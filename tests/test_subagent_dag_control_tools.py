@@ -96,6 +96,7 @@ def _finished_run() -> dict[str, Any]:
     return {
         "run_id": "r1",
         "dir": "/tmp/runs/r1",
+        "nodes_root": "/tmp/nodes",
         "finalized": True,
         "task_summary": "Plan, then write, then review.",
         "files": [
@@ -106,10 +107,10 @@ def _finished_run() -> dict[str, Any]:
                 "subagent": "Coder",
                 "inputs": {"topic": "x"},
                 "prompt_template": long_template,
-                "prompt_file": "/tmp/runs/r1/a.prompt.md",
+                "prompt_file": "/tmp/nodes/a.prompt.md",
                 "instance": "i-1",
-                "output_file": "/tmp/runs/r1/a.out.md",
-                "memory_file": "/tmp/runs/r1/a.memory.json",
+                "output_file": "/tmp/nodes/a.out.md",
+                "memory_file": "/tmp/nodes/a.memory.json",
                 "started_at": 1000,
                 "ended_at": 3000,
             },
@@ -222,8 +223,8 @@ async def test_dag_status_reads_one_run_back_with_every_node_field() -> None:
     assert "    subagent: Coder" in out
     assert '    inputs: {"topic": "x"}' in out
     assert "    instance: i-1" in out
-    assert "    output_file: /tmp/runs/r1/a.out.md" in out
-    assert "    memory_file: /tmp/runs/r1/a.memory.json" in out
+    assert "    output_file: /tmp/nodes/a.out.md" in out
+    assert "    memory_file: /tmp/nodes/a.memory.json" in out
     assert "    started_at: 1000" in out
     assert "    ended_at: 3000" in out
     # The long template is cut to its head and points at the full prompt file.
@@ -231,7 +232,7 @@ async def test_dag_status_reads_one_run_back_with_every_node_field() -> None:
     assert "line10" in out
     assert "line11" not in out
     assert "truncated, 2 more lines" in out
-    assert "full prompt in /tmp/runs/r1/a.prompt.md" in out
+    assert "full prompt in /tmp/nodes/a.prompt.md" in out
     # A node whose fields never got written renders (none) for each of them.
     assert "- b [failed]" in out
     assert "    node_summary: (none)" in out
@@ -250,7 +251,7 @@ async def test_dag_status_derives_the_prompt_path_when_truncated_without_one() -
     out = await tool.execute("r1")
 
     assert "truncated, 2 more lines" in out
-    assert "full prompt in /tmp/runs/r1/a.prompt.md" in out
+    assert "full prompt in /tmp/nodes/a.prompt.md" in out
 
 
 async def test_dag_status_reports_an_unknown_run() -> None:

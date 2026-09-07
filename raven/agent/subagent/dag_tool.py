@@ -62,11 +62,11 @@ from raven.agent.subagent.dag_store import (
     SessionNodes,
     index_guard,
     make_run_id,
-    read_index,
+    read_registry,
     read_session_nodes,
 )
 from raven.agent.subagent.dag_verdict import Verdict, describe_failure, judge, tail
-from raven.agent.subagent.history import dag_root, session_history_root
+from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
@@ -143,15 +143,18 @@ class _RunDirs:
     """The directories a run works in, read from the turn that submitted it.
 
     ``workdir`` is the nodes' cwd and what ``{{ ref:<path> }}`` resolves
-    against; ``run_root`` is where the prompt/output records go;
-    ``subagents_root`` is its parent, the second directory a file reference may
-    resolve into. All three come from turn-local state that a backgrounded run
+    against; ``run_root`` is where this run's ``graph.json`` and
+    ``manifest.json`` go; ``nodes_root`` is the flat, session-wide root where
+    each node's own prompt/output/memory files go instead; ``subagents_root``
+    is their common parent, the second directory a file reference may resolve
+    into. All four come from turn-local state that a backgrounded run
     outlives, so they are resolved at call time rather than looked up once the
     graph is already running.
     """
 
     workdir: str
     run_root: str
+    nodes_root: str
     subagents_root: str
 
 
@@ -232,8 +235,9 @@ _NODE_SCHEMA: dict[str, Any] = {
         "id": {
             "type": "string",
             "description": (
-                "Node id (^[A-Za-z0-9_-]+$), unique across this whole conversation, not just this graph: "
-                "it is how a later graph names this node's output. Reusing an id an earlier run took is "
+                "Node id (^[A-Za-z0-9_-]+$), unique across this whole conversation -- not just this "
+                "graph, and not just this tool: a graph node and a spawn's node_id share one namespace. "
+                "It is how a later task of either kind names this node's output. Reusing an id is "
                 "rejected -- pick a fresh one (plan_v2, research_pricing) rather than repeating a generic "
                 "one, and to re-do work under the same name give the node a new id."
             ),
@@ -258,19 +262,22 @@ _NODE_SCHEMA: dict[str, Any] = {
                 "Node prompt. Placeholders: {{ <node>.output }} / {{ <node>.output_path }} inject a "
                 "node's output text/path; {{ inputs.<k> }} / {{ inputs.<k>.path }} inject an input; "
                 "{{ ref:<path> }} / {{ ref_path:<path> }} read a file. <node> is either a node of this "
-                "graph listed in this node's depends_on, or any node an earlier run in this conversation "
-                "completed, since ids are unique across it. To read a run's file directly, "
-                "{{ ref:@runs/<run_id>/<node>.out.md }}. The _path forms need a "
+                "graph listed in this node's depends_on, or any task this conversation already "
+                "completed and left an output. One that failed, was skipped, was cancelled or is "
+                "still running keeps its id but is refused, saying which. To read a node's files "
+                "directly, "
+                "{{ ref:@nodes/<node>.out.md }} or {{ ref:@nodes/<node>.prompt.md }}. The _path forms need a "
                 "sub-agent the roster tags [local-files]; for a [no-local-files] one use the contents "
-                "forms instead, and every _path form must name a file that already exists."
+                "forms instead, and every _path form must name a file that already exists. "
+                "Every key in inputs must be referenced by a placeholder."
             ),
         },
         "depends_on": {
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "Ids this node depends on. A node of this graph runs first; a node an earlier run in "
-                "this conversation completed is already done, so listing it only records the "
+                "Ids this node depends on. A node of this graph runs first; a task this conversation "
+                "already completed with an output is already done, so listing it only records the "
                 "dependency. Either way you may read it with {{ <node>.output }}."
             ),
         },
@@ -278,8 +285,10 @@ _NODE_SCHEMA: dict[str, Any] = {
             "type": "object",
             "description": (
                 'Per-key literal string, {"file": <path>}, or {"node": <id>} to take another node\'s '
-                "output -- a dependency of this node, or any node from an earlier run in this "
-                "conversation. {{ inputs.<k> }} injects the text, {{ inputs.<k>.path }} the file path."
+                "output -- a dependency of this node, or any task this conversation already completed "
+                "with an output. Exactly one of those three and nothing else in the object: no second "
+                "key beside file or node, no empty path or id, and a number, boolean or list is "
+                "refused. {{ inputs.<k> }} injects the text, {{ inputs.<k>.path }} the file path."
             ),
         },
         "instance": {
@@ -475,19 +484,17 @@ class SubAgentDagTool(Tool):
         no ``sessions/`` yet there is provably no history to read, and building
         one just to learn that would itself be the write we are avoiding.
 
-        The root must be the one the run itself will claim ids into -- the same
-        ``_run_root(_turn_conversation())`` pair ``_dirs`` resolves. Validating
-        against one index while claiming into another would refuse nothing and
-        detect nothing.
+        Guarded on ``_history_root()`` -- the same root ``run_dag`` now locks
+        to claim ids -- so the pre-check and the claim can never disagree
+        about which registry they mean.
         """
-        if self._session_dir is None and not (Path(self._workspace) / "sessions").is_dir():
+        if (history := self._history_root()) is None:
             return SessionNodes()
-        root = self._run_root(self._turn_conversation())
         # Guarded like every other read that decides something, so this cannot
-        # see a half-written index. It is still only a pre-check -- ``run_dag``
+        # see a half-written registry. It is still only a pre-check -- ``run_dag``
         # repeats it inside the guard that also claims the ids.
-        async with index_guard(root):
-            return await read_session_nodes(self._backend, root)
+        async with index_guard(history):
+            return await read_session_nodes(self._backend, history)
 
     def _reference_roots(self) -> tuple[str, ...]:
         """The directories a node's file references may resolve into.
@@ -631,6 +638,16 @@ class SubAgentDagTool(Tool):
         """
         return str(dag_root(self._session_dir_for(session_key)))
 
+    def _nodes_root(self, session_key: str | None) -> str:
+        """This session's flat node root, where node artifacts are written and read.
+
+        Sibling of ``_run_root``, derived the same way, but node artifacts
+        (prompt/output/transcript/memory) live here rather than under any one
+        run's directory: a node id is unique for the whole conversation, not
+        just the run that dispatched it.
+        """
+        return str(nodes_root(self._session_dir_for(session_key)))
+
     def _session_dir_for(self, session_key: str | None) -> Path:
         """This conversation's session directory, the parent of both roots.
 
@@ -646,23 +663,27 @@ class SubAgentDagTool(Tool):
             self._fallback_sessions = SessionManager(Path(self._workspace))
         return Path(self._fallback_sessions.session_dir(key))
 
-    def _history_root(self) -> str | None:
+    def _history_root(self, session_key: str | None = None) -> str | None:
         """This conversation's sub-agent history root, or None if it has none.
 
         ``<session_dir>/subagents/`` -- the second directory a node's file
-        reference may resolve into, holding this conversation's DAG runs and
-        ``spawn`` records. Narrower than agent home deliberately: see
-        :func:`raven.agent.subagent.prompt_paths.check_confined`.
+        reference may resolve into, holding this conversation's DAG runs, its
+        node registry, and ``spawn`` records. Narrower than agent home
+        deliberately: see :func:`raven.agent.subagent.prompt_paths.check_confined`.
 
         ``None`` rather than a path when no resolver is injected and no
         ``sessions/`` exists, because building a ``SessionManager`` to find out
         would create the directory -- and validation must leave a rejected
         graph's session exactly as it found it. With no history there is also
         nothing for a reference to name.
+
+        ``session_key`` defaults to the current turn, like ``_run_root``, so a
+        caller resolving another conversation's registry (``session_run_ids``)
+        does not have to reach past this method to build the path itself.
         """
         if self._session_dir is None and not (Path(self._workspace) / "sessions").is_dir():
             return None
-        return str(session_history_root(self._session_dir_for(None)))
+        return str(session_history_root(self._session_dir_for(session_key)))
 
     async def read_run(self, run_id: str, session_key: str | None = None) -> dict:
         """One run's durable structure + per-node state, read back from disk.
@@ -671,17 +692,20 @@ class SubAgentDagTool(Tool):
         way a consumer that missed them (a reloaded browser tab) can rebuild the
         graph. Serves in-flight runs too -- see :func:`dag_reader.read_run`.
         """
-        return await _read_run(self._backend, self._run_root(session_key), run_id)
+        return await _read_run(self._backend, self._run_root(session_key), run_id, self._nodes_root(session_key))
 
     async def session_run_ids(self, session_key: str | None = None) -> set[str]:
-        """Every run id this conversation's index records.
+        """Every run id this conversation's node registry records.
 
-        The live run set is loop-wide and the index is per session; the
+        The live run set is loop-wide and the registry is per session; the
         intersection of the two is what one conversation's model may see, which
         is how the control tools scope their listing and their cancel.
         """
-        entries = await read_index(self._backend, self._run_root(session_key))
-        return {str(entry["run_id"]) for entry in entries if entry.get("run_id")}
+        history = self._history_root(session_key)
+        if history is None:
+            return set()
+        registry = await read_registry(self._backend, history)
+        return {str(run["run_id"]) for run in registry["runs"] if run.get("run_id")}
 
     async def read_node(
         self,
@@ -697,6 +721,7 @@ class SubAgentDagTool(Tool):
             self._run_root(session_key),
             run_id,
             node_id,
+            self._nodes_root(session_key),
             max_output_chars=max_output_chars,
         )
 
@@ -993,6 +1018,7 @@ class SubAgentDagTool(Tool):
         dirs = _RunDirs(
             workdir=str(workdir.current() or self._workspace),
             run_root=str(dag_root(session_dir)),
+            nodes_root=str(nodes_root(session_dir)),
             subagents_root=str(session_history_root(session_dir)),
         )
         # Ahead of the charge: a graph the user turns down must not spend budget
@@ -1148,6 +1174,7 @@ class SubAgentDagTool(Tool):
         dirs = _RunDirs(
             workdir=str(workdir.current() or self._workspace),
             run_root=str(dag_root(session_dir)),
+            nodes_root=str(nodes_root(session_dir)),
             subagents_root=str(session_history_root(session_dir)),
         )
         call_id = self._tool_call_id.get()
@@ -1225,9 +1252,15 @@ class SubAgentDagTool(Tool):
         """
         known = await self._session_nodes()
         state = dict(known.state)
+        has_output = dict(known.has_output)
         for entry in live.get("files") or []:
             state[entry["node"]] = entry.get("status") or state.get(entry["node"], RUNNING)
-        return SessionNodes(owner=dict(known.owner), state=state)
+            # The live read is the output half's only source too: the registry
+            # entry this overlays is the one that has not been written yet, so
+            # leaving it behind marks the node completed and unreadable at once
+            # -- the very refusal the overlay exists to prevent.
+            has_output[entry["node"]] = bool(entry.get("output_file") or entry.get("output"))
+        return SessionNodes(owner=dict(known.owner), state=state, has_output=has_output)
 
     async def await_finalized(self, run_id: str) -> None:
         """Wait for one run's task to end, so its per-node outcomes are on disk.
@@ -1246,7 +1279,14 @@ class SubAgentDagTool(Tool):
 
     async def _record_link(self, run_id: str, entry: dict[str, Any]) -> None:
         """Note the replan link on `run_id`'s own graph.json."""
-        store = DagRunStore(self._backend, self._run_root(self._turn_conversation()), run_id)
+        session_key = self._turn_conversation()
+        store = DagRunStore(
+            self._backend,
+            self._run_root(session_key),
+            run_id,
+            nodes_root=self._nodes_root(session_key),
+            registry_root=self._history_root(session_key) or self._run_root(session_key),
+        )
         await store.record_replan(entry)
 
     @staticmethod
@@ -1615,6 +1655,8 @@ class SubAgentDagTool(Tool):
                 backend=self._backend,
                 workdir=dirs.workdir,
                 run_root=dirs.run_root,
+                nodes_root=dirs.nodes_root,
+                history_root=dirs.subagents_root,
                 subagents_root=dirs.subagents_root,
                 progress_publisher=emit,
                 semaphore=self._gate,

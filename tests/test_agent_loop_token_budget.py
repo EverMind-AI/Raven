@@ -65,13 +65,22 @@ def test_a_ceiling_as_large_as_the_window_still_leaves_room_for_history(workspac
     budget = _loop(workspace, window=200_000, ceiling=64_000, monkeypatch=monkeypatch)._make_token_budget()
 
     assert budget.reserved_output == 64_000, "what the reply may actually use"
-    # 129_000 rather than 130_000: `run_subagent_dag` is registered on every
-    # install now (the agent table always holds the built-in rows, so its roster is
-    # never empty), and its schema plus roster is about 1.5k tokens of tool
-    # surface a default install did not carry before. The bound here is about
-    # history not being squeezed toward zero, which is what the measured 0 in the
-    # docstring was; the exact figure moves whenever a tool is added.
-    assert budget.available_history > 129_000
+    # Two bounds, because two different things were being guarded through one
+    # number and the tighter of them rode on where the repo is checked out.
+    #
+    # `available_history` is the docstring's subject: the measured 0 that
+    # started this, history squeezed to nothing by an honest-but-huge ceiling.
+    # A loose bound is the right shape for it -- `reserved_system` embeds the
+    # workspace path, so this figure moves with the length of a temp directory:
+    # measured 129_090 / 129_060 / 129_035 at path lengths 22 / 62 / 121.
+    assert budget.available_history > 128_000, "an honest ceiling must not squeeze history toward zero"
+    # `reserved_tools` is what the old 129_000 bound was really watching, and it
+    # is invariant across those same three paths: 5773 tokens, paid on every
+    # turn of every conversation. Asserted directly so a grown tool description
+    # trips it for that reason rather than because a worktree sits deeper than
+    # the one this was measured on. Trim somewhere before raising it, and say
+    # what was traded.
+    assert budget.reserved_tools < 6_000, f"tool surface grew: {budget.reserved_tools} tokens reserved"
 
 
 def test_an_honest_but_large_ceiling_does_not_eat_the_window(workspace, monkeypatch) -> None:

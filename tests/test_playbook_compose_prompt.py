@@ -87,6 +87,11 @@ def test_compose_prompt_forbids_params_anywhere_and_requires_input_use() -> None
 
     assert "no ${params.*} may appear anywhere in the graph" in text
     assert "Every declared input must be referenced" in text
+    # This prompt is sent on its own, so the value shapes have to be stated
+    # here too -- the per-field guidance the generator carries never reaches it.
+    flat = " ".join(text.split())
+    assert 'literal string, {"file": <path>} or {"node": <id>}' in flat
+    assert "exactly one of the three, nothing else in the object" in flat
 
 
 @pytest.mark.parametrize("field", ["agent"])
