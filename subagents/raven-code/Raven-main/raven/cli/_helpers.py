@@ -121,7 +121,6 @@ def make_provider(config: Config):
         max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
         timeout=defaults.llm_call_timeout,
-        stream_idle_timeout=defaults.stream_idle_timeout,
         probe_timeout=defaults.llm_probe_timeout,
         probe_budget=defaults.llm_probe_budget,
     )
@@ -145,7 +144,6 @@ def make_lazy_provider(config: Config):
             max_tokens=defaults.max_tokens,
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
-            stream_idle_timeout=defaults.stream_idle_timeout,
             probe_timeout=defaults.llm_probe_timeout,
             probe_budget=defaults.llm_probe_budget,
         ),

@@ -121,7 +121,6 @@ def classify_empty_response(
     empty_retries: int,
     limits: RecoveryLimits,
     length_nudges: int = 0,
-    prefill_supported: bool = True,
 ) -> RecoveryAction:
     """Decide how to handle a no-tool-call assistant response.
 
@@ -150,19 +149,6 @@ def classify_empty_response(
         return RecoveryAction.RETRY
 
     thinking = has_thinking(response)
-
-    # Provider refuses a trailing assistant message (Anthropic with thinking
-    # on): PREFILL would build a request the vendor rejects, and behind a
-    # gateway that rejection arrives as a stream that never yields a byte, so
-    # the turn hangs to the wall-clock cap instead of failing. Must run before
-    # PREFILL. The act-now nudge leaves a user message last, then the plain
-    # retry budget, then give up.
-    if thinking and not prefill_supported:
-        if length_nudges < limits.truncated_max_nudges:
-            return RecoveryAction.TRUNCATED
-        if empty_retries < limits.empty_content_max_retries:
-            return RecoveryAction.RETRY
-        return RecoveryAction.COMPLETE
 
     # thinking-only prefill — the model reasoned but produced no body.
     if thinking and prefill_retries < limits.thinking_prefill_max_retries:

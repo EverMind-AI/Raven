@@ -52,25 +52,6 @@ The turn-loop extension point: an `AgentHook` ABC with five async phases
 Multiple hooks chain via `CompositeHook`; the EvalEngine wires three concrete implementations.
 _Avoid_: "callback" or "middleware" — neither captures the phase-specific, chain-aware semantics.
 
-**Session Mode** (`acp/modes.py`; declared under `acp.modes` in config):
-A named per-session operating profile an ACP client switches with `session/set_mode`; every
-session response (`session/new`, `session/load`, `session/resume`) carries the spec's
-`SessionModeState`. What a mode moves is declared in the catalogue -- today the reasoning
-effort; the default mode moves nothing and runs the connection's own configuration. Session
-state, not transcript state: kept in memory, forgotten on close, never persisted with the
-conversation. A switch lands on the session's next turn.
-_Avoid_: re-spelling a mode as a `session/set_config_option` entry -- modes are first-class in
-the stable schema, the option list exists only because `session/set_model` is not.
-
-**Session Policy** (`agent/loop/main.py`, `SessionPolicy`):
-What one session's turns run under beyond the loop-wide defaults: the generation overrides
-its Session Mode moves, recorded on the Agent Loop with `set_session_policy` and read once at
-each turn's start by `_process_message`, then threaded into the turn's LLM calls as explicit
-arguments. A session with no policy passes nothing, so the provider's configured defaults
-apply exactly as before.
-_Avoid_: calling it the session's "mode" -- the mode is the client-facing name, the policy is
-what the engine enforces.
-
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result
 re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bounded by

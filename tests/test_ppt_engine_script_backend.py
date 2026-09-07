@@ -23,15 +23,7 @@ from raven_ppt.backends.script import (
     submission_refusal,
 )
 from raven_ppt.contracts import Project
-from tests._ppt_engine_fixtures import (  # noqa: F401
-    COMMENT_ABOVE_FIRST_BANNER,
-    deck,
-    image,
-    noise_image,
-    noise_png,
-    product_page,
-    template_file,
-)
+from tests._ppt_engine_fixtures import deck, image, noise_image, noise_png, product_page, template_file  # noqa: F401
 
 pytest.importorskip("pptx")
 
@@ -630,37 +622,6 @@ async def test_a_helper_that_exits_loses_only_its_page(project: Project) -> None
     assert [entry["page"] for entry in page_failures(project)] == [2]
 
 
-@pytest.mark.asyncio
-async def test_a_script_saved_with_a_byte_order_mark_builds_like_one_without(project: Project) -> None:
-    """Editors on one platform put U+FEFF in front of the file the author edits in place
-    (a submitted string is checked by compile() first and refused by name). `python
-    build.py` skips the mark; handed to compile() as text it is a SyntaxError on line 1,
-    and neither `\\s` nor `str.lstrip()` sees past it, so the first banner and the comment
-    above it were lost to every reader that splits the file into pages. The mark is
-    dropped once, where the file is read, so every reader sees the same text."""
-    import codecs
-
-    from raven_ppt.backends.script import page_failures, read_script
-    from raven_ppt.backends.script.runner import _isolable_blocks
-    from raven_ppt.backends.script.workspace import script_path
-
-    project.build_dir.mkdir(parents=True, exist_ok=True)
-    plain = project.build_dir / "plain.py"
-    plain.write_text(COMMENT_ABOVE_FIRST_BANNER, encoding="utf-8")
-    script_path(project).write_bytes(codecs.BOM_UTF8 + COMMENT_ABOVE_FIRST_BANNER.encode("utf-8"))
-
-    assert read_script(project) == COMMENT_ABOVE_FIRST_BANNER
-    assert _isolable_blocks(script_path(project)) == _isolable_blocks(plain) == [[1, 0, 20], [2, 20, 23]], (
-        "the comment above the first banner belongs to page 1's block, mark or no mark"
-    )
-
-    script_path(project).write_bytes(codecs.BOM_UTF8 + HELPER_EXITS.encode("utf-8"))
-    outcome = await _build(project, None)
-
-    assert outcome.ok and outcome.pages == 3, outcome.stderr
-    assert [entry["page"] for entry in page_failures(project)] == [2]
-
-
 PRELUDE_RAISES = textwrap.dedent(
     """
     import os
@@ -717,61 +678,6 @@ async def test_the_pages_already_drawn_are_saved_even_when_nothing_catches(proje
     assert "First" in texts[0] and "Second" in texts[1], "the two pages that were drawn are on disk"
     assert len(texts) == 2, "and the page after the interruption is not"
     assert "deck.pptx.building" in outcome.stderr, "and the author is told where to look"
-
-
-NO_BANNERS = textwrap.dedent(
-    """
-    import os
-
-    from pptx import Presentation
-    from pptx.util import Inches
-
-    prs = Presentation()
-    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
-
-
-    def grab(shapes, pred):
-        found = [s for s in shapes if pred(s)]
-        if not found:
-            raise RuntimeError("grab: nothing matched")
-        return found[0]
-
-
-    def page(text):
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
-        box = slide.shapes.add_textbox(Inches(0.8), Inches(0.6), Inches(11), Inches(1))
-        box.text_frame.text = text
-        return slide
-
-
-    page("First")
-    page("Second")
-    grab(page("Third").shapes)
-
-    prs.save(os.environ["PPT_OUTPUT"])
-    """
-).lstrip()
-
-
-@pytest.mark.asyncio
-async def test_a_script_whose_pages_cannot_be_separated_still_keeps_what_it_drew(project: Project) -> None:
-    """Isolation needs `# SLIDE n` banners numbering the pages in file order, and a
-    rewrite can drop them without saying so: three builds of one live run ended with
-    "the build script did not produce a deck" over five pages that were drawn, each for
-    one helper call that raised. Nothing there told the author that the banners were
-    what they had lost.
-
-    So the failure names it, and the pages are kept either way."""
-    from pptx import Presentation
-
-    outcome = await _build(project, NO_BANNERS)
-
-    assert not outcome.ok
-    assert "pages are not separable" in outcome.stderr, outcome.stderr
-    kept = project.review_dir / "build_failures" / "failure-001" / "deck.pptx.building"
-    assert kept.is_file(), "the pages drawn before the raise are gone"
-    assert len(Presentation(str(kept)).slides) == 3
-    assert "deck.pptx.building" in outcome.stderr
 
 
 @pytest.mark.asyncio

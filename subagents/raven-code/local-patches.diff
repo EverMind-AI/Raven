@@ -1,63 +1,16 @@
 # Local patches carried on top of the vendored checkout.
 #
-# FIVE LIVE OVERLAYS, not all in the fork yet: four behavior fixes and one
-# cross-cutting incident replay suite. They are committed directly into
-# `Raven-main/` (with a refreshed `subagents/TREE_HASHES`), so this file records
-# every affected path plus WHAT and WHY rather than an appliable diff. A
-# re-vendor must re-apply each overlay that the selected source does not yet
-# contain.
+# CURRENTLY EMPTY: the snapshot equals the fork tree exactly.
 #
-# The first two fix defects the 2026-09-01 dispatched-run report raised (host
-# TUI orchestrating a DAG, Raven-Code driven as an ACP sub-agent over OpenRouter
-# claude-opus-5). Each behavior change is written to be upstreamable as-is.
+# This file is retained as a history of patches that used to be carried here.
+# Do not run git apply while it is empty. A future local-only patch must add an
+# actual diff below and document why it cannot live in the fork first. After a
+# re-vendor, compare the snapshot with the recorded fork commit: zero difference
+# is expected when this file remains empty.
 #
-# 1. Empty-response recovery must not prefill an Anthropic model.
-#    `raven/agent/loop/recovery.py`, `raven/agent/loop/main.py`,
-#    `raven/providers/{base,litellm_provider,lazy,per_model_provider}.py`,
-#    `tests/test_agent_loop_empty_recovery.py`.
-#    A thinking-only turn was recovered by re-feeding the model its own
-#    reasoning as a trailing assistant message. Anthropic rejects that request
-#    while thinking is on, and through a gateway the rejection arrived as a
-#    stream that never produced a byte, so the turn hung to the wall clock.
-#    Providers now declare `supports_assistant_prefill`; when it is refused the
-#    recovery uses the act-now nudge, then the plain retry budget.
-#    Report item 1.
-#
-# 2. The stream needs its own idle timeout.
-#    `raven/config/schema.py`, `raven/providers/{base,litellm_provider}.py`,
-#    `raven/cli/_helpers.py`, `tests/test_litellm_provider_timeout.py`.
-#    `chat_stream` waited the whole request budget for every chunk, so with
-#    `llmCallTimeout: 1800` a dead stream cost half an hour.
-#    `streamIdleTimeout` (default 180s, 0 disables) decides whether the stream
-#    is dead; the request budget is enforced separately so a backend that
-#    trickles forever is still bounded. Report item 2.
-#
-# 3. A submitted ACP turn keeps the policy captured when it was accepted.
-#    `raven/acp/methods.py`, `raven/agent/loop/main.py`,
-#    `tests/test_acp_methods_session_modes.py`,
-#    `tests/test_agent_loop_session_policy.py`. A concurrent
-#    `session/set_mode` now affects the next turn instead of changing a queued
-#    turn while it is running.
-#
-# 4. The ACP configuration refuses unknown keys.
-#    `raven/config/schema.py`, `tests/test_config_acp_modes.py`. A misspelled
-#    `defaultMode` used to be ignored and silently selected the first declared
-#    mode.
-#
-# 5. The dispatched-run incident is replayed through the real streaming path.
-#    `tests/test_agent_loop_incident_replay.py`. It covers the Anthropic
-#    thinking-only recovery, the separate stream idle deadline, and the
-#    deployed configuration defaults across overlays 1 and 2.
-#
-# Also carried: the ACP session-modes work (effort tiers) from local fork
-# branch feat/acp_session_effort_modes at c0197f8e. Those four commits DO live
-# in a fork branch, and that branch is based on the same 3edd204f baseline as
-# this snapshot, so their content applies on its native base. A future
-# re-vendor from a branch that contains them absorbs them cleanly.
-#
-# History: every patch this file used to carry is in the source lineage. The
-# remote fork branch (github.com/TongLi31/Raven, feat/acp_worktree_integration)
-# is at 9bda1403; the vendored snapshot came from its local continuation.
+# Every patch this file used to carry is now in the source lineage. The remote
+# fork branch (github.com/TongLi31/Raven, feat/acp_worktree_integration) is at
+# 9bda1403; this snapshot exactly matches its local continuation at 3edd204f.
 # The GitLab workflow does not publish that continuation to GitHub.
 #
 # 1. everos timestamp coercion -> fork commit 31fd7f3

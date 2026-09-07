@@ -42,38 +42,6 @@ HERE = Path(__file__).resolve().parent
 # The checkout lives beside this launcher, per the subagents/ convention.
 CHECKOUT = HERE / "Raven-main"
 DEFAULT_CONFIG = HERE / "config.json"
-# Effort overlays over the baseline config. `config.json` is the complete
-# default (high) profile; each overlay carries the one knob its tier moves, so
-# the provider wiring and the tool surface exist in exactly one place.
-MODES_DIR = HERE / "modes"
-
-# What a client's mode picker shows, and what the dispatching model reads when
-# it chooses a tier for a task. The copy lives here rather than in the overlay
-# files because it is product text about the choice, not config the agent reads.
-MODE_LABELS = {
-    "low": (
-        "Low",
-        "Light reasoning. For a small, well-specified change, a question about the code, "
-        "or an explanation; the cheapest and fastest tier.",
-    ),
-    "high": (
-        "High",
-        "Standard reasoning, the default. Right for an ordinary fix, feature or failing test "
-        "unless the request says otherwise.",
-    ),
-    "max": (
-        "Max",
-        "Deepest reasoning. For a hard bug, a cross-file refactor, or when the user has "
-        "explicitly asked for the most thorough attempt; the slowest and most expensive tier.",
-    ),
-}
-# The baseline IS the high profile, so it needs no overlay file; the others do.
-BASELINE_MODE = "high"
-# The one knob a tier moves. An overlay naming anything else would be declared
-# and then ignored by the agent's mode profile, which is exactly the silent
-# no-op the strict check here exists to refuse.
-OVERLAY_KEYS = frozenset({"agents"})
-EFFORT_PATH = ("agents", "defaults", "reasoningEffort")
 
 
 def env_value(name: str) -> str | None:
@@ -378,59 +346,7 @@ def sweep_stale_renders(state_dir: Path) -> None:
             continue
 
 
-def overlay_effort(overlay_file: Path) -> str:
-    """The effort one overlay file moves the tier to, refusing anything else.
-
-    Strict on purpose: the agent's mode profile carries the effort and nothing
-    more, so a key beyond it would be declared here and dropped there without a
-    word. The failure has to be at launch, where a person sees it.
-    """
-    overlay = json.loads(overlay_file.read_text(encoding="utf-8"))
-    unknown = sorted(set(overlay) - OVERLAY_KEYS)
-    if unknown:
-        raise SystemExit(
-            f"{overlay_file}: unsupported top-level key(s) {', '.join(unknown)}; "
-            f"an overlay carries only {', '.join(sorted(OVERLAY_KEYS))}"
-        )
-    defaults = (overlay.get("agents") or {}).get("defaults")
-    extra = sorted(set(overlay.get("agents") or {}) - {"defaults"}) + sorted(set(defaults or {}) - {EFFORT_PATH[-1]})
-    if extra:
-        raise SystemExit(f"{overlay_file}: an overlay moves only {'.'.join(EFFORT_PATH)}; found {', '.join(extra)}")
-    effort = dig(overlay, EFFORT_PATH)
-    if not effort:
-        raise SystemExit(f"{overlay_file}: an overlay must set {'.'.join(EFFORT_PATH)} to a non-empty string")
-    return effort
-
-
-def mode_catalogue() -> dict:
-    """The `acp.modes` block: one entry per tier, the baseline carrying no effort.
-
-    Declared rather than applied. The agent composes a profile per session, so
-    these files become a catalogue a client picks from over `session/set_mode`,
-    and `--mode` is only which entry a session starts in. The baseline entry
-    inherits `agents.defaults.reasoningEffort` from the rendered config itself,
-    which is what keeps the default tier byte-identical to today's behaviour.
-
-    An empty dict when this folder ships no `modes/` directory, which leaves the
-    rendered config without an `acp` key and the agent's `session/set_mode`
-    method-not-found -- the pre-modes behaviour, and also what keeps this
-    launcher runnable against a vendored tree whose schema knows no `acp` key.
-    """
-    if not MODES_DIR.is_dir():
-        return {}
-    catalogue = {}
-    for mode, (name, description) in MODE_LABELS.items():
-        entry = {"name": name, "description": description}
-        if mode != BASELINE_MODE:
-            overlay_file = MODES_DIR / f"{mode}.json"
-            if not overlay_file.is_file():
-                continue
-            entry["reasoningEffort"] = overlay_effort(overlay_file)
-        catalogue[mode] = entry
-    return catalogue
-
-
-def render_config(source: Path, state_dir: Path, mode: str | None = None) -> Path:
+def render_config(source: Path, state_dir: Path) -> Path:
     """Write a rendered config into the state partition that will consume it.
 
     The runtime derives its data directory from the config file's parent but its
@@ -438,19 +354,8 @@ def render_config(source: Path, state_dir: Path, mode: str | None = None) -> Pat
     so sessions, memory and skills stay in the same host-owned partition. The
     ACP session Working directory remains a separate path used for repository
     reads, edits and commands.
-
-    ``mode`` is which tier sessions start in; the source stays the baseline
-    every tier diffs against, so nothing is merged into it here.
     """
     config = json.loads(source.read_text(encoding="utf-8"))
-    catalogue = mode_catalogue()
-    if mode and mode not in catalogue:
-        raise SystemExit(f"error: no overlay for mode {mode!r} at {MODES_DIR / f'{mode}.json'}")
-    if catalogue:
-        acp = config.setdefault("acp", {})
-        acp["modes"] = catalogue
-        acp["defaultMode"] = mode or BASELINE_MODE
-        log(f"[run] modes: {', '.join(catalogue)} (default {acp['defaultMode']})")
     # Config location controls runtime data, but does not change workspace_path.
     # Pin it explicitly so Raven-Code does not fall back to ~/.raven/workspace.
     put(config, ("agents", "defaults", "workspace"), str(state_dir.resolve()))
@@ -744,7 +649,7 @@ def _serve_acp(args) -> int:
     adopt_legacy_acp_home(acp_state)
     acp_state.mkdir(parents=True, exist_ok=True)
 
-    config = render_config(Path(args.config).resolve(), acp_state, mode=args.mode)
+    config = render_config(Path(args.config).resolve(), acp_state)
     log(f"[run] acp: serving on stdio under {config}")
     # Arm the first-write workspace gate for the multiplexed server: per-session
     # allocation records under this partition, repo-level owners/locks/worktrees
@@ -792,22 +697,10 @@ def main() -> int:
         action="store_true",
         help="Serve the Agent Client Protocol on stdio instead of running one task",
     )
-    ap.add_argument(
-        "--mode",
-        choices=tuple(MODE_LABELS),
-        default=None,
-        help="Which effort tier ACP sessions start in; a client may switch a live session "
-        "with session/set_mode. `high` is the baseline as-is. Only with --acp.",
-    )
     args = ap.parse_args()
 
     if args.acp:
         return _serve_acp(args)
-    if args.mode:
-        # A tier is a session-level choice the ACP client makes. The one-task
-        # path has no session to put it on, and a flag accepted there would be
-        # one that silently does nothing.
-        raise SystemExit("error: --mode applies to --acp only")
 
     if args.prompt_file:
         task = Path(args.prompt_file).read_text(encoding="utf-8").strip()

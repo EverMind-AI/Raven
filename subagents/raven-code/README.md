@@ -12,10 +12,10 @@ outside this directory.
 | | |
 |---|---|
 | Remote source | `github.com/TongLi31/Raven`, branch `feat/acp_worktree_integration`, current remote tip `9bda1403` |
-| Vendored source | Local continuation of that branch at `3edd204f`, plus the four ACP-session-modes commits of local fork branch `feat/acp_session_effort_modes` at `c0197f8e` applied on top (same `3edd204f` base); the GitLab workflow does not publish GitHub branches |
+| Vendored source | Local continuation of that branch at `3edd204f`; the GitLab workflow does not publish GitHub branches |
 | Local checkout | `./Raven-main` - the agent itself lives inside this folder |
-| Package / version | `raven` 0.1.9 (integration line), vendored 2026-08-28 from local source commit `3edd204f`; session-mode commits merged 2026-09-04 from `c0197f8e` |
-| Local overlays | **five**, live - four behavior fixes and one cross-cutting incident replay suite. Committed into `Raven-main/`; `local-patches.diff` records every affected path and why it differs from the source. Not all are in the fork yet, so **the tree does not equal the source tree** |
+| Package / version | `raven` 0.1.9 (integration line), vendored 2026-08-28 from local source commit `3edd204f` |
+| Local patches | **none** - `local-patches.diff` records only that every former patch was upstreamed |
 | **Read first** | **`Raven-main/README.SWARM.md`** - the branch's own contract, and the authority on everything below |
 
 This is **Raven-X's swarm-integration branch**, not plain upstream Raven. It is
@@ -46,13 +46,12 @@ on top of it:
 | `raven/session/manager.py` + `tests/test_session_state_dir.py` - drop the in-workspace session migration | `SessionManager` read `<workspace>/sessions` as a legacy location, moved every file into the per-workspace state bucket and removed the source tree. Trunk now keeps a raven's live transcripts exactly there, and this fork's workspace defaults to `~/.raven/workspace` - the host agent's own home - so the migration ran against the host's live store rather than a legacy one, once per launch. **Observed 2026-08-27**, not defense-in-depth. The two upstream tests that asserted the migration are inverted in the same patch, so a replay restores the fix and its regression guard together |
 | Agent Loop, coding tools, identity, bootstrap and checkpoints - consume the ACP session Working directory | ACP already validated and persisted `session/new.cwd`, but turns still used Raven-Code's Agent home for relative file and exec operations and described that path to the model. **Observed 2026-08-27** in a real Direct Chat: the ACP frame and session metadata named the host checkout while Raven-Code inspected `/root/.raven/workspace`. The patch binds the session directory for the whole turn, keeps Agent home separate in the prompt, reads repository rules from the bound checkout, and isolates shadow checkpoints per checkout so rendered credentials in Agent home are never snapshotted. |
 
-`local-patches.diff` holds no appliable diffs: for those three it records WHERE
-each went (fork commits on `feat/acp_worktree_integration`) so an update can
-verify the fixes are still present upstream instead of re-applying them. For the
-five live overlays it records every affected path plus WHAT and WHY; the changes
-themselves are in this repository's history. Everything that adapts this agent
-to our gateway lives *beside* the checkout, never inside it; these overlays are
-the current exceptions, pending their upstreaming.
+`local-patches.diff` no longer holds appliable diffs: it records WHERE each of
+the three went (fork commits on `feat/acp_worktree_integration`) so an update
+can verify the fixes are still present upstream instead of re-applying them.
+Everything that adapts this agent to our gateway lives *beside* the checkout,
+never inside it - and with the patches upstreamed, that rule now holds without
+exceptions.
 
 **The 2026-08-20 update found this the hard way.** The tree that was here
 differed from its own stated source in eight files. Seven were `ruff format`
@@ -79,11 +78,8 @@ git fetch --no-tags https://github.com/TongLi31/Raven.git \
 git log --oneline <base>..tongli31/feat/acp_worktree_integration
 ```
 
-Then replace the body from those objects. **There is an overlay step**: the five
-live overlays listed in `local-patches.diff` are committed directly into
-`Raven-main/`, so a wholesale replacement drops them. After the replacement,
-re-apply every overlay from this repository's history, except those already
-present in the new source, before running the checks below.
+Then replace the body from those objects. There is no patch step: live local
+patches are zero, so the vendored tree must equal the source tree exactly.
 
 ```bash
 cd subagents/raven-code
@@ -92,31 +88,20 @@ git -C <repo root> archive <source-commit> | tar -x -C Raven-main
 git add -A .
 ```
 
-**The checks that make this safe**, run before committing, use two different
-baselines. The source-to-vendor diff is expected to contain the live overlays;
-review its complete output against the affected-path ledger in
-`local-patches.diff`. Deletions of `.pdf` / `.png` / `.svg` / `.html` are also
-expected because the repo's `subagents/**` rules keep report assets out. Any
-other path means either the extraction lost a file or an unrecorded local change
-crept in. A zero source-to-vendor diff is expected only after every overlay has
-been upstreamed into the selected source commit.
+**The check that makes this safe**, run before committing: the staged tree must
+differ from the source tree in NOTHING. Deletions of `.pdf` / `.png` / `.svg` /
+`.html` are expected - the repo's `subagents/**` rules keep report assets out -
+but any other line means either the extraction lost a file or something local
+crept in unrecorded.
 
 ```bash
 git diff --name-status "<source-commit>^{tree}" \
     $(git write-tree --prefix=subagents/raven-code/Raven-main)
 ```
 
-Then refresh `subagents/TREE_HASHES` in the same commit and verify it. This is
-the exact-content check for the resulting source-plus-overlays tree; it does not
-assert equality with the unpatched source tree.
-
-```bash
-python3 scripts/check_vendored_subagents.py --update
-python3 scripts/check_vendored_subagents.py
-```
-
-Also update the source commit and overlay count in the provenance table at the
-top of this file.
+Also refresh `subagents/TREE_HASHES` in the same commit
+(`python3 scripts/check_vendored_subagents.py --update`) and update the source
+commit in the provenance table at the top of this file.
 
 A `.venv` inside the checkout is gitignored and so is absent from a fresh
 worktree; in a clone that has one, move it aside first and `uv sync --reinstall`
@@ -489,52 +474,6 @@ in-place mode would be dead code for every real spawn, which is how it was
 caught. The subagent `description` is what tells the dispatching model to write
 the line, and to write it on the first turn only.
 
-## Effort tiers
-
-Raven-Code runs at one of three effort tiers, chosen per session by the caller.
-A tier is an ACP **session mode** (`session/set_mode`, in the stable schema) and
-moves exactly one knob, `agents.defaults.reasoningEffort`:
-
-| Tier id | Effort sent | When |
-|---|---|---|
-| `low` | `low` | A small, well-specified change, a question about the code, an explanation |
-| `high` | inherits `config.json` (`high`) | **The default.** An ordinary fix, feature or failing test |
-| `max` | `max` | A hard bug, a cross-file refactor, or when the user asked for the most thorough attempt |
-
-How it is wired, and where each half lives:
-
-- `config.json` is the complete baseline and *is* the `high` tier; `modes/low.json`
-  and `modes/max.json` are diffs carrying only the effort. `run.py` renders them
-  into the config as an `acp.modes` catalogue (plus `acp.defaultMode`) - it declares,
-  it does not merge. `--mode <id>` picks which tier sessions start in and is only
-  meaningful with `--acp`.
-- The vendored fork answers `session/set_mode`, advertises the catalogue on every
-  `session/new` / `session/load` / `session/resume` response, and records the chosen
-  tier as that session's policy on the agent loop, read once at the start of each
-  turn. A switch lands on the session's next turn; nothing running is interrupted.
-- The host needs no per-agent code: its `spawn` tool grows a `mode` parameter from
-  the advertised catalogue, sends `session/set_mode` on every route into a session
-  (fail-open: an agent that refuses the mode runs on its default), and re-learns the
-  catalogue from any session response.
-
-Two things to know when upgrading to this tier-aware tree:
-
-- **The host's capability snapshot does not notice.** Its fingerprint digests only
-  how the agent is launched (command, cwd, env, ready timeout), none of which a
-  re-vendor changes. Until the agent is Tested once from the UI - or the first
-  dispatch's `session/new` re-learns the catalogue - the `spawn` schema offers no
-  `mode`, and a `spawn(mode="low")` is refused by the host. Press Test after
-  installing.
-- **Launcher and vendored tree move together.** The fork's root config is
-  `extra="forbid"`; a launcher that renders `acp.modes` against an older tree
-  fails the agent at startup. A tree that predates the tiers must be paired with a
-  folder that ships no `modes/` directory, which renders no `acp` key at all.
-
-The fork also carries a fix the tiers depend on: the streaming call path (every
-ACP turn) used to drop the configured `reasoningEffort` and hard-code the
-sampling temperature to 0.7. Both now resolve from the config, so `high` means
-`high` on the wire.
-
 ## The LLM it runs on
 
 `config.json` pins the model this agent is tuned for, and `subagent.json` records
@@ -822,7 +761,7 @@ blocking.
 | `config.json` | Run config. Holds **no** secrets |
 | `.env` / `.env.example` | The real secrets (mode 600, never published) and their template |
 | `subagent.json` | The third-party subagent entry, with install-time placeholders |
-| `Raven-main/` | The agent itself. Ships as source; its `.venv` does not. **Five live local overlays** - `local-patches.diff` records every affected path and why it differs from the source, plus the history of the earlier patches' upstreaming |
+| `Raven-main/` | The agent itself. Ships as source; its `.venv` does not. **No live local patches** - `local-patches.diff` records only the history of their upstreaming |
 | `sessions/` | Raven's own transcripts, bucketed by workspace path. Created by the build beside its config; not ours to curate |
 
 ## Publishing

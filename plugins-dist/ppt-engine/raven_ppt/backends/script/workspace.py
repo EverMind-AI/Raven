@@ -38,19 +38,6 @@ def script_path(project: Project) -> Path:
     return project.build_dir / "build.py"
 
 
-# How the author's program is read, by every reader of it. utf-8-sig drops the
-# byte-order mark an editor may have put in front of the file, once, at the door:
-# past it the mark is a SyntaxError to compile(), invisible to `str.lstrip()` and
-# to `\s`, and so hides the first banner or the comment above it from the readers
-# that split the file into pages.
-SCRIPT_ENCODING = "utf-8-sig"
-
-
-def read_script(project: Project) -> str:
-    """The author's program as text, read the one way every reader reads it."""
-    return script_path(project).read_text(encoding=SCRIPT_ENCODING)
-
-
 def deck_path(project: Project) -> Path:
     return project.build_dir / "deck.pptx"
 

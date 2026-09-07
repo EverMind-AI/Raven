@@ -34,13 +34,11 @@ from typing import Any, BinaryIO
 from loguru import logger
 
 from raven.acp.methods import AcpMethods
-from raven.acp.modes import build_session_modes
 from raven.acp.outbound import OutboundRequests
 from raven.acp.permissions import AcpPermissionBroker
 from raven.acp.questions import AcpQuestions
 from raven.acp.stdio import read_frames, write_frame
 from raven.acp.updates import UpdateTranslator
-from raven.config import load_config
 
 SHUTDOWN_GRACE_S = 5.0
 """How long a handler gets to finish after the client closed stdin.
@@ -90,10 +88,6 @@ async def serve(reader: asyncio.StreamReader, out: BinaryIO, *, channel: str = A
     _ask_before_external_effects()
     stack = await build_stack(translator, channel=channel, approval_responder=permissions)
     questions.set_broker(stack.question_broker)
-    # Resolved before the first frame: a mode catalogue that does not validate
-    # has to fail the launch here, not the session/set_mode that first reaches
-    # it -- by then a client has already been shown the mode as available.
-    modes = build_session_modes(load_config())
     methods = AcpMethods(
         dispatcher=stack.dispatcher,
         translator=translator,
@@ -102,7 +96,6 @@ async def serve(reader: asyncio.StreamReader, out: BinaryIO, *, channel: str = A
         outbound=outbound,
         questions=questions,
         channel=channel,
-        modes=modes,
     )
     logger.info("acp: engine ready on channel {} ({} methods)", channel, len(stack.dispatcher.methods()))
 

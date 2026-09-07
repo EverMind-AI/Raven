@@ -64,9 +64,6 @@ class PerModelProvider(LLMProvider):
     def get_default_model(self) -> str:
         return self._default
 
-    def supports_assistant_prefill(self, model: str | None = None) -> bool:
-        return self._pick(model).supports_assistant_prefill(model)
-
     async def chat(
         self,
         messages: list[dict[str, Any]],

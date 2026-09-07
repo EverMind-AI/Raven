@@ -22,7 +22,6 @@ from raven_ppt.backends.script.workspace import (
     asset_helpers,
     deck_path,
     provision,
-    read_script,
     script_path,
     with_template_helpers,
 )
@@ -39,7 +38,6 @@ __all__ = [
     "page_failures",
     "page_sources",
     "provision",
-    "read_script",
     "run_script",
     "script_path",
     "submission_refusal",

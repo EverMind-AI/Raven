@@ -4456,37 +4456,6 @@ def test_swap_icon_keeps_a_theme_slot_so_the_icon_follows_the_deck_s_palette(hel
     assert slot == MSO_THEME_COLOR.ACCENT_6
 
 
-def test_swap_icon_takes_a_picture_the_bind_reply_calls_an_icon_slot(helpers) -> None:
-    """The reply names a template's 1.7in seals icon slots and tells the author to swap
-    them; at a 1.6in ceiling this call refused exactly those. One number, in both places."""
-    from pptx import Presentation
-    from pptx.util import Inches
-
-    from raven_ppt.services.measure.geometry import ICON_MAX_IN
-
-    assert helpers.ppt_icons._ICON_AT_MOST_IN == ICON_MAX_IN
-    deck = Presentation()
-    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    slide = deck.slides.add_slide(deck.slide_layouts[6])
-    seal = slide.shapes.add_picture(
-        str(_an_image(helpers.directory / "seal.png")), Inches(1.6), Inches(2.5), Inches(1.7), Inches(1.7)
-    )
-
-    with pytest.raises(ValueError, match="pass colour"):
-        helpers.ppt_icons.swap_icon(slide, seal, "building-store")
-    drawn = helpers.ppt_icons.swap_icon(slide, seal, "building-store", colour="#C8102E")
-
-    assert drawn is not None
-    assert not any(shape.shape_type == 13 for shape in slide.shapes), "the seal is gone; the icon stands in its box"
-
-
-def _an_image(path):
-    from PIL import Image
-
-    Image.new("RGB", (120, 120), (200, 30, 40)).save(path)
-    return path
-
-
 def test_swap_icon_refuses_a_figure_sized_shape(helpers) -> None:
     from pptx import Presentation
     from pptx.util import Inches

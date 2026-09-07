@@ -2347,63 +2347,6 @@ def test_adapt_names_a_drawing_a_picture_may_stand_in_for_when_a_key_misses(tmp_
     assert "name a drawing listed below" in str(caught.value)
 
 
-def test_the_menu_names_a_small_picture_an_icon_slot(tmp_path: Path) -> None:
-    """The red template's page 4 carries three 1.7in seals over its three cards, and a live
-    deck kept them as the marks on three phases of its own; the menu had called them
-    photos. A picture no longer than ICON_MAX_IN a side is an icon slot, one per unit."""
-    from PIL import Image
-    from pptx import Presentation
-    from pptx.util import Inches
-
-    from raven_ppt.services.measure.geometry import ICON_MAX_IN
-    from raven_ppt.services.template.menu import ICON_SLOT_NOTE, menu
-
-    seal = tmp_path / "seal.png"
-    Image.new("RGB", (120, 120), (200, 30, 40)).save(seal)
-    photo = tmp_path / "photo.png"
-    Image.new("RGB", (400, 300), (90, 90, 90)).save(photo)
-    presentation = Presentation()
-    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
-    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-    slide.shapes.add_picture(str(seal), Inches(1.6), Inches(2.5), Inches(1.7), Inches(1.7))
-    slide.shapes.add_picture(str(photo), Inches(5.0), Inches(2.5), Inches(5.3), Inches(2.9))
-    path = tmp_path / "slots.pptx"
-    presentation.save(str(path))
-
-    (entry,) = menu(path)
-
-    assert ICON_MAX_IN == 1.8
-    assert entry.picture_slots == ("[1] 1.7x1.7in icon", "[2] 5.3x2.9in photo")
-    assert "one per unit" in ICON_SLOT_NOTE and "swap_icon" in ICON_SLOT_NOTE and "drop=[n, ...]" in ICON_SLOT_NOTE
-
-
-def test_a_small_transparent_glyph_is_an_icon_slot_and_the_same_glyph_grown_is_a_cut_out(tmp_path: Path) -> None:
-    """Size before transparency: a transparent glyph within ICON_MAX_IN is a mark whichever
-    way it is drawn, and a slot named `cut-out` would not carry ICON_SLOT_NOTE's one-per-unit
-    ask. The same PNG past that size is the floating illustration a cut-out slot is for."""
-    from PIL import Image
-    from pptx import Presentation
-    from pptx.util import Inches
-
-    from raven_ppt.services.template.menu import menu
-
-    glyph = tmp_path / "glyph.png"
-    canvas = Image.new("RGBA", (200, 200), (0, 0, 0, 0))
-    canvas.paste((30, 120, 120, 255), (60, 60, 140, 140))
-    canvas.save(glyph)
-    presentation = Presentation()
-    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
-    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-    slide.shapes.add_picture(str(glyph), Inches(1.0), Inches(2.5), Inches(1.5), Inches(1.5))
-    slide.shapes.add_picture(str(glyph), Inches(6.0), Inches(2.0), Inches(3.0), Inches(3.0))
-    path = tmp_path / "glyphs.pptx"
-    presentation.save(str(path))
-
-    (entry,) = menu(path)
-
-    assert entry.picture_slots == ("[1] 1.5x1.5in icon", "[2] 3.0x3.0in cut-out")
-
-
 def test_the_menu_names_a_transparent_illustration_a_cut_out(tmp_path: Path) -> None:
     """The teal template's cartoons are PNGs two thirds transparent, floating on the page's
     ground with boxes that run into the title row; the menu called them photos, and an

@@ -23,7 +23,6 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Sequence
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -400,31 +399,14 @@ class PptOutlineTool(Tool):
 
             examples = [entry for entry in menu(state.template.source) if not entry.role and not entry.hidden]
             suggestions = []
-            stranded = []
             for page in outline.pages:
                 if page.prototype is None and not page.borrowed:
                     fitting = _suggested_examples(page, examples)
                     if fitting:
                         suggestions.append(f"page {page.page} -> try {', '.join(str(n) for n in fitting)}")
-                    else:
-                        stranded.append(page)
             if suggestions:
                 examples_said += "By what each page says it carries: " + "; ".join(suggestions) + ". "
-            # A page no example of this template can carry is the case borrowing exists
-            # for, and until now it was the case the reply said least about: it listed
-            # the examples that did not fit and left the page composed from scratch.
-            borrowed_said = _borrows_for(stranded, state)
-            if borrowed_said:
-                examples_said += borrowed_said
-        asks = _asks(
-            errands,
-            blocking,
-            bool(state.figures),
-            unprototyped,
-            outline,
-            examples_said,
-            _reused_prototypes(outline, state),
-        )
+        asks = _asks(errands, blocking, bool(state.figures), unprototyped, outline, examples_said)
         if reordered:
             asks.insert(
                 0,
@@ -886,365 +868,23 @@ def _suggested_examples(page: PagePlan, examples: list) -> list[int]:
     the nearest example" was acted on by nobody until a page number stood beside each
     page; the author still chooses, and can still say no example fits.
     """
-    return [entry.number for entry in examples if _fits(page, entry)][:4]
-
-
-def _fits(page: PagePlan, entry) -> bool:
-    """Whether this example page can carry what that page says it carries.
-
-    One predicate for the template's own examples and for the reference pages of the
-    other bundled templates, because the question is the same one and two spellings of
-    it would come to disagree about the page they both offer.
-    """
     carries = (page.carries or "").lower()
+    wants_picture = bool(page.figures) or any(word in carries for word in ("figure", "photo", "picture", "image", "图"))
     wants_table = any(word in carries for word in ("table", "表"))
-    if wants_table:
-        return bool(entry.tables)
-    if _wants_picture(page):
-        return bool(entry.pictures)
-    # Slots when the page repeats a unit; otherwise its text blocks less the
-    # heading, which is what a page of plain boxes offers.
-    room = entry.slots or max(entry.text_blocks - 1, 0)
-    return room >= max(len(page.says), 2)
-
-
-def _wants_picture(page: PagePlan) -> bool:
-    carries = (page.carries or "").lower()
-    return bool(page.figures) or any(word in carries for word in ("figure", "photo", "picture", "image", "图"))
-
-
-# How many pages on one example page make it a habit rather than a coincidence. Two,
-# because the second use is already the moment: by the third the author has settled
-# into it. Measured on two live decks built inside bundled templates -- 16 pages on a
-# 15-page template and 20 on another 15-page one, every page of both carrying a
-# `prototype` and neither carrying a `borrowed` -- so both had to run an example twice
-# and both did it silently. Nothing in the reply had ever mentioned that the other
-# bundled templates ship pages this deck could borrow, so the repetition was not a
-# choice made and lost; it was the only path shown.
-PROTOTYPE_REUSED = 2
-# How many borrows to name. Past this the ask stops being a shortlist: the reference
-# pages of every other bundled template are the pool, and four is a list an author reads
-# whole. This template's own unused examples are not capped: that pool is the handful
-# of pages the template ships and each is offered once, and a repeating page sent to
-# another template while one of them still fits is the outcome the offer exists to stop.
-MOST_BORROWS_OFFERED = 4
-
-
-def _borrowable_offers(state: Any) -> list:
-    """(stem, number, menu entry) for every reference page this deck may borrow.
-
-    Ordered one template at a time round the templates rather than all of one and then
-    all of the next. The order is the order the offers are picked in, and the reference
-    pages are declared eleven of one template first: picked in that order, a deck
-    repeating four examples was offered four pages of the same borrowed template, which
-    answers a monoculture with a monoculture.
-    """
-    grouped: dict[str, list] = {}
-    for stem, number, entry in _reference_menu(Path(state.template.source).stem if state.template else ""):
-        grouped.setdefault(stem, []).append((stem, number, entry))
-    offers = []
-    for index in range(max((len(pages) for pages in grouped.values()), default=0)):
-        for pages in grouped.values():
-            if index < len(pages):
-                offers.append(pages[index])
-    return offers
-
-
-@lru_cache(maxsize=8)
-def _reference_menu(bound_stem: str) -> tuple:
-    """The reference pages and what each holds, read off the bundled templates once.
-
-    Opens seven .pptx and takes about two seconds, and two places in one reply want it,
-    so it is cached rather than paid for twice. Keyed by the bound template because
-    that is what decides which templates are opened; the payload is package data and
-    does not change while a process runs.
-    """
-    from raven_ppt.services.template.defaults import bundled_path, reference_pages
-    from raven_ppt.services.template.menu import menu
-
-    menus: dict[str, dict[int, Any]] = {}
-    found = []
-    for stem, number in reference_pages(except_stem=bound_stem):
-        if stem not in menus:
-            path = bundled_path(stem)
-            menus[stem] = {entry.number: entry for entry in menu(path)} if path else {}
-        entry = menus[stem].get(number)
-        if entry is not None and not entry.role and not entry.hidden:
-            found.append((stem, number, entry))
-    return tuple(found)
-
-
-def _borrow_caveat(stem: str, number: int) -> str:
-    """What this page needs doing to it, or "" when it needs nothing.
-
-    One thing, measured over the 252 cross-template clones of these pages: four of
-    them carry drawings painted in their own template's accents, and a bitmap is the
-    one thing on a reference page that nothing recolours. Every other borrow came
-    across in the deck's own palette, and a caveat on one of those is what teaches an
-    author to read past the caveats.
-    """
-    from raven_ppt.services.template.defaults import reference_artwork
-
-    drawings = reference_artwork(stem, number)
-    if not drawings:
-        return ""
-    return f" (replace its {drawings} drawing(s), painted in {stem.split('_')[0]}'s own colours)"
-
-
-def _pale_accent_note(state: Any) -> str:
-    """The sentence a deck whose accent cannot carry white type needs, once.
-
-    Once for the deck rather than once per offer: it is a fact about this template and
-    not about any page, it applies to every page borrowed into it, and repeated beside
-    each offer it reads as boilerplate -- which is how a caveat stops being read.
-    """
-    from raven_ppt.services.template.theme import borrow_ink_note
-
-    if state.template is None:
-        return ""
-    said = borrow_ink_note(state.template.inventory, Path(state.template.source))
-    return f" {said}" if said else ""
-
-
-def _borrows_for(pages: list, state: Any) -> str:
-    """Reference pages for the pages no example of the bound template can carry.
-
-    The other half of the same offer `_reused_prototypes` makes, at the other moment:
-    there an example fits and has been used already, here no example fits at all.
-    """
-    if not pages or state.template is None:
-        return ""
-    offers = _borrowable_offers(state)
-    if not offers:
-        return ""
-    named, matched = _matched_borrows(pages, offers)
-    if not named:
-        return ""
-    return (
-        "No example of this template fits "
-        + ", ".join(f"page {number}" for number in matched)
-        + ", which is what borrowing is for -- a reference page of another bundled template arrives in this "
-        "deck's own colours and master with only its arrangement carried across: "
-        + "; ".join(named)
-        + ". Record `borrowed: '<template>'` and `prototype: N` on that page."
-        + _pale_accent_note(state)
-        + " "
-    )
-
-
-def _matched_borrows(pages: list, offers: list) -> tuple[list[str], list[int]]:
-    """One reference page per plan page it fits, and the plan pages that got one.
-
-    A reference page is offered once: two pages of a deck built on one arrangement is
-    the repetition this exists to answer, so offering the same page twice would answer
-    it with itself.
-    """
-    named: list[str] = []
-    matched: list[int] = []
-    taken: set[tuple[str, int]] = set()
-    for page in pages:
-        pick = next(((s, n, e) for s, n, e in offers if _fits(page, e) and (s, n) not in taken), None)
-        if pick is None:
-            continue
-        stem, number, entry = pick
-        taken.add((stem, number))
-        shape = entry.arrangement or f"{entry.text_blocks} text blocks"
-        slots = f", {entry.slots} slots" if entry.slots else ""
-        named.append(f"page {page.page} -> {stem} page {number} ({shape}{slots})" + _borrow_caveat(stem, number))
-        matched.append(page.page)
-        if len(named) >= MOST_BORROWS_OFFERED:
-            break
-    return named, matched
-
-
-# How many pages in a row on one example read as a series rather than a habit. Five case
-# pages built alike so a reader compares them across is the deck this was written against,
-# and two adjacent pages on one example is the ordinary repetition the ask is about; at
-# three in a row "built alike on purpose" is the likelier reading, and the ask says so
-# rather than pulling one page out of the middle of it.
-SERIES_RUN = 3
-
-
-def _reused_prototypes(outline: Outline, state: Any) -> str:
-    """The ask that names another page for each page repeating an example.
-
-    An ask rather than a finding: a template with fewer example pages than the deck
-    has pages *has* to repeat one, so repetition is not an error and refusing it would
-    refuse the decks this is meant to help. What the author is missing is not a rule,
-    it is the alternative, by number, so it is a choice from a list rather than a thing
-    to go and look up.
-
-    This template's own unused examples come first, and the other templates' reference
-    pages only for a page none of those fits. Measured on a delivered deck: twenty pages
-    on ten of the template's eleven content examples, one example five times and another
-    three, while five examples -- among them the one with the largest picture slot the
-    template draws, 35% of the page -- started nothing; the borrow offer alone would have
-    sent the author to another template past the pages it already had. The template's
-    own furniture (cover, index, divider, closing) repeats by design and is not counted.
-    """
-    from collections import Counter
-
-    from raven_ppt.services.template.menu import menu
-
-    if state.template is None or not outline.pages:
-        return ""
-    entries = menu(state.template.source)
-    house = {entry.number for entry in entries if entry.role}
-    counted = [
-        page for page in outline.pages if page.prototype is not None and (page.borrowed or page.prototype not in house)
-    ]
-    used = Counter((page.borrowed, page.prototype) for page in counted)
-    repeated = {source for source, count in used.items() if count >= PROTOTYPE_REUSED}
-    if not repeated:
-        return ""
-    runs = _series(counted)
-    in_series = {number for run in runs for number in run}
-    # The first page on an example keeps it; the ones after it are the ones with
-    # somewhere else to go -- unless they sit inside a series.
-    seen: set = set()
-    repeating = []
-    for page in counted:
-        key = (page.borrowed, page.prototype)
-        if key in repeated and key in seen and page.page not in in_series:
-            repeating.append(page)
-        seen.add(key)
-    if not repeating:
-        return ""
-    taken = {page.prototype for page in outline.pages if page.prototype is not None and not page.borrowed}
-    examples = [entry for entry in entries if not entry.role and not entry.hidden]
-    unused = [entry for entry in examples if entry.number not in taken]
-    own_named, own_matched = _matched_examples(repeating, unused, examples, state)
-    left = [page for page in repeating if page.page not in own_matched]
-    borrow_named: list[str] = []
-    borrow_matched: list[int] = []
-    if left:
-        offers = _borrowable_offers(state)
-        if offers:
-            borrow_named, borrow_matched = _matched_borrows(left, offers)
-    if not own_named and not borrow_named:
-        return ""
-    ordered = sorted(repeated, key=lambda one: (one[0], one[1]))
-    numbers = ", ".join(f"{one[1]}" if not one[0] else f"{one[0]} page {one[1]}" for one in ordered)
-    beyond_first = sum(count - 1 for count in used.values() if count >= PROTOTYPE_REUSED)
-    said = (
-        f"prototype{'s' if len(ordered) > 1 else ''} {numbers} each start more than one of this deck's "
-        f"{len(outline.pages)} pages ({beyond_first} page(s) repeat one). "
-        "Repeating an example is not wrong -- a template with fewer example pages than the deck has pages has to"
-    )
-    if runs:
-        series = " and ".join(f"pages {run[0]}-{run[-1]}, in a row on {_source_said(counted, run[0])}," for run in runs)
-        said += (
-            f" -- and {series} read as a series built alike so a reader can compare them, so they are left alone here"
-        )
-    said += ". "
-    if own_named:
-        said += (
-            f"But {len(unused)} of this template's {len(examples)} content examples start no page of this deck. "
-            "By what each repeating page says it carries: "
-            + "; ".join(own_named)
-            + ". Record `prototype: N` on that page and clone it with `adapt(prs, prototype(tpl, N), ...)`. "
-        )
-    if borrow_named:
-        said += (
-            f"For page{'s' if len(borrow_matched) > 1 else ''} {', '.join(str(number) for number in borrow_matched)} "
-            "this template has no unused example left that fits, and the other bundled templates ship reference "
-            "pages this deck can borrow -- a "
-            "borrowed page arrives in this deck's own colours and master with only its arrangement carried across: "
-            + "; ".join(borrow_named)
-            + ". Borrow one with `adapt(prs, prototype(bundled('<template>'), N), ...)` and record "
-            "`borrowed: '<template>'` and `prototype: N` on that page of the plan." + _pale_accent_note(state)
-        )
-    return said.rstrip()
-
-
-def _series(pages: list) -> list[list[int]]:
-    """Runs of at least SERIES_RUN consecutive page numbers on one example, as page numbers."""
-    runs: list[list[int]] = []
-    run: list[int] = []
-    previous = None
-    for page in sorted(pages, key=lambda one: one.page):
-        key = (page.borrowed, page.prototype)
-        if previous is not None and key == previous[0] and page.page == previous[1] + 1:
-            run.append(page.page)
-        else:
-            if len(run) >= SERIES_RUN:
-                runs.append(run)
-            run = [page.page]
-        previous = (key, page.page)
-    if len(run) >= SERIES_RUN:
-        runs.append(run)
-    return runs
-
-
-def _source_said(pages: list, number: int) -> str:
-    page = next(one for one in pages if one.page == number)
-    return f"{page.borrowed} page {page.prototype}" if page.borrowed else str(page.prototype)
-
-
-def _matched_examples(pages: list, unused: list, examples: list, state: Any) -> tuple[list[str], list[int]]:
-    """One unused example of this template per plan page it fits, and the pages that got one.
-
-    Each example offered once, as `_matched_borrows` offers a reference page once, and
-    for the same reason; unlike the borrows, every page one fits gets its offer (see
-    MOST_BORROWS_OFFERED). The line carries what the author chooses by and the menu line
-    does not put beside a number: the picture slots with their share of the page, and
-    which of them is the largest the template draws.
-    """
-    canvas = state.template.inventory.width_in * state.template.inventory.height_in if state.template else 0.0
-    largest = max((area for entry in examples for _, area in _picture_areas(entry)), default=0.0)
-    named: list[str] = []
-    matched: list[int] = []
-    taken: set[int] = set()
-    for page in pages:
-        # A page carrying a picture is offered the roomiest slot first: the deck this was
-        # written against put five photographs on the example with a 16% slot while the
-        # 35% one, listed six pages later, started nothing.
-        candidates = sorted(unused, key=lambda entry: -max((area for _, area in _picture_areas(entry)), default=0.0))
-        if not (page.figures or _wants_picture(page)):
-            candidates = unused
-        pick = next((entry for entry in candidates if _fits(page, entry) and entry.number not in taken), None)
-        if pick is None:
-            continue
-        taken.add(pick.number)
-        shape = pick.arrangement or f"{pick.text_blocks} text blocks"
-        slots = f", {pick.slots} slots" if pick.slots else ""
-        named.append(
-            f"page {page.page} -> this template's page {pick.number} ({shape}{slots}{_slot_facts(pick, canvas, largest)})"
-        )
-        matched.append(page.page)
-    return named, matched
-
-
-_SLOT = re.compile(r"\[(\d+)\] ([\d.]+)x([\d.]+)in (\S+)")
-
-
-def _picture_areas(entry: Any) -> list[tuple[str, float]]:
-    """("WxHin", square inches) for each of the entry's picture slots that is not an icon."""
-    found = []
-    for place in getattr(entry, "picture_slots", ()) or ():
-        match = _SLOT.match(place)
-        if match is None or match.group(4) == "icon":
-            continue
-        found.append((f"{match.group(2)}x{match.group(3)}in", float(match.group(2)) * float(match.group(3))))
-    return found
-
-
-def _slot_facts(entry: Any, canvas: float, largest: float) -> str:
-    """The picture slots as a choice reads them: size, share of the page, and the largest."""
-    areas = _picture_areas(entry)
-    icons = sum(1 for place in getattr(entry, "picture_slots", ()) or () if place.endswith(" icon"))
-    parts = []
-    if areas:
-        shares = [f"{size}, {area / canvas:.0%} of the page" if canvas else size for size, area in areas]
-        if largest and any(area >= largest for _, area in areas):
-            shares = [
-                share + (", the largest picture slot this template draws" if area >= largest else "")
-                for share, (_, area) in zip(shares, areas)
-            ]
-        parts.append(f"picture slot{'s' if len(areas) > 1 else ''} " + " and ".join(shares))
-    if icons:
-        parts.append(f"{icons} icon slot{'s' if icons > 1 else ''}")
-    return f"; {'; '.join(parts)}" if parts else ""
+    points = len(page.says)
+    fitting = []
+    for entry in examples:
+        if wants_table and entry.tables:
+            fitting.append(entry.number)
+        elif wants_picture and entry.pictures:
+            fitting.append(entry.number)
+        elif not wants_table and not wants_picture:
+            # Slots when the page repeats a unit; otherwise its text blocks less the
+            # heading, which is what a page of plain boxes offers.
+            room = entry.slots or max(entry.text_blocks - 1, 0)
+            if room >= max(points, 2):
+                fitting.append(entry.number)
+    return fitting[:4]
 
 
 # The most of a deck's content pages that may be composed from scratch while a template
@@ -1290,23 +930,6 @@ def _composed_pages(outline: Outline, state: Any) -> list:
         return []
     examples = [entry.number for entry in entries if not entry.role and not entry.hidden]
     listed = ", ".join(str(number) for number in composed)
-    # The refusal used to end at "or a `borrowed` page from `borrowable_pages`", which
-    # is the sentence a composed page was already refused past: it names a category and
-    # leaves the author to go and look up which page of which template carries this
-    # page's shape. So the same matcher the asks use is run here, and when it finds
-    # nothing the clause is absent rather than vague.
-    plans = [page for page in content if page.prototype is None and not page.borrowed]
-    named, matched = _matched_borrows(plans, _borrowable_offers(state))
-    borrowable = (
-        (
-            " Of those, these pages of the other bundled templates carry what the page says it carries, and a "
-            "borrowed page arrives in this deck's own colours and master with only its arrangement carried "
-            "across -- record `borrowed: '<template>'` and `prototype: N` on it: " + "; ".join(named) + "."
-        )
-        + _pale_accent_note(state)
-        if named
-        else ""
-    )
     return [
         Finding(
             kind="composed_pages",
@@ -1314,20 +937,14 @@ def _composed_pages(outline: Outline, state: Any) -> list:
             message=(
                 f"{len(composed)} of this deck's {len(content)} content pages ({listed}) plan to be composed from "
                 f"scratch, and at most {allowed} may be while a template is bound: the template offers "
-                f"{len(examples)} content examples (pages {', '.join(str(n) for n in examples)}). "
-                "Give each of the rest a `prototype` -- the nearest example by "
+                f"{len(examples)} content examples (pages {', '.join(str(n) for n in examples)}), and the bundled "
+                "reference pages are borrowable. Give each of the rest a `prototype` -- the nearest example by "
                 "information shape, then replace its text and pictures, delete spare units and move what needs "
-                "moving; a prototype is a starting composition, not a form to fit. "
-                "Keep composing only the pages whose shape no example carries, and say which "
-                "shape that was in `needs`." + borrowable
+                "moving; a prototype is a starting composition, not a form to fit -- or a `borrowed` page from "
+                "`borrowable_pages`. Keep composing only the pages whose shape no example carries, and say which "
+                "shape that was in `needs`"
             ),
-            detail={
-                "composed": composed,
-                "allowed": allowed,
-                "content_pages": len(content),
-                "examples": examples,
-                **({"borrowable_for": matched} if matched else {}),
-            },
+            detail={"composed": composed, "allowed": allowed, "content_pages": len(content), "examples": examples},
         )
     ]
 
@@ -1712,14 +1329,11 @@ def _asks(
     unprototyped: list[int] | None = None,
     outline: Outline | None = None,
     examples: str = "",
-    reused: str = "",
 ) -> list[str]:
     asks: list[str] = []
     if blocking:
         asks.append("fix what is refused above and call ppt_outline again -- nothing is recorded until it clears")
         return asks
-    if reused:
-        asks.append(reused)
     if unprototyped:
         asks.append(
             f"pages {', '.join(str(number) for number in unprototyped)} have no template prototype. "

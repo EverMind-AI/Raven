@@ -424,11 +424,8 @@ def test_every_check_produces_the_severity_it_declares(sample: Sample, tmp_path:
     # The ninth keeps under half of one picture, which is the state `figure_crop` is
     # about and one every other fixture's pictures, fitted or trimmed, are not in.
     cropped = check_deck(DeckUnderReview(pptx_path=_a_picture_mostly_cropped_away(tmp_path)))
-    # The tenth wears one mark over each of three things, which is the state `same_mark`
-    # reads and one no other fixture's pictures, each its own, are in.
-    marked = check_deck(DeckUnderReview(pptx_path=_one_mark_over_three_things(tmp_path)))
 
-    every = (*loaded, *bare, *alike, *banded, *fresh, *footed, *plain, *inherited, *cropped, *marked)
+    every = (*loaded, *bare, *alike, *banded, *fresh, *footed, *plain, *inherited, *cropped)
     assert {finding.kind for finding in every} == set(DISPATCH), "a row nothing produced"
     for finding in every:
         assert finding.severity == DISPATCH[finding.kind], finding.kind
@@ -614,29 +611,6 @@ def _a_deck_the_new_readings_are_for(tmp_path: Path) -> tuple[Path, object, obje
         WordBox(page=1, text="本该对齐的第 3 行。", x0=80.6, y0=275.0, x1=237.0, y1=289.4),
     ]
     return builder.save("new_readings.pptx"), bands, plan, words
-
-
-def _one_mark_over_three_things(tmp_path: Path) -> Path:
-    """Three heading-and-body units in a row and the same 1.7in mark over each."""
-    from pptx import Presentation
-    from pptx.util import Inches
-
-    mark = _an_image(tmp_path / "mark.png", 120, 120)
-    presentation = Presentation()
-    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
-    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-    for index in range(3):
-        left = 0.8 + index * 4.2
-        slide.shapes.add_textbox(
-            Inches(left), Inches(4.4), Inches(3.4), Inches(0.7)
-        ).text_frame.text = f"Thing {index + 1}"
-        slide.shapes.add_textbox(
-            Inches(left), Inches(5.2), Inches(3.4), Inches(1.2)
-        ).text_frame.text = "What it is about."
-        slide.shapes.add_picture(str(mark), Inches(left + 0.85), Inches(2.35), Inches(1.7), Inches(1.7))
-    path = tmp_path / "marked.pptx"
-    presentation.save(str(path))
-    return path
 
 
 def _an_image(path: Path, width: int, height: int) -> Path:

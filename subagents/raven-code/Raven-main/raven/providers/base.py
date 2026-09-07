@@ -113,10 +113,6 @@ class GenerationSettings:
     max_tokens: int = 4096
     reasoning_effort: str | None = None
     timeout: float = 600.0
-    # Streaming stall detector: `timeout` is the whole-request budget, this is
-    # the longest gap between chunks before the stream counts as dead. Reset by
-    # every chunk; 0 falls back to `timeout`.
-    stream_idle_timeout: float = 180.0
     # Backend health probing between retries. A hung backend costs a full
     # `timeout` per attempt in non-streaming mode (a hang and a slow legit
     # generation are indistinguishable until the wall clock fires), so after a
@@ -246,8 +242,8 @@ class LLMProvider(ABC):
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         max_tokens: object = _SENTINEL,
-        temperature: object = _SENTINEL,
-        reasoning_effort: object = _SENTINEL,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamDelta]:
         """Non-streaming fallback: emit the full ``chat()`` response as a single
@@ -259,19 +255,13 @@ class LLMProvider(ABC):
         implements ``chat`` usable in the streaming path — without token-level
         streaming. ``LiteLLMProvider`` overrides this with true streaming.
 
-        ``max_tokens``, ``temperature`` and ``reasoning_effort`` fall back to
-        ``self.generation`` the way ``chat_with_retry`` does. Plain defaults
-        meant the streaming path silently capped output at the signature's
-        4096, sampled at 0.7 whatever the config said, and sent no reasoning
-        effort at all -- so a config that switched thinking on ran with it off
-        on every surface that streams (the TUI, and every ACP turn).
+        ``max_tokens`` falls back to ``self.generation`` the way
+        ``chat_with_retry`` does. A plain default meant the streaming path
+        silently capped output at the signature's 4096 while the configured
+        budget went unused, and left callers no way to raise it for a retry.
         """
         if max_tokens is self._SENTINEL:
             max_tokens = self.generation.max_tokens
-        if temperature is self._SENTINEL:
-            temperature = self.generation.temperature
-        if reasoning_effort is self._SENTINEL:
-            reasoning_effort = self.generation.reasoning_effort
         response = await self.chat(
             messages=messages,
             tools=tools,
@@ -677,17 +667,6 @@ class LLMProvider(ABC):
             return response
 
         return response  # type: ignore[return-value]  # chain always non-empty
-
-    def supports_assistant_prefill(self, model: str | None = None) -> bool:
-        """Whether a request may end with an assistant message to be continued.
-
-        Anthropic rejects a trailing assistant message once thinking is on, and
-        behind a gateway that rejection can surface as a stream that never
-        produces a byte rather than an error. Empty-response recovery asks this
-        before re-feeding the model its own reasoning. Default True: every other
-        vendor accepts the continuation.
-        """
-        return True
 
     @abstractmethod
     def get_default_model(self) -> str:
