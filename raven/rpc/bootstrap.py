@@ -264,7 +264,9 @@ async def build_rpc_stack(
         # own loop), so this is where they start. Idempotent, so a host that
         # already started them pays nothing; loud on failure, never fatal.
         try:
-            await agent_loop.start_plugin_services()
+            start_plugin_services = getattr(agent_loop, "start_plugin_services", None)
+            if start_plugin_services is not None:
+                await start_plugin_services()
         except Exception:
             from loguru import logger as _logger
 
@@ -348,8 +350,10 @@ async def build_rpc_stack(
     if terminal_services is not None and agent_loop is not None:
         from raven.rpc.terminal_tools import register_terminal_tools
 
-        terminal_services.sessions = agent_loop.sessions
-        unregister_terminal_tools = register_terminal_tools(agent_loop.tools, dispatcher)
+        terminal_services.sessions = getattr(agent_loop, "sessions", None)
+        tools = getattr(agent_loop, "tools", None)
+        if terminal_services.sessions is not None and tools is not None:
+            unregister_terminal_tools = register_terminal_tools(tools, dispatcher)
 
     if owns_loop and agent_loop is not None:
         # A one-time runtime preparation belongs to whoever assembles the engine.

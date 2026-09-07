@@ -53,9 +53,6 @@ def register_terminal_methods(
     from raven.rpc.methods.runtime import runtime_status
 
     dispatcher.register("runtime.status", runtime_status)
-    if host is None:
-        dispatcher.register("terminal.resize", terminal_resize)
-        return None
     methods = TerminalMethods(host, delivery, stream, receive_host=receive_host, bind_session=bind_session)
     for name in ("create", "list", "show", "send", "wait", "close", "subscribe", "input", "resize", "rename"):
         dispatcher.register(f"terminal.{name}", methods.handler(name))
@@ -284,6 +281,10 @@ class TerminalMethods:
     def handler(self, method):
         async def invoke(params):
             try:
+                if self.host is None:
+                    if method == "resize" and "handle" not in params:
+                        return await terminal_resize(params)
+                    raise TerminalError("terminal_unavailable", "This runtime has no terminal host attached")
                 return await getattr(self, method)(params)
             except TerminalError as exc:
                 raise _rpc_error(exc.code, str(exc), data=exc.data) from exc

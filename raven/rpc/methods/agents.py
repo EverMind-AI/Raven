@@ -18,10 +18,16 @@ class IdentityRpcError(RpcError):
 
 
 def register_agents_methods(
-    dispatcher: Dispatcher, *, registry: IdentityRegistry, terminal_show: Callable[[str], TerminalRecord] | None = None
+    dispatcher: Dispatcher,
+    *,
+    registry: IdentityRegistry | None = None,
+    terminal_show: Callable[[str], TerminalRecord] | None = None,
 ) -> None:
     async def invoke(method: str, params: dict) -> dict:
+        nonlocal registry
         try:
+            if registry is None:
+                registry = IdentityRegistry()
             if method == "register":
                 name = params.get("name") or params.get("agent_name")
                 if not isinstance(name, str) or not name:

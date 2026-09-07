@@ -237,3 +237,12 @@ async def test_hosted_rename_is_idempotent_canonical_projection(hosted_rpc):
     refused = await call_terminal(dispatcher, "rename", handle="term_0", title="different")
     assert refused["error"]["message"] == "title_is_canonical_projection"
     assert host.show("term_0").title == "worker"
+
+
+async def test_unhosted_terminal_method_reports_unavailable_instead_of_missing():
+    dispatcher = Dispatcher()
+    register_terminal_methods(dispatcher)
+    response = await call_terminal(dispatcher, "list")
+    assert response["error"]["code"] == -32099
+    assert response["error"]["message"] == "terminal_unavailable"
+    assert (await call_terminal(dispatcher, "resize", cols=90))["result"] == {"ok": True}

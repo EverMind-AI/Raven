@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from raven.rpc.methods._stubs import register_stub_methods
+from raven.rpc.methods.agents import register_agents_methods
 from raven.rpc.methods.approval import register_approval_methods
 from raven.rpc.methods.browser import register_browser_methods
 from raven.rpc.methods.cli_dispatch import register_cli_methods
@@ -74,6 +75,7 @@ def register_aligned_methods(
     build_error: "RpcError | None" = None,
     send_frame: "Any" = None,
     default_channel: str = "tui",
+    terminal_services: "Any" = None,
 ) -> None:
     """Register every aligned RPC handler on a dispatcher.
 
@@ -105,6 +107,7 @@ def register_aligned_methods(
         build_error=build_error,
         send_frame=send_frame,
         default_channel=default_channel,
+        terminal_services=terminal_services,
     )
 
 
@@ -146,6 +149,7 @@ def register_aligned_methods_except_system(
     register_session_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     if terminal_services is None:
         register_terminal_methods(dispatcher)
+        register_agents_methods(dispatcher)
     else:
         terminal_services.register(dispatcher)
     register_stub_methods(dispatcher)
