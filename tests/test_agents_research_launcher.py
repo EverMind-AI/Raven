@@ -307,8 +307,8 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
     )[1]
     digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
 
-    assert shipped["version"] == "dr@3.5-filetools-askuser-derive-numeric-cite"
-    assert digest == "6b87d0eb203d66b0", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
+    assert shipped["version"] == "dr@3.5-filetools-askuser-derive-numeric-cite-rank"
+    assert digest == "baf5019c4141a463", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
 def test_every_retirement_this_product_declares_names_a_label_it_can_load():
