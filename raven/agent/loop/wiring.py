@@ -292,6 +292,20 @@ class WiringMixin:
 
         return self._session_policies.get(session_key, SessionPolicy())
 
+    def session_tier(self, session_key: str | None) -> str:
+        """The sub-agent effort tier in force for this session.
+
+        One rule with one home. Two callers need it and they are not interchangeable:
+        the manager reads it per dispatch, and a turn freezes it at its start so a
+        switch arriving mid-turn lands on the next one. Both used to spell the
+        expression out, so a change to how a tier is found had two places to reach.
+
+        Lives here because the policy does: `session_policy` and `set_session_policy`
+        are the pair it is derived from. Both callers reach it on `self` -- the loop is
+        one object assembled from these mixins -- so nothing imports anything new.
+        """
+        return self.session_policy(session_key or "").mode or self._default_tier
+
     def binding_for_session(self, session_key: str) -> ModelBinding:
         """The binding this session runs on: its own switch, else the default.
 

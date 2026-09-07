@@ -85,6 +85,11 @@ DS.onboard = {
     hideSplash();
     shellReady();
     loadSettings().catch(() => {});
+    /* The tier chip's first read. `session.onChange` covers every switch after
+       this, but not the state the page boots into: a page with no conversation
+       restored never changes session, so the chip would stay hidden on the one
+       screen where the reader is about to start a conversation. */
+    loadTier();
     /* Refresh the rail badges from real data right away — until these resolve
        the badges stay suppressed (data-counts="pending") rather than showing
        the demo mock's phantom counts. */

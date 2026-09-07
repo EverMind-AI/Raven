@@ -226,6 +226,16 @@
                   <circle class="fg" cx="10" cy="10" r="7.6"></circle>
                 </svg>
               </button>
+              <!-- Beside the model chip and deliberately not inside its picker: a tier
+                   is not a model. It moves what raven asks of the sub-agents it
+                   dispatches, and leaves raven's own effort alone. Hidden until the
+                   catalogue answers, since a build can offer none. -->
+              <button class="chip" id="tierChip" aria-expanded="false" aria-haspopup="true" hidden>
+                <svg class="pico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                  <path d="M6 18.5v-4"/><path d="M12 18.5v-9"/>
+                </svg>
+                <span id="tierName">High</span>
+              </button>
               <button class="chip" id="modelChip"><span id="modelName">minimax-m3</span></button>
               <button class="go" id="go" disabled data-i18n-aria="gui.send"></button>
             </div>
@@ -239,6 +249,16 @@
               <div class="hd"><span class="lab" data-i18n="gui.perm.title">权限模式</span></div>
               <div id="permList"></div>
               <div class="note" data-i18n="gui.perm.wip">还没接到后端，这里的选择只记在界面上</div>
+            </div>
+            <!-- Heading and note are written on open, from the catalogue that
+                 answered: the built-in ladder is a Session Tier and reaches
+                 sub-agents, a deployment's own catalogue is a Session Mode and
+                 does not. No `data-i18n` on either, or a language flip would put
+                 the tier wording back over a mode catalogue. -->
+            <div class="pop" id="tierPop" data-open="false" role="dialog" aria-labelledby="tierPopLab">
+              <div class="hd"><span class="lab" id="tierPopLab"></span></div>
+              <div id="tierList" role="radiogroup"></div>
+              <div class="note"></div>
             </div>
           </div>
                     <!-- In front of the composer: these four stand on or beside it. -->

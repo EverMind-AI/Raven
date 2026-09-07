@@ -1620,7 +1620,13 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.pb.no_refs': 'none',
     'gui.pb.carried': "carried by this playbook, not this machine's configuration",
     'gui.pb.required': 'required',
-    'gui.pb.no_default': '—'
+    'gui.pb.no_default': '—',
+    'gui.tier.title': 'Sub-agent effort',
+    'gui.tier.scope':
+      'The tier in force is offered to the sub-agents this conversation dispatches, clamped to what each one supports.',
+    'gui.tier.failed': 'Could not switch to {name}',
+    'gui.tier.mode': 'Session mode',
+    'gui.tier.mode_scope': 'The profile in force is not one of the built-in tiers, so it is not offered to sub-agents.'
   },
   zh: {
     'gui.act.ing.ask_user': '等待你回答',
@@ -2944,6 +2950,11 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.pb.no_refs': '无',
     'gui.pb.carried': '本剧本自带,不是本机配置里的同名服务器',
     'gui.pb.required': '必填',
-    'gui.pb.no_default': '—'
+    'gui.pb.no_default': '—',
+    'gui.tier.title': '子智能体力度',
+    'gui.tier.scope': '当前这一档会下发给本会话派出的子智能体,并按每个子智能体支持的档位钳定。',
+    'gui.tier.failed': '切换到 {name} 没有成功',
+    'gui.tier.mode': '会话模式',
+    'gui.tier.mode_scope': '当前这一档不是内置的三档之一,不会下发给子智能体。'
   }
 } as Record<Locale, Record<string, string>>

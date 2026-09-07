@@ -499,3 +499,25 @@ async def test_the_turns_subagent_tier_is_frozen_at_its_start(tmp_path):
 
     assert seen and set(seen) == {"medium"}, f"the turn kept the tier it started on, saw {seen}"
     assert loop.session_policy("cli:c").mode == "max", "the switch did land, for the next turn"
+
+
+def test_the_loop_wires_this_sessions_tier_into_the_subagent_manager(tmp_path):
+    """The half a later refactor can silently drop.
+
+    `SubagentManager` reads a session's tier through a callable the loop hands it at
+    construction, and nothing asserted the loop hands the right one: both loop-side
+    writes survived mutation (`session_tier=lambda key: ""` and a wrong
+    `_default_tier`) while the tier ladder's own tests stayed green. Reported by 0xKT
+    with a control proving the selection did exercise the ladder.
+
+    Asserted against literal values rather than against `loop._default_tier`, or a
+    wrong default would compare equal to itself and pass.
+    """
+    loop = _loop(tmp_path, _ScriptedProvider([_text("plain")]), None)
+
+    assert loop._default_tier == "high", "the loop resolves the catalogue default once, at construction"
+    assert loop.subagents._session_tier("cli:c") == "high", "and a session with no policy inherits it"
+
+    loop.set_session_policy("cli:c", mode="max")
+    assert loop.subagents._session_tier("cli:c") == "max", "a session's own tier reaches the manager"
+    assert loop.subagents._session_tier("cli:other") == "high", "and only that session's"

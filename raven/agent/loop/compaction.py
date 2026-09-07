@@ -16,7 +16,9 @@ half, used by the loop only when ``agents.defaults.compaction.enabled`` is on:
   ``tail_budget``.
 
 The MemoryConsolidator operates at turn boundaries and never runs inside a
-turn; this module plus ``_emergency_shrink`` are the only in-turn mechanisms.
+turn; this module, ``_emergency_shrink`` and the standing image window
+(``_window_images``, which retires pictures the model has already looked at
+before every call) are the only in-turn mechanisms.
 """
 
 from __future__ import annotations
