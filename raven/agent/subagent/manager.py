@@ -30,7 +30,7 @@ from raven.agent.subagent.direct_chat import (
 from raven.agent.subagent.history import SpawnRecord, session_history_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
-from raven.agent.subagent.mode_tiers import clamp_tier, turn_tier_in_force
+from raven.agent.subagent.mode_tiers import resolve_tier, turn_tier_in_force
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
 from raven.agent.subagent_memory import (
     TRACE_BUDGET_S,
@@ -1020,13 +1020,20 @@ class SubagentManager:
         if not tier:
             return None
         offered = tuple(getattr(mode, "id", "") for mode in self.agent_modes(agent))
-        landed = clamp_tier(tier, offered)
+        landed, decline = resolve_tier(tier, offered)
         seen = (agent, tier, landed)
-        if landed is None:
+        if decline is not None:
             if seen not in _TIER_MISS_SEEN:
                 _TIER_MISS_SEEN.add(seen)
+                # Rendered, not decided. Re-testing one of the conditions here to pick a
+                # sentence is what let a decline with no branch of its own borrow another
+                # one's wording, which is a diagnostic that names the wrong side.
                 logger.info(
-                    "sub-agent {}: offers no tier from {}; running on its own default", agent, "/".join(TIER_LADDER)
+                    decline.value,
+                    tier=tier,
+                    agent=agent,
+                    ladder="/".join(TIER_LADDER),
+                    menu="/".join(offered) or "nothing",
                 )
         elif landed != tier and seen not in _TIER_MISS_SEEN:
             _TIER_MISS_SEEN.add(seen)
@@ -1494,6 +1501,12 @@ class SubagentManager:
         # whole file, and this line is concatenated verbatim with no truncation,
         # so the file would be re-injected into the host's context in full.
         asked = origin.get("authored_task") or task
+        # System voice, with the announce's own instructions and outside the
+        # fence -- the channel measured to change the next move (watch_work's
+        # module docstring carries the measurements).
+        from raven.agent.subagent.watch_work import hoarded_code_note
+
+        hoard_note = hoarded_code_note(result)
         announce_content = f"""[Subagent '{task_summary}' {status_text}]
 
 Task: {asked}
@@ -1501,7 +1514,7 @@ Task: {asked}
 Result:
 {fenced_result}{record_line}
 
-Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not report the task as done merely because this message arrived. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full, outside that length budget. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls."""
+Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not report the task as done merely because this message arrived. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full, outside that length budget. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls.{hoard_note}"""
 
         assert self._submit is not None
         mark = {"kind": "spawn", "label": task_summary, "status": status}

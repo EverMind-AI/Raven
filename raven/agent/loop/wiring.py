@@ -169,6 +169,12 @@ class WiringMixin:
 
         return exec_extra_deny_patterns(self._live_config)
 
+    def _live_exec_allow_destructive(self) -> bool | None:
+        """The deletion-safety preference the config currently names."""
+        from raven.config.live import exec_allow_destructive_commands
+
+        return exec_allow_destructive_commands(self._live_config)
+
     def _live_web_search_key(self) -> str:
         """The selected vendor's search key the file names now, else the boot value.
 
@@ -263,6 +269,7 @@ class WiringMixin:
         max_iterations: int | None = None,
         mode: str = "",
         mode_overlay: dict | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         """Record the operating policy this session's next turn runs under.
 
@@ -273,7 +280,10 @@ class WiringMixin:
         from raven.agent.loop._shared import SessionPolicy
 
         self._session_policies[session_key] = SessionPolicy(
-            max_iterations=max_iterations, mode=mode, mode_overlay=dict(mode_overlay or {})
+            max_iterations=max_iterations,
+            mode=mode,
+            mode_overlay=dict(mode_overlay or {}),
+            reasoning_effort=reasoning_effort or None,
         )
 
     def session_policy(self, session_key: str):
@@ -281,6 +291,20 @@ class WiringMixin:
         from raven.agent.loop._shared import SessionPolicy
 
         return self._session_policies.get(session_key, SessionPolicy())
+
+    def session_tier(self, session_key: str | None) -> str:
+        """The sub-agent effort tier in force for this session.
+
+        One rule with one home. Two callers need it and they are not interchangeable:
+        the manager reads it per dispatch, and a turn freezes it at its start so a
+        switch arriving mid-turn lands on the next one. Both used to spell the
+        expression out, so a change to how a tier is found had two places to reach.
+
+        Lives here because the policy does: `session_policy` and `set_session_policy`
+        are the pair it is derived from. Both callers reach it on `self` -- the loop is
+        one object assembled from these mixins -- so nothing imports anything new.
+        """
+        return self.session_policy(session_key or "").mode or self._default_tier
 
     def binding_for_session(self, session_key: str) -> ModelBinding:
         """The binding this session runs on: its own switch, else the default.
@@ -520,9 +544,11 @@ class WiringMixin:
                 timeout=self.exec_config.timeout,
                 restrict_to_workspace=self.restrict_to_workspace,
                 path_append=self.exec_config.path_append,
+                allow_destructive_commands=self.exec_config.allow_destructive_commands,
                 executor=self._executor,
                 extra_deny_patterns=self.exec_config.extra_deny_patterns,
                 extra_deny_source=self._live_exec_extra_deny,
+                allow_destructive_source=self._live_exec_allow_destructive,
                 extra_allowed_dirs=(self.workspace,),
             )
         )
@@ -617,6 +643,7 @@ class WiringMixin:
                 ask=self._confirm_graph,
                 control_reachable=self.dag_control_reachable,
                 provider_for=self._verdict_provider,
+                binding_for=self._turn_binding,
                 verdict_config=self.subagent_dag_config,
             )
         )
@@ -998,6 +1025,7 @@ class WiringMixin:
             # a playbook step is an ordinary DAG node, so it is judged on the same
             # terms once judgement is wired in.
             provider_for=self._verdict_provider,
+            binding_for=self._turn_binding,
             control_reachable=self.dag_control_reachable,
             verdict_config=self.subagent_dag_config,
         )
@@ -1053,6 +1081,18 @@ class WiringMixin:
         from raven.config.live import disabled_playbook_names
 
         return disabled_playbook_names(self._live_config)
+
+    def _turn_binding(self) -> tuple[Any, str]:
+        """The running turn's provider and model, resolved per dispatch.
+
+        Same reason as `_verdict_provider`: both are properties over the turn's
+        binding, and reading them while the loop was being built would freeze
+        the default onto the graph tool. A node dispatched to a pooled ACP
+        worker is what needs them -- the worker keeps the binding it was
+        launched with, so a session that switched model has to say so on every
+        dispatch, through the graph as much as through `spawn`.
+        """
+        return self.provider, self.model
 
     def _verdict_provider(self) -> Any:
         """The provider the node judge should call, resolved per dispatch.

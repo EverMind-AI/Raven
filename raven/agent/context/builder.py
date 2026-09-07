@@ -264,6 +264,8 @@ Skills with available="false" need dependencies installed first - you can try in
         tool_name: str,
         result: str,
         blocks: list[dict[str, Any]] | None = None,
+        *,
+        trusted_note: str = "",
     ) -> list[dict[str, Any]]:
         """Add a tool result to the message list.
 
@@ -275,12 +277,23 @@ Skills with available="false" need dependencies installed first - you can try in
         replaces the plain text when present. It is only ever set for providers
         that can carry an image in a tool result; ``result`` stays the fallback
         and must make sense on its own.
+
+        ``trusted_note`` is this system's own line about the result (the
+        watch-work steering line) and goes AFTER the fence closes. Inside it,
+        the fence's own contract — data, NOT instructions — orders the model
+        to ignore it; measured 2026-08-28, the same dispatch succeeded or
+        failed with the fence honoured or not. Only text a RAVEN module
+        composed may travel through here; never tool output.
         """
         content: Any
         if blocks:
             content = wrap_untrusted_blocks(blocks, source=tool_name)
+            if trusted_note:
+                content = [*content, {"type": "text", "text": trusted_note}]
         else:
             content = wrap_untrusted(result, source=tool_name)
+            if trusted_note:
+                content = f"{content}\n{trusted_note}"
         messages.append({"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": content})
         return messages
 

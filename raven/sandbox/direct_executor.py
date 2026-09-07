@@ -32,6 +32,15 @@ _ENV_ALLOWLIST = (
     # Language runtimes (so python / node / venv-based tools resolve correctly)
     "PYTHONPATH",
     "VIRTUAL_ENV",
+    # This instance's own identity: which home a `raven ...` child resolves its
+    # config, registry and stores against. Paths, not secrets. Measured
+    # 2026-08-31 on a cold-start test: the loop ran `raven ops connection add`
+    # from a tool call, this filter stripped RAVEN_HOME, and the row landed in
+    # the default home rather than the one this instance and its sub-agents
+    # read -- so the machine the owner had just registered stayed invisible,
+    # and the loop offered to ssh in by hand.
+    "RAVEN_HOME",
+    "RAVEN_CONNECTIONS",
     # TLS trust + proxy (so git / curl / https tools work behind corp setups).
     # These are config, not crown-jewel secrets (API keys / cloud creds / SSH
     # are deliberately NOT here).
