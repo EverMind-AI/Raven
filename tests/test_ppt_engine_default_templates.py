@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -116,3 +117,120 @@ def test_the_bound_template_is_not_offered_to_itself() -> None:
 
     assert offered and all(s != stem for s, _ in offered)
     assert len(offered) == sum(len(pages) for s, pages in REFERENCE_PAGES.items() if s != stem)
+
+
+def test_the_reference_pages_that_carry_house_coloured_drawings_are_named() -> None:
+    """The four pages a bitmap makes an exception of, checked against the payload.
+
+    A borrowed page arrives in the deck's own palette because every fill on it is a
+    theme colour -- the whole reason these pages are the ones offered. A picture is not
+    a fill: a drawing painted in its own template's accents arrives in those accents,
+    and it is the only thing on these pages that does. The list is data, so what this
+    holds is that each entry is a reference page that really does carry that many
+    images, and that no page outside the list carries a drawing nobody was warned about.
+    """
+    import re
+
+    from pptx import Presentation
+
+    from raven_ppt.services.template.defaults import (
+        REFERENCE_ARTWORK,
+        REFERENCE_PAGES,
+        bundled_path,
+        reference_artwork,
+    )
+
+    for stem, pages in REFERENCE_ARTWORK.items():
+        assert stem in REFERENCE_PAGES, f"{stem} is not a template anything borrows from"
+        path = bundled_path(stem)
+        if path is None:
+            continue
+        slides = list(Presentation(str(path)).slides)
+        for number, drawings in pages.items():
+            assert number in REFERENCE_PAGES[stem], f"{stem} page {number} is not offered for borrowing"
+            carried = len(re.findall(r"<a:blip ", slides[number - 1]._element.xml))
+            assert carried >= drawings, f"{stem} page {number} carries {carried} image(s), not {drawings}"
+            assert reference_artwork(stem, number) == drawings
+
+    assert reference_artwork("gold_panel_year_end_summary", 6) == 0, "a photograph is a placeholder, not a caveat"
+    assert reference_artwork("no_such_template", 1) == 0
+
+
+def test_the_ratio_at_which_white_stops_reading_is_the_measurement_packages_own() -> None:
+    """Two modules state it and only one may decide it.
+
+    `defaults` cannot import the measurement package -- it is read where python-pptx is
+    not wanted -- so the number is written twice. Written twice it can drift, and the
+    drift would be silent: the gate would refuse a page the offer had just called safe.
+    """
+    from raven_ppt.services.measure.contrast import UNREADABLE_RATIO
+    from raven_ppt.services.template.defaults import ACCENT_READS_WHITE
+
+    assert ACCENT_READS_WHITE == UNREADABLE_RATIO
+
+
+def test_only_the_template_whose_accent_is_pale_asks_for_dark_labels() -> None:
+    """Measured over the 252 cross-template clones, and the one exception it found.
+
+    Seven of the eight bundled templates have an accent1 dark enough to label in white,
+    which is why every reference page labels its cards that way. The eighth does not,
+    and 19 of the 31 pages borrowed into it came back with copy under the ratio. So the
+    note has to fire for that one and stay silent for the other seven -- a note on a
+    template that carries white fine is what teaches an author to read past the notes.
+    """
+    from raven_ppt.services.template.defaults import templates_dir
+    from raven_ppt.services.template.inventory import inspect_template
+    from raven_ppt.services.template.theme import borrow_ink_note, white_on_accent
+
+    said = {}
+    for path in sorted(templates_dir().glob("*.pptx")):
+        inventory = inspect_template(path)
+        assert inventory is not None
+        said[path.stem] = white_on_accent(inventory)
+
+    pale = {stem: found for stem, found in said.items() if found is not None}
+    assert list(pale) == ["warm_bauhaus_quarterly_review"], f"expected one pale template, got {list(pale)}"
+    slot, ratio = pale["warm_bauhaus_quarterly_review"]
+    assert slot == "accent1"
+    assert 1.8 < ratio < 1.95
+
+    path = templates_dir() / "warm_bauhaus_quarterly_review.pptx"
+    note = borrow_ink_note(inspect_template(path), path)
+    assert "1.9:1" in note and "this deck's ink" in note
+    # And it names a page of this template that already does it, because "set it in the
+    # ink" without one leaves the author to invent the alternative.
+    assert re.search(r"own page \d+ does", note), note
+
+    other = templates_dir() / "beige_geometric_general_report.pptx"
+    assert borrow_ink_note(inspect_template(other), other) == ""
+
+
+def test_the_page_named_as_the_example_really_sets_dark_ink_on_that_accent() -> None:
+    """The evidence half, run rather than asserted: open the page and measure it."""
+    from pptx import Presentation
+
+    from raven_ppt.services.assets.color import contrast_ratio
+    from raven_ppt.services.template.defaults import templates_dir
+    from raven_ppt.services.template.theme import (
+        _fill_scheme,
+        _palette_of,
+        _run_inks,
+        _walk,
+        labels_accent_in_ink,
+    )
+
+    path = templates_dir() / "warm_bauhaus_quarterly_review.pptx"
+    number = labels_accent_in_ink(path)
+    assert number is not None
+
+    presentation = Presentation(str(path))
+    palette = _palette_of(presentation)
+    slide = list(presentation.slides)[number - 1]
+    measured = [
+        contrast_ratio(ink, palette["accent1"])
+        for shape in _walk(slide.shapes)
+        if _fill_scheme(shape) == "accent1"
+        for ink in _run_inks(shape, palette)
+    ]
+    assert measured, f"page {number} was named and sets no ink on accent1"
+    assert max(measured) >= 3.0, measured

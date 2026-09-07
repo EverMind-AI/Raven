@@ -21,6 +21,7 @@ modules is worse than one file with three halves.
 from __future__ import annotations
 
 import io
+import textwrap
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -339,3 +340,37 @@ def layout_picture(layout, image: Path, left: float, top: float, width: float, h
         )
     )
     return list(layout.shapes)[-1]
+
+
+# A comment run contiguous above the first banner, so the banner walk-back reaches the
+# file's first line, and the comment names a slide creator, so which block the line lands
+# in changes what the diagnosis counts. This is the file on which reading the mark and not
+# reading it give two different refusals.
+COMMENT_ABOVE_FIRST_BANNER = textwrap.dedent(
+    """
+    # each page calls add_slide() once, through new_slide
+    # SLIDE 1
+    import os
+
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+
+
+    def new_slide(text):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        box = slide.shapes.add_textbox(Inches(0.8), Inches(0.6), Inches(11), Inches(1))
+        box.text_frame.text = text
+        return slide
+
+
+    new_slide("First")
+
+    # SLIDE 2
+    new_slide("Second")
+
+    prs.save(os.environ["PPT_OUTPUT"])
+    """
+).lstrip()
