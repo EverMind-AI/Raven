@@ -106,18 +106,16 @@ function receiveOutput(frame: TerminalOutputFrame): void {
 }
 
 function receiveEvent(event: TerminalEvent): void {
-  const payload = event.payload ?? {}
-  const handle = typeof payload.handle === 'string' ? payload.handle : ''
-  if (!handle) return
-  if (event.type === 'a2a.send' && payload.state === 'accepted') {
-    const nonce = typeof payload.nonce === 'string' ? payload.nonce : ''
-    set({ deliveries: { ...state.deliveries, [handle]: { stage: 'delivered', nonce } } })
+  if (event.type === 'a2a.send' && event.payload.state === 'accepted') {
+    const { handle, nonce } = event.payload
+    set({ deliveries: { ...state.deliveries, [handle]: { stage: 'delivered', nonce: nonce ?? '' } } })
     return
   }
   if (event.type !== 'a2a.ack.matched') return
+  const { handle, ack_for: ackFor } = event.payload
+  if (!handle) return
   const current = state.deliveries[handle]
   if (!current) return
-  const ackFor = typeof payload.ack_for === 'string' ? payload.ack_for : ''
   if (current.nonce && current.nonce !== ackFor) return
   set({ deliveries: { ...state.deliveries, [handle]: { ...current, stage: 'acknowledged' } } })
 }

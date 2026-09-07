@@ -81,7 +81,8 @@ export function TerminalPane({ terminal, active }: { terminal: TerminalRow; acti
       }),
     )
     void source.subscribe({ handle: terminal.handle }).then((reply) => {
-      lastAck = Math.max(lastAck, reply.subscription.seq)
+      const baseline = reply.subscription.seq
+      if (typeof baseline === 'number') lastAck = Math.max(lastAck, baseline)
     })
 
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit)

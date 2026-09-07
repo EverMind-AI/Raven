@@ -248,13 +248,15 @@ describe('hosted terminal tabs', () => {
 
     act(() => source.onEvent?.({
       type: 'a2a.ack.matched',
-      payload: { handle: 'term_claude', nonce: 'a2a-reply', ack_for: 'a2a-other' },
+      payload: { handle: 'term_claude', nonce: 'a2a-reply', ack_for: 'a2a-other', from: 'peer', to: 'raven' },
     }))
     expect(acknowledged.classList.contains('active')).toBe(false)
 
     act(() => source.onEvent?.({
       type: 'a2a.ack.matched',
-      payload: { handle: 'term_claude', nonce: null, ack_for: 'a2a-123456abcdef' },
+      payload: {
+        handle: 'term_claude', nonce: null, ack_for: 'a2a-123456abcdef', from: 'peer', to: 'raven',
+      },
     }))
     expect(acknowledged.classList.contains('active')).toBe(true)
   })
