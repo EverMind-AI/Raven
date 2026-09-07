@@ -41,7 +41,6 @@ __all__ = [
     "default_model",
     "disabled_playbook_names",
     "disabled_tool_names",
-    "exec_allow_destructive_commands",
     "exec_extra_deny_patterns",
     "mcp_server_configs",
     "media_tool_config",
@@ -179,18 +178,6 @@ def exec_extra_deny_patterns(live: LiveConfig) -> list[str] | None:
             return list(ExecToolConfig.model_validate({"extra_deny_patterns": value}).extra_deny_patterns)
         except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
             return None
-    return None
-
-
-def exec_allow_destructive_commands(live: LiveConfig) -> bool | None:
-    """Whether deletion safeguards are disabled, or None when unset/invalid."""
-    for key in ("tools.exec.allowDestructiveCommands", "tools.exec.allow_destructive_commands"):
-        value = live.get(key)
-        if value is None:
-            continue
-        if isinstance(value, bool):
-            return value
-        return None
     return None
 
 

@@ -72,6 +72,7 @@ import re
 
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
+from research_flow.support.brief_checklist import render_checklist
 
 logger = logging.getLogger(__name__)
 
@@ -134,9 +135,21 @@ _SECTION_RE = {
 }
 
 
-def render_reminder() -> str:
-    """The per-turn reminder block, delimiters included."""
-    return f"{REMINDER_OPEN} {_REMINDER_BODY} {REMINDER_CLOSE}"
+def render_reminder(task: str = "") -> str:
+    """The per-turn reminder block, delimiters included.
+
+    ``task`` is this turn's user message. When it carries constraints a parser can settle -
+    how many items, what is excluded, what artefacts are named - they ride inside the same
+    block, for the same reason the template reminder does: the request itself is fifteen
+    thousand tokens up the context by the time the report is written, and the 2026-09-04
+    head-to-head lost three dimensions to constraints that were stated there and satisfied
+    by intention rather than by checking.
+
+    Inside the block rather than beside it, so one delimiter pair still bounds everything
+    injected and ``strip_reminder`` needs no second case. Empty task, or a task with no
+    machine-readable constraints, renders exactly the bytes this function always rendered.
+    """
+    return f"{REMINDER_OPEN} {_REMINDER_BODY}{render_checklist(task)} {REMINDER_CLOSE}"
 
 
 def strip_reminder(content: str) -> str:

@@ -153,8 +153,6 @@ class LiteLLMProvider(LLMProvider):
     (see providers/registry.py) — no if-elif chains needed here.
     """
 
-    api_protocol = "chat"
-
     def __init__(
         self,
         api_key: str | None = None,

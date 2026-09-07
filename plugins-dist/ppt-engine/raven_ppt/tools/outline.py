@@ -103,11 +103,6 @@ class PptOutlineTool(Tool):
                     "maxItems": MAX_PAGES,
                     "description": "the pages in order, one entry each",
                     "items": {
-                        # Every field but `page` and `claim` may arrive as null: a model that has
-                        # nothing to put in an optional field writes null as readily as it leaves
-                        # the key out, and both readers (`_plan` here, `load_outline` in the
-                        # contracts) already treat the two alike. Declared `string` alone, a
-                        # null on one field refused the whole outline, once per page.
                         "type": "object",
                         "additionalProperties": False,
                         "properties": {
@@ -120,17 +115,15 @@ class PptOutlineTool(Tool):
                                 ),
                             },
                             "carries": {
-                                "type": ["string", "null"],
+                                "type": "string",
                                 "description": (
                                     "what carries the claim: a figure, a table, a chart you draw, a single "
                                     "number, a diagram, or prose when it genuinely is prose"
                                 ),
                             },
                             "layout": {
-                                "type": ["string", "null"],
-                                # null in the enum as well as the type: a provider reads these
-                                # parameters as JSON Schema, where the two apply together.
-                                "enum": [*_structure_enum(), None],
+                                "type": "string",
+                                "enum": _structure_enum(),
                                 "description": (
                                     "which page structure this page is composed on, as one id from "
                                     "deck/build/references/layouts.md -- `P14`. Part 1 of that file is "
@@ -145,7 +138,7 @@ class PptOutlineTool(Tool):
                                 ),
                             },
                             "layers": {
-                                "type": ["array", "null"],
+                                "type": "array",
                                 "items": {"type": "string", "enum": _layer_enum()},
                                 "description": (
                                     "the modifier layers stacked on that structure, by id from Part 2 of "
@@ -155,7 +148,7 @@ class PptOutlineTool(Tool):
                                 ),
                             },
                             "anti_pattern": {
-                                "type": ["string", "null"],
+                                "type": "string",
                                 "description": (
                                     "what this page must not turn into, in a line -- the way this "
                                     "structure goes wrong on this page's content. Part 1's third column "
@@ -164,12 +157,12 @@ class PptOutlineTool(Tool):
                                 ),
                             },
                             "figures": {
-                                "type": ["array", "null"],
+                                "type": "array",
                                 "items": {"type": "string"},
                                 "description": "figure ids this page places, as ppt_ingest listed them",
                             },
                             "says": {
-                                "type": ["array", "null"],
+                                "type": "array",
                                 "items": {"type": "string"},
                                 # Shaped after 238 human-written deck outlines (PresentBench's task
                                 # specs, all five domains): 3 points a page at the median, 105 characters
@@ -201,7 +194,7 @@ class PptOutlineTool(Tool):
                                 ),
                             },
                             "section": {
-                                "type": ["string", "null"],
+                                "type": "string",
                                 "description": (
                                     "which movement of the deck this page belongs to, named for this "
                                     "material rather than from a template -- the sections of a deck are its "
@@ -211,8 +204,8 @@ class PptOutlineTool(Tool):
                                 ),
                             },
                             "role": {
-                                "type": ["string", "null"],
-                                "enum": [*PAGE_ROLES, None],
+                                "type": "string",
+                                "enum": list(PAGE_ROLES),
                                 "description": (
                                     "the part this page plays when it is not an argument of its own: `cover` "
                                     "opens the deck, `agenda` indexes it, `section` divides one movement from "
@@ -234,7 +227,7 @@ class PptOutlineTool(Tool):
                             # of the ten left it empty on every page. Not a requirement and not a
                             # gate: a page carrying a chart, a table or prose wants no picture.
                             "needs": {
-                                "type": ["string", "null"],
+                                "type": "string",
                                 "description": (
                                     "what this page lacks and the materials do not hold, if anything -- it "
                                     "comes back as something to go and get before the page is written "

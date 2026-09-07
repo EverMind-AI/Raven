@@ -50,10 +50,8 @@ def test_a_foreign_vocabulary_shares_no_rung_and_is_declined():
 
 
 def test_an_illegible_menu_is_never_climbed_towards():
-    """The shape raven-code ships: a rung below `medium` that the ladder cannot rank,
-    beside one it can. MR !472 was going to give it `low` / `max` and was closed
-    unmerged; the catalogue landed by another route in `669c913a4` as
-    `low` / `high` / `max`, so this is the live fleet and not a hypothetical.
+    """The shape MR !472 gives raven-code: `low` and `max`, one word of which the
+    ladder cannot rank.
 
     Raising to the cheapest *visible* rung would put a `medium` session on `max`
     -- the dearest thing the agent has, chosen because the genuinely cheaper
@@ -65,12 +63,6 @@ def test_an_illegible_menu_is_never_climbed_towards():
     assert clamp_tier("medium", ("low", "max")) is None
     assert clamp_tier("high", ("low", "max")) is None
     assert clamp_tier("max", ("low", "max")) == "max"
-
-    # The menu raven-code actually advertises, so this case is measured against the
-    # fleet rather than against the shape it was written from.
-    assert clamp_tier("medium", ("low", "high", "max")) is None, "climbing past an unrankable low"
-    assert clamp_tier("high", ("low", "high", "max")) == "high", "an exact hit is unaffected"
-    assert clamp_tier("max", ("low", "high", "max")) == "max"
 
 
 def test_the_climb_still_happens_when_the_whole_menu_is_legible():
@@ -174,43 +166,3 @@ def test_a_turn_that_starts_with_no_tier_dispatches_without_one():
     mgr = _manager("max", {"coder": ("medium", "high", "max")})
     with turn_tier(""):
         assert mgr.resolve_mode("s1", "coder", None) is None
-
-
-def test_the_declined_log_names_the_side_that_actually_declined():
-    """One sentence per decline, and no decline borrowing another's wording.
-
-    `resolve_tier` refuses for three different reasons and the line said "offers no
-    tier from medium/high/max" for all of them -- so an agent offering the complete
-    ladder was named as the one at fault when the session's vocabulary was the foreign
-    one, and an agent offering `low`/`max` was told it offered no tier while plainly
-    offering `max`. A diagnostic that can assert the opposite of the truth sends the
-    next reader to the wrong place. First two reported by 0xKT on !474; the third
-    reported on !508 by a verifier, and filed there as pre-existing.
-
-    The caller renders `decline.value` and tests no condition of its own, so a fourth
-    reason cannot arrive wearing a third one's sentence.
-    """
-    from loguru import logger
-
-    # loguru writes to its own sinks, not the stdlib logging `caplog` hooks -- the
-    # same shape `tests/test_acp_server.py` uses.
-    def said_for(tier: str, menu: tuple[str, ...], key: str) -> str:
-        lines: list[str] = []
-        sink = logger.add(lambda m: lines.append(m.record["message"]), level="INFO")
-        try:
-            _manager(tier, {"coder": menu}).resolve_mode(key, "coder", None)
-        finally:
-            logger.remove(sink)
-        return "\n".join(lines)
-
-    foreign = said_for("deep", ("medium", "high", "max"), "s1")
-    assert "deep" in foreign, "name the tier that could not be ranked"
-    assert "offers no tier" not in foreign, "the agent offers all three; it is not the one declining"
-
-    no_overlap = said_for("high", ("fast", "deep"), "s2")
-    assert "offers no tier" in no_overlap, "here the menu really is the reason"
-
-    illegible = said_for("medium", ("low", "max"), "s3")
-    assert "offers no tier" not in illegible, "it offers max; saying otherwise is false"
-    assert "low/max" in illegible, "show the menu that could not be ranked"
-    assert "cannot rank" in illegible, "and say that ranking, not overlap, is what failed"

@@ -68,14 +68,6 @@ export function startMemoryMonitor({
   const inFlight = new Set<Exclude<MemoryLevel, 'normal'>>()
 
   const tick = async () => {
-    // Entries on Node's performance timeline live until cleared, and nothing
-    // in the TUI reads them back. React's development reconciler emits ~6
-    // measures per commit; a streaming session accumulated millions and the
-    // OS killed the process (2026-09-01). The production bundle no longer
-    // ships that build, but the timeline stays capped either way.
-    performance.clearMeasures?.()
-    performance.clearMarks?.()
-
     const { heapUsed, rss } = process.memoryUsage()
     const level: MemoryLevel = heapUsed >= criticalBytes ? 'critical' : heapUsed >= highBytes ? 'high' : 'normal'
 

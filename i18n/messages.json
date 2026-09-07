@@ -2891,26 +2891,6 @@
       "en": "Search models...",
       "zh": "搜索模型…"
     },
-    "gui.picker.protocol": {
-      "en": "API route",
-      "zh": "API 接入方式"
-    },
-    "gui.picker.protocol_auto": {
-      "en": "Auto · {protocol}",
-      "zh": "自动 · {protocol}"
-    },
-    "gui.picker.protocol_chat": {
-      "en": "OpenAI Chat Completions",
-      "zh": "OpenAI Chat Completions"
-    },
-    "gui.picker.protocol_responses": {
-      "en": "OpenAI Responses",
-      "zh": "OpenAI Responses"
-    },
-    "gui.picker.protocol_anthropic": {
-      "en": "Anthropic Messages",
-      "zh": "Anthropic Messages"
-    },
     "gui.pill.bottom": {
       "en": "back to bottom",
       "zh": "回到底部"
@@ -4298,26 +4278,6 @@
     "gui.set.prm.guard": {
       "en": "Guardrails",
       "zh": "执行护栏"
-    },
-    "gui.set.prm.destructive": {
-      "en": "Allow destructive delete commands",
-      "zh": "允许破坏性删除命令"
-    },
-    "gui.set.prm.destructive_w": {
-      "en": "Skips delete confirmation and the recursive-delete guard. Sandbox, workspace limits, and system-level blocks still apply.",
-      "zh": "跳过删除确认和递归删除拦截；沙箱、工作区限制和系统级拦截仍然有效。"
-    },
-    "gui.set.prm.destructive_confirm": {
-      "en": "Allow destructive delete commands?",
-      "zh": "允许破坏性删除命令吗？"
-    },
-    "gui.set.prm.destructive_body": {
-      "en": "The agent may delete files without asking first, including recursive deletes. Keep this off unless you want that behavior.",
-      "zh": "代理可以不经确认删除文件，包括递归删除。除非你明确需要，否则建议保持关闭。"
-    },
-    "gui.set.prm.destructive_yes": {
-      "en": "Allow deletes",
-      "zh": "允许删除"
     },
     "gui.set.prm.mask": {
       "en": "Mask secrets in the transcript",

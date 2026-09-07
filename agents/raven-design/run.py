@@ -54,32 +54,6 @@ SECRET_SLOTS = {
 # The one secret whose absence is fatal: no key, no model, no design.
 REQUIRED_SECRETS = ("DESIGN_API_KEY",)
 
-# Three effort tiers over ACP session modes, the research launcher's shape: the
-# labels are product copy about the choice, the overlay beside each non-baseline
-# mode carries the knobs. config.json IS the high profile, so it needs no file.
-MODES_DIR = HERE / "modes"
-MODE_LABELS = {
-    "medium": (
-        "Medium",
-        "Bounded: medium reasoning and 60 tool iterations. A quick draft or a small revision.",
-    ),
-    "high": (
-        "High",
-        "The default: high reasoning and 150 tool iterations.",
-    ),
-    "max": (
-        "Max",
-        "Maximum reasoning and 300 tool iterations. A full deliverable where the ceiling matters more than the bill.",
-    ),
-}
-BASELINE_MODE = "high"
-OVERLAY_KEYS = frozenset({"agents"})
-
-
-def agent_default(overlay: dict, key: str):
-    """One ``agents.defaults`` knob from a mode overlay, or ``None``."""
-    return ((overlay.get("agents") or {}).get("defaults") or {}).get(key)
-
 
 def env_value(name: str) -> str | None:
     """This product's settings lookup: the process environment, then ``.env``."""
@@ -179,7 +153,6 @@ def render_config(source: Path) -> Path:
     host = render.host_config()
 
     render.apply_secret_slots(config, host, slots=SECRET_SLOTS, required=(), lookup=env_value)
-    render.inherit_exec_policy(config, host)
     configure_image_generation(config, host)
 
     llm_key = REQUIRED_SECRETS[0]
@@ -209,32 +182,6 @@ def render_config(source: Path) -> Path:
     # workspace wins.
     defaults = config.setdefault("agents", {}).setdefault("defaults", {})
     defaults.setdefault("workspace", str(render.product_acp_home(PRODUCT, override=env_value("DESIGN_ACP_HOME"))))
-
-    # Every entry declares its own cap and effort, the baseline included, so
-    # the loop enforces them per session without reading the overlay -- which
-    # the engine does not read either. The overlay stays on the entry as the
-    # record of what the mode changed.
-    catalogue = render.mode_catalogue(
-        MODES_DIR,
-        MODE_LABELS,
-        baseline=BASELINE_MODE,
-        overlay_keys=OVERLAY_KEYS,
-        resolve=lambda overlay: (
-            agent_default(overlay, "maxToolIterations") or defaults.get("maxToolIterations"),
-            {"agents": overlay.get("agents", {})},
-        ),
-    )
-    if catalogue:
-        for entry in catalogue.values():
-            entry["reasoningEffort"] = agent_default(entry["overlay"], "reasoningEffort") or defaults.get(
-                "reasoningEffort"
-            )
-        acp = config.get("acp")
-        if not isinstance(acp, dict):
-            acp = config["acp"] = {}
-        acp["modes"] = catalogue
-        acp["defaultMode"] = BASELINE_MODE
-        log(f"[run] modes: {', '.join(catalogue)} (default {BASELINE_MODE})")
 
     root = state_root()
 

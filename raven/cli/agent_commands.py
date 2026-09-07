@@ -39,28 +39,6 @@ console = Console()
 _ONE_SHOT_EXIT = {"code": 0}
 
 
-async def _wait_for_background_work(agent_loop, scheduler, conversation: str) -> None:
-    """Wait for sub-agents and their follow-up turns before one-shot teardown.
-
-    A sub-agent completion submits a ``SUBAGENT`` turn after its running count
-    drops, so the short second check closes that hand-off gap.
-    """
-    subagents = getattr(agent_loop, "subagents", None)
-    if subagents is None:
-        return
-    lanes = {conversation, "cli:direct"}
-
-    def busy() -> bool:
-        return subagents.get_running_count() > 0 or any(scheduler.has_inflight(lane) for lane in lanes)
-
-    while True:
-        if not busy():
-            await asyncio.sleep(2.0)
-            if not busy():
-                return
-        await asyncio.sleep(1.0)
-
-
 def _print_agent_response(response: str, render_markdown: bool) -> None:
     """Render assistant response with consistent terminal styling."""
     content = response or ""
@@ -351,7 +329,6 @@ def register(app: typer.Typer) -> None:
                         )
                     )
                     await handle.result()
-                    await _wait_for_background_work(agent_loop, scheduler, session_id)
                 await hub.wait_idle("cli")  # render barrier: CliOutlet caught up
                 await teardown()
                 await agent_loop.close_mcp()

@@ -83,11 +83,9 @@ class ExecTool(Tool):
         path_append: str = "",
         executor: SandboxExecutor | None = None,
         extra_deny_patterns: list[str] | None = None,
-        allow_destructive_commands: bool = False,
         extra_allowed_dirs: tuple[Path, ...] = (),
         *,
         extra_deny_source: Callable[[], list[str] | None] | None = None,
-        allow_destructive_source: Callable[[], bool | None] | None = None,
         follow_binding: bool = True,
     ):
         self.timeout = timeout
@@ -119,14 +117,9 @@ class ExecTool(Tool):
         self._base_deny_patterns = list(self.deny_patterns)
         self._extra_deny_current = list(extra_deny_patterns or [])
         self._extra_deny_source = extra_deny_source
-        self._allow_destructive_current = bool(allow_destructive_commands)
-        self._allow_destructive_source = allow_destructive_source
         if extra_deny_patterns:
             self.deny_patterns = self.deny_patterns + list(extra_deny_patterns)
-        self._policy = ShellCommandPolicy(
-            deny_patterns=self.deny_patterns,
-            allow_destructive_commands=allow_destructive_commands,
-        )
+        self._policy = ShellCommandPolicy(deny_patterns=self.deny_patterns)
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
         self.extra_allowed_dirs = extra_allowed_dirs
@@ -144,22 +137,6 @@ class ExecTool(Tool):
             "exec_tool_approval_turn",
             default=_ApprovalTurn(),
         )
-
-    def _refresh_allow_destructive(self) -> None:
-        """Apply the latest deletion-safety preference before classifying a command."""
-        if self._allow_destructive_source is None:
-            return
-        try:
-            allowed = self._allow_destructive_source()
-        except Exception:
-            return
-        if allowed is None:
-            return
-        allowed = bool(allowed)
-        if allowed == self._allow_destructive_current:
-            return
-        self._policy.set_allow_destructive_commands(allowed)
-        self._allow_destructive_current = allowed
 
     def _refresh_deny_patterns(self) -> None:
         """Track the operator's extra deny list as it stands on disk.
@@ -249,12 +226,6 @@ class ExecTool(Tool):
         "tool, script, interpreter, or equivalent method; carry on with the rest of "
         "the task without it."
     )
-    # A parse failure is the command's own to fix, not a protected action: the
-    # stop instruction above told the model to abandon the install it was doing.
-    _PARSE_INSTRUCTION = (
-        " This command will not run here as written. Close the quote, or write the "
-        "script to a file with the file tools and run that file, then retry."
-    )
 
     @property
     def description(self) -> str:
@@ -305,7 +276,6 @@ class ExecTool(Tool):
         timeout: int | None = None,
         **kwargs: Any,
     ) -> str | ToolResult:
-        self._refresh_allow_destructive()
         self._refresh_deny_patterns()
         bound = str(workdir.current() or "") if self.follow_binding else ""
         cwd = working_dir or bound or self.working_dir or os.getcwd()
@@ -331,16 +301,9 @@ class ExecTool(Tool):
         outcome = self._policy.classify(command, sandboxed=sandboxed)
         if outcome.decision is CommandDecision.HARD_DENY:
             why = _DENY_REASONS.get(outcome.reason_code, "")
-            message = (
+            return self._terminal_error(
                 f"Error: Command blocked by safety guard: it {why}" if why else "Error: Command blocked by safety guard"
             )
-            if outcome.reason_code == "parse_error":
-                # Not a protected action, so not a reason to end the turn: the
-                # command is the model's own to fix, and ending the turn here is
-                # what turned one unclosed quote into an hour of design work
-                # abandoned one step before delivery.
-                return ToolResult(model_text=message + self._PARSE_INSTRUCTION, ok=False)
-            return self._terminal_error(message)
         if outcome.decision is CommandDecision.REQUIRE_APPROVAL:
             approval_error = await self._request_approval(command, sandboxed=sandboxed)
             if approval_error:

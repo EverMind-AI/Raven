@@ -35,13 +35,6 @@ await build({
   outfile: out,
   jsx: 'automatic',
   jsxImportSource: 'react',
-  // Bake production in. Without this the bundle carries BOTH react-reconciler
-  // builds and picks at runtime -- and the launcher never set NODE_ENV, so
-  // every production TUI ran the development reconciler. That build emits
-  // ~6 performance.measure() entries per commit, and Node's performance
-  // timeline is never cleared: hours of streaming grew the heap past 2.5 GB
-  // and the OS killed the session (observed 2026-08-31 and 2026-09-01).
-  define: { 'process.env.NODE_ENV': '"production"' },
   // Skip the prebuilt @hermes/ink bundle — esbuild's __esm helper doesn't
   // await nested async init, which breaks lazy-initialized exports like
   // `render`. Bundling from source sidesteps that.

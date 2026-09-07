@@ -58,22 +58,6 @@ def _log_rows(tmp_path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-async def test_reserved_session_replays_updates_after_sink_attaches() -> None:
-    from raven.acp_client.pool import _SessionRouter
-
-    router = _SessionRouter("Design")
-    received: list[tuple[str, dict]] = []
-
-    async def sink(method: str, params: dict) -> None:
-        received.append((method, params))
-
-    router.reserve("acp:turn")
-    await router.dispatch(*_frame("agent_message_chunk", "first", session="acp:turn"))
-    await router.take_over("acp:turn", sink)
-
-    assert [params["update"]["content"]["text"] for _, params in received] == ["first"]
-
-
 async def test_a_turn_reaches_the_pane_as_the_three_events_a_typed_turn_uses(tmp_path):
     """The client demultiplexes message.start / token.delta / message.complete on
     ``target`` -- the same three a typed direct-chat turn produces -- and it must

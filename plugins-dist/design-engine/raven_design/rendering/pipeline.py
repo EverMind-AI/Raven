@@ -249,11 +249,7 @@ class RenderPipeline:
             and comparison["mean_absolute_channel_delta"] <= self.config.browser_channel_delta_limit
         ):
             return False
-        self.pdf.image_to_pdf(
-            reference,
-            paths.document,
-            pixels_per_point=adapter_result.rendered.get("reference_pixels_per_point", 2.0),
-        )
+        self.pdf.image_to_pdf(reference, paths.document)
         if paths.pages.exists():
             shutil.rmtree(paths.pages)
         adapter_result.rendered["pdf_fidelity"] = "raster_fallback"
@@ -349,17 +345,6 @@ class RenderPipeline:
                 "invalid_parameters",
                 "viewport height is outside the allowed range.",
             )
-        if (
-            not isinstance(request.scale, (int, float))
-            or isinstance(request.scale, bool)
-            or not isfinite(request.scale)
-            or not 1 <= request.scale <= 4
-            or max(request.viewport_width, request.viewport_height) * request.scale > self.config.max_side_pixels
-        ):
-            raise RenderError(
-                "invalid_parameters",
-                "scale must be between 1 and 4 and keep the scaled viewport within max_side_pixels.",
-            )
         actions = _validated_actions(request.actions)
         return RenderRequest(
             path=source,
@@ -373,7 +358,6 @@ class RenderPipeline:
             asset_root=asset_root,
             internal_output=request.internal_output,
             actions=actions,
-            scale=request.scale,
         )
 
     @staticmethod
