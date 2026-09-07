@@ -28,6 +28,7 @@ from raven.agent.subagent.direct_chat import (
     DirectChatError,
     DirectChatRecord,
     DirectTurnMeta,
+    NotAddressableError,
 )
 from raven.agent.subagent.history import SpawnRecord, session_history_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
@@ -766,12 +767,12 @@ class SubagentManager:
         """
         row = self.registry.get(agent)
         if row is None or not row.enabled:
-            raise RuntimeError(
+            raise NotAddressableError(
                 f"Cannot {doing}: {agent!r} is disabled or no longer configured, so it cannot "
                 "be addressed. Any records it already has remain on disk."
             )
         if not self.declared_stateful(agent):
-            raise RuntimeError(
+            raise NotAddressableError(
                 f"Cannot {doing}: {agent!r} is stateless, so each turn would start a fresh "
                 "conversation with no memory of this one. Spawn it with a task instead."
             )

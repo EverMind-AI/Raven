@@ -106,6 +106,11 @@ class AcpEmptyTurnError(RuntimeError):
     measured on ``hermes acp``, a provider ``HTTP 401`` still returned
     ``stopReason: "end_turn"`` and reported the failure only on stderr. So a turn
     with no content is treated as a failure and the stderr tail carried with it.
+
+    Also raised for a turn that DID say something and still answered nothing:
+    one that ends on a failed tool call, having narrated only its plan to make
+    the call. Same outcome for the caller -- nothing usable came back -- and
+    without this it was reported as a completed run whose result was the plan.
     """
 
 
@@ -474,6 +479,50 @@ class _TurnCollector:
             if ev["t"] == "say":
                 said.append(ev["text"])
         return "".join(reversed(said)).strip()
+
+    @property
+    def failed_call_without_answer(self) -> tuple[str, str] | None:
+        """The tool call this turn ended on, when it failed and nothing followed.
+
+        A turn can end on a tool call and say nothing after it -- that is what
+        ``closing_text`` returns empty for, and when the call SUCCEEDED it is a
+        real outcome. When it failed, the run has no answer at all: what
+        ``text`` holds is whatever the agent narrated on its way to the call,
+        which is a plan, not a result.
+
+        Returns the call's label and its error text, because those are the
+        actionable part and nothing else on the path carries them: measured on a
+        real dispatch, the whole of what a caller could act on was
+        ``update_task_state`` and ``operations should be array``, and both were
+        thrown away.
+
+        Walking back rather than reading the last event, and stopping at the
+        first thing that settles the question: anything said, or a person's
+        words, means the turn did not end on the call. A ``call`` with no
+        ``result`` behind it means nobody told us how it went, which is not the
+        same as knowing it failed.
+        """
+        for ev in reversed(self.events):
+            if ev["t"] == "say" and str(ev.get("text") or "").strip():
+                return None
+            if ev["t"] == "user":
+                return None
+            if ev["t"] == "call":
+                return None
+            if ev["t"] == "result":
+                if ev.get("ok"):
+                    return None
+                call = next(
+                    (e["call"] for e in reversed(self.events) if e["t"] == "call" and e.get("id") == ev.get("id")),
+                    None,
+                )
+                # `name`, not `label`: the label pairs the verb with its target
+                # for a flat list, and a call whose only subject is its own
+                # title reads as that title twice ("update_task_state
+                # update_task_state", which is what `meta.tool_calls` shows).
+                named = getattr(call, "name", None) or str(ev.get("id") or "a tool call")
+                return str(named), str(ev.get("text") or "")
+        return None
 
     def counts(self) -> dict[str, int]:
         tally: dict[str, int] = {}
@@ -1108,6 +1157,19 @@ class AcpAgentBackend:
                     raise AcpEmptyTurnError(
                         f"acp agent {self.name!r} ended its turn with no content "
                         f"(stopReason={stop_reason!r}){asked}; stderr tail: {tail or '<empty>'}"
+                    )
+
+                if failed := collector.failed_call_without_answer:
+                    label, detail = failed
+                    span.error(f"no answer after a failed {label}")
+                    # Not `if not text`: this turn said something. What it said
+                    # is the plan it had for the call that then failed, and
+                    # handing that back made a run that did nothing read as a
+                    # completed one whose result was a promise to begin.
+                    raise AcpEmptyTurnError(
+                        f"acp agent {self.name!r} ended its turn on a failed {label} and answered "
+                        f"nothing after it (stopReason={stop_reason!r}); the call reported: "
+                        f"{detail.strip() or '<no detail>'}"
                     )
 
                 if not resumed and self.is_stateful:
