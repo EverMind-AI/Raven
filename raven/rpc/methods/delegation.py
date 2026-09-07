@@ -31,12 +31,7 @@ if TYPE_CHECKING:
     from raven.rpc.methods.session import AgentLoopFactory
 
 
-# Raven's sub-agents are leaves: ``RavenLoopBackend`` builds their tool set
-# without the spawn tool, and no backend reports a parent id, so a spawn tree
-# is exactly one level deep. The HUD needs a number to render "d1/1" against;
-# reporting a cap the runtime does not enforce would be worse than this
-# constant, which it does.
-MAX_SPAWN_DEPTH = 1
+from raven.agent.subagent.lineage import MAX_SPAWN_DEPTH
 
 
 def _manager(agent_loop_factory: "AgentLoopFactory | None") -> Any:
@@ -63,7 +58,7 @@ async def delegation_status(
     manager = _manager(agent_loop_factory)
     return {
         "max_concurrent_children": manager.max_concurrent,
-        "max_spawn_depth": MAX_SPAWN_DEPTH,
+        "max_spawn_depth": manager.max_spawn_depth,
         "paused": manager.paused,
     }
 

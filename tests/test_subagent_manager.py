@@ -3199,3 +3199,32 @@ async def test_announce_of_an_ordinary_result_carries_no_hoarding_note():
     )
 
     assert "workspace of the node" not in submitted[0].text
+
+
+async def test_spawn_refuses_in_a_child_process_before_backend_resolution(monkeypatch):
+    monkeypatch.setenv("RAVEN_PARENT_ID", "host-session")
+    monkeypatch.setenv("RAVEN_SPAWN_DEPTH", "1")
+    manager = _stub_mgr(monkeypatch)
+    result = await manager.spawn("must not run", agent="missing-agent")
+    assert result.startswith("Spawn refused: ")
+    assert "depth" in result
+    assert not manager._running_tasks
+
+
+async def test_spawn_child_context_carries_parent_and_refuses_recursive_dispatch(monkeypatch):
+    from raven.agent.subagent.lineage import current_lineage
+
+    manager = _stub_mgr(monkeypatch)
+    observed = []
+
+    async def child(*args, **kwargs):
+        observed.append(current_lineage())
+        observed.append(await manager.spawn("grandchild"))
+
+    monkeypatch.setattr(manager, "_run_subagent_inner", child)
+    assert "started" in await manager.spawn("child", session_key="cli:parent")
+    await asyncio.gather(*manager._running_tasks.values())
+    assert observed[0].parent_id == "cli:parent"
+    assert observed[0].depth == manager.max_spawn_depth == 1
+    assert observed[1].startswith("Spawn refused: ")
+    assert current_lineage().depth == 0

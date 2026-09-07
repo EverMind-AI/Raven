@@ -40,3 +40,30 @@ async def test_acp_child_inherits_custom_raven_home(tmp_path: Path, monkeypatch:
         assert observed.read_text(encoding="utf-8") == str(host_home)
     finally:
         await client.close()
+
+
+async def test_acp_child_carries_enforced_ancestry_after_config_env(tmp_path, monkeypatch):
+    from raven.agent.subagent.lineage import child_run
+
+    observed = tmp_path / "lineage.txt"
+    child = tmp_path / "lineage.py"
+    child.write_text(
+        "import os,pathlib,time\n"
+        "pathlib.Path(os.environ['OUTPUT']).write_text(os.environ['RAVEN_PARENT_ID'] + ':' + os.environ['RAVEN_SPAWN_DEPTH'])\n"
+        "time.sleep(60)\n"
+    )
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": os.environ["PATH"], "OUTPUT": str(observed)})
+    with child_run("cli:parent"):
+        client = await AcpClient.launch(
+            name="lineage-probe",
+            command=f"{shlex.quote(sys.executable)} {shlex.quote(str(child))}",
+            env={"RAVEN_PARENT_ID": "override", "RAVEN_SPAWN_DEPTH": "0"},
+        )
+    try:
+        for _ in range(100):
+            if observed.exists():
+                break
+            await asyncio.sleep(0.01)
+        assert observed.read_text() == "cli:parent:1"
+    finally:
+        await client.close()

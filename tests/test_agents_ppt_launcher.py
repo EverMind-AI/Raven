@@ -159,7 +159,7 @@ def test_the_config_is_the_forks_modulo_the_swap_ledger():
     assert retired == slice_
     ours_disabled = set(ours["tools"].pop("disabledTools"))
     fork_disabled = set(fork_tools.pop("disabledTools"))
-    assert ours_disabled - fork_disabled == TRUNK_HELD_OUT
+    assert ours_disabled - fork_disabled == TRUNK_HELD_OUT | {"spawn", "message"}
     assert fork_disabled <= ours_disabled, "no fork disable row may be quietly re-enabled"
     assert ours["tools"] == fork_tools
     ours.pop("tools")
@@ -597,7 +597,7 @@ DECK_TOOLS = {
 #: from the rendered slice key) joins only when a Serper key is present -- the
 #: fork's own refusal to register keyless search. Every trunk-new name is held
 #: out by the TRUNK_HELD_OUT config rows pinned above.
-VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | DECK_TOOLS
+VENDORED_TOOL_FACE = (FORK_CONFIG_INTENT - {"spawn", "message"}) | DECK_TOOLS
 KEY_GATED = {"web_search", "ppt_image_search"}
 
 
