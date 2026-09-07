@@ -480,6 +480,28 @@ def _unreadable(node_id: str, what: str, target: str, known: SessionNodes) -> st
             f"node '{node_id}' references {what}: run '{owner}' recorded no outcome for it. Read the file "
             f"instead: {{{{ ref:@runs/{owner}/{target}.out.md }}}}"
         )
+    # The two states a *live* run's nodes can be in that only a replan can present:
+    # its overlay reads that run as it stands rather than as it finalized. Nothing
+    # has happened to it yet -- every message here is raised as a refusal, and
+    # `prepare_replan` returns that before the decision is signalled, so the old run
+    # is still going as submitted. The advice is `failed`'s -- redo the work --
+    # because a replan that does land marks these `skipped` and `failed`, and not
+    # RUNNING's "wait for that run to report", which would wait on nodes a landing
+    # replan throws away.
+    # Not an enumeration of everything the overlay can carry: a run that is
+    # unfinalized and held by no tool any more reconciles its nodes to
+    # `interrupted` (`dag_resume`), which falls through to the caller's unknown-id
+    # fallback here, as it did before these two branches existed.
+    if state == "pending":
+        return (
+            f"node '{node_id}' references {what}, which run '{owner}' has not started, and this replan "
+            f"would discard it unrun, so it will write no output. Re-do it under a new id"
+        )
+    if state == "exception":
+        return (
+            f"node '{node_id}' references {what}, which reported in run '{owner}' that it could not "
+            f"accomplish its task, so it wrote no output. Re-do it under a new id"
+        )
     return None
 
 

@@ -1606,7 +1606,12 @@ class TestSessionModes:
             {
                 "fast": AcpModeProfile(id="fast", name="Fast", description="bounded", max_iterations=None),
                 "deep": AcpModeProfile(
-                    id="deep", name="Deep", description="longer", max_iterations=60, overlay={"k": 10}
+                    id="deep",
+                    name="Deep",
+                    description="longer",
+                    max_iterations=60,
+                    overlay={"k": 10},
+                    reasoning_effort="max",
                 ),
             },
             default="fast",
@@ -1642,7 +1647,12 @@ class TestSessionModes:
         assert response["result"] == {}
         assert modes.current(sid) == "deep"
         assert applied[-1][0] == sid
-        assert applied[-1][1] == {"max_iterations": 60, "mode": "deep", "mode_overlay": {"k": 10}}
+        assert applied[-1][1] == {
+            "max_iterations": 60,
+            "mode": "deep",
+            "mode_overlay": {"k": 10},
+            "reasoning_effort": "max",
+        }
 
     async def test_unknown_mode_is_invalid_params_naming_the_catalogue(self, rig, monkeypatch):
         self._declare(rig, monkeypatch)

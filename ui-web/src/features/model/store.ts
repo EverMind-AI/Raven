@@ -10,7 +10,7 @@
 import { ds, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 
-import type { ModelSource, Provider } from './types'
+import type { ApiProtocol, ModelSource, Provider } from './types'
 
 export interface OpenAt {
   /* What the popover is anchored to and must not close on a click inside.
@@ -100,6 +100,18 @@ export function close(): void {
 /* Only providers with an account and something to offer. Exported because the
    list decides both columns and the initial selection. */
 export const authed = (): Provider[] => source().providers().filter((p) => p.on && p.models.length)
+
+export const protocolFor = (provider: Provider, model: string): ApiProtocol => {
+  const configured = provider.protocols?.[model]
+  return configured === 'chat' || configured === 'responses' || configured === 'anthropic' ? configured : 'chat'
+}
+
+export async function setProtocol(model: string, provider: string, protocol: ApiProtocol): Promise<void> {
+  const setter = source().setProtocol
+  if (!setter) throw new Error('当前 WebUI 后端不支持 API 类型设置')
+  await setter(model, provider, protocol)
+  announce()
+}
 
 /* Optimistic: the chip has to say the new model before the round trip, because
    the next turn already uses it. A rejected write puts the old one back and

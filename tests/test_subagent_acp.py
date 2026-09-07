@@ -758,11 +758,11 @@ async def test_the_collector_serves_a_timestamped_partial_while_in_flight() -> N
 
 async def test_dispatch_accepts_the_managers_full_keyword_set(tmp_path: Path) -> None:
     """``SubagentManager`` passes one keyword set to whichever backend it
-    resolved, ``provider`` and ``model`` included. This backend ignores both --
-    the agent holds its own credential -- but it has to accept them: without
-    them every acp dispatch died of a TypeError before the agent was contacted,
-    spawn, DAG node and direct chat alike, and the tests missed it by calling
-    ``run`` directly with the arguments this backend happened to declare.
+    resolved, ``provider`` and ``model`` included. The ACP launch carries the
+    binding into its worker environment, so a pooled worker follows the turn
+    that dispatched it. The parameters still have to be accepted uniformly:
+    without them every ACP dispatch died of a TypeError before the agent was
+    contacted.
     """
     backend = build_third_party_backend(stub_config("a"))
     reply = await backend.run(
@@ -1222,6 +1222,12 @@ async def test_two_tasks_on_one_handle_take_turns(tmp_path: Path) -> None:
     assert await registry.lookup("s", "shared", "work", kind="acp") == "stub-session-1"
 
 
+def _only_connection(name: str):
+    held = get_pool().connections(name)
+    assert len(held) == 1, f"{name!r} holds {len(held)} connections"
+    return held[0]
+
+
 async def test_a_reconfigured_agent_stops_being_served_by_the_old_process(tmp_path: Path) -> None:
     """The pool used to key on the agent name alone.
 
@@ -1231,14 +1237,14 @@ async def test_a_reconfigured_agent_stops_being_served_by_the_old_process(tmp_pa
     """
     old = build_third_party_backend(stub_config("a", mode="ok"))
     assert await old.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "pong"
-    old_pid = get_pool()._connections["a"].client._proc.pid
+    old_pid = _only_connection("a").client._proc.pid
 
     # Same name, different launch config. `empty_turn` is what the new process
     # answers with, so reaching it is observable rather than inferred.
     new = build_third_party_backend(stub_config("a", mode="empty_turn"))
     with pytest.raises(AcpEmptyTurnError):
         await new.run("ping", task_id="t2", workspace=tmp_path, executor=None)
-    assert get_pool()._connections["a"].client._proc.pid != old_pid
+    assert _only_connection("a").client._proc.pid != old_pid
 
 
 async def test_an_unchanged_agent_keeps_its_process(tmp_path: Path) -> None:
@@ -1246,11 +1252,11 @@ async def test_an_unchanged_agent_keeps_its_process(tmp_path: Path) -> None:
     cfg = stub_config("a")
     first = build_third_party_backend(cfg)
     await first.run("ping", task_id="t1", workspace=tmp_path, executor=None)
-    pid = get_pool()._connections["a"].client._proc.pid
+    pid = _only_connection("a").client._proc.pid
 
     second = build_third_party_backend(stub_config("a"))
     await second.run("ping", task_id="t2", workspace=tmp_path, executor=None)
-    assert get_pool()._connections["a"].client._proc.pid == pid
+    assert _only_connection("a").client._proc.pid == pid
 
 
 def test_the_launch_key_covers_every_launch_parameter() -> None:
@@ -1278,6 +1284,47 @@ def test_the_launch_key_covers_every_launch_parameter() -> None:
     assert launch_key(**base) == launch_key(**base)
     # An absent env and an empty one are the same launch.
     assert launch_key(command="a", cwd=None, env=None) == launch_key(command="a", cwd=None, env={})
+
+
+async def test_two_bindings_of_one_agent_hold_their_own_connections(tmp_path: Path) -> None:
+    """The parent binding reaches the worker as launch environment, so two
+    bindings are two processes. They used to share the name's one slot: the
+    second binding's dispatch read as a config change and closed the first
+    binding's connection -- under whatever turn was running on it.
+    """
+    backend = build_third_party_backend(stub_config("a"))
+    assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, model="m-one") == "pong"
+    first = _only_connection("a")
+    pid_one = first.client._proc.pid
+
+    assert await backend.run("ping", task_id="t2", workspace=tmp_path, executor=None, model="m-two") == "pong"
+    held = get_pool().connections("a")
+    assert len(held) == 2 and all(c.alive for c in held)
+    assert first.alive and first.client._proc.pid == pid_one
+    assert get_pool().live_agents() == ["a"]
+
+    # Back on the first binding: its process is reused, not relaunched.
+    assert await backend.run("ping", task_id="t3", workspace=tmp_path, executor=None, model="m-one") == "pong"
+    assert len(get_pool().connections("a")) == 2
+    assert first.alive and first.client._proc.pid == pid_one
+
+
+async def test_a_config_change_still_retires_every_binding(tmp_path: Path) -> None:
+    """The other half of keeping bindings apart: an operator's edit is still a
+    relaunch, and it reaches every binding's connection, not just the one that
+    happened to dispatch next.
+    """
+    backend = build_third_party_backend(stub_config("a"))
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, model="m-one")
+    await backend.run("ping", task_id="t2", workspace=tmp_path, executor=None, model="m-two")
+    old = get_pool().connections("a")
+    assert len(old) == 2
+
+    edited = build_third_party_backend(stub_config("a", mode="empty_turn"))
+    with pytest.raises(AcpEmptyTurnError):
+        await edited.run("ping", task_id="t3", workspace=tmp_path, executor=None, model="m-one")
+    assert all(not c.alive for c in old)
+    assert len(get_pool().connections("a")) == 1
 
 
 async def test_a_dead_connection_is_replaced(tmp_path: Path) -> None:
@@ -3437,14 +3484,14 @@ async def test_a_second_run_on_a_pooled_connection_asks_its_own_turns_user(tmp_p
     start_ask_turn(first, conversation_id="tui:c1")
     reply = await backend().run("hi", task_id="t1", workspace=tmp_path, session_key="s1", executor=None)
     assert "using:redis" in reply
-    pid = get_pool()._connections["a"].client._proc.pid
+    pid = _only_connection("a").client._proc.pid
 
     start_ask_turn(second, conversation_id="tui:c2")
     reply = await backend().run("hi", task_id="t2", workspace=tmp_path, session_key="s2", executor=None)
     assert "using:redis" in reply
     # One inherited read loop is the whole premise: a relaunch in between would
     # hand the second run a loop born in its own context and prove nothing.
-    assert get_pool()._connections["a"].client._proc.pid == pid
+    assert _only_connection("a").client._proc.pid == pid
 
     assert [c for _, c in first.seen] == ["tui:c1"]
     assert [c for _, c in second.seen] == ["tui:c2"]
@@ -3675,7 +3722,7 @@ async def test_close_all_abandons_a_connection_whose_close_hangs() -> None:
             closed.append(self._name)
 
     for name, hangs in (("stuck", True), ("clean", False)):
-        pool._connections[name] = SimpleNamespace(client=_Client(name, hangs))
+        pool._connections[name] = {"": SimpleNamespace(client=_Client(name, hangs))}
 
     monkeypatch_timeout = 0.05
     with patch.object(pool_mod, "_CLOSE_TIMEOUT_S", monkeypatch_timeout):
