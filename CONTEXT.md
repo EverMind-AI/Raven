@@ -767,9 +767,12 @@ losslessly to disk, Consolidation distills across turns into memory notes, Compa
 (below) squeezes the live prompt inside one turn.
 
 **Compaction** (`agents.defaults.compaction`, `config/schema.py:CompactionConfig`):
-In-turn transcript compaction for long agentic turns, off by default: the loop's only
-in-turn shrink is then the reactive, deterministic elision it has always run on a
-provider's overflow error. Enabled, two layers join it on the same usage readings: a
+In-turn transcript compaction for long agentic turns, off by default: without it the
+loop's in-turn shrinks are the standing image window (`_window_images`, which retires
+pictures the model has already looked at before every call, bounded by
+`agents.defaults.imageWindowBudgetBytes`) and the reactive, deterministic elision it has
+always run on a provider's overflow error. Enabled, two layers join them on the same usage
+readings: a
 proactive layer that, once context crosses the trigger, prunes older tool-result bodies
 first (deterministic, no LLM call) and only then replaces the transcript head with an LLM
 summary while a recent tail stays verbatim; and a reactive completion that lets an

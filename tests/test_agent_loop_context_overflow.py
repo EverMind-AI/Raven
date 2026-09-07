@@ -5,10 +5,11 @@ overflow; the loop elides older tool-result bodies and retries the iteration
 rather than ending the turn with an error.
 
 Also the in-turn transcript compaction layers gated on
-``agents.defaults.compaction`` (factory-off): with the flag off the reactive
-elision above stays the loop's only in-turn shrink (pinned here), and with it
-on a proactive threshold prunes and, when pruning is not enough, an LLM head
-summary compacts the transcript before the window blows.
+``agents.defaults.compaction`` (factory-off): with the flag off no proactive
+layer runs (pinned here) and the loop's in-turn shrinks are the standing image
+window (``_window_images``) and the reactive elision above; with it on a
+proactive threshold prunes and, when pruning is not enough, an LLM head summary
+compacts the transcript before the window blows.
 """
 
 from __future__ import annotations

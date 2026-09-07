@@ -132,9 +132,10 @@ class ChannelsConfig(Base):
 class CompactionConfig(Base):
     """In-turn transcript compaction for long agentic turns.
 
-    Off by default: the loop's only in-turn shrink is then the reactive,
-    deterministic elision it has always run on a provider's overflow error.
-    Enabled, two layers join it, on the same usage readings:
+    Off by default: without it the loop's in-turn shrinks are the standing image
+    window (``_window_images``, bounded by ``image_window_budget_bytes``) and the
+    reactive, deterministic elision it has always run on a provider's overflow
+    error. Enabled, two layers join them, on the same usage readings:
 
     - Proactive: before an LLM call, once the last observed context size
       crosses the trigger, older tool-result bodies are pruned first
@@ -220,6 +221,14 @@ class AgentDefaults(Base):
     # asked again (the output is produced twice for whoever watched the stream). Off for
     # a chat; on for an unattended run whose client is a machine, such as a deck build.
     llm_retry_after_output: bool = False
+    # Decoded bytes of pictures that tools have shown the model which one request may
+    # carry before the older ones are withdrawn: past it, every image-bearing result but
+    # the newest two loses its pictures at once, each replaced by a note saying what it
+    # showed and how to see it again. A bound on what the endpoint is asked to take, not
+    # a guess at its limit; a size refusal is still answered by the reactive ladder. 0
+    # keeps every picture until an endpoint refuses. One deck build reached 75 pictures
+    # and 26.6 MB in a single request before OpenRouter refused it.
+    image_window_budget_bytes: int = Field(default=12_000_000, ge=0)
     # Deprecated compatibility field: accepted from old configs but ignored at runtime.
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
