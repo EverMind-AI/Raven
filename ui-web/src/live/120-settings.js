@@ -332,6 +332,44 @@ async function persistModel(m, provider, scope) {
   return 'staged';
 }
 
+/* The tier over the wire. One method serves all three calls, and every reply
+   carries the whole catalogue, so `read` and `set` differ only in whether they
+   name a mode -- there is no separate menu fetch to keep in step.
+
+   `session_key` is required by the handler and is the conversation the chip sits
+   under; a page with no conversation yet has no tier to report, and the caller
+   leaves the chip hidden on the refusal rather than inventing one. */
+let tierMenu = [];
+
+/* Read by the send path, which applies it next to the staged model.
+   `pendingTier` itself is declared beside `pendingModel` in 080, where both are
+   reset on the two paths that abandon a draft. */
+function stagedTier() { const t = pendingTier; pendingTier = null; return t; }
+
+DS.tier = {
+  read: async () => {
+    /* A draft asks too, and the handler answers the catalogue and its default
+       for a key it has never seen -- which is exactly what the first turn of a
+       new conversation will run at. */
+    const r = await rpc.call('session.set_mode', { session_key: sessionCurrent() || '' });
+    tierMenu = (r && r.availableModes) || tierMenu;
+    return r;
+  },
+  set: async (mode) => {
+    const sid = sessionCurrent();
+    if (!sid) {
+      /* Staged, and echoed back as though written: there is no server state to
+         contradict it yet, and the chip has to show the reader what their next
+         turn will run at. */
+      pendingTier = mode;
+      return { mode, availableModes: tierMenu };
+    }
+    const r = await rpc.call('session.set_mode', { session_key: sid, mode });
+    tierMenu = (r && r.availableModes) || tierMenu;
+    return r;
+  },
+};
+
 DS.model = {
   providers: () => providersLive,
   persist: persistModel,

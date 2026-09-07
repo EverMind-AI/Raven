@@ -78,6 +78,11 @@ class RecoveryLimits:
     #: client is a machine: one measured deck build had two hours behind it when a
     #: mid-stream "Network connection lost" ended the turn with nothing published.
     llm_retry_after_output: bool = False
+    #: Decoded bytes of tool-shown pictures one request may carry before the standing
+    #: image window collapses to the newest messages (``agents.defaults.
+    #: imageWindowBudgetBytes``). 0 turns the standing pass off: pictures then leave
+    #: only through the ladder that answers a size refusal.
+    image_window_budget_bytes: int = 12_000_000
 
 
 def limits_from_defaults(defaults: object) -> RecoveryLimits:
@@ -93,6 +98,7 @@ def limits_from_defaults(defaults: object) -> RecoveryLimits:
         empty_content_max_retries=getattr(defaults, "empty_content_max_retries", 3),
         llm_error_retry_delays=_ladder(getattr(defaults, "llm_error_retry_delays", None)),
         llm_retry_after_output=bool(getattr(defaults, "llm_retry_after_output", False)),
+        image_window_budget_bytes=max(0, int(getattr(defaults, "image_window_budget_bytes", 12_000_000))),
     )
 
 

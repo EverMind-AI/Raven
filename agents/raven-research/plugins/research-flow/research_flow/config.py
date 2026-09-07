@@ -252,6 +252,26 @@ SUPERSEDED_PROFILES: dict[str, str] = {
 }
 
 
+#: Profile labels THIS product retired by diverging from the fork, successor named.
+#:
+#: Separate from ``SUPERSEDED_PROFILES`` above, which is held equal to the fork's table by
+#: ``test_the_twins_retired_labels_are_the_forks`` and must be: both loaders read the same
+#: twin config, so a label one of them refuses and the other accepts is a config that
+#: loads on one launcher and not the other. This table is the other case - a label the
+#: fork must go on accepting because the fork's own distribution did not change, while
+#: this product's did and the label no longer describes what it runs.
+#:
+#: Without it the mechanism has a hole exactly where it is needed: a config still stamped
+#: with the old suffix loads clean here and runs the new distribution under the old name,
+#: which is the mislabelling the whole-profile check exists to prevent.
+PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
+    # 2026-09-05: the deep report clause and the reviewer rubric gained the
+    # numeric-discipline rule. Same base rung, different distribution, and the fork has
+    # neither, so it keeps the label this one leaves behind.
+    "dr@3.5-filetools-askuser-derive": "dr@3.5-filetools-askuser-derive-numeric",
+}
+
+
 # Knobs the fork's LOOP consumed, which no seam here reaches. They are kept OFF
 # the model rather than accepted and ignored: a field that validates reads as
 # live, and ``toolsAllowlist`` reads as the tool fence -- it was the fence in the
@@ -382,10 +402,37 @@ class FlowConfig(_Base):
 
     _SUPERSEDED_VERSIONS: ClassVar[tuple[str, ...]] = SUPERSEDED_VERSIONS
     _SUPERSEDED_PROFILES: ClassVar[dict[str, str]] = SUPERSEDED_PROFILES
+    _PRODUCT_SUPERSEDED_PROFILES: ClassVar[dict[str, str]] = PRODUCT_SUPERSEDED_PROFILES
+
+    @classmethod
+    def _resolve_successor(cls, version: str) -> str | None:
+        """The label to move to, followed to the end of the chain.
+
+        Two tables retire labels here, and a successor named by one can be retired by the
+        other: the fork's table sends ``-askuser`` to ``-derive``, and this product's
+        sends ``-derive`` on to ``-numeric``. Naming the first hop would tell an operator
+        to move to a label that also refuses to load, which is a worse answer than the one
+        they started with. Cycle-guarded, so a table that ever points back at itself
+        stops rather than hangs.
+        """
+        seen = {version}
+        current = version
+        while True:
+            nxt = cls._SUPERSEDED_PROFILES.get(current) or cls._PRODUCT_SUPERSEDED_PROFILES.get(current)
+            if nxt is None or nxt in seen:
+                break
+            seen.add(nxt)
+            current = nxt
+        return None if current == version else current
 
     @model_validator(mode="after")
     def _version_matches_build(self) -> "FlowConfig":
         """Reject a superseded label on this build, by profile or by base.
+
+        Two profile tables, checked the same way: the one mirrored from the fork, and this
+        product's own retirements. A label lands in the second when this product diverged
+        and the fork did not, which is a state the mirrored table cannot hold because it
+        has to keep matching a fork that still runs that label correctly.
 
         The profile table matches the whole string and names the successor. The
         base table matches the base label only: suffixes name a profile, not a
@@ -393,7 +440,7 @@ class FlowConfig(_Base):
         suffixed or not - is refused. The current label comes from the field
         default, never a literal, so a bump has one place to land.
         """
-        successor = self._SUPERSEDED_PROFILES.get(self.version)
+        successor = self._resolve_successor(self.version)
         if self.enabled and successor is not None:
             raise ValueError(
                 f"drFlow.version={self.version!r} is a superseded profile label on this "

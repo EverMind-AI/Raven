@@ -14,6 +14,7 @@ function bootPage() {
     ['sessionOpen', () => { const first = sessionRows()[0]; if (first) sessionOpen(first); }],
     ['drawCapsBadge', () => drawCapsBadge()],
     ['drawPerm', () => drawPerm()],
+    ['loadTier', () => loadTier()],
     ['drawCtx', () => drawCtx()],
     ['drawCaps', () => drawCaps()],
     ['drawFoot', () => drawFoot()],
