@@ -69,10 +69,13 @@ description: "构建、重做、诊断或提升最终由浏览器消费的高完
 
 ### 内容型／营销型 Web 的前置参考分流
 
-内容型或营销型 Web 在形成视觉方向之前，先锁定一条且只锁定一条 `reference_route`：
+内容型或营销型 Web 在形成视觉方向之前，先分别锁定两条路线并写入 `REFERENCE-CONTRACT`：`identity_route` 决定
+标识、色、字与既有视觉语言；`layout_route` 决定宏观结构与阅读顺序。`identity_route` 取 `accepted_system` 或
+`none`；`layout_route` 取 `pool_template` 或 `observed_benchmark`，不因 `identity_route` 已锁定而省略。合同中至少
+一条宏观结构／阅读顺序关系必须来自 `layout_route` 的来源画面。
 
 - `accepted_system`：用户已接受的参考、品牌系统或质量合格的既有视觉语言能够约束当前页面；
-  必须保存实际可查看的来源画面，名称、印象和模型记忆不算证据。
+  必须保存实际可查看的来源画面，名称、印象和模型记忆不算证据。它约束身份，不提供版式参照。
 - `pool_template`：没有可沿用系统，且模板池存在不违反任务硬约束的候选；先完成
   [模板池](references/template-pool/POOL.md)「第零步」翻译、逐张查看候选截图并选定主要骨架。
 - `observed_benchmark`：池中没有该形态候选，或每个候选均与已经声明的硬约束冲突；逐候选记录
@@ -90,7 +93,7 @@ description: "构建、重做、诊断或提升最终由浏览器消费的高完
 representative_frame_evidence / final_frame_evidence / deviation_constraint`；至少包含一条宏观结构或
 阅读顺序、一条层级或密度关系、一条主对象或图像角色，只记录颜色关系不算完成。引用名称、描述
 气质或只写进 brief 只是建立假设，不算参考已经执行。在
-`reference_route` 与合同完成前，不得生成视觉方向、风格合同或写第一行页面代码。
+`identity_route` 与 `layout_route` 与合同完成前，不得生成视觉方向、风格合同或写第一行页面代码。
 
 ### Web 技术底座预构建 gate
 
@@ -146,9 +149,12 @@ final_asset: 成图、尺寸、lineage、原图查看与页面引用证据
 
 新建或大改的公开内容站与营销站，默认先由 `image_generate` 取得一张项目级主视觉母版；已有的
 合法真实资产只有在能完成同一 `semantic_job` 且用户或权威来源允许时才可替代。每个主要页面族
-在布局前都要进入 `page_family_visual_map`，默认选择 `dominant_background`。`content_first` 只对
-当前页面族的开场职责成立，不能用一个理由批量覆盖其余页面族；文字多、包含事实、没有真图或
-担心生成图被误认，都不能单独构成理由。如果最终像素表明大背景妨碍了阅读，调整文字大小或
+在布局前都要进入 `page_family_visual_map`，默认选择 `dominant_background`。`integrated_visual_field` 与
+`content_first` 只对当前页面族的开场职责成立，不能用一个理由批量覆盖其余页面族；文字多、包含事实、没有真图、
+担心生成图被误认或担心可读性，都不能单独构成选择这两种角色的理由。`visual_role` 的声明须与渲染返回的
+`opening_visual` 读数相符：声明 `dominant_background` 而读数显示标题与图像重叠为 0%，即为不符，改声明或改图；
+读数标为 `uniform` 时必须在 `reason` 中说明该区域为何属于画面；读数未回填或 `uniform` 无说明，该页面族的
+`visual_role` 视为未结账。如果最终像素表明大背景妨碍了阅读，调整文字大小或
 位置，或重新生成背景，而不是放弃大背景。页面族可以
 复用母版的有意义裁切，或用 image edit 派生适配构图，不要求每个内容实体重新生成。
 
@@ -184,7 +190,7 @@ Canvas 或发光几何模拟。此 gate 没有真实母版、原图查看、完�
 **`DESIGN-BRIEF.md`**——正面：要什么。包含：
 
 - 第 1 节的决策卡；
-- 内容型／营销型 Web 的 `reference_route`、`implementation_base` 与 `REFERENCE-CONTRACT`；
+- 内容型／营销型 Web 的 `identity_route` 与 `layout_route`、`implementation_base` 与 `REFERENCE-CONTRACT`；
 - **条件式方向候选**：只有参考合同仍留下结构、媒介或叙事上的实质不确定性时，才提出 2–3 个
   互斥候选并写出关键视觉取舍；否则直接采用已锁定方向，不为满足数量制造候选。选择模板时，
   池内候选本身就是方向候选，不得另造一组越过模板事实的独立风格方向；
@@ -544,11 +550,12 @@ Logo、公共／安全符号和品牌母版继续使用权威资产或对应专�
 
 交付前确认：
 
-- 内容型／营销型 Web 在首行页面代码之前完成 `reference_route` 与 `REFERENCE-CONTRACT`；代表帧
+- 内容型／营销型 Web 在首行页面代码之前完成 `identity_route` 与 `layout_route` 与 `REFERENCE-CONTRACT`；代表帧
   和最终帧逐条写入实际像素证据，缺行、只引用名称或无硬约束地推翻主要关系即未完成；
 - 内容型／营销型 Web 在页面布局之前完成 `VISUAL-THESIS` 和 `MASTER-VISUAL-CONTRACT`，真实母版
   已取得并查看；每个主要页面族均有预先锁定的视觉角色、资产 lineage 和开场证据，选择
   `dominant_background` 的页面族由同一视觉家族主导开场，其他角色有任务证据且没有退回默认模板；
+  每个页面族的 `visual_role` 已与渲染返回的 `opening_visual` 读数对照回填，`uniform` 读数已在 `reason` 说明；
 - `SURFACE-MANIFEST` 覆盖每个顶层区块和页面族；没有 `planned`、`built`、待检查或缺证据行。
   每一行均有最后一次可见修改后的可读尺度像素，整页缩略图不代替区块细节证据；
 - `COMPONENT-BEHAVIOR-MAP` 覆盖全部独特行为类和视觉交互暗示；所有具体目标已由浏览器遍历，

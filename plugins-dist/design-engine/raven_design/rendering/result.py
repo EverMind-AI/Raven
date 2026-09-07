@@ -30,6 +30,9 @@ def render_tool_result(outcome: RenderOutcome) -> RenderToolOutput:
     errors = page_error_details(outcome.warnings)
     if errors:
         result["errors"] = errors
+    facts = render_facts(outcome.warnings)
+    if facts:
+        result["facts"] = facts
     return result
 
 
@@ -74,6 +77,9 @@ def preview_tool_result(
     errors = page_error_details(outcome.warnings)
     if errors:
         metadata["errors"] = errors
+    facts = render_facts(outcome.warnings)
+    if facts:
+        metadata["facts"] = facts
     return [text_block(json.dumps(metadata, separators=(",", ":"), ensure_ascii=False)), *image_parts]
 
 
@@ -138,6 +144,24 @@ _ERROR_DETAIL_CODES = (
     "animation_not_running",
     "action_no_visible_response",
 )
+
+#: Measurements the browser takes on a successful render. They are readings the
+#: author checks a declared intent against, not defects, so they must not make a
+#: healthy render report errors.
+_FACT_CODES = (
+    "image_cropped",
+    "opening_visual",
+)
+
+
+def render_facts(warnings: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for warning in warnings:
+        if warning.get("code") in _FACT_CODES:
+            details = warning.get("details")
+            if isinstance(details, list):
+                lines.extend(str(d)[:300] for d in details[:10])
+    return lines
 
 
 def page_error_details(warnings: list[dict[str, Any]]) -> list[str]:
