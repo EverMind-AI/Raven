@@ -1626,7 +1626,13 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       'The tier in force is offered to the sub-agents this conversation dispatches, clamped to what each one supports.',
     'gui.tier.failed': 'Could not switch to {name}',
     'gui.tier.mode': 'Session mode',
-    'gui.tier.mode_scope': 'The profile in force is not one of the built-in tiers, so it is not offered to sub-agents.'
+    'gui.tier.mode_scope': 'The profile in force is not one of the built-in tiers, so it is not offered to sub-agents.',
+    'gui.imode.title': 'Effort',
+    'gui.imode.auto': 'Auto',
+    'gui.imode.agent_default': "the agent's own default",
+    'gui.imode.auto_tip': 'Following the conversation. Click to give this instance its own effort.',
+    'gui.imode.set_tip': "This instance's own effort, set apart from the conversation.",
+    'gui.imode.failed': "Could not change this instance's effort"
   },
   zh: {
     'gui.act.ing.ask_user': '等待你回答',
@@ -2955,6 +2961,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.tier.scope': '当前这一档会下发给本会话派出的子智能体,并按每个子智能体支持的档位钳定。',
     'gui.tier.failed': '切换到 {name} 没有成功',
     'gui.tier.mode': '会话模式',
-    'gui.tier.mode_scope': '当前这一档不是内置的三档之一,不会下发给子智能体。'
+    'gui.tier.mode_scope': '当前这一档不是内置的三档之一,不会下发给子智能体。',
+    'gui.imode.title': '力度',
+    'gui.imode.auto': '自动',
+    'gui.imode.agent_default': '该子智能体自己的默认',
+    'gui.imode.auto_tip': '跟随会话。点击可为这个实例单独设定力度。',
+    'gui.imode.set_tip': '这个实例自己的力度,与会话分开设定。',
+    'gui.imode.failed': '改这个实例的力度没有成功'
   }
 } as Record<Locale, Record<string, string>>
