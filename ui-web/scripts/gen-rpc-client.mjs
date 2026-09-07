@@ -81,7 +81,7 @@ function buildRootSchema(doc) {
     // structurally identical results (a dozen methods return {ok: boolean})
     // into one interface and every other name in the RpcMethods map dangles.
     defs[`${pascal}Params`] = { title: `${pascal}Params`, ...rewriteRefs(paramsToSchema(method)) }
-    defs[`${pascal}Result`] = { title: `${pascal}Result`, ...rewriteRefs(method.result.schema) }
+    defs[`${pascal}Result`] = { ...rewriteRefs(method.result.schema), title: `${pascal}Result` }
   }
   const properties = {}
   for (const name of Object.keys(defs)) properties[name] = { $ref: `#/definitions/${name}` }
@@ -101,7 +101,9 @@ function buildMethodMap(doc) {
   const rows = doc.methods
     .map(m => {
       const p = methodToPascal(m.name)
-      return `  '${m.name}': { params: ${p}Params; result: ${p}Result };`
+      const ref = m.result?.schema?.$ref
+      const result = typeof ref === 'string' ? ref.split('/').pop() : `${p}Result`
+      return `  '${m.name}': { params: ${p}Params; result: ${result} };`
     })
     .join('\n')
   return `

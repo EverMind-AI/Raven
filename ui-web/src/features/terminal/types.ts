@@ -1,15 +1,23 @@
-/** Wire and view contracts for hosted terminal tabs. */
+/** Generated wire contracts plus view state for hosted terminal tabs. */
 
-export type TerminalStatus = 'idle' | 'working' | 'permission' | 'unknown'
-export type TerminalLiveness = 'live' | 'exited' | 'unverifiable'
+import type {
+  A2AAckMatchedEvent,
+  A2ASendEvent,
+  IdentityRecord,
+  TerminalClosedEvent,
+  TerminalCreatedEvent,
+  TerminalInputParams,
+  TerminalListResult,
+  TerminalRecord,
+  TerminalResizeParams,
+  TerminalStatusEvent,
+  TerminalSubscribeParams,
+  TerminalSubscribeResult,
+} from '../../rpc/generated'
 
-export interface TerminalIdentity {
-  agentName: string
-  brand: string
-  bindingGeneration: number
-}
+export interface TerminalIdentity extends Pick<IdentityRecord, 'agentName' | 'brand' | 'bindingGeneration'> {}
 
-export interface TerminalRow {
+export interface TerminalRow extends TerminalRecord {
   handle: string
   incarnationId: string
   ptyId: string
@@ -20,8 +28,8 @@ export interface TerminalRow {
   worktreePath: string
   executionHostId: string
   title: string
-  status: TerminalStatus
-  liveness: TerminalLiveness
+  status: NonNullable<TerminalRecord['status']>
+  liveness: NonNullable<TerminalRecord['liveness']>
   connected: boolean
   writable: boolean
   orphaned: boolean
@@ -31,17 +39,8 @@ export interface TerminalRow {
   identity?: TerminalIdentity
 }
 
-export interface HostScope {
-  hostIds: string[]
-  omittedHostIds: string[]
-}
-
-export interface TerminalListReply {
+export interface TerminalListReply extends Omit<TerminalListResult, 'terminals'> {
   terminals: TerminalRow[]
-  truncated: boolean
-  hostScope: HostScope
-  topologyRevisions: Record<string, number>
-  visualLayouts?: Array<Record<string, unknown>>
 }
 
 export interface TerminalOutputFrame {
@@ -51,32 +50,18 @@ export interface TerminalOutputFrame {
   data: Uint8Array
 }
 
-export interface TerminalSubscribeReply {
-  subscription: {
-    handle: string
-    enabled: boolean
-    seq: number
-    ackBytes: number
-    subscription_id?: string
-  }
-}
-
-export interface TerminalSubscribeParams {
-  handle: string
-  enabled?: boolean
-  ack?: number
-}
-
-export interface TerminalEvent {
-  type: string
-  payload?: Record<string, unknown>
-}
+export type TerminalEvent =
+  | TerminalCreatedEvent
+  | TerminalClosedEvent
+  | TerminalStatusEvent
+  | A2ASendEvent
+  | A2AAckMatchedEvent
 
 export interface TerminalSource {
   list(taskId: string): Promise<TerminalListReply>
-  input(params: { handle: string; data: string }): Promise<unknown>
-  resize(params: { handle: string; cols: number; rows: number }): Promise<unknown>
-  subscribe(params: TerminalSubscribeParams): Promise<TerminalSubscribeReply>
+  input(params: TerminalInputParams): Promise<unknown>
+  resize(params: TerminalResizeParams & { handle: string; cols: number; rows: number }): Promise<unknown>
+  subscribe(params: TerminalSubscribeParams): Promise<TerminalSubscribeResult>
   onOutput: ((frame: TerminalOutputFrame) => void) | null
   onEvent: ((event: TerminalEvent) => void) | null
 }

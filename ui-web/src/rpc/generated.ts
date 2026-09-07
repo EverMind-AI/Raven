@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 162 methods, 91 component schemas.
+// 176 methods, 115 component schemas.
 
 /* eslint-disable */
 /**
@@ -53,7 +53,157 @@ export type TurnEvent =
   | CronMissedEvent
   | MediaEvent
   | SessionTitledEvent
-  | SessionNamingEndedEvent;
+  | SessionNamingEndedEvent
+  | TerminalCreatedEvent
+  | TerminalClosedEvent
+  | TerminalStatusEvent
+  | A2ASendEvent
+  | A2AAckMatchedEvent;
+export type Type = 'terminal.created';
+export type Handle = string;
+export type Incarnationid = string;
+export type Ptyid = string;
+export type Tabid = string;
+export type Leafid = string;
+export type Panekey = string;
+export type Worktreeid = string;
+export type Worktreepath = string;
+export type Executionhostid = string;
+export type Title = string;
+export type Status = 'idle' | 'working' | 'permission' | 'unknown';
+export type Liveness = 'live' | 'exited' | 'unverifiable';
+export type Connected = boolean;
+export type Writable = boolean;
+export type Orphaned = boolean;
+export type Visible = boolean;
+export type Owner = string;
+export type Lastoutputat = number | null;
+export type Type1 = 'terminal.closed';
+export type Handle1 = string;
+export type Type2 = 'terminal.status';
+export type Handle2 = string;
+export type Status1 = 'working' | 'idle' | 'permission' | 'unknown';
+export type Liveness1 = 'live' | 'exited' | 'unverifiable';
+export type Type3 = 'a2a.send';
+export type Handle3 = string;
+export type State = 'accepted' | 'queued' | 'blocked' | 'stalled' | 'delivered_to_host';
+export type Nonce = string | null;
+export type Type4 = 'a2a.ack.matched';
+export type Handle4 = string | null;
+export type Nonce1 = string | null;
+export type AckFor = string;
+export type From = string;
+export type To = string;
+export type State1 = 'ready';
+export type Runtimeid = string;
+export type State2 = 'ready';
+export type Environment = string;
+export type Appversion = string;
+export type Capabilities = string[];
+export type Hostids = string[];
+export type Omittedhostids = string[];
+export type Handle5 = string | null;
+export type Accepted = boolean;
+export type Byteswritten = number;
+export type State3 = 'accepted' | 'queued' | 'blocked' | 'stalled' | 'delivered_to_host';
+export type Nonce2 = string | null;
+export type Deduplicated = boolean;
+export type Contentack = boolean | null;
+export type To1 = 'raven' | null;
+export type Handle6 = string;
+export type Satisfied = boolean;
+export type Blockedreason = string | null;
+export type Timedout = boolean;
+export type Handle7 = string;
+export type Closed = boolean;
+export type Handle8 = string;
+export type Byteswritten1 = number;
+export type Handle9 = string;
+export type Enabled = boolean | null;
+export type Seq = number | null;
+export type Ack = number | null;
+export type Ackbytes = number | null;
+export type SubscriptionId = string | null;
+export type Handle10 = string;
+export type Tabid1 = string;
+export type Title1 = string;
+export type Livetitle = string;
+export type Alias = string;
+export type Source = string;
+export type Handle11 = string | null;
+export type Incarnationid1 = string | null;
+export type Worktreeid1 = string | null;
+export type Tabid2 = string | null;
+export type Leafid1 = string | null;
+export type Agentname = string;
+export type Kindref = string;
+export type Brand = string;
+export type Role = string;
+export type Taskref = string;
+export type Description = string;
+export type Aliases = IdentityAlias[];
+export type Bindinggeneration = number;
+export type Firstobservedat = number;
+export type Lastobservedat = number;
+export type Orphan = boolean;
+export type Schemaversion = 1;
+export type Exitedat = number | null;
+export type Runtimeid1 = string;
+export type Reason = 'exact' | 'alias';
+export type Handle12 = string | null;
+export type Cols = number | null;
+export type Rows = number | null;
+/**
+ * Sent by the client; the handler does not read it.
+ */
+export type SessionId = string | null;
+export type Ok = boolean;
+export type WorktreeId = string;
+export type Command = string | string[];
+export type Title2 = string;
+export type Owner1 = string;
+export type SessionId1 = string | null;
+export type WorktreeId1 = string | null;
+export type Limit = number;
+export type IncludeVisualLayouts = boolean;
+export type Terminals = TerminalRecord[];
+export type Truncated = boolean;
+export type Visuallayouts =
+  | {
+      [k: string]: JsonValue;
+    }[]
+  | null;
+export type Handle13 = string;
+export type Handle14 = string | null;
+export type To2 = 'raven' | null;
+export type Text = string;
+export type Enter = boolean;
+export type RequireAck = boolean;
+export type SourceHandle = string | null;
+export type SessionId2 = string | null;
+export type Handle15 = string;
+export type For = 'tui-idle' | 'exit';
+export type TimeoutMs = number;
+export type Handle16 = string;
+export type Handle17 = string;
+export type Data = string;
+export type Handle18 = string;
+export type Enabled1 = boolean;
+export type Ack1 = number | null;
+export type Handle19 = string;
+export type Title3 = string;
+export type Name = string;
+export type Kind = string | null;
+export type Terminal = string | null;
+export type Role1 = string;
+export type TaskRef = string;
+export type Description1 = string | null;
+export type Aliases1 = IdentityAlias[] | null;
+export type Agents = IdentityRecord[];
+export type Name1 = string;
+export type Mention = string;
+export type Candidates = IdentityCandidate[];
+export type Unique = boolean;
 
 export interface BrowserTab {
   index: number;
@@ -1328,6 +1478,66 @@ export interface MediaEvent {
     items: MediaItem[];
   };
 }
+export interface TerminalCreatedEvent {
+  type: Type;
+  payload: TerminalRecord;
+}
+export interface TerminalRecord {
+  handle?: Handle;
+  incarnationId?: Incarnationid;
+  ptyId?: Ptyid;
+  tabId?: Tabid;
+  leafId?: Leafid;
+  paneKey?: Panekey;
+  worktreeId: Worktreeid;
+  worktreePath: Worktreepath;
+  executionHostId?: Executionhostid;
+  title?: Title;
+  status?: Status;
+  liveness?: Liveness;
+  connected?: Connected;
+  writable?: Writable;
+  orphaned?: Orphaned;
+  visible?: Visible;
+  owner?: Owner;
+  lastOutputAt?: Lastoutputat;
+}
+export interface TerminalClosedEvent {
+  type: Type1;
+  payload: TerminalClosedPayload;
+}
+export interface TerminalClosedPayload {
+  handle: Handle1;
+}
+export interface TerminalStatusEvent {
+  type: Type2;
+  payload: TerminalStatusPayload;
+}
+export interface TerminalStatusPayload {
+  handle: Handle2;
+  status: Status1;
+  liveness: Liveness1;
+}
+export interface A2ASendEvent {
+  type: Type3;
+  payload: A2ASendPayload;
+}
+export interface A2ASendPayload {
+  handle: Handle3;
+  state: State;
+  nonce: Nonce;
+}
+export interface A2AAckMatchedEvent {
+  type: Type4;
+  payload: A2AAckMatchedPayload;
+}
+export interface A2AAckMatchedPayload {
+  handle?: Handle4;
+  nonce: Nonce1;
+  ack_for: AckFor;
+  from: From;
+  to: To;
+}
 /**
  * One base as the list view needs it.
  *
@@ -1480,6 +1690,92 @@ export interface PlaybookMcpServer {
   enabled?: boolean;
   auth?: 'none' | 'apikey' | 'oauth';
   has_oauth_config?: boolean;
+}
+export interface RuntimeGraphInfo {
+  state: State1;
+}
+export interface RuntimeStatusInfo {
+  runtimeId?: Runtimeid;
+  state: State2;
+  environment: Environment;
+  appVersion: Appversion;
+  capabilities: Capabilities;
+}
+export interface HostScope {
+  hostIds?: Hostids;
+  omittedHostIds?: Omittedhostids;
+}
+export interface TerminalDeliveryResult {
+  handle?: Handle5;
+  accepted: Accepted;
+  bytesWritten?: Byteswritten;
+  state: State3;
+  nonce?: Nonce2;
+  deduplicated?: Deduplicated;
+  contentAck?: Contentack;
+  to?: To1;
+}
+export interface WaitResult {
+  handle: Handle6;
+  satisfied: Satisfied;
+  blockedReason?: Blockedreason;
+  timedOut?: Timedout;
+}
+export interface TerminalClosed {
+  handle: Handle7;
+  closed: Closed;
+}
+export interface TerminalInput {
+  handle: Handle8;
+  bytesWritten: Byteswritten1;
+}
+export interface TerminalSubscription {
+  handle: Handle9;
+  enabled?: Enabled;
+  seq?: Seq;
+  ack?: Ack;
+  ackBytes?: Ackbytes;
+  subscription_id?: SubscriptionId;
+}
+export interface TerminalRename {
+  handle: Handle10;
+  tabId: Tabid1;
+  title: Title1;
+  liveTitle: Livetitle;
+}
+export interface IdentityAlias {
+  alias: Alias;
+  source: Source;
+}
+export interface IdentityBinding {
+  handle?: Handle11;
+  incarnationId?: Incarnationid1;
+  worktreeId?: Worktreeid1;
+  tabId?: Tabid2;
+  leafId?: Leafid1;
+}
+export interface IdentityRecord {
+  agentName: Agentname;
+  kindRef: Kindref;
+  brand: Brand;
+  role?: Role;
+  taskRef?: Taskref;
+  description?: Description;
+  aliases?: Aliases;
+  binding?: IdentityBinding | null;
+  bindingGeneration: Bindinggeneration;
+  firstObservedAt: Firstobservedat;
+  lastObservedAt: Lastobservedat;
+  orphan?: Orphan;
+  schemaVersion?: Schemaversion;
+  exitedAt?: Exitedat;
+}
+export interface RuntimeInfo {
+  runtimeId?: Runtimeid1;
+}
+export interface IdentityCandidate {
+  agent: IdentityRecord;
+  reason: Reason;
 }
 export interface SessionListParams {
   /**
@@ -2948,15 +3244,13 @@ export interface CompletePathResult {
   items: JsonValue[];
 }
 export interface TerminalResizeParams {
-  cols?: number;
-  rows?: number;
-  /**
-   * Sent by the client; the handler does not read it.
-   */
-  session_id?: string;
+  handle?: Handle12;
+  cols?: Cols;
+  rows?: Rows;
+  session_id?: SessionId;
 }
 export interface TerminalResizeResult {
-  ok: boolean;
+  ok: Ok;
 }
 export interface SystemUpgradeParams {}
 /**
@@ -3601,6 +3895,123 @@ export interface SubagentCancelInstanceResult {
   agent: string;
   handle: string;
 }
+export interface RuntimeStatusParams {}
+export interface RuntimeStatusResult {
+  runtime: RuntimeStatusInfo;
+  graph: RuntimeGraphInfo;
+}
+export interface TerminalCreateParams {
+  worktree_id: WorktreeId;
+  command: Command;
+  title?: Title2;
+  owner?: Owner1;
+  session_id?: SessionId1;
+}
+export interface TerminalCreateResult {
+  terminal: TerminalRecord;
+}
+export interface TerminalListParams {
+  worktree_id?: WorktreeId1;
+  limit?: Limit;
+  include_visual_layouts?: IncludeVisualLayouts;
+}
+export interface TerminalListResult {
+  terminals?: Terminals;
+  truncated?: Truncated;
+  hostScope?: HostScope;
+  topologyRevisions?: Topologyrevisions;
+  visualLayouts?: Visuallayouts;
+}
+export interface Topologyrevisions {
+  [k: string]: number;
+}
+export interface TerminalShowParams {
+  handle: Handle13;
+}
+export interface TerminalShowResult {
+  terminal: TerminalRecord;
+}
+export interface TerminalSendParams {
+  handle?: Handle14;
+  to?: To2;
+  text: Text;
+  enter?: Enter;
+  require_ack?: RequireAck;
+  source_handle?: SourceHandle;
+  session_id?: SessionId2;
+}
+export interface TerminalSendResult {
+  send: TerminalDeliveryResult;
+}
+export interface TerminalWaitParams {
+  handle: Handle15;
+  for?: For;
+  timeout_ms?: TimeoutMs;
+}
+export interface TerminalWaitResult {
+  wait: WaitResult;
+}
+export interface TerminalCloseParams {
+  handle: Handle16;
+}
+export interface TerminalCloseResult {
+  close: TerminalClosed;
+}
+export interface TerminalInputParams {
+  handle: Handle17;
+  data: Data;
+}
+export interface TerminalInputResult {
+  input: TerminalInput;
+}
+export interface TerminalSubscribeParams {
+  handle: Handle18;
+  enabled?: Enabled1;
+  ack?: Ack1;
+}
+export interface TerminalSubscribeResult {
+  subscription: TerminalSubscription;
+}
+export interface TerminalRenameParams {
+  handle: Handle19;
+  title: Title3;
+}
+export interface TerminalRenameResult {
+  rename: TerminalRename;
+}
+export interface AgentsRegisterParams {
+  name: Name;
+  kind?: Kind;
+  terminal?: Terminal;
+  role?: Role1;
+  task_ref?: TaskRef;
+  description?: Description1;
+  aliases?: Aliases1;
+}
+export interface AgentsRegisterResult {
+  _meta: RuntimeInfo;
+  agent: IdentityRecord;
+}
+export interface AgentsListParams {}
+export interface AgentsListResult {
+  _meta: RuntimeInfo;
+  agents: Agents;
+}
+export interface AgentsShowParams {
+  name: Name1;
+}
+export interface AgentsShowResult {
+  _meta: RuntimeInfo;
+  agent: IdentityRecord;
+}
+export interface AgentsResolveParams {
+  mention: Mention;
+}
+export interface AgentsResolveResult {
+  _meta: RuntimeInfo;
+  candidates: Candidates;
+  unique: Unique;
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -3664,20 +4075,20 @@ export interface RpcMethods {
   'system.hello': { params: SystemHelloParams; result: SystemHelloResult };
   'system.ping': { params: SystemPingParams; result: SystemPingResult };
   'system.version': { params: SystemVersionParams; result: SystemVersionResult };
-  'cli.dispatch': { params: CliDispatchParams; result: CliDispatchResult };
+  'cli.dispatch': { params: CliDispatchParams; result: CliResult };
   'setup.status': { params: SetupStatusParams; result: SetupStatusResult };
   'reload.mcp': { params: ReloadMcpParams; result: ReloadMcpResult };
-  'commands.catalog': { params: CommandsCatalogParams; result: CommandsCatalogResult };
-  'voice.toggle': { params: VoiceToggleParams; result: VoiceToggleResult };
-  'browser.manage': { params: BrowserManageParams; result: BrowserManageResult };
-  'spawn_tree.save': { params: SpawnTreeSaveParams; result: SpawnTreeSaveResult };
-  'spawn_tree.list': { params: SpawnTreeListParams; result: SpawnTreeListResult };
-  'spawn_tree.load': { params: SpawnTreeLoadParams; result: SpawnTreeLoadResult };
-  'process.stop': { params: ProcessStopParams; result: ProcessStopResult };
-  'rollback.list': { params: RollbackListParams; result: RollbackListResult };
-  'rollback.diff': { params: RollbackDiffParams; result: RollbackDiffResult };
-  'rollback.restore': { params: RollbackRestoreParams; result: RollbackRestoreResult };
-  'tools.configure': { params: ToolsConfigureParams; result: ToolsConfigureResult };
+  'commands.catalog': { params: CommandsCatalogParams; result: CommandsCatalogResponse };
+  'voice.toggle': { params: VoiceToggleParams; result: StubResult };
+  'browser.manage': { params: BrowserManageParams; result: StubResult };
+  'spawn_tree.save': { params: SpawnTreeSaveParams; result: StubResult };
+  'spawn_tree.list': { params: SpawnTreeListParams; result: StubResult };
+  'spawn_tree.load': { params: SpawnTreeLoadParams; result: StubResult };
+  'process.stop': { params: ProcessStopParams; result: StubResult };
+  'rollback.list': { params: RollbackListParams; result: StubResult };
+  'rollback.diff': { params: RollbackDiffParams; result: StubResult };
+  'rollback.restore': { params: RollbackRestoreParams; result: StubResult };
+  'tools.configure': { params: ToolsConfigureParams; result: StubResult };
   'dag.get': { params: DagGetParams; result: DagGetResult };
   'dag.node': { params: DagNodeParams; result: DagNodeResult };
   'plughub.search': { params: PlughubSearchParams; result: PlughubSearchResult };
@@ -3729,17 +4140,17 @@ export interface RpcMethods {
   'complete.path': { params: CompletePathParams; result: CompletePathResult };
   'terminal.resize': { params: TerminalResizeParams; result: TerminalResizeResult };
   'system.upgrade': { params: SystemUpgradeParams; result: SystemUpgradeResult };
-  'voice.record': { params: VoiceRecordParams; result: VoiceRecordResult };
-  'session.save': { params: SessionSaveParams; result: SessionSaveResult };
-  'session.steer': { params: SessionSteerParams; result: SessionSteerResult };
-  'session.usage': { params: SessionUsageParams; result: SessionUsageResult };
-  'skills.reload': { params: SkillsReloadParams; result: SkillsReloadResult };
-  'reload.env': { params: ReloadEnvParams; result: ReloadEnvResult };
-  'sudo.respond': { params: SudoRespondParams; result: SudoRespondResult };
-  'secret.respond': { params: SecretRespondParams; result: SecretRespondResult };
-  'image.attach': { params: ImageAttachParams; result: ImageAttachResult };
-  'prompt.submit': { params: PromptSubmitParams; result: PromptSubmitResult };
-  'prompt.background': { params: PromptBackgroundParams; result: PromptBackgroundResult };
+  'voice.record': { params: VoiceRecordParams; result: StubResult };
+  'session.save': { params: SessionSaveParams; result: StubResult };
+  'session.steer': { params: SessionSteerParams; result: StubResult };
+  'session.usage': { params: SessionUsageParams; result: StubResult };
+  'skills.reload': { params: SkillsReloadParams; result: StubResult };
+  'reload.env': { params: ReloadEnvParams; result: StubResult };
+  'sudo.respond': { params: SudoRespondParams; result: StubResult };
+  'secret.respond': { params: SecretRespondParams; result: StubResult };
+  'image.attach': { params: ImageAttachParams; result: StubResult };
+  'prompt.submit': { params: PromptSubmitParams; result: StubResult };
+  'prompt.background': { params: PromptBackgroundParams; result: StubResult };
   'browser.state': { params: BrowserStateParams; result: BrowserStateResult };
   'browser.open': { params: BrowserOpenParams; result: BrowserOpenResult };
   'browser.tabs': { params: BrowserTabsParams; result: BrowserTabsResult };
@@ -3770,6 +4181,20 @@ export interface RpcMethods {
   'subagent.interrupt': { params: SubagentInterruptParams; result: SubagentInterruptResult };
   'subagent.cancel_session': { params: SubagentCancelSessionParams; result: SubagentCancelSessionResult };
   'subagent.cancel_instance': { params: SubagentCancelInstanceParams; result: SubagentCancelInstanceResult };
+  'runtime.status': { params: RuntimeStatusParams; result: RuntimeStatusResult };
+  'terminal.create': { params: TerminalCreateParams; result: TerminalCreateResult };
+  'terminal.list': { params: TerminalListParams; result: TerminalListResult };
+  'terminal.show': { params: TerminalShowParams; result: TerminalShowResult };
+  'terminal.send': { params: TerminalSendParams; result: TerminalSendResult };
+  'terminal.wait': { params: TerminalWaitParams; result: TerminalWaitResult };
+  'terminal.close': { params: TerminalCloseParams; result: TerminalCloseResult };
+  'terminal.input': { params: TerminalInputParams; result: TerminalInputResult };
+  'terminal.subscribe': { params: TerminalSubscribeParams; result: TerminalSubscribeResult };
+  'terminal.rename': { params: TerminalRenameParams; result: TerminalRenameResult };
+  'agents.register': { params: AgentsRegisterParams; result: AgentsRegisterResult };
+  'agents.list': { params: AgentsListParams; result: AgentsListResult };
+  'agents.show': { params: AgentsShowParams; result: AgentsShowResult };
+  'agents.resolve': { params: AgentsResolveParams; result: AgentsResolveResult };
 }
 
 /** The literal union of callable method names. */
@@ -3780,6 +4205,10 @@ export type ResultOf<M extends RpcMethod> = RpcMethods[M]['result'];
 
 /** Method names present in the contract, for a runtime guard at the edges. */
 export const RPC_METHODS = [
+  "agents.list",
+  "agents.register",
+  "agents.resolve",
+  "agents.show",
   "approval.respond",
   "browser.close",
   "browser.frame",
@@ -3865,6 +4294,7 @@ export const RPC_METHODS = [
   "rollback.diff",
   "rollback.list",
   "rollback.restore",
+  "runtime.status",
   "secret.respond",
   "session.archive",
   "session.branch",
@@ -3934,7 +4364,16 @@ export const RPC_METHODS = [
   "system.ping",
   "system.upgrade",
   "system.version",
+  "terminal.close",
+  "terminal.create",
+  "terminal.input",
+  "terminal.list",
+  "terminal.rename",
   "terminal.resize",
+  "terminal.send",
+  "terminal.show",
+  "terminal.subscribe",
+  "terminal.wait",
   "tools.configure",
   "turn.cancel",
   "turn.send",
