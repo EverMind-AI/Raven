@@ -94,3 +94,15 @@ def test_native_host_identity_is_unbound_and_idempotent(tmp_path):
     assert host.kind_ref == "generic"
     assert host.binding.handle is None
     assert registry.ensure_host().binding_generation == host.binding_generation
+
+
+def test_creator_session_survives_storage_and_registration_generation(tmp_path):
+    rows = [{"name": "coder", "kind": "cli", "command": "codex"}]
+    path = tmp_path / "agent_registry.json"
+    registry = IdentityRegistry(path, config_rows=lambda: rows)
+    registry.register("worker-a", kind_ref="coder", binding=terminal(), session_key="web:creator")
+    reloaded = IdentityRegistry(path, config_rows=lambda: rows)
+    assert reloaded.show("worker-a").session_key == "web:creator"
+    renewed = reloaded.register("worker-a", kind_ref="coder", binding=terminal())
+    assert renewed.session_key == "web:creator"
+    assert renewed.model_dump(by_alias=True)["sessionKey"] == "web:creator"

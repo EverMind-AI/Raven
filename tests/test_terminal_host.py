@@ -135,3 +135,41 @@ async def test_known_codex_native_idle_titles_clear_startup_and_working():
     assert record.status == "working"
     await host.observe_output(state, b"\x1b]0;Reply\x07")
     assert record.status == "idle"
+
+
+@pytest.mark.parametrize("status", ["working", "idle"])
+async def test_human_input_does_not_restore_dirty_after_status_observation(status):
+    from raven.contracts.terminal import TerminalRecord
+    from raven.terminal.host import TerminalHost, TerminalState
+
+    host = TerminalHost()
+    record = TerminalRecord(worktree_id="repo::/tmp/work", worktree_path="/tmp/work", status="idle")
+    state = TerminalState(record, 123, -1, "token", "worker-a", composer_dirty=True)
+    host._terminals[record.handle] = state
+
+    async def write(handle, data):
+        await host.set_status(handle, status)
+
+    host.write = write
+    await host.input(record.handle, b"human input")
+    assert not state.composer_dirty
+
+
+async def test_escape_then_idle_clears_dirty_but_idle_alone_does_not():
+    from raven.contracts.terminal import TerminalRecord
+    from raven.terminal.host import TerminalHost, TerminalState
+
+    host = TerminalHost()
+    record = TerminalRecord(worktree_id="repo::/tmp/work", worktree_path="/tmp/work", status="idle")
+    state = TerminalState(record, 123, -1, "token", "worker-a", composer_dirty=True)
+    host._terminals[record.handle] = state
+
+    async def write(handle, data):
+        pass
+
+    host.write = write
+    await host.set_status(record.handle, "idle")
+    assert state.composer_dirty
+    await host.input(record.handle, b"\x1b")
+    await host.set_status(record.handle, "idle")
+    assert not state.composer_dirty

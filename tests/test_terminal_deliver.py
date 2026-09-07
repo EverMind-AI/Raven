@@ -208,3 +208,26 @@ async def test_permission_reason_survives_delivery_failure_result():
         await delivery.send(host.record.handle, "task")
     assert error.value.data["reason"] == "permission"
     assert error.value.data["bytesWritten"] > 0
+
+
+async def test_matched_ack_clears_pending_receiver_composer():
+    host, _, delivery = setup()
+    original = Envelope(sender="raven", recipient="worker-b", scope="local/dev", body="x" * 32768)
+    await delivery.send(host.record.handle, original.to_text())
+    host.activity.composer_dirty = True
+    assert await delivery.receive_host(f"ack_for={original.nonce}")
+    assert not host.activity.composer_dirty
+    assert (await delivery.send(host.record.handle, "next task")).accepted
+
+
+async def test_explicit_force_clears_composer_without_bypassing_startup():
+    host, _, delivery = setup()
+    host.activity.composer_dirty = True
+    host.activity.startup_pending = True
+    with pytest.raises(TerminalError) as error:
+        await delivery.send(host.record.handle, "next task", force=True)
+    assert error.value.data["reason"] == "startup_pending"
+    assert host.writes == []
+    host.activity.startup_pending = False
+    assert (await delivery.send(host.record.handle, "next task", force=True)).accepted
+    assert not host.activity.composer_dirty
