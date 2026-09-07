@@ -1,23 +1,11 @@
-"""``terminal.resize`` RPC handler — record cols, return ok.
-
-ui-tui's ``useMainApp.ts`` calls ``terminal.resize`` with the new
-``{cols, rows}`` payload whenever Ink observes a SIGWINCH; the call is
-fire-and-forget. We need a handler that:
-
-  1. Never raises (so the SIGWINCH burst doesn't spam errors), and
-  2. Records the latest ``cols`` / ``rows``, which no raven code reads back
-     today -- a console that wants the width still calls
-     ``shutil.get_terminal_size()``.
-
-The recorded state is module-level (a single TUI subprocess has exactly one
-terminal, so a singleton is correct).
-"""
+"""Hosted terminal RPC operations and native TUI size reporting."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 from raven.contracts.terminal import TerminalError
+from raven.rpc.errors import RpcError
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -58,7 +46,9 @@ async def terminal_resize(params: dict) -> dict:
     return {"ok": True}
 
 
-def register_terminal_methods(dispatcher: "Dispatcher", *, host=None, delivery=None, stream=None):
+def register_terminal_methods(
+    dispatcher: "Dispatcher", *, host=None, delivery=None, stream=None, receive_host=None, bind_session=None
+):
     """Register hosted terminal operations, retaining the native TUI resize path."""
     from raven.rpc.methods.runtime import runtime_status
 
@@ -66,7 +56,7 @@ def register_terminal_methods(dispatcher: "Dispatcher", *, host=None, delivery=N
     if host is None:
         dispatcher.register("terminal.resize", terminal_resize)
         return None
-    methods = TerminalMethods(host, delivery, stream)
+    methods = TerminalMethods(host, delivery, stream, receive_host=receive_host, bind_session=bind_session)
     for name in ("create", "list", "show", "send", "wait", "close", "subscribe", "input", "resize", "rename"):
         dispatcher.register(f"terminal.{name}", methods.handler(name))
     return methods
@@ -78,13 +68,15 @@ __all__ = [
 ]
 
 
-def _rpc_error(code: str, message: str = "", *, invalid: bool = False, data=None):
-    from raven.rpc.errors import RpcError
+class TerminalMethodError(RpcError):
+    def __init__(self, code: str, message: str = "", *, invalid: bool = False, data=None):
+        self.CODE = -32602 if invalid else -32099
+        self.MESSAGE = code
+        super().__init__(message or code, data=data)
 
-    error = RpcError(message or code, data=data)
-    error.CODE = -32602 if invalid else -32099
-    error.MESSAGE = code
-    return error
+
+def _rpc_error(code: str, message: str = "", *, invalid: bool = False, data=None):
+    return TerminalMethodError(code, message, invalid=invalid, data=data)
 
 
 def _text(params, key, default=None):
@@ -111,26 +103,28 @@ def _boolean(params, key, default=False):
 def terminal_json(record):
     """Project the host record into the terminal topology's public field names."""
     if isinstance(record, dict):
-        values = record
-    elif hasattr(record, "model_dump"):
-        return record.model_dump(by_alias=True, mode="json")
-    else:
-        values = vars(record)
-    return {
-        key.split("_")[0] + "".join(part.capitalize() for part in key.split("_")[1:]): value
-        for key, value in values.items()
-    }
+        return record
+    return record.model_dump(by_alias=True, mode="json")
 
 
 class TerminalMethods:
     """Transport validation and topology projection for an injected terminal host."""
 
-    def __init__(self, host, delivery=None, stream=None):
+    def __init__(self, host, delivery=None, stream=None, *, receive_host=None, bind_session=None):
         self.host = host
         self.delivery = delivery
         self.stream = stream
+        self.receive_host = receive_host
+        self.bind_session = bind_session
         self._topologies = {}
         self._revisions = {}
+
+    def _record(self, record):
+        result = terminal_json(record)
+        if self.stream is not None:
+            output = self.stream.outputs.get(result["handle"])
+            result["visible"] = bool(output and output.acks)
+        return result
 
     def _owner(self):
         from raven.rpc.connection import current_state
@@ -138,6 +132,7 @@ class TerminalMethods:
         return (current_state() or {}).get("terminal_owner", "human")
 
     async def create(self, params):
+        session = _text(params, "session_id") if "session_id" in params else None
         command = params.get("command")
         if not (isinstance(command, str) and command.strip()) and not (
             isinstance(command, list) and command and all(isinstance(s, str) and s for s in command)
@@ -153,7 +148,9 @@ class TerminalMethods:
             title=_text(params, "title", "Terminal"),
             owner=requested_owner,
         )
-        return {"terminal": terminal_json(record)}
+        if session and self.bind_session is not None:
+            self.bind_session(record.handle, session)
+        return {"terminal": self._record(record)}
 
     async def list(self, params):
         limit = _integer(params, "limit", 1000)
@@ -161,7 +158,7 @@ class TerminalMethods:
         worktree_id = params.get("worktree_id")
         if worktree_id is not None:
             worktree_id = _text(params, "worktree_id")
-        records = [terminal_json(r) for r in self.host.list(worktree_id=worktree_id)]
+        records = [self._record(r) for r in self.host.list(worktree_id=worktree_id)]
         worktrees = {r["worktreeId"] for r in records}
         if worktree_id:
             worktrees.add(worktree_id)
@@ -210,19 +207,33 @@ class TerminalMethods:
         return result
 
     async def show(self, params):
-        return {"terminal": terminal_json(self.host.show(_text(params, "handle")))}
+        return {"terminal": self._record(self.host.show(_text(params, "handle")))}
 
     async def send(self, params):
         text = params.get("text")
         if not isinstance(text, str):
             raise _rpc_error("invalid_argument", "text must be a string", invalid=True)
+        enter = _boolean(params, "enter")
+        require_ack = _boolean(params, "require_ack")
+        if params.get("to") is not None:
+            if params.get("handle") is not None or params["to"] != "raven":
+                raise _rpc_error("invalid_argument", "Use one handle or to=raven", invalid=True)
+            if self.receive_host is None:
+                raise _rpc_error("terminal_unavailable")
+            source = _text(params, "source_handle") if "source_handle" in params else None
+            return {"send": await self.receive_host(text, source)}
         if self.delivery is None:
             raise _rpc_error("terminal_unavailable")
+        handle = _text(params, "handle")
+        if "session_id" in params:
+            session = _text(params, "session_id")
+            if self.bind_session is not None:
+                self.bind_session(handle, session)
         result = await self.delivery.send(
-            _text(params, "handle"),
+            handle,
             text,
-            enter=_boolean(params, "enter"),
-            require_ack=_boolean(params, "require_ack"),
+            enter=enter,
+            require_ack=require_ack,
         )
         return {"send": terminal_json(result)}
 
@@ -246,7 +257,7 @@ class TerminalMethods:
         if not isinstance(data, str) or len(data.encode("utf-8")) > 65536:
             raise _rpc_error("invalid_argument", "data must be a string of at most 64 KiB", invalid=True)
         handle = _text(params, "handle")
-        await self.host.write(handle, data.encode("utf-8"))
+        await self.host.input(handle, data.encode("utf-8"))
         return {"input": {"handle": handle, "bytesWritten": len(data.encode("utf-8"))}}
 
     async def resize(self, params):
@@ -274,8 +285,6 @@ class TerminalMethods:
         async def invoke(params):
             try:
                 return await getattr(self, method)(params)
-            except KeyError as exc:
-                raise _rpc_error("terminal_not_found", "Terminal handle is not live") from exc
             except TerminalError as exc:
                 raise _rpc_error(exc.code, str(exc), data=exc.data) from exc
 

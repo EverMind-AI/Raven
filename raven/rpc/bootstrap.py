@@ -20,7 +20,7 @@ from loguru import logger
 
 from raven.rpc import LOCAL_CHANNEL
 
-SendFrame = Callable[[dict[str, Any]], Awaitable[None]]
+SendFrame = Callable[[dict[str, Any] | bytes], Awaitable[None]]
 
 
 @dataclass
@@ -39,6 +39,7 @@ class RpcStack:
     # a per-conversation routing shim over both (see RoutingQuestionBroker).
     question_broker: Any = None
     deliverables: Any = None
+    terminal_services: Any = None
 
 
 _TUI_INIT_CRASH_TYPES: tuple[type[BaseException], ...] = (
@@ -135,6 +136,7 @@ async def build_rpc_stack(
     agent_loop: Any = None,
     channel: str = "tui",
     approval_responder: Any = None,
+    enable_terminals: bool = False,
 ) -> RpcStack:
     """Assemble dispatcher + engine wired to ``send_frame``.
 
@@ -192,6 +194,11 @@ async def build_rpc_stack(
 
     dispatcher = Dispatcher()
     emitter = SubscriptionEmitter(send_frame=send_frame)
+    terminal_services = None
+    if enable_terminals:
+        from raven.rpc.terminal_services import TerminalServices
+
+        terminal_services = TerminalServices(emitter, send_frame)
     # ``confirm.request`` now names the conversation the dispatch was asked for
     # (slash.exec threads its session_id down; see cli_dispatch), so the same
     # scoping as the question broker applies: a destructive command's yes/no
@@ -334,7 +341,15 @@ async def build_rpc_stack(
         build_error=build_error,
         send_frame=send_frame,
         default_channel=channel,
+        terminal_services=terminal_services,
     )
+
+    unregister_terminal_tools = None
+    if terminal_services is not None and agent_loop is not None:
+        from raven.rpc.terminal_tools import register_terminal_tools
+
+        terminal_services.sessions = agent_loop.sessions
+        unregister_terminal_tools = register_terminal_tools(agent_loop.tools, dispatcher)
 
     if owns_loop and agent_loop is not None:
         # A one-time runtime preparation belongs to whoever assembles the engine.
@@ -357,6 +372,13 @@ async def build_rpc_stack(
         asyncio.create_task(_start_backend())
 
     async def teardown() -> None:
+        if unregister_terminal_tools is not None:
+            unregister_terminal_tools()
+        if terminal_services is not None:
+            try:
+                await terminal_services.shutdown()
+            except Exception:
+                logger.exception("terminal services stop failed; continuing shutdown")
         confirm_broker.cancel_all()
         approval_broker.cancel_all()
         if owns_loop and agent_loop is not None and agent_loop.cron_service is not None:
@@ -439,6 +461,7 @@ async def build_rpc_stack(
         direct_targets=direct_targets,
         question_broker=question_broker,
         deliverables=getattr(agent_loop, "_deliverables", None),
+        terminal_services=terminal_services,
     )
 
 

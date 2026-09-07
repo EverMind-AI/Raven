@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import typer
 
 from raven.cli import _terminal_rpc
@@ -42,7 +44,8 @@ def terminal_show(
 
 @terminal_app.command("send")
 def terminal_send(
-    terminal: str = typer.Option(..., "--terminal"),
+    terminal: str | None = typer.Option(None, "--terminal"),
+    to: str | None = typer.Option(None, "--to", help="Use raven to reply to the native host without PTY input"),
     text: str = typer.Option(..., "--text"),
     enter: bool = typer.Option(False, "--enter", help="Submit the provider composer after pasting"),
     require_ack: bool = typer.Option(False, "--require-ack"),
@@ -50,11 +53,16 @@ def terminal_send(
     json_output: bool = typer.Option(False, "--json"),
 ):
     """Paste text into a terminal and optionally submit or wait for content ACK."""
+    if (terminal is None) == (to is None):
+        raise typer.BadParameter("Supply exactly one of --terminal or --to")
     if len(text) > 1200:
         typer.echo("Warning: long terminal message; prefer a short summary and an absolute file path.", err=True)
+    params = {"handle": terminal} if terminal is not None else {"to": to}
+    if to is not None and os.environ.get("RAVEN_TERMINAL_HANDLE"):
+        params["source_handle"] = os.environ["RAVEN_TERMINAL_HANDLE"]
     _terminal_rpc.run(
         "terminal.send",
-        {"handle": terminal, "text": text, "enter": enter, "require_ack": require_ack},
+        {**params, "text": text, "enter": enter, "require_ack": require_ack},
         environment=environment,
         json_output=json_output,
         timeout_ms=310000 if require_ack else 60000,

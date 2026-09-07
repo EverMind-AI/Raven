@@ -22,7 +22,10 @@ class StubOutputHost:
         if handle != "term_test":
             raise KeyError(handle)
 
-    def subscribe(self, handle, callback):
+    def raw_snapshot(self, handle):
+        return b""
+
+    def subscribe(self, handle, callback, *, replay_callback=None):
         self.callbacks[handle] = callback
         return lambda: self.callbacks.pop(handle, None)
 
@@ -109,3 +112,32 @@ async def test_gateway_filters_terminal_frames_and_preserves_browser_broadcast()
     browser = b"RVF1browser"
     await gateway.broadcast(browser)
     other.send_bytes.assert_awaited_once_with(browser)
+
+
+async def test_replay_precedes_live_output_without_consuming_the_ack_window():
+    host, sink = StubOutputHost(), AsyncMock()
+    host.raw_snapshot = lambda handle: b"\x1b[?1049h" + b"x" * 262136
+    stream = TerminalStream(host, sink)
+    token = connection.bind_connection()
+    replay_sink = AsyncMock()
+    connection.set_frame_sink(replay_sink)
+    try:
+        subscribed = await stream.subscribe({"handle": "term_test"})
+        assert subscribed["subscription"]["seq"] == 0
+        frames = [decode_frame(call.args[0]) for call in replay_sink.await_args_list]
+        assert b"".join(frame[1] for frame in frames) == host.raw_snapshot("term_test")
+        assert all(frame[0]["replay"] is True and frame[0]["seq"] == 0 for frame in frames)
+        await host.callbacks["term_test"](b"live")
+        assert decode_frame(sink.await_args.args[0])[0] == {"handle": "term_test", "seq": 4}
+        other = connection.bind_connection()
+        other_sink = AsyncMock()
+        connection.set_frame_sink(other_sink)
+        try:
+            joined = await stream.subscribe({"handle": "term_test"})
+            assert joined["subscription"]["seq"] == 4
+            assert len(other_sink.await_args_list) == 4
+            assert len(replay_sink.await_args_list) == 4
+        finally:
+            connection.unbind_connection(other)
+    finally:
+        connection.unbind_connection(token)

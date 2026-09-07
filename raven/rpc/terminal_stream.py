@@ -15,8 +15,11 @@ ACK_BYTES = 64 * 1024
 WINDOW_BYTES = 1024 * 1024
 
 
-def encode_frame(handle: str, seq: int, payload: bytes) -> bytes:
-    header = json.dumps({"handle": handle, "seq": seq}, separators=(",", ":")).encode("utf-8")
+def encode_frame(handle: str, seq: int, payload: bytes, *, replay: bool = False) -> bytes:
+    fields = {"handle": handle, "seq": seq}
+    if replay:
+        fields["replay"] = True
+    header = json.dumps(fields, separators=(",", ":")).encode("utf-8")
     return MAGIC + struct.pack(">I", len(header)) + header + payload
 
 
@@ -44,15 +47,18 @@ class _Output:
     ready: asyncio.Event = field(default_factory=asyncio.Event)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     unsubscribe: object = None
+    event_subscriptions: dict[int, str] = field(default_factory=dict)
 
 
 class TerminalStream:
     """One host subscription per handle, bounded by the slowest subscribed connection."""
 
-    def __init__(self, host, broadcast):
+    def __init__(self, host, broadcast, emitter=None):
         self.host = host
         self.broadcast = broadcast
+        self.emitter = emitter
         self.outputs: dict[str, _Output] = {}
+        self.cleanup_tasks: set[asyncio.Task] = set()
 
     async def subscribe(self, params):
         handle = _text(params, "handle")
@@ -82,28 +88,48 @@ class TerminalStream:
         if output is None:
             output = _Output()
             self.outputs[handle] = output
-        if identity not in output.acks:
-            output.acks[identity] = output.seq
-            subscriptions.add(handle)
-            state.setdefault("on_disconnect", []).append(lambda: self._remove(handle, identity))
-        if output.unsubscribe is None:
+        async with output.lock:
+            if identity not in output.acks:
+                output.acks[identity] = output.seq
+                subscriptions.add(handle)
+                state.setdefault("on_disconnect", []).append(lambda: self._remove(handle, identity))
+                try:
+                    if self.emitter is not None:
+                        record = self.host.show(handle)
+                        output.event_subscriptions[identity] = await self.emitter.register(record.worktree_id)
+                    snapshot = self.host.raw_snapshot(handle)
+                    if output.unsubscribe is None:
 
-            async def receive(data):
-                await self._emit(handle, output, data)
+                        async def receive(data):
+                            await self._emit(handle, output, data)
 
-            try:
-                output.unsubscribe = self.host.subscribe(handle, receive)
-            except Exception:
-                subscriptions.discard(handle)
-                self._remove(handle, identity)
-                raise
-        return {"subscription": {"handle": handle, "enabled": True, "seq": output.seq, "ackBytes": ACK_BYTES}}
+                        async def replay_captured(data):
+                            # Replay is per connection; the shared live callback must not duplicate it.
+                            pass
+
+                        output.unsubscribe = self.host.subscribe(handle, receive, replay_callback=replay_captured)
+                    sink = connection.current_frame_sink() or self.broadcast
+                    for offset in range(0, len(snapshot), ACK_BYTES):
+                        await sink(encode_frame(handle, output.seq, snapshot[offset : offset + ACK_BYTES], replay=True))
+                except BaseException:
+                    subscriptions.discard(handle)
+                    self._remove(handle, identity)
+                    raise
+        result = {"handle": handle, "enabled": True, "seq": output.seq, "ackBytes": ACK_BYTES}
+        if identity in output.event_subscriptions:
+            result["subscription_id"] = output.event_subscriptions[identity]
+        return {"subscription": result}
 
     def _remove(self, handle, identity):
         output = self.outputs.get(handle)
         if output is None:
             return
         output.acks.pop(identity, None)
+        subscription = output.event_subscriptions.pop(identity, None)
+        if subscription is not None:
+            task = asyncio.create_task(self.emitter.unregister(subscription))
+            self.cleanup_tasks.add(task)
+            task.add_done_callback(self.cleanup_tasks.discard)
         output.ready.set()
         if not output.acks:
             if output.unsubscribe is not None:
@@ -128,3 +154,8 @@ class TerminalStream:
         for handle, output in list(self.outputs.items()):
             for identity in list(output.acks):
                 self._remove(handle, identity)
+
+    async def shutdown(self):
+        self.close()
+        if self.cleanup_tasks:
+            await asyncio.gather(*self.cleanup_tasks)

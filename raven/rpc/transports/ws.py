@@ -334,11 +334,14 @@ class WsGateway:
             logger.info("serve: ws client disconnected ({} active)", len(self._sockets))
         return ws
 
-    async def _send_one(self, ws: web.WebSocketResponse, frame: dict[str, Any]) -> None:
+    async def _send_one(self, ws: web.WebSocketResponse, frame: dict[str, Any] | bytes) -> None:
         """Send one frame to a single socket. Raises if that socket is gone --
         the caller decides whether to fall back to :meth:`broadcast`."""
         if ws.closed:
             raise ConnectionResetError("socket closed")
+        if isinstance(frame, bytes):
+            await ws.send_bytes(frame)
+            return
         await ws.send_str(json.dumps(frame, ensure_ascii=False))
 
     async def _dispatch_one(self, ws: web.WebSocketResponse, frame: dict[str, Any]) -> None:

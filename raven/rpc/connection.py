@@ -51,7 +51,7 @@ _live: set[int] = set()
 # outlive the socket it names.
 _owners: dict[str, dict[str, Any]] = {}
 
-SendFrame = Callable[[dict[str, Any]], Awaitable[None]]
+SendFrame = Callable[[dict[str, Any] | bytes], Awaitable[None]]
 
 # What a declared surface may look like: a short lowercase token ("tui",
 # "page", "shell", "webui"). Bounded so an arbitrary client cannot write

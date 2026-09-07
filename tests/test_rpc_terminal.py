@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from raven.contracts.terminal import TerminalError, TerminalRecord
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.methods import terminal as terminal_mod
 from raven.rpc.methods.terminal import (
@@ -91,12 +92,13 @@ class StubTerminalHost:
     def __init__(self):
         self.records = {}
         self.write = AsyncMock()
+        self.input = AsyncMock()
         self.resize = AsyncMock()
         self.close = AsyncMock()
 
     async def create(self, *, worktree_id, command, title, owner):
         index = len(self.records)
-        record = SimpleNamespace(
+        record = TerminalRecord(
             handle=f"term_{index}",
             incarnation_id=f"incarnation-{index}",
             pty_id=f"{worktree_id}@@{index:08x}",
@@ -123,7 +125,10 @@ class StubTerminalHost:
         return [r for r in self.records.values() if worktree_id is None or r.worktree_id == worktree_id]
 
     def show(self, handle):
-        return self.records[handle]
+        try:
+            return self.records[handle]
+        except KeyError as exc:
+            raise TerminalError("terminal_not_found", "Terminal handle is not live") from exc
 
 
 @pytest.fixture
@@ -136,7 +141,12 @@ def hosted_rpc():
 
 
 async def call_terminal(dispatcher, method, **params):
-    return await dispatcher.dispatch({"jsonrpc": "2.0", "id": 42, "method": f"terminal.{method}", "params": params})
+    from raven.rpc.models import METHOD_MODELS
+
+    response = await dispatcher.dispatch({"jsonrpc": "2.0", "id": 42, "method": f"terminal.{method}", "params": params})
+    if "result" in response:
+        METHOD_MODELS[f"terminal.{method}"][1].model_validate(response["result"])
+    return response
 
 
 async def test_hosted_create_show_and_invisible_topology(hosted_rpc):
@@ -171,7 +181,7 @@ async def test_hosted_send_wait_input_and_resize_use_host(hosted_rpc):
     dispatcher, host, delivery = hosted_rpc
     await host.create(worktree_id="repo::/tmp/task", command="codex", title="worker", owner="human")
     delivery.send.return_value = {"handle": "term_0", "accepted": True, "state": "accepted"}
-    delivery.wait.return_value = {"satisfied": True}
+    delivery.wait.return_value = {"handle": "term_0", "satisfied": True}
     assert (await call_terminal(dispatcher, "send", handle="term_0", text="hello", enter=True))["result"]["send"][
         "accepted"
     ]
@@ -180,7 +190,8 @@ async def test_hosted_send_wait_input_and_resize_use_host(hosted_rpc):
         "satisfied"
     ]
     await call_terminal(dispatcher, "input", handle="term_0", data="a\r")
-    host.write.assert_awaited_once_with("term_0", b"a\r")
+    host.input.assert_awaited_once_with("term_0", b"a\r")
+    host.write.assert_not_awaited()
     await call_terminal(dispatcher, "resize", handle="term_0", cols=100, rows=30)
     host.resize.assert_awaited_once_with("term_0", 100, 30)
 

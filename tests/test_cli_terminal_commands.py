@@ -71,6 +71,21 @@ def test_terminal_error_is_json_with_nonzero_exit(monkeypatch):
     assert json.loads(result.stdout) == envelope
 
 
+def test_native_host_reply_never_requires_a_terminal_handle(monkeypatch):
+    from raven.cli import _terminal_rpc
+
+    request = AsyncMock(return_value={"ok": True, "result": {"send": {"state": "delivered_to_host"}}})
+    monkeypatch.setattr(_terminal_rpc, "request", request)
+    monkeypatch.setenv("RAVEN_TERMINAL_HANDLE", "term_sender")
+    result = CliRunner().invoke(
+        app, ["terminal", "send", "--to", "raven", "--text", "ack_for=a2a-123456789abc received", "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    assert request.await_args.args[1]["to"] == "raven"
+    assert request.await_args.args[1]["source_handle"] == "term_sender"
+    assert "handle" not in request.await_args.args[1]
+
+
 def test_terminal_long_text_warns_without_refusing(monkeypatch):
     from raven.cli import _terminal_rpc
 

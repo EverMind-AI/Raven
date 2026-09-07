@@ -47,7 +47,8 @@ async def _exchange(ws, method, params):
 
 def _wrap(frame, runtime_id):
     runtime = RuntimeInfo(runtime_id=runtime_id)
-    if frame.get("_meta", {}).get("runtimeId") != runtime_id:
+    meta = frame.get("_meta")
+    if not isinstance(meta, dict) or meta.get("runtimeId") != runtime_id:
         raise _TransportError("runtime_identity_changed", "Runtime identity changed during the request")
     if "error" in frame:
         error = frame["error"]
@@ -77,12 +78,18 @@ async def request(method, params, *, environment=None, timeout_ms=60000):
             async with aiohttp.ClientSession() as session:
                 async with session.ws_connect(f"http://127.0.0.1:{port}/rpc", headers={"X-Raven-Token": token}) as ws:
                     status = await _exchange(ws, "runtime.status", {})
-                    runtime = status.get("result", {}).get("runtime", {})
+                    status_result = status.get("result")
+                    if not isinstance(status_result, dict):
+                        raise _TransportError("invalid_response", "Runtime status has no result object")
+                    runtime = status_result.get("runtime")
+                    graph = status_result.get("graph")
+                    if not isinstance(runtime, dict) or not isinstance(graph, dict):
+                        raise _TransportError("invalid_response", "Runtime status has invalid readiness fields")
                     runtime_id = runtime.get("runtimeId")
                     if not isinstance(runtime_id, str) or not runtime_id:
                         raise _TransportError("runtime_unavailable", "Runtime status has no identity")
                     wrapped = _wrap(status, runtime_id)
-                    if runtime.get("state") != "ready" or status["result"].get("graph", {}).get("state") != "ready":
+                    if runtime.get("state") != "ready" or graph.get("state") != "ready":
                         raise _TransportError("runtime_unavailable", "Runtime is not ready")
                     if environment is not None and environment != runtime.get("environment", "local"):
                         raise _TransportError(
