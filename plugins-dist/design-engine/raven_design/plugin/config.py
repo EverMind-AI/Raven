@@ -157,6 +157,8 @@ _RENDER_SPEC: tuple[tuple[str, str, str, Any, tuple[Any, Any] | None], ...] = (
     ("ffprobePath", "ffprobe_path", "text", "", None),
     ("qpdfPath", "qpdf_path", "text", "", None),
     ("maxSidePixels", "max_side_pixels", "count", 8192, (256, 1 << 20)),
+    ("maxViewportWidth", "max_viewport_width", "count", 8192, (320, 1 << 20)),
+    ("maxViewportHeight", "max_viewport_height", "count", 8192, (240, 1 << 20)),
     ("maxTotalPixels", "max_total_pixels", "count", 500_000_000, (1, 1 << 42)),
     ("maxAnimationFrames", "max_animation_frames", "count", 1000, (2, 100_000)),
     ("browserReadySeconds", "browser_ready_seconds", "number", 10.0, (0.1, 3600.0)),
@@ -208,6 +210,8 @@ class RenderSettings:
     ffprobe_path: str = ""
     qpdf_path: str = ""
     max_side_pixels: int = 8192
+    max_viewport_width: int = 8192
+    max_viewport_height: int = 8192
     max_total_pixels: int = 500_000_000
     max_animation_frames: int = 1000
     browser_ready_seconds: float = 10.0

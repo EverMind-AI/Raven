@@ -83,6 +83,116 @@ def test_an_unconfined_tool_reads_the_paths_it_is_given(tmp_path) -> None:
     assert tool._image_part(str(outside))["image_url"]["url"].startswith("data:image/png;base64,")
 
 
+# ── the image path: which endpoint a model is sent to ──
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"pixels"
+_B64 = base64.b64encode(_PNG).decode()
+
+
+def _image_tool(monkeypatch, handler, *, model: str, workspace: Path, api_base: str = "https://openrouter.ai/api/v1"):
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    return ImageGenerateTool(SimpleNamespace(api_base=api_base, model=model, api_key="k"), workspace=workspace)
+
+
+async def test_a_dedicated_image_model_goes_to_the_images_api_with_its_references(monkeypatch, tmp_path) -> None:
+    """gpt-image-2 answers 404 on chat/completions whatever the modalities say;
+    OpenRouter serves it only through ``/images``, where edit inputs travel as
+    ``input_references``."""
+    seen: list[tuple[str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    ref = tmp_path / "logo.png"
+    ref.write_bytes(_PNG)
+    tool = _image_tool(monkeypatch, handler, model="openai/gpt-image-2", workspace=tmp_path / "ws")
+    out = json.loads(await tool.execute("a poster", images=[str(ref)], aspect_ratio="3:4", quality="high"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _PNG
+    path, body = seen[0]
+    assert path == "/api/v1/images"
+    assert (body["model"], body["aspect_ratio"], body["quality"]) == ("openai/gpt-image-2", "3:4", "high")
+    reference = body["input_references"][0]
+    assert reference["type"] == "image_url" and reference["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+async def test_an_openai_compatible_base_takes_a_size_and_edits_by_multipart(monkeypatch, tmp_path) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    tool = _image_tool(
+        monkeypatch, handler, model="gpt-image-2", workspace=tmp_path / "ws", api_base="https://gw.test/v1"
+    )
+    assert json.loads(await tool.execute("a poster", aspect_ratio="3:4"))["success"]
+    generation = seen[0]
+    assert generation.url.path == "/v1/images/generations"
+    assert json.loads(generation.content)["size"] == "1152x1536"
+
+    ref = tmp_path / "logo.png"
+    ref.write_bytes(_PNG)
+    assert json.loads(await tool.execute("blend the logo in", images=[str(ref)]))["success"]
+    edit = seen[1]
+    assert edit.url.path == "/v1/images/edits"
+    assert edit.headers["content-type"].startswith("multipart/form-data")
+    assert b'name="image[]"' in edit.content and _PNG in edit.content and b"gpt-image-2" in edit.content
+
+
+async def test_a_reference_pointing_inward_is_refused_before_anything_is_fetched(monkeypatch, tmp_path) -> None:
+    """``images`` is model-controlled and may name any URL. The multipart edit
+    path is the one that fetches such a URL from this process, so it goes
+    through the guarded fetch: a link-local or private target is refused, and
+    nothing is read from it or uploaded to the provider."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    tool = _image_tool(
+        monkeypatch, handler, model="gpt-image-2", workspace=tmp_path / "ws", api_base="https://gw.test/v1"
+    )
+    out = json.loads(await tool.execute("blend it in", images=["http://169.254.169.254/latest/meta-data/"]))
+    assert "refused" in out["error"]
+    assert seen == []
+
+
+async def test_a_chat_refusal_for_an_image_only_model_falls_back_to_the_images_api(monkeypatch, tmp_path) -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path.endswith("/chat/completions"):
+            message = (
+                "vendor/pictures-only is an image generation model and cannot be used with the "
+                "chat/completions endpoint. Use the /api/v1/images endpoint instead."
+            )
+            return httpx.Response(404, json={"error": {"message": message, "code": 404}})
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    tool = _image_tool(monkeypatch, handler, model="vendor/pictures-only", workspace=tmp_path / "ws")
+    assert json.loads(await tool.execute("a poster"))["success"]
+    assert seen == ["/api/v1/chat/completions", "/api/v1/images"]
+
+
+async def test_a_chat_routed_image_model_still_takes_chat_completions(monkeypatch, tmp_path) -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        assert json.loads(request.content)["modalities"] == ["image", "text"]
+        message = {"images": [{"image_url": {"url": "data:image/png;base64," + _B64}}]}
+        return httpx.Response(200, json={"choices": [{"message": message}]})
+
+    tool = _image_tool(monkeypatch, handler, model="google/gemini-2.5-flash-image", workspace=tmp_path / "ws")
+    assert json.loads(await tool.execute("a poster"))["success"]
+    assert seen == ["/api/v1/chat/completions"]
+
+
 # ── the speech path: what the stream carries, and what the file becomes ──
 
 

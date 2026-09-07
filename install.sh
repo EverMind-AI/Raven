@@ -250,7 +250,7 @@ install_raven() {
     build_web_assets "$script_dir"
     # Pin to the locked dependency set so an install matches what we test.
     constraints="$(mktemp)"
-    uv export --directory "$script_dir" --frozen --all-extras --no-hashes --no-emit-project -o "$constraints"
+    uv export --directory "$script_dir" --frozen --all-extras --no-hashes --no-emit-workspace -o "$constraints"
     # Install all channel adapters by default. If the umbrella extra fails to
     # resolve/build on this platform, fall back to base raven so one broken
     # channel SDK cannot block the whole install.

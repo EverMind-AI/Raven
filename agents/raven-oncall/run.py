@@ -129,6 +129,7 @@ def render_config(source: Path) -> Path:
     host = render.host_config()
 
     render.apply_secret_slots(config, host, slots=SECRET_SLOTS, required=REQUIRED_SECRETS, lookup=env_value)
+    render.inherit_exec_policy(config, host)
 
     llm_key = REQUIRED_SECRETS[0]
     if env_value(llm_key):

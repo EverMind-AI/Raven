@@ -162,7 +162,7 @@ def _build(root: Path, version: str) -> tuple[Path, Path]:
         print(f"Building the wheel at {version}...", flush=True)
         _run(["uv", "build", "--wheel"], cwd=root)
         _run(
-            ["uv", "export", "--all-extras", "--no-hashes", "--no-emit-project", "-o", "dist/raven-constraints.txt"],
+            ["uv", "export", "--all-extras", "--no-hashes", "--no-emit-workspace", "-o", "dist/raven-constraints.txt"],
             cwd=root,
         )
     finally:

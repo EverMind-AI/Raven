@@ -14,6 +14,7 @@ path-touching tool call, and a parse error there would break looking at files.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -251,7 +252,10 @@ async def test_a_look_at_the_named_path_gains_the_line():
         state, "read_file", {"path": "/tmp/arena/run.sh"}, "file contents", "run /tmp/arena, 25 min budget"
     )
     assert "spawn `Raven-Oncall`" in out
-    assert out.startswith("file contents"), "the result itself must survive intact"
+    assert "file contents" not in out, (
+        "the note travels alone: the result is fenced as untrusted data by "
+        "add_tool_result, and a note appended to it would ride inside the fence"
+    )
 
 
 @pytest.mark.asyncio
@@ -275,23 +279,28 @@ async def test_the_judgement_is_paid_once_per_turn():
 async def test_a_not_watched_verdict_leaves_every_result_alone():
     loop, state = _loop(verdict='{"watched": false, "paths": []}')
     out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "read this file for me")
-    assert out == "r"
+    assert out == ""
 
 
 @pytest.mark.asyncio
 async def test_a_look_elsewhere_stays_clean_even_on_a_watched_turn():
     loop, state = _loop()
     out = await loop._note_watch_work(state, "read_file", {"path": "/etc/hosts"}, "r", "run /tmp/arena")
-    assert out == "r"
+    assert out == ""
 
 
 @pytest.mark.asyncio
 async def test_after_a_real_oncall_dispatch_the_turn_goes_quiet():
+    """The judgement is paid at most once per turn. A straight-to-spawn turn
+    pays it AT the hand-off, to judge the dispatch's shape (2026-09-01: a bare
+    watcher spawn on a code-driven request dropped the coding half and every
+    nudge then went silent) -- one flash call against hours of misdirected
+    budget. Looks after the hand-off still pay nothing."""
     loop, state = _loop()
     await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, ACCEPTED, "run /tmp/arena")
     out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
-    assert out == "r"
-    assert loop._llm_calls == 0, "a handed-over turn must not pay for the judgement"
+    assert out == ""
+    assert loop._llm_calls == 1, "the judgement is paid once, at the hand-off, and never again"
 
 
 @pytest.mark.asyncio
@@ -334,14 +343,15 @@ async def test_two_interleaved_turns_never_share_watch_state():
 
     assert "spawn `Raven-Oncall`" in out_a, "B's hand-off silenced A"
     assert state_b.dispatched and not state_a.dispatched
-    assert state_a.verdict is not None and state_b.verdict is None, "the verdict stayed with A's turn"
+    assert state_a.verdict is not None and state_b.verdict is not None
+    assert state_a.verdict is not state_b.verdict, "each turn holds its own verdict"
 
 
 @pytest.mark.asyncio
 async def test_a_roster_without_the_specialist_asks_no_judgement():
     loop, state = _loop(names=("Raven-Code",))
     out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
-    assert out == "r"
+    assert out == ""
     assert loop._llm_calls == 0
 
 
@@ -354,7 +364,7 @@ async def test_a_judgement_that_blows_up_never_reaches_the_result(monkeypatch):
 
     monkeypatch.setattr(watch_work, "oncall_agent", broken)
     out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
-    assert out == "r"
+    assert out == ""
 
 
 # --- the spawn itself: nothing stands between the call and the manager ---
@@ -399,7 +409,7 @@ async def test_a_successful_dispatch_still_goes_quiet():
     loop, state = _loop()
     await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, ACCEPTED, "run /tmp/arena")
     out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
-    assert out == "r"
+    assert out == ""
 
 
 @pytest.mark.asyncio
@@ -444,4 +454,224 @@ async def test_an_accepted_graph_with_an_oncall_node_goes_quiet():
         "run /tmp/arena",
     )
     out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
-    assert out == "r"
+    assert out == ""
+
+
+# --- the hard form: the second claimed look is refused, not nudged again ---
+
+
+def test_the_nudge_names_both_dispatch_doors():
+    line = watch_work.nudge("Raven-Oncall")
+    assert "spawn `Raven-Oncall`" in line and "run_subagent_dag" in line
+
+
+def test_the_second_nudge_is_the_hard_form():
+    first = watch_work.nudge("Raven-Oncall")
+    second = watch_work.nudge("Raven-Oncall", repeat=True)
+    assert not first.startswith("\n\nSTOP")
+    assert second.startswith("\n\nSTOP")
+    assert "do not ask the owner" in second
+
+
+@pytest.mark.asyncio
+async def test_the_loop_escalates_on_the_second_claimed_look():
+    loop, state = _loop()
+    first = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/a"}, "r", "run /tmp/arena")
+    second = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/b"}, "r", "run /tmp/arena")
+    assert "spawn `Raven-Oncall`" in first and not first.startswith("\n\nSTOP")
+    assert second.startswith("\n\nSTOP")
+
+
+# --- the owner-ask gate: a pre-dispatch question never reaches the owner ---
+
+
+def _watched_state(subjects=("/srv/arena",)):
+    state = watch_work.TurnWatch()
+    state.verdict = watch_work.Verdict(watched=True, subjects=list(subjects))
+    state.agent = "Raven-Oncall"
+    return state
+
+
+def test_a_pre_dispatch_ask_is_preempted_with_the_dispatch_door():
+    state = _watched_state()
+    out = watch_work.preempt_owner_ask(
+        state, {"questions": [{"question": "Path /srv/arena does not exist on this machine, where is it?"}]}
+    )
+    assert "not sent to the owner" in out and "spawn `Raven-Oncall`" in out
+    assert state.nudges == 1
+
+
+def test_a_paraphrased_or_bundled_ask_is_still_preempted():
+    """Measured 2026-08-28 run 6: the model wrote "this path" for the path and
+    bundled two case-answerable questions alongside; a verbatim-subject filter
+    let it through to the owner. The gate keys on the turn's judged state."""
+    state = _watched_state()
+    out = watch_work.preempt_owner_ask(
+        state,
+        {
+            "questions": [
+                {"question": "This path is on another machine. How do I reach that machine? SSH address?"},
+                {"question": "What are the cantilever beam's geometry and material parameters?"},
+            ]
+        },
+    )
+    assert "not sent to the owner" in out and "spawn `Raven-Oncall`" in out
+
+
+def test_no_verdict_or_handed_over_turn_never_intercepts():
+    bare = watch_work.TurnWatch()
+    assert watch_work.preempt_owner_ask(bare, {"questions": [{"question": "x /srv/arena"}]}) == ""
+    done = _watched_state()
+    done.dispatched = True
+    assert watch_work.preempt_owner_ask(done, {"questions": [{"question": "x /srv/arena"}]}) == ""
+
+
+# -- hoarded_code_note: bulk source in the main context earns one line --
+
+
+def _source_blob(n: int = 200) -> str:
+    return "\n".join(f"import os\ndef fn_{i}(x):\n    return x + {i}" for i in range(n))
+
+
+def test_a_bulk_source_result_earns_the_hoarding_note():
+    """The 2026-09-01 shape: whole files fetched into the main context."""
+    note = watch_work.hoarded_code_note(_source_blob())
+    assert "workspace of the node" in note
+    assert "PATH" in note
+
+
+def test_bulk_prose_is_not_code_and_earns_nothing():
+    prose = (
+        "The experiment concluded with a validation score that held steady "
+        "across seeds, and the report describes each round in detail. "
+    ) * 200
+    assert watch_work.hoarded_code_note(prose) == ""
+
+
+def test_a_small_snippet_earns_nothing():
+    """Quoting a function while discussing it is normal conversation."""
+    assert watch_work.hoarded_code_note("def f(x):\n    return x\n" * 20) == ""
+
+
+# -- solo dispatch: a bare watcher spawn on a code-driven request --
+
+
+CODE_VERDICT = '{"watched": true, "subjects": ["/tmp/arena"], "code_work": true}'
+RUN_VERDICT = '{"watched": true, "subjects": ["/tmp/arena"], "code_work": false}'
+
+
+def test_read_verdict_parses_code_work():
+    assert watch_work.read_verdict(CODE_VERDICT).code_work is True
+    assert watch_work.read_verdict(RUN_VERDICT).code_work is False
+    assert watch_work.read_verdict('{"watched": true, "subjects": []}').code_work is False
+
+
+@pytest.mark.asyncio
+async def test_a_bare_watcher_spawn_on_code_work_earns_the_solo_note():
+    """The 2026-09-01 shape: the whole search handed to the watcher as one
+    spawn, the coding half owned by nobody, every nudge then silent."""
+    loop, state = _loop(verdict=CODE_VERDICT)
+    out = await loop._note_watch_work(
+        state,
+        "spawn",
+        {"subagent": "Raven-Oncall", "task": "search"},
+        ACCEPTED,
+        "edit train.py for the search, run /tmp/arena",
+    )
+    assert "coding half" in out
+    assert "run_subagent_dag" in out
+    assert ACCEPTED not in out, (
+        "the confirmation travels once, as the fenced tool result; repeating it in the trusted note "
+        "was the duplication measured on every dispatch before this branch honoured the caller contract"
+    )
+    assert state.dispatched and state.solo
+
+
+@pytest.mark.asyncio
+async def test_a_watcher_spawn_on_run_only_work_is_a_complete_handoff():
+    loop, state = _loop(verdict=RUN_VERDICT)
+    out = await loop._note_watch_work(
+        state,
+        "spawn",
+        {"subagent": "Raven-Oncall", "task": "run the case"},
+        ACCEPTED,
+        "run /tmp/arena and report the result",
+    )
+    assert "coding half" not in out
+    assert state.dispatched and not state.solo
+
+
+@pytest.mark.asyncio
+async def test_a_later_claimed_look_repeats_the_solo_correction():
+    loop, state = _loop(verdict=CODE_VERDICT)
+    await loop._note_watch_work(
+        state, "spawn", {"subagent": "Raven-Oncall", "task": "t"}, ACCEPTED, "edit train.py, run /tmp/arena"
+    )
+    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/train.py"}, "code", "msg")
+    assert out.startswith("\n\nSTOP")
+    assert "coding half" in out
+
+
+@pytest.mark.asyncio
+async def test_a_dag_dispatch_clears_the_solo_state():
+    loop, state = _loop(verdict=CODE_VERDICT)
+    await loop._note_watch_work(
+        state, "spawn", {"subagent": "Raven-Oncall", "task": "t"}, ACCEPTED, "edit train.py, run /tmp/arena"
+    )
+    nodes = [{"subagent": "Raven-Code"}, {"subagent": "Raven-Oncall"}]
+    await loop._note_watch_work(state, "run_subagent_dag", {"nodes": nodes}, "run r1 started in the background", "msg")
+    assert not state.solo
+    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/train.py"}, "code", "msg")
+    assert "coding half" not in out
+
+
+# --- the note channel never carries tool output past the fence ---
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool", "args", "result"),
+    [
+        ("spawn", {"subagent": "Raven-Oncall"}, ACCEPTED),
+        ("run_subagent_dag", {"task_summary": "run and watch"}, "DAG run r1 accepted: node watch on Raven-Oncall"),
+        ("spawn", {"subagent": "Raven-Oncall"}, "'Raven-Oncall' has no machine. Nothing was dispatched."),
+    ],
+)
+async def test_a_dispatch_result_reaches_the_model_once_and_inside_the_fence(tmp_path, tool, args, result):
+    """The whole road: ``_note_watch_work`` -> ``add_tool_result``.
+
+    ``add_tool_result`` places the returned note AFTER the untrusted fence, as
+    this system's own voice. Reviewed 2026-09-04: the spawn and DAG exits still
+    returned ``result`` under the new contract, so a sub-agent's own text rode
+    out of the fence as a trusted note -- a trust-boundary hole, not a display
+    duplicate. Only system-composed text may travel that channel.
+    """
+    from raven.agent.context.builder import ContextBuilder
+
+    loop, state = _loop()
+    note = await loop._note_watch_work(state, tool, args, result, "run /tmp/arena")
+    assert result not in note, "tool output must never be returned as the trusted note"
+
+    messages = ContextBuilder(workspace=tmp_path).add_tool_result([], "c1", tool, result, trusted_note=note)
+    content = messages[-1]["content"]
+    assert content.count(result) == 1, "the result travels once, as the fenced tool result"
+    fence_end = content.index("[END UNTRUSTED")
+    assert result not in content[fence_end:], "and nothing of it appears after the fence closes"
+    assert content.index(result) < fence_end
+
+
+def test_the_resident_dag_skill_digest_routes_code_work_through_the_roster():
+    """The orchestration skill is ``always: true`` with ``inject: description``:
+    only its frontmatter description reaches an ordinary turn, and the body
+    only after the model calls ``read_skill``. So the door the watch-work notes
+    point at (a coding node feeding an on-call node) has to be stated in the
+    description itself, or the resident digest keeps telling the model that
+    code work is never a DAG while the notes tell it to dispatch one."""
+    import raven
+
+    skill = Path(raven.__file__).parent / "memory_engine" / "skills" / "subagent-dag-orchestration" / "SKILL.md"
+    head = skill.read_text(encoding="utf-8").split("---")[1]
+    description = next(line for line in head.splitlines() if line.startswith("description:"))
+    assert "never a DAG" not in description
+    assert "specialist" in description and "run_subagent_dag" in description
+    assert "one graph per round" in description

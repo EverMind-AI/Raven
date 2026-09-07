@@ -101,6 +101,64 @@ def test_inherit_llm_honours_the_parent_riders_on_the_inheritance_branch(monkeyp
     assert "reasoning_effort=low" in taken
 
 
+def test_inherit_llm_honours_parent_provider_and_protocol(monkeypatch):
+    monkeypatch.setenv("RAVEN_PARENT_MODEL", "openrouter/openai/gpt-5.6-sol")
+    monkeypatch.setenv("RAVEN_PARENT_PROVIDER", "openrouter")
+    monkeypatch.setenv("RAVEN_PARENT_PROTOCOL", "responses")
+    host = {
+        "providers": {
+            "openrouter": {"apiKey": "k", "models": ["openrouter/openai/gpt-5.6-sol"]},
+            "custom": {"apiKey": "placeholder", "models": ["openai/gpt-5.6-sol"]},
+        },
+        "agents": {"defaults": {"provider": "custom", "model": "openai/gpt-5.6-sol"}},
+    }
+    config: dict = {}
+
+    render.inherit_llm(config, host)
+
+    defaults = config["agents"]["defaults"]
+    assert defaults["provider"] == "openrouter"
+    assert defaults["model"] == "openrouter/openai/gpt-5.6-sol"
+    assert config["providers"]["openrouter"]["modelProtocols"] == {"openrouter/openai/gpt-5.6-sol": "responses"}
+
+
+def test_inherit_llm_names_the_provider_from_the_model_prefix(monkeypatch):
+    """A LiteLLM-backed parent sends no RAVEN_PARENT_PROVIDER, and a model the
+    page typed in is listed under no block: the stored id's own prefix names
+    the provider, and the host default stands in when even that fails."""
+    monkeypatch.setenv("RAVEN_PARENT_MODEL", "openrouter/some-new-model")
+    monkeypatch.delenv("RAVEN_PARENT_PROVIDER", raising=False)
+    host = {
+        "providers": {"openrouter": {"apiKey": "k", "models": []}, "custom": {"apiKey": "k", "models": []}},
+        "agents": {"defaults": {"provider": "custom", "model": "openai/x"}},
+    }
+    config: dict = {}
+    render.inherit_llm(config, host)
+    assert config["agents"]["defaults"]["provider"] == "openrouter"
+
+    monkeypatch.setenv("RAVEN_PARENT_MODEL", "bare-model")
+    config = {}
+    render.inherit_llm(config, host)
+    assert config["agents"]["defaults"]["provider"] == "custom", "host default rather than an empty provider"
+
+
+def test_inherit_exec_policy_carries_the_host_toggle_but_not_over_the_products_own():
+    host = {"tools": {"exec": {"allowDestructiveCommands": True, "timeout": 60}}}
+    config: dict = {"tools": {"exec": {"timeout": 600}}}
+    render.inherit_exec_policy(config, host)
+    assert config["tools"]["exec"] == {"timeout": 600, "allowDestructiveCommands": True}, (
+        "the toggle rides, the timeout stays the product's"
+    )
+
+    pinned = {"tools": {"exec": {"allowDestructiveCommands": False}}}
+    render.inherit_exec_policy(pinned, host)
+    assert pinned["tools"]["exec"]["allowDestructiveCommands"] is False
+
+    untouched: dict = {}
+    render.inherit_exec_policy(untouched, {"tools": {"exec": {"timeout": 60}}})
+    assert untouched == {}, "a host that never chose leaves the product alone"
+
+
 def test_the_own_key_branch_never_reads_the_parent_riders(monkeypatch, tmp_path):
     """The riders belong to inheritance alone: a product paying with its own
     key keeps its own tuned model whatever the spawning parent runs -- the
