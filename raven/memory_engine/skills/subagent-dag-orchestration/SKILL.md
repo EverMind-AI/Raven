@@ -230,14 +230,21 @@ read better. `depends_on` is still *required* for a node of *this* graph, since 
 is what makes the upstream node run first.
 
 Only a node that **completed** can be named this way, in a placeholder or in `depends_on`
-alike. A node that failed, was cancelled, was skipped, or belongs to a run still in flight
-keeps its id — nothing else may take it — but has no output
+alike. Any other node keeps its id — nothing else may take it — but has no output
 to read, and naming it is refused before any node of your graph is dispatched. The refusal
-says which of the four it is, because the fix differs: re-do failed, cancelled, or skipped
-work under a **new** id, and for a run still in flight, submit again once it reports its
-result.
+says which case it is, because the fix differs: re-do work that failed, was cancelled or
+was skipped under a **new** id; where the run recorded no outcome for the node at all, read
+its file directly; and for a node of a run still in flight, submit again once that run
+reports its result.
 
-Note what is *not* an option in any of the four: re-creating that node here. Its id is
+That last one inverts when you are replanning. A replan discards what is left of the run it
+replaces, so a node of that run which has not finished — one still waiting to start, or one
+suspended on a report of its own — will never write an output, and waiting for it is waiting
+for something the replan itself cancels. Those refusals say so, and ask for a new id: the
+same answer this guide already gives for every node of the replaced run except the ones it
+completed.
+
+Note what is *not* an option in any of these: re-creating that node here. Its id is
 taken, so a graph that repeats it is refused for the reuse instead. Re-running an upstream
 step *as a node of your own graph* only works for one that does not exist yet — naming the
 taken id in `depends_on` does not re-run anything.

@@ -1932,8 +1932,10 @@ same conversation uses to read what that node produced — `{{ <id>.output }}`, 
 nothing). That second role is why the id is
 **unique per conversation, not per graph**: reusing one an earlier run took is refused, so
 an id names one node and one output. An id is claimed for the whole run, whatever the
-outcome, but only a `completed` node can be referenced; a failed, skipped, cancelled or
-still-running one keeps its id and is refused with which of the four it is. A run stopped
+outcome, but only a `completed` node can be referenced; one that failed, was skipped or
+cancelled, is still running, or -- as a replan validating its replacement sees it -- is
+still pending or awaiting a decision, keeps
+its id and is refused with which of those it is. A run stopped
 by `/stop` or a shutdown records its still-running nodes as `cancelled` and its pending
 ones as `skipped` on the way out, so "still-running" means what it says rather than
 outliving the run that claimed it. Distinct from an
