@@ -21,8 +21,8 @@
     "vitest": "^4.1.3"
   },
   "dependencies": {
-    "@xterm/addon-fit": "0.11.0",
-    "@xterm/xterm": "6.0.0",
+    "@xterm/addon-fit": "0.12.0-beta.301",
+    "@xterm/xterm": "6.1.0-beta.304",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   }
