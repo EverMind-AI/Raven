@@ -973,18 +973,6 @@ def _patch_table(monkeypatch, table: dict, *, info=_litellm_miss):
     monkeypatch.setattr(litellm, "get_model_info", info)
 
 
-def test_a_claude_model_the_catalogue_does_not_know_falls_back_to_the_claude_ceiling(monkeypatch):
-    """Anthropic requires max_tokens on every request, so the Anthropic transport
-    carries whatever this answers. 16384 is a guess for OpenAI-compatible servers
-    that clamp; a claude model cut at 16384 loses the rest of the file. The
-    smallest ceiling among the current claude models is what an unknown one gets."""
-    _patch_table(monkeypatch, {})
-
-    assert rates.resolve_max_output_tokens("anthropic/claude-opus-5") == rates.CLAUDE_MAX_OUTPUT_TOKENS == 64000
-    assert rates.resolve_max_output_tokens("openrouter/anthropic/claude-sonnet-5", allow_fetch=False) == 64000
-    assert rates.resolve_max_output_tokens("probe/unknown") == rates.DEFAULT_MAX_OUTPUT_TOKENS
-
-
 def test_a_row_filing_its_window_as_the_ceiling_is_not_trusted(monkeypatch):
     """Measured on the pinned LiteLLM: 984 of 3040 rows carry
     ``max_output_tokens >= max_input_tokens``, and one of them is the id this

@@ -122,13 +122,10 @@ def test_diagnose_audit_stays_read_only_for_write_capable_domains(tmp_path: Path
 
 
 def test_shared_review_gates_are_scope_driven_not_fixed_rounds(tmp_path: Path) -> None:
-    registry = _registry(tmp_path)
-    meta = registry.get("build-polished-visual-frontends")
+    meta = _registry(tmp_path).get("build-polished-visual-frontends")
     assert meta is not None
     skill_text = meta.path.read_text(encoding="utf-8")
-    review_meta = registry.get("review-against-ai-patterns")
-    assert review_meta is not None
-    review_text = (review_meta.path.parent / "references" / "anti-slop-review.md").read_text(encoding="utf-8")
+    review_text = (meta.path.parent / "references" / "anti-slop-review.md").read_text(encoding="utf-8")
 
     assert "视觉判断不是固定三轮" in skill_text
     assert "至少完成三次视觉判断" not in skill_text

@@ -175,7 +175,6 @@ class BoxLiteRenderBackend:
             asset_root=asset_root,
             internal_output=request.internal_output,
             actions=request.actions,
-            scale=request.scale,
         )
 
     def _stage_request(
@@ -214,7 +213,6 @@ class BoxLiteRenderBackend:
                 "page_range": request.page_range,
                 "viewport_width": request.viewport_width,
                 "viewport_height": request.viewport_height,
-                "scale": request.scale,
                 "actions": list(request.actions) if request.actions else None,
             },
             "config": asdict(self.config),

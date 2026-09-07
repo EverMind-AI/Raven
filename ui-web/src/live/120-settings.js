@@ -70,7 +70,6 @@ async function loadProviders(sid, gen) {
   if (ticket !== viewGen) return;
   providersLive = (mo.providers || []).map((p) => ({
     id: p.slug, name: p.name, models: p.models || [], on: p.authenticated,
-    protocols: p.protocols || {}, protocolOverrides: p.protocol_overrides || {},
     kind: p.auth_type || 'api_key', needsBase: !!p.needs_api_base,
     env: p.key_env || '', warn: p.warning || '',
     key: p.authenticated ? '已配置' : '',
@@ -374,10 +373,6 @@ DS.tier = {
 DS.model = {
   providers: () => providersLive,
   persist: persistModel,
-  setProtocol: async (model, provider, protocol) => {
-    await rpc.call('model.set_protocol', { model, slug: provider, protocol });
-    await loadProviders();
-  },
   openSettings: () => RavenIslands.settings.open(),
 };
 

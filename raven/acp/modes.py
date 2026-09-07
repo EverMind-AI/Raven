@@ -23,7 +23,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.config.mode_catalogue import ModeProfile, build_mode_catalogue, resolve_default
+from raven.config.mode_catalogue import ModeProfile, build_mode_catalogue
 
 # The profile shape itself is inner: the loop needs the default tier and the RPC
 # surface serves the catalogue, and neither may import this surface to reach it.
@@ -36,7 +36,7 @@ class SessionModes:
 
     def __init__(self, profiles: dict[str, AcpModeProfile], *, default: str | None) -> None:
         self._profiles = dict(profiles)
-        self._default = resolve_default(default, self._profiles)
+        self._default = default if default in self._profiles else next(iter(self._profiles), "")
         self._current: dict[str, str] = {}
 
     @property
@@ -49,6 +49,9 @@ class SessionModes:
 
     def ids(self) -> tuple[str, ...]:
         return tuple(self._profiles)
+
+    def profiles(self) -> tuple[AcpModeProfile, ...]:
+        return tuple(self._profiles.values())
 
     def current(self, session_id: str) -> str:
         """Answers for a session it has never seen: the default."""

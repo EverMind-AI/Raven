@@ -660,28 +660,17 @@ def _chk_str(key: str, max_len: int = 500):
 # validator that returns the value to store; anything not listed here (or in
 # the special cases above) stays editable only through the config file.
 #
-# The containment controls stay absent because they can remove the execution
-# boundary in one unaudited RPC call. `tools.restrictToWorkspace` and
-# `tools.sandbox.backend` are the containment controls themselves -- one call
-# to either turns a sandboxed agent into an unsandboxed one -- and
-# `tools.web.proxy` would route every WebSearch and WebFetch, API keys and all,
-# through a chosen host. This whitelist is reachable from any RPC client with
-# no confirmation step, so it must not contain the settings that decide what an
-# attacker who reaches it can then do. Editing the config file for those is the
-# friction, and it is the point.
-#
-# `tools.exec.allowDestructiveCommands` is listed on a stated threat model: it
-# is a rail against the model's own mistakes, not a boundary against whoever
-# holds the RPC credential. That holder already has `shell.exec`, which runs a
-# command as the human's own and bypasses the agent-facing deny and approval
-# policy, so flipping this key hands them no deletion they could not already
-# perform; sandbox and workspace containment are untouched by it. A rail against
-# the model is proportionately guarded by the client that asks the human --
-# the WebUI presents an explicit warning before it writes the value -- where a
-# boundary against the holder would have to be confirmed server-side.
+# Three keys are deliberately absent, and adding them back needs an argument
+# rather than a line. `tools.restrictToWorkspace` and `tools.sandbox.backend`
+# are the containment controls themselves -- one call to either turns a
+# sandboxed agent into an unsandboxed one -- and `tools.web.proxy` would route
+# every WebSearch and WebFetch, API keys and all, through a chosen host. This
+# whitelist is reachable from any RPC client with no confirmation step, so it
+# must not contain the settings that decide what an attacker who reaches it can
+# then do. Editing the config file for those is the friction, and it is the
+# point.
 _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.exec.timeout": _chk_int("tools.exec.timeout", 5, 3600),
-    "tools.exec.allowDestructiveCommands": _chk_bool("tools.exec.allowDestructiveCommands"),
     "tools.web.search.apiKey": _chk_str("tools.web.search.apiKey", 200),
     "tools.web.jinaApiKey": _chk_str("tools.web.jinaApiKey", 200),
     "tools.web.search.provider": _chk_enum("tools.web.search.provider", *get_args(WebSearchProvider)),

@@ -10,7 +10,6 @@ WebSocket broadcast), so the same engine assembly serves both transports.
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -48,32 +47,6 @@ _TUI_INIT_CRASH_TYPES: tuple[type[BaseException], ...] = (
     FileNotFoundError,
     OSError,
 )
-
-
-def _turn_pools() -> tuple[int, int]:
-    """The turn pools this stack schedules with: ``gateway.userPool`` and
-    ``gateway.systemPool`` from the config the loop is built from, 0 meaning
-    unbounded.
-
-    The channel gateway has always read these; serve, the page and every ACP
-    worker went through here and got the spine's built-in 1/1, so a second
-    conversation -- or a second task handed to a pooled sub-agent -- waited for
-    the first to finish with nothing on screen saying so. Read raw rather than
-    through ``load_config`` because that path creates a default file when none
-    exists, which a factory must not do as a side effect.
-    """
-    from raven.config.loader import get_config_path
-    from raven.config.schema import GatewayConfig
-
-    gateway = GatewayConfig()
-    path = get_config_path()
-    try:
-        if path.exists():
-            section = json.loads(path.read_text(encoding="utf-8")).get("gateway") or {}
-            gateway = GatewayConfig.model_validate(section)
-    except Exception as exc:  # noqa: BLE001 - a bad section must not take the stack down with it
-        logger.warning("rpc: gateway pool sizes unreadable in {} ({}); using the defaults", path, exc)
-    return gateway.user_pool, gateway.system_pool
 
 
 def build_agent_loop(workspace: str | None = None, home: str | None = None):
@@ -281,13 +254,10 @@ async def build_rpc_stack(
         from raven.core.cron_stack import make_on_cron_job
 
         cron_readback: dict[str, str] = {}
-        user_pool, system_pool = _turn_pools()
         turn_scheduler, _turn_hub, turn_ids, turn_teardown = build_rpc_spine(
             agent_loop,
             emitter,
             channel=channel,
-            user_pool=user_pool,
-            system_pool=system_pool,
             on_turn_end=turn_module.clear_active,
             direct_targets=direct_targets,
             readback_texts=cron_readback,

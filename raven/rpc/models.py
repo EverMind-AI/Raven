@@ -1372,8 +1372,6 @@ class ModelOptionProvider(_Strict):
     auth_type: str
     key_env: str | None = None
     models: list[str]
-    protocols: dict[str, str] = Field(default_factory=dict)
-    protocol_overrides: dict[str, str] = Field(default_factory=dict)
     model_labels: dict[str, ModelLabel] | None = None
     total_models: int
     needs_api_base: bool
@@ -1388,16 +1386,6 @@ class ModelOptionsResult(_Strict):
     model: str
     provider: str
     providers: list[ModelOptionProvider]
-
-
-class ModelSetProtocolParams(_Strict):
-    slug: str
-    model: str
-    protocol: Literal["auto", "chat", "responses", "anthropic"]
-
-
-class ModelSetProtocolResult(_Strict):
-    provider: ModelOptionProvider
 
 
 class ModelSaveKeyParams(_Strict):
@@ -3895,7 +3883,6 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "skill.unpin": (SkillUnpinParams, SkillUnpinResult),
     # model.*
     "model.options": (ModelOptionsParams, ModelOptionsResult),
-    "model.set_protocol": (ModelSetProtocolParams, ModelSetProtocolResult),
     "model.save_key": (ModelSaveKeyParams, ModelSaveKeyResult),
     "model.disconnect": (ModelDisconnectParams, ModelDisconnectResult),
     "model.add_model": (ModelAddModelParams, ModelAddModelResult),

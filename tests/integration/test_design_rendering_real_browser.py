@@ -11,10 +11,9 @@ pytest.importorskip("PIL")
 pytest.importorskip("fitz")
 pytest.importorskip("playwright")
 
-from PIL import Image
+from raven.agent.tools.base import ToolOutput
 
 from raven.agent.tools.registry import ToolRegistry
-from raven.contracts.tool import ToolOutput
 from raven_design.rendering.models import RenderConfig, RenderRequest
 from raven_design.rendering.paths import RenderPathPolicy
 from raven_design.rendering.pdf import image_difference
@@ -76,14 +75,11 @@ async def test_static_html_produces_minimal_bundle(tmp_path: Path) -> None:
             capture_duration_seconds=0.25,
             viewport_width=640,
             viewport_height=360,
-            scale=2,
         )
     )
 
     assert set(result) == {"dir"}
     _assert_bundle(Path(result["dir"]))
-    with Image.open(next((Path(result["dir"]) / "preview").glob("*.png"))) as image:
-        assert image.size == (1280, 720)
     preview = await service.preview(
         path=source,
         output_dir=tmp_path / "preview-output",
