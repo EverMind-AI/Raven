@@ -711,6 +711,17 @@ Discovered and run by `tests/test_trajectory_regressions.py`; asserting
 "divergence at the expected call, live value = fixed behavior" is the normal
 shape — zero divergence is the special case guarding faithful reproduction.
 
+**Conversation Record** (`raven/trajectory/conversation.py`):
+One labeled conversation event (`User input`, `LLM input`, `Tool output`, …)
+rebuilt from an Attempt's span snapshot by `attempt_conversation` — the data
+layer behind the browser's full-conversation preview. Records sort by event
+time (inputs at span start, outputs at span end, ties broken by nesting depth
+from `parentSpanId`), carry full artifact content with span previews only as
+fallback, and spell out every degradation in `degraded` — an ERROR span or an
+unreadable expected payload always yields a record.
+_Avoid_: confusing with the session's conversation history — a Conversation
+Record derives from trace spans, not from session messages.
+
 ### Workspace & Onboarding
 
 **Workspace**:
