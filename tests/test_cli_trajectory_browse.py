@@ -1698,6 +1698,16 @@ def test_conversation_lines_meta_shown_once_per_span():
     )
 
 
+def test_conversation_lines_meta_not_deduped_across_traces():
+    meta = "model-x"
+    records = [
+        _rec("LLM output", "llm", "a", trace_id="tA", turn_span_id="tuA", span_id="same", seq=0, meta=meta),
+        _rec("LLM output", "llm", "b", trace_id="tB", turn_span_id="tuB", span_id="same", seq=1, meta=meta),
+    ]
+    plains = _plain(tbrowse._conversation_lines(records, 100))
+    assert sum(1 for plain in plains if plain.strip() == f"({meta})") == 2
+
+
 def test_preview_screen_pager_threshold_boundary(state, monkeypatch):
     _preview_console(monkeypatch)
     _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
