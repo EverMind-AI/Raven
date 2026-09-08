@@ -47,7 +47,7 @@ import os
 import shutil
 import uuid
 import wave
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -55,7 +55,9 @@ import httpx
 from loguru import logger
 
 from raven.agent import workdir
+from raven.contracts.token_strategy import UsageSnapshot
 from raven.contracts.tool import Tool
+from raven.providers.usage import image_usage
 from raven.security.network import guarded_fetch
 from raven.utils.images import image_block
 
@@ -91,6 +93,7 @@ class _OpenRouterMediaTool(Tool):
         proxy: str | None = None,
         output_subdir: str = "generated",
         restrict_to_workspace: bool = False,
+        usage_recorder: Callable[[UsageSnapshot], Awaitable[None]] | None = None,
     ):
         # A callable is the live form: the loop passes a reader over the config
         # file so a key added or rotated there serves the next call without a
@@ -102,6 +105,7 @@ class _OpenRouterMediaTool(Tool):
         self._proxy = proxy
         self._output_subdir = output_subdir
         self._restrict_to_workspace = restrict_to_workspace
+        self._usage_recorder = usage_recorder
 
     @property
     def _config(self) -> "MediaToolConfig | None":
@@ -193,6 +197,14 @@ class _OpenRouterMediaTool(Tool):
             ensure_ascii=False,
         )
 
+    async def _record_usage(self, payload: dict[str, Any], model: str, protocol: str) -> None:
+        if self._usage_recorder is None:
+            return
+        try:
+            await self._usage_recorder(UsageSnapshot(model=model, **image_usage(payload, protocol)))
+        except Exception:
+            logger.warning("Image usage recording failed")
+
     async def _chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         """POST to chat/completions and return the assistant message dict.
 
@@ -206,6 +218,7 @@ class _OpenRouterMediaTool(Tool):
             )
             r.raise_for_status()
             data = r.json()
+        await self._record_usage(data, payload["model"], "chat")
         choice = (data.get("choices") or [{}])[0]
         message = dict(choice.get("message") or {})
         for key in ("finish_reason", "native_finish_reason"):
@@ -477,7 +490,9 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                         body["quality"] = quality
                     r = await client.post(f"{self.api_base}/images/generations", headers=headers, json=body)
                 r.raise_for_status()
-                items = r.json().get("data") or []
+                payload = r.json()
+                await self._record_usage(payload, model_id, "images")
+                items = payload.get("data") or []
         except httpx.HTTPStatusError as e:
             return self._format_http_error(e)
         except Exception as e:

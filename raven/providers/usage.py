@@ -70,3 +70,31 @@ def merge_usage(current: dict[str, Any] | None, incoming: dict[str, Any]) -> dic
         elif value is not None:
             result[key] = value
     return result
+
+
+def image_usage(payload: dict[str, Any], protocol: str) -> dict[str, Any]:
+    """Normalize image usage without inventing absent token counts or amounts."""
+    raw = payload.get("usage")
+    raw = raw if isinstance(raw, dict) else {}
+    prompt_key, output_key, details_key = (
+        ("prompt_tokens", "completion_tokens", "prompt_tokens_details")
+        if protocol == "chat"
+        else ("input_tokens", "output_tokens", "input_tokens_details")
+    )
+    # Image gateways may return Chat-style usage even on the Images endpoint.
+    if prompt_key not in raw and "prompt_tokens" in raw:
+        prompt_key, details_key = "prompt_tokens", "prompt_tokens_details"
+    if output_key not in raw and "completion_tokens" in raw:
+        output_key = "completion_tokens"
+    details = raw.get(details_key)
+    details = details if isinstance(details, dict) else {}
+    prompt = token_count(raw.get(prompt_key))
+    read = token_count(details.get("cached_tokens"))
+    write = token_count(details.get("cache_write_tokens"))
+    return {
+        "input_tokens": max(0, prompt - (read or 0) - (write or 0)) if prompt is not None else None,
+        "output_tokens": token_count(raw.get(output_key)),
+        "cache_read_tokens": read,
+        "cache_write_tokens": write,
+        "cost_usd": reported_cost(raw.get("cost")),
+    }
