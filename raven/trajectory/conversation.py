@@ -684,10 +684,15 @@ def attempt_conversation(traces: Sequence[str], state_dir: Path | None = None) -
                 "",
                 degraded="span record malformed — original status/attributes unreadable",
             )
-        if info.error and records:
-            records[-1]["error"] = info.error
-        elif info.error:
-            _emit(info, records, _label(info.name), _PHASE_OUTPUT, "", error=info.error)
+        if info.error:
+            # An ERROR is a completion event: it belongs to the span's last
+            # output-phase record (endTime), never to an input record or the
+            # Turn start marker; without one, a completion placeholder stands.
+            target = next((r for r in reversed(records) if r["phase"] == _PHASE_OUTPUT), None)
+            if target is not None:
+                target["error"] = info.error
+            else:
+                _emit(info, records, _label(info.name), _PHASE_OUTPUT, "", error=info.error)
         all_records.extend(records)
 
     def _key(record: dict[str, Any]) -> tuple:
