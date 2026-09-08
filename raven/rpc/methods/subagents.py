@@ -161,7 +161,21 @@ async def _rows(*, probe: bool = True) -> list[dict]:
         _raise_config_error(exc)
     configured = _as_configs(configured_raw)
     claimed = {getattr(c, "preset", None) for c in configured}
-    presets = [p for p in third_party_subagent_presets() if p.get("preset") not in claimed]
+    # A preset is also withheld when a configured row already occupies the name it
+    # ships under, which a hand-written row may do without being that preset at
+    # all. Two rows of one name is unusable: every verb here addresses a row by
+    # name, so the second is unreachable and the model is offered a duplicate.
+    #
+    # Deliberately here and not in the provenance backfill, which is where this
+    # started: `preset` is read at runtime (`session_mcp_for`, the transport
+    # upgrade hint), so inferring it from a name would hand one preset's measured
+    # policy to a row that only shares its label -- and a name is the field the
+    # overlay lets its owner edit. What is a presentation collision stays a
+    # presentation rule.
+    taken_names = {getattr(c, "name", "") for c in configured}
+    presets = [
+        p for p in third_party_subagent_presets() if p.get("preset") not in claimed and p.get("name") not in taken_names
+    ]
     preset_cfgs = _as_configs(presets)
 
     # The built-in rows, merged the way the runtime merges them, so this list shows

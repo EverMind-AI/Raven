@@ -27,6 +27,7 @@ from loguru import logger
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
+from raven.agent.subagent.presets import install_hint_for
 from raven.agent.subagent.probe_state import LastTest
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
@@ -137,6 +138,26 @@ async def _captured_login_path() -> str:
         return ""
 
 
+def _missing_exe_detail(cfg: Any, exe: str) -> str:
+    """Why a row cannot start, plus what to install when this repo knows.
+
+    ``shutil.which`` can only answer with the executable it looked for, and that
+    is not the package that ships it -- ``qodercli`` does not spell
+    ``@qoder-ai/qodercli``. This probe is the surface a person reads when a row is
+    absent, so it is where the install belongs. It previously sat in the roster
+    ``description``, whose only reader is the dispatching model, which cannot act
+    on an install at all.
+
+    Both callers share this rather than spelling the message twice: the two
+    absent-executable branches are the same event on two transports, and one of
+    them growing the hint alone is the shape a reader would trust and be wrong
+    about on the other.
+    """
+    detail = f"{exe} is not on the login shell PATH"
+    hint = install_hint_for(cfg)
+    return f"{detail}; install with {hint}" if hint else detail
+
+
 def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     def done(status: ProbeStatus, detail: str, target: str = "") -> ProbeResult:
         return ProbeResult(cfg.name, source, "cli", status, detail, target, 0)
@@ -160,7 +181,7 @@ def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
     resolved = shutil.which(exe, path=cfg_path or path)
     if resolved is None:
-        return done("missing", f"{exe} is not on the login shell PATH", exe)
+        return done("missing", _missing_exe_detail(cfg, exe), exe)
     return done("ready", f"installed at {resolved}", resolved)
 
 
@@ -194,7 +215,7 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
     resolved = shutil.which(exe, path=cfg_path or path)
     if resolved is None:
-        return done("missing", f"{exe} is not on the login shell PATH", exe)
+        return done("missing", _missing_exe_detail(cfg, exe), exe)
 
     snapshot = acp_snapshot_for(cfg)
     if snapshot is None:
