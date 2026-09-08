@@ -62,6 +62,10 @@ class CreateTerminalTool(_TerminalTool):
                 "description": "Explicitly bypass provider permission prompts; defaults to false for interactive terminals",
                 "default": False,
             },
+            "resume_session_id": {
+                "type": "string",
+                "description": "Existing native Claude Code or Codex session ID to resume; not the Raven creator session key",
+            },
         },
         "required": ["provider", "name"],
         "additionalProperties": False,
@@ -72,15 +76,42 @@ class CreateTerminalTool(_TerminalTool):
         self.provider_command = provider_command
         self.task_worktree = task_worktree
 
-    async def execute(self, provider: str, name: str, task: str = "", unattended: bool = False, **kwargs: Any) -> str:
+    async def execute(
+        self,
+        provider: str,
+        name: str,
+        task: str = "",
+        unattended: bool = False,
+        resume_session_id: str | None = None,
+        **kwargs: Any,
+    ) -> str:
         try:
             if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
                 raise TerminalError("invalid_agent_name", "Use a lowercase canonical agent name")
             session_key = self.session_key()
             worktree = self.task_worktree(task, session_key)
-            kind, command = self.provider_command(provider, unattended=unattended)
+            kind, command = self.provider_command(
+                provider,
+                unattended=unattended,
+                **({"resume_session_id": resume_session_id} if resume_session_id is not None else {}),
+            )
             existing = await self.rpc("agents.resolve", {"mention": name})
-            if any(candidate["agent"].get("exitedAt") is None for candidate in existing.get("candidates", [])):
+            if resume_session_id is not None:
+                for candidate in existing.get("candidates", []):
+                    binding = candidate["agent"].get("binding") or {}
+                    if not binding.get("handle"):
+                        raise TerminalError("agent_name_exists", "The existing identity has no exited terminal binding")
+                    try:
+                        previous = (await self.rpc("terminal.show", {"handle": binding["handle"]}))["terminal"]
+                    except TerminalError as exc:
+                        if exc.code != "terminal_not_found":
+                            raise
+                    else:
+                        if previous.get("liveness") != "exited":
+                            raise TerminalError(
+                                "agent_name_exists", "Resume requires the previous terminal to have exited"
+                            )
+            elif any(candidate["agent"].get("exitedAt") is None for candidate in existing.get("candidates", [])):
                 raise TerminalError("agent_name_exists", "The canonical name or alias already exists")
             created = await self.rpc(
                 "terminal.create", {"worktree_id": worktree, "command": command, "title": name, **self.session_params()}

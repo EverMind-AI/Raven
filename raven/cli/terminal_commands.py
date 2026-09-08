@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 
 import typer
 
@@ -91,14 +92,24 @@ def terminal_wait(
 def terminal_create(
     worktree: str = typer.Option(..., "--worktree", help="Exact worktree id:<repo-id>::<path>"),
     command: str = typer.Option(..., "--command"),
+    resume: str | None = typer.Option(None, "--resume", help="Existing native provider session ID to resume"),
     title: str = typer.Option("Terminal", "--title"),
     environment: str | None = typer.Option(None, "--environment"),
     json_output: bool = typer.Option(False, "--json"),
 ):
     """Create a hosted terminal in the selected worktree."""
+    launch_command = command
+    if resume is not None:
+        from raven.contracts.terminal import TerminalError
+        from raven.terminal.commands import resume_command
+
+        try:
+            launch_command = resume_command(shlex.split(command), resume)
+        except (TerminalError, ValueError) as exc:
+            raise typer.BadParameter(str(exc), param_hint="--resume") from exc
     _terminal_rpc.run(
         "terminal.create",
-        {"worktree_id": worktree_selector(worktree), "command": command, "title": title},
+        {"worktree_id": worktree_selector(worktree), "command": launch_command, "title": title},
         environment=environment,
         json_output=json_output,
     )
