@@ -93,7 +93,7 @@ def test_make_provider_custom_routes_through_litellm(tmp_path: Path) -> None:
         json.dumps(
             {
                 "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
-                "providers": {"custom": {"apiKey": "sk-x", "apiBase": "http://localhost:9000/v1"}},
+                "providers": {"custom": {"apiKey": "sk-x", "apiBase": "http://localhost:9000/v1", "protocol": "chat"}},
             }
         ),
         encoding="utf-8",
@@ -108,7 +108,7 @@ def _model_config(tmp_path: Path) -> Path:
         json.dumps(
             {
                 "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
-                "providers": {"custom": {"apiKey": "sk-x", "apiBase": "http://localhost:9000/v1"}},
+                "providers": {"custom": {"apiKey": "sk-x", "apiBase": "http://localhost:9000/v1", "protocol": "chat"}},
             }
         ),
         encoding="utf-8",
@@ -142,7 +142,7 @@ def test_make_provider_nvidia_uses_the_hosted_nim_endpoint() -> None:
                     "provider": "nvidia_nim",
                 }
             },
-            "providers": {"nvidia_nim": {"apiKey": "nvapi-test"}},
+            "providers": {"nvidia_nim": {"apiKey": "nvapi-test", "protocol": "chat"}},
         }
     )
 
@@ -150,7 +150,7 @@ def test_make_provider_nvidia_uses_the_hosted_nim_endpoint() -> None:
 
     assert type(provider) is LiteLLMProvider
     assert provider.api_base == "https://integrate.api.nvidia.com/v1"
-    assert provider.wire_model_id(provider.default_model) == "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+    assert provider._resolve_model(provider.default_model) == "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +268,7 @@ def test_make_lazy_provider_has_no_endpoint_label_for_a_single_endpoint_section(
         ("openai_codex", "openai-codex/gpt-5.3-codex", "OpenAICodexProvider"),
         ("minimax_global", "minimax-global/MiniMax-M3", "MiniMaxOAuthProvider"),
         ("azure_openai", "azure_openai/my-deployment", "AzureOpenAIProvider"),
-        ("deepseek", "deepseek/deepseek-chat", "LiteLLMProvider"),
+        ("deepseek", "deepseek/deepseek-chat", "OpenAIResponsesProvider"),
     ],
 )
 def test_which_client_serves_a_provider_is_read_from_the_registry(

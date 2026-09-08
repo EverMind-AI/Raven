@@ -74,49 +74,7 @@ async def test_list_returns_configured_entries_and_unconfigured_presets(config_p
     assert by_name["Researcher"]["mcps"] == []
     assert by_name["Researcher"]["allow_mcp_secrets"] is False
     # A preset with no configured entry still appears, so the overlay can offer it.
-    assert by_name["OpenCode"]["configured"] is False
-
-
-async def test_a_preset_is_withheld_when_a_configured_row_holds_its_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A hand-written row wearing a preset's shipped name hides that preset.
-
-    Rows carry their agents' official names, so a row someone wrote by hand may
-    be called ``OpenCode`` while launching something else. Offering the opencode
-    preset beside it would put two rows of one name on the overlay, and every
-    verb here addresses a row by name, so the second would be unreachable.
-
-    Withheld here rather than by inferring `preset` from the name: that field is
-    read at runtime, so a guess would hand this row opencode's measured MCP
-    policy. The row's own provenance therefore stays empty, which
-    ``test_a_shipped_name_on_a_hand_written_row_infers_no_provenance`` pins.
-    """
-    path = tmp_path / "config.json"
-    path.write_text(
-        json.dumps(
-            {
-                "subagents": {
-                    "agents": [
-                        {"name": "OpenCode", "kind": "acp", "command": "custom-agent --acp", "enabled": True},
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
-    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
-
-    result = await subagents_list({"probe": False})
-    rows = [r for r in result["rows"] if r["name"] == "OpenCode"]
-    assert len(rows) == 1, "the opencode preset must not be offered beside the row holding its name"
-    # The wire shape carries booleans rather than the internal source label.
-    assert rows[0]["configured"] is True
-    assert rows[0]["builtin"] is False
-    assert rows[0]["preset"] is None, "a hand-written row is not given provenance it did not declare"
-    # Every other preset is still offered: the rule withholds one name, not the group.
-    assert "OpenClaw" in {r["name"] for r in result["rows"]}
+    assert by_name["opencode"]["configured"] is False
 
 
 async def test_list_never_returns_an_api_key(config_path: Path) -> None:
@@ -163,12 +121,12 @@ async def test_list_groups_an_installed_but_untested_acp_preset_as_installed(
     monkeypatch.setattr("raven.agent.subagent.probe._login_path", lambda: str(bindir))
     result = await subagents_list({})
     by_name = {row["name"]: row for row in result["rows"]}
-    assert by_name["Hermes Agent"]["probe_status"] == "attention"
-    assert by_name["Hermes Agent"]["group"] == "installed"
+    assert by_name["hermes"]["probe_status"] == "attention"
+    assert by_name["hermes"]["group"] == "installed"
     # Not an unconditional "installed": this one's executable really is absent,
     # which is the only thing NOT INSTALLED is meant to say.
-    assert by_name["OpenClaw"]["probe_status"] == "missing"
-    assert by_name["OpenClaw"]["group"] == "uninstalled"
+    assert by_name["openclaw"]["probe_status"] == "missing"
+    assert by_name["openclaw"]["group"] == "uninstalled"
 
 
 async def test_list_surfaces_a_malformed_config_section_instead_of_an_empty_list(
@@ -204,11 +162,11 @@ async def test_list_with_probe_false_skips_the_network_probe(config_path: Path, 
         "Raven",
         "Coder",
         "Researcher",
-        "Codex",
-        "OpenClaw",
-        "OpenCode",
-        "Hermes Agent",
-    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()}
+        "codex",
+        "openclaw",
+        "opencode",
+        "hermes",
+    } | set(ACP_REGISTRY_PRESETS)
     # Their own group, not installed/uninstalled: there is nothing to install, and
     # a row that could only ever read "uninstalled" would say the opposite.
     assert by_name["Raven"]["group"] == "builtin"
@@ -285,7 +243,7 @@ async def test_add_writes_the_preset_template_under_a_chosen_name(config_path: P
 
 async def test_add_defaults_name_and_description_to_the_preset(config_path: Path) -> None:
     await subagents_add({"preset": "opencode"})
-    entry = next(e for e in _stored(config_path) if e["name"] == "OpenCode")
+    entry = next(e for e in _stored(config_path) if e["name"] == "opencode")
     assert entry["description"]  # the preset's shipped text, not blank
 
 
@@ -319,7 +277,7 @@ async def test_add_keeps_an_openai_preset_enabled_when_a_key_is_supplied(config_
 
 async def test_add_keeps_a_cli_preset_enabled(config_path: Path) -> None:
     await subagents_add({"preset": "opencode"})
-    entry = next(e for e in _stored(config_path) if e["name"] == "OpenCode")
+    entry = next(e for e in _stored(config_path) if e["name"] == "opencode")
     assert entry["enabled"] is True
 
 
@@ -1052,7 +1010,7 @@ async def test_test_can_target_an_unconfigured_preset(config_path: Path, monkeyp
         return TestResult(cfg.name, source, "cli", True, "ok", "PONG", 1)
 
     monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
-    out = await subagents_test({"name": "OpenCode", "source": "preset"})
+    out = await subagents_test({"name": "opencode", "source": "preset"})
     assert out["ok"] is True
 
 
@@ -1150,7 +1108,7 @@ async def test_testing_a_preset_leaves_the_agent_table_alone(config_path: Path, 
         return TestResult(cfg.name, source, "acp", True, "connected", None, 5)
 
     monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
-    await subagents_test({"name": "OpenCode", "source": "preset"}, agent_loop_factory=lambda: _Loop())
+    await subagents_test({"name": "opencode", "source": "preset"}, agent_loop_factory=lambda: _Loop())
     assert applied == []
 
 

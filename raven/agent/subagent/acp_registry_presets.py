@@ -87,73 +87,67 @@ installed binary. A local executable needs no such allowance and takes the
 schema default."""
 
 ACP_REGISTRY_SHIM_PRESETS = frozenset({"pi"})
-"""Rows raven fetches, because the package is an adapter and not the agent.
-
-Preset keys, on the same reasoning as :data:`SHIM_LAUNCHED_PRESETS`."""
-
-ACP_REGISTRY_INSTALL_HINTS: dict[str, str] = {
-    "github_copilot": "npm i -g @github/copilot",
-    "qwen_code": "npm i -g @qwen-code/qwen-code",
-    "codebuddy": "npm i -g @tencent-ai/codebuddy-code",
-    "qoder": "npm i -g @qoder-ai/qodercli",
-    "grok": "npm i -g @xai-official/grok",
-}
-"""How to install the agent a row defers to, for the probe that reports it absent.
-
-Keyed by preset key, so a row renamed by its owner keeps its hint and a row that
-merely wears a preset's name gets none -- the same boundary the table draws
-everywhere else.
-
-Only the rows whose vendor publishes the agent on npm are listed. The three
-:data:`ACP_REGISTRY_SHIM_PRESETS`-adjacent lanes need nothing: a shim command is
-an ``npx`` one and always resolves, so the absent-executable branch these hints
-serve is unreachable for them. An agent distributed as a per-platform binary is
-absent here rather than guessed at, because one command cannot name the install
-for six platform targets and a wrong one is worse than the executable name the
-probe already reports.
-"""
+"""Rows raven fetches, because the package is an adapter and not the agent."""
 
 ACP_REGISTRY_PRESETS: dict[str, dict[str, Any]] = {
     "github_copilot": {
-        "name": "GitHub Copilot",
+        "name": "github_copilot",
         "preset": "github_copilot",
         "kind": "acp",
-        "description": "GitHub's AI pair programmer.",
+        "description": (
+            "GitHub Copilot CLI over ACP - coding tasks against your Copilot subscription. "
+            "Runs your local copilot install and its login; install with `npm i -g @github/copilot`."
+        ),
         "command": "copilot --acp",
     },
     "qwen_code": {
-        "name": "Qwen Code",
+        "name": "qwen_code",
         "preset": "qwen_code",
         "kind": "acp",
-        "description": "Alibaba's Qwen coding assistant.",
+        "description": (
+            "Qwen Code over ACP - coding tasks. Runs your local qwen install and its "
+            "configured provider; install with `npm i -g @qwen-code/qwen-code`."
+        ),
         "command": "qwen --acp",
     },
     "codebuddy": {
-        "name": "CodeBuddy",
+        "name": "codebuddy",
         "preset": "codebuddy",
         "kind": "acp",
-        "description": "Tencent Cloud's official intelligent coding tool.",
+        "description": (
+            "Codebuddy Code over ACP - coding tasks. Runs your local codebuddy install and "
+            "its login; install with `npm i -g @tencent-ai/codebuddy-code`."
+        ),
         "command": "codebuddy --acp",
     },
     "qoder": {
-        "name": "Qoder",
+        "name": "qoder",
         "preset": "qoder",
         "kind": "acp",
-        "description": "An AI coding assistant with agentic capabilities.",
+        "description": (
+            "Qoder CLI over ACP - coding tasks. Runs your local qodercli install and its "
+            "login; install with `npm i -g @qoder-ai/qodercli`."
+        ),
         "command": "qodercli --acp",
     },
     "grok": {
-        "name": "Grok Build",
+        "name": "grok",
         "preset": "grok",
         "kind": "acp",
-        "description": "xAI's coding agent and CLI.",
+        "description": (
+            "Grok Build over ACP - xAI's coding agent. Runs your local grok install and its "
+            "grok.com login; install with `npm i -g @xai-official/grok`."
+        ),
         "command": "grok agent stdio",
     },
     "pi": {
-        "name": "Pi",
+        "name": "pi",
         "preset": "pi",
         "kind": "acp",
-        "description": "A coding agent CLI with read, bash, edit, write tools and session management.",
+        "description": (
+            "pi over ACP, through the pi-acp adapter - general assistant. Drives your local "
+            "pi install and its login. The adapter is fetched on first use via npx."
+        ),
         "command": "npx -y pi-acp@0.0.33",
         "readyTimeoutMs": _SHIM_READY_TIMEOUT_MS,
     },

@@ -1058,3 +1058,46 @@ async def test_options_config_reads_do_not_scale_with_the_row_count(
     assert len(result["providers"]) > 3, "too few rows for the bound to mean anything"
     assert calls["load_config"] <= 2, f"{calls} for {len(result['providers'])} rows"
     assert calls["raw_read"] <= 1, f"{calls} for {len(result['providers'])} rows"
+
+
+@pytest.mark.parametrize("override", [None, "anthropic"])
+async def test_direct_glm_picker_agrees_with_native_transport(fake_home, override):
+    from raven.config.loader import load_config
+    from raven.providers.factory import make_provider
+
+    section = {"apiKey": "test-key", "models": ["zai/glm-4.6"]}
+    if override:
+        section["modelProtocols"] = {"zai/glm-4.6": override}
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"provider": "zai", "model": "zai/glm-4.6"}},
+            "providers": {"zai": section},
+        },
+    )
+    entry = _entry(await model_options({}), "zai")
+    provider = make_provider(load_config())
+    assert entry["protocols"]["zai/glm-4.6"] == provider.api_protocol == "anthropic"
+    assert provider.api_base == "https://api.z.ai/api/anthropic"
+    assert not entry["warning"]
+
+
+async def test_direct_provider_without_native_base_is_flagged_without_protocol_fallback(fake_home):
+    from raven.config.loader import load_config
+    from raven.providers.auth import MissingCredentialsError
+    from raven.providers.factory import make_provider
+
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"provider": "gemini", "model": "gemini/gemini-2.5-flash"}},
+            "providers": {
+                "gemini": {"apiKey": "test-key", "models": ["gemini/gemini-2.5-flash"], "protocol": "responses"}
+            },
+        },
+    )
+    entry = _entry(await model_options({}), "gemini")
+    assert entry["protocols"]["gemini/gemini-2.5-flash"] == "responses"
+    assert "Explicit API base required for responses" in entry["warning"]
+    with pytest.raises(MissingCredentialsError, match="requires an explicit API base"):
+        make_provider(load_config())

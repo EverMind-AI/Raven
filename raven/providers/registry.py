@@ -74,6 +74,7 @@ class ProviderSpec:
     detect_by_key_prefix: str = ""  # match api_key prefix, e.g. "sk-or-"
     detect_by_base_keyword: str = ""  # match substring in api_base URL
     default_api_base: str = ""  # fallback base URL
+    native_api_bases: tuple[tuple[str, str], ...] = ()
     passes_default_api_base: bool = False  # send the shipped default as a per-call api_base
     strip_api_base_trailing_slash: bool = False
 
@@ -294,6 +295,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # VolcEngine: OpenAI-compatible gateway
     ProviderSpec(
         name="volcengine",
+        native_api_bases=(("responses", "https://ark.cn-beijing.volces.com/api/v3"),),
         keywords=("volcengine", "volces", "ark"),
         env_key="OPENAI_API_KEY",
         display_name="VolcEngine",
@@ -314,6 +316,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # prefix is what keeps another vendor's key from answering for the id.
     ProviderSpec(
         name="anthropic",
+        native_api_bases=(("anthropic", "https://api.anthropic.com"),),
         keywords=("anthropic", "claude"),
         env_key="ANTHROPIC_API_KEY",
         display_name="Anthropic",
@@ -333,6 +336,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # OpenAI: LiteLLM recognizes "gpt-*" natively, no prefix needed.
     ProviderSpec(
         name="openai",
+        native_api_bases=(("responses", "https://api.openai.com/v1"),),
         keywords=("openai", "gpt"),
         env_key="OPENAI_API_KEY",
         display_name="OpenAI",
@@ -396,6 +400,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # DeepSeek: needs "deepseek/" prefix for LiteLLM routing.
     ProviderSpec(
         name="deepseek",
+        native_api_bases=(("responses", "https://api.deepseek.com"),),
         keywords=("deepseek",),
         env_key="DEEPSEEK_API_KEY",
         display_name="DeepSeek",
@@ -434,6 +439,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # skip_prefixes: don't add "zai/" when already routed via gateway.
     ProviderSpec(
         name="zai",
+        native_api_bases=(("anthropic", "https://api.z.ai/api/anthropic"),),
         keywords=("zhipu", "glm", "zai"),
         name_aliases=("zhipu",),  # model ids written before the rename
         env_key="ZAI_API_KEY",
@@ -501,6 +507,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # Uses OpenAI-compatible API at api.minimax.io/v1.
     ProviderSpec(
         name="minimax",
+        native_api_bases=(("responses", "https://api.minimax.io/v1"),),
         keywords=("minimax",),
         env_key="MINIMAX_API_KEY",
         display_name="MiniMax (Global)",
@@ -520,6 +527,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="minimax_cn_api",
+        native_api_bases=(("responses", "https://api.minimax.cn/v1"),),
         keywords=("minimax-cn-api",),
         env_key="MINIMAX_API_KEY",
         display_name="MiniMax (CN)",

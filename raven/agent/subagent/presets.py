@@ -14,27 +14,27 @@ agent with different capabilities than the one they asked for.
 
 Measured on 2026-08-11, which is what fixed each transport below:
 
-- ``Hermes Agent`` - ACP, native (``hermes acp``). resume + fork + load.
-- ``Claude Code`` - ACP through the ACP project's adapter. It reads the *local*
+- ``hermes`` - ACP, native (``hermes acp``). resume + fork + load.
+- ``claude_code`` - ACP through the ACP project's adapter. It reads the *local*
   Claude Code credentials: a real prompt failed with exactly the error the local
   ``claude -p`` gives ("Credit balance is too low") while no ANTHROPIC_API_KEY /
   ANTHROPIC_AUTH_TOKEN / CLAUDE_CODE_OAUTH_TOKEN was set anywhere in the
   environment. That is the property that makes it usable at all: raven treats
   these as *external* agents, so an adapter demanding its own credential would
   not be acceptable.
-- ``Codex`` - ACP through the ACP project's adapter. resume + load but **no
+- ``codex`` - ACP through the ACP project's adapter. resume + load but **no
   fork**, which is exactly why capabilities are negotiated rather than declared.
-- ``OpenCode`` - ACP, native (``opencode acp``). resume + fork + load.
-- ``OpenClaw`` - ACP, native (``openclaw acp``). This one is a bridge backed by
+- ``opencode`` - ACP, native (``opencode acp``). resume + fork + load.
+- ``openclaw`` - ACP, native (``openclaw acp``). This one is a bridge backed by
   the OpenClaw Gateway rather than a self-contained server: with no reachable
   gateway it never answers ``initialize``, so pass ``--url`` / ``--token`` when
   yours needs them.
-- ``MiroThinker`` - not a local agent at all: MiroMind deep-research over an
+- ``mirothinker`` - not a local agent at all: MiroMind deep-research over an
   OpenAI-compatible endpoint (set ``apiKey``).
 
 What a row is allowed to fetch depends on what the package is. An **ACP shim** --
-a dedicated adapter whose product lives elsewhere, as ``Claude Code`` and
-``Codex`` are -- is
+a dedicated adapter whose product lives elsewhere, as ``claude_code`` and
+``codex`` are -- is
 plumbing raven brings along: nobody installs one on purpose, it holds no
 credential, and there is no local build to defer to, so raven fetches it and
 pins the version, because ``npx -y`` would otherwise silently change which shim
@@ -70,7 +70,6 @@ from __future__ import annotations
 from typing import Any
 
 from raven.agent.subagent.acp_registry_presets import (
-    ACP_REGISTRY_INSTALL_HINTS,
     ACP_REGISTRY_PRESETS,
     ACP_REGISTRY_SHIM_PRESETS,
 )
@@ -125,21 +124,17 @@ SHIM_LAUNCHED_PRESETS = frozenset({"claude_code", "codex"}) | ACP_REGISTRY_SHIM_
 
 Membership is a fact about the package, not a preference -- see the module
 docstring. Every other acp preset must name an executable the user installed.
-
-Spelled with the preset key, not the row's ``name``: what a package is cannot
-depend on what the row is called, and a configured row's name is the user's to
-change (``test_provenance_survives_a_rename``).
 """
 
 
 THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
     "claude_code": {
-        "name": "Claude Code",
+        "name": "claude_code",
         "preset": "claude_code",
         "kind": "acp",
         "description": (
-            "An agentic coding tool that reads your codebase, edits files, runs commands, and integrates with your "
-            "development tools."
+            "Claude Code over ACP - strong general coding / agent tasks. Uses this machine's "
+            "existing Claude Code login. Fetched on first use via npx."
         ),
         "command": _CLAUDE_ACP,
         # npx may have to download the adapter on the first connect, which is far
@@ -147,10 +142,13 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         "readyTimeoutMs": 120000,
     },
     "codex": {
-        "name": "Codex",
+        "name": "codex",
         "preset": "codex",
         "kind": "acp",
-        "description": "A coding agent from OpenAI that runs locally on your computer.",
+        "description": (
+            "OpenAI Codex over ACP - coding tasks. Fetched on first use via npx. Supports "
+            "resuming a session but not forking one."
+        ),
         "command": _CODEX_ACP,
         "readyTimeoutMs": 120000,
         # Its default mode ("agent") is approval `on-request` with
@@ -164,10 +162,13 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         "env": {"INITIAL_AGENT_MODE": "agent-full-access"},
     },
     "opencode": {
-        "name": "OpenCode",
+        "name": "opencode",
         "preset": "opencode",
         "kind": "acp",
-        "description": "The open source coding agent.",
+        "description": (
+            "OpenCode over ACP - open-source coding agent. Runs your local opencode install "
+            "and whichever provider and model it is configured for."
+        ),
         "command": "opencode acp",
         # Measured on 1.18.16, when this row still fetched that build: two sessions
         # on one connection see each other's MCP servers, so a dispatch's grant
@@ -181,22 +182,24 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         "sessionMcp": False,
     },
     "hermes": {
-        "name": "Hermes Agent",
+        "name": "hermes",
         "preset": "hermes",
         "kind": "acp",
-        "description": "Nous Research's open-source agent that grows with you - a general assistant with tool calling.",
+        "description": "Hermes Agent over ACP - general assistant with tool calling.",
         # --accept-hooks: auto-approve unseen shell hooks. Its own prompt is a
         # TTY prompt, which a pooled stdio connection has no way to answer, so
         # without this the agent waits on a terminal that is not there.
         "command": "hermes acp --accept-hooks",
     },
     "openclaw": {
-        "name": "OpenClaw",
+        "name": "openclaw",
         "preset": "openclaw",
         "kind": "acp",
         "description": (
-            "A multi-channel AI gateway with extensible messaging integrations - a general assistant with its own "
-            "tool set."
+            "OpenClaw over ACP - general assistant with its own tool set. This is a bridge "
+            "backed by the OpenClaw Gateway, not a self-contained server: with no reachable "
+            "gateway it never answers the handshake, so pass --url / --token when yours needs "
+            "them."
         ),
         "command": "openclaw acp",
         # Measured: it did not answer `initialize` within 20s while waiting on a
@@ -205,12 +208,12 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         "readyTimeoutMs": 45000,
     },
     "mirothinker": {
-        "name": "MiroThinker",
+        "name": "mirothinker",
         "preset": "mirothinker",
         "kind": "openai",
         "description": (
-            "A deep research agent optimized for complex research and prediction tasks. Returns a sourced report "
-            "with citations."
+            "MiroMind deep-research (OpenAI-compatible HTTP). Returns a sourced report "
+            "with citations. Requires an apiKey."
         ),
         "baseUrl": "https://api.miromind.ai/v1",
         "model": "mirothinker-1-7-deepresearch",
@@ -276,25 +279,8 @@ def session_mcp_for(cfg: Any) -> bool:
     return bool(preset.get("sessionMcp", True))
 
 
-def install_hint_for(cfg: Any) -> str | None:
-    """How to install the agent this row defers to, or ``None`` when unknown.
-
-    Read from the row's ``preset`` provenance rather than its name, for the reason
-    :func:`session_mcp_for` reads the same field: a name is the owner's to edit,
-    and a hand-written row wearing a preset's name is not that agent, so telling
-    its owner to install a package they did not ask for would be a guess.
-
-    ``None`` for every hand-written row and for every agent whose install this
-    repo does not know. The caller keeps its own message in that case: the
-    executable name it already reports is what a person searches with.
-    """
-    preset = getattr(cfg, "preset", None)
-    return ACP_REGISTRY_INSTALL_HINTS.get(preset) if preset else None
-
-
 __all__ = [
     "SHIM_LAUNCHED_PRESETS",
-    "install_hint_for",
     "THIRD_PARTY_SUBAGENT_PRESETS",
     "session_mcp_for",
     "third_party_subagent_presets",

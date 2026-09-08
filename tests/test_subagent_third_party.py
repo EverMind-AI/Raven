@@ -36,11 +36,7 @@ from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX, SubagentManager
 from raven.agent.subagent.mcp_grant import McpGrant
-from raven.agent.subagent.presets import (
-    THIRD_PARTY_SUBAGENT_PRESETS,
-    third_party_subagent_preset,
-    third_party_subagent_presets,
-)
+from raven.agent.subagent.presets import third_party_subagent_preset, third_party_subagent_presets
 from raven.agent.subagent.spawn_tool import SpawnTool
 from raven.config.schema import (
     ACP_UNSUPPORTED_FIELDS,
@@ -2300,12 +2296,12 @@ def test_only_the_measured_non_isolating_preset_withholds_session_mcp() -> None:
         if p["kind"] == "acp"
     }
     # The measured three, pinned by value.
-    assert declared["Claude Code"] is True
-    assert declared["Codex"] is True
-    assert declared["OpenCode"] is False
+    assert declared["claude_code"] is True
+    assert declared["codex"] is True
+    assert declared["opencode"] is False
     # And nothing else withholds. Asserted as "the only false" rather than by
     # listing every other preset, so adding one cannot quietly arrive as a false.
-    assert {name for name, isolates in declared.items() if not isolates} == {"OpenCode"}
+    assert {name for name, isolates in declared.items() if not isolates} == {"opencode"}
 
 
 def test_a_row_written_before_the_field_existed_still_gets_the_measured_answer() -> None:
@@ -2407,17 +2403,15 @@ def test_the_declaration_survives_being_added_from_a_preset() -> None:
 
 def test_presets_are_valid_and_complete() -> None:
     presets = {p["name"]: p for p in third_party_subagent_presets()}
-    # Names, so they are the agents' own official spelling and not the table keys.
     assert set(presets) == {
-        "Claude Code",
-        "Codex",
-        "MiroThinker",
-        "OpenClaw",
-        "Hermes Agent",
-        "OpenCode",
-    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()}
-    # One row per key: a name collision would silently drop a preset here.
-    assert len(presets) == len(THIRD_PARTY_SUBAGENT_PRESETS)
+        "claude_code",
+        "codex",
+        "mirothinker",
+        "openclaw",
+        "hermes",
+        "opencode",
+    } | set(ACP_REGISTRY_PRESETS)
+    assert {p["preset"] for p in presets.values()} == set(presets)
     # Every preset validates against the schema (discriminated union), so "Add
     # from preset" can never produce a config the write path would reject ...
     cfg = SubagentsConfig(agents=list(presets.values()))
@@ -2431,13 +2425,13 @@ def test_presets_are_valid_and_complete() -> None:
     # must not have to try two transports (and the cli test dispatch spends the
     # user's own quota to answer a question the repo already knows).
     assert {name for name, p in presets.items() if p["kind"] == "acp"} == {
-        "Claude Code",
-        "Codex",
-        "OpenCode",
-        "Hermes Agent",
-        "OpenClaw",
-    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()}
-    assert presets["MiroThinker"]["kind"] == "openai"
+        "claude_code",
+        "codex",
+        "opencode",
+        "hermes",
+        "openclaw",
+    } | set(ACP_REGISTRY_PRESETS)
+    assert presets["mirothinker"]["kind"] == "openai"
 
     for name, acp in ((n, p) for n, p in presets.items() if p["kind"] == "acp"):
         # An acp command starts a server, so it carries no task placeholder, and
@@ -2451,7 +2445,7 @@ def test_presets_are_valid_and_complete() -> None:
     # Measured: `openclaw acp` is a gateway-backed bridge and did not answer
     # `initialize` within 20s, so the shared default would report a working
     # install unreachable.
-    assert presets["OpenClaw"]["readyTimeoutMs"] > presets["Hermes Agent"]["readyTimeoutMs"]
+    assert presets["openclaw"]["readyTimeoutMs"] > presets["hermes"]["readyTimeoutMs"]
 
 
 _VERSION_PIN = re.compile(r"@\d+\.\d+\.\d+|==\d+\.\d+\.\d+")
@@ -2484,9 +2478,7 @@ def test_no_preset_downloads_the_agent_itself() -> None:
             continue
         name = preset["name"]
         argv = shlex.split(preset["command"])
-        # Membership is keyed by provenance, not by the row's display name: the
-        # set says what the package is, and a name is the user's to change.
-        if preset["preset"] in SHIM_LAUNCHED_PRESETS:
+        if name in SHIM_LAUNCHED_PRESETS:
             assert argv[0] in ("npx", "uvx"), f"{name} is shim-launched but runs {argv[0]!r}"
             package = _fetched_package(argv)
             assert _VERSION_PIN.search(package), f"{name} fetches {package!r} unpinned"
@@ -2498,68 +2490,28 @@ def test_no_preset_downloads_the_agent_itself() -> None:
             )
 
 
-def test_no_preset_description_carries_operator_instructions() -> None:
-    """The description is the roster line a dispatching model reads, nothing else.
+def test_registry_presets_say_what_to_install() -> None:
+    """A row that defers to a local install has to name that install.
 
-    It renders into `spawn`'s and `run_subagent_dag`'s tool descriptions
-    (:func:`raven.agent.subagent.backends.format_agent_listing`), so every word
-    in it is prompt the model pays for on every turn, and it can only act on what
-    the agent *is*. An install command, a login, an api key or a launch flag is
-    addressed to a person, who cannot be reached here.
-
-    This inverts the guard that used to stand here, which required an install
-    line for the same field. What it protected is real, and it moved rather than
-    being dropped: :func:`raven.agent.subagent.probe._missing_exe_detail` now
-    names the package beside the executable, on the surface a person is actually
-    reading. ``ACP_REGISTRY_INSTALL_HINTS`` holds those, keyed by provenance, and
-    ``tests/test_subagent_probe.py`` pins both directions of it. This test's job
-    is the other half: keeping the operator prose from coming back here.
+    ``_probe_acp`` can only ever answer "<exe> is not on the login shell PATH"
+    for an agent that is not there. That names the executable and nothing else,
+    so without the install line the overlay tells the user to go and install
+    something without saying what.
     """
-    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.agent.subagent.acp_registry_presets import ACP_REGISTRY_PRESETS, ACP_REGISTRY_SHIM_PRESETS
 
-    # The vocabulary the operator-facing halves were written in. A word list
-    # cannot describe "addressed to a person", but it does catch the shapes this
-    # table actually carried.
-    operator_words = ("install", "login", "npx", "apikey", "api key", "subscription", "--")
-    for key, preset in THIRD_PARTY_SUBAGENT_PRESETS.items():
-        description = preset["description"]
-        assert description, key
-        found = [word for word in operator_words if word in description.lower()]
-        assert not found, f"{key}: {found} is addressed to a person, not to the dispatching model"
-
-
-def test_every_install_hint_names_a_row_that_defers_to_a_local_install() -> None:
-    """A hint keyed by a name no preset has would never match, and say nothing.
-
-    Two ways that goes wrong silently, so both are pinned: a key that is not in
-    the table at all, and a key belonging to a shim-launched row, whose command
-    is an ``npx`` one that always resolves -- the absent-executable branch these
-    hints serve is unreachable there, so a hint on such a row is dead weight
-    advertising itself as coverage.
-    """
-    from raven.agent.subagent.acp_registry_presets import ACP_REGISTRY_INSTALL_HINTS
-    from raven.agent.subagent.presets import SHIM_LAUNCHED_PRESETS
-
-    unknown = set(ACP_REGISTRY_INSTALL_HINTS) - set(THIRD_PARTY_SUBAGENT_PRESETS)
-    assert not unknown, f"install hints for presets that do not exist: {sorted(unknown)}"
-    fetched = set(ACP_REGISTRY_INSTALL_HINTS) & SHIM_LAUNCHED_PRESETS
-    assert not fetched, f"these rows fetch their own command, so the hint is unreachable: {sorted(fetched)}"
-    for key, hint in ACP_REGISTRY_INSTALL_HINTS.items():
-        assert hint.strip() == hint and hint, key
+    for name, preset in ACP_REGISTRY_PRESETS.items():
+        if name in ACP_REGISTRY_SHIM_PRESETS:
+            continue
+        assert "install" in preset["description"].lower(), name
 
 
 def test_presets_declare_their_own_provenance() -> None:
     # The UI groups by provenance rather than by name, because a configured
     # preset's name is user-editable. A preset that shipped without this would
     # reappear as unconfigured the moment the user renamed it.
-    #
-    # Provenance is the table's own key, and deliberately not the display name:
-    # the name carries the agent's official spelling ("GitHub Copilot"), which is
-    # a label, while the key is what config, the already-claimed check and the
-    # transport-upgrade hint all read.
-    for key, preset in THIRD_PARTY_SUBAGENT_PRESETS.items():
-        assert preset["preset"] == key, key
-    assert {p["preset"] for p in third_party_subagent_presets()} == set(THIRD_PARTY_SUBAGENT_PRESETS)
+    for preset in third_party_subagent_presets():
+        assert preset["preset"] == preset["name"], preset["name"]
 
 
 def test_provenance_survives_a_rename() -> None:
@@ -2596,29 +2548,6 @@ def test_provenance_backfilled_when_name_matches_a_preset_openai() -> None:
         ]
     ).agents[0]
     assert cfg.preset == "mirothinker"
-
-
-def test_a_shipped_name_on_a_hand_written_row_infers_no_provenance() -> None:
-    """A row is not a preset for wearing its name.
-
-    Rows carry their agents' official names, so a hand-written one may be called
-    ``OpenCode`` while launching something else entirely. `preset` is read at
-    runtime -- :func:`session_mcp_for` resolves an undeclared ``sessionMcp`` from
-    it, and the opencode preset is the one measured to share MCP servers across a
-    connection -- so inferring provenance from the name would hand that row
-    opencode's measured policy and withhold the MCP servers a dispatch grants it.
-
-    The name is also the field the overlay lets its owner edit, which is what
-    makes it unfit to carry identity at all. The duplicate presentation this
-    guards against is handled where it belongs, in
-    :func:`raven.rpc.methods.subagents.subagents_list`.
-    """
-    from raven.agent.subagent.presets import session_mcp_for
-
-    cfg = SubagentsConfig(agents=[{"name": "OpenCode", "kind": "acp", "command": "custom-agent --acp"}]).agents[0]
-    assert cfg.preset is None
-    # The consequence, not just the field: this is what a wrong provenance costs.
-    assert session_mcp_for(cfg) is True
 
 
 def test_provenance_not_guessed_for_a_renamed_hand_written_entry() -> None:
