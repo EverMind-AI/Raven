@@ -2,7 +2,7 @@
 
 Pins the wire shape that ``turn.send`` relays as ``message.complete.payload.usage``:
 per-turn token counts plus the live context-window gauge (used / max / percent)
-and the estimated cost. Before this, only the token counts were populated, so the
+and the provider-reported cost. Before this, only the token counts were populated, so the
 TUI context bar stayed frozen at 0% and never showed cost.
 """
 
@@ -105,7 +105,8 @@ async def test_usage_sink_carries_context_gauge_and_cost(workspace):
     assert sink["context_max"] == 40000
     assert sink["context_used"] == 8000
     assert sink["context_percent"] == 20
-    assert "cost_usd" in sink
+    assert sink["cost_usd"] is None
+    assert sink["cost_missing_calls"] == 1
 
 
 def _patch_live_openrouter_window(monkeypatch, window: int) -> None:

@@ -355,7 +355,9 @@ async def _run_variant(
                         cache_read=snap.cache_read_tokens,
                         cache_write=snap.cache_write_tokens,
                         completion=snap.output_tokens,
-                        cost_usd=snap.estimated_cost_usd,
+                        cost_usd=snap.cost_usd
+                        if snap.cost_usd is not None
+                        else pytest.skip("Provider did not report cost"),
                     )
                 )
             cost_so_far[f"{scenario_tag}:{variant_name}"] = result.total_cost

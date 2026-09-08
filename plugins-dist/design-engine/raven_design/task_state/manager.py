@@ -243,11 +243,7 @@ class TaskStateManager:
         names = [operation.get("operation") for operation in operations]
         if "initialize" in names:
             if len(operations) != 1:
-                raise TaskStateError(
-                    "initialize replaces the whole state and must be called alone. "
-                    "Send exactly one initialize operation, putting all initial tasks in state.items. "
-                    "Remove add operations from this call, or send them in a separate call after initialization succeeds."
-                )
+                raise TaskStateError("initialize replaces the whole state and must be called alone.")
             state = self._normalize_state(operations[0].get("state"))
             revision = self.store.save(session_key, state, mutation_group=mutation_group)
             return TaskStateUpdate(state=state, revision=revision)

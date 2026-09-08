@@ -706,7 +706,7 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
                     model="stub-model",
                     input_tokens=1200,
                     output_tokens=340,
-                    estimated_cost_usd=0.004,
+                    cost_usd=0.004,
                     session_key=req.conversation,
                 ),
             )

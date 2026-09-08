@@ -105,10 +105,9 @@ class _OpenRouterMediaTool(Tool):
 
     @property
     def _config(self) -> "MediaToolConfig | None":
-        config = self._config_source() if self._config_source is not None else self._config_static
-        from raven.config.live import resolve_media_selection
-
-        return resolve_media_selection(config)
+        if self._config_source is not None:
+            return self._config_source()
+        return self._config_static
 
     # ── config resolution (at call time, so env/config edits are picked up) ──
 
@@ -342,6 +341,16 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             return self._no_key_error()
 
         config = self._config
+        source = getattr(config, "selection_config", "")
+        if source:
+            from raven.config.live import LiveConfig, media_tool_config
+
+            if getattr(self, "_selection_path", None) != source:
+                self._selection_path = source
+                self._selection_live = LiveConfig(Path(source))
+            selection = media_tool_config(self._selection_live, "image")
+            if selection is not None:
+                config = selection
         model_id = getattr(config, "model", "") or model or self.default_model
         if "quality" in getattr(config, "model_fields_set", set()):
             quality = config.quality

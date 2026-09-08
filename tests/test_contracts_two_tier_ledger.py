@@ -237,7 +237,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("11", "ab729a55c3228591d2c6e944ecfbf2c5480d2b7b032a1e9b393a2805d9af5971")
+PINNED_CONTRACT_SURFACE = ("12", "5f57bd4ad4ca4d79c73c4d2403cb0b115b5821ed41965b98aadba5ebc12c7b7e")
 
 
 def contract_surface_digest(pkg_dir: Path) -> str:
@@ -326,7 +326,7 @@ def test_the_digest_ignores_prose(tmp_path):
     shutil.copytree(CONTRACTS_DIR, work, ignore=shutil.ignore_patterns("__pycache__"))
     p = work / "token_strategy.py"
     src = p.read_text()
-    marker = "Convention: ``input_tokens`` is *fresh* (non-cached) prompt tokens."
+    marker = "Input tokens are fresh (non-cached)."
     assert marker in src
     p.write_text(src.replace(marker, "Rule: input tokens count only the fresh prompt.", 1))
     assert contract_surface_digest(work) == contract_surface_digest(CONTRACTS_DIR)

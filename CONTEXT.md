@@ -542,7 +542,12 @@ window). A Hermes-faithful `SystemAndTailCacheStrategy` ships alongside as an A/
 
 **UsageSnapshot**:
 The token/cost accounting unit for a single LLM call: input / output / cache-read /
-cache-write / reasoning tokens plus the estimated USD cost.
+cache-write / reasoning tokens plus provider-reported USD cost. Missing cache
+counters and cost remain unknown, distinct from zero. The tracker persists version-2
+records and counts missing values alongside its aggregates; old estimated costs do not
+contribute to reported-cost totals. Chat, Responses, and Anthropic adapters interpret
+API-returned numeric `usage.cost` as USD regardless of provider or endpoint; compatible
+gateways must use that unit. Other monetary fields and SDK estimates are not inferred.
 _Avoid_: the turn-end wire payload is `TurnUsage` (rpc/models.py), not UsageSnapshot.
 
 **Provider**:

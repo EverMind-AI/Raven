@@ -86,3 +86,13 @@ describe('StatusRule fits the terminal', () => {
     expect(rowsOf(40, LONG_CWD)[0]).toContain('ready')
   })
 })
+
+describe('reported usage cost', () => {
+  it('distinguishes unknown, zero and partial costs', () => {
+    expect(frameOf({ cols: 200, showCost: true, usage: { ...USAGE, cost_usd: null } })).toContain('cost unknown')
+    expect(frameOf({ cols: 200, showCost: true, usage: { ...USAGE, cost_usd: 0 } })).toContain('$0')
+    const partial = frameOf({ cols: 200, showCost: true, usage: { ...USAGE, cost_usd: 0.84, cost_missing_calls: 2 } })
+    expect(partial).toContain('$0.8400')
+    expect(partial).toContain('2 calls with unknown cost')
+  })
+})

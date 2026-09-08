@@ -1047,7 +1047,12 @@
           "required": true,
           "schema": {
             "type": "string",
-            "enum": ["auto", "chat", "responses", "anthropic"]
+            "enum": [
+              "auto",
+              "chat",
+              "responses",
+              "anthropic"
+            ]
           }
         }
       ],
@@ -1056,7 +1061,9 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["provider"],
+          "required": [
+            "provider"
+          ],
           "properties": {
             "provider": {
               "$ref": "#/components/schemas/ModelOptionProvider"
@@ -2387,22 +2394,30 @@
         {
           "name": "session_key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "agent",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "handle",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "mode",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "clear",
@@ -2421,11 +2436,17 @@
           "required": [],
           "properties": {
             "mode": {
-              "type": ["string", "null"],
+              "type": [
+                "string",
+                "null"
+              ],
               "description": "This instance's own override, or null when it has none. Null is the ordinary answer to a read with no override set and to every clear, not an error."
             },
             "inherited": {
-              "type": ["string", "null"],
+              "type": [
+                "string",
+                "null"
+              ],
               "description": "What a dispatch runs at when there is no override: this session's tier, clamped to what the agent offers. Null when nothing is inherited and the agent's own default is what runs."
             },
             "availableModes": {
@@ -2433,11 +2454,19 @@
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["id"],
+                "required": [
+                  "id"
+                ],
                 "properties": {
-                  "id": { "type": "string" },
-                  "name": { "type": "string" },
-                  "description": { "type": "string" }
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
                 }
               }
             }
@@ -2457,12 +2486,16 @@
         {
           "name": "session_key",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "mode",
           "required": false,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "clear",
@@ -2481,7 +2514,10 @@
           "required": [],
           "properties": {
             "mode": {
-              "type": ["string", "null"],
+              "type": [
+                "string",
+                "null"
+              ],
               "description": "The tier now in force."
             },
             "availableModes": {
@@ -2489,11 +2525,19 @@
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["id"],
+                "required": [
+                  "id"
+                ],
                 "properties": {
-                  "id": { "type": "string" },
-                  "name": { "type": "string" },
-                  "description": { "type": "string" }
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
                 }
               }
             }
@@ -7673,28 +7717,66 @@
             "type": "integer"
           },
           "input_tokens": {
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "output_tokens": {
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "cache_read_tokens": {
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "cost_usd": {
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "model": {
             "type": "string"
+          },
+          "cache_write_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cost_missing_calls": {
+            "type": "integer"
+          },
+          "cache_read_missing_calls": {
+            "type": "integer"
+          },
+          "cache_write_missing_calls": {
+            "type": "integer"
+          },
+          "legacy_cost_calls": {
+            "type": "integer"
+          },
+          "input_missing_calls": {
+            "type": "integer",
+            "default": 0
+          },
+          "output_missing_calls": {
+            "type": "integer",
+            "default": 0
           }
         },
         "required": [
           "calls",
-          "input_tokens",
-          "output_tokens",
-          "cache_read_tokens",
-          "cost_usd",
-          "model"
+          "model",
+          "cost_missing_calls",
+          "cache_read_missing_calls",
+          "cache_write_missing_calls",
+          "legacy_cost_calls"
         ],
         "type": "object"
       },
@@ -7705,24 +7787,62 @@
             "type": "integer"
           },
           "input_tokens": {
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "output_tokens": {
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "cache_read_tokens": {
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "cost_usd": {
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cache_write_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cost_missing_calls": {
+            "type": "integer"
+          },
+          "cache_read_missing_calls": {
+            "type": "integer"
+          },
+          "cache_write_missing_calls": {
+            "type": "integer"
+          },
+          "legacy_cost_calls": {
+            "type": "integer"
+          },
+          "input_missing_calls": {
+            "type": "integer",
+            "default": 0
+          },
+          "output_missing_calls": {
+            "type": "integer",
+            "default": 0
           }
         },
         "required": [
           "calls",
-          "input_tokens",
-          "output_tokens",
-          "cache_read_tokens",
-          "cost_usd"
+          "cost_missing_calls",
+          "cache_read_missing_calls",
+          "cache_write_missing_calls",
+          "legacy_cost_calls"
         ],
         "type": "object"
       },
@@ -8614,14 +8734,14 @@
       "ModelOptionProvider": {
         "type": "object",
         "additionalProperties": false,
-          "required": [
-            "slug",
-            "name",
-            "authenticated",
-            "is_current",
-            "auth_type",
-            "models",
-            "total_models",
+        "required": [
+          "slug",
+          "name",
+          "authenticated",
+          "is_current",
+          "auth_type",
+          "models",
+          "total_models",
           "needs_api_base",
           "warning"
         ],
@@ -8889,7 +9009,10 @@
             "type": "integer"
           },
           "cost_usd": {
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "context_used": {
             "type": "integer"
@@ -8899,6 +9022,10 @@
           },
           "context_percent": {
             "type": "integer"
+          },
+          "cost_missing_calls": {
+            "type": "integer",
+            "default": 0
           }
         }
       },

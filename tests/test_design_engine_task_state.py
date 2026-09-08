@@ -198,9 +198,7 @@ def test_update_ignores_explicit_null_placeholders(tmp_path):
 
 def test_tool_schema_separates_operation_shapes(tmp_path):
     schema = TaskStateTool(TaskStateManager(tmp_path)).parameters
-    branches = schema["properties"]["operations"]["anyOf"]
-    assert branches[0]["maxItems"] == 1
-    variants = [branches[0]["items"], *branches[1]["items"]["oneOf"]]
+    variants = schema["properties"]["operations"]["items"]["oneOf"]
 
     assert [variant["properties"]["operation"]["enum"][0] for variant in variants] == [
         "initialize",
@@ -403,43 +401,3 @@ def test_snapshot_contains_only_visible_item_numbers(tmp_path):
 
     assert snapshot["items"][0]["item_number"] == 1
     assert "item_id" not in snapshot["items"][0]
-
-
-@pytest.mark.parametrize("extra", ["add", "initialize"])
-def test_schema_rejects_initialization_batched_with_any_operation(tmp_path, extra):
-    from jsonschema import Draft202012Validator
-
-    schema = TaskStateTool(TaskStateManager(tmp_path)).parameters
-    initialize = {"operation": "initialize", "state": _state()}
-    other = {"operation": "add", "item": {"title": "Extra"}} if extra == "add" else initialize
-    validator = Draft202012Validator(schema)
-    assert validator.is_valid({"operations": [initialize]})
-    assert not validator.is_valid({"operations": [initialize, other]})
-    assert not validator.is_valid({"operations": [other, initialize]})
-    assert validator.is_valid(
-        {
-            "operations": [
-                {"operation": "add", "item": {"title": "Extra"}},
-                {"operation": "complete", "item_number": 1},
-            ]
-        }
-    )
-
-
-def test_mixed_initialization_error_explains_how_to_retry(tmp_path):
-    manager = TaskStateManager(tmp_path)
-    with pytest.raises(TaskStateError, match="all initial tasks in state.items"):
-        manager.apply(
-            "test",
-            [
-                {"operation": "initialize", "state": _state()},
-                {"operation": "add", "item": {"title": "Extra"}},
-            ],
-        )
-    assert manager.get("test") is None
-    manager.apply("test", [{"operation": "initialize", "state": _state()}])
-    manager.apply(
-        "test", [{"operation": "add", "item": {"title": "Extra"}}, {"operation": "complete", "item_number": 1}]
-    )
-    assert len(manager.get("test")["items"]) == 3
-    assert manager.get("test")["items"][0]["status"] == "completed"
