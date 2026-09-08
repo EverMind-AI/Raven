@@ -6,20 +6,6 @@ All notable changes to Raven are documented here.
 
 ### Added
 
-- The research agent's three modes are three stop rules rather than three sizes
-  of one budget. `medium` may answer a settled general-knowledge question
-  without searching: the first model call has the web tools withheld and a
-  `request_research` tool offered, a plain draft is put to an independent judge,
-  and an accepted one ships saying no sources were consulted (`plainFirst`,
-  medium only). `high` terminates on the reviewer, with three revisions and an
-  evidence round on a rejection. `max` adds an evidence floor: a draft resting on
-  fewer than 18 readable pages from 8 sites is sent back to research, at most
-  twice (`evidenceFloor`). The reviewer asks for its verdict as a forced tool
-  call, runs one uninterrupted attempt with 16384 tokens, and records why it
-  failed open. The sufficiency judge can release a turn from the search listing
-  before any page is opened (`sufficiency.judgeListing`). The product label
-  moves to `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain`.
-
 - `web_search` and `web_fetch` route through a vendor the deployment picks:
   Serper, AnySearch, SerpApi, Tavily, Exa, Brave Search or Firecrawl for
   search, Jina Reader, AnySearch, Tavily, Exa or Firecrawl for pages. Keys are
@@ -37,10 +23,6 @@ All notable changes to Raven are documented here.
   search key.
 
 ### Changed
-
-- The research agent's sufficiency judge no longer passes a transport timeout
-  the provider rejects; before this every judge call failed open before it was
-  sent, so `medium` never actually stopped early.
 
 - The ppt engine (`plugins-dist/ppt-engine`) carries the fork's layout work:
   eight bundled templates instead of twelve (four dropped for looks), a curated

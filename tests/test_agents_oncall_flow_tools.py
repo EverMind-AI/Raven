@@ -39,7 +39,6 @@ from oncall_flow.tools.ops import (  # noqa: E402
 from oncall_flow.tools.ops_connections import OpsConnectionsTool  # noqa: E402
 from oncall_flow.tools.ops_declare import OpsDeclareTool  # noqa: E402
 from oncall_flow.tools.ops_escalation import OpsAskOwnerTool, OpsFinishTool  # noqa: E402
-from oncall_flow.tools.ops_exec import OpsExecTool  # noqa: E402
 
 from raven.plugins.context import PluginContext, RuntimeHandles, ServiceLocator  # noqa: E402
 from raven.plugins.manifest import PluginManifest  # noqa: E402
@@ -104,8 +103,9 @@ def test_every_manifest_tool_factory_constructs_its_face(tmp_path: Path) -> None
         factory = getattr(importlib.import_module(module_path), attr)
         tool = factory(ctx)
         assert tool is not None and tool.name == row.name
-    assert "exec" not in {t.name for t in manifest.contributes.tools}, (
-        "the machine face is ops_exec; the same-name exec shadow is an open ruling"
+    names = {t.name for t in manifest.contributes.tools}
+    assert "exec" not in names and "ops_exec" not in names, (
+        "the machine face is trunk exec's own machine parameter; the plugin contributes no spelling of it"
     )
 
 
@@ -355,14 +355,7 @@ async def test_finish_files_the_report_and_stands_the_wake_down(tmp_path: Path) 
     assert json.loads((cdir / "reports.jsonl").read_text().splitlines()[-1])["dedupe_key"] == "line-held"
 
 
-# ── The machine face, and the fork bytes the prompt quotes ──────────
-
-
-async def test_ops_exec_refuses_work_that_outlives_the_call(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("RAVEN_CONNECTIONS", str(tmp_path / "none.json"))
-    tools_base.set_home(tmp_path / "state")
-    out = await OpsExecTool().execute(command="nohup ./solve &", machine="box")
-    assert "nohup" in out and "ops_submit" in out and "Nothing was run" in out
+# ── The fork bytes the prompt quotes ────────────────────────────────
 
 
 def test_model_facing_text_keeps_the_fork_bytes() -> None:

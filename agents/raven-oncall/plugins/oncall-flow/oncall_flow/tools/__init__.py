@@ -19,11 +19,10 @@ the fork's own "no scheduler" prose; the tool stays registered, because
 reading a campaign never needed a timer.
 
 ``ops_tune_launch`` has no factory here on purpose (fork parity: full-auto
-stays off the agent's menu; ``python -m oncall_flow.tune`` is the D5 entry),
-and the fork's ``exec(machine=...)`` face is contributed as ``ops_exec``
-rather than as a same-name shadow -- the shadow rule replaces a built-in
-outright and no grant hands a shadow its inner tool, so the local half of
-exec could not be served (deviation table, this draft).
+stays off the agent's menu; ``python -m oncall_flow.tune`` is the D5 entry).
+The machine face is not contributed at all: trunk exec carries the fork's
+``machine`` parameter itself, which closed the same-name-shadow ruling the
+draft's deviation table left open.
 """
 
 from __future__ import annotations
@@ -149,11 +148,3 @@ def make_ops_finish(ctx: "PluginContext"):
     from oncall_flow.tools.ops_escalation import OpsFinishTool
 
     return base.adopt(OpsFinishTool())
-
-
-def make_ops_exec(ctx: "PluginContext"):
-    if not _wired(ctx):
-        return None
-    from oncall_flow.tools.ops_exec import OpsExecTool
-
-    return base.adopt(OpsExecTool())

@@ -56,18 +56,10 @@ from research_flow.gates.conversation import (
     set_prior_sources,
     set_research_turn,
 )
-from research_flow.gates.evidence_floor import EvidenceFloorGate
 from research_flow.gates.fetch_floor import FetchFloorObserver
 from research_flow.gates.fetch_gate import FetchGateObserver
 from research_flow.gates.final_shape import shape_final_answer
 from research_flow.gates.finalize import ForcedFinalizeGate
-from research_flow.gates.plain_first import (
-    PLAIN_TURN_SOURCE,
-    PlainFirstGate,
-    PlainScopedReview,
-    PlainTurnGate,
-    set_plain_turn,
-)
 from research_flow.gates.report_shape import ReportShape, ReportShapeGate, render_reminder
 from research_flow.gates.spin_breaker import SpinEntryBreaker
 from research_flow.gates.sufficiency import SufficiencyGate
@@ -217,7 +209,6 @@ class TurnFrame(AgentHook):
         set_turn_brief("")
         set_clarify_verdict(None)
         set_first_turn(False)
-        set_plain_turn(False)
         set_prior_sources(())
         ctx.metadata.pop(_TURN_MODE_KEY, None)
         text = ctx.inbound_content or ""
@@ -322,9 +313,6 @@ class TurnFrame(AgentHook):
             text = str(ctx.metadata.pop(_USER_TEXT_KEY, None) or "") or ctx.turn_question
             mode = await self._gate.decide(text, prior)
         set_research_turn(mode.research)
-        # The gate's third verdict, read by the plain-first gate one hook later in
-        # the same phase. Only ``PlainTurnGate`` ever emits the source.
-        set_plain_turn(mode.source == PLAIN_TURN_SOURCE)
         ctx.metadata[_TURN_MODE_KEY] = mode
         if not mode.research:
             logger.info("conversation-gate: answering from context ({}) - {}", mode.source, mode.why)
@@ -502,10 +490,7 @@ def build_chain(
         if provider is None:
             _skip("conversation.gate=agentic")
         else:
-            # The plain verdict is offered only when there is a plain-first gate to
-            # act on it; otherwise the two-key prompt stays byte for byte.
-            gate_cls = PlainTurnGate if cfg.plain_first.enabled else ConversationGate
-            gate = gate_cls(
+            gate = ConversationGate(
                 provider,
                 model=cfg.conversation.gate_model,
                 max_tokens=cfg.conversation.gate_max_tokens,
@@ -517,27 +502,9 @@ def build_chain(
 
     # Observer order is part of the flow contract: note appenders first, then
     # the spin breaker (a restart must be intercepted before the terminal gates
-    # see it), then ForcedFinalizeGate ahead of the evidence floor ahead of the
-    # reviewer - an answerless terminal is salvaged, never reviewed, and a draft
-    # below the floor is bounced, never reviewed.
+    # see it), then ForcedFinalizeGate ahead of the reviewer - an answerless
+    # terminal is salvaged, never reviewed.
     observers: list[AgentHook] = []
-    if cfg.plain_first.enabled:
-        # First in the chain: it decides, on the first model call, whether there is a
-        # research turn at all, and on the first response whether the plain answer
-        # stands - before any terminal gate reads that response as a draft.
-        if cfg.plain_first.judge and provider is None:
-            _skip("plainFirst.judge")
-        plain: AgentHook = PlainFirstGate(
-            provider if cfg.plain_first.judge else None,
-            judge_model=cfg.plain_first.judge_model,
-            judge_timeout_seconds=cfg.plain_first.judge_timeout_seconds,
-            judge_max_tokens=cfg.plain_first.judge_max_tokens,
-            judge_reasoning_effort=cfg.plain_first.judge_reasoning_effort,
-            closing_tag_required=cfg.think_closing_tag_required,
-        )
-        if ask_user_on:
-            plain = ClarifyExemptHook(plain)
-        observers.append(plain)
     if cfg.budget_note.enabled:
         observers.append(
             BudgetNoteObserver(
@@ -573,7 +540,6 @@ def build_chain(
                     model=cfg.sufficiency.model,
                     min_searches=cfg.sufficiency.min_searches,
                     min_fetches=cfg.sufficiency.min_fetches,
-                    judge_listing=cfg.sufficiency.judge_listing,
                     timeout_seconds=cfg.sufficiency.timeout_seconds,
                     attempt_timeout_seconds=cfg.sufficiency.attempt_timeout_seconds,
                     max_tokens=cfg.sufficiency.max_tokens,
@@ -617,18 +583,6 @@ def build_chain(
             if ask_user_on:
                 finalizer = ClarifyExemptHook(finalizer)
             observers.append(finalizer)
-    if cfg.evidence_floor.enabled:
-        floor: AgentHook = EvidenceFloorGate(
-            min_pages=cfg.evidence_floor.min_pages,
-            min_domains=cfg.evidence_floor.min_domains,
-            max_rollbacks=cfg.evidence_floor.max_rollbacks,
-            closing_tag_required=cfg.think_closing_tag_required,
-        )
-        # A prose clarify reads as a draft here too, and more pages are not the
-        # answer to "which sense of the term did you mean".
-        if ask_user_on:
-            floor = ClarifyExemptHook(floor)
-        observers.append(floor)
     if cfg.verify.enabled:
         if provider is None:
             _skip("verify")
@@ -649,11 +603,6 @@ def build_chain(
                 evidence_round=evidence_round,
                 closing_tag_required=cfg.think_closing_tag_required,
             )
-            # An accepted plain answer carries no evidence for this reviewer to
-            # check and the judge has already read it; the scoped wrapper ships it
-            # and hands every researched draft straight through.
-            if cfg.plain_first.enabled and cfg.plain_first.review == "skip":
-                reviewer = PlainScopedReview(reviewer, closing_tag_required=cfg.think_closing_tag_required)
             # A clarify the model wrote as prose instead of calling the tool
             # arrives here as an ordinary draft, and the reviewer rejects it
             # for being one.

@@ -494,3 +494,83 @@ def test_a_live_job_from_before_device_ids_reserves_the_lowest_free_ids(tmp_path
     pinned = _campaign(tmp_path, "pinned")
     _running_job(pinned, "trialC", held={"gpus": 1, "device_ids": ["0"]})
     assert free_device_ids(tmp_path, "m1", 4) == ["3"], "explicit ids are skipped; the two unplaced jobs take 1 and 2"
+
+
+async def test_a_card_a_stranger_holds_is_skipped_for_the_next_free_one(tmp_path, monkeypatch):
+    """A shared machine is the ordinary case: someone outside the ledger is on
+    device 0. The gate asks the machine before assigning and hands the job
+    device 1; when nothing idle is left for the round it refuses, naming the
+    cards and what they hold, rather than launching onto a busy card."""
+    import oncall_flow.backends as backends_mod
+
+    mine = _campaign(tmp_path, "mine")
+    labels: list = []
+    _install(monkeypatch, concurrency=1, row_extra={"kind": "gpu", "gpus": 2}, labels=labels)
+    busy = {"0": 30000}
+
+    async def probe(ids):
+        return {d: m for d, m in busy.items() if d in ids}
+
+    plain = backends_mod.backend_from_meta
+
+    def with_probe(meta):
+        backend = plain(meta)
+        backend.busy_devices = probe
+        return backend
+
+    monkeypatch.setattr(backends_mod, "backend_from_meta", with_probe)
+
+    out = await _submit(mine, configs=[{"nx": 1, "gpus_needed": 1}], round=0)
+    assert "Submitted 1" in out, out
+    assert labels and labels[0].get("device_ids") == "1", labels
+
+    # The ledger now holds device 1 for the job above; the only ledger-free card
+    # is the stranger's, so the round is refused naming that card and its hold.
+    out = await _submit(mine, configs=[{"nx": 2, "gpus_needed": 1}], round=0)
+    assert "REFUSED" in out and "device 0 (30000 MiB)" in out and "0 device(s) remain free" in out, out
+
+
+async def test_the_machine_is_probed_before_the_reservation_lock_and_nothing_awaits_under_it(tmp_path, monkeypatch):
+    """The reservation lock is a synchronous file lock. An await under it hands
+    the event loop to a sibling submit that then blocks the thread acquiring the
+    same lock, and the first can never resume to release it (reproduced in
+    review, 2026-09-07). So the one remote look -- the foreign-use probe -- runs
+    before the lock is taken, and the lock-held arithmetic reads its snapshot."""
+    import contextlib
+
+    import oncall_flow.backends as backends_mod
+    import oncall_flow.occupancy as occ
+
+    mine = _campaign(tmp_path, "mine")
+    labels: list = []
+    _install(monkeypatch, concurrency=1, row_extra={"kind": "gpu", "gpus": 2}, labels=labels)
+    order: list[str] = []
+
+    async def probe(ids):
+        order.append(f"probe:{','.join(ids)}")
+        return {"0": 30000}
+
+    plain = backends_mod.backend_from_meta
+
+    def with_probe(meta):
+        backend = plain(meta)
+        backend.busy_devices = probe
+        return backend
+
+    monkeypatch.setattr(backends_mod, "backend_from_meta", with_probe)
+    real_lock = occ.reservation_lock
+
+    @contextlib.contextmanager
+    def watched_lock(home):
+        order.append("lock:enter")
+        with real_lock(home):
+            yield
+        order.append("lock:exit")
+
+    monkeypatch.setattr(occ, "reservation_lock", watched_lock)
+
+    out = await _submit(mine, configs=[{"nx": 1, "gpus_needed": 1}], round=0)
+
+    assert "Submitted 1" in out, out
+    assert labels[0].get("device_ids") == "1"
+    assert order == ["probe:0,1", "lock:enter", "lock:exit"], order

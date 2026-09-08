@@ -66,19 +66,7 @@ ARGUMENT_KEY = {
     "WebSearch": "query",
 }
 
-SUBJECT_KEYS = (
-    "command",
-    "path",
-    "file_path",
-    "abs_path",
-    "filePath",
-    "target_file",
-    "pattern",
-    "query",
-    "url",
-    "prompt",
-    "argument",
-)
+SUBJECT_KEYS = ("command", "path", "file_path", "abs_path", "filePath", "pattern", "query", "url", "prompt", "argument")
 """``argument`` is the write path's own fallback key, not an adapter field name."""
 
 

@@ -2020,7 +2020,7 @@ class OpsSubmitTool(_OpsScheduler):
         # A question the loop itself called blocking, still unanswered. It said
         # nothing worth doing was left until it heard back; submitting now
         # contradicts that, and spends compute on a branch the answer may make
-        # wrong. Looking is untouched -- ops_exec, the logs, the case are all
+        # wrong. Looking is untouched -- exec on the machine, the logs, the case are all
         # still open, and writing down what was found is how the wait gets used.
         from oncall_flow.escalation import blocking_question_open
 
@@ -2239,6 +2239,25 @@ class OpsSubmitTool(_OpsScheduler):
         from oncall_flow.proposer import legacy_config_key
 
         _admitted: list[tuple[int, dict, str]] = []
+        # The one look at the machine itself, taken BEFORE the lock: which of its
+        # devices a process outside the ledger holds right now. The lock below is a
+        # synchronous file lock, and an await inside it hands the event loop to a
+        # sibling submit that then blocks the whole thread acquiring the same lock
+        # -- the first can never resume to release it (reproduced in review,
+        # 2026-09-07). So nothing under the lock awaits; the probe's answer is a
+        # snapshot the lock-held arithmetic reads, and the launcher's own check at
+        # start stays the last guard against a card taken in between.
+        _foreign: dict[str, int] = {}
+        if _conn_id:
+            _pre_row = _occ_conns.get(_conn_id) or {}
+            if _occ_conns.resource_unit(_pre_row) == "gpus":
+                _all_ids = [str(i) for i in range(_occ_conns.capacity(_pre_row).get("gpus", 0))]
+                _probe = getattr(backend, "busy_devices", None)
+                if _all_ids and callable(_probe):
+                    try:
+                        _foreign = dict(await _probe(_all_ids) or {})
+                    except Exception:  # noqa: BLE001 -- a probe that cannot answer must not refuse
+                        _foreign = {}
         with reservation_lock(_occ_home):
             # What each config will hold, decided before anything is recorded: the
             # gate admits by free devices or cores (owner's rulings 2026-09-03), and
@@ -2266,6 +2285,25 @@ class OpsSubmitTool(_OpsScheduler):
                         log_event(cdir, "capacity_refused", round=round, connection=_conn_id)
                         return _cap
                     _free_ids = free_device_ids(_occ_home, _conn_id, _capacity[_unit]) if _unit == "gpus" else []
+                    if _free_ids and _foreign:
+                        # The ledger's free ids, minus the ones a person outside the
+                        # ledger is using right now (probed above, before the lock):
+                        # a shared machine is the ordinary case, and the launcher's
+                        # own check can only refuse the card it was given --
+                        # skipping here is what lets the idle higher card be chosen.
+                        _busy = {d: m for d, m in _foreign.items() if d in _free_ids}
+                        if _busy:
+                            _free_ids = [d for d in _free_ids if d not in _busy]
+                            if len(_free_ids) < sum(_requests):
+                                _held_txt = ", ".join(f"device {d} ({m} MiB)" for d, m in sorted(_busy.items()))
+                                log_event(
+                                    cdir, "capacity_refused", round=round, connection=_conn_id, foreign=list(_busy)
+                                )
+                                return (
+                                    f"REFUSED: {_held_txt} is/are held by a process outside the ledger -- the machine is "
+                                    f"shared -- and only {len(_free_ids)} device(s) remain free for the {sum(_requests)} this "
+                                    f"round asks for. Submit what fits, or wait and try again; nothing was submitted."
+                                )
                     for _i, (_n, _mem) in enumerate(zip(_requests, _mem_requests)):
                         _held: dict[str, Any] = {_unit: _n}
                         if _mem:

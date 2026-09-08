@@ -408,6 +408,44 @@ class ProcessExecutor(JobBackend):
 
     # ---- JobBackend ----
 
+    async def busy_devices(self, device_ids: list[str]) -> dict[str, int]:
+        """Which of ``device_ids`` a process outside the ledger holds right now, with MiB used.
+
+        The gate knows what the ledger holds; this is the one thing it cannot know
+        -- a person on the same machine. Asked before ids are assigned so a busy
+        card is skipped for a free one rather than met at launch (reviewed
+        2026-09-07: the launcher's own check refused the lowest free id every
+        time, and every resubmission chose the same lowest id, so a shared box
+        with someone on card 0 could never be used through the ledger). Empty on a
+        machine without nvidia-smi, on a failed probe, or when nothing is held: a
+        probe that cannot answer must not refuse.
+        """
+        ids = [str(d) for d in device_ids if str(d).strip()]
+        if not ids:
+            return {}
+        cmd = (
+            "if command -v nvidia-smi >/dev/null 2>&1; then "
+            f"nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits -i {','.join(ids)} 2>/dev/null; fi"
+        )
+        try:
+            rc, out = await self._arun(cmd)
+        except Exception:  # noqa: BLE001 -- a probe that cannot answer must not refuse
+            return {}
+        if rc != 0:
+            return {}
+        busy: dict[str, int] = {}
+        for line in str(out).splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 2:
+                continue
+            try:
+                idx, used = parts[0], int(float(parts[1]))
+            except ValueError:
+                continue
+            if idx in ids and used > _FOREIGN_USE_MIB:
+                busy[idx] = used
+        return busy
+
     async def submit(self, spec: JobSpec) -> JobHandle:
         job_id = f"{self._prefix}{spec.idem_key}"
         job_dir = self._job_dir(spec.idem_key)

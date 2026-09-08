@@ -55,18 +55,14 @@
           "enabled": true,
           "minSearches": 1,
           "minFetches": 2,
-          "judgeListing": true,
-          "timeoutSeconds": 60,
-          "attemptTimeoutSeconds": 30,
-          "maxTokens": 4096
+          "timeoutSeconds": 30,
+          "attemptTimeoutSeconds": 15
         },
         "verify": {
           "constraintRubric": true,
           "strictRejectOnly": true,
-          "reasoningEffort": "low",
-          "timeoutSeconds": 300,
-          "attemptTimeoutSeconds": 300,
-          "maxTokens": 16384
+          "timeoutSeconds": 120,
+          "attemptTimeoutSeconds": 40
         },
         "digest": {
           "verbatimHeadChars": 800
@@ -87,7 +83,7 @@
           "reportFormatOverride": true,
           "reportDepth": true,
           "reportReminder": true,
-          "reportBounce": true,
+          "reportBounce": false,
           "processAppendix": true
         },
         "askUser": {
@@ -103,11 +99,7 @@
           "researchMemo": true,
           "identityScope": "turn"
         },
-        "plainFirst": {
-          "enabled": true,
-          "judge": true
-        },
-        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain"
+        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank"
       }
     }
   },

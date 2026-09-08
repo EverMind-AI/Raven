@@ -25,7 +25,6 @@ from research_flow.support.harness_text import (  # noqa: E402
     is_elided_tool_output,
     is_harness_authored,
     is_harness_echo,
-    plain_first_notice,
     search_closed_notice,
 )
 
@@ -126,13 +125,6 @@ def test_the_two_predicates_actually_disagree():
 
 def test_whitespace_around_a_bare_echo_still_counts():
     assert is_harness_echo(f"\n  {search_closed_notice(10)}  \n")
-
-
-def test_the_plain_first_note_is_an_echo_but_an_answer_about_it_is_not():
-    """The note persists into history through ``append_note`` on the first model call,
-    so a model that hands it back as its whole answer is the salvage-echo failure again."""
-    assert is_harness_echo(plain_first_notice())
-    assert not is_harness_echo(f"{plain_first_notice()} The boiling point is 100 degrees Celsius.")
 
 
 # --- the seam that produced the bug -----------------------------------------

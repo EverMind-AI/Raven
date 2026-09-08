@@ -554,7 +554,7 @@ class OpsDeclareTool(Tool):
                     "'{job_dir}' this round's own directory (also the working "
                     "directory), '{config}' its config.json, '{staged_case}' the "
                     "case it came from, '{remote_dir}' where rounds are kept. "
-                    "Read the entry script first with ops_exec(machine=...).",
+                    "Read the entry script first with exec(machine=...).",
                 },
                 "backend": {
                     "type": "string",
@@ -812,14 +812,14 @@ class OpsDeclareTool(Tool):
             return (
                 f"REFUSED: backend={chosen_backend!r} runs a command on the machine, and none was "
                 f"given, so there is nothing to run.\n"
-                f"Look at the case with ops_exec(machine=...) -- its entry script says how it starts -- and "
+                f"Look at the case with exec(machine=...) -- its entry script says how it starts -- and "
                 f"pass that line as 'command'. Nothing was written."
             )
         if not chosen_backend and kind != CONDITION:
             return (
                 "REFUSED: this experiment does not say how a trial starts.\n"
                 "Pass 'command': the one line that runs the owner's case once, the way it would be "
-                "typed on that machine. Read the case with ops_exec(machine=...) first if you do not know it.\n"
+                "typed on that machine. Read the case with exec(machine=...) first if you do not know it.\n"
                 "Only pass backend='docker' if the work really is a container image rather than "
                 "something installed on the machine. Nothing was written."
             )
