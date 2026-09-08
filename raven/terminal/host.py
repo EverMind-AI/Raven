@@ -105,6 +105,51 @@ class OutputParser:
         self.sequence = ""
 
 
+class InputParser:
+    """Track terminal reports across input frames without treating them as typing."""
+
+    def __init__(self):
+        self.state = "text"
+
+    def feed(self, data: bytes) -> tuple[bool, bool | None]:
+        typed = False
+        dirty = None
+        for byte in data:
+            if self.state == "text":
+                if byte == 27:
+                    self.state = "escape"
+                elif byte in (3, 21):
+                    dirty = False
+                elif byte >= 32 or byte in (8, 9):
+                    typed = True
+                    dirty = True
+            elif self.state == "escape":
+                if byte in (91, 79):
+                    self.state = "csi"
+                elif byte in (93, 80, 88, 94, 95):
+                    self.state = "string"
+                elif 32 <= byte <= 47:
+                    self.state = "intermediate"
+                elif byte != 27:
+                    self.state = "text"
+            elif self.state in {"csi", "intermediate"}:
+                if byte == 27:
+                    self.state = "escape"
+                elif byte in (24, 26) or (64 if self.state == "csi" else 48) <= byte <= 126:
+                    self.state = "text"
+            elif self.state == "string":
+                if byte in (7, 24, 26):
+                    self.state = "text"
+                elif byte == 27:
+                    self.state = "string_escape"
+            elif self.state == "string_escape":
+                if byte in (92, 7, 24, 26):
+                    self.state = "text"
+                elif byte != 27:
+                    self.state = "string"
+        return typed, dirty
+
+
 @dataclass
 class TerminalState:
     record: TerminalRecord
@@ -132,6 +177,7 @@ class TerminalState:
     closed: bool = False
     composer_dirty: bool = False
     human_input_pending: bool = False
+    input_parser: InputParser = field(default_factory=InputParser)
     blocked_reason: str | None = None
 
 
@@ -337,11 +383,10 @@ class TerminalHost:
     async def input(self, handle: str, data: bytes) -> None:
         state = self.state(handle)
         async with state.send_lock:
-            state.human_input_pending = bool(data) or state.human_input_pending
-            if b"\x03" in data or b"\x15" in data:
-                state.composer_dirty = False
-            elif any(byte >= 32 or byte in (8, 9, 127) for byte in data):
-                state.composer_dirty = True
+            typed, dirty = state.input_parser.feed(data)
+            state.human_input_pending = typed or state.human_input_pending
+            if dirty is not None:
+                state.composer_dirty = dirty
             await self.write(handle, data)
 
     async def resize(self, handle: str, cols: int, rows: int) -> None:
