@@ -54,6 +54,22 @@ _DELETE_TIMEOUT_S = 10.0
 # the internal one instead of racing it.
 _CLOSE_TIMEOUT_S = 10.0
 
+# How long a connection may sit silent before a reuse pays for a probe. Under
+# this, the connection spoke recently and is handed out on that evidence alone;
+# past it, one round trip settles the question a 120s session open would
+# otherwise ask the slow way. Generous against real gaps between rounds (a
+# watching agent goes quiet for minutes between wakes) and tiny against the
+# failure it guards (a wedged process sat silent for a whole night, measured
+# 2026-09-02 on the fork, and cost three full session-open budgets before
+# anyone gave up on it).
+_STALE_AFTER_S = 300.0
+
+# The probe's budget. The probe is answered by the agent's dispatcher before
+# any business logic, so a healthy agent answers in milliseconds; five seconds
+# convicts nothing that works, and is 24x cheaper than the session-open budget
+# the caller would otherwise spend finding out.
+_PROBE_TIMEOUT_S = 5.0
+
 SessionSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 """Receives ``(method, params)`` for one session's notifications."""
 
@@ -351,6 +367,16 @@ class AcpConnectionPool:
             self._locks[name] = lock
         return lock
 
+    def live(self, name: str) -> "list[_Connection]":
+        """The live connections held for ``name`` (one per parent binding). Never launches one.
+
+        For a caller that has something to hand each connection's resident state
+        -- a new generation re-pointing the unprompted recorders at its own
+        manager -- and must not pay a process start to find out there is nothing
+        to hand it to.
+        """
+        return [conn for conn in self.connections(name) if conn.alive]
+
     async def acquire(
         self,
         *,
@@ -392,7 +418,13 @@ class AcpConnectionPool:
             held = self._connections.setdefault(name, {})
             existing = held.get(bkey)
             if existing is not None and existing.alive and existing.launch_key == key:
-                return existing
+                if await self._responsive(existing):
+                    return existing
+                # Alive by its process and unchanged by its key, yet not answering:
+                # a wedged worker is replaced rather than hit again (see _responsive).
+                logger.info("acp agent {!r}: connection is unresponsive, relaunching", name)
+                held.pop(bkey, None)
+                await existing.client.close()
             for other_key, other in list(held.items()):
                 if other_key != bkey and other.alive and other.config_key == config:
                     continue
@@ -471,6 +503,34 @@ class AcpConnectionPool:
             connections = list((self._connections.pop(name, None) or {}).values())
         for connection in connections:
             await connection.client.close()
+
+    @staticmethod
+    async def _responsive(existing: _Connection) -> bool:
+        """Whether a pooled connection is worth handing out again.
+
+        ``alive`` sees a dead process or a closed pipe; it cannot see the
+        failure measured 2026-09-02 on the fork -- a process whose pipes stay
+        open with nobody home, which the pool then handed out all night while
+        every session open waited its full budget against it. Three tiers,
+        cheapest first: a turn in flight is busy, not broken (the open path
+        already queues behind it, and probing a busy agent would misread its
+        queue as silence); recent frames are proof enough; only a connection
+        both idle and long silent pays for one probe round trip.
+        """
+        client = existing.client
+        if getattr(client, "prompting", False):
+            return True
+        if client.idle_seconds < _STALE_AFTER_S:
+            return True
+        ok = await client.probe(_PROBE_TIMEOUT_S)
+        if not ok:
+            logger.warning(
+                "acp agent {!r}: silent for {:.0f}s and did not answer a {:.0f}s probe",
+                client.name,
+                client.idle_seconds,
+                _PROBE_TIMEOUT_S,
+            )
+        return ok
 
     async def close_all(self) -> None:
         """Close every connection. For process shutdown and for tests.

@@ -680,9 +680,20 @@ class AcpMethods:
         try:
             try:
                 self._apply_mode(session)
+                # channel and chat_id are the pair that rebuilds this session key
+                # (``<channel>:<chat_id>``). Tools record them as the turn's live
+                # route, and a wake scheduled from this turn is later run on
+                # exactly that conversation -- so they must name this session,
+                # not the "default" chat the turn otherwise gets.
                 accepted = await self._call(
                     "turn.send",
-                    {"session_key": session.session_key, "content": text, "media": media},
+                    {
+                        "session_key": session.session_key,
+                        "channel": self._channel,
+                        "chat_id": _chat_id_of(session.session_key),
+                        "content": text,
+                        "media": media,
+                    },
                 )
             except AcpMethodError as exc:
                 # The turn never started, so no terminating event is coming and
@@ -1192,6 +1203,11 @@ class AcpMethods:
 # image pasted into an editor and an image dropped into the web page are the
 # same file arriving by two roads.
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
+
+def _chat_id_of(session_key: str) -> str:
+    """The chat id half of ``<channel>:<chat_id>``; the whole key if it has none."""
+    return session_key.split(":", 1)[1] if ":" in session_key else session_key
 
 
 def _acp_mcp_config(entry: Any) -> tuple[str, Any]:

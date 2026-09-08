@@ -71,21 +71,20 @@ def test_a_configured_effort_reaches_the_reviewer_call():
     assert reviewer.calls[0]["reasoning_effort"] == "low"
 
 
-def test_the_transport_deadline_is_sent_only_when_its_knob_is_set():
-    """Same conditional shape as the effort knob, for the same reason: an unset
-    knob keeps the reviewer call byte-identical to every measured arm. Set, the
-    deadline reaches the wire verbatim so a hang raises a classifiable transport
-    exception (connect vs read) before the wait_for cancellation - which names
-    nothing - erases it. Not derived from the slice and not unconditional,
-    because an early-surfaced stall can let the ladder answer inside the same
-    slice: a verdict a cancelled attempt never could (AGENTS.md 0.2)."""
+def test_the_transport_deadline_knob_is_kept_but_never_sent():
+    """``attemptHttpTimeoutSeconds`` stays on the model for twin parity and reaches the
+    gate, but the call never carries ``timeout``: the trunk provider protocol has no
+    such argument, and passing it raised TypeError inside the call so every review
+    failed open the moment the knob was set - the sufficiency judge's own defect."""
     reviewer = _Reviewer()
     _review(DraftReviewerGate(reviewer, attempt_timeout_seconds=40.0))
     assert "timeout" not in reviewer.calls[0]
 
     reviewer = _Reviewer()
-    _review(DraftReviewerGate(reviewer, attempt_timeout_seconds=40.0, attempt_http_timeout_seconds=35.0))
-    assert reviewer.calls[0]["timeout"] == 35.0
+    gate = DraftReviewerGate(reviewer, attempt_timeout_seconds=40.0, attempt_http_timeout_seconds=35.0)
+    _review(gate)
+    assert "timeout" not in reviewer.calls[0]
+    assert gate._attempt_http_timeout_seconds == 35.0
 
 
 def test_the_knob_travels_from_config_to_the_gate(tmp_path):

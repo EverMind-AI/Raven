@@ -320,15 +320,38 @@ TWIN_LEADS: dict[str, str] = {
     ),
 }
 
+#: Fields the trunk twin carries and the fork does not, with the reason: a whole sub-model
+#: by its name, or one leaf by its dotted path. The twin's docstring promises the fork's
+#: fields; this table is the declared exception, and a field outside it on the twin's side
+#: is a drift, not a feature. A row nothing on the twin matches is stale and fails too.
+PRODUCT_ONLY_FIELDS: dict[str, str] = {
+    "evidence_floor": (
+        "the per-mode evidence demand that makes max a different stop rule from high "
+        "(gates/evidence_floor.py). Off in the base slice and in every fork mode, so the "
+        "measured arms and the fork's overlays all run without it"
+    ),
+    "sufficiency.judge_listing": (
+        "a second sufficiency judgement over the first search listing, before any page is "
+        "opened, so a settled question ships on snippets. Off by default; the product's "
+        "medium turns it on, the fork never has it"
+    ),
+    "plain_first": (
+        "the first-reply gate: web tools withheld for the first model call, a plain "
+        "answer judged or escalated to research (gates/plain_first.py). Off as a class "
+        "default; the product's medium slice turns it on and the deep overlays turn it off"
+    ),
+}
+
 
 def test_the_twins_defaults_are_the_forks(probe):
     """Class defaults, not the slice: what a profile gets when it does not pin a knob.
 
     The trunk twin's own docstring promises the fork's defaults, and the slice
     test in the launcher file cannot see them - a value the config writes hides
-    the default underneath. Two differences are declared: the four retired LOOP
-    knobs, which is exactly the set of fork fields the twin may lack, and the
-    ``TWIN_LEADS`` keys, where the twin has moved past the vendored record.
+    the default underneath. Three differences are declared: the four retired LOOP
+    knobs, which is exactly the set of fork fields the twin may lack; the
+    ``TWIN_LEADS`` keys, where the twin has moved past the vendored record; and the
+    ``PRODUCT_ONLY_FIELDS`` sub-models this product adds and the fork never had.
     """
     twin = json.loads(json.dumps(_flat(FlowConfig()), default=str))
     fork = probe["fork_defaults"]
@@ -336,11 +359,20 @@ def test_the_twins_defaults_are_the_forks(probe):
     missing = {key for key in fork if key not in twin}
     assert {key.split(".", 1)[0] for key in missing} == retired, missing
     extra = set(twin) - set(fork)
-    assert extra <= set(TWIN_LEADS), "twin-only defaults with no lead reason: " + repr(extra - set(TWIN_LEADS))
-    drift = {key: (twin[key], fork.get(key)) for key in twin if twin[key] != fork.get(key)}
+    unexplained_extra = {
+        k
+        for k in extra
+        if k not in TWIN_LEADS and k not in PRODUCT_ONLY_FIELDS and k.split(".", 1)[0] not in PRODUCT_ONLY_FIELDS
+    }
+    assert not unexplained_extra, "twin-only defaults with no declared reason: " + repr(unexplained_extra)
+    stale_product = {
+        row for row in PRODUCT_ONLY_FIELDS if row not in extra and not any(k.startswith(row + ".") for k in extra)
+    }
+    assert not stale_product, "PRODUCT_ONLY_FIELDS rows nothing on the twin matches: " + repr(stale_product)
+    drift = {key: (twin[key], fork[key]) for key in twin if key in fork and twin[key] != fork[key]}
     unexplained = {key: v for key, v in drift.items() if key not in TWIN_LEADS}
     assert not unexplained, "twin default != fork default (twin, fork): " + repr(unexplained)
-    stale = set(TWIN_LEADS) - set(drift)
+    stale = set(TWIN_LEADS) - (set(drift) | (extra & set(TWIN_LEADS)))
     assert not stale, "TWIN_LEADS entries that no longer differ from the record: " + repr(stale)
 
 

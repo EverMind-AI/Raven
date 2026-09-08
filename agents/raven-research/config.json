@@ -55,14 +55,18 @@
           "enabled": true,
           "minSearches": 1,
           "minFetches": 2,
-          "timeoutSeconds": 30,
-          "attemptTimeoutSeconds": 15
+          "judgeListing": true,
+          "timeoutSeconds": 60,
+          "attemptTimeoutSeconds": 30,
+          "maxTokens": 4096
         },
         "verify": {
           "constraintRubric": true,
           "strictRejectOnly": true,
-          "timeoutSeconds": 120,
-          "attemptTimeoutSeconds": 40
+          "reasoningEffort": "low",
+          "timeoutSeconds": 300,
+          "attemptTimeoutSeconds": 300,
+          "maxTokens": 16384
         },
         "digest": {
           "verbatimHeadChars": 800
@@ -83,7 +87,7 @@
           "reportFormatOverride": true,
           "reportDepth": true,
           "reportReminder": true,
-          "reportBounce": false,
+          "reportBounce": true,
           "processAppendix": true
         },
         "askUser": {
@@ -99,7 +103,11 @@
           "researchMemo": true,
           "identityScope": "turn"
         },
-        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank"
+        "plainFirst": {
+          "enabled": true,
+          "judge": true
+        },
+        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain"
       }
     }
   },
