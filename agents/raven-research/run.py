@@ -66,7 +66,8 @@ MODE_LABELS = {
     ),
     "high": (
         "High",
-        "No early stop: every draft is reviewed against its evidence, and a rejection "
+        "May answer settled general knowledge without searching, after an independent "
+        "check. Otherwise no early stop: every draft is reviewed against its evidence, and a rejection "
         "buys a revision and a deeper round of retrieval, up to three times. A draft the "
         "reviewer still faults after that ships with the verdict on record, and an "
         "unavailable reviewer never blocks the reply. For a multi-faceted topic one pass "

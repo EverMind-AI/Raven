@@ -514,6 +514,16 @@ source_modules = ["raven"]
 forbidden_modules = ["agents"]
 
 [[tool.importlinter.contracts]]
+# The development trees are consumers too: benchmarks, demos and the suite all
+# import raven, and the runtime reaching back would make a shipped wheel depend
+# on trees that are not in it. raven/README.md has carried this as prose since
+# the package layout was written; zero edges today, and the machine keeps it so.
+name = "the runtime does not import the development trees"
+type = "forbidden"
+source_modules = ["raven"]
+forbidden_modules = ["benchmarks", "demos", "tests"]
+
+[[tool.importlinter.contracts]]
 # The surfaces law, first half (2026-08-31): a served surface never imports
 # the launcher. The reverse direction -- cli assembling the rpc/acp stacks it
 # hosts -- is the sanctioned one: an entrance brings its own transport-side
