@@ -362,3 +362,29 @@ def test_a_subagent_gate_asks_through_the_parent_turns_responder(workspace, tmp_
     result = asyncio.run(registry.execute("exec", {"command": "echo delegated"}))
     assert click.seen == ["echo delegated"]
     assert "denied" in str(result).lower()
+
+
+@pytest.mark.parametrize("initially_enabled", [False, True])
+def test_design_image_offer_and_execution_follow_host_selection(tmp_path, initially_enabled):
+    from raven.config.live import LiveConfig
+    from raven.config.schema import MediaGenConfig
+
+    host = tmp_path / "host.json"
+    selection = {"apiKey": "host-key", "model": "openai/gpt-image-2"}
+
+    def write(enabled):
+        host.write_text(json.dumps({"tools": {"media": {"image": selection if enabled else {}}}}))
+
+    write(initially_enabled)
+    startup = {**(selection if initially_enabled else {}), "selectionConfig": str(host)}
+    loop = _loop(tmp_path, media_config=MediaGenConfig.model_validate({"image": startup}))
+    loop._live_config = LiveConfig(tmp_path / "absent-render.json")
+    tool = loop.tools.get("image_generate")
+    for enabled in [initially_enabled, not initially_enabled, initially_enabled]:
+        write(enabled)
+        assert ("image_generate" not in loop._unconfigured_tool_names()) is enabled
+        assert tool._config.api_key == ("host-key" if enabled else "")
+        assert tool._config.model == ("openai/gpt-image-2" if enabled else "")
+    host.write_text(json.dumps({"tools": {}}))
+    assert "image_generate" in loop._unconfigured_tool_names()
+    assert not tool._config.api_key

@@ -22,8 +22,11 @@ class TaskStateTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Create or update the resident Task State. Use initialize with a full state "
-            "to replace it, or submit atomic add/update/remove/complete operations. "
+            "Create or update the resident Task State. For initialization or replacement, "
+            "operations must contain exactly one initialize operation. Put ALL initial "
+            "tasks in initialize.state.items; never append add or another operation to "
+            "that call. After initialization succeeds, use a separate call to batch "
+            "add/update/remove/complete operations. "
             "Address an existing item with the visible 1-based item_number from the "
             "Task State context; do not invent an item id."
         )
@@ -50,7 +53,7 @@ class TaskStateTool(Tool):
         }
         state = {
             "type": "object",
-            "description": "Complete replacement state for initialize.",
+            "description": "Complete replacement state. Include all initial tasks in items; do not send separate add operations.",
             "additionalProperties": False,
             "properties": {
                 "goal": {"type": "string"},
@@ -86,6 +89,63 @@ class TaskStateTool(Tool):
                 "required": ["operation", *required],
             }
 
+        incremental_operations = [
+            operation_schema(
+                "add",
+                {"item": {**item, "description": "New item for add."}},
+                ["item"],
+            ),
+            operation_schema(
+                "update",
+                {
+                    "target": {"type": "string", "enum": ["task_state"]},
+                    "changes": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "goal": nullable({"type": "string"}),
+                            "requirements": nullable(requirements),
+                        },
+                        "required": ["goal", "requirements"],
+                    },
+                },
+                ["target", "changes"],
+            ),
+            operation_schema(
+                "update",
+                {
+                    "target": {"type": "string", "enum": ["item"]},
+                    "item_number": item_number,
+                    "changes": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "title": nullable({"type": "string"}),
+                            "status": nullable(status),
+                            "requirements": nullable(requirements),
+                        },
+                        "required": ["title", "status", "requirements"],
+                    },
+                },
+                ["target", "item_number", "changes"],
+            ),
+            operation_schema(
+                "remove",
+                {
+                    "item_number": item_number,
+                    "reason": {
+                        "type": "string",
+                        "description": "Required explanation for removing the item.",
+                    },
+                },
+                ["item_number", "reason"],
+            ),
+            operation_schema(
+                "complete",
+                {"item_number": item_number},
+                ["item_number"],
+            ),
+        ]
         return {
             "type": "object",
             "additionalProperties": False,
@@ -93,67 +153,17 @@ class TaskStateTool(Tool):
                 "operations": {
                     "type": "array",
                     "minItems": 1,
-                    "description": "Operations applied atomically in order.",
-                    "items": {
-                        "oneOf": [
-                            operation_schema("initialize", {"state": state}, ["state"]),
-                            operation_schema(
-                                "add",
-                                {"item": {**item, "description": "New item for add."}},
-                                ["item"],
-                            ),
-                            operation_schema(
-                                "update",
-                                {
-                                    "target": {"type": "string", "enum": ["task_state"]},
-                                    "changes": {
-                                        "type": "object",
-                                        "additionalProperties": False,
-                                        "properties": {
-                                            "goal": nullable({"type": "string"}),
-                                            "requirements": nullable(requirements),
-                                        },
-                                        "required": ["goal", "requirements"],
-                                    },
-                                },
-                                ["target", "changes"],
-                            ),
-                            operation_schema(
-                                "update",
-                                {
-                                    "target": {"type": "string", "enum": ["item"]},
-                                    "item_number": item_number,
-                                    "changes": {
-                                        "type": "object",
-                                        "additionalProperties": False,
-                                        "properties": {
-                                            "title": nullable({"type": "string"}),
-                                            "status": nullable(status),
-                                            "requirements": nullable(requirements),
-                                        },
-                                        "required": ["title", "status", "requirements"],
-                                    },
-                                },
-                                ["target", "item_number", "changes"],
-                            ),
-                            operation_schema(
-                                "remove",
-                                {
-                                    "item_number": item_number,
-                                    "reason": {
-                                        "type": "string",
-                                        "description": "Required explanation for removing the item.",
-                                    },
-                                },
-                                ["item_number", "reason"],
-                            ),
-                            operation_schema(
-                                "complete",
-                                {"item_number": item_number},
-                                ["item_number"],
-                            ),
-                        ]
-                    },
+                    "description": (
+                        "Either one initialize operation containing all initial tasks in state.items, "
+                        "or a batch of incremental operations after initialization. Never mix them."
+                    ),
+                    "anyOf": [
+                        {
+                            "maxItems": 1,
+                            "items": operation_schema("initialize", {"state": state}, ["state"]),
+                        },
+                        {"items": {"oneOf": incremental_operations}},
+                    ],
                 }
             },
             "required": ["operations"],
