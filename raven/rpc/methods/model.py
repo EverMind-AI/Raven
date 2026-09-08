@@ -248,25 +248,9 @@ def _build_provider_entry(
         warning = f"run `raven provider login {slug.replace('_', '-')}` to authenticate"
 
     models = _provider_models(slug, configured=configured, section=section)
-    from raven.providers.protocol import effective_protocol, native_api_base
+    from raven.providers.protocol import effective_protocol
 
     protocols = {model: effective_protocol(section if section is not _UNLOADED else None, model) for model in models}
-    if configured and not (spec and spec.client):
-        from raven.providers.endpoints import provider_endpoints
-
-        endpoints = provider_endpoints(section) if section is not _UNLOADED else []
-        missing = sorted(
-            {
-                protocol
-                for protocol in protocols.values()
-                if protocol != "chat"
-                and (not endpoints or any(not native_api_base(slug, protocol, ep.api_base) for ep in endpoints))
-            }
-        )
-        if missing:
-            warning = (
-                "Explicit API base required for " + ", ".join(missing) + "; select a compatible endpoint or protocol."
-            )
     overrides = {}
     if section is not _UNLOADED:
         raw_overrides = getattr(section, "model_protocols", {}) or {}

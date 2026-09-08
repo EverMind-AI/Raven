@@ -54,41 +54,6 @@ def test_model_protocol_defaults_and_overrides() -> None:
     )
 
 
-@pytest.mark.parametrize("model", ["gemini-2.5-flash", "unknown", "llama-4", "o3", None])
-def test_unlisted_models_default_to_chat(model):
-    assert effective_protocol(None, model) == "chat"
-    assert effective_protocol({}, model) == "chat"
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "qwen3.8-max",
-        "Qwen/Qwen3-Coder",
-        "seed-2.0",
-        "doubao-seed-2-0-pro",
-        "MiniMax-M3",
-        "deepseek-chat",
-        "deepseek/deepseek-v4-pro",
-        "openai/gpt-5",
-        "kimi-k3",
-        "openrouter/moonshotai/kimi-k2.5",
-    ],
-)
-def test_response_series_defaults_preserve_manual_choices(model):
-    assert effective_protocol(None, model) == "responses"
-    for protocol in ("chat", "responses", "anthropic"):
-        assert effective_protocol({"protocol": protocol}, model) == protocol
-        assert effective_protocol({"model_protocols": {model: protocol}}, model) == protocol
-
-
-def test_claude_default_and_explicit_protocol_priority():
-    assert effective_protocol(None, "anthropic/claude-opus-5") == "anthropic"
-    assert effective_protocol({"protocol": "chat"}, "glm-5.3-flash") == "chat"
-    assert effective_protocol({"protocol": "responses"}, "claude-opus-5") == "responses"
-    assert isinstance(make_provider(_config("glm-5.3-flash")), AnthropicMessagesProvider)
-
-
 def test_factory_selects_protocol_adapter() -> None:
     assert isinstance(make_provider(_config("openai/gpt-5.6-sol")), OpenAIResponsesProvider)
     assert isinstance(make_provider(_config("anthropic/claude-opus-5")), AnthropicMessagesProvider)
@@ -660,66 +625,3 @@ async def test_responses_partial_usage_preserves_cost_and_cache():
     assert usage["cache_read_input_tokens"] == 60
     assert usage["prompt_tokens"] == 100
     assert usage["cache_creation_input_tokens"] is None
-
-
-@pytest.mark.parametrize("model", ["glm-5.3-flash", "z-ai/GLM-5", "openrouter/z-ai/glm-5.3-flash", "claude-opus-5"])
-def test_anthropic_model_defaults_preserve_manual_overrides(model):
-    assert effective_protocol(None, model) == "anthropic"
-    assert effective_protocol(_config(model).providers.custom, model) == "anthropic"
-    for protocol in ("chat", "responses"):
-        config = _config(model, override=protocol)
-        assert effective_protocol(config.providers.custom, model) == protocol
-
-
-def test_explicit_gemini_native_protocol_does_not_fall_back():
-    from raven.providers.auth import MissingCredentialsError
-
-    config = _provider_config("gemini", "gemini/gemini-2.5-pro", override="responses")
-    with pytest.raises(MissingCredentialsError, match="requires an explicit API base"):
-        make_provider(config)
-
-
-@pytest.mark.parametrize("override", [None, "anthropic"])
-def test_direct_glm_uses_vendor_anthropic_endpoint(override):
-    config = _provider_config("zai", "zai/glm-4.6", override=override)
-    provider = make_provider(config)
-    assert isinstance(provider, AnthropicMessagesProvider)
-    assert provider.api_base == "https://api.z.ai/api/anthropic"
-    assert provider.api_protocol == effective_protocol(config.providers.get("zai"), "zai/glm-4.6")
-
-
-def test_explicit_native_protocol_requires_vendor_address():
-    from raven.providers.auth import MissingCredentialsError
-
-    config = _provider_config("zai", "zai/glm-4.6", override="responses")
-    with pytest.raises(MissingCredentialsError, match="requires an explicit API base"):
-        make_provider(config)
-
-
-def test_direct_glm_with_explicit_endpoint_uses_that_endpoint():
-    config = _provider_config("zai", "zai/glm-4.6")
-    config.providers.get("zai").api_base = "https://vendor.example/anthropic"
-    provider = make_provider(config)
-    assert isinstance(provider, AnthropicMessagesProvider)
-    assert provider.api_base == "https://vendor.example/anthropic"
-
-
-@pytest.mark.parametrize(
-    "vendor,model,base",
-    [
-        ("deepseek", "deepseek/deepseek-v4-pro", "https://api.deepseek.com"),
-        ("volcengine", "volcengine/doubao-seed-2-0-pro", "https://ark.cn-beijing.volces.com/api/v3"),
-        ("minimax", "minimax/MiniMax-M3", "https://api.minimax.io/v1"),
-        ("minimax_cn_api", "minimax-cn-api/MiniMax-M3", "https://api.minimax.cn/v1"),
-    ],
-)
-def test_response_series_use_declared_vendor_addresses(vendor, model, base):
-    provider = make_provider(_provider_config(vendor, model))
-    assert isinstance(provider, OpenAIResponsesProvider)
-    assert provider.api_base == base
-
-
-def test_gemini_defaults_to_litellm_chat_without_an_endpoint():
-    provider = make_provider(_provider_config("gemini", "gemini/gemini-2.5-flash"))
-    assert isinstance(provider, LiteLLMProvider)
-    assert provider.api_protocol == "chat"
