@@ -108,9 +108,11 @@ async def test_subscription_replays_raw_startup_before_live_output():
     host._terminals[record.handle] = state
     await host.observe_output(state, b"\x1b[31mstartup")
     seen = []
+
     async def callback(data):
         await asyncio.sleep(0)
         seen.append(data)
+
     unsubscribe = host.subscribe(record.handle, callback)
     for subscriber in tuple(state.subscribers):
         await subscriber(b"live")
@@ -231,3 +233,31 @@ async def test_printable_and_editing_input_between_reports_is_human_input(text):
     await host.input(record.handle, b"\x1b[?1;2c\x1b[200~" + text + b"\x1b[201~\x1b[24;80R")
     assert state.composer_dirty
     assert state.human_input_pending
+
+
+@pytest.mark.parametrize("phase", ["startup", "permission"])
+async def test_dialog_keystrokes_do_not_latch_the_composer(phase):
+    from raven.contracts.terminal import TerminalRecord
+    from raven.terminal.host import TerminalHost, TerminalState
+
+    host = TerminalHost()
+    record = TerminalRecord(worktree_id="repo::/tmp/work", worktree_path="/tmp/work")
+    state = TerminalState(record, 123, -1, "token", "worker-a")
+    if phase == "startup":
+        state.startup_pending = True
+    else:
+        record.status = "permission"
+    host._terminals[record.handle] = state
+    written = []
+
+    async def write(handle, data):
+        written.append(data)
+
+    host.write = write
+    await host.input(record.handle, b"y\r")
+    assert written == [b"y\r"]
+    assert not state.composer_dirty
+    assert not state.human_input_pending
+    state.composer_dirty = True
+    await host.input(record.handle, b"\x15")
+    assert not state.composer_dirty

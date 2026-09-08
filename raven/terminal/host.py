@@ -209,9 +209,7 @@ class TerminalHost:
         executable = shutil.which(argv[0])
         if executable is None:
             raise TerminalError("command_not_found", f"Executable not found: {argv[0]}")
-        record = TerminalRecord(
-            worktree_id=worktree_id, worktree_path=path, title=title, owner=owner, visible=False
-        )
+        record = TerminalRecord(worktree_id=worktree_id, worktree_path=path, title=title, owner=owner, visible=False)
         token = secrets.token_urlsafe(32)
         env = {key: value for key, value in os.environ.items() if not key.startswith("ORCA_")}
         env.update(
@@ -384,8 +382,12 @@ class TerminalHost:
         state = self.state(handle)
         async with state.send_lock:
             typed, dirty = state.input_parser.feed(data)
-            state.human_input_pending = typed or state.human_input_pending
-            if dirty is not None:
+            # While a startup or permission dialog owns the keyboard, keystrokes answer
+            # that dialog rather than landing in the composer.
+            dialog = state.startup_pending or state.record.status == "permission"
+            if typed and not dialog:
+                state.human_input_pending = True
+            if dirty is False or (dirty and not dialog):
                 state.composer_dirty = dirty
             await self.write(handle, data)
 

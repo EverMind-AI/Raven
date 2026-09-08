@@ -19,7 +19,7 @@ VERIFY_POLL_SECONDS = 0.05
 IDLE_POLL_SECONDS = 2.0
 UNKNOWN_QUIET_SECONDS = 3.0
 DEFAULT_TIMEOUT_MS = 300000
-_ACK = re.compile(r"(?<![\w-])ack_for=(a2a-[0-9a-f]{12})(?![\w-])")
+_ACK = re.compile(r"(?<![\w-])(?:ack_for|reply_to|in_reply_to)=(a2a-[0-9a-f]{12})(?![\w-])")
 
 
 @dataclass
@@ -63,11 +63,29 @@ class DeliveryService:
             nonces.add(envelope.ack_for)
         return envelope, nonces
 
-    def match_ack(self, handle: str, text: str) -> dict | None:
+    def _expired(self, pending: PendingSend) -> bool:
+        return self.clock() - pending.created_at > DEFAULT_TIMEOUT_MS / 1000
+
+    def _settle(self, pending: PendingSend, reply: Envelope | None) -> dict:
+        nonce = pending.envelope.nonce
+        self.pending.pop(nonce)
+        self.host.state(pending.handle).composer_dirty = False
+        payload = {
+            "handle": pending.handle,
+            "nonce": reply.nonce if reply else None,
+            "ack_for": nonce,
+            "from": pending.envelope.recipient,
+            "to": pending.envelope.sender,
+        }
+        if not pending.future.done():
+            pending.future.set_result(payload)
+        return payload
+
+    def match_ack(self, handle: str, text: str, *, source_handle: str | None = None) -> dict | None:
         reply, nonces = self._ack_candidates(text)
         for nonce in nonces:
             pending = self.pending.get(nonce)
-            if pending is None or self.clock() - pending.created_at > DEFAULT_TIMEOUT_MS / 1000:
+            if pending is None or self._expired(pending):
                 continue
             original = pending.envelope
             target = original.reply_terminal or ("raven" if original.sender == "raven" else pending.handle)
@@ -82,22 +100,24 @@ class DeliveryService:
                     continue
             elif original.reply_terminal is None and original.sender != "raven":
                 continue
-            self.pending.pop(nonce)
-            self.host.state(pending.handle).composer_dirty = False
-            payload = {
-                "handle": pending.handle,
-                "nonce": reply.nonce if reply else None,
-                "ack_for": nonce,
-                "from": original.recipient,
-                "to": original.sender,
-            }
-            if not pending.future.done():
-                pending.future.set_result(payload)
-            return payload
+            return self._settle(pending, reply)
+        if reply is None and source_handle is not None and handle == "raven":
+            # A reply issued from the receiving terminal's own shell proves that terminal
+            # acted on Raven's message, so a single outstanding send needs no quoted nonce.
+            implicit = [
+                pending
+                for pending in self.pending.values()
+                if pending.handle == source_handle
+                and pending.envelope.sender == "raven"
+                and pending.envelope.reply_terminal is None
+                and not self._expired(pending)
+            ]
+            if len(implicit) == 1:
+                return self._settle(implicit[0], None)
         return None
 
-    async def receive_host(self, text: str) -> dict | None:
-        payload = self.match_ack("raven", text)
+    async def receive_host(self, text: str, source_handle: str | None = None) -> dict | None:
+        payload = self.match_ack("raven", text, source_handle=source_handle)
         if payload is not None:
             await self._emit("a2a.ack.matched", payload)
         return payload
@@ -137,7 +157,16 @@ class DeliveryService:
             if force:
                 state.composer_dirty = False
             if state.composer_dirty:
-                raise TerminalError("composer_not_empty", "The composer contains unsubmitted input")
+                # Raven's own paste always ended with Enter, so an idle agent means that
+                # paste was consumed or lost; only human typing is still worth protecting.
+                if state.human_input_pending or self.host.show(handle).status != "idle":
+                    raise TerminalError(
+                        "composer_not_empty",
+                        "The composer contains unsubmitted input",
+                        {"humanInputPending": state.human_input_pending, "status": self.host.show(handle).status},
+                    )
+                state.composer_dirty = False
+                await self._emit("a2a.composer.reclaimed", {"handle": handle})
             baseline_working = state.working_sequence
             baseline_cursor = state.show_cursor_sequence
             was_working = state.record.status == "working"

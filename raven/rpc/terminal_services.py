@@ -47,7 +47,7 @@ class TerminalServices:
     async def receive_host(self, text, source_handle=None):
         if self.delivery is None:
             raise TerminalError("terminal_unavailable", "Terminal delivery service is unavailable")
-        matched = await self.delivery.receive_host(text)
+        matched = await self.delivery.receive_host(text, source_handle)
         handle = source_handle or (matched.get("handle") if matched else None)
         conversation = self.conversations.get(handle)
         if conversation is None and handle:

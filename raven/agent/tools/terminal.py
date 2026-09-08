@@ -147,7 +147,10 @@ class SendTerminalTool(_TerminalTool):
             "force": {
                 "type": "boolean",
                 "default": False,
-                "description": "Clear stale composer state only after the human confirms the terminal composer is empty",
+                "description": (
+                    "Stale Raven pastes are reclaimed automatically; set this only after the human confirms "
+                    "the terminal composer is empty to discard tracked human input"
+                ),
             },
         },
         "required": ["to", "text"],
@@ -211,6 +214,23 @@ class SendTerminalTool(_TerminalTool):
             try:
                 result = await self.rpc("terminal.send", params)
             except TerminalError as blocked:
+                if blocked.code == "composer_not_empty":
+                    await self.rpc(
+                        "terminal.wait", {"handle": binding["handle"], "for": "tui-idle", "timeout_ms": 120000}
+                    )
+                    try:
+                        result = await self.rpc("terminal.send", params)
+                    except TerminalError as retry_error:
+                        if retry_error.code == "composer_not_empty":
+                            raise TerminalError(
+                                retry_error.code,
+                                "The composer still holds unsubmitted human input after the peer went idle. "
+                                "Ask the human to submit or clear it in the terminal tab, or retry with "
+                                "force=true once they confirm the composer is empty.",
+                                retry_error.data,
+                            ) from retry_error
+                        raise
+                    return json.dumps(result["send"])
                 if not (
                     blocked.code == "agent_prompt_blocked"
                     and isinstance(blocked.data, dict)

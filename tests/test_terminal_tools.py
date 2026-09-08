@@ -390,6 +390,46 @@ async def test_send_only_forces_when_explicitly_requested(force):
     assert "human confirms" in SendTerminalTool.parameters["properties"]["force"]["description"]
 
 
+@pytest.mark.parametrize("outcome", ["success", "still_dirty"])
+async def test_send_waits_for_idle_and_retries_once_when_the_composer_is_dirty(outcome):
+    calls = []
+    sends = []
+
+    async def rpc(method, params):
+        calls.append((method, params))
+        if method == "agents.resolve":
+            return {"unique": True, "candidates": [{"agent": candidate()}]}
+        if method == "terminal.show":
+            return {"terminal": {**candidate()["binding"], "connected": True, "writable": True, "orphaned": False}}
+        if method == "terminal.wait":
+            return {"wait": {"satisfied": True, "timedOut": False}}
+        if method == "terminal.send":
+            sends.append(dict(params))
+            if len(sends) == 1 or outcome == "still_dirty":
+                raise TerminalError(
+                    "composer_not_empty",
+                    "The composer contains unsubmitted input",
+                    {"humanInputPending": True, "status": "idle"},
+                )
+            return {"send": {"accepted": True}}
+        raise AssertionError(method)
+
+    result = json.loads(await SendTerminalTool(rpc).execute(to="worker", text="follow-up"))
+    assert [p for m, p in calls if m == "terminal.wait"] == [
+        {"handle": "term_test", "for": "tui-idle", "timeout_ms": 120000}
+    ]
+    assert len(sends) == 2
+    assert sends[0] == sends[1]
+    assert "force" not in sends[1]
+    if outcome == "success":
+        assert result["accepted"] is True
+    else:
+        assert result["error"]["code"] == "composer_not_empty"
+        assert result["error"]["data"]["humanInputPending"] is True
+        assert "terminal tab" in result["error"]["message"]
+        assert "force" in result["error"]["message"]
+
+
 @pytest.mark.parametrize("failure_at", ["resolve", "show", "send"])
 async def test_send_reports_stale_binding_with_last_handle(failure_at):
     agent = candidate()

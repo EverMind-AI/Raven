@@ -115,10 +115,81 @@ async def test_working_without_render_evidence_is_not_called_queued():
 async def test_human_composer_is_never_appended_to():
     host, _, delivery = setup()
     host.activity.composer_dirty = True
+    host.activity.human_input_pending = True
+    host.record.status = "idle"
     with pytest.raises(TerminalError) as error:
         await delivery.send(host.record.handle, "task")
     assert error.value.code == "composer_not_empty"
+    assert error.value.data == {"humanInputPending": True, "status": "idle"}
     assert host.writes == []
+    assert host.activity.composer_dirty
+
+
+@pytest.mark.parametrize("status", ["working", "unknown"])
+async def test_raven_paste_leftover_is_not_reclaimed_while_the_agent_is_busy(status):
+    host, _, delivery = setup()
+    host.activity.composer_dirty = True
+    host.record.status = status
+    with pytest.raises(TerminalError) as error:
+        await delivery.send(host.record.handle, "task")
+    assert error.value.code == "composer_not_empty"
+    assert error.value.data == {"humanInputPending": False, "status": status}
+    assert host.writes == []
+
+
+async def test_stale_raven_paste_is_reclaimed_when_the_agent_is_idle():
+    host, _, delivery = setup()
+    events = []
+
+    async def emit(name, payload):
+        events.append((name, payload))
+
+    delivery.emit = emit
+    host.activity.composer_dirty = True
+    host.record.status = "idle"
+    result = await delivery.send(host.record.handle, "next task")
+    assert result.accepted and result.state == "accepted"
+    assert events[0] == ("a2a.composer.reclaimed", {"handle": host.record.handle})
+    assert not host.activity.composer_dirty
+
+
+async def test_reply_to_reference_counts_as_content_ack():
+    host, _, delivery = setup()
+    original = Envelope(sender="raven", recipient="worker-b", scope="local/dev", body="task")
+    await delivery.send(host.record.handle, original.to_text())
+    report = f"[AO-A2A:v1] from=worker-b to=raven reply_to={original.nonce} status=done\nReport written"
+    payload = await delivery.receive_host(report)
+    assert payload and payload["ack_for"] == original.nonce
+
+
+async def test_reply_from_the_receiving_terminal_is_an_implicit_ack():
+    host, _, delivery = setup()
+    original = Envelope(sender="raven", recipient="worker-b", scope="local/dev", body="task")
+    await delivery.send(host.record.handle, original.to_text())
+    assert await delivery.receive_host("done, report at /tmp/x.md", source_handle="term_other") is None
+    payload = await delivery.receive_host("done, report at /tmp/x.md", source_handle=host.record.handle)
+    assert payload == {
+        "handle": host.record.handle,
+        "nonce": None,
+        "ack_for": original.nonce,
+        "from": "worker-b",
+        "to": "raven",
+    }
+    assert original.nonce not in delivery.pending
+
+
+async def test_implicit_ack_needs_exactly_one_pending_send_for_the_terminal():
+    host, _, delivery = setup()
+    first = Envelope(sender="raven", recipient="worker-b", scope="local/dev", body="one")
+    second = Envelope(sender="raven", recipient="worker-b", scope="local/dev", body="two")
+    await delivery.send(host.record.handle, first.to_text())
+    await delivery.send(host.record.handle, second.to_text())
+    assert await delivery.receive_host("done", source_handle=host.record.handle) is None
+    assert {first.nonce, second.nonce} <= set(delivery.pending)
+    assert (await delivery.receive_host(f"ack_for={first.nonce}", source_handle=host.record.handle))[
+        "ack_for"
+    ] == first.nonce
+    assert (await delivery.receive_host("done", source_handle=host.record.handle))["ack_for"] == second.nonce
 
 
 async def test_wait_quiet_fallback_only_without_agent_status():

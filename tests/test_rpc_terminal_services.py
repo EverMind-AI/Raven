@@ -69,6 +69,29 @@ async def test_native_reply_is_a_persisted_note_without_pty_input(tmp_path, matc
     assert service.sessions.peek("cli-launch-rsi") is None
 
 
+async def test_native_reply_from_the_receiving_terminal_acks_without_quoting_the_nonce(tmp_path):
+    record = TerminalRecord(worktree_id=f"repo::{tmp_path}", worktree_path=str(tmp_path))
+    state = SimpleNamespace(record=record, composer_dirty=True)
+    host = SimpleNamespace(show=lambda _: record, state=lambda _: state, write=AsyncMock(), input=AsyncMock())
+    identity = IdentityRegistry(
+        tmp_path / "identities.json", config_rows=lambda: [{"name": "Raven", "kind": "builtin"}]
+    )
+    delivery = DeliveryService(host)
+    future = asyncio.get_running_loop().create_future()
+    envelope = Envelope(sender="raven", recipient="worker", scope="local/development", body="Read this task")
+    delivery.pending[envelope.nonce] = PendingSend(envelope, record.handle, future, time.monotonic())
+    service = TerminalServices(
+        SubscriptionEmitter(AsyncMock()), AsyncMock(), host=host, delivery=delivery, identities=identity
+    )
+    service.sessions = SessionManager(tmp_path)
+    service.sessions.get_or_create("tui:task")
+    service.bind_session(record.handle, "tui:task")
+    result = await service.receive_host("started on it", record.handle)
+    assert result["contentAck"] is True
+    assert future.result()["ack_for"] == envelope.nonce
+    assert not state.composer_dirty
+
+
 async def test_ambiguous_terminal_target_is_rejected_before_delivery():
     from raven.rpc.methods.terminal import register_terminal_methods
 
