@@ -60,23 +60,17 @@ BASELINE_MODE = "medium"
 MODE_LABELS = {
     "medium": (
         "Medium",
-        "May answer settled general knowledge without searching, after an independent "
-        "check; otherwise stops as soon as an independent judge finds the search results "
-        "or the pages already decide the question. The default, and right for an ordinary question.",
+        "Bounded budget; converges as soon as the evidence answers the question. "
+        "The default, and right for an ordinary question.",
     ),
     "high": (
         "High",
-        "No early stop: every draft is reviewed against its evidence, and a rejection "
-        "buys a revision and a deeper round of retrieval, up to three times. A draft the "
-        "reviewer still faults after that ships with the verdict on record, and an "
-        "unavailable reviewer never blocks the reply. For a multi-faceted topic one pass "
-        "of evidence will not settle.",
+        "Keeps searching for longer before the early-convergence gate is consulted. "
+        "For a multi-faceted topic one pass of evidence will not settle.",
     ),
     "max": (
         "Max",
-        "High's review, over an evidence floor: a draft resting on too few readable "
-        "pages or too few distinct sites is sent back to research, twice at most, "
-        "before it is reviewed. For a survey where missing a source is the failure mode.",
+        "No early-convergence gate; exhaustive retrieval. For a survey where missing a source is the failure mode.",
     ),
 }
 OVERLAY_KEYS = frozenset({"drFlow", "agents"})

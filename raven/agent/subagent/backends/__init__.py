@@ -101,12 +101,8 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
       (``raven_loop.py``), which is what ``live_progress`` advertises.
     - ``cli``: from ``resume_command``. The schema already forces the optional
       ``stateful`` field to agree with it.
-    - ``acp``: from the agent's own ``loadSession``, recorded in a capability
-      snapshot at registration. Resuming an acp instance is that agent's
-      ``session/load``, so the capability that method is gated on is the one
-      that answers whether reusing a handle continues the session -- not
-      ``sessionCapabilities.resume``, which the three agents measured on
-      2026-09-07 report false while resuming correctly. An acp config has no
+    - ``acp``: from the agent's own ``sessionCapabilities.resume``, recorded in a
+      capability snapshot at registration. An acp config has no
       ``resume_command`` at all, so falling through to the cli rule would report
       every acp agent stateless -- which would strip the ``instance`` parameter
       out of the spawn schema entirely and make the DAG pre-check reject any
@@ -147,10 +143,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
     if kind == "acp":
         if snapshot is None:
             snapshot = acp_snapshot_for(cfg)
-        # ``loadSession``, for the reason ``AcpAgentBackend.is_stateful`` gives:
-        # resuming an acp instance is that method, so its capability is the one
-        # that answers whether reusing a handle continues the session.
-        stateful = bool(snapshot is not None and snapshot.can_load)
+        stateful = bool(snapshot is not None and snapshot.can_resume)
         # Measured, never declared: the menu offered has to be the one the agent
         # serves, or the model is handed a mode the agent then refuses.
         modes = tuple(getattr(snapshot, "available_modes", ()) or ())
@@ -241,7 +234,7 @@ def acp_snapshot_for(cfg: Any) -> Any:
                 "acp agent {!r}: launch config changed since its capabilities were measured; "
                 "still treating it as resume={} -- run a test to re-measure",
                 name,
-                snapshot.can_load,
+                snapshot.can_resume,
             )
     return snapshot
 

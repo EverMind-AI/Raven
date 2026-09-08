@@ -23,7 +23,6 @@ from aiohttp import web
 
 import raven.agent.subagent.backends.env as env_mod
 from raven.agent.subagent import instances as instances_mod
-from raven.agent.subagent.acp_registry_presets import ACP_REGISTRY_PRESETS
 from raven.agent.subagent.backends import (
     AgentMeta,
     CliAgentBackend,
@@ -2295,13 +2294,13 @@ def test_only_the_measured_non_isolating_preset_withholds_session_mcp() -> None:
         for name, p in presets.items()
         if p["kind"] == "acp"
     }
-    # The measured three, pinned by value.
-    assert declared["claude_code"] is True
-    assert declared["codex"] is True
-    assert declared["opencode"] is False
-    # And nothing else withholds. Asserted as "the only false" rather than by
-    # listing every other preset, so adding one cannot quietly arrive as a false.
-    assert {name for name, isolates in declared.items() if not isolates} == {"opencode"}
+    assert declared == {
+        "claude_code": True,
+        "codex": True,
+        "opencode": False,
+        "hermes": True,
+        "openclaw": True,
+    }
 
 
 def test_a_row_written_before_the_field_existed_still_gets_the_measured_answer() -> None:
@@ -2403,14 +2402,7 @@ def test_the_declaration_survives_being_added_from_a_preset() -> None:
 
 def test_presets_are_valid_and_complete() -> None:
     presets = {p["name"]: p for p in third_party_subagent_presets()}
-    assert set(presets) == {
-        "claude_code",
-        "codex",
-        "mirothinker",
-        "openclaw",
-        "hermes",
-        "opencode",
-    } | set(ACP_REGISTRY_PRESETS)
+    assert set(presets) == {"claude_code", "codex", "mirothinker", "openclaw", "hermes", "opencode"}
     assert {p["preset"] for p in presets.values()} == set(presets)
     # Every preset validates against the schema (discriminated union), so "Add
     # from preset" can never produce a config the write path would reject ...
@@ -2430,7 +2422,7 @@ def test_presets_are_valid_and_complete() -> None:
         "opencode",
         "hermes",
         "openclaw",
-    } | set(ACP_REGISTRY_PRESETS)
+    }
     assert presets["mirothinker"]["kind"] == "openai"
 
     for name, acp in ((n, p) for n, p in presets.items() if p["kind"] == "acp"):
@@ -2439,71 +2431,19 @@ def test_presets_are_valid_and_complete() -> None:
         assert not any(ph in acp["command"] for ph in ("{prompt}", "{prompt_file}", "{agent_id}")), name
         assert not (set(acp) & {"resumeCommand", "idSource", "transcriptFormat", "stateful", "readsLocalFiles"}), name
 
-    # Which rows may fetch, and that a fetched one is pinned, is asserted for
-    # every preset in test_no_preset_downloads_the_agent_itself.
+    # Adapter versions are pinned: `npx -y` fetches what is absent, so an unpinned
+    # command would silently change which build a user runs.
+    for name in ("claude_code", "codex", "opencode"):
+        assert "npx -y " in presets[name]["command"], name
+        assert "@" in presets[name]["command"].split("npx -y ")[1], name
+        # npx may download on the first connect, which is far slower than starting
+        # an installed binary.
+        assert presets[name]["readyTimeoutMs"] >= 120000, name
 
     # Measured: `openclaw acp` is a gateway-backed bridge and did not answer
     # `initialize` within 20s, so the shared default would report a working
     # install unreachable.
     assert presets["openclaw"]["readyTimeoutMs"] > presets["hermes"]["readyTimeoutMs"]
-
-
-_VERSION_PIN = re.compile(r"@\d+\.\d+\.\d+|==\d+\.\d+\.\d+")
-
-
-def _fetched_package(argv: list[str]) -> str:
-    """The package an ``npx`` / ``uvx`` command fetches, skipping its flags."""
-    return next(tok for tok in argv[1:] if not tok.startswith("-"))
-
-
-def test_no_preset_downloads_the_agent_itself() -> None:
-    """A preset may fetch an ACP shim. It may never fetch the agent.
-
-    Two halves of one rule. A shim is plumbing raven brings along: it carries no
-    credential, nobody installs it on purpose, and there is no local build to
-    defer to -- so fetching it is right, and pinning it is what keeps ``npx -y``
-    from silently changing which shim build runs.
-
-    The agent itself is the opposite on every count. It is what the user
-    installed, logged into and configured, so fetching a second copy at a version
-    chosen here would run a build they never picked against the login they did.
-    It would also report the agent as installed when it is absent, because
-    ``_probe_acp`` resolves ``argv[0]`` and ``npx`` always resolves; naming the
-    local executable is what makes that probe tell the truth.
-    """
-    from raven.agent.subagent.presets import SHIM_LAUNCHED_PRESETS
-
-    for preset in third_party_subagent_presets():
-        if preset["kind"] != "acp":
-            continue
-        name = preset["name"]
-        argv = shlex.split(preset["command"])
-        if name in SHIM_LAUNCHED_PRESETS:
-            assert argv[0] in ("npx", "uvx"), f"{name} is shim-launched but runs {argv[0]!r}"
-            package = _fetched_package(argv)
-            assert _VERSION_PIN.search(package), f"{name} fetches {package!r} unpinned"
-            assert preset["readyTimeoutMs"] >= 120000, name
-        else:
-            assert argv[0] not in ("npx", "uvx"), f"{name} fetches the agent itself, not a shim"
-            assert not _VERSION_PIN.search(preset["command"]), (
-                f"{name} pins a version, but the user's own install decides the build"
-            )
-
-
-def test_registry_presets_say_what_to_install() -> None:
-    """A row that defers to a local install has to name that install.
-
-    ``_probe_acp`` can only ever answer "<exe> is not on the login shell PATH"
-    for an agent that is not there. That names the executable and nothing else,
-    so without the install line the overlay tells the user to go and install
-    something without saying what.
-    """
-    from raven.agent.subagent.acp_registry_presets import ACP_REGISTRY_PRESETS, ACP_REGISTRY_SHIM_PRESETS
-
-    for name, preset in ACP_REGISTRY_PRESETS.items():
-        if name in ACP_REGISTRY_SHIM_PRESETS:
-            continue
-        assert "install" in preset["description"].lower(), name
 
 
 def test_presets_declare_their_own_provenance() -> None:

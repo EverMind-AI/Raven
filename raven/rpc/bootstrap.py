@@ -76,7 +76,7 @@ def _turn_pools() -> tuple[int, int]:
     return gateway.user_pool, gateway.system_pool
 
 
-def build_agent_loop(workspace: str | None = None, home: str | None = None, channel: str = LOCAL_CHANNEL):
+def build_agent_loop(workspace: str | None = None, home: str | None = None):
     """The rpc stack's loop factory: :func:`raven.core.engine_stack.build_engine`
     with every construction failure translated to the ``-32603`` the transport
     can carry.
@@ -92,9 +92,7 @@ def build_agent_loop(workspace: str | None = None, home: str | None = None, chan
     from raven.rpc.errors import InternalError
 
     try:
-        return build_engine(
-            workspace=workspace, home=home, channel=channel, notify=lambda m: print(m, file=sys.stderr)
-        ).loop
+        return build_engine(workspace=workspace, home=home, notify=lambda m: print(m, file=sys.stderr)).loop
     except MissingCredentialsError as e:
         from loguru import logger as _logger
 
@@ -216,14 +214,7 @@ async def build_rpc_stack(
     build_error: RpcError | None = None
     if owns_loop:
         try:
-            # Built for the channel this stack serves, so the engine's cron
-            # partition covers the wakes this stack's own turns schedule. Built
-            # for the default instead, an acp-served process refused every wake
-            # its on-call agent armed -- "channel 'acp' is outside this runner's
-            # partition", logged once, then silence while the job sat unclaimed
-            # (measured 2026-09-03/04: seven wakes over two runs, none fired; the
-            # main agent re-prompted the agent by hand each time).
-            agent_loop = build_agent_loop(channel=channel)
+            agent_loop = build_agent_loop()
         except RpcError as e:
             build_error = e
 
@@ -287,7 +278,7 @@ async def build_rpc_stack(
     direct_targets: dict[str, dict[str, str]] = {}
     turn_teardown = None
     if agent_loop is not None:
-        from raven.core.cron_stack import make_on_cron_job, make_on_session_wake
+        from raven.core.cron_stack import make_on_cron_job
 
         cron_readback: dict[str, str] = {}
         user_pool, system_pool = _turn_pools()
@@ -309,23 +300,15 @@ async def build_rpc_stack(
         if owns_loop:
             agent_loop.subagents.set_submit(turn_scheduler.submit)
         if owns_loop and agent_loop.cron_service is not None:
-            if channel == LOCAL_CHANNEL:
-                base_on_cron = make_on_cron_job(
-                    submit=turn_scheduler.submit,
-                    readback_texts=cron_readback,
-                    default_channel=LOCAL_CHANNEL,
-                    cron_service=agent_loop.cron_service,
-                )
-                agent_loop.cron_service.on_job = build_cron_callback_spine(
-                    base_on_cron, emitter, direct_targets=direct_targets
-                )
-            else:
-                # An ACP client watches one session's update stream and nothing
-                # else: no fan-out reaches it and the reminder shape addresses
-                # the wrong agent. A wake runs on the session that armed it
-                # (measured 2026-09-04: two wakes, a whole campaign, no frame
-                # delivered until this was here).
-                agent_loop.cron_service.on_job = make_on_session_wake(submit=turn_scheduler.submit, channel=channel)
+            base_on_cron = make_on_cron_job(
+                submit=turn_scheduler.submit,
+                readback_texts=cron_readback,
+                default_channel=LOCAL_CHANNEL,
+                cron_service=agent_loop.cron_service,
+            )
+            agent_loop.cron_service.on_job = build_cron_callback_spine(
+                base_on_cron, emitter, direct_targets=direct_targets
+            )
             await agent_loop.cron_service.start()
             # start() dropped past-due one-shot reminders on this runner's
             # partition. The served page reaches the runtime through here rather

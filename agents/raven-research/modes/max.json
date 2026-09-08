@@ -13,21 +13,16 @@
       "enabled": false
     },
     "verify": {
-      "maxRevisions": 3,
-      "reviewFinalDraft": true,
-      "evidenceRound": true,
-      "evidenceRoundSearches": 12,
       "timeoutSeconds": 360,
-      "attemptTimeoutSeconds": 360
+      "attemptTimeoutSeconds": 120
     },
-    "evidenceFloor": {
-      "enabled": true,
-      "minPages": 18,
-      "minDomains": 8,
-      "maxRollbacks": 2
+    "search": {
+      "saturation": {
+        "k": 10
+      }
     },
-    "plainFirst": {
-      "enabled": false
+    "finalShape": {
+      "reportBounce": true
     }
   }
 }

@@ -10,6 +10,7 @@ import {
   anchoredGeometry,
   clampGeometry,
   defaultGeometry,
+  DESK_DRAG_THRESHOLD,
   DESK_GEOMETRY_KEY,
   deskReserve,
   magnetGeometry,
@@ -352,9 +353,25 @@ export function DeskPalette(): JSX.Element | null {
       pointerCleanup.current?.()
     }
   }, [])
+  /* Set when a press on the handle turned into a drag, and read by the capture
+     handler on the handle itself: the gesture ends on a button whose click is
+     about to fire, and that click belongs to the drag, not to the tab. */
+  const dragged = useRef(false)
   const drag = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if ((event.target as HTMLElement).closest('button')) return
+    /* No early return for a press on a button. The handle IS mostly buttons --
+       measured on the running page, 182 of its 298px, with the rest broken into
+       3px slivers between the tabs -- so refusing to start a drag there left a
+       title bar that mostly could not be grabbed, and the press fell through to
+       the browser, which began selecting text across the page instead. The
+       gesture decides now: past `DESK_DRAG_THRESHOLD` it is a drag and the
+       click that would have followed is swallowed; below it the tab keeps its
+       click. */
     event.preventDefault()
+    /* Like `resize` below, and like every other drag handle in the app
+       (`shell/scrollbars.ts` does both on its thumb): the press has done its
+       job here, and letting it climb is what let an ancestor act on the same
+       gesture. */
+    event.stopPropagation()
     pointerCleanup.current?.()
     const palette = event.currentTarget.closest('.desk-palette')
     const rect = palette?.getBoundingClientRect()
@@ -367,14 +384,32 @@ export function DeskPalette(): JSX.Element | null {
     const target = event.currentTarget
     const pointerId = event.pointerId
     const controller = new AbortController()
-    target.dataset.dragging = 'true'
-    target.setPointerCapture(pointerId)
+    let moved = false
+    /* Capture is taken when the gesture becomes a drag, not when it starts.
+       Held from `pointerdown`, it retargets the browser's own click to this
+       handle -- pointer events dispatch the click at the capture target when
+       `pointerup` happens under capture -- so the click never reached the tab
+       under the finger and pressing a tab stopped switching tabs. */
     const move = (e: globalThis.PointerEvent): void => {
       if (e.pointerId !== pointerId) return
-      setGeom((now) => magnetGeometry({
+      const dx = e.clientX - start.pointerX
+      const dy = e.clientY - start.pointerY
+      if (!moved) {
+        if (Math.abs(dx) + Math.abs(dy) < DESK_DRAG_THRESHOLD) return
+        moved = true
+        dragged.current = true
+        target.dataset.dragging = 'true'
+        target.setPointerCapture(pointerId)
+      }
+      /* Free of the magnet while the hand is down. Snapping on every move froze
+         the panel in a band around the anchor -- measured, ~34px of it -- and
+         the anchor is at the top of the window, so a reader pushing the panel
+         upwards found it would not go. A magnet belongs on the release. */
+      setGeom((now) => clampGeometry({
         ...now,
-        x: start.x + e.clientX - start.pointerX,
-        y: start.y + e.clientY - start.pointerY,
+        x: start.x + dx,
+        y: start.y + dy,
+        detached: true,
       }))
     }
     const finish = (e?: globalThis.PointerEvent): void => {
@@ -382,6 +417,9 @@ export function DeskPalette(): JSX.Element | null {
       target.dataset.dragging = 'false'
       if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
       controller.abort()
+      /* Here rather than during: let go near where it came from and it goes
+         home, and nowhere else does it fight the hand. */
+      if (moved) setGeom((now) => magnetGeometry(now))
       if (pointerCleanup.current === cleanup) pointerCleanup.current = null
     }
     const cleanup = (): void => finish()
@@ -440,7 +478,20 @@ export function DeskPalette(): JSX.Element | null {
         height: geom.h,
       } as CSSProperties}
     >
-      <div className="desk-drag" onPointerDown={drag}>
+      <div
+        className="desk-drag"
+        onPointerDown={drag}
+        /* Capture, so it runs before the tab's own click: a gesture that moved
+           the panel must not also switch what it is showing. Cleared here
+           rather than on the next press, so one drag swallows exactly one
+           click. */
+        onClickCapture={(clicked) => {
+          if (!dragged.current) return
+          dragged.current = false
+          clicked.preventDefault()
+          clicked.stopPropagation()
+        }}
+      >
         <DeskTabs value={state.tab} onChange={(tab) => desk.update({ tab })} />
       </div>
       <div className="desk-body">

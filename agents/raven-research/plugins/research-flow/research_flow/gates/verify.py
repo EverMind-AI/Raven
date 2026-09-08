@@ -3,8 +3,7 @@
 The candidate final answer is reviewed by an independent context — a
 fresh ``[system, user]`` conversation that shares nothing with the
 drafting context except the task, the draft, and a fenced evidence
-pack. A failed review sends the turn back to solve, up to ``max_revisions``
-times per turn (one in the baseline mode, three in the deep modes): the
+pack. A failed review sends the turn back to solve exactly once: the
 draft and the reviewer's feedback are injected into history (persisted,
 so the draft -> feedback -> revision shape enters the training
 distribution) and the loop re-samples.
@@ -21,7 +20,7 @@ import time
 
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.security.trust import wrap_untrusted
-from research_flow.support._verdict import coerce_bool, parse_bool_verdict
+from research_flow.support._verdict import parse_bool_verdict
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
 from research_flow.support.evidence_round import EvidenceRound
 from research_flow.support.harness_text import harness_body_kind, is_elided_tool_output
@@ -64,8 +63,7 @@ _REVIEWER_SYSTEM = (
     "draft ONLY against the evidence provided; do not use outside knowledge "
     "to fill gaps. Check: (1) is every decisive claim supported by the "
     "evidence, (2) are sources cited for the key facts, (3) does the draft "
-    "actually answer the task. Keep any internal reasoning brief. Deliver the "
-    "verdict by calling the review_verdict tool. If you cannot call tools, your "
+    "actually answer the task. Keep any internal reasoning brief. Your "
     "reply must be EXACTLY one bare JSON object and nothing else - no prose "
     "before or after, no markdown code fences: "
     '{"pass": true|false, "unresolved_claims": <int>, '
@@ -140,33 +138,6 @@ _STRICT_REJECT_ONLY = (
     "verify either way."
 )
 
-# The verdict is requested as a forced tool call rather than as bare JSON text.
-# Measured on one draft: 2 of 9 text replies carried no boolean ``pass`` (one was
-# prose, one an upstream failure spelled as ``stop``), and each cost a fail-open.
-# A forced function call still lets a reasoning model think first, but its
-# arguments arrive as a parsed object with the boolean the gate needs. Text
-# parsing stays as the fallback for a backend that answers in content anyway.
-_VERDICT_TOOL_NAME = "review_verdict"
-_VERDICT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": _VERDICT_TOOL_NAME,
-        "description": "Deliver the review verdict. Call exactly once, after checking the draft against the evidence.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "pass": {"type": "boolean", "description": "true if the draft may ship as written"},
-                "unresolved_claims": {"type": "integer"},
-                "unsupported_claims": {"type": "array", "items": {"type": "string"}},
-                "estimated_cells": {"type": "array", "items": {"type": "string"}},
-                "issues": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["pass", "unsupported_claims", "estimated_cells", "issues"],
-        },
-    },
-}
-_VERDICT_TOOL_CHOICE = {"type": "function", "function": {"name": _VERDICT_TOOL_NAME}}
-
 _REVISION_PROMPT = (
     "A reviewer rejected the draft above. Fix exactly the listed issues and "
     "produce the corrected final answer. Do not restart the research; reuse "
@@ -192,7 +163,7 @@ _EVIDENCE_ROUND_PROMPT = (
 
 
 class DraftReviewerGate(AgentHook):
-    """Verify-gate: review the candidate final, bounce it back up to ``max_revisions`` times."""
+    """Verify-gate: review the candidate final, bounce it back once."""
 
     def __init__(
         self,
@@ -218,14 +189,16 @@ class DraftReviewerGate(AgentHook):
         self._timeout_seconds = timeout_seconds
         self._attempt_timeout_seconds = attempt_timeout_seconds
         self._attempt_http_timeout_seconds = attempt_http_timeout_seconds
-        if attempt_http_timeout_seconds is not None:
-            # Kept on the model for twin parity, never sent: the trunk provider protocol
-            # has no per-call ``timeout`` argument, and passing one raised TypeError
-            # inside the call - the same shape that silently killed the sufficiency
-            # judge - so every review would have failed open the moment it was set.
-            logger.info(
-                "verify-gate: attemptHttpTimeoutSeconds=%s is not honoured by this provider; the wait_for slice is the deadline",
+        if attempt_http_timeout_seconds is not None and attempt_http_timeout_seconds >= attempt_timeout_seconds:
+            # Not clamped: a configured value is the operator's to own. But a
+            # transport deadline that cannot win the race against the wait_for
+            # slice silently reverts to the nameless-cancellation behavior the
+            # knob exists to fix, so say it once at construction.
+            logger.warning(
+                "verify-gate: attemptHttpTimeoutSeconds (%.0fs) >= attemptTimeoutSeconds (%.0fs); "
+                "the transport deadline can never fire before the slice cancels it",
                 attempt_http_timeout_seconds,
+                attempt_timeout_seconds,
             )
         self._max_revisions = max_revisions
         self._review_final_draft = review_final_draft
@@ -323,7 +296,6 @@ class DraftReviewerGate(AgentHook):
                 # second one makes a zero in an aggregate mean anything.
                 "evidence_rounds": state.get("evidence_rounds"),
                 "draft_chars": len(draft) if draft is not None else None,
-                "fail_open_reason": state.get("fail_open_reason") if outcome == "unavailable" else None,
             }
         )
 
@@ -502,19 +474,29 @@ class DraftReviewerGate(AgentHook):
         # conditional is what keeps the unset knob byte-identical to before it
         # existed.
         effort_kwargs = {"reasoning_effort": self._reasoning_effort} if self._reasoning_effort is not None else {}
-        # ``timeout_seconds`` is the budget, ``attempt_timeout_seconds`` the slice a
-        # single call may take before it is cancelled and retried on a fresh call.
-        # The shipped modes set the two equal - one uninterrupted attempt - because
-        # a 40s or 120s slice cancelled reviewer calls that finish at 44-303s and
-        # the retry started the same slow generation over; the slice stays a knob
-        # for a deployment whose provider stalls on dead pooled connections.
+        # The budget is spent as short attempts, not one long wait: a call
+        # stalled on a dead pooled connection never errors and never
+        # returns, while a fresh attempt completes in seconds.
+        #
+        # Passed only when configured, same conditional shape as the effort knob:
+        # an unset knob keeps the call byte-identical to every measured arm. Set
+        # it inside the wait_for slice so the transport wins the race: a cancelled
+        # coroutine names nothing, while the transport's own timeout raises an
+        # exception whose class says where the call hung (connect vs read) - the
+        # one datum a stalled attempt can still yield. Not unconditional because
+        # it is not purely observational: surfacing a stall early enough for the
+        # retry ladder to answer inside the same slice can produce a verdict a
+        # cancelled attempt never could.
+        timeout_kwargs = (
+            {"timeout": self._attempt_http_timeout_seconds} if self._attempt_http_timeout_seconds is not None else {}
+        )
         deadline = asyncio.get_event_loop().time() + self._timeout_seconds
         attempt = 0
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
                 logger.warning("verify-gate: reviewer timed out after %.0fs budget; fail-open", self._timeout_seconds)
-                return self._fail_open(ctx, "timeout")
+                return None
             attempt += 1
             try:
                 response = await asyncio.wait_for(
@@ -524,10 +506,9 @@ class DraftReviewerGate(AgentHook):
                             {"role": "user", "content": user},
                         ],
                         model=self._model,
-                        tools=[_VERDICT_TOOL],
-                        tool_choice=_VERDICT_TOOL_CHOICE,
                         max_tokens=self._max_tokens,
                         temperature=0.0,
+                        **timeout_kwargs,
                         **effort_kwargs,
                     ),
                     timeout=min(self._attempt_timeout_seconds, remaining),
@@ -551,37 +532,18 @@ class DraftReviewerGate(AgentHook):
                 continue
             except Exception as exc:
                 logger.warning("verify-gate: reviewer call failed (%s: %s); fail-open", type(exc).__name__, exc)
-                return self._fail_open(ctx, "call_failed")
+                return None
         # Which vendor served the failing call. Without it every fail-open below is
         # unattributable, and an intermittent vendor flake cannot be pinned out.
         upstream = getattr(response, "serving_upstream", None)
-        if getattr(response, "finish_reason", "") == "length" or getattr(response, "truncated", False):
+        if getattr(response, "finish_reason", "") == "length":
             logger.warning(
                 "verify-gate: reviewer generation truncated at max_tokens=%d (thinking overrun?; upstream=%s); fail-open",
                 self._max_tokens,
                 upstream,
             )
-            return self._fail_open(ctx, "truncated")
-        verdict_call_seen = False
-        for call in getattr(response, "tool_calls", None) or []:
-            if getattr(call, "name", None) != _VERDICT_TOOL_NAME:
-                continue
-            verdict_call_seen = True
-            arguments = getattr(call, "arguments", None)
-            if not isinstance(arguments, dict) or coerce_bool(arguments.get("pass")) is None:
-                # Arguments without the one required boolean are no verdict; the
-                # content, if any, gets the text parser's chance below.
-                continue
-            return self._normalise_verdict(dict(arguments))
+            return None
         text = visible_answer(getattr(response, "content", None) or "")
-        if not text and verdict_call_seen:
-            # The model answered on the tool channel and the arguments carried no
-            # usable ``pass``: a different cure from an empty reply (the schema or
-            # the provider's argument parsing), so a different name.
-            logger.warning(
-                "verify-gate: review_verdict call carried no usable 'pass' (upstream=%s); fail-open", upstream
-            )
-            return self._fail_open(ctx, "tool_args_unusable")
         if not text or getattr(response, "finish_reason", "") == "error":
             # On an error the content IS the formatted exception - its head names
             # the exception class, which localizes a transport hang.
@@ -591,22 +553,11 @@ class DraftReviewerGate(AgentHook):
                 upstream,
                 (getattr(response, "content", None) or "")[:160] or None,
             )
-            return self._fail_open(ctx, "no_content")
-        verdict = self._parse_verdict(text, upstream)
-        return verdict if verdict is not None else self._fail_open(ctx, "unparsed")
+            return None
+        return self._parse_verdict(text, upstream)
 
     @staticmethod
-    def _fail_open(ctx: AgentHookContext, reason: str) -> None:
-        """Name the failure on the turn's state so the ledger row and the observer
-        record say WHICH way the reviewer failed; a bare ``unavailable`` hid a 120s
-        slice killing calls that finish at 180s behind a truncation that needs a
-        bigger cap."""
-        if ctx.metadata is not None:
-            ctx.metadata.setdefault("verify_gate", {})["fail_open_reason"] = reason
-        return None
-
-    @classmethod
-    def _parse_verdict(cls, text: str, upstream: str | None = None) -> dict | None:
+    def _parse_verdict(text: str, upstream: str | None = None) -> dict | None:
         parsed = parse_bool_verdict(text, "pass")
         if parsed is None:
             logger.warning(
@@ -615,10 +566,6 @@ class DraftReviewerGate(AgentHook):
             )
             return None
         verdict, _ = parsed
-        return cls._normalise_verdict(verdict)
-
-    @staticmethod
-    def _normalise_verdict(verdict: dict) -> dict:
         # The list fields are iterated without a type check downstream, so a
         # reviewer answering `"unsupported_claims": 3` makes the gate raise
         # mid-rejection. The hook chain treats a raised hook as a no-op, so the
@@ -629,9 +576,6 @@ class DraftReviewerGate(AgentHook):
         # A count is not a named claim, so it collapses to empty rather than to
         # a fake entry -- that keeps ``strict_reject_only`` honest, since its
         # whole rule is that an unnamed reject degrades to a pass.
-        # ``parse_bool_verdict`` and the tool path both checked the key coerces, so
-        # the string forms a model emits ("false", "no") land as the boolean here.
-        verdict["pass"] = coerce_bool(verdict.get("pass"))
         for key in ("unsupported_claims", "estimated_cells", "issues"):
             value = verdict.get(key)
             if value is None or isinstance(value, list):

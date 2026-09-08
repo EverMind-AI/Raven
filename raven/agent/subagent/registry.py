@@ -321,16 +321,6 @@ class AgentRegistry:
             self._backends[name] = backend
         return backend
 
-    def backends(self) -> list[Any]:
-        """Every external backend the table currently holds, for a manager to bind.
-
-        The DAG path resolves a node's backend through this registry directly,
-        never through the manager's per-dispatch resolver, so a manager that
-        only bound what it resolved left graph-only agents with no route for an
-        unprompted turn. A generation binds them all here, once, at apply time.
-        """
-        return list(self._backends.values())
-
     def names(self) -> list[str]:
         """Enabled agent names, sorted -- the ``enum`` a tool schema constrains to."""
         return sorted(row.name for row in self.enabled())
