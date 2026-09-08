@@ -593,6 +593,48 @@ def test_test_provider_200_extracts_model_ids(cfg_path: Path) -> None:
     ]
 
 
+def test_lm_studio_probe_is_keyless_and_uses_its_openai_endpoint(cfg_path: Path) -> None:
+    set_provider_fields("lm_studio", {"api_base": "http://localhost:1234/v1"}, config_path=cfg_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://localhost:1234/v1/models"
+        assert "Authorization" not in request.headers
+        return httpx.Response(200, json={"data": [{"id": "qwen3-8b"}]})
+
+    result = probe_provider("lm_studio", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["ok"] is True
+    assert result["model_ids"] == ["qwen3-8b"]
+
+
+def test_minimax_cn_probe_uses_the_cn_endpoint(cfg_path: Path) -> None:
+    set_provider_fields("minimax_cn_api", {"api_key": "K-CN"}, config_path=cfg_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.minimaxi.com/v1/models"
+        assert request.headers["Authorization"] == "Bearer K-CN"
+        return httpx.Response(200, json={"data": [{"id": "MiniMax-M3"}]})
+
+    result = probe_provider("minimax_cn_api", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["ok"] is True
+    assert result["model_ids"] == ["MiniMax-M3"]
+
+
+def test_nvidia_probe_uses_the_hosted_nim_endpoint(cfg_path: Path) -> None:
+    set_provider_fields("nvidia_nim", {"api_key": "nvapi-test"}, config_path=cfg_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://integrate.api.nvidia.com/v1/models"
+        assert request.headers["Authorization"] == "Bearer nvapi-test"
+        return httpx.Response(200, json={"data": [{"id": "nvidia/nemotron-3-super-120b-a12b"}]})
+
+    result = probe_provider("nvidia_nim", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["ok"] is True
+    assert result["model_ids"] == ["nvidia/nemotron-3-super-120b-a12b"]
+
+
 def test_test_provider_200_empty_data_returns_empty_model_ids(cfg_path: Path) -> None:
     _seed_key(cfg_path)
 

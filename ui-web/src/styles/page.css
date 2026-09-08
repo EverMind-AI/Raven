@@ -665,6 +665,31 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .led { width: 5px; height: 5px; border-radius: 50%; background: var(--moss); flex: none; }
 .led.warn { background: var(--gold); }
 .led.bad { background: var(--clay); }
+.provider-icon { width: 20px; height: 20px; object-fit: contain; flex: none; }
+.provider-icon.fallback { display: inline-grid; place-items: center; border: 1px solid var(--line);
+  border-radius: 5px; background: var(--surface); color: var(--muted); font: 600 10px var(--sans); }
+.provider-link { min-width: 0; display: inline-flex; align-items: baseline; gap: 4px; color: inherit;
+  text-decoration: none; }
+.provider-link > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.provider-link::after { content: '↗'; flex: none; color: var(--faint); font-size: .78em; font-weight: 500; }
+.provider-link:hover > span:first-child { text-decoration: underline; text-underline-offset: 3px; }
+.provider-link:focus-visible { outline: 1px solid var(--amber); outline-offset: 3px; border-radius: 2px; }
+.provider-choice-row { position: relative; }
+.provider-choice-row > :not(.provider-choice-action) { position: relative; z-index: 1; pointer-events: none; }
+.provider-choice-row .provider-link { pointer-events: auto; }
+.provider-choice-action { position: absolute; z-index: 0; inset: 0; width: 100%; border: 0;
+  border-radius: inherit; background: transparent; cursor: pointer; }
+.provider-choice-row:has(> .provider-choice-action:focus-visible) { outline: 1px solid var(--amber);
+  outline-offset: 1px; }
+.provider-status { width: 7px; height: 7px; border-radius: 50%; background: var(--clay); flex: none;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--clay) 16%, transparent); }
+.provider-status.on { background: var(--moss);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--moss) 16%, transparent); }
+:root[data-theme="dark"] img.provider-icon { filter: invert(1); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) img.provider-icon { filter: invert(1); }
+}
+:root img.provider-icon[data-provider="nvidia_nim"] { filter: none; }
 
 /* Context is a quantity, so it gets a quantity's shape: a ring that fills --
    and only the ring. The fill and its colour already answer "is this fine?"
@@ -2129,8 +2154,11 @@ textarea:focus, textarea:focus-visible,
 .mpick .row:hover { background: color-mix(in oklab, var(--text) 7%, transparent); }
 .mpick .provs .row.dim { opacity: .35; }
 .mpick .provs .row.dim:hover { background: none; }
-.mpick .row[aria-selected="true"] { background: color-mix(in oklab, var(--text) 9%, transparent); }
-.mpick .row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mpick .row:has(> .provider-choice-action[aria-selected="true"]) {
+  background: color-mix(in oklab, var(--text) 9%, transparent); }
+.mpick .row .nm { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.mpick .row .nm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mpick .provider-icon { width: 18px; height: 18px; }
 .mpick .row .ct { font-family: var(--mono); font-size: 10.5px; color: var(--faint); flex: none; }
 .mpick .row .tick { color: var(--amber); flex: none; }
 .mpick .models .row { font-family: var(--mono); font-size: 12px; }
@@ -3843,7 +3871,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
    one long unbroken string in column 1 -- a probe that reported 2000 characters
    of an agent's stdout -- widens the track until the controls in column 2 leave
    the viewport entirely, with no horizontal scroll to reach them. */
-.pcard { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 14px; align-items: center;
+.pcard { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 14px; align-items: center;
   background: var(--ink); padding: 13px 15px; }
 .pcard .nm { grid-column: 1; grid-row: 1; display: flex; align-items: center; gap: 8px;
   font-size: 13.5px; font-weight: 600; }
@@ -3851,6 +3879,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
   overflow-wrap: anywhere; }
 .pcard .ctl { grid-column: 2; grid-row: 1 / span 2; align-self: center; justify-self: end;
   display: flex; gap: 7px; }
+.pcard > .provider-status { grid-column: 3; grid-row: 1 / span 2; }
 .pcard .keyrow { grid-row: 3; }
 .keyrow { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 9px; }
 .keyrow input { flex: 1; min-width: 0; }
@@ -4300,8 +4329,9 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
   transition: background .15s ease, border-color .15s ease; }
 .ob-row:hover { background: var(--surface); }
 .ob-row[data-sel] { border-color: var(--text); background: var(--surface); }
-.ob-row .nm { font-size: 14px; font-weight: 500; color: var(--text);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ob-row .nm { min-width: 0; display: flex; align-items: center; gap: 9px;
+  font-size: 14px; font-weight: 500; color: var(--text); }
+.ob-row .nm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ob-row .bd { margin-left: auto; flex: none; font-family: var(--mono);
   font-size: 10px; letter-spacing: .04em; color: var(--faint); }
 .ob-row .bd.on { color: var(--moss); }

@@ -60,6 +60,8 @@ PROVIDER_ALIASES: dict[str, str] = {
     "github_copilot": "github-copilot",
     "minimax_global": "minimax",
     "minimax_cn": "minimax-cn",
+    "minimax_cn_api": "minimax-cn",
+    "nvidia_nim": "nvidia",
 }
 
 #: Model fields carried over. ``name``/``description`` are what a picker renders;

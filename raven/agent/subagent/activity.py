@@ -73,11 +73,6 @@ class RunActivity:
     # ends. A pointer rather than the frames themselves -- they are already a
     # file, and meta.json is read on every poll of a panel that polls often.
     frames: dict[str, Any] = field(default_factory=dict)
-    # What the agent attached to its prompt response under ``_meta`` (the field
-    # ACP reserves for an agent's own metadata), kept verbatim and namespaced
-    # as sent. The host reads none of it: a product's report reaches the run
-    # record without the host knowing the product.
-    response_meta: dict[str, Any] = field(default_factory=dict)
     # What the run said after its last step, when the transport can tell that
     # apart from what it said on the way. `None` is "this lane cannot say" and
     # the full output stands in; `""` is "it ended on a step and said nothing
@@ -158,8 +153,6 @@ class RunActivity:
             meta["step_counts"] = self.step_counts
         if self.frames:
             meta["acp_frames"] = self.frames
-        if self.response_meta:
-            meta["acp_response_meta"] = self.response_meta
         if self.truncation:
             meta.update(self.truncation)
         return meta
@@ -309,14 +302,6 @@ def note_frames(frames: dict[str, Any] | None) -> None:
     if activity is not None and isinstance(frames, dict) and frames:
         _touch(activity)
         activity.frames = dict(frames)
-
-
-def note_response_meta(meta: Any) -> None:
-    """Record the agent's prompt-response ``_meta``. Replaced, not merged; a
-    response without one leaves the record as it was."""
-    activity = _current.get()
-    if activity is not None and isinstance(meta, dict) and meta:
-        activity.response_meta = dict(meta)
 
 
 def note_steps(counts: dict[str, int] | None) -> None:
@@ -473,7 +458,6 @@ __all__ = [
     "note_closing",
     "note_console",
     "note_frames",
-    "note_response_meta",
     "note_output_truncation",
     "note_steps",
     "note_thoughts",

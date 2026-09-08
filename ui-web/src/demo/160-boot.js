@@ -82,15 +82,23 @@ function demoOnbBackend() {
   const wait = (v, ms) => new Promise((r) => setTimeout(() => r(v), ms == null ? 420 : ms));
   const P = [
     { slug: 'anthropic', name: 'Anthropic', auth_type: 'key', authenticated: false,
-      models: ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'] },
+      homepage: 'https://anthropic.com/', models: ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'] },
     { slug: 'openai', name: 'OpenAI', auth_type: 'key', authenticated: false,
-      models: ['gpt-5.2', 'gpt-5.2-mini', 'o5', 'gpt-4.1'] },
+      homepage: 'https://openai.com/', models: ['gpt-5.2', 'gpt-5.2-mini', 'o5', 'gpt-4.1'] },
     { slug: 'minimax_global', name: 'MiniMax Global', auth_type: 'oauth', authenticated: false,
-      models: ['MiniMax-M2.5', 'MiniMax-M2'] },
+      homepage: 'https://platform.minimax.io/', models: ['MiniMax-M2.5', 'MiniMax-M2'] },
     { slug: 'deepseek', name: 'DeepSeek', auth_type: 'key', authenticated: false,
-      models: ['deepseek-chat', 'deepseek-reasoner'] },
+      homepage: 'https://deepseek.com/', models: ['deepseek-chat', 'deepseek-reasoner'] },
+    { slug: 'minimax', name: 'MiniMax (Global)', auth_type: 'key', authenticated: false,
+      homepage: 'https://platform.minimax.io/', models: ['minimax/MiniMax-M3', 'minimax/MiniMax-M2.5'] },
+    { slug: 'minimax_cn_api', name: 'MiniMax (CN)', auth_type: 'endpoint', authenticated: false,
+      homepage: 'https://platform.minimaxi.com/', default_api_base: 'https://api.minimaxi.com/v1/', models: ['minimax-cn-api/MiniMax-M3'] },
+    { slug: 'nvidia_nim', name: 'NVIDIA', auth_type: 'key', authenticated: false,
+      homepage: 'https://build.nvidia.com/explore/discover', default_api_base: 'https://integrate.api.nvidia.com/v1', models: ['nvidia-nim/nvidia/nemotron-3-super-120b-a12b', 'nvidia-nim/openai/gpt-oss-120b'] },
+    { slug: 'lm_studio', name: 'LM Studio', auth_type: 'local', needs_api_base: true, authenticated: false,
+      homepage: 'https://lmstudio.ai/', default_api_base: 'http://localhost:1234/v1', models: [] },
     { slug: 'ollama', name: 'Ollama', auth_type: 'local', needs_api_base: true, authenticated: false,
-      models: ['qwen3:32b', 'llama4:70b'] }
+      homepage: 'https://ollama.com/', models: ['qwen3:32b', 'llama4:70b'] }
   ];
   let pokes = 0;
   return {

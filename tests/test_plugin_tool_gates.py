@@ -125,7 +125,7 @@ class TestManifestToolGates:
                 version = "0.1.0"
                 [[plugin.contributes.tool_gates]]
                 name = "write_gate"
-                factory = "some_flow.gate:make_write_gate"
+                factory = "code_flow.gate:make_write_gate"
                 """
             )
         )

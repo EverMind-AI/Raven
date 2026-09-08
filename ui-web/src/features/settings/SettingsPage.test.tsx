@@ -33,7 +33,7 @@ function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     configPath: '~/.raven/config.json',
     everos: null,
     providers: [
-      { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-4-5'], on: true, kind: 'api_key' },
+      { id: 'anthropic', name: 'Anthropic', homepage: 'https://anthropic.com/', models: ['claude-opus-4-5'], on: true, kind: 'api_key' },
       { id: 'openai', name: 'OpenAI', models: [], on: false, kind: 'api_key' },
       /* Connected with nothing to lend: `on` means "usable", and these two are
          usable by a token file and by an address, with no key behind either. */
@@ -271,7 +271,8 @@ describe('settings island', () => {
       screen.getByText('gui.set.pg.model').click()
     })
     const badged = () =>
-      [...document.querySelectorAll('.pcard')].find((c) => c.querySelector('.tagm'))?.querySelector('.nm span:nth-child(2)')
+      [...document.querySelectorAll('.pcard')].find((c) => c.querySelector('.tagm'))
+        ?.querySelector('.provider-link > span, .nm > span:not(.tagm)')
         ?.textContent
     expect(badged()).toBe('Anthropic')
     await act(async () => {
@@ -525,6 +526,90 @@ describe('settings island', () => {
       screen.getByText('gui.model.connect').click()
     })
     expect(calls).toContainEqual(['provider', { op: 'save_key', params: { slug: 'openai', api_key: 'sk-x' } }])
+  })
+
+  it('connects LM Studio with the backend-provided default endpoint', async () => {
+    const local = snap({
+      providers: [{
+        id: 'lm_studio',
+        name: 'LM Studio',
+        models: [],
+        on: false,
+        kind: 'local',
+        needsBase: true,
+        defaultApiBase: 'http://localhost:1234/v1',
+      }],
+      curProvider: '',
+    })
+    const { calls } = install(local)
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    await act(async () => {
+      screen.getByText('gui.model.connect').click()
+    })
+    const base = document.querySelector<HTMLInputElement>('.pcard.open .pform input[type="text"]')!
+    expect(base.value).toBe('http://localhost:1234/v1')
+    await act(async () => {
+      screen.getByText('gui.model.connect').click()
+    })
+    expect(calls).toContainEqual([
+      'provider',
+      { op: 'save_key', params: { slug: 'lm_studio', api_base: 'http://localhost:1234/v1' } },
+    ])
+  })
+
+  it('connects MiniMax CN with its regional endpoint and API key', async () => {
+    const cn = snap({
+      providers: [{
+        id: 'minimax_cn_api',
+        name: 'MiniMax (CN)',
+        models: ['minimax-cn-api/MiniMax-M3'],
+        on: false,
+        kind: 'endpoint',
+        defaultApiBase: 'https://api.minimaxi.com/v1/',
+      }],
+      curProvider: '',
+    })
+    const { calls } = install(cn)
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    await act(async () => {
+      screen.getByText('gui.model.connect').click()
+    })
+    const form = document.querySelector<HTMLElement>('.pcard.open .pform')!
+    expect(form.querySelector<HTMLInputElement>('input[type="text"]')?.value).toBe('https://api.minimaxi.com/v1/')
+    form.querySelector<HTMLInputElement>('input[type="password"]')!.value = 'K-CN'
+    await act(async () => {
+      screen.getByText('gui.model.connect').click()
+    })
+    expect(calls).toContainEqual([
+      'provider',
+      {
+        op: 'save_key',
+        params: { slug: 'minimax_cn_api', api_key: 'K-CN', api_base: 'https://api.minimaxi.com/v1/' },
+      },
+    ])
+  })
+
+  it('puts provider branding first and connection state at the far edge', async () => {
+    install()
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    const cards = [...document.querySelectorAll<HTMLElement>('.pcard')]
+    const anthropic = cards.find(card => card.querySelector('.nm')?.textContent?.includes('Anthropic'))!
+    const openai = cards.find(card => card.querySelector('.nm')?.textContent?.includes('OpenAI'))!
+
+    expect(anthropic.querySelector('.nm')?.firstElementChild?.getAttribute('src')).toBe('assets/providers/anthropic.svg')
+    expect(anthropic.querySelector('.provider-link')?.getAttribute('href')).toBe('https://anthropic.com/')
+    expect(anthropic.querySelector('.provider-link')?.getAttribute('aria-label')).toBe('Anthropic homepage')
+    expect(anthropic.lastElementChild?.className).toBe('provider-status on')
+    expect(openai.lastElementChild?.className).toBe('provider-status')
   })
 
   it('writes the reasoning effort pick through settings.set', async () => {

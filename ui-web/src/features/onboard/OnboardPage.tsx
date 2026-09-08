@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../shell/bridge'
+import { ProviderIcon, ProviderLink, ProviderStatus } from '../../shell/provider-mark'
 import * as store from './store'
 
 import type { OnboardProvider, OnboardSource } from './types'
@@ -128,7 +129,7 @@ function Flow({ source }: { source: OnboardSource }): JSX.Element {
     setSelected(provider)
     setModel(null)
     setQuery('')
-    setReady(false)
+    setReady(provider.auth_type === 'local' && !!(provider.api_base || provider.default_api_base))
     setError('')
     setStep(provider.authenticated ? 'model' : 'creds')
   }
@@ -185,8 +186,17 @@ function Flow({ source }: { source: OnboardSource }): JSX.Element {
         <div className="ob-s">{t('gui.onb.provider_s')}</div>
         <div className="ob-list">
           {providers.map(provider => (
-            <button key={provider.slug} className="ob-row" type="button" onClick={() => chooseModel(provider)}>
-              <span className="nm">{provider.name || provider.slug}</span>
+            <div key={provider.slug} className="ob-row provider-choice-row">
+              <button
+                className="provider-choice-action"
+                type="button"
+                aria-label={provider.name || provider.slug}
+                onClick={() => chooseModel(provider)}
+              />
+              <span className="nm">
+                <ProviderIcon id={provider.slug} name={provider.name || provider.slug} />
+                <ProviderLink homepage={provider.homepage} name={provider.name || provider.slug} />
+              </span>
               <span className={'bd' + (provider.authenticated ? ' on' : '')}>
                 {provider.authenticated
                   ? t('gui.onb.connected')
@@ -196,7 +206,11 @@ function Flow({ source }: { source: OnboardSource }): JSX.Element {
                       ? 'URL'
                       : 'API Key'}
               </span>
-            </button>
+              <ProviderStatus
+                connected={provider.authenticated}
+                label={t(provider.authenticated ? 'gui.model.state.connected' : 'gui.model.not_connected')}
+              />
+            </div>
           ))}
         </div>
         <button className="ob-ghost" onClick={welcome}>
@@ -207,7 +221,7 @@ function Flow({ source }: { source: OnboardSource }): JSX.Element {
     )
   } else if (step === 'creds' && selected) {
     const local = selected.auth_type === 'local'
-    const needsBase = local || !!selected.needs_api_base
+    const needsBase = local || selected.auth_type === 'endpoint' || !!selected.needs_api_base
     body = (
       <div className="ob-step">
         <div className="ob-t">{t('gui.onb.key_t', { name: selected.name || selected.slug })}</div>
@@ -257,6 +271,7 @@ function Flow({ source }: { source: OnboardSource }): JSX.Element {
                   ref={baseInput}
                   className="ob-in"
                   type="text"
+                  defaultValue={selected.api_base || selected.default_api_base || ''}
                   placeholder={t('gui.onb.base_ph')}
                   autoComplete="off"
                   spellCheck={false}

@@ -41,6 +41,7 @@ class ProviderSpec:
     # as the variable to export. Empty for OAuth and direct providers.
     env_key: str = ""
     display_name: str = ""  # shown in `raven status`
+    homepage: str = ""
 
     # model prefixing
     # This provider is reached through ANOTHER vendor's LiteLLM driver: SiliconFlow
@@ -73,6 +74,8 @@ class ProviderSpec:
     detect_by_key_prefix: str = ""  # match api_key prefix, e.g. "sk-or-"
     detect_by_base_keyword: str = ""  # match substring in api_base URL
     default_api_base: str = ""  # fallback base URL
+    passes_default_api_base: bool = False  # send the shipped default as a per-call api_base
+    strip_api_base_trailing_slash: bool = False
 
     # gateway behavior
     strip_model_prefix: bool = False  # strip "provider/" before re-prefixing
@@ -119,11 +122,10 @@ class ProviderSpec:
     # so adding a family does not mean editing the factory's dispatch.
     client: str = ""
 
-    # The endpoint is the user's to supply and there is no default that works:
-    # Azure gives every tenant its own resource URL, a self-hosted endpoint is
-    # wherever the user put it. Distinct from `default_api_base`, which is a
-    # working address the user may override, and from `is_local`, which needs an
-    # address but no key.
+    # The setup shape exposes an endpoint alongside the API key: Azure gives
+    # every tenant its own resource URL, while a regional vendor may ship a
+    # working endpoint that the user can override. Distinct from `is_local`,
+    # which needs an address but no key.
     requires_api_base: bool = False
 
     @property
@@ -134,12 +136,13 @@ class ProviderSpec:
     def usable_default_api_base(self) -> str:
         """The shipped default address ``Config.get_api_base`` would actually serve.
 
-        Non-empty only for a gateway or local deployment -- a direct vendor's
-        ``default_api_base`` travels via env vars instead and the reader never
-        hands it out. Stated once so the credential gate cannot accept a
-        default the reader then refuses to serve (see ``providers.auth``).
+        Non-empty for a gateway, local deployment, or direct provider explicitly
+        marked for a per-call base. Other direct vendors' defaults travel via
+        env vars instead and the reader never hands them out. Stated once so the
+        credential gate cannot accept a default the reader then refuses to serve
+        (see ``providers.auth``).
         """
-        return self.default_api_base if (self.is_gateway or self.is_local) else ""
+        return self.default_api_base if (self.is_gateway or self.is_local or self.passes_default_api_base) else ""
 
     @property
     def model_prefix(self) -> str:
@@ -225,6 +228,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("azure", "azure-openai"),
         env_key="",
         display_name="Azure OpenAI",
+        homepage="https://azure.microsoft.com/en-us/products/ai-services/openai-service",
         bypasses_litellm=True,
         requires_api_base=True,
     ),
@@ -236,6 +240,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("openrouter",),
         env_key="OPENROUTER_API_KEY",
         display_name="OpenRouter",
+        homepage="https://openrouter.ai/",
         skip_prefixes=(),
         env_extras=(),
         is_gateway=True,
@@ -256,6 +261,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("aihubmix",),
         env_key="OPENAI_API_KEY",  # OpenAI-compatible
         display_name="AiHubMix",
+        homepage="https://aihubmix.com",
         via_driver="openai",  # → openai/{model}
         skip_prefixes=(),
         env_extras=(),
@@ -273,6 +279,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("siliconflow",),
         env_key="OPENAI_API_KEY",
         display_name="SiliconFlow",
+        homepage="https://www.siliconflow.cn",
         via_driver="openai",
         skip_prefixes=(),
         env_extras=(),
@@ -290,6 +297,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("volcengine", "volces", "ark"),
         env_key="OPENAI_API_KEY",
         display_name="VolcEngine",
+        homepage="https://console.volcengine.com/ark/region:cn-beijing/overview",
         skip_prefixes=(),
         env_extras=(),
         is_gateway=True,
@@ -309,6 +317,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("anthropic", "claude"),
         env_key="ANTHROPIC_API_KEY",
         display_name="Anthropic",
+        homepage="https://anthropic.com/",
         skip_prefixes=(),
         env_extras=(),
         is_gateway=False,
@@ -327,6 +336,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("openai", "gpt"),
         env_key="OPENAI_API_KEY",
         display_name="OpenAI",
+        homepage="https://openai.com/",
         skip_prefixes=(),
         env_extras=(),
         is_gateway=False,
@@ -344,6 +354,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("openai-codex",),
         env_key="",  # OAuth-based, no API key
         display_name="OpenAI Codex",
+        homepage="https://openai.com/codex",
         bypasses_litellm=True,
         skip_prefixes=(),
         env_extras=(),
@@ -368,6 +379,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("github_copilot", "copilot"),
         env_key="",  # OAuth-based, no API key
         display_name="Github Copilot",
+        homepage="https://github.com/features/copilot",
         billing="plan",
         skip_prefixes=("github_copilot/",),
         env_extras=(),
@@ -387,6 +399,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("deepseek",),
         env_key="DEEPSEEK_API_KEY",
         display_name="DeepSeek",
+        homepage="https://deepseek.com/",
         skip_prefixes=("deepseek/",),  # avoid double-prefix
         env_extras=(),
         is_gateway=False,
@@ -403,6 +416,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("gemini",),
         env_key="GEMINI_API_KEY",
         display_name="Gemini",
+        homepage="https://gemini.google.com/",
         skip_prefixes=("gemini/",),  # avoid double-prefix
         env_extras=(),
         is_gateway=False,
@@ -424,6 +438,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         name_aliases=("zhipu",),  # model ids written before the rename
         env_key="ZAI_API_KEY",
         display_name="Z.ai",
+        homepage="https://z.ai",
         skip_prefixes=("zhipu/", "zai/", "openrouter/", "hosted_vllm/"),
         env_extras=(("ZHIPUAI_API_KEY", "{api_key}"),),
         is_gateway=False,
@@ -440,6 +455,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("qwen", "dashscope"),
         env_key="DASHSCOPE_API_KEY",
         display_name="DashScope",
+        homepage="https://www.aliyun.com/product/bailian",
         skip_prefixes=("dashscope/", "openrouter/"),
         env_extras=(),
         is_gateway=False,
@@ -456,6 +472,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("moonshot", "kimi"),
         env_key="MOONSHOT_API_KEY",
         display_name="Moonshot",
+        homepage="https://www.moonshot.cn/",
         skip_prefixes=("moonshot/", "openrouter/"),
         is_gateway=False,
         is_local=False,
@@ -469,13 +486,25 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         # `provider test` and the wizard probe /v1/models before any LiteLLM call.
         default_api_base="https://api.moonshot.ai/v1",
     ),
-    # MiniMax: needs "minimax/" prefix for LiteLLM routing.
+    ProviderSpec(
+        name="nvidia_nim",
+        keywords=("nvidia", "nemotron"),
+        env_key="NVIDIA_NIM_API_KEY",
+        display_name="NVIDIA",
+        homepage="https://build.nvidia.com/explore/discover",
+        skip_prefixes=("nvidia_nim/",),
+        default_api_base="https://integrate.api.nvidia.com/v1",
+        passes_default_api_base=True,
+        default_model="nvidia-nim/nvidia/nemotron-3-super-120b-a12b",
+    ),
+    # MiniMax Global: needs "minimax/" prefix for LiteLLM routing.
     # Uses OpenAI-compatible API at api.minimax.io/v1.
     ProviderSpec(
         name="minimax",
         keywords=("minimax",),
         env_key="MINIMAX_API_KEY",
-        display_name="MiniMax",
+        display_name="MiniMax (Global)",
+        homepage="https://platform.minimax.io/",
         skip_prefixes=("minimax/", "openrouter/"),
         env_extras=(),
         is_gateway=False,
@@ -483,10 +512,26 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_key_prefix="",
         detect_by_base_keyword="",
         strip_model_prefix=False,
+        strip_api_base_trailing_slash=True,
         model_overrides=(),
         # Needed by `provider test` and the wizard preflight, which probe
         # /v1/models before any LiteLLM call resolves an endpoint.
         default_api_base="https://api.minimax.io/v1",
+    ),
+    ProviderSpec(
+        name="minimax_cn_api",
+        keywords=("minimax-cn-api",),
+        env_key="MINIMAX_API_KEY",
+        display_name="MiniMax (CN)",
+        homepage="https://platform.minimaxi.com/",
+        via_driver="minimax",
+        metadata_prefix="minimax",
+        skip_prefixes=("openrouter/",),
+        default_api_base="https://api.minimaxi.com/v1/",
+        passes_default_api_base=True,
+        strip_api_base_trailing_slash=True,
+        requires_api_base=True,
+        default_model="minimax-cn-api/MiniMax-M3",
     ),
     ProviderSpec(
         name="minimax_global",
@@ -494,6 +539,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("minimax-global",),
         env_key="",
         display_name="MiniMax Global (OAuth)",
+        homepage="https://platform.minimax.io/",
         via_driver="anthropic",
         skip_prefixes=("anthropic/",),
         default_api_base="https://api.minimax.io/anthropic/v1",
@@ -508,6 +554,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("minimax-cn",),
         env_key="",
         display_name="MiniMax CN (OAuth)",
+        homepage="https://platform.minimaxi.com/",
         via_driver="anthropic",
         skip_prefixes=("anthropic/",),
         default_api_base="https://api.minimaxi.com/anthropic/v1",
@@ -524,6 +571,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("vllm",),
         env_key="HOSTED_VLLM_API_KEY",
         display_name="vLLM/Local",
+        homepage="https://docs.vllm.ai/",
         name_aliases=("vllm",),
         skip_prefixes=(),
         env_extras=(),
@@ -535,12 +583,31 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=False,
         model_overrides=(),
     ),
+    # === LM Studio (local, OpenAI-compatible) ===============================
+    ProviderSpec(
+        name="lm_studio",
+        keywords=("lmstudio", "lm-studio"),
+        env_key="",
+        display_name="LM Studio",
+        homepage="https://lmstudio.ai/",
+        name_aliases=("lmstudio",),
+        skip_prefixes=(),
+        env_extras=(),
+        is_gateway=False,
+        is_local=True,
+        detect_by_key_prefix="",
+        detect_by_base_keyword="",
+        default_api_base="http://localhost:1234/v1",
+        strip_model_prefix=False,
+        model_overrides=(),
+    ),
     # === Ollama (local, OpenAI-compatible) ===================================
     ProviderSpec(
         name="ollama_chat",
         keywords=("ollama", "nemotron"),
         env_key="OLLAMA_API_KEY",
         display_name="Ollama",
+        homepage="https://ollama.com/",
         name_aliases=("ollama",),
         skip_prefixes=("ollama/", "ollama_chat/"),
         env_extras=(),
@@ -560,6 +627,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("groq",),
         env_key="GROQ_API_KEY",
         display_name="Groq",
+        homepage="https://groq.com/",
         skip_prefixes=("groq/",),  # avoid double-prefix
         env_extras=(),
         is_gateway=False,

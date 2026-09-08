@@ -9,6 +9,7 @@
 export interface Provider {
   id: string
   name: string
+  homepage?: string
   models: string[]
   /* Authenticated. A provider without an account is not offered: picking one of
      its models would fail on the next turn rather than at the click. */

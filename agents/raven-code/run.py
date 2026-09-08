@@ -21,10 +21,11 @@ fork launcher's own pair:
   kill kept distinct from exit 1.
 
 The fork's coding conduct rides the rendered config now, not the process
-environment: ``plugins.dirs`` names the code-flow plugin and its slice flips
-the flow on (per D6). Worktree isolation retired with the write gate: nothing
-locks a checkout, and a session learns from the flow when other sessions are
-working beside it. The launch contract is otherwise the fork launcher's: refuse
+environment: ``plugins.dirs`` names the code-flow plugin, and the
+``workspaceGate`` block in its slice arms the first-write gate (the fork's
+``RAVEN_WORKSPACE_ALLOC_*`` env contract respelled as config, per D6) --
+multiplexed layout for the ACP server, one-conversation layout for a CLI
+instance. The launch contract is otherwise the fork launcher's: refuse
 without any LLM key before any process starts, seed the fork's TOOLS.md
 wording into the state partition once, keep secrets out of the published
 config and in a 0600 rendered copy whose parent decides the data dir.
@@ -57,39 +58,6 @@ FLOW_PLUGIN_ID = "code-flow"
 GUIDE = PLUGINS_DIR / FLOW_PLUGIN_ID / "prompts" / "TOOLS_CODE.md"
 
 PRODUCT = "raven-code"
-
-# Effort overlays over the baseline config. `config.json` is the complete
-# default (high) profile; each overlay carries the one knob its tier moves, so
-# the provider wiring and the tool surface exist in exactly one place.
-MODES_DIR = HERE / "modes"
-# The ids are the host's own tier ladder (medium / high / max): the host clamps
-# its session tier onto the rungs an agent offers by name, and a rung it cannot
-# rank would leave the agent on its default rather than guess. The baseline IS
-# the high profile, so it needs no overlay file; the others do.
-BASELINE_MODE = "high"
-# What a client's mode picker shows, and what the dispatching model reads when
-# it chooses a tier for a task. The copy lives here rather than in the overlay
-# files because it is product text about the choice, not config the agent reads.
-MODE_LABELS = {
-    "medium": (
-        "Medium",
-        "Lighter reasoning. For a small, well-specified change, a question about the code, "
-        "or an explanation; the cheapest and fastest tier.",
-    ),
-    "high": (
-        "High",
-        "Standard reasoning, the default. Right for an ordinary fix, feature or failing test "
-        "unless the request says otherwise.",
-    ),
-    "max": (
-        "Max",
-        "Deepest reasoning. For a hard bug, a cross-file refactor, or when the user has "
-        "explicitly asked for the most thorough attempt; the slowest and most expensive tier.",
-    ),
-}
-# The one top-level key an overlay may carry, and under it the one knob.
-OVERLAY_KEYS = frozenset({"agents"})
-EFFORT_KEY = "reasoningEffort"
 
 # Where each secret belongs in the config the engine loads; keys stay out of
 # config.json because that file is published.
@@ -180,40 +148,16 @@ def seed_guide(partition: Path) -> None:
     render.seed_once(partition / "TOOLS.md", lambda: GUIDE.read_text(encoding="utf-8"))
 
 
-def overlay_effort(overlay: dict) -> str | None:
-    """The one knob a tier moves, read strictly; ``None`` for the baseline's empty diff.
-
-    An overlay naming anything else would be declared and then ignored by the
-    engine's mode profile, which is exactly the silent no-op the refusal here
-    exists to prevent.
-    """
-    if not overlay:
-        return None
-    defaults = (overlay.get("agents") or {}).get("defaults") or {}
-    extra = sorted(set(overlay.get("agents") or {}) - {"defaults"}) + sorted(set(defaults) - {EFFORT_KEY})
-    if extra:
-        raise SystemExit(
-            f"error: a raven-code mode overlay moves {', '.join(extra)}; a tier moves only agents.defaults.{EFFORT_KEY}"
-        )
-    effort = defaults.get(EFFORT_KEY)
-    if not isinstance(effort, str) or not effort.strip():
-        raise SystemExit(f"error: a raven-code mode overlay names no agents.defaults.{EFFORT_KEY}")
-    return effort.strip()
-
-
-def resolve_mode(overlay: dict) -> tuple[None, dict]:
-    overlay_effort(overlay)
-    return None, {}
-
-
-def render_config(source: Path, partition: Path, mode: str | None = None) -> Path:
+def render_config(source: Path, partition: Path, gate: dict[str, str]) -> Path:
     """Write a copy of ``source`` with the secrets merged in, under ``partition``.
 
     The partition is the rendered file's parent and the pinned Agent home, so
-    the runtime data dir and transcripts stay in this host-owned partition; the
-    working directory repository work happens in stays a separate path (the ACP
-    session cwd, or ``--workspace``). ``mode`` is which effort tier sessions
-    start in; the source stays the baseline whatever the tier.
+    the runtime data dir, transcripts and allocation records stay in this
+    host-owned partition; the working directory repository work happens in
+    stays a separate path (the ACP session cwd, or ``--workspace``). ``gate``
+    is the workspaceGate arming rendered into the code-flow slice -- this
+    render owns those spellings and the plugin conforms (verdict D6: the
+    fork's ``RAVEN_WORKSPACE_ALLOC_*`` env contract, moved into config).
     """
     config = json.loads(source.read_text(encoding="utf-8"))
     host = render.host_config()
@@ -242,27 +186,15 @@ def render_config(source: Path, partition: Path, mode: str | None = None) -> Pat
     plugins = config.setdefault("plugins", {})
     plugins["dirs"] = [str(PLUGINS_DIR)]
     flow_slice = plugins.setdefault("config", {}).setdefault(FLOW_PLUGIN_ID, {})
-    # The launcher flips the flow on for its own renders, so a custom --config
-    # lacking the code-flow slice still gets the product's conduct. setdefault,
-    # so an operator's explicit false still opts out.
+    flow_slice.setdefault("workspaceGate", dict(gate))
+    # The launcher that arms the gate also flips it on: rendering an armed
+    # workspaceGate into a slice the plugin reads as enabled=False would be
+    # these two lines disagreeing, and on a custom --config lacking the
+    # code-flow slice it would deploy the very coding-agent-with-no-approval-
+    # gate the swap ordering exists to prevent (the fork armed via env,
+    # regardless of config file). setdefault, so an operator's explicit false
+    # still opts out.
     flow_slice.setdefault("enabled", True)
-
-    # Declared, not merged: the engine composes a profile per session from the
-    # catalogue over session/set_mode, and --mode only picks the starting entry.
-    catalogue = render.mode_catalogue(
-        MODES_DIR,
-        MODE_LABELS,
-        baseline=BASELINE_MODE,
-        overlay_keys=OVERLAY_KEYS,
-        resolve=resolve_mode,
-    )
-    if mode and mode not in catalogue:
-        raise SystemExit(f"error: no overlay for mode {mode!r} under {MODES_DIR}")
-    if catalogue:
-        acp = config.setdefault("acp", {})
-        acp["modes"] = catalogue
-        acp["defaultMode"] = mode or BASELINE_MODE
-        log(f"[run] modes: {', '.join(catalogue)} (default {acp['defaultMode']})")
 
     partition.mkdir(parents=True, exist_ok=True)
     seed_guide(partition)
@@ -270,8 +202,8 @@ def render_config(source: Path, partition: Path, mode: str | None = None) -> Pat
     return render.write_rendered(config, partition)
 
 
-def render_acp_config(source: Path, mode: str | None = None) -> Path:
-    """The ACP hosting's render: the acp partition.
+def render_acp_config(source: Path) -> Path:
+    """The ACP hosting's render: the acp partition, the multiplexed arming.
 
     The partition is the engine's Agent home and must sit OUTSIDE the host
     Agent home (the host hands its home over as the session cwd, and the
@@ -281,7 +213,15 @@ def render_acp_config(source: Path, mode: str | None = None) -> Path:
     under CODE_STATE_ROOT; CODE_ACP_HOME overrides the home alone.
     """
     acp_state = render.product_acp_home(PRODUCT, override=env_value("CODE_ACP_HOME")).resolve()
-    return render_config(source, acp_state, mode=mode)
+    return render_config(
+        source,
+        acp_state,
+        {
+            "allocBase": str(acp_state),
+            "reposRoot": str(state_root() / "repos"),
+            "stateBucket": "acp",
+        },
+    )
 
 
 def serve(args: argparse.Namespace) -> int:
@@ -295,7 +235,7 @@ def serve(args: argparse.Namespace) -> int:
     keeps, and the pid-liveness sweep in render_config is the cleaner that
     actually runs.
     """
-    rendered = render_acp_config(Path(args.config).resolve(), mode=getattr(args, "mode", None))
+    rendered = render_acp_config(Path(args.config).resolve())
     log(f"[run] exec {sys.executable} -m raven acp (config {rendered})")
     os.execv(sys.executable, [sys.executable, "-m", "raven", "acp", "--config", str(rendered)])
     raise AssertionError("unreachable: execv does not return")
@@ -493,7 +433,15 @@ def run_task(args: argparse.Namespace) -> int:
     _VERBOSE = args.verbose
     _LOG_FILE = state_dir / "launcher.log"
 
-    rendered = render_config(Path(args.config).resolve(), state_dir)
+    rendered = render_config(
+        Path(args.config).resolve(),
+        state_dir,
+        {
+            "allocDir": str(state_dir),
+            "instance": instance,
+            "reposRoot": str(state_root() / "repos"),
+        },
+    )
     workspace = resolve_workspace(state_dir, args.workspace)
 
     transcript = session_file(state_dir, workspace, conversation)
@@ -621,9 +569,6 @@ def main() -> int:
     parser.add_argument("--job", help="state directory name for a run by hand (default: a unique name)")
     parser.add_argument("--workspace", help="work in this directory instead of the inherited cwd")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
-    parser.add_argument(
-        "--mode", choices=sorted(MODE_LABELS), help="the effort tier sessions start in (with --acp only)"
-    )
     # No wall-clock cap by default: a real coding task has no predictable
     # length, and a killed run produces nothing at all. The per-LLM-call and
     # per-command limits stay: those bound a stall, not a long task.
@@ -631,8 +576,6 @@ def main() -> int:
     parser.add_argument("--keep-going", action="store_true", help="do not fail when no answer was committed")
     parser.add_argument("--verbose", action="store_true", help="mirror diagnostics to stderr; never when spawned")
     args = parser.parse_args()
-    if args.mode and not args.acp:
-        raise SystemExit("error: --mode applies to --acp only; a one-turn CLI run has no session to put a tier on")
     if args.acp:
         return serve(args)
     return run_task(args)

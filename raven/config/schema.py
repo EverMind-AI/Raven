@@ -547,13 +547,19 @@ class ProvidersConfig(Base):
     )
     gemini: GeminiProviderConfig = Field(default_factory=GeminiProviderConfig)  # Google Gemini / Vertex AI
     moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
+    nvidia_nim: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax: ProviderConfig = Field(default_factory=ProviderConfig)
+    minimax_cn_api: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax_global: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax_cn: ProviderConfig = Field(default_factory=ProviderConfig)
     aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
     ollama_chat: ProviderConfig = Field(
         default_factory=ProviderConfig,
         validation_alias=AliasChoices("ollama_chat", "ollamaChat", "ollama"),
+    )
+    lm_studio: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("lm_studio", "lmStudio", "lmstudio"),
     )
     siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow
     volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine
@@ -711,12 +717,12 @@ class AcpModeConfig(Base):
     """One operating profile a client may switch a session to over ACP.
 
     The stable schema's session modes: a named profile a session runs in,
-    switched with ``session/set_mode``. Three things move with a mode -- the
-    tool-iteration ceiling the loop enforces, the reasoning effort its model
-    calls run at, and an ``overlay`` the loop does not interpret at all: it
-    reaches the hook chain as ``ctx.metadata["mode_overlay"]``, so a product's
-    own hooks read their own knobs from it. Everything else about the agent is
-    the connection's, identically, in every mode.
+    switched with ``session/set_mode``. Two things move with a mode -- the
+    tool-iteration ceiling the loop enforces, and an ``overlay`` the loop does
+    not interpret at all: it reaches the hook chain as
+    ``ctx.metadata["mode_overlay"]``, so a product's own hooks read their own
+    knobs from it. Everything else about the agent is the connection's,
+    identically, in every mode.
     """
 
     name: str
@@ -737,8 +743,8 @@ class AcpConfig(Base):
     """The ACP surface's session modes.
 
     The three built-in tiers move what raven asks of its SUB-AGENTS, not what
-    raven does: every one leaves ``maxToolIterations`` and ``reasoningEffort``
-    inherited and ``overlay`` empty. A deployment that declares its own catalogue replaces this one whole;
+    raven does: every one leaves ``maxToolIterations`` inherited and ``overlay``
+    empty. A deployment that declares its own catalogue replaces this one whole;
     one that writes ``"modes": {}`` turns the surface off entirely.
     """
 
@@ -2121,17 +2127,17 @@ class Config(BaseSettings):
         return p.effective_api_key if p else None
 
     def get_api_base(self, model: str | None = None) -> str | None:
-        """Get API base URL for the given model. Applies default URLs for gateway/local providers."""
+        """Get the configured or usable shipped API base URL for a model."""
         from raven.providers.registry import find_by_name
 
         p, name = self._match_provider(model)
         if p and p.api_base:
             return p.api_base
-        # Only gateways / local providers get a default api_base here. A
-        # standard provider (like Moonshot) reaches its base URL through the env
-        # vars LiteLLMProvider._setup_env writes; what is returned here travels
-        # as the per-call ``api_base`` kwarg, which would override LiteLLM's own
-        # routing for that vendor.
+        # Gateways, local providers, and regional endpoints get a default
+        # api_base here. A standard provider (like Moonshot) reaches its base URL
+        # through the env vars LiteLLMProvider._setup_env writes; what is returned
+        # here travels as the per-call ``api_base`` kwarg, which would override
+        # LiteLLM's own routing for that vendor.
         if name:
             spec = find_by_name(name)
             if spec and spec.usable_default_api_base:

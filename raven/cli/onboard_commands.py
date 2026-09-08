@@ -98,12 +98,14 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
             # the row twice as long for nothing.
             {
                 "name": "minimax",
-                "label": "MiniMax (open-source partner)",
+                "label": "MiniMax (Global, open-source partner)",
             },
+            {"name": "minimax_cn_api", "label": "MiniMax (CN)"},
             {"name": "deepseek", "label": "DeepSeek"},
             {"name": "zai", "label": "Z.ai (Zhipu)"},
             {"name": "dashscope", "label": "DashScope"},
             {"name": "moonshot", "label": "Moonshot"},
+            {"name": "nvidia_nim", "label": "NVIDIA"},
             {"name": "volcengine", "label": "VolcEngine"},
             {"name": "siliconflow", "label": "SiliconFlow"},
             {"name": "groq", "label": "Groq"},
@@ -129,6 +131,7 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
     {
         "kind": "local",
         "providers": [
+            {"name": "lm_studio", "label": "LM Studio (local)"},
             {"name": "ollama_chat", "label": "Ollama (local)"},
             {"name": "hosted_vllm", "label": "vLLM / self-hosted"},
         ],
@@ -744,6 +747,13 @@ def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
     return stored_model_id(provider, model_id)
 
 
+def _uses_manual_endpoint_flow(provider: str, spec: Any) -> bool:
+    """Return whether setup must collect an endpoint instead of using a shipped one."""
+    return provider == "custom" or (
+        auth_shape(provider) == SHAPE_ENDPOINT and not (spec and spec.usable_default_api_base)
+    )
+
+
 def _pick_model(
     provider: str,
     spec: Any,
@@ -1050,7 +1060,7 @@ def _configure_one_provider(
         spec = find_by_name(provider)
         kind = auth_shape(provider)
         is_oauth = kind == SHAPE_OAUTH
-        is_custom = kind == SHAPE_ENDPOINT
+        is_custom = _uses_manual_endpoint_flow(provider, spec)
         # The interactive picker already echoes the chosen provider; only print
         # an explicit confirmation when it came from --provider (no echo then).
         if flag_provider:
@@ -1504,10 +1514,9 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                     stored = ""
                 retyped = _prompt_local_api_base(target_spec, current=stored)
                 _write_provider_fields(target, {"api_base": retyped})
-            elif auth_shape(target) == SHAPE_ENDPOINT:
-                # A self-hosted endpoint is a key *and* the address it is sent
-                # to. Updating only the key left the one field that moves when
-                # the user redeploys -- the URL -- unreachable from this menu.
+            elif _uses_manual_endpoint_flow(target, target_spec):
+                # An endpoint without a shipped address needs both its key and
+                # URL updated here; the URL may move when the service is redeployed.
                 from raven.config.update_providers import get_provider_config
 
                 try:
@@ -2602,7 +2611,7 @@ def register(app: typer.Typer) -> None:
         base_url: Optional[str] = typer.Option(
             None,
             "--base-url",
-            help="Server URL: required for a local deployment (ollama_chat / hosted_vllm), or a custom OpenAI-compatible endpoint",
+            help="Server URL: required for a local deployment (LM Studio / Ollama / vLLM), or a custom OpenAI-compatible endpoint",
         ),
         model: Optional[str] = typer.Option(None, "--model", help="Default model id (e.g. 'openai/gpt-4o-mini')"),
         channel: Optional[str] = typer.Option(None, "--channel", help="Channel to enable in Step 3"),

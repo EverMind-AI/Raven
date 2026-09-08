@@ -22,6 +22,7 @@ providers cannot have keys written from the picker — that is gated to
 from __future__ import annotations
 
 import asyncio
+import time
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -86,6 +87,9 @@ def _parse(model_cls: type, params: dict) -> Any:
 #: ``None``, which is what a provider absent from the config resolves to.
 _UNLOADED: Any = object()
 
+_LIVE_MODEL_CACHE_TTL_SECONDS = 5.0
+_LIVE_MODEL_CACHE: dict[tuple[str, str], tuple[float, tuple[str, ...]]] = {}
+
 
 def _provider_models(slug: str, *, configured: bool, section: Any = _UNLOADED) -> list[str]:
     if section is _UNLOADED:
@@ -99,12 +103,12 @@ def _provider_models(slug: str, *, configured: bool, section: Any = _UNLOADED) -
     from_config = list(from_config) if isinstance(from_config, list) else []
     # Priority: what the user configured (manual entry via ``model.add_model``
     # writes here), then the curated shortlist, then LiteLLM's own catalogue,
-    # then whatever the account itself reports. Curated before catalogue because
+    # then whatever the configured runtime reports. Curated before catalogue because
     # the shortlist is a few models worth recommending and the catalogue is
     # everything, deprecated snapshots included; catalogue after it because eleven
     # providers have no shortlist at all, which is why the picker used to offer
-    # them nothing; the account last because only one provider can be asked and
-    # asking costs a request (see ``_account_models``).
+    # them nothing; the live source is last because asking may cost a request
+    # (see ``_runtime_models``).
     from raven.providers.wire import merge_key
 
     out: list[str] = []
@@ -113,7 +117,7 @@ def _provider_models(slug: str, *, configured: bool, section: Any = _UNLOADED) -
         *from_config,
         *common_models_for(slug),
         *litellm_models_for(slug),
-        *_account_models(slug, configured=configured),
+        *_runtime_models(slug, configured=configured, section=section),
     )
     for candidate in chain:
         # By identity: a model reaching this list from two sources in two
@@ -126,23 +130,51 @@ def _provider_models(slug: str, *, configured: bool, section: Any = _UNLOADED) -
     return out
 
 
-def _account_models(slug: str, *, configured: bool) -> tuple[str, ...]:
-    """Models the account itself reports, for a provider only it can answer for.
+def _runtime_models(slug: str, *, configured: bool, section: Any = _UNLOADED) -> tuple[str, ...]:
+    """Models reported by a configured runtime rather than a static catalogue.
 
     Codex has no static list worth offering: the registry default is refused by
     the backend, and the entries LiteLLM's table carries are not the slugs an
-    account is entitled to. Everyone else is served by the tiers above.
+    account is entitled to. LM Studio serves whichever models are loaded in the
+    local process, so its ``/v1/models`` response is likewise authoritative.
 
-    Nobody signed in has nothing to report, so asking costs a request that can
-    only fail -- and the failure is cached, which is how opening the picker while
-    signed out left this provider empty for the half-minute after signing in.
+    An unconfigured provider has nothing to report. LM Studio probes are cached
+    briefly so repeated picker refreshes do not turn into repeated local HTTP
+    calls, while a model loaded after the picker opens appears within seconds.
     """
-    if slug != "openai_codex" or not configured:
+    if not configured:
         return ()
 
-    from raven.providers.codex_catalog import account_models
+    if slug == "openai_codex":
+        from raven.providers.codex_catalog import account_models
 
-    return tuple(_stored_spelling(slug, model) for model in account_models())
+        return tuple(_stored_spelling(slug, model) for model in account_models())
+
+    if slug != "lm_studio":
+        return ()
+
+    if section is _UNLOADED:
+        try:
+            cfg = get_provider_config(slug, redact_secrets=False)
+        except KeyError:
+            cfg = {}
+        api_base = str(cfg.get("api_base") or "")
+    else:
+        api_base = str(getattr(section, "api_base", None) or "")
+
+    cache_key = (slug, api_base)
+    now = time.monotonic()
+    cached = _LIVE_MODEL_CACHE.get(cache_key)
+    if cached and now - cached[0] < _LIVE_MODEL_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    from raven.config.update_providers import test_provider
+
+    result = test_provider(slug, timeout_s=2)
+    raw_models = result.get("model_ids") if result.get("ok") else None
+    models = tuple(_stored_spelling(slug, model) for model in (raw_models or []) if isinstance(model, str) and model)
+    _LIVE_MODEL_CACHE[cache_key] = (now, models)
+    return models
 
 
 def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -> dict[str, dict[str, Any]]:
@@ -232,10 +264,13 @@ def _build_provider_entry(
         "model_labels": _model_labels(slug, models, section=section),
         "slug": slug,
         "name": info.get("display_name") or (spec.label if spec else slug),
+        "homepage": (spec.homepage or None) if spec else None,
         "authenticated": configured,
         "is_current": slug == current_provider,
         "auth_type": kind,
         "key_env": (spec.env_key or None) if spec else None,
+        "api_base": info.get("api_base"),
+        "default_api_base": (spec.default_api_base or None) if spec else None,
         "models": models,
         "protocols": protocols,
         "protocol_overrides": overrides,

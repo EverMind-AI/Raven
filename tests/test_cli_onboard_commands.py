@@ -438,6 +438,34 @@ def test_onboard_non_interactive_custom_requires_base_url(
     assert "--base-url is required" in r.stdout
 
 
+def test_onboard_non_interactive_minimax_cn_uses_built_in_endpoint_and_model(
+    tmp_env: Path, stub_verify, stub_step3
+) -> None:
+    r = runner.invoke(
+        app,
+        [
+            "onboard",
+            "--non-interactive",
+            "--provider",
+            "minimax-cn-api",
+            "--api-key",
+            "sk-minimax-cn-fake",
+            "--skip-channel",
+            "--yes",
+        ],
+    )
+
+    assert r.exit_code == 0, r.stdout
+    data = json.loads(tmp_env.read_text())
+    assert data["providers"]["minimax_cn_api"]["apiKey"] == "sk-minimax-cn-fake"
+    assert data["agents"]["defaults"]["model"] == "minimax-cn-api/MiniMax-M3"
+    from raven.config.loader import load_config
+
+    config = load_config()
+    assert config.providers.minimax_cn_api.api_base is None
+    assert config.get_api_base("minimax-cn-api/MiniMax-M3") == "https://api.minimaxi.com/v1/"
+
+
 def test_onboard_oauth_non_interactive_errors(tmp_env: Path) -> None:
     """OAuth providers can't run headless — wizard must surface that."""
     r = runner.invoke(
@@ -3613,7 +3641,7 @@ def test_the_curated_groups_cover_the_flat_list_and_carry_both_fallbacks() -> No
     # the custom-endpoint path, which routes through the generic OpenAI driver
     # and so loses the behaviour litellm applies to "ollama_chat/".
     local = {entry["name"] for group in _CURATED_GROUPS if group["kind"] == "local" for entry in group["providers"]}
-    assert local == {"ollama_chat", "hosted_vllm"}
+    assert local == {"lm_studio", "ollama_chat", "hosted_vllm"}
 
 
 def test_the_vendor_step_offers_litellm_names_the_picker_does_not_already_list() -> None:
@@ -3652,11 +3680,15 @@ def test_minimax_precedes_deepseek_and_carries_the_open_source_partner_marker() 
 
     api_key_group = next(g for g in _CURATED_GROUPS if g["kind"] == "api_key")
     names = [entry["name"] for entry in api_key_group["providers"]]
-    assert names.index("minimax") == names.index("deepseek") - 1
+    assert names.index("minimax") == names.index("minimax_cn_api") - 1
+    assert names.index("minimax_cn_api") == names.index("deepseek") - 1
 
     minimax = api_key_group["providers"][names.index("minimax")]
-    assert minimax["label"] == "MiniMax (open-source partner)"
-    assert zh_catalog.MESSAGES[minimax["label"]] == "MiniMax(开源合作伙伴)"
+    assert minimax["label"] == "MiniMax (Global, open-source partner)"
+    minimax_cn = api_key_group["providers"][names.index("minimax_cn_api")]
+    assert minimax_cn["label"] == "MiniMax (CN)"
+    assert zh_catalog.MESSAGES[minimax["label"]] == "MiniMax Global(开源合作伙伴)"
+    assert zh_catalog.MESSAGES[minimax_cn["label"]] == "MiniMax 中国"
 
     oauth_group = next(g for g in _CURATED_GROUPS if g["kind"] == "oauth")
     for entry in oauth_group["providers"]:
@@ -4172,8 +4204,10 @@ def test_the_wizard_never_reads_a_spec_auth_flag_itself() -> None:
         ("github_copilot", "oauth"),
         ("openai_codex", "oauth"),
         ("minimax_global", "oauth"),
+        ("minimax_cn_api", "endpoint"),
         ("ollama_chat", "local"),
         ("hosted_vllm", "local"),
+        ("lm_studio", "local"),
         ("custom", "endpoint"),
         ("anthropic", "key"),
         ("mistral", "key"),  # no spec at all
@@ -4192,6 +4226,36 @@ def test_every_registered_provider_has_exactly_one_credential_kind() -> None:
     known = {SHAPE_OAUTH, SHAPE_LOCAL, SHAPE_ENDPOINT, SHAPE_KEY}
     for spec in PROVIDERS:
         assert auth_shape(spec.name) in known, spec.name
+
+
+def test_minimax_cn_onboarding_uses_vendor_credentials_and_model_picker(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: dict[str, dict[str, Any]] = {}
+
+    def collect(provider: str, **kwargs: Any) -> None:
+        calls["credentials"] = {"provider": provider, **kwargs}
+
+    def resolve(provider: str, spec: Any, **kwargs: Any) -> str:
+        calls["model"] = {"provider": provider, "spec": spec, **kwargs}
+        return "minimax-cn-api/MiniMax-M3"
+
+    monkeypatch.setattr(onboard_commands, "_collect_credentials", collect)
+    monkeypatch.setattr(onboard_commands, "_resolve_model_with_test", resolve)
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda *_args: None)
+
+    result = onboard_commands._configure_one_provider(
+        provider="minimax-cn-api",
+        api_key=None,
+        base_url=None,
+        model=None,
+        non_interactive=False,
+        warnings=[],
+    )
+
+    assert result == {"provider": "minimax_cn_api", "model": "minimax-cn-api/MiniMax-M3"}
+    assert calls["credentials"]["is_custom"] is False
+    assert calls["model"]["is_custom"] is False
 
 
 def test_the_picker_result_goes_through_the_same_gate_as_the_flag(monkeypatch, tmp_path) -> None:
@@ -4444,7 +4508,10 @@ def test_a_provider_with_no_model_endpoint_is_not_reported_as_unreachable(
         )
 
 
-def test_updating_a_self_hosted_endpoint_can_change_its_address(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("provider", ["custom", "azure_openai"])
+def test_updating_an_endpoint_without_a_shipped_address_can_change_its_address(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
     """A key plus the address it is sent to; the menu only re-asked for the key.
 
     The URL is the field that moves when the user redeploys, and it was the one
@@ -4453,7 +4520,7 @@ def test_updating_a_self_hosted_endpoint_can_change_its_address(tmp_env: Path, m
     """
     from raven.config.update_providers import set_provider_fields
 
-    set_provider_fields("custom", {"api_key": "sk-old", "api_base": "http://old-box:8000/v1"})
+    set_provider_fields(provider, {"api_key": "sk-old", "api_base": "http://old-box:8000/v1"})
 
     import questionary
 
@@ -4464,7 +4531,7 @@ def test_updating_a_self_hosted_endpoint_can_change_its_address(tmp_env: Path, m
         def ask(self) -> Any:
             return self._a
 
-    select_answers = iter(["custom", "update", onboard_commands._BACK])
+    select_answers = iter([provider, "update", onboard_commands._BACK])
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
     monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kw: "sk-new")
 
@@ -4478,10 +4545,39 @@ def test_updating_a_self_hosted_endpoint_can_change_its_address(tmp_env: Path, m
 
     onboard_commands._manage_existing_providers(non_interactive=False)
 
-    section = json.loads(tmp_env.read_text())["providers"]["custom"]
+    section = json.loads(tmp_env.read_text())["providers"][provider]
     assert section.get("apiBase") == "http://new-box:9000/v1", section
     assert section.get("apiKey") == "sk-new", section
     assert seeded["default"] == "http://old-box:8000/v1", "the stored address was not offered back"
+
+
+def test_updating_minimax_cn_rotates_only_the_key(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.config.loader import load_config
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("minimax_cn_api", {"api_key": "sk-old"})
+
+    import questionary
+
+    class _FQ:
+        def __init__(self, answer: Any) -> None:
+            self._answer = answer
+
+        def ask(self) -> Any:
+            return self._answer
+
+    select_answers = iter(["minimax_cn_api", "update", onboard_commands._BACK])
+    monkeypatch.setattr(questionary, "select", lambda *args, **kwargs: _FQ(next(select_answers)))
+    monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kwargs: "sk-new")
+    monkeypatch.setattr(onboard_commands, "_prompt_base_url", _must_not_call("_prompt_base_url"))
+
+    onboard_commands._manage_existing_providers(non_interactive=False)
+
+    data = json.loads(tmp_env.read_text())
+    assert data["providers"]["minimax_cn_api"]["apiKey"] == "sk-new"
+    config = load_config()
+    assert config.providers.minimax_cn_api.api_base is None
+    assert config.get_api_base("minimax-cn-api/MiniMax-M3") == "https://api.minimaxi.com/v1/"
 
 
 def test_a_provider_whose_endpoint_only_the_user_knows_is_asked_for_it() -> None:

@@ -13,6 +13,7 @@ import type { OnboardProvider, OnboardSource } from './types'
 const connected: OnboardProvider = {
   slug: 'anthropic',
   name: 'Anthropic',
+  homepage: 'https://anthropic.com/',
   auth_type: 'key',
   authenticated: true,
   models: ['claude-fable-5', 'claude-opus-5']
@@ -72,8 +73,10 @@ function install(providers: OnboardProvider[] = [connected, keyed], over: Partia
 const mount = () => render(<OnboardApp />, { container: document.getElementById('onb')! })
 const button = (text: string): HTMLButtonElement =>
   [...document.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === text)!
-const row = (name: string): HTMLButtonElement =>
-  [...document.querySelectorAll<HTMLElement>('.ob-row .nm')].find(item => item.textContent === name)!.closest('button')!
+const row = (name: string): HTMLButtonElement => {
+  const label = [...document.querySelectorAll<HTMLElement>('.ob-row .nm')].find(item => item.textContent === name)!
+  return label.closest('.ob-row')!.querySelector<HTMLButtonElement>('.provider-choice-action') || label.closest('button')!
+}
 
 const open = async (): Promise<void> => {
   await act(async () => {
@@ -114,6 +117,11 @@ describe('the onboarding island', () => {
     expect(h.options).toHaveBeenCalledTimes(1)
     expect([...document.querySelectorAll('.ob-row .nm')].map(item => item.textContent)).toEqual(['Anthropic', 'OpenAI'])
     expect(document.querySelector('.ob-row .bd.on')?.textContent).toBe('gui.onb.connected')
+    const rows = [...document.querySelectorAll<HTMLElement>('.ob-row')]
+    expect(rows[0]!.querySelector('.nm')?.firstElementChild?.getAttribute('src')).toBe('assets/providers/anthropic.svg')
+    expect(rows[0]!.querySelector('.provider-link')?.getAttribute('href')).toBe('https://anthropic.com/')
+    expect(rows[0]!.lastElementChild?.className).toBe('provider-status on')
+    expect(rows[1]!.lastElementChild?.className).toBe('provider-status')
   })
 
   it('takes a key before offering models and hands the exact fields to the source', async () => {
@@ -155,6 +163,57 @@ describe('the onboarding island', () => {
       fireEvent.click(button('gui.onb.next'))
     })
     expect(h.saves).toEqual([['ollama', '', 'http://127.0.0.1:11434']])
+  })
+
+  it('prefills the LM Studio endpoint and accepts it without an API key', async () => {
+    const local: OnboardProvider = {
+      slug: 'lm_studio',
+      name: 'LM Studio',
+      auth_type: 'local',
+      authenticated: false,
+      needs_api_base: true,
+      default_api_base: 'http://localhost:1234/v1',
+      models: ['lm-studio/qwen3-8b']
+    }
+    const h = install([local])
+    mount()
+    await open()
+    await start()
+    fireEvent.click(row('LM Studio'))
+    const base = document.querySelector<HTMLInputElement>('.ob-form .ob-in')!
+    expect(base.value).toBe('http://localhost:1234/v1')
+    expect(button('gui.onb.next').disabled).toBe(false)
+    await act(async () => {
+      fireEvent.click(button('gui.onb.next'))
+    })
+    expect(h.saves).toEqual([['lm_studio', '', 'http://localhost:1234/v1']])
+  })
+
+  it('shows the MiniMax CN endpoint and requires its API key', async () => {
+    const cn: OnboardProvider = {
+      slug: 'minimax_cn_api',
+      name: 'MiniMax (CN)',
+      auth_type: 'endpoint',
+      authenticated: false,
+      needs_api_base: false,
+      default_api_base: 'https://api.minimaxi.com/v1/',
+      models: ['minimax-cn-api/MiniMax-M3']
+    }
+    const h = install([cn])
+    mount()
+    await open()
+    await start()
+    fireEvent.click(row('MiniMax (CN)'))
+    const fields = document.querySelectorAll<HTMLInputElement>('.ob-form .ob-in')
+    expect(fields).toHaveLength(2)
+    expect(fields[1]!.value).toBe('https://api.minimaxi.com/v1/')
+    expect(button('gui.onb.next').disabled).toBe(true)
+    fireEvent.input(fields[0]!, { target: { value: 'K-CN' } })
+    expect(button('gui.onb.next').disabled).toBe(false)
+    await act(async () => {
+      fireEvent.click(button('gui.onb.next'))
+    })
+    expect(h.saves).toEqual([['minimax_cn_api', 'K-CN', 'https://api.minimaxi.com/v1/']])
   })
 
   it('re-probes OAuth without leaving the credentials step until it is connected', async () => {

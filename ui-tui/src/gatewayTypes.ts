@@ -351,8 +351,11 @@ export interface ToolsConfigureResponse {
 // arrives on the wire invisible to the component reading this type. The drift
 // test beside this file fails if a generated property is missing here.
 export interface ModelOptionProvider {
+  api_base?: string
   auth_type?: string
   authenticated?: boolean
+  default_api_base?: string
+  homepage?: string
   is_current?: boolean
   key_env?: null | string
   model_labels?: Record<string, { description?: string; label: string }>

@@ -865,10 +865,13 @@ export interface SubagentRow {
 export interface ModelOptionProvider {
   slug: string;
   name: string;
+  homepage?: string;
   authenticated: boolean;
   is_current: boolean;
   auth_type: string;
   key_env?: string;
+  api_base?: string;
+  default_api_base?: string;
   models: string[];
   /**
    * Effective API protocol keyed by model id.

@@ -12,8 +12,7 @@ from raven.providers.base import LLMProvider
 from raven.providers.common_models import common_models_for
 from raven.providers.registry import PROVIDERS, find_by_name
 
-# The Confluence "Providers" page claims 19 providers. This pins the current
-# registry so any drift (add/remove a ProviderSpec) is caught here.
+# Pin the current registry so any drift (add/remove a ProviderSpec) is caught here.
 EXPECTED_PROVIDER_NAMES = {
     "custom",
     "azure_openai",
@@ -30,18 +29,21 @@ EXPECTED_PROVIDER_NAMES = {
     "zai",
     "dashscope",
     "moonshot",
+    "nvidia_nim",
     "minimax",
+    "minimax_cn_api",
     "minimax_global",
     "minimax_cn",
     "hosted_vllm",
+    "lm_studio",
     "ollama_chat",
     "groq",
 }
 
 
-def test_registry_has_exactly_21_providers() -> None:
-    assert len(PROVIDERS) == 21
-    assert len(EXPECTED_PROVIDER_NAMES) == 21
+def test_registry_has_exactly_24_providers() -> None:
+    assert len(PROVIDERS) == 24
+    assert len(EXPECTED_PROVIDER_NAMES) == 24
 
 
 def test_registry_provider_name_set_is_pinned() -> None:
@@ -51,6 +53,15 @@ def test_registry_provider_name_set_is_pinned() -> None:
 def test_provider_names_are_unique() -> None:
     names = [spec.name for spec in PROVIDERS]
     assert len(names) == len(set(names))
+
+
+def test_concrete_providers_have_https_homepages() -> None:
+    missing_or_insecure = {
+        spec.name: spec.homepage
+        for spec in PROVIDERS
+        if spec.name != "custom" and not spec.homepage.startswith("https://")
+    }
+    assert not missing_or_insecure
 
 
 def test_a_specs_route_prefix_is_a_provider_litellm_knows() -> None:
@@ -119,6 +130,8 @@ _SEEDED_DIRECT_PROVIDERS = [
     "zai",
     "dashscope",
     "groq",
+    "nvidia_nim",
+    "minimax_cn_api",
     "minimax_global",
     "minimax_cn",
 ]
@@ -347,6 +360,7 @@ LABELLED_PROVIDERS = frozenset(
         "groq",
         "minimax",
         "minimax_cn",
+        "minimax_cn_api",
         "minimax_global",
         "moonshot",
         "openai",

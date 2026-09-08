@@ -16,7 +16,7 @@ vi.mock('../../shell/toast', () => ({
 }))
 
 const PROVIDERS: Provider[] = [
-  { id: 'minimax', name: 'MiniMax', models: ['minimax-m3', 'minimax-m2'], on: true },
+  { id: 'minimax', name: 'MiniMax (Global)', homepage: 'https://platform.minimax.io/', models: ['minimax-m3', 'minimax-m2'], on: true },
   { id: 'anthropic', name: 'Anthropic', models: ['vendor/claude-opus-5', 'claude-sonnet-5'], on: true },
   { id: 'openai', name: 'OpenAI', models: ['gpt-5.2'], on: false },
   { id: 'empty', name: 'Nothing', models: [], on: true },
@@ -72,6 +72,8 @@ const mount = () => render(<ModelPickerApp />, { container: document.body.append
 const pick = (): HTMLElement | null => document.querySelector('.mpick')
 const rows = (col: string): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(`.mpick .${col} .row`)]
 const field = (): HTMLInputElement => document.querySelector('.mpick .find input')!
+const providerSelected = (index: number): string | null | undefined =>
+  rows('provs')[index]?.querySelector('.provider-choice-action')?.getAttribute('aria-selected')
 
 const openIt = (anchor?: HTMLElement | null, after?: () => void) =>
   act(() => {
@@ -105,7 +107,10 @@ describe('the model picker', () => {
     install()
     mount()
     openIt()
-    expect(rows('provs').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['MiniMax', 'Anthropic'])
+    expect(rows('provs').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['MiniMax (Global)', 'Anthropic'])
+    expect(rows('provs')[0]!.querySelector('.nm')?.firstElementChild?.getAttribute('src')).toBe('assets/providers/minimax.svg')
+    expect(rows('provs')[0]!.querySelector('.provider-link')?.getAttribute('href')).toBe('https://platform.minimax.io/')
+    expect(rows('provs')[0]!.lastElementChild?.className).toBe('provider-status on')
   })
 
   it('refuses to open with nothing authenticated, and says why', () => {
@@ -121,7 +126,7 @@ describe('the model picker', () => {
     install()
     mount()
     openIt()
-    expect(rows('provs')[1]!.getAttribute('aria-selected')).toBe('true')
+    expect(providerSelected(1)).toBe('true')
     expect(rows('provs')[1]!.querySelector('.tick')!.textContent).toBe('•')
     const ticked = rows('models').find((b) => b.querySelector('.tick'))!
     expect(ticked.querySelector('.nm')!.textContent).toBe('claude-sonnet-5')
@@ -156,7 +161,7 @@ describe('the model picker', () => {
     mount()
     openIt()
     type('sonnet')
-    expect(rows('provs')[1]!.getAttribute('aria-selected')).toBe('true')
+    expect(providerSelected(1)).toBe('true')
     expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['claude-sonnet-5'])
   })
 
@@ -170,7 +175,7 @@ describe('the model picker', () => {
        you browse the rest of the provider a search just found for you, so the
        column has to stay where the search put it -- and show that provider's
        full list, not its one hit. */
-    expect(rows('provs')[1]!.getAttribute('aria-selected')).toBe('true')
+    expect(providerSelected(1)).toBe('true')
     expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual([
       'claude-opus-5',
       'claude-sonnet-5',
@@ -190,7 +195,7 @@ describe('the model picker', () => {
     type('')
     /* There is no better column to move to, so the selection must not wander --
        a typo on the way to a search must not relocate the reader. */
-    expect(rows('provs')[1]!.getAttribute('aria-selected')).toBe('true')
+    expect(providerSelected(1)).toBe('true')
     expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual([
       'claude-opus-5',
       'claude-sonnet-5',

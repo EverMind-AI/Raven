@@ -69,9 +69,10 @@ async function loadProviders(sid, gen) {
   // page the reader has since moved to.
   if (ticket !== viewGen) return;
   providersLive = (mo.providers || []).map((p) => ({
-    id: p.slug, name: p.name, models: p.models || [], on: p.authenticated,
+    id: p.slug, name: p.name, homepage: p.homepage || '', models: p.models || [], on: p.authenticated,
     protocols: p.protocols || {}, protocolOverrides: p.protocol_overrides || {},
     kind: p.auth_type || 'api_key', needsBase: !!p.needs_api_base,
+    apiBase: p.api_base || '', defaultApiBase: p.default_api_base || '',
     env: p.key_env || '', warn: p.warning || '',
     key: p.authenticated ? '已配置' : '',
   }));

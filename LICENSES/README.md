@@ -12,4 +12,5 @@ history.
 
 - `MIT-hermes-agent.txt` - Hermes Agent license notice.
 - `MIT-ink.txt` - Ink license notice.
+- `MIT-lobe-icons.txt` - Lobe Icons 1.95.0 provider SVGs under `ui-web/src/assets/providers/`.
 - `MIT-nanobot.txt` - Nanobot license notice.

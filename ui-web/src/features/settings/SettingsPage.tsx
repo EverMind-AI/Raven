@@ -6,6 +6,7 @@ import * as lookStore from '../../shell/look'
 import * as notifications from '../../shell/notifications'
 import { open as openUrl } from '../../shell/open-url'
 import { isMac, modKey } from '../../shell/platform'
+import { ProviderIcon, ProviderLink, ProviderStatus } from '../../shell/provider-mark'
 import { hint as reachHint, text as reachText } from '../../shell/reach'
 import { show as toast } from '../../shell/toast'
 import { open as openConn } from '../connections/store'
@@ -725,7 +726,12 @@ function ProvForm({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Element
         <>
           {(pv.needsBase || pv.kind === 'endpoint') && (
             <div className="keyrow">
-              <input ref={base} type="text" placeholder={t(pv.kind === 'local' ? 'gui.model.base_ph_local' : 'gui.model.base_ph')} />
+              <input
+                ref={base}
+                type="text"
+                defaultValue={pv.apiBase || pv.defaultApiBase || ''}
+                placeholder={t(pv.kind === 'local' ? 'gui.model.base_ph_local' : 'gui.model.base_ph')}
+              />
             </div>
           )}
           <div className="keyrow">
@@ -787,8 +793,8 @@ function ProvCard({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Element
   return (
     <div className={'pcard' + (open ? ' open' : '')}>
       <div className="nm">
-        <span className={'led' + (pv.on ? '' : ' warn')} />
-        <span>{pv.name}</span>
+        <ProviderIcon id={pv.id} name={pv.name} />
+        <ProviderLink homepage={pv.homepage} name={pv.name} />
         {pv.id === s.snap.curProvider && <span className="tagm">{t('gui.model.is_default')}</span>}
       </div>
       <div className="mo">{bits.join(' · ')}</div>
@@ -797,6 +803,7 @@ function ProvCard({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Element
           {open ? t('gui.model.collapse') : pv.on ? t('gui.model.manage') : t('gui.model.connect')}
         </button>
       </div>
+      <ProviderStatus connected={pv.on} label={t(pv.on ? 'gui.model.state.connected' : 'gui.model.not_connected')} />
       {open && <ProvForm pv={pv} s={s} />}
     </div>
   )

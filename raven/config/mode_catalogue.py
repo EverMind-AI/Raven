@@ -20,11 +20,7 @@ from raven.i18n import t as _t
 
 @dataclass(frozen=True)
 class ModeProfile:
-    """One resolved mode: what the loop enforces and what the hooks read.
-
-    ``reasoning_effort`` is the effort the session's model calls run at;
-    ``None`` leaves the connection's own configured effort standing.
-    """
+    """One resolved mode: what the loop enforces and what the hooks read."""
 
     id: str
     name: str

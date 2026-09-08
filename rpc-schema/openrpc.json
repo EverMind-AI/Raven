@@ -8616,6 +8616,9 @@
           "name": {
             "type": "string"
           },
+          "homepage": {
+            "type": "string"
+          },
           "authenticated": {
             "type": "boolean"
           },
@@ -8626,6 +8629,12 @@
             "type": "string"
           },
           "key_env": {
+            "type": "string"
+          },
+          "api_base": {
+            "type": "string"
+          },
+          "default_api_base": {
             "type": "string"
           },
           "models": {

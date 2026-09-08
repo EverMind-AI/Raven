@@ -160,10 +160,6 @@ class ResolvingProvider(LLMProvider):
         vendor behind this router."""
         return self._pick(model).supports_prompt_caching(model)
 
-    def supports_assistant_prefill(self, model: str | None = None) -> bool:
-        """Asked of the vendor adapter that would serve this model."""
-        return self._pick(model).supports_assistant_prefill(model)
-
     def wire_model_id(self, model: str) -> str:
         """Forwarded: the inner adapter is the one that decides the wire id.
 

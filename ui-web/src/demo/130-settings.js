@@ -7,10 +7,16 @@
 /* The fixture provider rows. Live mode owns the rows fetched from its model
    source, so it never refills this demo list in place. */
 const PROVIDERS = [
-  { id: 'minimax', name: 'MiniMax', models: ['minimax-m3', 'minimax-m2'], on: true, kind: 'api_key' },
-  { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-4-5', 'claude-sonnet-4-6'], on: true, kind: 'api_key' },
-  { id: 'openai', name: 'OpenAI', models: ['gpt-5.1', 'gpt-5-mini'], on: false, kind: 'api_key' },
-  { id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v3.2'], on: false, kind: 'api_key' }
+  { id: 'minimax', name: 'MiniMax (Global)', homepage: 'https://platform.minimax.io/', models: ['minimax/MiniMax-M3', 'minimax/MiniMax-M2'], on: true, kind: 'api_key' },
+  { id: 'minimax_cn_api', name: 'MiniMax (CN)', models: ['minimax-cn-api/MiniMax-M3', 'minimax-cn-api/MiniMax-M2'], on: false,
+    homepage: 'https://platform.minimaxi.com/', kind: 'endpoint', defaultApiBase: 'https://api.minimaxi.com/v1/' },
+  { id: 'anthropic', name: 'Anthropic', homepage: 'https://anthropic.com/', models: ['claude-opus-4-5', 'claude-sonnet-4-6'], on: true, kind: 'api_key' },
+  { id: 'openai', name: 'OpenAI', homepage: 'https://openai.com/', models: ['gpt-5.1', 'gpt-5-mini'], on: false, kind: 'api_key' },
+  { id: 'deepseek', name: 'DeepSeek', homepage: 'https://deepseek.com/', models: ['deepseek-v3.2'], on: false, kind: 'api_key' },
+  { id: 'nvidia_nim', name: 'NVIDIA', models: ['nvidia-nim/nvidia/nemotron-3-super-120b-a12b', 'nvidia-nim/openai/gpt-oss-120b'], on: false,
+    homepage: 'https://build.nvidia.com/explore/discover', kind: 'api_key', defaultApiBase: 'https://integrate.api.nvidia.com/v1' },
+  { id: 'lm_studio', name: 'LM Studio', models: [], on: false, kind: 'local', needsBase: true,
+    homepage: 'https://lmstudio.ai/', defaultApiBase: 'http://localhost:1234/v1' }
 ];
 
 /* The open tab. A window property, not a script binding: the chrome writes

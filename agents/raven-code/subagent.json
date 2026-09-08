@@ -1,7 +1,7 @@
 {
   "name": "Raven-Code",
   "kind": "acp",
-  "description": "A powerful coding agent that can write, run and debug code on this host, then report what it did. Use it for a fix, a small feature, a script, or a failing test. IMPORTANT: it edits your files for real, and nothing locks the checkout: when several Raven-Code tasks run at the same time against one working directory, give each task its own set of files and say so in its prompt; a session is told when others are working beside it.",
+  "description": "A powerful coding agent that can write, run and debug code on this host, then report what it did. Use it for a fix, a small feature, a script, or a failing test. IMPORTANT: it edits your files for real; before its first modification it may ask the user to authorize a git worktree when the checkout is dirty or already being edited by another Raven-Code instance.",
   "owns": "owns coding: writing, running or debugging code. Do not write the code yourself.",
   "enabled": true,
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py --acp",

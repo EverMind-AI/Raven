@@ -96,6 +96,7 @@ async def test_options_authed_provider_lists_models(fake_home: Path) -> None:
     assert entry["total_models"] > 2 + len(curated), "the catalogue tier added nothing"
     assert entry["auth_type"] == "key"
     assert entry["key_env"] == "ANTHROPIC_API_KEY"
+    assert entry["homepage"] == "https://anthropic.com/"
 
 
 async def test_options_unauthed_provider_marked(fake_home: Path) -> None:
@@ -159,6 +160,26 @@ async def test_options_needs_api_base_flag(fake_home: Path) -> None:
     assert _entry(result, "custom")["needs_api_base"] is False
     assert _entry(result, "azure_openai")["needs_api_base"] is True
     assert _entry(result, "ollama_chat")["needs_api_base"] is True
+    lm_studio = _entry(result, "lm_studio")
+    assert lm_studio["needs_api_base"] is True
+    assert lm_studio["api_base"] is None
+    assert lm_studio["default_api_base"] == "http://localhost:1234/v1"
+    minimax_cn = _entry(result, "minimax_cn_api")
+    assert minimax_cn["name"] == "MiniMax (CN)"
+    assert minimax_cn["auth_type"] == "endpoint"
+    assert minimax_cn["needs_api_base"] is False
+    assert minimax_cn["default_api_base"] == "https://api.minimaxi.com/v1/"
+    nvidia = _entry(result, "nvidia_nim")
+    assert nvidia["name"] == "NVIDIA"
+    assert nvidia["auth_type"] == "key"
+    assert nvidia["key_env"] == "NVIDIA_NIM_API_KEY"
+    assert nvidia["default_api_base"] == "https://integrate.api.nvidia.com/v1"
+    assert _entry(result, "minimax")["name"] == "MiniMax (Global)"
+    assert _entry(result, "minimax")["homepage"] == "https://platform.minimax.io/"
+    assert _entry(result, "minimax_cn_api")["homepage"] == "https://platform.minimaxi.com/"
+    assert _entry(result, "volcengine")["homepage"] == ("https://console.volcengine.com/ark/region:cn-beijing/overview")
+    assert _entry(result, "gemini")["homepage"] == "https://gemini.google.com/"
+    assert _entry(result, "custom")["homepage"] is None
     assert _entry(result, "anthropic")["needs_api_base"] is False
 
 
@@ -710,6 +731,36 @@ async def test_options_lists_the_codex_models_the_account_reports(
 
     assert entry["authenticated"] is True, "the credential this test wrote was not seen"
     assert entry["models"] == ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.4"]
+
+
+async def test_options_lists_lm_studio_models_from_the_local_server(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}},
+            "providers": {"lm_studio": {"apiBase": "http://localhost:1234/v1"}},
+        },
+    )
+    calls: list[tuple[str, int]] = []
+
+    def probe(name: str, *, timeout_s: int) -> dict:
+        calls.append((name, timeout_s))
+        return {"ok": True, "model_ids": ["qwen3-8b", "publisher/vision-model"]}
+
+    monkeypatch.setattr("raven.config.update_providers.test_provider", probe)
+    model_module._LIVE_MODEL_CACHE.clear()
+
+    first = _entry(await model_options({}), "lm_studio")
+    second = _entry(await model_options({}), "lm_studio")
+
+    assert first["authenticated"] is True
+    assert first["api_base"] == "http://localhost:1234/v1"
+    assert first["models"] == ["lm-studio/qwen3-8b", "lm-studio/publisher/vision-model"]
+    assert second["models"] == first["models"]
+    assert calls == [("lm_studio", 2)]
 
 
 @pytest.mark.parametrize(

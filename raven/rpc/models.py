@@ -1383,10 +1383,13 @@ class ModelOptionProvider(_Strict):
 
     slug: str
     name: str
+    homepage: str | None = None
     authenticated: bool
     is_current: bool
     auth_type: str
     key_env: str | None = None
+    api_base: str | None = None
+    default_api_base: str | None = None
     models: list[str]
     protocols: dict[str, str] = Field(default_factory=dict)
     protocol_overrides: dict[str, str] = Field(default_factory=dict)

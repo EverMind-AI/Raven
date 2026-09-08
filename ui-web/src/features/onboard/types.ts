@@ -3,9 +3,12 @@
 export interface OnboardProvider {
   slug: string
   name?: string
+  homepage?: string
   auth_type: string
   authenticated: boolean
   needs_api_base?: boolean
+  api_base?: string
+  default_api_base?: string
   models: string[]
 }
 

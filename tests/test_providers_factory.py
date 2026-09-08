@@ -130,6 +130,29 @@ def test_make_provider_defaults_to_the_config_model(tmp_path: Path) -> None:
     assert provider.get_default_model() == "my-model"
 
 
+def test_make_provider_nvidia_uses_the_hosted_nim_endpoint() -> None:
+    from raven.config.schema import Config
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    config = Config.model_validate(
+        {
+            "agents": {
+                "defaults": {
+                    "model": "nvidia-nim/nvidia/nemotron-3-super-120b-a12b",
+                    "provider": "nvidia_nim",
+                }
+            },
+            "providers": {"nvidia_nim": {"apiKey": "nvapi-test"}},
+        }
+    )
+
+    provider = _helpers.make_provider(config)
+
+    assert type(provider) is LiteLLMProvider
+    assert provider.api_base == "https://integrate.api.nvidia.com/v1"
+    assert provider.wire_model_id(provider.default_model) == "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+
+
 # ---------------------------------------------------------------------------
 # check_provider_credentials — fail-fast without importing litellm
 # ---------------------------------------------------------------------------

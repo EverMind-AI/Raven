@@ -11,6 +11,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../shell/bridge'
+import { ProviderIcon, ProviderLink, ProviderStatus } from '../../shell/provider-mark'
 import * as store from './store'
 
 import type { ApiProtocol, Provider } from './types'
@@ -131,18 +132,27 @@ function Pick(): JSX.Element {
       <div className="cols">
         <div className="provs">
           {providers.map((p, i) => (
-            <button
+            <div
               key={p.id}
-              className={'row' + (hits[i]!.length ? '' : ' dim')}
-              aria-selected={i === prov && hits[i]!.length > 0}
-              onClick={() => {
-                if (hits[i]!.length) setProv(i)
-              }}
+              className={'row provider-choice-row' + (hits[i]!.length ? '' : ' dim')}
             >
-              <span className="nm">{p.name}</span>
+              <button
+                className="provider-choice-action"
+                type="button"
+                aria-label={p.name}
+                aria-selected={i === prov && hits[i]!.length > 0}
+                onClick={() => {
+                  if (hits[i]!.length) setProv(i)
+                }}
+              />
+              <span className="nm">
+                <ProviderIcon id={p.id} name={p.name} />
+                <ProviderLink homepage={p.homepage} name={p.name} />
+              </span>
               <span className="ct">{String(hits[i]!.length)}</span>
               {hits[i]!.includes(current) ? <span className="tick">•</span> : null}
-            </button>
+              <ProviderStatus connected={p.on} label={t(p.on ? 'gui.model.state.connected' : 'gui.model.not_connected')} />
+            </div>
           ))}
         </div>
         <div className="model-pane">

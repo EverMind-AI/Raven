@@ -3,11 +3,14 @@
 export interface ProviderRow {
   id: string
   name: string
+  homepage?: string
   models: string[]
   on: boolean
   /* 'api_key' | 'oauth' | 'local' | 'endpoint' */
   kind?: string
   needsBase?: boolean
+  apiBase?: string
+  defaultApiBase?: string
   env?: string
   warn?: string
   key?: string

@@ -87,7 +87,7 @@ async def test_failing_tick_does_not_kill_loop(tmp_path: Path, monkeypatch) -> N
     svc = CronService(store_path, on_job=on_job)
     svc.add_job(
         name="soon",
-        schedule=CronSchedule(kind="at", at_ms=_now_ms() + 200),
+        schedule=CronSchedule(kind="at", at_ms=_now_ms() + 1_000),
         message="fires after a bad tick",
         channel="tui",
         to="direct",

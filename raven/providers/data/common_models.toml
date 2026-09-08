@@ -110,12 +110,29 @@ moonshot = [
         "moonshot/kimi-latest",
         "moonshot/moonshot-v1-128k",
 ]
+nvidia_nim = [
+        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b",
+        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
+        "nvidia-nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        "nvidia-nim/openai/gpt-oss-120b",
+        "nvidia-nim/openai/gpt-oss-20b",
+        "nvidia-nim/qwen/qwen3.5-122b-a10b",
+        "nvidia-nim/moonshotai/kimi-k2.6",
+        "nvidia-nim/minimaxai/minimax-m3",
+]
 minimax = [
         "minimax/MiniMax-M3",
         "minimax/MiniMax-M2.5",
         "minimax/MiniMax-M2.5-lightning",
         "minimax/MiniMax-M2.1",
         "minimax/MiniMax-M2",
+]
+minimax_cn_api = [
+        "minimax-cn-api/MiniMax-M3",
+        "minimax-cn-api/MiniMax-M2.5",
+        "minimax-cn-api/MiniMax-M2.5-lightning",
+        "minimax-cn-api/MiniMax-M2.1",
+        "minimax-cn-api/MiniMax-M2",
 ]
 volcengine = [
         "volcengine/doubao-seed-2-0-pro-260215",
