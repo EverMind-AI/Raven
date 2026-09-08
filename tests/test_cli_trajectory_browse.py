@@ -1570,10 +1570,10 @@ def test_conversation_lines_narrow_separators_respect_width():
     width = 10
     lines = tbrowse._conversation_lines(records, width)
     assert all(tbrowse._cell_width(line.plain) <= width for line in lines)
-    joined = "".join(line.plain for line in lines)
-    assert "── Turn 1 · " in joined
-    assert "── Turn 2 · " in joined
-    assert "── Turn 1 (continued) ──" in joined
+    compact = "".join(line.plain for line in lines).replace(" ", "")
+    assert "──Turn1·" in compact
+    assert "──Turn2·" in compact
+    assert "──Turn1(continued)──" in compact
 
 
 def test_conversation_lines_marker_only_narrow_separators_respect_width():
@@ -1671,6 +1671,65 @@ def test_preview_screen_pager_triggered_by_wrapped_separators(state, monkeypatch
     assert all(tbrowse._cell_width(line.plain) <= 20 for line in narrow)
     assert tbrowse._preview_screen(1, row, state) is False
     assert "ask 1" not in buf.getvalue()
+
+
+def test_wrap_display_breaks_at_spaces_not_mid_word():
+    assert tbrowse._wrap_display("alpha beta gamma", 11) == ["alpha beta", "gamma"]
+    assert tbrowse._wrap_display("supercalifragilistic", 8) == ["supercal", "ifragili", "stic"]
+    assert tbrowse._wrap_display(" leading indent", 9) == [" leading", "indent"]
+    assert tbrowse._wrap_display("宽宽 narrow words", 8) == ["宽宽", "narrow", "words"]
+
+
+def test_conversation_lines_meta_shown_once_per_span():
+    meta = "model-x · in 5 / out 2 tok"
+    records = [
+        _rec("LLM input", "llm", "q", span_id="llm1", seq=0, meta=meta),
+        _rec("LLM thinking", "llm", "t", span_id="llm1", seq=1, meta=meta),
+        _rec("LLM output", "llm", "a", span_id="llm1", seq=2, meta=meta),
+        _rec("Tool input", "tool", "p", span_id="tool1", seq=3, meta="run"),
+        _rec("Tool output", "tool", "r", span_id="tool1", seq=4, meta="run"),
+    ]
+    plains = _plain(tbrowse._conversation_lines(records, 120))
+    assert plains.count(f"             ({meta})") + plains.count(f"              ({meta})") <= 1
+    assert sum(1 for plain in plains if plain.strip() == f"({meta})") == 1
+    assert sum(1 for plain in plains if plain.strip() == "(run)") == 1
+    assert plains.index(next(p for p in plains if p.strip() == f"({meta})")) > plains.index(
+        next(p for p in plains if p.startswith("LLM output:"))
+    )
+
+
+def test_preview_screen_pager_threshold_boundary(state, monkeypatch):
+    _preview_console(monkeypatch)
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    row = _mk_attempt(traces=("trace-1",))
+    monkeypatch.setattr(tbrowse.shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((80, 10)))
+    paged = []
+    monkeypatch.setattr(tbrowse, "_page_lines", lambda lines, width: paged.append(len(lines)) or True)
+    monkeypatch.setattr(tbrowse, "_conversation_lines", lambda records, width: [Text("l")] * 8)
+    assert tbrowse._preview_screen(1, row, state) is True
+    assert paged == []  # exactly height - 2 lines: no pager
+    monkeypatch.setattr(tbrowse, "_conversation_lines", lambda records, width: [Text("l")] * 9)
+    assert tbrowse._preview_screen(2, row, state) is False
+    assert paged == [9]  # one line over the threshold: paged
+
+
+def test_conversation_lines_three_trace_interleave_snapshot():
+    records = [
+        _rec("User input", "user", "a1", trace_id="tA", turn_span_id="tuA", span_id="a1", seq=0),
+        _rec("User input", "user", "b1", trace_id="tB", turn_span_id="tuB", span_id="b1", seq=1),
+        _rec("User input", "user", "c1", trace_id="tC", turn_span_id="tuC", span_id="c1", seq=2),
+        _rec("Agent reply", "user", "b2", trace_id="tB", turn_span_id="tuB", span_id="b2", seq=3),
+        _rec("Agent reply", "user", "a2", trace_id="tA", turn_span_id="tuA", span_id="a2", seq=4),
+    ]
+    plains = _plain(tbrowse._conversation_lines(records, 100))
+    bodies = [p for p in plains if not p.startswith("── Turn")]
+    assert [p.split()[-1] for p in bodies] == ["a1", "b1", "c1", "b2", "a2"]
+    seps = [p for p in plains if p.startswith("── Turn")]
+    assert seps[0].startswith("── Turn 1 · ")
+    assert seps[1].startswith("── Turn 2 · ")
+    assert seps[2].startswith("── Turn 3 · ")
+    assert seps[3] == "── Turn 2 (continued) ──"
+    assert seps[4] == "── Turn 1 (continued) ──"
 
 
 def test_space_skips_waiter_after_pager(state, workspace, monkeypatch):
