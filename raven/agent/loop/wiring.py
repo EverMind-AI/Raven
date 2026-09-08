@@ -38,6 +38,7 @@ from raven.agent.loop._shared import (
     workdir,
 )
 from raven.agent.tools.ask_user import DEFAULT_TIMEOUT_S
+from raven.contracts.token_strategy import UsageSnapshot
 
 if TYPE_CHECKING:
     from raven.agent.tools.deliverables import DeliverableStore
@@ -540,6 +541,11 @@ class WiringMixin:
     def _web_key(self, vendor: str) -> str | None:
         return resolve_vendor_key(vendor, self.web_provider_keys, self.search_api_key, self.jina_api_key)
 
+    async def _record_image_usage(self, usage: UsageSnapshot) -> None:
+        tracker = self.strategies.get("usage_tracker")
+        if tracker is not None:
+            await tracker.after_llm_call({}, usage)
+
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
         allowed_dirs = (self.workspace,) if self.restrict_to_workspace else ()
@@ -604,6 +610,7 @@ class WiringMixin:
                 proxy=media.proxy,
                 output_subdir=media.output_subdir,
                 restrict_to_workspace=self.restrict_to_workspace,
+                usage_recorder=self._record_image_usage if kind == "image" else None,
             )
             self.tools.register(tool)
             self._config_gated_tools[tool.name] = tool
