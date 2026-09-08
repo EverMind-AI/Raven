@@ -19,8 +19,10 @@ class TerminalServices:
     def __init__(self, emitter, broadcast, *, host=None, delivery=None, identities=None):
         self.emitter = emitter
         self.identities = identities if identities is not None else IdentityRegistry()
-        self.identities.ensure_host()
         self.host = host if host is not None else TerminalHost(emit=self.emit)
+        self.identities.terminal_show = self.host.show
+        self.identities.reconcile()
+        self.identities.ensure_host()
         self.delivery = delivery if delivery is not None else DeliveryService(self.host, emit=self.emit)
         self.stream = TerminalStream(self.host, broadcast, emitter)
         self.worktrees: set[str] = set()

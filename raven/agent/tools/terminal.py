@@ -65,7 +65,7 @@ class CreateTerminalTool(_TerminalTool):
             worktree = self.task_worktree(task, self._session_key.get())
             kind, command = self.provider_command(provider, unattended=unattended)
             existing = await self.rpc("agents.resolve", {"mention": name})
-            if existing.get("candidates"):
+            if any(candidate["agent"].get("exitedAt") is None for candidate in existing.get("candidates", [])):
                 raise TerminalError("agent_name_exists", "The canonical name or alias already exists")
             created = await self.rpc(
                 "terminal.create", {"worktree_id": worktree, "command": command, "title": name, **self.session_params()}
@@ -145,9 +145,17 @@ class SendTerminalTool(_TerminalTool):
         self.scope = scope
 
     async def execute(self, to: str, text: str, require_ack: bool = False, force: bool = False, **kwargs: Any) -> str:
+        last_handle = None
         try:
             resolution = await self.rpc("agents.resolve", {"mention": to})
             candidates = resolution.get("candidates", [])
+            if len(candidates) == 1:
+                candidate = candidates[0]["agent"]
+                last_handle = (candidate.get("binding") or {}).get("handle")
+                if candidate.get("exitedAt") is not None:
+                    raise TerminalError(
+                        "agent_binding_stale", "The agent's terminal has exited", {"handle": last_handle}
+                    )
             if not resolution.get("unique") or len(candidates) != 1:
                 raise TerminalError(
                     "agent_not_unique", "Resolve a unique live canonical name before sending", resolution
@@ -155,13 +163,17 @@ class SendTerminalTool(_TerminalTool):
             agent = candidates[0]["agent"]
             binding = agent.get("binding")
             if agent.get("orphan") or not binding:
-                raise TerminalError("agent_binding_stale", "Agent has no live binding")
+                raise TerminalError("agent_binding_stale", "Agent has no live binding", {"handle": last_handle})
             current = (await self.rpc("terminal.show", {"handle": binding["handle"]}))["terminal"]
             keys = ("handle", "incarnationId", "worktreeId", "tabId", "leafId")
             if any(not binding.get(k) or binding[k] != current.get(k) for k in keys) or not (
                 current.get("connected") and current.get("writable") and current.get("orphaned") is False
             ):
-                raise TerminalError("agent_binding_stale", "The terminal incarnation no longer matches the identity")
+                raise TerminalError(
+                    "agent_binding_stale",
+                    "The terminal incarnation no longer matches the identity",
+                    {"handle": last_handle},
+                )
             try:
                 envelope = Envelope(sender=self.sender, recipient=agent["agentName"], scope=self.scope, body=text)
             except ValueError as exc:
@@ -218,4 +230,10 @@ class SendTerminalTool(_TerminalTool):
                     raise
             return json.dumps(result["send"])
         except TerminalError as exc:
+            if exc.code == "terminal_not_found" and last_handle:
+                return _failure(
+                    TerminalError(
+                        "agent_binding_stale", "The agent's terminal no longer exists", {"handle": last_handle}
+                    )
+                )
             return _failure(exc)

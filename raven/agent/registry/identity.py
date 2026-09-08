@@ -81,10 +81,12 @@ class IdentityRegistry:
         *,
         config_rows: Callable[[], list] = _config_rows,
         clock: Callable[[], float] = time.time,
+        terminal_show: Callable[[str], TerminalRecord] | None = None,
     ):
         self.path = path or get_config_path().parent / "agent_registry.json"
         self.config_rows = config_rows
         self.clock = clock
+        self.terminal_show = terminal_show
         self.startup_error: TerminalError | None = None
         try:
             self.reconcile()
@@ -176,6 +178,16 @@ class IdentityRegistry:
             retained = []
             for record in state.records:
                 record.orphan = record.kind_ref not in rows
+                if record.exited_at is None and record.binding and record.binding.handle and self.terminal_show:
+                    try:
+                        terminal = self.terminal_show(record.binding.handle)
+                    except TerminalError as exc:
+                        if exc.code != "terminal_not_found":
+                            raise
+                        record.exited_at = self.clock()
+                    else:
+                        if terminal.liveness != "live" or terminal.incarnation_id != record.binding.incarnation_id:
+                            record.exited_at = self.clock()
                 if record.exited_at is not None and self.clock() - record.exited_at > 30 * 86400:
                     state.archive.append(record)
                 else:
@@ -211,7 +223,12 @@ class IdentityRegistry:
             )
             if reason:
                 candidates.append({"agent": record.model_dump(by_alias=True, mode="json"), "reason": reason})
-        return {"candidates": candidates, "unique": len(candidates) == 1 and not candidates[0]["agent"]["orphan"]}
+        return {
+            "candidates": candidates,
+            "unique": len(candidates) == 1
+            and not candidates[0]["agent"]["orphan"]
+            and candidates[0]["agent"]["exitedAt"] is None,
+        }
 
     def mark_exited(self, handle: str) -> None:
         with write_transaction(self.path):
