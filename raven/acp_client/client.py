@@ -17,7 +17,6 @@ import asyncio
 import os
 import shlex
 import signal
-import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from functools import partial
@@ -30,7 +29,6 @@ from raven.acp_client.journal import FrameJournal, redact_acp_frame
 from raven.acp_client.protocol import (
     CANCEL_REQUEST_METHOD,
     AcpConnectionError,
-    AcpError,
     AcpProtocolError,
     AcpRemoteError,
     AcpTimeoutError,
@@ -175,11 +173,6 @@ class AcpClient:
         # carries an id and nothing else -- can be attributed in the journal.
         # Read by the read loop before the awaiting task clears the entry.
         self._request_sessions: dict[int, str | None] = {}
-        # Which method each outbound request carries, so "is a turn in flight"
-        # is answerable while one is: a pending session/prompt IS the running
-        # turn, and a session open that times out behind it needs to say
-        # "busy", not "broken" (see AcpBusyError).
-        self._request_methods: dict[int, str] = {}
         # Agent-initiated requests raven had no answer for. Kept because the
         # refusal is invisible from the caller's side: the agent asks, gets
         # "method not found", and whatever it does next usually arrives as a
@@ -189,9 +182,6 @@ class AcpClient:
         self._refused_logged: set[str] = set()
         self._next_id = 0
         self._pending: dict[int, asyncio.Future[Any]] = {}
-        # Launch counts as activity: a fresh connection has said nothing yet
-        # and must not read as stale before its first frame.
-        self._last_frame_at = time.monotonic()
         self._unsettled_cancels: set[str] = set()
         self._stderr: deque[str] = deque(maxlen=_STDERR_LINES)
         self._closed = False
@@ -468,7 +458,6 @@ class AcpClient:
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
         self._request_sessions[request_id] = (params or {}).get("sessionId") if isinstance(params, dict) else None
-        self._request_methods[request_id] = method
         try:
             await self._send(protocol.request(request_id, method, params))
             if timeout is None:
@@ -483,50 +472,6 @@ class AcpClient:
         finally:
             self._pending.pop(request_id, None)
             self._request_sessions.pop(request_id, None)
-            self._request_methods.pop(request_id, None)
-
-    @property
-    def prompting(self) -> bool:
-        """Whether a turn is in flight on this connection right now.
-
-        True while any ``session/prompt`` awaits its answer. One connection
-        carries every session of this agent, so a pending prompt is exactly
-        the condition under which another session's open can only queue.
-        """
-        return any(method == "session/prompt" for method in self._request_methods.values())
-
-    @property
-    def idle_seconds(self) -> float:
-        """Seconds since the agent last put any frame on the wire.
-
-        ``alive`` cannot see the failure this measures: a process can hold its
-        pipes open with its frame loop wedged, so the pid is live, the reader
-        task is parked on ``readline``, and nothing ever answers. Measured
-        2026-09-02 on the fork: an agent answered at 18:39 and then logged
-        nothing all night, while three session opens each waited out their full
-        budget against it. Only silence has a duration; this is it.
-        """
-        return time.monotonic() - self._last_frame_at
-
-    async def probe(self, timeout: float = 5.0) -> bool:
-        """Whether the agent still answers at all, proven by one round trip.
-
-        A repeat ``initialize`` handshake: the agent's dispatcher answers it
-        before any business logic and re-initialising is explicitly allowed
-        (it only refreshes the capability record), so a healthy agent answers
-        in milliseconds and a short timeout convicts nothing that works. Any
-        reply counts -- an error frame proves the loop reads and answers just
-        as well as a result does.
-        """
-        if not self.alive:
-            return False
-        try:
-            await self.request("initialize", protocol.initialize_params(), timeout=timeout)
-        except AcpRemoteError:
-            return True
-        except AcpError:
-            return False
-        return True
 
     async def _cancel_turn(self, session_id: str, future: asyncio.Future) -> None:
         """Tell the agent to stop this turn, and give it a bounded chance to.
@@ -612,7 +557,6 @@ class AcpClient:
                         self._journal.note("in", text=line)
                     logger.debug("acp agent {!r}: ignoring unparseable stdout line ({})", self.name, exc)
                     continue
-                self._last_frame_at = time.monotonic()
                 # Before dispatch, so a notification the router has no sink for
                 # is recorded rather than dropped with only a debug line.
                 if self._journal is not None:

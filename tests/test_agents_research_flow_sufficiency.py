@@ -318,9 +318,14 @@ def test_the_judge_call_is_pinned_to_a_deterministic_low_effort_shape():
     assert call["temperature"] == 0.0
     assert call["max_tokens"] == 256
     assert call["reasoning_effort"] == "low"
-    # 5s inside the default 30s attempt slice - the transport deadline must win
-    # the race against wait_for so a hang raises something classifiable.
-    assert call["timeout"] == 25.0
+    # No transport deadline unless one is configured. This line asserted 25.0 --
+    # five seconds inside the default attempt slice, so a hang would raise
+    # something classifiable -- and the arithmetic was right while the kwarg was
+    # not: the trunk provider takes no ``timeout``, so every judge call raised
+    # TypeError and the gate failed open having sent nothing. A permissive
+    # ``**kwargs`` stub is what let both the gate and this assertion agree with
+    # each other and with nothing else.
+    assert "timeout" not in call
 
 
 def test_an_unset_effort_knob_sends_no_effort_parameter_at_all():
@@ -390,3 +395,223 @@ def test_the_anchor_cannot_reach_the_gate_however_the_knob_is_written(tmp_path):
         assert make_hook(ctx) is None
     finally:
         set_ledger_dir(None)
+
+
+# --------------------------------------------------------------------------
+# The judge's call shape against the trunk provider
+# --------------------------------------------------------------------------
+
+
+class _SignatureBoundProvider:
+    """``chat_with_retry`` with the trunk protocol's parameters, kwarg for kwarg.
+
+    ``raven.contracts.llm_provider.LLMProvider.chat_with_retry`` takes no
+    ``timeout``, so a gate that passes one raises TypeError before any request
+    leaves the process -- and this gate's fail-open contract then records that
+    as an ordinary unavailable judge. The stub refuses unknown kwargs rather
+    than swallowing them: ``_Provider`` above takes ``**kwargs``, which is why
+    every verdict test here passed while the shipped gate never once reached a
+    provider.
+    """
+
+    def __init__(self, reply: str = '{"sufficient": true, "reason": "the pages answer it"}') -> None:
+        self._reply = reply
+        self.calls: list[dict] = []
+
+    async def chat_with_retry(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=None,
+        temperature=None,
+        reasoning_effort=None,
+        tool_choice=None,
+        fallback_models=None,
+    ) -> _Response:
+        self.calls.append({"model": model, "max_tokens": max_tokens, "temperature": temperature})
+        return _Response(self._reply)
+
+
+def test_the_judge_call_carries_no_transport_timeout_by_default():
+    """Unset, the transport deadline stays out of the call entirely.
+
+    The gate passed ``timeout`` unconditionally until 2026-09-07, so on the
+    trunk provider it failed open on every turn of every mode in about a
+    millisecond, having sent nothing. Measured on a smoke turn: ``outcome:
+    fail_open``, ``latency_s: 0.001``, and a TypeError in the log naming the
+    kwarg. The mode whose entire stop rule is this gate ran without one.
+    """
+    provider = _SignatureBoundProvider()
+    gate = SufficiencyGate(provider, min_searches=1, min_fetches=1)
+    state, decision = _run(gate, _round())
+    assert provider.calls, "the judge never reached the provider"
+    assert state.get("outcome") == "sufficient", state
+    assert _fired(decision)
+
+
+def test_the_gate_declares_no_transport_deadline_knob():
+    """There is no knob to turn this back on, and that is deliberate.
+
+    ``verify`` carries ``attemptHttpTimeoutSeconds`` because the fork's reviewer
+    did; the fork's judge had no such field, and the twin's models are held field
+    for field to the fork's by the parity suite. So the deadline comes back only
+    when the trunk provider accepts one -- not through a knob this product invents.
+    """
+    from research_flow.config import SufficiencyConfig
+
+    assert "attempt_http_timeout_seconds" not in SufficiencyConfig.model_fields
+
+
+# --------------------------------------------------------------------------
+# The listing stage: a second judgement one round earlier, product-only
+# --------------------------------------------------------------------------
+
+from research_flow.support.harness_text import (  # noqa: E402
+    harness_body_kind,
+    is_harness_echo,
+    sufficiency_listing_notice,
+)
+
+_LONG_SERP = json.dumps(
+    {
+        "results": [
+            {"title": f"Result {i}", "url": f"https://s{i}.example/", "snippet": "the capital is Canberra " * 20}
+            for i in range(12)
+        ]
+    }
+)
+
+
+def _listing_only() -> list[dict]:
+    return [
+        {"role": "user", "content": "capital of Australia?"},
+        {"role": "tool", "name": "web_search", "content": _SERP},
+    ]
+
+
+def test_off_by_default_the_listing_is_never_judged():
+    """The measured arms ran without this stage, and their flow must be byte-identical:
+    a search-only round asks nothing, exactly as before the knob existed."""
+    provider = _Provider('{"sufficient": true}')
+    state, decision = _run(SufficiencyGate(provider, min_fetches=2), _listing_only())
+    assert provider.calls == [] and not _fired(decision) and "stage" not in state
+
+
+def test_with_the_knob_on_the_listing_is_judged_before_any_page():
+    """One search, no page: the judge is asked over the snippets with the listing rubric,
+    and a yes releases with the listing variant of the note - the one that waives
+    contract rule 1 and says to cite result URLs."""
+    provider = _Provider('{"sufficient": true, "reason": "snippets agree"}')
+    state, decision = _run(SufficiencyGate(provider, min_fetches=2, judge_listing=True), _listing_only())
+    assert len(provider.calls) == 1
+    system = provider.calls[0]["messages"][0]["content"]
+    assert "no page opened yet" in system and "When in doubt, insufficient" in system
+    assert decision.append_note == sufficiency_listing_notice()
+    assert (state["stage"], state["released_on"], state["listing_outcome"]) == ("listing", "listing", "sufficient")
+    assert "evaluated" not in state, "the page-floor latch is untouched by a listing verdict"
+
+
+def test_an_insufficient_listing_verdict_leaves_the_page_judgement_intact():
+    """The stage is a second latch, not a lower floor. A research question fails the
+    listing judge and must still get its page-floor judgement once two pages are open
+    - otherwise the knob would silently take medium's release door away."""
+    provider = _Provider(
+        '{"sufficient": false, "reason": "only implied"}', '{"sufficient": true, "reason": "page states it"}'
+    )
+    gate = SufficiencyGate(provider, min_fetches=2, judge_listing=True)
+    messages = _listing_only()
+    metadata: dict = {}
+    state, first = _run(gate, messages, metadata=metadata)
+    assert not _fired(first) and state["listing_outcome"] == "insufficient" and state["listing_evaluated"] is True
+
+    messages.append({"role": "tool", "name": "web_fetch", "content": _OK_PAGE})
+    state, second = _run(gate, messages, metadata=metadata, iteration=3)
+    assert len(provider.calls) == 1, "one page is below the floor of two: no judgement yet"
+
+    messages.append({"role": "tool", "name": "web_fetch", "content": _OK_PAGE})
+    state, third = _run(gate, messages, metadata=metadata, iteration=4)
+    assert len(provider.calls) == 2
+    assert "no page opened yet" not in provider.calls[1]["messages"][0]["content"]
+    assert third.append_note == sufficiency_notice()
+    assert (state["stage"], state["released_on"], state["evaluated"]) == ("pages", "pages", True)
+
+
+def test_a_listing_release_is_still_a_release_after_the_page_judge_says_no():
+    """The record is per stage, and ``fired`` is sticky.
+
+    A listing release leaves the tools in place, so the model may open pages anyway;
+    the page stage then gets its own judgement, and an "insufficient" there must not
+    overwrite the fact that this turn was released - ``turn_observers`` publishes the
+    whole dict, and a reader counting releases reads ``fired``.
+    """
+    provider = _Provider(
+        '{"sufficient": true, "reason": "the snippets state it"}', '{"sufficient": false, "reason": "pages disagree"}'
+    )
+    gate = SufficiencyGate(provider, min_fetches=2, judge_listing=True)
+    messages = _listing_only()
+    metadata: dict = {}
+    state, first = _run(gate, messages, metadata=metadata)
+    assert first.append_note == sufficiency_listing_notice() and state["fired"] is True
+
+    messages.extend([{"role": "tool", "name": "web_fetch", "content": _OK_PAGE}] * 2)
+    state, second = _run(gate, messages, metadata=metadata, iteration=3)
+    assert len(provider.calls) == 2 and second.append_note is None
+    assert (state["stage"], state["outcome"]) == ("pages", "insufficient"), "the newest judgement is the page stage's"
+    assert (state["listing_outcome"], state["pages_outcome"]) == ("sufficient", "insufficient")
+    assert state["fired"] is True and state["released_on"] == "listing"
+
+
+def test_the_listing_is_asked_once_and_a_fail_open_keeps_its_own_retry():
+    truncated = _Response('{"sufficient": true}')
+    truncated.finish_reason = "length"
+    provider = _Provider(truncated, '{"sufficient": false}', '{"sufficient": true}')
+    gate = SufficiencyGate(provider, min_fetches=2, judge_listing=True)
+    messages = _listing_only()
+    metadata: dict = {}
+    _run(gate, messages, metadata=metadata)
+    messages.append({"role": "tool", "name": "web_search", "content": _SERP})
+    _run(gate, messages, metadata=metadata, iteration=3)
+    messages.append({"role": "tool", "name": "web_search", "content": _SERP})
+    state, decision = _run(gate, messages, metadata=metadata, iteration=4)
+    assert len(provider.calls) == 2 and state["listing_attempts"] == 2
+    assert not _fired(decision)
+
+
+def test_the_listing_judge_reads_the_top_of_the_listing_not_its_tail():
+    """Ranking puts the deciding results first; the page pack keeps a body's tail
+    (where the extracted fact lands) and would have shown the judge results 9-12."""
+    provider = _Provider('{"sufficient": false}')
+    gate = SufficiencyGate(provider, min_fetches=2, judge_listing=True, evidence_item_chars=600)
+    messages = [{"role": "user", "content": "q"}, {"role": "tool", "name": "web_search", "content": _LONG_SERP}]
+    _run(gate, messages)
+    user = provider.calls[0]["messages"][1]["content"]
+    assert "Result 0" in user and "Result 11" not in user
+
+
+def test_a_listing_release_is_a_harness_sentence_on_the_same_terms_as_the_page_one():
+    assert sufficiency_listing_notice().startswith(SUFFICIENCY_PREFIX)
+    assert sufficiency_listing_notice() != sufficiency_notice()
+    assert is_harness_echo(sufficiency_listing_notice())
+    assert harness_body_kind(sufficiency_listing_notice()) is harness_body_kind(sufficiency_notice()) is None
+
+
+def test_the_listing_knob_reaches_the_gate_from_config(tmp_path):
+    from research_flow.config import FlowConfig
+    from research_flow.flow import ToolHandles, build_chain
+    from research_flow.state import SessionStore
+
+    config = FlowConfig(enabled=True)
+    config.sufficiency.enabled = True
+    assert config.sufficiency.judge_listing is False
+    config = config.with_overlay({"sufficiency": {"judgeListing": True}})
+    chain = build_chain(
+        config,
+        _Provider(),
+        max_iterations=40,
+        context_window_tokens=65_536,
+        tools=ToolHandles(),
+        store=SessionStore(tmp_path),
+    )
+    gate = next(o for o in chain if isinstance(o, SufficiencyGate))
+    assert gate._judge_listing is True

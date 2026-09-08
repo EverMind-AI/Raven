@@ -122,14 +122,7 @@ class UnpromptedRecorder:
     costs an empty dict.
     """
 
-    def __init__(
-        self,
-        agent: str,
-        registry: Any,
-        session_dir_for: Any,
-        emit: EventSink | None = None,
-        announce: Callable[[str, str, str], Any] | None = None,
-    ) -> None:
+    def __init__(self, agent: str, registry: Any, session_dir_for: Any, emit: EventSink | None = None) -> None:
         self._agent = agent
         self._registry = registry
         # Given rather than resolved here: which directory an instance's log
@@ -137,15 +130,6 @@ class UnpromptedRecorder:
         # copies of it drift.
         self._session_dir_for = session_dir_for
         self._emit_sink = emit
-        # ``(session_key, handle, text) -> awaitable | None``: wake the
-        # conversation that owns the instance with what it said. Only turns
-        # that said words go through -- a wake round that just looked at a
-        # ledger (five of eight turns in the measured campaign) is a heartbeat,
-        # not a report, and each wake costs a full main-agent turn. Without
-        # this half, a report of finished work reaches only the log: measured
-        # 2026-09-01, a watch instance announced finished GPU runs five times
-        # while the main agent slept eleven hours beside them.
-        self._wake_cb = announce
         self._pending: dict[str, _Pending] = {}
         self._idle: dict[str, asyncio.Task] = {}
         # session id -> (session_key, handle), resolved once per turn rather than
@@ -230,44 +214,12 @@ class UnpromptedRecorder:
         session_key, handle = placed
         if not buf.empty:
             self._write(session_key, handle, buf)
-            await self._wake(session_key, handle, buf)
         await self._mark_row(session_key, handle, "completed")
         if buf.turn_id is not None:
             # The promise message.start made. Without it the pane keeps a
             # replying dot forever and never runs the settled re-read that
             # replaces the live snapshot with the record.
             self._send_to(session_key, handle, "message.complete", {"turn_id": buf.turn_id})
-
-    def rebind(self, *, emit: EventSink | None, announce: Callable[[str, str, str], Any] | None) -> None:
-        """Point this resident recorder at the backend that now owns the connection.
-
-        The recorder lives as long as the pooled connection, which is the
-        process; the backend and the manager behind it live one generation. A
-        runtime swap builds generation N+1 and reuses the connection, so the
-        sinks captured at construction would keep routing wakes to a manager
-        whose scheduler has been drained -- the wake raises, is logged, and the
-        owner sleeps. Replacing them is how the surviving transport is rewired.
-        """
-        self._emit_sink = emit
-        self._wake_cb = announce
-
-    async def _wake(self, session_key: str, handle: str, buf: _Pending) -> None:
-        """Route a turn that said words back into its owning conversation.
-
-        Gated on ``said`` rather than on ``empty``: a tool-only wake round is a
-        heartbeat and stays in the log, while words are the agent reporting
-        something to somebody -- and between prompts the only somebody is the
-        conversation that owns the instance. Failure costs the wake, never the
-        record: the log write has already happened.
-        """
-        if self._wake_cb is None or not any(s.strip() for s in buf.said):
-            return
-        try:
-            ret = self._wake_cb(session_key, handle, buf.answer())
-            if ret is not None:
-                await ret
-        except Exception as exc:  # noqa: BLE001 - a lost wake must not cost the record
-            logger.warning("acp agent {!r}: could not announce unprompted turn: {}", self._agent, exc)
 
     # ---- the two outputs ----
 

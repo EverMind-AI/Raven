@@ -130,6 +130,24 @@ def sufficiency_notice() -> str:
     )
 
 
+def sufficiency_listing_notice() -> str:
+    """The variant written when the release comes before any page was opened.
+
+    Same prefix, so a reader and the strict recogniser can still tell which rule fired;
+    a different body because the instruction differs. Contract rule 1 forbids answering
+    from the listing, and a release that left that rule standing would be one the model
+    cannot follow - so this sentence waives it, for this reply only, and says what to
+    cite instead. Product surface (``sufficiency.judgeListing``): the measured arms never
+    write it.
+    """
+    return (
+        f"{SUFFICIENCY_PREFIX} an independent review of the search results finds the "
+        "snippets already state the answer and agree with each other. For this task you "
+        "may answer from the listing without opening a page: write the final answer now, "
+        "the answer itself first, then the snippets that decide it with their result URLs."
+    )
+
+
 # Permissive recognisers: (name, matcher). Used only where a false positive is
 # free. Keep the names stable - they are the diagnostic a reader gets back.
 _HARNESS_BODIES: tuple[tuple[str, object], ...] = (
@@ -188,6 +206,27 @@ def is_harness_authored(content: object) -> bool:
     return harness_body_kind(content) is not None
 
 
+PLAIN_FIRST_PREFIX = "[plain-first]"
+
+
+def plain_first_notice(request_tool: str = "request_research") -> str:
+    """The note the plain-first gate leaves on the first model call of a turn.
+
+    Lives here rather than beside the gate so the strict recogniser below can name it:
+    it persists into history through ``append_note``, so a model that echoes it back as
+    its whole answer is the ``hle-256`` failure again. The tool name is the gate's one
+    parameter, and its default is the gate's shipped name, which is what the recogniser
+    compares against.
+    """
+    return (
+        f"{PLAIN_FIRST_PREFIX} Web tools are withheld for this first reply. If this question is "
+        "settled, time-invariant general knowledge, answer it now from what you know, in the "
+        "required report shape, and state plainly that no sources were consulted. If the "
+        "answer depends on anything recent, on current figures, on a specific document, or "
+        f"if you are not certain, call {request_tool} and write nothing else."
+    )
+
+
 def is_harness_echo(answer: object) -> bool:
     """Strict: this *entire* answer is a harness sentence, not a model answer.
 
@@ -212,6 +251,10 @@ def is_harness_echo(answer: object) -> bool:
         return True
     if s == sufficiency_notice():
         return True
+    if s == sufficiency_listing_notice():
+        return True
+    if s == plain_first_notice():
+        return True
     # ``k`` is a small configured integer (``saturation.k``, default 10). Rather
     # than plumb the live value into every caller - which would make the check
     # depend on config and therefore fail open when the config is absent - the
@@ -222,6 +265,7 @@ def is_harness_echo(answer: object) -> bool:
 
 __all__ = [
     "FETCH_GATE_PREFIX",
+    "PLAIN_FIRST_PREFIX",
     "SUFFICIENCY_PREFIX",
     "SEARCH_CLOSED_PREFIX",
     "TOOL_OUTPUT_ELIDED",
@@ -230,6 +274,8 @@ __all__ = [
     "is_elided_tool_output",
     "is_harness_authored",
     "is_harness_echo",
+    "plain_first_notice",
     "search_closed_notice",
+    "sufficiency_listing_notice",
     "sufficiency_notice",
 ]
