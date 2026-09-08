@@ -4636,8 +4636,8 @@
       "zh": "调用次数"
     },
     "gui.set.usg.cost": {
-      "en": "reported cost",
-      "zh": "已记录费用"
+      "en": "est. cost",
+      "zh": "预估费用"
     },
     "gui.set.usg.in": {
       "en": "input tokens",
@@ -5754,22 +5754,6 @@
     "gui.confirm.note_keys": {
       "en": "Enter send · Esc back · expires in {n}s",
       "zh": "Enter 发送 · Esc 返回 · {n} 秒后过期"
-    },
-    "gui.set.usg.unknown": {
-      "en": "unknown",
-      "zh": "未知"
-    },
-    "gui.set.usg.cost_unknown": {
-      "en": "cost unknown",
-      "zh": "费用未知"
-    },
-    "gui.set.usg.cost_missing": {
-      "en": "{n} calls with unknown cost",
-      "zh": "{n} 次调用费用未知"
-    },
-    "gui.set.usg.legacy": {
-      "en": "Historical estimates excluded",
-      "zh": "历史估算未计入"
     }
   }
 }

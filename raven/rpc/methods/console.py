@@ -729,26 +729,8 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     days = days if isinstance(days, int) and not isinstance(days, bool) else 30
     days = max(1, min(days, 90))
 
-    from raven.providers.usage import reported_cost, token_count
-
-    def empty_totals() -> dict[str, Any]:
-        return {
-            "calls": 0,
-            "input_tokens": None,
-            "output_tokens": None,
-            "cache_read_tokens": None,
-            "cache_write_tokens": None,
-            "cost_usd": None,
-            "input_missing_calls": 0,
-            "output_missing_calls": 0,
-            "cost_missing_calls": 0,
-            "cache_read_missing_calls": 0,
-            "cache_write_missing_calls": 0,
-            "legacy_cost_calls": 0,
-        }
-
     models: dict[str, dict[str, Any]] = {}
-    total = empty_totals()
+    total = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cost_usd": 0.0}
     # The same resolution the writer uses (usage_tracker._default_telemetry_dir):
     # both used to hardcode ~/.raven, which held together only until RAVEN_HOME
     # moved one of them.
@@ -769,26 +751,32 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                 row = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(row, dict):
-                continue
             name = str(row.get("model") or "?")
-            acc = models.setdefault(name, {"model": name, **empty_totals()})
-            cost = reported_cost(row.get("cost_usd")) if row.get("schema_version") == 2 else None
-            legacy = row.get("schema_version") != 2 and row.get("estimated_cost_usd") is not None
-            for target in (acc, total):
-                target["calls"] += 1
-                target["legacy_cost_calls"] += int(legacy)
-                for key, value, missing in (
-                    ("input_tokens", token_count(row.get("input_tokens")), "input_missing_calls"),
-                    ("output_tokens", token_count(row.get("output_tokens")), "output_missing_calls"),
-                    ("cost_usd", cost, "cost_missing_calls"),
-                    ("cache_read_tokens", token_count(row.get("cache_read_tokens")), "cache_read_missing_calls"),
-                    ("cache_write_tokens", token_count(row.get("cache_write_tokens")), "cache_write_missing_calls"),
-                ):
-                    if value is None:
-                        target[missing] += 1
-                    else:
-                        target[key] = (target[key] or 0) + value
+            acc = models.setdefault(
+                name,
+                {
+                    "model": name,
+                    "calls": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cost_usd": 0.0,
+                },
+            )
+            inp = int(row.get("input_tokens") or 0)
+            out = int(row.get("output_tokens") or 0)
+            cr = int(row.get("cache_read_tokens") or 0)
+            cost = float(row.get("estimated_cost_usd") or 0.0)
+            acc["calls"] += 1
+            acc["input_tokens"] += inp
+            acc["output_tokens"] += out
+            acc["cache_read_tokens"] += cr
+            acc["cost_usd"] += cost
+            total["calls"] += 1
+            total["input_tokens"] += inp
+            total["output_tokens"] += out
+            total["cache_read_tokens"] += cr
+            total["cost_usd"] += cost
 
     tools: dict[str, int] = {}
     tool_total = 0
@@ -823,7 +811,7 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
         "days": days,
         "llm": {
             "total": total,
-            "models": sorted(models.values(), key=lambda m: -(m["cost_usd"] or 0)),
+            "models": sorted(models.values(), key=lambda m: -m["cost_usd"]),
         },
         "tools": {
             "total": tool_total,

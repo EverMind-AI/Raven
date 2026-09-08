@@ -19,7 +19,6 @@ from raven.providers.openai_codex_provider import (
     _convert_messages,
     _convert_tools,
 )
-from raven.providers.usage import responses_usage
 
 _GPT_VERSION = re.compile(r"(?:^|/)gpt-(\d+)\.(\d+)(?:$|[-/])", re.IGNORECASE)
 _DEFAULT_BASE = "https://api.openai.com/v1"
@@ -109,7 +108,6 @@ class OpenAIResponsesProvider(LLMProvider):
 
         url = f"{(self.api_base or _DEFAULT_BASE).rstrip('/')}/responses"
         headers = {"Accept": "text/event-stream", **self.extra_headers}
-        raw_usage: dict[str, Any] = {}
         try:
             async with httpx.AsyncClient(timeout=self.generation.timeout) as client:
                 async with client.stream(
@@ -128,14 +126,11 @@ class OpenAIResponsesProvider(LLMProvider):
                     # 2026-09-07). getattr: a GenerationSettings from before the
                     # field falls back to the call budget, as it always did.
                     idle_timeout = getattr(self.generation, "stream_idle_timeout", None) or self.generation.timeout
-                    content, tool_calls, finish_reason = await _consume_sse(
-                        response, idle_timeout, usage_sink=raw_usage
-                    )
+                    content, tool_calls, finish_reason = await _consume_sse(response, idle_timeout)
             return LLMResponse(
                 content=content or None,
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
-                usage=responses_usage(raw_usage),
             )
         except Exception as exc:
             classification = self.classify_error(exc)
@@ -157,7 +152,6 @@ class OpenAIResponsesProvider(LLMProvider):
             return LLMResponse(
                 content=format_llm_error(exc, classification, provider=self._provider_name),
                 finish_reason="error",
-                usage=responses_usage(raw_usage),
                 error_classification=classification,
             )
 

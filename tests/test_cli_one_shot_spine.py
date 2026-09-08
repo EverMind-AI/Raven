@@ -309,7 +309,7 @@ def test_turn_summary_tiny_cost_shows_floor_not_free():
     tracker = _FakeUsageTracker()
     summary = TurnUsageSummary(tracker)
     summary.turn_started()
-    tracker.set(input_tokens=100, output_tokens=10, cost_usd=0.00004)
+    tracker.set(input_tokens=100, output_tokens=10, estimated_cost_usd=0.00004)
     line = summary.take_line()
     assert line is not None
     assert "<$0.0001" in line
@@ -320,7 +320,7 @@ def test_turn_summary_normal_cost_still_renders_exact():
     tracker = _FakeUsageTracker()
     summary = TurnUsageSummary(tracker)
     summary.turn_started()
-    tracker.set(input_tokens=200, output_tokens=20, cost_usd=0.0042)
+    tracker.set(input_tokens=200, output_tokens=20, estimated_cost_usd=0.0042)
     line = summary.take_line()
     assert line is not None
     assert "$0.0042" in line
@@ -332,23 +332,3 @@ def test_summary_line_indented_like_progress_notices(capsys):
     _render_summary_line("1.2k in / 340 out tokens")
     out = capsys.readouterr().out
     assert out.startswith("  ↳")
-
-
-async def test_summary_distinguishes_free_unknown_and_partial():
-    from raven.contracts.token_strategy import UsageSnapshot
-    from raven.token_wise.usage_tracker import UsageTracker
-
-    tracker = UsageTracker(persist=False)
-    summary = TurnUsageSummary(tracker)
-    summary.turn_started()
-    await tracker.after_llm_call({}, UsageSnapshot(model="model", input_tokens=10, cost_usd=0))
-    assert "$0" in summary.take_line()
-    summary.turn_started()
-    await tracker.after_llm_call({}, UsageSnapshot(model="model", input_tokens=10))
-    line = summary.take_line()
-    assert "cost unknown" in line and "$0" not in line
-    summary.turn_started()
-    await tracker.after_llm_call({}, UsageSnapshot(model="model", input_tokens=10, cost_usd=0.4))
-    await tracker.after_llm_call({}, UsageSnapshot(model="model", input_tokens=10))
-    line = summary.take_line()
-    assert "$0.4" in line and "1 calls with unknown cost" in line

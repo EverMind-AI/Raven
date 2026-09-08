@@ -1,7 +1,8 @@
 {
   "agents": {
     "defaults": {
-      "maxToolIterations": 60
+      "maxToolIterations": 60,
+      "reasoningEffort": "medium"
     }
   }
 }

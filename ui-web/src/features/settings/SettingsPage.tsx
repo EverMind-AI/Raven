@@ -514,14 +514,7 @@ function NotifyPage(): JSX.Element {
 
 /* ---- usage ----------------------------------------------------------- */
 
-const fmtTok = (n: number | null | undefined): string => n == null ? t('gui.set.usg.unknown') : (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n))
-
-function usageCost(value: number | null | undefined, missing: number): string {
-  const amount = value == null ? t('gui.set.usg.unknown')
-    : value === 0 ? '$0'
-    : value < 0.0001 ? '<$0.0001' : '$' + value.toFixed(4)
-  return missing ? amount + ' · ' + t('gui.set.usg.cost_missing', { n: missing }) : amount
-}
+const fmtTok = (n: number): string => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n))
 
 function UsagePage({ s }: { s: SettingsState }): JSX.Element {
   /* Only the tick lives here, and it asks the dialog whether it is still up.
@@ -553,15 +546,14 @@ function UsagePage({ s }: { s: SettingsState }): JSX.Element {
             [String(u.llm.total.calls), t('gui.set.usg.calls')],
             [fmtTok(u.llm.total.input_tokens), t('gui.set.usg.in')],
             [fmtTok(u.llm.total.output_tokens), t('gui.set.usg.out')],
-            [usageCost(u.llm.total.cost_usd, u.llm.total.cost_missing_calls), t('gui.set.usg.cost')],
+            ['$' + u.llm.total.cost_usd.toFixed(2), t('gui.set.usg.cost')],
           ]}
         />
-        {u.llm.total.legacy_cost_calls > 0 && <div className="empty-note">{t('gui.set.usg.legacy')}</div>}
         {u.llm.models.length > 0 && (
           <KvList
             rows={u.llm.models
               .slice(0, 12)
-              .map((m) => [m.model, `${m.calls} × · ${fmtTok(m.input_tokens == null && m.output_tokens == null ? null : (m.input_tokens ?? 0) + (m.output_tokens ?? 0))} tok · ${usageCost(m.cost_usd, m.cost_missing_calls)}`])}
+              .map((m) => [m.model, `${m.calls} × · ${fmtTok(m.input_tokens + m.output_tokens)} tok · $${m.cost_usd.toFixed(2)}`])}
           />
         )}
       </Scard>

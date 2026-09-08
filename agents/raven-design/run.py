@@ -1,8 +1,27 @@
 #!/usr/bin/env python
-"""Launch Raven-Design with host-owned model and tool credentials.
+"""Host-side launcher for the Raven-Design ACP server -- the B side, swapped.
 
-The rendered config only adds engine tools, storage placement and iteration
-limits. Model selection, reasoning effort and image settings come from the host.
+The engine this launcher serves is installed raven's own: the visual
+capability arrives as the design-engine wheel (plugins-dist/design-engine),
+discovered through the ``raven.plugins`` entry-point group -- the Visual
+Domain Selector turn hook, the render/preview tools, the resident Task State,
+with the fifteen-skill corpus and its reference plates as package data. The
+vendored fork checkout is no longer on the exec path; what remains of it is
+the A side of the A/B verification, run by its own wrapper.
+
+The launch contract is the fork launcher's render half, kept whole: refuse
+without any LLM key, give an own key to every provider block, merge the
+optional Serper and Jina keys with per-slot host fallback, resolve the
+image-generation key through the fork's waterfall, and pin the engine's
+Agent home in the raven data directory (w109). Three renders are this
+hosting's own trunk seats, the dw2 debt triple paid: the engine's skill
+directory is mounted through ``skillForge.localDirs`` (per-entry, keyed by
+path -- an operator's own mounts survive), so the selector cards'
+``read_skill local/<name>`` instruction resolves on this host; the resident
+Task State gets its ``taskState.stateRoot`` under the product state root, so
+that surface stops declining; and the exec target is ``python -m raven acp``
+on this interpreter. stdout belongs to the protocol; every diagnostic goes
+to stderr.
 """
 
 from __future__ import annotations
@@ -12,7 +31,6 @@ import importlib.util
 import json
 import os
 import sys
-from copy import deepcopy
 from pathlib import Path
 
 from raven.config import product_render as render
@@ -24,19 +42,34 @@ ENGINE_PACKAGE = "raven_design"
 
 PRODUCT = "raven-design"
 
+# Where each optional secret belongs in the config the engine loads. The LLM
+# key is not among them: it is written to every provider block rather than to
+# one path. The image key is not among them either: its value is a waterfall
+# over four sources, not one env read (see configure_image_generation).
+SECRET_SLOTS = {
+    "DESIGN_SERPER_API_KEY": ("tools", "web", "search", "apiKey"),
+    "DESIGN_JINA_API_KEY": ("tools", "web", "jinaApiKey"),
+}
+
+# The one secret whose absence is fatal: no key, no model, no design.
+REQUIRED_SECRETS = ("DESIGN_API_KEY",)
+
+# Three effort tiers over ACP session modes, the research launcher's shape: the
+# labels are product copy about the choice, the overlay beside each non-baseline
+# mode carries the knobs. config.json IS the high profile, so it needs no file.
 MODES_DIR = HERE / "modes"
 MODE_LABELS = {
     "medium": (
         "Medium",
-        "Bounded: 60 tool iterations. A quick draft or a small revision.",
+        "Bounded: medium reasoning and 60 tool iterations. A quick draft or a small revision.",
     ),
     "high": (
         "High",
-        "The default: 150 tool iterations.",
+        "The default: high reasoning and 150 tool iterations.",
     ),
     "max": (
         "Max",
-        "300 tool iterations. A full deliverable where the ceiling matters more than the bill.",
+        "Maximum reasoning and 300 tool iterations. A full deliverable where the ceiling matters more than the bill.",
     ),
 }
 BASELINE_MODE = "high"
@@ -77,15 +110,67 @@ def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-def configure_image_generation(config: dict, host: dict) -> None:
-    """Use the host image section and keep subsequent settings edits live."""
-    from raven.config.schema import live_media_tool_config
+def recommended_llm() -> str:
+    """What this folder's manifest says this agent is tuned for."""
+    try:
+        rec = json.loads((HERE / "subagent.json").read_text(encoding="utf-8")).get("recommendedLlm") or {}
+    except (OSError, ValueError):
+        return "unrecorded"
+    return f"{rec.get('model', '?')} via {rec.get('apiBase') or rec.get('provider', '?')}"
 
-    host_image = ((host.get("tools") or {}).get("media") or {}).get("image")
-    section = live_media_tool_config(host_image, (host.get("providers") or {}).get("openrouter"))
-    image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
-    image["selectionConfig"] = str(render.raven_home() / render.CONFIG_FILENAME)
-    config.setdefault("tools", {}).setdefault("media", {})["image"] = image
+
+def configure_image_generation(config: dict, host: dict) -> None:
+    """Resolve the image-generation key through the fork launcher's waterfall.
+
+    Order kept from the fork: an own DESIGN_IMAGE_API_KEY wins; then the host's
+    ``tools.media.image`` key rides along with the base and model it was
+    configured for; then the host's OpenRouter provider key; then the own LLM
+    key, but only when the configured endpoint is already OpenRouter (the only
+    backend trunk's media tools speak). No key resolves to an empty key AND an
+    empty model, which is precisely how the trunk registrar withholds the
+    ``image_generate`` tool rather than offering one that cannot answer. The
+    fork's apiStyle/allowModelOverride companions are not carried: the trunk
+    media schema has no such keys (phantom knobs, per the D4 floor).
+    """
+    own_image_key = env_value("DESIGN_IMAGE_API_KEY")
+    own_llm_key = env_value(REQUIRED_SECRETS[0])
+    host_media = ((host.get("tools") or {}).get("media") or {}).get("image") or {}
+    host_media_key = str(host_media.get("apiKey") or host_media.get("api_key") or "")
+    host_media_base = str(host_media.get("apiBase") or host_media.get("api_base") or "")
+    host_openrouter = (host.get("providers") or {}).get("openrouter") or {}
+    host_openrouter_key = str(host_openrouter.get("apiKey") or host_openrouter.get("api_key") or "")
+
+    image_key = own_image_key
+    borrowed_host_media = False
+    if not image_key and host_media_key and (not host_media_base or "openrouter.ai" in host_media_base):
+        image_key = host_media_key
+        borrowed_host_media = True
+    if not image_key:
+        image_key = host_openrouter_key
+        borrowed_host_media = bool(image_key and (not host_media_base or "openrouter.ai" in host_media_base))
+    if not image_key and own_llm_key:
+        configured_base = str(
+            (((config.get("tools") or {}).get("media") or {}).get("image") or {}).get("apiBase") or ""
+        )
+        if "openrouter.ai" in configured_base:
+            image_key = own_llm_key
+
+    image = config.setdefault("tools", {}).setdefault("media", {}).setdefault("image", {})
+    if not image_key:
+        image["apiKey"] = ""
+        image["model"] = ""
+        return
+    image["apiKey"] = image_key
+    if borrowed_host_media:
+        image["selectionConfig"] = str(render.raven_home() / render.CONFIG_FILENAME)
+        if host_media_base:
+            image["apiBase"] = host_media_base
+        if host_media.get("model"):
+            image["model"] = str(host_media["model"])
+        if "quality" in host_media:
+            image["quality"] = str(host_media["quality"] or "")
+        else:
+            image.pop("quality", None)
 
 
 def render_config(source: Path) -> Path:
@@ -99,18 +184,25 @@ def render_config(source: Path) -> Path:
     config = json.loads(source.read_text(encoding="utf-8"))
     host = render.host_config()
 
-    config.setdefault("tools", {})["web"] = deepcopy((host.get("tools") or {}).get("web") or {})
+    render.apply_secret_slots(config, host, slots=SECRET_SLOTS, required=(), lookup=env_value)
     configure_image_generation(config, host)
 
-    defaults = config.setdefault("agents", {}).setdefault("defaults", {})
-    for key in ("model", "provider", "reasoningEffort"):
-        defaults.pop(key, None)
-    config.pop("providers", None)
-    config.pop("routing", None)
-    taken = render.inherit_llm(config, deepcopy(host))
-    if not taken:
-        raise SystemExit("error: configure a model provider in the host Raven settings before starting Design")
-    log(f"[run] llm: inherited from the host ({taken})")
+    llm_key = REQUIRED_SECRETS[0]
+    if api_key := env_value(llm_key):
+        for provider in config.get("providers", {}).values():
+            if isinstance(provider, dict) and not provider.get("apiKey"):
+                provider["apiKey"] = api_key
+        defaults = config.get("agents", {}).get("defaults", {})
+        log(f"[run] llm: own key (provider={defaults.get('provider')} model={defaults.get('model')})")
+    else:
+        taken = render.inherit_llm(config, host)
+        if not taken:
+            raise SystemExit(
+                f"error: {llm_key} is not set and the host config has no provider key to "
+                f"inherit from; put the key in {HERE / '.env'} (see .env.example), export "
+                f"it, or configure a provider in the host raven"
+            )
+        log(f"[run] llm: inherited from the host ({taken}); tuned for {recommended_llm()}")
 
     # The pooled loop reads identity, sessions, transcripts and the skill pool
     # from ONE agent home; unpinned it would be the host's own (the launcher
@@ -139,9 +231,9 @@ def render_config(source: Path) -> Path:
     )
     if catalogue:
         for entry in catalogue.values():
-            overlay_defaults = ((entry.get("overlay") or {}).get("agents") or {}).get("defaults") or {}
-            overlay_defaults.pop("reasoningEffort", None)
-            entry["reasoningEffort"] = defaults.get("reasoningEffort")
+            entry["reasoningEffort"] = agent_default(entry["overlay"], "reasoningEffort") or defaults.get(
+                "reasoningEffort"
+            )
         acp = config.get("acp")
         if not isinstance(acp, dict):
             acp = config["acp"] = {}

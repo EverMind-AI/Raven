@@ -351,8 +351,8 @@ def _usage_update(usage: Any) -> dict[str, Any] | None:
     no usage at all (a cached reply, a hook short-circuit) has nothing to say
     here -- an update of zeroes is not the same statement as no update.
 
-    The currency is USD because cost_usd carries only verified dollar amounts
-    reported by the provider, never a locally estimated price.
+    The currency is hardcoded because the figure is: ``estimated_cost_usd`` is
+    dollars by name. A configurable currency here would relabel the same number.
     """
     if not isinstance(usage, dict):
         return None

@@ -940,25 +940,3 @@ it.each([
   await openImageSettings()
   expect((screen.getByLabelText('gui.caps.image_model') as HTMLSelectElement).value).toBe(selected)
 })
-
-it.each([null, 0, 0.75])('renders persisted reported cost %s without treating unknown as free', async (cost) => {
-  const total = {
-    calls: 2, input_tokens: 100, output_tokens: 20, cost_usd: cost,
-    cache_read_tokens: null, cache_write_tokens: null,
-    cost_missing_calls: 1, cache_read_missing_calls: 2,
-    cache_write_missing_calls: 2, legacy_cost_calls: 1,
-  }
-  install(snap(), { usage: async () => ({
-    days: 30, llm: { total, models: [{ model: 'reported-model', ...total }] },
-    tools: { total: 0, counts: [] },
-  }) })
-  await mount()
-  expect(screen.getByText('gui.set.usg.legacy')).toBeTruthy()
-  expect(screen.getAllByText(/gui.set.usg.cost_missing/).length).toBeGreaterThan(0)
-  if (cost === null) {
-    expect(screen.queryByText(/\$0/)).toBeNull()
-    expect(screen.getAllByText(/gui.set.usg.unknown/).length).toBeGreaterThan(0)
-  } else {
-    expect(screen.getAllByText(cost === 0 ? /\$0 ·/ : /\$0.7500/).length).toBeGreaterThan(0)
-  }
-})

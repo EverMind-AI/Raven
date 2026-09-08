@@ -32,7 +32,6 @@ from raven.providers.base import (
 from raven.providers.prompt_cache import accepts_cache_control
 from raven.providers.rates import CLAUDE_MAX_OUTPUT_TOKENS
 from raven.providers.tool_names import normalized_tool_name
-from raven.providers.usage import reported_cost
 
 _DEFAULT_BASE = "https://api.anthropic.com"
 _ANTHROPIC_VERSION = "2023-06-01"
@@ -525,7 +524,7 @@ def _strip_cache_control(value: Any) -> Any:
     return value
 
 
-def _usage(raw: Any) -> dict[str, Any]:
+def _usage(raw: Any) -> dict[str, int]:
     if not raw:
         return {}
     prompt = int(_get(raw, "input_tokens", 0) or 0)
@@ -535,33 +534,22 @@ def _usage(raw: Any) -> dict[str, Any]:
     creation = _get(raw, "cache_creation", {}) or {}
     if not cache_write and isinstance(creation, dict):
         cache_write += sum(int(v or 0) for v in creation.values() if isinstance(v, (int, float)))
-    total = int(_get(raw, "total_tokens", 0) or (prompt + completion + cache_read + cache_write))
-    result = {
-        "prompt_tokens": prompt,
-        "completion_tokens": completion,
-        "total_tokens": total,
-        "prompt_tokens_include_cache": False,
-    }
-    if _get(raw, "cache_read_input_tokens") is not None:
+    total = int(_get(raw, "total_tokens", 0) or (prompt + completion))
+    result = {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
+    if cache_read:
         result["cache_read_input_tokens"] = cache_read
-    if _get(raw, "cache_creation_input_tokens") is not None or creation:
+    if cache_write:
         result["cache_creation_input_tokens"] = cache_write
-    cost = reported_cost(_get(raw, "cost"))
-    if cost is not None:
-        result["cost_usd"] = cost
     return result
 
 
-def _merge_usage(target: dict[str, Any], raw: Any) -> None:
+def _merge_usage(target: dict[str, int], raw: Any) -> None:
     """Merge message-start and message-delta usage without erasing counts."""
     incoming = _usage(raw)
     for key, value in incoming.items():
-        if value or key not in target or key == "cost_usd":
+        if value or key not in target:
             target[key] = value
-    target["total_tokens"] = sum(
-        int(target.get(key, 0))
-        for key in ("prompt_tokens", "completion_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
-    )
+    target["total_tokens"] = int(target.get("prompt_tokens", 0)) + int(target.get("completion_tokens", 0))
 
 
 def _finish_reason(reason: Any) -> str:
@@ -650,7 +638,7 @@ async def consume_message_stream(response: httpx.Response, timeout: float) -> As
     tool_names: dict[int, str] = {}
     thinking: dict[int, dict[str, Any]] = {}
     next_tool = 0
-    usage: dict[str, Any] = {}
+    usage: dict[str, int] = {}
     terminal_sent = False
 
     async for event in _iter_sse(response, timeout):

@@ -32,7 +32,6 @@ from raven.providers.base import (
     format_llm_error,
 )
 from raven.providers.tool_names import normalized_tool_name
-from raven.providers.usage import merge_usage
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
@@ -369,21 +368,13 @@ async def _iter_sse(response: httpx.Response, timeout: float) -> AsyncGenerator[
         buffer.append(line)
 
 
-async def _consume_sse(
-    response: httpx.Response,
-    timeout: float,
-    *,
-    usage_sink: dict[str, Any] | None = None,
-) -> tuple[str, list[ToolCallRequest], str]:
+async def _consume_sse(response: httpx.Response, timeout: float) -> tuple[str, list[ToolCallRequest], str]:
     content = ""
     tool_calls: list[ToolCallRequest] = []
     tool_call_buffers: dict[str, dict[str, Any]] = {}
     finish_reason = "stop"
 
     async for event in _iter_sse(response, timeout):
-        raw_usage = (event.get("response") or {}).get("usage")
-        if usage_sink is not None and isinstance(raw_usage, dict):
-            usage_sink.update(merge_usage(usage_sink, raw_usage))
         event_type = event.get("type")
         if event_type == "response.output_item.added":
             item = event.get("item") or {}
@@ -435,7 +426,7 @@ async def _consume_sse(
                         run_meta=RunMeta(arguments_repaired=True) if repaired else None,
                     )
                 )
-        elif event_type in {"response.completed", "response.done"}:
+        elif event_type == "response.completed":
             status = (event.get("response") or {}).get("status")
             finish_reason = _map_finish_reason(status)
         elif event_type in {"error", "response.failed"}:

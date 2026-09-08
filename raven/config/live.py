@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import json
 import weakref
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -243,38 +242,11 @@ def media_tool_config(live: LiveConfig, kind: str):
     slot = f"media_tool_config:{kind}"
     media = live.get("tools.media")
     if media is None:
-        value = _admit(live, slot, present=False, value=None)
-    else:
-        candidate = (
-            live_media_tool_config(media.get(kind), live.get("providers.openrouter"))
-            if isinstance(media, dict)
-            else None
-        )
-        value = _admit(live, slot, present=True, value=candidate)
-    return resolve_media_selection(value, kind)
-
-
-def resolve_media_selection(config, kind: str = "image"):
-    """Resolve a host-owned selection for both tool availability and execution."""
-    source = getattr(config, "selection_config", "")
-    if not source:
-        return config
-    from raven.config.schema import MediaToolConfig, live_media_tool_config
-
-    live = _selection_live(source)
-    media = live.get("tools.media")
-    if media is None:
-        _admit(live, f"media_selection:{kind}", present=False, value=None)
-        return MediaToolConfig()
-    value = (
-        live_media_tool_config(media.get(kind), live.get("providers.openrouter")) if isinstance(media, dict) else None
-    )
-    return _admit(live, f"media_selection:{kind}", present=True, value=value) or MediaToolConfig()
-
-
-@lru_cache(maxsize=32)
-def _selection_live(source: str) -> LiveConfig:
-    return LiveConfig(Path(source))
+        return _admit(live, slot, present=False, value=None)
+    if not isinstance(media, dict):
+        return _admit(live, slot, present=True, value=None)
+    value = live_media_tool_config(media.get(kind), live.get("providers.openrouter"))
+    return _admit(live, slot, present=True, value=value)
 
 
 def mcp_server_configs(live: LiveConfig) -> dict | None:

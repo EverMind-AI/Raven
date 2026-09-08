@@ -15,7 +15,7 @@ so its ``before_llm_call`` inherits the default no-op pass-through.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -77,8 +77,7 @@ class UsageTracker(TokenStrategy):
             self._buffer.append(
                 {
                     "ts": datetime.now(timezone.utc).isoformat(),
-                    "schema_version": 2,
-                    **{k: v for k, v in asdict(usage).items() if k != "calls" and not k.endswith("_missing_calls")},
+                    **asdict(usage),
                 }
             )
             if self._call_count % self.flush_every == 0:
@@ -119,24 +118,28 @@ class UsageTracker(TokenStrategy):
 
     @staticmethod
     def _add_into(acc: UsageSnapshot, add: UsageSnapshot) -> None:
-        acc.calls += 1
+        acc.input_tokens += add.input_tokens
+        acc.output_tokens += add.output_tokens
+        acc.cache_read_tokens += add.cache_read_tokens
+        acc.cache_write_tokens += add.cache_write_tokens
         acc.reasoning_tokens += add.reasoning_tokens
-        for field, missing in (
-            ("input_tokens", "input_missing_calls"),
-            ("output_tokens", "output_missing_calls"),
-            ("cost_usd", "cost_missing_calls"),
-            ("cache_read_tokens", "cache_read_missing_calls"),
-            ("cache_write_tokens", "cache_write_missing_calls"),
-        ):
-            value = getattr(add, field)
-            if value is None:
-                setattr(acc, missing, getattr(acc, missing) + 1)
-            else:
-                setattr(acc, field, (getattr(acc, field) or 0) + value)
+        if add.estimated_cost_usd is not None:
+            # A plan-billed call contributes tokens but no money; summing it as
+            # zero would read as "these calls were free".
+            acc.estimated_cost_usd = (acc.estimated_cost_usd or 0.0) + add.estimated_cost_usd
 
     @staticmethod
     def _copy(src: UsageSnapshot) -> UsageSnapshot:
-        return replace(src)
+        return UsageSnapshot(
+            model=src.model,
+            input_tokens=src.input_tokens,
+            output_tokens=src.output_tokens,
+            cache_read_tokens=src.cache_read_tokens,
+            cache_write_tokens=src.cache_write_tokens,
+            reasoning_tokens=src.reasoning_tokens,
+            estimated_cost_usd=src.estimated_cost_usd,
+            session_key=src.session_key,
+        )
 
     def _flush(self) -> None:
         if not self._buffer or not self.persist:

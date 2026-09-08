@@ -14,7 +14,12 @@ import raven.agent.subagent.backends.env as env_mod
 import raven.agent.subagent.probe as probe_mod
 from raven.agent.subagent import instances as instances_mod
 from raven.agent.subagent.probe import probe_all, probe_one, run_test
-from raven.config.schema import Config, ThirdPartyCliSubagentConfig, ThirdPartyOpenAISubagentConfig
+from raven.config.schema import (
+    Config,
+    ThirdPartyAcpSubagentConfig,
+    ThirdPartyCliSubagentConfig,
+    ThirdPartyOpenAISubagentConfig,
+)
 
 
 def _free_port() -> int:
@@ -57,6 +62,35 @@ async def test_cli_probe_reports_the_resolved_absolute_path(tmp_path: Path) -> N
     assert res.target == str(exe)
     assert res.kind == "cli"
     assert res.source == "config"
+
+
+async def test_a_missing_executable_says_what_installs_it(tmp_path: Path) -> None:
+    """The install belongs on the surface a person reads, not in the roster prose.
+
+    ``which`` can only report the executable it looked for, which is not the
+    package that ships it: ``qodercli`` does not spell ``@qoder-ai/qodercli``.
+    Carried by the row's provenance rather than its name, so an owner who renamed
+    the row keeps the hint.
+    """
+    cfg = ThirdPartyAcpSubagentConfig(name="Renamed By Its Owner", preset="qoder", command="qodercli --acp")
+    res = await probe_one(cfg, source="config", path=str(tmp_path))
+    assert res.status == "missing"
+    assert res.target == "qodercli"
+    assert "npm i -g @qoder-ai/qodercli" in res.detail
+
+
+async def test_a_missing_executable_invents_no_install_it_does_not_know(tmp_path: Path) -> None:
+    """A hand-written row is not the preset whose name it happens to wear.
+
+    Its command is the owner's, so naming a package would send them to install
+    something they never asked for. The executable name already reported is what
+    they search with instead.
+    """
+    cfg = ThirdPartyAcpSubagentConfig(name="Qoder", command="my-own-agent --acp")
+    res = await probe_one(cfg, source="config", path=str(tmp_path))
+    assert res.status == "missing"
+    assert res.detail == "my-own-agent is not on the login shell PATH"
+    assert "npm" not in res.detail
 
 
 async def test_cli_probe_reports_missing_and_still_names_what_it_looked_for(tmp_path: Path) -> None:

@@ -41,7 +41,6 @@ from raven.providers.transport_failure import (
     prompt_chars,
     transport_failure_message,
 )
-from raven.providers.usage import merge_usage, reported_cost, token_count
 from raven.providers.wire import wire_model
 
 litellm = import_litellm()
@@ -129,30 +128,37 @@ def session_affinity_headers() -> dict[str, str]:
     return {"x-session-affinity": uuid.uuid4().hex}
 
 
-def _usage_field(value: Any, key: str) -> Any:
-    return value.get(key) if isinstance(value, dict) else getattr(value, key, None)
+def _cache_tokens(usage: Any) -> tuple[int, int]:
+    """Cache read and write counts, out of whichever shape this response used.
 
+    LiteLLM normalises these across providers into more than one shape depending
+    on where the response came from:
+      - Anthropic native:  usage.cache_read_input_tokens / cache_creation_input_tokens
+      - LiteLLM internal:  usage._cache_read_input_tokens / _cache_creation_input_tokens
+      - OpenAI-style:      usage.prompt_tokens_details.cached_tokens (read only)
+      - OpenRouter:        usage.prompt_tokens_details.cached_tokens
+                           usage.prompt_tokens_details.cache_write_tokens
 
-def _cache_tokens(usage: Any) -> tuple[int | None, int | None]:
-    """Read cache counts without converting a missing report into zero."""
-    # LiteLLM synthesizes private cache counters at zero even when none arrived.
-    details = _usage_field(usage, "prompt_tokens_details")
-
-    def first(*values: Any) -> int | None:
-        return next((count for value in values if (count := token_count(value)) is not None), None)
-
-    return (
-        first(
-            _usage_field(usage, "cache_read_input_tokens"),
-            _usage_field(details, "cached_tokens"),
-            _usage_field(usage, "_cache_read_input_tokens") or None,
-        ),
-        first(
-            _usage_field(usage, "cache_creation_input_tokens"),
-            _usage_field(details, "cache_write_tokens"),
-            _usage_field(usage, "_cache_creation_input_tokens") or None,
-        ),
+    Shared by both response paths so a streamed turn and a non-streamed one
+    report cache activity the same way: a streamed response carries the
+    OpenRouter shape, while the accounting above it
+    (``AgentLoop._build_usage_snapshot``, ``tracing.usage.normalize``, the
+    telemetry the UsageTracker writes) reads the Anthropic names.
+    """
+    details = getattr(usage, "prompt_tokens_details", None)
+    read = (
+        getattr(usage, "cache_read_input_tokens", None)
+        or getattr(usage, "_cache_read_input_tokens", None)
+        or (getattr(details, "cached_tokens", None) if details else None)
+        or 0
     )
+    write = (
+        getattr(usage, "cache_creation_input_tokens", None)
+        or getattr(usage, "_cache_creation_input_tokens", None)
+        or (getattr(details, "cache_write_tokens", None) if details else None)
+        or 0
+    )
+    return int(read), int(write)
 
 
 class LiteLLMProvider(LLMProvider):
@@ -760,30 +766,9 @@ class LiteLLMProvider(LLMProvider):
                 except StopAsyncIteration:
                     first = done
 
-            # LiteLLM rebuilds its final usage and drops API monetary fields.
-            # Its retained chunks precede that rebuild and contain reported usage.
-            sdk_stream = isinstance(stream, litellm.CustomStreamWrapper)
-            usage_cursor = 0
-
-            def reported_usage() -> dict[str, Any] | None:
-                nonlocal usage_cursor
-                usage = None
-                for original in stream.chunks[usage_cursor:]:
-                    raw = _usage_field(original, "usage")
-                    if raw is not None:
-                        usage = merge_usage(usage, self._normalize_usage(raw))
-                usage_cursor = len(stream.chunks)
-                return usage
-
             chunk = first
             while chunk is not done:
                 delta = self._normalize_stream_chunk(chunk)
-                if sdk_stream:
-                    usage = reported_usage()
-                    if delta is not None:
-                        delta.usage = usage
-                    elif usage is not None:
-                        delta = ChatDelta(usage=usage)
                 if delta is not None:
                     # LiteLLM's stream wrapper answers an upstream that closed the
                     # connection without a terminal chunk by making up a final
@@ -797,29 +782,9 @@ class LiteLLMProvider(LLMProvider):
                 try:
                     chunk = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
                 except StopAsyncIteration:
-                    if sdk_stream and (usage := reported_usage()) is not None:
-                        yield ChatDelta(usage=usage)
                     break
         finally:
             await _close(stream)
-
-    def _normalize_usage(self, usage: Any) -> dict[str, Any]:
-        """Read protocol usage.cost as reported USD, independently of the endpoint."""
-        result = {}
-        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-            value = token_count(_usage_field(usage, key))
-            if value is not None:
-                result[key] = value
-        read, write = _cache_tokens(usage)
-        if read is not None:
-            result["cache_read_input_tokens"] = read
-        if write is not None:
-            result["cache_creation_input_tokens"] = write
-        result["prompt_tokens_include_cache"] = True
-        cost = reported_cost(_usage_field(usage, "cost"))
-        if cost is not None:
-            result["cost_usd"] = cost
-        return result
 
     def _normalize_stream_chunk(self, chunk: Any) -> ChatDelta | None:
         """Normalize a raw provider chunk into a ChatDelta.
@@ -835,11 +800,11 @@ class LiteLLMProvider(LLMProvider):
         """
         try:
             choices = getattr(chunk, "choices", None)
-            usage = getattr(chunk, "usage", None)
-            if not choices and usage is None:
+            if not choices:
                 return None
-            choice = choices[0] if choices else None
-            delta_obj = getattr(choice, "delta", None)
+            delta_obj = getattr(choices[0], "delta", None)
+            if delta_obj is None:
+                return None
             content = getattr(delta_obj, "content", None)
             tool_calls = getattr(delta_obj, "tool_calls", None)
             usage = getattr(chunk, "usage", None)
@@ -849,7 +814,7 @@ class LiteLLMProvider(LLMProvider):
             # discard the one signal that says the response was cut off at the
             # output ceiling rather than finished -- the difference between "the
             # model is done" and "the model was interrupted mid-token".
-            finish_reason = getattr(choice, "finish_reason", None) or None
+            finish_reason = getattr(choices[0], "finish_reason", None) or None
 
             tool_call_delta: dict[str, Any] | None = None
             if tool_calls:
@@ -873,7 +838,21 @@ class LiteLLMProvider(LLMProvider):
                         )
                 tool_call_delta = {"tool_calls": serialized}
 
-            usage_dict = self._normalize_usage(usage) if usage is not None else None
+            usage_dict: dict[str, Any] | None = None
+            if usage is not None:
+                try:
+                    usage_dict = usage.model_dump()
+                except AttributeError:
+                    usage_dict = {
+                        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                        "completion_tokens": getattr(usage, "completion_tokens", None),
+                        "total_tokens": getattr(usage, "total_tokens", None),
+                    }
+                cache_read, cache_write = _cache_tokens(usage)
+                if cache_read:
+                    usage_dict["cache_read_input_tokens"] = cache_read
+                if cache_write:
+                    usage_dict["cache_creation_input_tokens"] = cache_write
 
             if (
                 content is None
@@ -954,8 +933,18 @@ class LiteLLMProvider(LLMProvider):
                 )
             )
 
-        raw_usage = getattr(response, "usage", None)
-        usage = self._normalize_usage(raw_usage) if raw_usage is not None else {}
+        usage = {}
+        if hasattr(response, "usage") and response.usage:
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+            cache_read, cache_write = _cache_tokens(response.usage)
+            if cache_read:
+                usage["cache_read_input_tokens"] = int(cache_read)
+            if cache_write:
+                usage["cache_creation_input_tokens"] = int(cache_write)
 
         reasoning_content = getattr(message, "reasoning_content", None) or None
         thinking_blocks = getattr(message, "thinking_blocks", None) or None

@@ -295,7 +295,6 @@ class TurnUsage(_Strict):
     completion_tokens: int
     total_tokens: int
     cost_usd: float | None = None
-    cost_missing_calls: int = 0
     context_used: int | None = None
     context_max: int | None = None
     context_percent: int | None = None
@@ -2787,17 +2786,10 @@ class SettingsSetResult(_Strict):
 
 class ApiUsageTotals(_Strict):
     calls: int
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    cache_read_tokens: int | None = None
-    cache_write_tokens: int | None = None
-    cost_usd: float | None = None
-    input_missing_calls: int = 0
-    output_missing_calls: int = 0
-    cost_missing_calls: int
-    cache_read_missing_calls: int
-    cache_write_missing_calls: int
-    legacy_cost_calls: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cost_usd: float
 
 
 class ApiUsageModel(ApiUsageTotals):

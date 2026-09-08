@@ -14,23 +14,25 @@ from typing import Any
 
 @dataclass
 class UsageSnapshot:
-    """Usage for one call. Input tokens are fresh (non-cached).
-    Missing cache counts and costs are None; zero is explicitly reported."""
+    """Token usage and cost for a single LLM call.
+
+    Convention: ``input_tokens`` is *fresh* (non-cached) prompt tokens.
+    Provider adapters normalize total/fresh divergence (some providers
+    report total ``prompt_tokens`` including cache reads/writes;
+    AgentLoop's ``_build_usage_snapshot`` subtracts when needed so this
+    field has consistent semantics across providers).
+    """
 
     model: str
-    input_tokens: int | None = 0
-    output_tokens: int | None = 0
-    cache_read_tokens: int | None = None
-    cache_write_tokens: int | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     reasoning_tokens: int = 0
-    cost_usd: float | None = None
-    # Populated by UsageTracker on aggregate snapshots.
-    input_missing_calls: int = 0
-    output_missing_calls: int = 0
-    calls: int = 0
-    cost_missing_calls: int = 0
-    cache_read_missing_calls: int = 0
-    cache_write_missing_calls: int = 0
+    # None when the call has no per-token price to state: a plan-billed provider
+    # is paid for by subscription, so a number here would be invented. Distinct
+    # from 0.0, which means "priced, and it cost nothing".
+    estimated_cost_usd: float | None = None
     session_key: str | None = None
 
 

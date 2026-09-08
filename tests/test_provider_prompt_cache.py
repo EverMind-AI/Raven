@@ -901,7 +901,7 @@ class TestStreamedCacheTokensReachTheAccounting:
 
         from raven.providers.litellm_provider import _cache_tokens
 
-        assert _cache_tokens(SimpleNamespace(prompt_tokens=5)) == (None, None)
+        assert _cache_tokens(SimpleNamespace(prompt_tokens=5)) == (0, 0)
 
     def test_a_warm_streamed_turn_is_no_longer_priced_as_fresh(self):
         """It was billed at 4x: 8,479 fresh instead of 7,383 read + 1,079 written."""

@@ -64,7 +64,7 @@ class _FakeUsageSnapshot:
         self.cache_read_tokens = 0
         self.cache_write_tokens = 0
         self.reasoning_tokens = 0
-        self.cost_usd = 0.0
+        self.estimated_cost_usd = 0.0
         self.model = "__empty__"
         self.session_key = "tui:default"
 

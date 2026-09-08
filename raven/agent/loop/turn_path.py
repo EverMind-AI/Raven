@@ -250,13 +250,42 @@ class TurnPathMixin:
 
     @staticmethod
     def _build_usage_snapshot(response, model: str, session_key: str) -> "UsageSnapshot":
-        """Build the same reported usage that tracing consumes."""
-        from raven.contracts.token_strategy import UsageSnapshot
-        from raven.providers.usage import normalize_usage
+        """Build a UsageSnapshot from an LLMResponse for TokenWise after-hooks.
 
-        usage = normalize_usage(response.usage)
-        usage.pop("total_tokens")
-        return UsageSnapshot(model=model, session_key=session_key or None, **usage)
+        Normalizes input_tokens to *fresh* (non-cached) prompt tokens. The
+        ``prompt_tokens`` field has two conventions in the wild:
+          - Anthropic native: fresh-only (cache_read/write are separate counts)
+          - OpenRouter/LiteLLM: total (already includes cache_read + cache_write)
+        We detect by inequality and subtract when needed so downstream code
+        (pricing, telemetry) sees a single consistent semantics.
+        """
+        from raven.contracts.token_strategy import UsageSnapshot
+        from raven.token_wise.pricing import estimate_cost_usd
+
+        usage = response.usage or {}
+        prompt_t = int(usage.get("prompt_tokens", 0) or 0)
+        out_toks = int(usage.get("completion_tokens", 0) or 0)
+        cache_read = int(usage.get("cache_read_input_tokens", 0) or 0)
+        cache_write = int(usage.get("cache_creation_input_tokens", 0) or 0)
+
+        # Normalize to fresh-only.
+        if prompt_t >= cache_read + cache_write and (cache_read + cache_write) > 0:
+            fresh = prompt_t - cache_read - cache_write
+        else:
+            fresh = prompt_t
+
+        # Left as None for a plan-billed provider: the field is optional all the
+        # way to the status bar, which renders it only when it is a number.
+        cost = estimate_cost_usd(model, fresh, out_toks, cache_read, cache_write)
+        return UsageSnapshot(
+            model=model,
+            input_tokens=fresh,
+            output_tokens=out_toks,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+            estimated_cost_usd=cost,
+            session_key=session_key or None,
+        )
 
     @trace.instrument("llm.call", extract=semconv.llm_call_stream)
     async def _llm_call_stream(
@@ -1062,8 +1091,7 @@ class TurnPathMixin:
                 usage_sink["prompt_tokens"] = prompt_tokens
                 usage_sink["completion_tokens"] = completion_tokens
                 usage_sink["total_tokens"] = int(response.usage.get("total_tokens", 0) or 0)
-                usage_sink["cost_usd"] = usage_snapshot.cost_usd
-                usage_sink["cost_missing_calls"] = int(usage_snapshot.cost_usd is None)
+                usage_sink["cost_usd"] = usage_snapshot.estimated_cost_usd
                 usage_sink["context_max"] = context_max
                 usage_sink["context_used"] = context_used
                 usage_sink["context_percent"] = round(100 * context_used / context_max) if context_max else 0

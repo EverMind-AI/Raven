@@ -50,7 +50,7 @@ async def test_the_responses_sse_watchdog_runs_on_the_stream_idle_budget(monkeyp
 
     seen: list[float] = []
 
-    async def fake_consume(response, timeout, **kwargs):
+    async def fake_consume(response, timeout):
         seen.append(timeout)
         return "ok", [], "stop"
 
@@ -71,7 +71,7 @@ async def test_the_anthropic_sse_watchdog_runs_on_the_stream_idle_budget(monkeyp
 
     seen: list[float] = []
 
-    async def fake_consume(response, timeout, **kwargs):
+    async def fake_consume(response, timeout):
         seen.append(timeout)
         yield ChatDelta(content="ok", finish_reason="stop")
 
@@ -94,7 +94,7 @@ async def test_a_generation_from_before_the_field_falls_back_to_the_call_budget(
 
     seen: list[float] = []
 
-    async def fake_consume(response, timeout, **kwargs):
+    async def fake_consume(response, timeout):
         seen.append(timeout)
         return "ok", [], "stop"
 

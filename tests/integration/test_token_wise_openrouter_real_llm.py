@@ -221,7 +221,7 @@ async def _run_variant(
                 completion_tokens=snap.output_tokens,
                 cache_read_tokens=snap.cache_read_tokens,
                 cache_write_tokens=snap.cache_write_tokens,
-                cost_usd=snap.cost_usd if snap.cost_usd is not None else pytest.skip("Provider did not report cost"),
+                cost_usd=snap.estimated_cost_usd,
                 response_chars=len(resp.content or ""),
                 finish_reason=resp.finish_reason,
             )

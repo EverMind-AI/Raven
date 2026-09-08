@@ -1,5 +1,3 @@
-import type { ApiUsageModel, SettingsUsageResult } from '../../rpc/generated'
-
 /* One provider row of the model panel. Each source owns its provider list;
    the live source shares its fetched rows with the composer's model picker. */
 export interface ProviderRow {
@@ -28,8 +26,25 @@ export interface EverosInfo {
   sections?: Record<string, EverosSection>
 }
 
-export type UsageModelRow = ApiUsageModel
-export type UsageStats = SettingsUsageResult
+export interface UsageModelRow {
+  model: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+}
+
+export interface UsageStats {
+  days: number
+  llm: {
+    total: { calls: number; input_tokens: number; output_tokens: number; cost_usd: number }
+    models: UsageModelRow[]
+  }
+  tools: {
+    total: number
+    counts: Array<{ name: string; count: number }>
+  }
+}
 
 /* One group heading of the toolset panel. */
 export interface ToolGroup {
