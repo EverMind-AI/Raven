@@ -211,7 +211,16 @@ class TerminalHost:
             raise TerminalError("command_not_found", f"Executable not found: {argv[0]}")
         record = TerminalRecord(worktree_id=worktree_id, worktree_path=path, title=title, owner=owner, visible=False)
         token = secrets.token_urlsafe(32)
-        env = {key: value for key, value in os.environ.items() if not key.startswith("ORCA_")}
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("ORCA_")
+            and key != "RAVEN_HOOK_URL"
+            and (
+                not key.startswith(("CLAUDE", "CODEX"))
+                or key.endswith(("_API_KEY", "_AUTH_TOKEN", "_OAUTH_TOKEN"))
+            )
+        }
         env.update(
             TERM="xterm-256color",
             COLORTERM="truecolor",

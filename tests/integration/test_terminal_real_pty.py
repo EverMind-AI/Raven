@@ -86,3 +86,42 @@ async def test_claude_startup_dialog_cannot_receive_automated_enter(tmp_path):
         assert not host.state(record.handle).startup_pending
     finally:
         await host.shutdown()
+
+
+async def test_host_drops_parent_agent_session_environment_but_keeps_auth(tmp_path, monkeypatch):
+    dropped = {
+        "ORCA_SESSION_ID": "parent-orca",
+        "CLAUDECODE": "1",
+        "CLAUDE_CODE_CHILD_SESSION": "parent-child",
+        "CLAUDE_CODE_SSE_PORT": "1234",
+        "CODEX_THREAD_ID": "parent-thread",
+        "CODEX_SESSION_ID": "parent-session",
+        "CODEX_SHELL": "parent-shell",
+        "RAVEN_HOOK_URL": "http://parent.invalid/hook",
+    }
+    kept = {
+        "CLAUDE_CODE_OAUTH_TOKEN": "test-oauth",
+        "CODEX_API_KEY": "test-codex-key",
+        "ANTHROPIC_API_KEY": "test-anthropic-key",
+        "ANTHROPIC_AUTH_TOKEN": "test-auth",
+        "OPENAI_API_KEY": "test-openai-key",
+        "RAVEN_PARENT_ID": "parent-agent",
+        "RAVEN_SPAWN_DEPTH": "1",
+    }
+    for name, value in {**dropped, **kept}.items():
+        monkeypatch.setenv(name, value)
+    kept.update({name: os.environ[name] for name in ("PATH", "HOME")})
+    selected = list(dropped) + list(kept)
+    script = f"import os,json; print(json.dumps({{k:os.environ.get(k) for k in {selected!r}}}),flush=True)"
+    host = TerminalHost()
+    record = await host.create(f"repo::{tmp_path}", [sys.executable, "-c", script])
+    try:
+        for _ in range(400):
+            if host.tail(record.handle).strip():
+                break
+            await asyncio.sleep(0.01)
+        child = json.loads(host.tail(record.handle).strip())
+        assert {name: child[name] for name in kept} == kept
+        assert all(child[name] is None for name in dropped)
+    finally:
+        await host.shutdown()
