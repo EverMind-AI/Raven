@@ -212,10 +212,10 @@ class WiringMixin:
         The boot config is the lane eval harnesses pass a section through with
         no file behind it, and the last good answer while the file is mid-write.
         """
-        from raven.config.live import media_tool_config
+        from raven.config.live import media_tool_config, resolve_media_selection
 
         cfg = media_tool_config(self._live_config, kind)
-        return fallback if cfg is None else cfg
+        return resolve_media_selection(fallback, kind) if cfg is None else cfg
 
     @property
     def provider(self) -> LLMProvider:
