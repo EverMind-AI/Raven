@@ -155,7 +155,7 @@ async def test_human_input_does_not_restore_dirty_after_status_observation(statu
     assert not state.composer_dirty
 
 
-async def test_escape_then_idle_clears_dirty_but_idle_alone_does_not():
+async def test_explicit_clear_clears_dirty_but_idle_alone_does_not():
     from raven.contracts.terminal import TerminalRecord
     from raven.terminal.host import TerminalHost, TerminalState
 
@@ -170,6 +170,64 @@ async def test_escape_then_idle_clears_dirty_but_idle_alone_does_not():
     host.write = write
     await host.set_status(record.handle, "idle")
     assert state.composer_dirty
-    await host.input(record.handle, b"\x1b")
+    await host.input(record.handle, b"\x15")
     await host.set_status(record.handle, "idle")
     assert not state.composer_dirty
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [b"\x1b[?1;2c"],
+        [b"\x1b[24;80R"],
+        [b"\x1b[I\x1b[O\x1b[?2004;1$y"],
+        [b"\x1b]10;rgb:ffff/ffff/ffff\x07"],
+        [b"\x1b]11;rgb:0000/0000/0000\x1b\\"],
+        [b"\x1bOP"],
+        [b"\x1b", b"O", b"P"],
+        [b"\x1b", b"[?1;", b"2c\x1b[24;", b"80R"],
+        [b"\x1b]11;rgb:0000", b"/0000/0000\x1b", b"\\"],
+        [b"\x1b]52;c;\x15\x03payload\x07"],
+        [b"\x1bP1$r0m\x1b\\\x1b(B"],
+    ],
+)
+async def test_terminal_reports_preserve_composer_and_human_input_state(chunks):
+    from raven.contracts.terminal import TerminalRecord
+    from raven.terminal.host import TerminalHost, TerminalState
+
+    host = TerminalHost()
+    record = TerminalRecord(worktree_id="repo::/tmp/work", worktree_path="/tmp/work")
+    state = TerminalState(record, 123, -1, "token", "worker-a")
+    host._terminals[record.handle] = state
+    written = []
+
+    async def write(handle, data):
+        written.append(data)
+
+    host.write = write
+    for dirty in (False, True):
+        state.composer_dirty = dirty
+        for chunk in chunks:
+            await host.input(record.handle, chunk)
+        assert state.composer_dirty is dirty
+        assert not state.human_input_pending
+    assert written == chunks * 2
+
+
+@pytest.mark.parametrize("text", [b"hello", b"\x08", b"\t", b"\x7f", b"\xc3\xa9"])
+async def test_printable_and_editing_input_between_reports_is_human_input(text):
+    from raven.contracts.terminal import TerminalRecord
+    from raven.terminal.host import TerminalHost, TerminalState
+
+    host = TerminalHost()
+    record = TerminalRecord(worktree_id="repo::/tmp/work", worktree_path="/tmp/work")
+    state = TerminalState(record, 123, -1, "token", "worker-a")
+    host._terminals[record.handle] = state
+
+    async def write(handle, data):
+        pass
+
+    host.write = write
+    await host.input(record.handle, b"\x1b[?1;2c\x1b[200~" + text + b"\x1b[201~\x1b[24;80R")
+    assert state.composer_dirty
+    assert state.human_input_pending
