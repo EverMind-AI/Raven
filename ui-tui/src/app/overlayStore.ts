@@ -88,6 +88,12 @@ export const resetFlowOverlays = () =>
     agents: $overlayState.get().agents,
     agentsFocusId: $overlayState.get().agentsFocusId,
     agentsInitialHistoryIndex: $overlayState.get().agentsInitialHistoryIndex,
+    // A pending approval outlives the turn that opened it, exactly as a
+    // pending clarify does: a sub-agent keeps working after its parent turn
+    // ends, and the command it asks about is still waiting on an answer.
+    // Wiped here, the prompt left the screen with nobody having answered it
+    // and the call died at the runtime's hard timeout instead.
+    approval: $overlayState.get().approval,
     clarify: $overlayState.get().clarify,
     modelPicker: $overlayState.get().modelPicker,
     newInstance: $overlayState.get().newInstance,

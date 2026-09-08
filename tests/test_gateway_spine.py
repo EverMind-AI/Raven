@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-from raven.acp_client.asker import AskViaTool, current_ask, current_autofill
+from raven.acp_client.asker import ApprovalViaAsk, AskViaTool, current_ask, current_autofill
 from raven.acp_client.resolver import Autofill
 from raven.agent.tools.ask_user import AskUserTool
 from raven.config.raven import SubagentQuestionsConfig
@@ -351,7 +351,9 @@ class _AskingAgent(_ReplyAgent):
         self.bound: dict = {}
 
     async def run_turn(self, req, emit, drain, **kwargs) -> TurnOutcome:
-        self.bound = {"ask": current_ask(), "autofill": current_autofill()}
+        from raven.permissions.turn import current_turn
+
+        self.bound = {"ask": current_ask(), "autofill": current_autofill(), "permission": current_turn()}
         return await super().run_turn(req, emit, drain, **kwargs)
 
 
@@ -369,6 +371,10 @@ async def test_gateway_user_turn_binds_the_asker_and_the_autofill():
     assert isinstance(agent.bound["ask"][0], AskViaTool)
     assert agent.bound["ask"][1] == "telegram:u1"
     assert isinstance(agent.bound["autofill"], Autofill)
+    # An approval rides the same round-trip a question does: the channel user
+    # who can answer ask_user can also click through the ask tier.
+    assert isinstance(agent.bound["permission"].responder, ApprovalViaAsk)
+    assert agent.bound["permission"].conversation_id == "telegram:u1"
 
 
 async def test_gateway_background_turn_binds_neither():
@@ -383,6 +389,55 @@ async def test_gateway_background_turn_binds_neither():
         await teardown()
     assert agent.bound["ask"] == (None, "cron:1")
     assert agent.bound["autofill"] is None
+    # Unattended by decision: the permission turn is bound with no responder,
+    # so the ask tier refuses with a reason instead of waiting on nobody.
+    assert agent.bound["permission"].responder is None
+    assert agent.bound["permission"].conversation_id == "cron:1"
+
+
+# --- the approval that rides the ask round-trip ---
+
+
+class _ScriptedAsker:
+    """Stands in for AskViaTool: returns one scripted answer, records the call."""
+
+    def __init__(self, answer: str | None) -> None:
+        self.answer = answer
+        self.calls: list[dict] = []
+
+    async def ask(self, prompt, choices, conversation_id, **kwargs):
+        self.calls.append({"prompt": prompt, "choices": choices, "conversation_id": conversation_id})
+        return self.answer
+
+
+@pytest.mark.parametrize(
+    ("answer", "choice", "feedback"),
+    [
+        ("Allow once", "allow", ""),
+        ("1", "allow", ""),
+        ("Deny", "deny", ""),
+        ("2", "deny", ""),
+        ("Deny and stop", "deny_stop", ""),
+        ("3", "deny_stop", ""),
+        ("keep it, I need that file", "deny", "keep it, I need that file"),
+        (None, "deny", ""),
+        ("", "deny", ""),
+    ],
+)
+async def test_approval_via_ask_maps_the_reply(answer, choice, feedback):
+    asker = _ScriptedAsker(answer)
+    responder = ApprovalViaAsk(asker, "telegram:u1")
+
+    outcome = await responder.await_approval(
+        command="rm scratch.txt", description="Approve this action: rm scratch.txt"
+    )
+
+    assert outcome.choice.value == choice
+    assert outcome.feedback == feedback
+    call = asker.calls[0]
+    assert "rm scratch.txt" in call["prompt"]
+    assert call["choices"] == ["Allow once", "Deny", "Deny and stop"]
+    assert call["conversation_id"] == "telegram:u1"
 
 
 async def test_build_gateway_teardown_leaves_no_pending_tasks():

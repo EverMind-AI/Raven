@@ -1430,6 +1430,14 @@
             },
             "description": "If omitted, return all whitelisted fields. Unknown keys are silently dropped."
           }
+        },
+        {
+          "name": "session_id",
+          "summary": "With it, permissions.mode answers the mode this conversation runs in; without it, the default.",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {
@@ -1472,7 +1480,7 @@
         },
         {
           "name": "session_id",
-          "summary": "Scopes a model switch to one conversation.",
+          "summary": "Scopes a model or permissions.mode switch to one conversation.",
           "required": false,
           "schema": {
             "type": "string"
@@ -1488,7 +1496,7 @@
         },
         {
           "name": "scope",
-          "summary": "How far a model switch reaches: this conversation, or what new ones start on.",
+          "summary": "How far a model or permissions.mode switch reaches: this conversation, or what new ones start on.",
           "required": false,
           "schema": {
             "type": "string",
@@ -4965,7 +4973,7 @@
     },
     {
       "name": "approval.respond",
-      "summary": "Answer a pending shell-approval request.",
+      "summary": "Answer a pending approval request.",
       "params": [
         {
           "name": "approval_id",
@@ -4978,8 +4986,16 @@
           "name": "choice",
           "required": true,
           "schema": {
-            "description": "allow | deny.",
+            "description": "allow | deny | deny_stop.",
             "type": "string"
+          }
+        },
+        {
+          "name": "feedback",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Optional sentence attached to a refusal, relayed to the model."
           }
         },
         {
@@ -9127,6 +9143,33 @@
           }
         }
       },
+      "PermissionReviewEvent": {
+        "description": "The smart-mode permission reviewer started or finished looking at one tool call. Presentational only: it lets a surface name the pause on the running tool row instead of showing an unexplained stall; decisions never depend on it.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "permission.review"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["phase", "tool"],
+            "properties": {
+              "phase": {
+                "type": "string",
+                "description": "started | ended."
+              },
+              "tool": {
+                "type": "string",
+                "description": "The tool name under review."
+              }
+            }
+          }
+        }
+      },
       "NoticeEvent": {
         "description": "Prose the runtime wrote, not the model.\n\nIt must not arrive as `token.delta`: that buffer is the model's voice, so the text would render as the answer -- glued to whatever the model narrated just before it, carrying the answer's copy and branch actions, and stuck in English whatever language the turn was in.",
         "type": "object",
@@ -10283,6 +10326,9 @@
             "$ref": "#/components/schemas/NoticeEvent"
           },
           {
+            "$ref": "#/components/schemas/PermissionReviewEvent"
+          },
+          {
             "$ref": "#/components/schemas/TokenDeltaEvent"
           },
           {
@@ -10347,6 +10393,7 @@
             "turn.started": "#/components/schemas/TurnStartedEvent",
             "episode.start": "#/components/schemas/EpisodeStartEvent",
             "notice": "#/components/schemas/NoticeEvent",
+            "permission.review": "#/components/schemas/PermissionReviewEvent",
             "token.delta": "#/components/schemas/TokenDeltaEvent",
             "thinking.delta": "#/components/schemas/ThinkingDeltaEvent",
             "tool.start": "#/components/schemas/ToolStartEvent",

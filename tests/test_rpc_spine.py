@@ -6,9 +6,15 @@ from dataclasses import replace
 from raven.acp_client.asker import current_ask
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.message import MessageTool
+from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
 from raven.config.raven import SubagentQuestionsConfig
-from raven.contracts.asking import SupportsApprovalTurn, SupportsDirectAsk
+from raven.config.schema import PermissionsConfig
+from raven.contracts.asking import SupportsDirectAsk
+from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
+from raven.permissions.builtin import BuiltinRulings
+from raven.permissions.gate import PermissionGate
+from raven.permissions.turn import current_turn
 from raven.rpc.spine import (
     RpcOutlet,
     RpcTurnRunner,
@@ -102,19 +108,26 @@ class _ApprovalResponder:
         self.answer = answer
         self.requests: list[dict] = []
 
-    async def await_approval(self, **request) -> bool:
+    async def await_approval(self, **request) -> ApprovalOutcome:
         self.requests.append(request)
-        return self.answer
+        return ApprovalOutcome(choice=ApprovalChoice.ALLOW if self.answer else ApprovalChoice.DENY)
 
 
 class _ApprovalRunLoop:
+    """The dispatch path a real turn takes: gate at the registry door."""
+
     def __init__(self, tool: ExecTool) -> None:
-        self.tools = {"exec": tool}
+        gate = PermissionGate(
+            config_source=PermissionsConfig,
+            builtin=BuiltinRulings(),
+            allow_ask=True,
+        )
+        self.tools = ToolRegistry(permission_gate=gate)
+        self.tools.register(tool)
         self.result = ""
 
     async def run_turn(self, req, emit, drain, **kwargs) -> TurnOutcome:
-        self.tools["exec"].set_tool_call_id("call-a")
-        self.result = await self.tools["exec"].execute("rm file.txt")
+        self.result = await self.tools.execute("exec", {"command": "rm file.txt"})
         return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
 
@@ -139,9 +152,8 @@ def test_pieces_satisfy_their_spine_protocols():
 
 
 def test_the_real_tools_satisfy_the_asking_seams_the_runner_probes():
-    # The runner binds by shape, so the shapes must keep fitting the tools that
-    # ship: a rename on either side would otherwise fail closed in silence.
-    assert isinstance(ExecTool(executor=_DirectRecordingExecutor()), SupportsApprovalTurn)
+    # The runner still binds ask_user by shape; approval no longer probes a
+    # tool at all -- it binds the permission turn, covered below.
     assert isinstance(AskUserTool(), SupportsDirectAsk)
 
 
@@ -194,48 +206,51 @@ async def test_cron_turn_does_not_receive_tui_approval_capability(tmp_path):
 
     await runner.run(req, emit, lambda: [])
 
-    assert "requires user approval" in loop.result.model_text
+    assert "requires user approval" in str(loop.result)
+    assert "not interactive" in str(loop.result)
     assert executor.commands == []
     assert responder.requests == []
 
 
-class _ApprovalSeam:
-    """Not an ExecTool -- only the seam the runner binds approval through."""
+class _TurnCaptureLoop:
+    """Records what the permission turn holds inside the running turn's task."""
 
     def __init__(self) -> None:
-        self.bound: list[tuple[object, str, str]] = []
+        self.seen: list[tuple[object, str, str]] = []
+        self.tools = ToolRegistry()
 
-    def start_approval_turn(self, responder, *, conversation_id: str, turn_id: str) -> None:
-        self.bound.append((responder, conversation_id, turn_id))
+    async def run_turn(self, req, emit, drain, **kwargs) -> TurnOutcome:
+        turn = current_turn()
+        self.seen.append((turn.responder, turn.conversation_id, turn.turn_id))
+        return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
 
-async def test_the_approval_binding_reaches_any_tool_exposing_the_seam():
-    # An entrance probes capability, not concrete class: whatever a shelf seats
-    # at ``exec`` is bound if it exposes start_approval_turn.
-    tool = _ApprovalSeam()
+async def test_the_approval_binding_reaches_the_permission_turn():
+    # The runner binds the turn-scoped permission context, not any tool: what
+    # the gate reads inside the turn's task is what was bound for this request.
+    loop = _TurnCaptureLoop()
     responder = _ApprovalResponder(True)
-    runner = RpcTurnRunner(_RunTurnLoop(tools={"exec": tool}), FakeEmitter(), {}, {}, approval_responder=responder)
+    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {}, approval_responder=responder)
     req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="turn-b")
     _events, emit = _collect()
 
     await runner.run(req, emit, lambda: [])
 
-    assert tool.bound == [(responder, "tui:c1", "turn-b")]
+    assert loop.seen == [(responder, "tui:c1", "turn-b")]
 
 
-async def test_a_tool_at_exec_without_the_seam_is_left_alone():
-    # A real Tool, just not one with the approval seam: the probe declines, the
-    # turn runs, and nothing reaches a method the tool does not have.
-    tool = MessageTool()
-    runner = RpcTurnRunner(
-        _RunTurnLoop(tools={"exec": tool}), FakeEmitter(), {}, {}, approval_responder=_ApprovalResponder(True)
-    )
-    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="turn-b")
+async def test_a_background_origin_binds_no_responder():
+    # The binding is revoked, not merely unused: a CRON turn sharing the
+    # process must find None in the permission turn, whatever an earlier USER
+    # turn bound.
+    loop = _TurnCaptureLoop()
+    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {}, approval_responder=_ApprovalResponder(True))
+    req = TurnRequest(origin=Origin.CRON, source=_src(), text="hi", conversation="cron:c1", turn_id="turn-b")
     _events, emit = _collect()
 
     outcome = await runner.run(req, emit, lambda: [])
 
-    assert not isinstance(tool, SupportsApprovalTurn)
+    assert loop.seen == [(None, "cron:c1", "turn-b")]
     assert outcome.explicit_reply is True
 
 

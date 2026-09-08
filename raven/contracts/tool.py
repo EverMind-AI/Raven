@@ -57,6 +57,25 @@ class FileChange:
 #: so two versions of it are two different instructions.
 SKIPPED_AFTER_BLOCKED_CALL = "Error: Tool call was not executed because a prior safety decision terminated this action."
 
+#: Appended to every safety refusal a policy makes. One string for the same
+#: reason as above -- and it closes the loophole where a denied ``rm`` is
+#: translated into Python, Perl, or another shell form of the same action.
+# Said as a refusal of the command, not of the task: an unattended agent told to
+# "stop this operation immediately" read it as the whole job and ended a deck
+# build with nothing published, on a curl loop a pattern happened to match.
+STOP_RETRY_INSTRUCTION = (
+    " This command will not run here. Do not retry it with another command, "
+    "tool, script, interpreter, or equivalent method; carry on with the rest of "
+    "the task without it."
+)
+
+# A parse failure is the command's own to fix, not a protected action: the stop
+# instruction above told the model to abandon the install it was doing.
+PARSE_RETRY_INSTRUCTION = (
+    " This command will not run here as written. Close the quote, or write the "
+    "script to a file with the file tools and run that file, then retry."
+)
+
 
 class Continuation(StrEnum):
     """What should happen to the turn after this tool call.
@@ -354,6 +373,8 @@ __all__ = [
     "ImageURL",
     "RAW_ARGUMENTS_KEY",
     "SKIPPED_AFTER_BLOCKED_CALL",
+    "PARSE_RETRY_INSTRUCTION",
+    "STOP_RETRY_INSTRUCTION",
     "TextPart",
     "Tool",
     "ToolOutput",

@@ -23,6 +23,7 @@ from raven.cli._helpers import (
     load_runtime_config,
     parse_fake_now,
     print_config_migration_notices,
+    print_deprecated_allow_destructive_notice,
     print_deprecated_memory_window_notice,
     report_dropped_memory_writes,
 )
@@ -199,6 +200,7 @@ def register(app: typer.Typer) -> None:
         ec_config = load_raven_config()
         sentinel_cfg = ec_config.sentinel
         print_deprecated_memory_window_notice(config)
+        print_deprecated_allow_destructive_notice(config)
         print_config_migration_notices()
         sync_workspace_templates(config.workspace_path, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))
 

@@ -505,6 +505,8 @@ async def test_loop_runs_the_turn_when_the_root_is_refused(tmp_path, monkeypatch
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    (home / ".raven").mkdir()
+    (home / ".raven" / "config.json").write_text('{"permissions": {"mode": "full"}}')
 
     agent = _loop_agent(home, checkpoint_enabled=True)
     final, _used, _msgs, outcome = await _run_turn_body(agent, home)

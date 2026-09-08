@@ -420,6 +420,22 @@ class NoticePayload(_Strict):
     detail: str = Field("", description="The blocking tool's own first line, when it gave one.")
 
 
+class PermissionReviewPayload(_Strict):
+    phase: str = Field(..., description="started | ended.")
+    tool: str = Field(..., description="The tool name under review.")
+
+
+class PermissionReviewEvent(_Strict):
+    """The smart-mode permission reviewer started or finished looking at one
+    tool call. Presentational only: it lets a surface name the pause on the
+    running tool row instead of showing an unexplained stall; decisions never
+    depend on it.
+    """
+
+    type: Literal["permission.review"]
+    payload: PermissionReviewPayload
+
+
 class NoticeEvent(_Strict):
     """Prose the runtime wrote, not the model.
 
@@ -999,6 +1015,7 @@ TurnEvent = Annotated[
         TurnStartedEvent,
         EpisodeStartEvent,
         NoticeEvent,
+        PermissionReviewEvent,
         TokenDeltaEvent,
         ThinkingDeltaEvent,
         ToolStartEvent,
@@ -1511,6 +1528,9 @@ class ConfigGetParams(_Strict):
         default=None,
         description=("If omitted, return all whitelisted fields. Unknown keys are silently dropped."),
     )
+    # With a session, ``permissions.mode`` answers the mode that conversation
+    # runs in; without one, the default a new conversation starts on.
+    session_id: str | None = None
 
 
 class ConfigGetResult(_Strict):
@@ -1520,8 +1540,9 @@ class ConfigGetResult(_Strict):
 class ConfigSetParams(_Strict):
     key: str
     value: JsonValue
-    # Model-switch extras. ``scope`` decides the reach of a ``key="model"``
-    # switch: this conversation, or the default a new one starts on.
+    # Scope extras for the two keys with a per-conversation reading, ``model``
+    # and ``permissions.mode``: this conversation, or the default a new one
+    # starts on.
     session_id: str | None = None
     provider: str | None = None
     scope: Literal["session", "default"] | None = None
@@ -3081,7 +3102,10 @@ class ApprovalRespondParams(_Strict):
     that happens to show the same command."""
 
     approval_id: str
-    choice: str = Field(..., description="allow | deny.")
+    choice: str = Field(..., description="allow | deny | deny_stop.")
+    feedback: str | None = Field(
+        default=None, description="Optional sentence attached to a refusal, relayed to the model."
+    )
     session_id: str | None = None
     conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
 

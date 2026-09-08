@@ -169,12 +169,6 @@ class WiringMixin:
 
         return exec_extra_deny_patterns(self._live_config)
 
-    def _live_exec_allow_destructive(self) -> bool | None:
-        """The deletion-safety preference the config currently names."""
-        from raven.config.live import exec_allow_destructive_commands
-
-        return exec_allow_destructive_commands(self._live_config)
-
     def _live_web_search_key(self) -> str:
         """The selected vendor's search key the file names now, else the boot value.
 
@@ -399,6 +393,25 @@ class WiringMixin:
         if model:
             self.restore_session_model(session_key, model, metadata.get("provider"))
 
+    def stored_session_permission_mode(self, session_key: str) -> str | None:
+        """The permission mode this session chose in an earlier process, off its record.
+
+        The gate's reader for ``permissions/session.py``: consulted once per
+        unknown conversation, the same record and the same tolerance for an
+        unreadable one as ``_restore_once`` applies to the model.
+        """
+        sessions = getattr(self, "sessions", None)
+        if sessions is None:
+            return None
+        try:
+            record = sessions.peek(session_key)
+        except Exception as exc:
+            logger.debug("cannot read session {!r} to restore its permission mode: {}", session_key, exc)
+            return None
+        metadata = getattr(record, "metadata", None) or {}
+        mode = metadata.get("permissions_mode")
+        return mode if isinstance(mode, str) and mode else None
+
     def session_model(self, session_key: str) -> str:
         """What to show this session's user, which is not the global default."""
         return self.binding_for_session(session_key).model
@@ -544,11 +557,7 @@ class WiringMixin:
                 timeout=self.exec_config.timeout,
                 restrict_to_workspace=self.restrict_to_workspace,
                 path_append=self.exec_config.path_append,
-                allow_destructive_commands=self.exec_config.allow_destructive_commands,
                 executor=self._executor,
-                extra_deny_patterns=self.exec_config.extra_deny_patterns,
-                extra_deny_source=self._live_exec_extra_deny,
-                allow_destructive_source=self._live_exec_allow_destructive,
                 extra_allowed_dirs=(self.workspace,),
             )
         )
@@ -1095,6 +1104,23 @@ class WiringMixin:
         dispatch, through the graph as much as through `spawn`.
         """
         return self.provider, self.model
+
+    def _permission_judge_provider(self) -> Any:
+        """The provider the permission reviewer should call, resolved per review.
+
+        Same resolution as ``_verdict_provider`` below, for the same two
+        reasons -- and the pin is read live, so pointing ``permissions.judgeModel``
+        at another model takes effect on the next review rather than the next
+        restart.
+        """
+        from raven.config.live import permissions_config
+
+        pinned = permissions_config(self._live_config).judge_model
+        if pinned and self._provider_pool is not None:
+            binding = self._provider_pool.bind_pin(pinned)
+            if binding is not None:
+                return binding.provider
+        return self.provider
 
     def _verdict_provider(self) -> Any:
         """The provider the node judge should call, resolved per dispatch.

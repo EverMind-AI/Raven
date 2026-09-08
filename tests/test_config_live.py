@@ -24,7 +24,6 @@ from raven.config.live import (
     LiveConfig,
     disabled_playbook_names,
     disabled_tool_names,
-    exec_allow_destructive_commands,
 )
 
 
@@ -270,26 +269,6 @@ class TestExecExtraDenySlice:
         assert web_provider_key(live, "bing") == ""
 
 
-class TestExecDestructiveSwitch:
-    def test_reads_the_camel_case_setting_and_updates(self, tmp_path):
-        path = tmp_path / "config.json"
-        _write(path, {"tools": {"exec": {"allowDestructiveCommands": True}}})
-        live = LiveConfig(path)
-        assert exec_allow_destructive_commands(live) is True
-
-        _write(path, {"tools": {"exec": {"allowDestructiveCommands": False}}})
-        assert exec_allow_destructive_commands(live) is False
-
-    def test_accepts_the_schema_spelling_and_rejects_invalid_values(self, tmp_path):
-        path = tmp_path / "config.json"
-        _write(path, {"tools": {"exec": {"allow_destructive_commands": True}}})
-        live = LiveConfig(path)
-        assert exec_allow_destructive_commands(live) is True
-
-        _write(path, {"tools": {"exec": {"allow_destructive_commands": "yes"}}})
-        assert exec_allow_destructive_commands(live) is None
-
-
 class TestRejectedCandidatesKeepTheLastAdmittedSlice:
     """A schema-rejected edit must not roll a credential back to the boot
     value: the last admitted live answer keeps serving until a valid candidate
@@ -405,3 +384,48 @@ class TestTheBorrowInputIsAdmittedOnTheSameTerms:
         )
         cfg = media_tool_config(live, "image")
         assert cfg is not None and cfg.api_key == "sk-own", "the borrow is not consulted, so it cannot veto"
+
+
+def test_permissions_node_that_stops_validating_keeps_the_last_policy(tmp_path):
+    """A broken live edit must not un-deny a default-allow tool.
+
+    Resetting to the schema's defaults on a validation failure dropped the
+    user's explicit deny rules -- reproduced: mode=full with read_file=deny,
+    then the tier misspelled, read back as mode=ask with no rules at all.
+    """
+    from raven.config.live import LiveConfig, permissions_config
+
+    path = tmp_path / "config.json"
+    path.write_text('{"permissions": {"mode": "full", "tools": {"read_file": "deny"}}}')
+    live = LiveConfig(path)
+    assert permissions_config(live).tools == {"read_file": "deny"}
+
+    path.write_text('{"permissions": {"mode": "full", "tools": {"read_file": "not-a-tier"}}}')
+    kept = permissions_config(live)
+    assert kept.mode == "full"
+    assert kept.tools == {"read_file": "deny"}
+
+    path.write_text('{"permissions": {"mode": "smart"}}')
+    assert permissions_config(live).mode == "smart"
+
+
+def test_permissions_node_invalid_from_the_start_answers_defaults(tmp_path):
+    from raven.config.live import LiveConfig, permissions_config
+
+    path = tmp_path / "config.json"
+    path.write_text('{"permissions": {"mode": "godmode"}}')
+    fresh = permissions_config(LiveConfig(path))
+    assert fresh.mode == "ask"
+    assert fresh.tools == {}
+
+
+def test_a_retired_destructive_toggle_is_accepted_ignored_and_flagged():
+    """The key used to lift a recursive-delete refusal that no longer exists.
+    An old config still carrying it must load, must not change any ruling, and
+    must be told so -- the same terms memoryWindow retired on."""
+    from raven.config.schema import ExecToolConfig
+
+    cfg = ExecToolConfig.model_validate({"allowDestructiveCommands": True})
+    assert cfg.should_warn_deprecated_allow_destructive is True
+    assert "allowDestructiveCommands" not in cfg.model_dump(by_alias=True)
+    assert ExecToolConfig().should_warn_deprecated_allow_destructive is False

@@ -76,6 +76,7 @@ from raven.agent.loop._shared import (
     uuid4,
     workdir,
 )
+from raven.permissions.turn import set_current_tool_call_id
 from raven.providers.tool_calls import openai_tool_call
 
 if TYPE_CHECKING:
@@ -1293,6 +1294,7 @@ class TurnPathMixin:
                     # needs this call's id to correlate with the row the UI drew.
                     if (setter := getattr(self.tools.get(tool_call.name), "set_tool_call_id", None)) is not None:
                         setter(tool_call.id)
+                    set_current_tool_call_id(tool_call.id)
                     tool_t0 = time.monotonic()
                     preempted = ""
                     if tool_call.name == "ask_user":

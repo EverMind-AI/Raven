@@ -249,6 +249,7 @@ import which) are recorded under **Layer Seats** in `CONTEXT.md`, routed from
 | `home` | Where raven keeps everything: the one address resolver |
 | `observability` | What a raven span means: the attribute vocabulary and the usage it reports |
 | `ops` | Machine registry and on-call operations |
+| `permissions` | The gate at the tool dispatch door: which calls run, ask, or are refused |
 | `playbook` | Playbook runtime |
 | `plugins` | Plugin discovery, manifests, registry, and bundled plugins |
 | `proactive_engine` | Cron, heartbeat, sentinel: turns raven starts itself |

@@ -137,6 +137,64 @@ export const coreCommands: SlashCommand[] = [
   },
 
   {
+    help: 'permission mode [ask|smart|full], or `default [ask|smart|full]` for new conversations',
+    name: 'perm',
+    run: (arg, ctx) => {
+      const words = arg.trim().toLowerCase().split(/\s+/).filter(Boolean)
+      const tiers = ['ask', 'smart', 'full']
+      const usage = 'usage: /perm [ask|smart|full] | /perm default [ask|smart|full]'
+      // `/perm X` reaches this conversation only; `/perm default X` the mode
+      // every new one starts on. A session scope with no session yet is the
+      // server's to refuse, and its refusal is the message the reader sees.
+      const isDefault = words[0] === 'default'
+      const want = isDefault ? words[1] : words[0]
+      if (words.length > (isDefault ? 2 : 1)) {
+        return ctx.transcript.sys(usage)
+      }
+
+      if (!want) {
+        // config.get takes `keys` (plural) and answers `{config: {...}}` --
+        // the singular `key`/`value` shape belongs to config.set only. With a
+        // session_id it answers the mode this conversation runs in.
+        ctx.gateway
+          .rpc<{ config?: Record<string, unknown> }>('config.get', {
+            keys: ['permissions.mode'],
+            ...(isDefault || !ctx.sid ? {} : { session_id: ctx.sid })
+          })
+          .then(r =>
+            ctx.transcript.sys(
+              `${isDefault ? 'default permission mode' : 'permission mode'}: ${r?.config?.['permissions.mode'] ?? 'ask'} (${usage})`
+            )
+          )
+          .catch(ctx.guardedErr)
+
+        return
+      }
+
+      if (!tiers.includes(want)) {
+        return ctx.transcript.sys(usage)
+      }
+
+      ctx.gateway
+        .rpc<ConfigSetResponse>('config.set', {
+          key: 'permissions.mode',
+          value: want,
+          ...(isDefault ? {} : { scope: 'session', session_id: ctx.sid })
+        })
+        .then(
+          ctx.guarded<ConfigSetResponse>(() => {
+            // The gate reads the mode live, so the switch holds from the
+            // next tool call -- nothing else to poke.
+            ctx.transcript.sys(
+              isDefault ? `default permission mode set to ${want}` : `permission mode set to ${want} for this conversation`
+            )
+          })
+        )
+        .catch(ctx.guardedErr)
+    }
+  },
+
+  {
     aliases: ['scroll'],
     help: 'toggle mouse/wheel tracking [on|off|toggle]',
     name: 'mouse',

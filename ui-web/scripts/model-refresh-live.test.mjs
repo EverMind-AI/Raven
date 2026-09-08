@@ -13,6 +13,9 @@ const src = readFileSync(new URL('../src/live/120-settings.js', import.meta.url)
 const match = src.match(/async function loadProviders[\s\S]*?\n}/)
 if (!match) throw new Error('loadProviders is absent from the live layer')
 const loadProvidersSrc = match[0]
+const permMatch = src.match(/async function loadPermMode[\s\S]*?\n}/)
+if (!permMatch) throw new Error('loadPermMode is absent from the live layer')
+const loadPermModeSrc = permMatch[0]
 
 function harness() {
   const calls = []
@@ -345,5 +348,56 @@ describe('the staged draft-write recovery', () => {
     await applied
     expect(h.calls).toEqual([])
     expect(h.inFlight()).toEqual(['config.set'])
+  })
+})
+
+/* The permission chip's refresh runs the same race as the model's: two opens in
+   a row, the first answer landing last. Same ticket, same outcome -- the chip
+   shows the conversation the reader is in, which is the one the gate runs. */
+function permHarness() {
+  const calls = []
+  const pending = []
+  const build = Function(
+    'deps',
+    `let viewGen = 0;
+     const { rpc, window } = deps;
+     ${loadPermModeSrc}
+     return { loadPermMode, bump: () => { viewGen += 1; return viewGen; } };`,
+  )
+  const api = build({
+    rpc: { call: (method, params) => new Promise((res) => pending.push({ params, res })) },
+    window: { setPermMode: (m) => calls.push(m) },
+  })
+  return {
+    ...api,
+    calls,
+    param: (i) => pending[i].params,
+    settle: (i, answer) => {
+      pending[i].res(answer)
+      return new Promise((r) => setTimeout(r, 0))
+    },
+  }
+}
+
+describe('the live permission-mode refresh', () => {
+  it('drops a superseded refresh even when its response lands last', async () => {
+    const h = permHarness()
+    h.loadPermMode('a', h.bump())
+    h.loadPermMode('b', h.bump())
+
+    await h.settle(1, { config: { 'permissions.mode': 'full' } })
+    await h.settle(0, { config: { 'permissions.mode': 'ask' } })
+
+    expect(h.calls).toEqual(['full'])
+    expect(h.param(0)).toEqual({ keys: ['permissions.mode'], session_id: 'a' })
+  })
+
+  it('reads the default for a draft and takes its own ticket when the caller brought none', async () => {
+    const h = permHarness()
+    h.bump()
+    h.loadPermMode(null)
+    expect(h.param(0)).toEqual({ keys: ['permissions.mode'] })
+    await h.settle(0, { config: {} })
+    expect(h.calls).toEqual(['ask'])
   })
 })

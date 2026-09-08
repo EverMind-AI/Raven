@@ -84,7 +84,10 @@ DS.onboard = {
     }
     hideSplash();
     shellReady();
-    loadSettings().catch(() => {});
+    /* pushPermMode after the load, same as the settings island's two callers:
+       the chip must reflect the server mode on cold boot, not the localStorage
+       cache -- the gate enforces the server's answer either way. */
+    loadSettings().then(pushPermMode).catch(() => {});
     /* The tier chip's first read. `session.onChange` covers every switch after
        this, but not the state the page boots into: a page with no conversation
        restored never changes session, so the chip would stay hidden on the one

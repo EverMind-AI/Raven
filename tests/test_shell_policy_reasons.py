@@ -15,20 +15,24 @@ from __future__ import annotations
 
 import pytest
 
-from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
 
 
 @pytest.fixture
 def policy() -> ShellCommandPolicy:
-    return ShellCommandPolicy(deny_patterns=[r"\b(mkfs|diskpart)\b"])
+    from raven.agent.tools.shell_policy import DELETE_MATCHERS
+
+    policy = ShellCommandPolicy(deny_patterns=[r"\b(mkfs|diskpart)\b"])
+    for name, matcher in DELETE_MATCHERS:
+        policy.register_approval_matcher(name, matcher)
+    return policy
 
 
 @pytest.mark.parametrize(
     ("command", "reason"),
     [
         ("mkfs.ext4 /dev/sdb1", "deny_pattern"),
-        ("rm -rf /tmp/tree", "recursive_delete"),
+        ("rm -rf /", "catastrophic_delete"),
         ("shutdown -h now", "system_power"),
         ("echo 'unterminated", "parse_error"),
     ],
@@ -60,11 +64,24 @@ def test_a_heredoc_body_is_the_consumers_input_not_shell(command: str, policy: S
 
 
 def test_a_heredoc_a_shell_reads_is_still_shell(policy: ShellCommandPolicy) -> None:
-    """`bash <<EOF` hands the body to a shell, so the matchers keep reading it."""
+    """`bash <<EOF` hands the body to a shell, so the matchers keep reading it.
+
+    An ordinary recursive delete answers to the declared family rather than the
+    unconditional list -- the narrowing that keeps `rm -rf build` daily work.
+    """
     outcome = policy.classify("bash <<'EOF'\nrm -rf /tmp/tree\nEOF")
 
+    assert outcome.decision is CommandDecision.REQUIRE_APPROVAL
+    assert outcome.reason_code == "delete_command"
+
+
+def test_a_heredoc_cannot_smuggle_a_catastrophic_delete(policy: ShellCommandPolicy) -> None:
+    """The stronger half of the same claim: the body is read deeply enough that
+    a root delete inside it is still refused outright."""
+    outcome = policy.classify("bash <<'EOF'\nrm -rf /\nEOF")
+
     assert outcome.decision is CommandDecision.HARD_DENY
-    assert outcome.reason_code == "recursive_delete"
+    assert outcome.reason_code == "catastrophic_delete"
 
 
 def test_an_allowed_command_has_no_reason_to_give(policy: ShellCommandPolicy) -> None:
@@ -88,7 +105,7 @@ def test_the_old_answers_are_the_new_one_read_two_ways(policy: ShellCommandPolic
     the same classification, so the two cannot disagree about one command --
     which they could while each re-ran the matchers itself.
     """
-    for command in ("ls -la", "rm /tmp/x", "rm -rf /tmp/tree", "mkfs.ext4 /dev/sdb1", "echo 'unterminated"):
+    for command in ("ls -la", "rm /tmp/x", "rm -rf ~", "mkfs.ext4 /dev/sdb1", "echo 'unterminated"):
         outcome = policy.classify(command)
 
         assert policy.evaluate(command) is outcome.decision, command
@@ -103,61 +120,57 @@ def test_a_comment_still_cannot_choose_the_reason(policy: ShellCommandPolicy) ->
 
 
 # ---------- what the reader is actually told ---------------------------------
+#
+# The refusal now happens at the permission gate, before the tool is
+# dispatched; the wording contract is the same one the tool used to carry.
 
 
-@pytest.fixture
-def tool(tmp_path) -> ExecTool:
-    return ExecTool(working_dir=str(tmp_path), deny_patterns=[r"\b(mkfs|diskpart)\b"])
+def _gate(extra: list[str] | None = None):
+    from raven.config.schema import PermissionsConfig
+    from raven.permissions.builtin import BuiltinRulings
+    from raven.permissions.gate import PermissionGate
+
+    return PermissionGate(
+        config_source=PermissionsConfig,
+        builtin=BuiltinRulings(extra_deny_patterns=extra or [r"\b(mkfs|diskpart)\b"]),
+        allow_ask=False,
+    )
 
 
 @pytest.mark.parametrize(
     ("command", "phrase"),
     [
         ("mkfs.ext4 /dev/sdb1", "denied pattern"),
-        ("rm -rf /tmp/tree", "recursively"),
+        ("rm -rf /", "filesystem root"),
         ("shutdown -h now", "powers the machine off"),
         ("echo 'unterminated", "could not be parsed"),
     ],
 )
-async def test_the_refusal_the_user_reads_says_which_rule_fired(command, phrase, tool: ExecTool) -> None:
+async def test_the_refusal_the_user_reads_says_which_rule_fired(command, phrase) -> None:
     """The four causes used to be one sentence. Each is now its own, and each
     names something its reader can act on -- an operator list to edit, or a
     quote to close."""
-    result = await tool.execute(command=command)
+    result = await _gate().enforce("exec", {"command": command})
 
-    assert not result.ok
+    assert result is not None and not result.ok
     assert phrase in result.model_text, result.model_text
     assert "policy evaluation failed" not in result.model_text
 
 
-async def test_a_parse_refusal_says_how_to_fix_it_rather_than_to_give_up(tool: ExecTool) -> None:
-    """The stop instruction closes the rm-in-Python loophole; a quote nobody
-    closed is not that loophole, and telling the model not to try another way
-    is what ended installs half-done."""
-    from raven.contracts.tool import Continuation
-
-    result = await tool.execute(command="echo 'unterminated")
-
-    assert not result.ok
-    assert "write the script to a file" in result.model_text
-    assert "Do not retry" not in result.model_text
-    # And the turn goes on: the model gets to fix the command and try again.
-    assert result.continuation is Continuation.CONTINUE
-    assert result.blocks_call is False and result.retryable is True
-
-
-async def test_an_unknown_reason_falls_back_rather_than_guessing(tool: ExecTool, monkeypatch) -> None:
+async def test_an_unknown_reason_falls_back_rather_than_guessing(monkeypatch) -> None:
     """A refusal from a rule this map does not know about says less rather than
     something wrong -- the same stance `_APPROVAL_DESCRIPTIONS` takes."""
     from raven.agent.tools import shell_policy
 
+    gate = _gate()
     monkeypatch.setattr(
-        tool._policy,
+        gate._builtin._policy,
         "classify",
         lambda *a, **kw: shell_policy.PolicyOutcome(CommandDecision.HARD_DENY, "a_rule_from_the_future"),
     )
 
-    result = await tool.execute(command="ls")
+    result = await gate.enforce("exec", {"command": "ls"})
 
+    assert result is not None
     assert "Command blocked by safety guard" in result.model_text
     assert "a_rule_from_the_future" not in result.model_text
