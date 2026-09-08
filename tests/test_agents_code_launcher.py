@@ -4,8 +4,8 @@ The B-side product holds the same launch contract as its vendored twin while
 consuming installed raven: secrets merge into a rendered 0600 config whose
 parent decides the data dir, the workspace is pinned to the hosting's state
 partition, the fork's TOOLS.md wording is seeded byte-for-byte, and the
-first-write gate arms through the rendered code-flow slice -- the fork's
-RAVEN_WORKSPACE_ALLOC_* env contract respelled as config (verdict D6). The
+code-flow plugin is switched on through the rendered slice (verdict D6; the
+write gate and its worktree isolation retired, so nothing arms). The
 ACP hosting execs ``python -m raven acp``; the CLI hosting runs one
 adjudicated ``raven agent -m`` turn and owes the fork launcher's five
 commitments (preamble, transcript verdict, changes footer, workspace pin,
@@ -180,13 +180,16 @@ def test_the_guide_is_seeded_once_and_never_overwritten(grounded, tmp_path):
 
 
 def test_the_roster_row_identity_is_the_vendored_twins():
-    """The spawn-facing text the host router reads stays byte-identical."""
+    """The spawn-facing text the host router reads stays byte-identical --
+    except the description: the frozen A side still promises the worktree
+    authorization the write gate used to ask for, and this side, which
+    retired that gate, tells the orchestrator about parallel sessions
+    instead."""
     ours = json.loads((RUN_PY.parent / "subagent.json").read_text())
     theirs = json.loads((FORK / "subagent.json").read_text())
     for field in (
         "name",
         "kind",
-        "description",
         "owns",
         "command",
         "cwd",
@@ -197,6 +200,8 @@ def test_the_roster_row_identity_is_the_vendored_twins():
         "recommendedLlm",
     ):
         assert ours[field] == theirs[field], field
+    assert "worktree" not in ours["description"].lower(), "no retired promise in the roster line"
+    assert "at the same time" in ours["description"], "the parallel-sessions guidance replaces it"
     # This product does not own run-and-watch work; mirroring the fork's
     # absence is what keeps the oncall steering inapplicable here.
     assert "ownsWatchedWork" not in ours
@@ -218,12 +223,12 @@ def test_the_everos_identity_agrees_in_all_three_places():
     assert ids == {"raven-code"}
 
 
-# --- the render: secrets, pinning, the plugin, the gate slices ---------------
+# --- the render: secrets, pinning, the plugin, the flow slice ----------------
 
 
-def test_the_render_merges_secrets_pins_workspace_and_arms_the_gate_slice(grounded, tmp_path):
-    """The acp partition (the engine home, the alloc base, the rendered file's
-    parent) sits in the raven DATA directory, outside the host Agent home the
+def test_the_render_merges_secrets_pins_workspace_and_enables_the_flow(grounded, tmp_path):
+    """The acp partition (the engine home, the rendered file's parent) sits in
+    the raven DATA directory, outside the host Agent home the
     surfaces hand over as a session cwd (w109); the work -- repos, the state
     bucket -- stays under CODE_STATE_ROOT."""
     rendered = _render(grounded)
@@ -233,11 +238,7 @@ def test_the_render_merges_secrets_pins_workspace_and_arms_the_gate_slice(ground
     assert data["agents"]["defaults"]["workspace"] == str(acp)
     flow = data["plugins"]["config"]["code-flow"]
     assert flow["enabled"] is True
-    assert flow["workspaceGate"] == {
-        "allocBase": str(acp),
-        "reposRoot": str(tmp_path / "state" / "repos"),
-        "stateBucket": "acp",
-    }
+    assert "workspaceGate" not in flow, "the write gate retired; the render arms nothing"
     assert rendered.parent == acp
 
 
@@ -272,19 +273,20 @@ def test_code_acp_home_override_wins_outright(grounded, tmp_path, monkeypatch):
 
 def test_the_render_declares_the_plugin_dirs(grounded):
     """The swap's production-discovery line: the render names the plugin
-    directory, so the code-flow gate, observer and hook board every serve.
+    directory, so the code-flow hook boards every serve.
     (Until the swap this was pinned NEGATIVE -- the fork loader forbade the
     key; that lane retired with the fork engine.)"""
     data = json.loads(_render(grounded).read_text())
     assert data["plugins"]["dirs"] == [str(RUN_PY.parent / "plugins")]
 
 
-def test_a_config_without_the_flow_slice_still_gates(grounded, tmp_path, monkeypatch):
-    """The launcher that arms the gate also flips it on: on a custom --config
-    lacking the code-flow slice, the render carries enabled: true beside the
-    arming, and the loop built from it casts the gate. The fork armed via env
-    regardless of which config file it served, so the swapped product must
-    not gate any narrower on a slice-less config. Pinned from both ends."""
+def test_a_config_without_the_flow_slice_still_enables_the_flow(grounded, tmp_path, monkeypatch):
+    """The launcher flips the flow on: on a custom --config lacking the
+    code-flow slice, the render still carries enabled: true, and the loop
+    built from it casts no tool gate (the write gate retired). The fork armed
+    via env regardless of which config file it served, so the swapped product
+    must not behave any differently on a slice-less config. Pinned from both
+    ends."""
     source = json.loads((RUN_PY.parent / "config.json").read_text())
     del source["plugins"]["config"]["code-flow"]
     custom = tmp_path / "custom.json"
@@ -293,7 +295,7 @@ def test_a_config_without_the_flow_slice_still_gates(grounded, tmp_path, monkeyp
     flow = json.loads(rendered.read_text())["plugins"]["config"]["code-flow"]
     assert flow["enabled"] is True
     _, gates = _hermetic_build(rendered, tmp_path, monkeypatch)
-    assert gates == ["WorkspaceGate"], "an armed render must cast the gate even without a shipped slice"
+    assert gates == [], "the flow casts no tool gate: the write gate retired with worktree isolation"
 
 
 def test_an_operators_explicit_opt_out_survives_the_render(grounded, tmp_path):
@@ -347,7 +349,7 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
     assert config.agents.defaults.model == "anthropic/claude-opus-5"
     extensions = load_raven_config(rendered)
     assert extensions.plugins.disabled == ["everos-memory"]
-    assert extensions.plugins.config["code-flow"]["workspaceGate"]["stateBucket"] == "acp"
+    assert extensions.plugins.config["code-flow"] == {"enabled": True}
     assert extensions.skill_forge.rewrite_enabled is False
     assert extensions.skill_forge.llm_gate_enabled is False
 
@@ -367,8 +369,8 @@ def test_no_llm_key_anywhere_refuses_before_serving(grounded, monkeypatch):
 def test_the_acp_exec_lane_is_installed_ravens(grounded, tmp_path, monkeypatch):
     """The served process is ``python -m raven acp`` on this interpreter,
     execed so it inherits this pid and stdio; the rendered file is on disk at
-    exec time; and the fork's env arming is gone -- the gate arms through the
-    rendered slice, not the process environment."""
+    exec time; and the fork's env arming is gone -- the flow is switched on
+    through the rendered slice, not the process environment."""
     calls = {}
 
     def fake_execv(binary, argv):
@@ -480,23 +482,16 @@ def test_the_cli_lane_is_installed_ravens_agent_turn(cli_run, grounded, tmp_path
     assert not rendered.exists(), "the secret-holding render must not outlive the turn"
 
 
-def test_the_cli_render_arms_the_one_conversation_layout(cli_run, tmp_path):
-    """The CLI hosting arms the gate's other layout, the ruled config
-    spelling of the fork's ALLOC_DIR/INSTANCE env pair: per-instance record
-    beside the conversation's state, same repos root as the ACP hosting so
-    the two hostings contend over the same checkouts."""
+def test_the_cli_render_enables_the_flow_beside_the_conversation_state(cli_run, tmp_path):
+    """The CLI hosting renders the same flow slice as the ACP hosting, and
+    pins the workspace to the conversation's own state partition."""
     invoke, calls = cli_run
     workspace = tmp_path / "repo"
     workspace.mkdir()
     calls["answer"] = "ok"
     invoke(_cli_args(workspace))
     state_dir = (tmp_path / "state" / "instance-conv-1").resolve()
-    gate = calls["rendered"]["plugins"]["config"]["code-flow"]["workspaceGate"]
-    assert gate == {
-        "allocDir": str(state_dir),
-        "instance": "instance-conv-1",
-        "reposRoot": str(tmp_path / "state" / "repos"),
-    }
+    assert calls["rendered"]["plugins"]["config"]["code-flow"] == {"enabled": True}
     assert calls["rendered"]["plugins"]["dirs"] == [str(RUN_PY.parent / "plugins")]
     assert calls["rendered"]["agents"]["defaults"]["workspace"] == str(state_dir)
 
@@ -760,12 +755,104 @@ def test_the_face_arithmetic_is_the_ledger():
 def test_the_products_tool_face_is_the_forks_config_intent_minus_the_ledger(grounded, tmp_path, monkeypatch):
     """Build the loop from the rendered config; the model-visible tool set is
     the ledgered face and nothing more, the code-flow plugin is discovered
-    for real (its gate is cast over the registry), and the trunk-new six
-    stay disabled by name."""
+    for real (and casts no tool gate), and the trunk-new six stay disabled
+    by name."""
     visible, gates = _hermetic_build(_render(grounded), tmp_path, monkeypatch)
     assert visible == VENDORED_TOOL_FACE
-    assert gates == ["WorkspaceGate"], "the write gate must be cast at assembly, from the rendered slice"
+    assert gates == [], "no tool gate is cast: the write gate retired with worktree isolation"
     disabled = set(json.loads((RUN_PY.parent / "config.json").read_text())["tools"]["disabledTools"])
     assert TRUNK_NEW_SIX <= disabled, "the trunk-new six stay disabled by config, not by luck"
     assert ACP_HOST_EXTRAS <= disabled, "the acp assembly extras stay disabled by config, not by luck"
-    assert {"exec", "ask_user"} & disabled == set(), "the coding lane and the gate's asking channel stay open"
+    assert {"exec", "ask_user"} & disabled == set(), "the coding lane and the asking channel stay open"
+
+
+# --- the effort tiers: the host's own ladder, declared for the agent to compose ---
+
+
+def test_the_render_declares_the_effort_tiers_on_the_hosts_ladder(grounded):
+    """The ids ARE the host's tier ladder: the host clamps its session tier onto
+    the rungs an agent offers by name, and a rung it cannot rank would leave the
+    agent on its default rather than guess. Each tier moves the reasoning
+    effort and nothing else; the baseline inherits config.json's."""
+    from raven.config.schema import DEFAULT_TIER, TIER_LADDER
+
+    data = json.loads(_render(grounded).read_text())
+    modes = data["acp"]["modes"]
+    assert list(modes) == list(TIER_LADDER)
+    assert data["acp"]["defaultMode"] == DEFAULT_TIER == grounded.BASELINE_MODE
+    assert modes["medium"]["reasoningEffort"] == "medium"
+    assert modes["max"]["reasoningEffort"] == "max"
+    assert "reasoningEffort" not in modes["high"], "the baseline inherits config.json's effort"
+    for entry in modes.values():
+        assert entry["maxToolIterations"] is None, "a tier moves the effort, not the iteration cap"
+        assert entry["overlay"] == {}, "nothing for the hooks to read"
+        assert entry["name"] and entry["description"]
+
+
+def test_the_shipped_overlays_carry_exactly_the_effort():
+    for name in ("medium", "max"):
+        overlay = json.loads((RUN_PY.parent / "modes" / f"{name}.json").read_text(encoding="utf-8"))
+        assert overlay == {"agents": {"defaults": {"reasoningEffort": name}}}, name
+
+
+def test_the_rendered_tiers_load_through_trunks_own_schema(grounded):
+    from raven.config.loader import load_config
+
+    config = load_config(_render(grounded))
+    assert config.acp.modes["medium"].reasoning_effort == "medium"
+    assert config.acp.modes["max"].reasoning_effort == "max"
+    assert config.acp.modes["high"].reasoning_effort is None
+    assert config.acp.effective_default_mode == "high"
+    assert config.agents.defaults.reasoning_effort == "high"
+
+
+def _ship_overlays(grounded, tmp_path, monkeypatch, **bodies):
+    modes = tmp_path / "modes"
+    modes.mkdir()
+    for name, body in bodies.items():
+        (modes / f"{name}.json").write_text(json.dumps(body), encoding="utf-8")
+    monkeypatch.setattr(grounded, "MODES_DIR", modes)
+
+
+def test_an_overlay_moving_anything_but_the_effort_refuses_to_launch(grounded, tmp_path, monkeypatch):
+    """A knob the engine's mode profile does not carry would be declared and
+    then silently ignored -- the launcher refuses instead."""
+    _ship_overlays(
+        grounded,
+        tmp_path,
+        monkeypatch,
+        medium={"agents": {"defaults": {"reasoningEffort": "medium", "maxToolIterations": 60}}},
+        max={"agents": {"defaults": {"reasoningEffort": "max"}}},
+    )
+    with pytest.raises(SystemExit, match="maxToolIterations"):
+        _render(grounded)
+
+
+def test_an_overlay_that_moves_nothing_refuses_to_launch(grounded, tmp_path, monkeypatch):
+    _ship_overlays(grounded, tmp_path, monkeypatch, medium={"agents": {"defaults": {}}})
+    with pytest.raises(SystemExit, match="reasoningEffort"):
+        _render(grounded)
+
+
+def test_a_mode_flag_starts_sessions_on_that_tier(grounded, monkeypatch):
+    calls = {}
+
+    def fake_execv(binary, argv):
+        calls["rendered"] = json.loads(Path(argv[-1]).read_text(encoding="utf-8"))
+        raise SystemExit(0)
+
+    monkeypatch.setattr(grounded.os, "execv", fake_execv)
+    monkeypatch.setattr(sys, "argv", ["run.py", "--acp", "--mode", "max"])
+    with pytest.raises(SystemExit):
+        grounded.main()
+    assert calls["rendered"]["acp"]["defaultMode"] == "max"
+    assert list(calls["rendered"]["acp"]["modes"]) == ["medium", "high", "max"]
+
+
+def test_the_mode_flag_is_refused_off_the_acp_path(grounded, monkeypatch):
+    """A tier is a session-level choice the ACP client makes; the one-turn CLI
+    path has no session to put it on, and accepting it there would be a flag
+    that silently does nothing."""
+    monkeypatch.setattr(sys, "argv", ["run.py", "--task", "x", "--mode", "medium"])
+    with pytest.raises(SystemExit, match="--mode"):
+        grounded.main()

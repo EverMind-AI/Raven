@@ -717,12 +717,12 @@ class AcpModeConfig(Base):
     """One operating profile a client may switch a session to over ACP.
 
     The stable schema's session modes: a named profile a session runs in,
-    switched with ``session/set_mode``. Two things move with a mode -- the
-    tool-iteration ceiling the loop enforces, and an ``overlay`` the loop does
-    not interpret at all: it reaches the hook chain as
-    ``ctx.metadata["mode_overlay"]``, so a product's own hooks read their own
-    knobs from it. Everything else about the agent is the connection's,
-    identically, in every mode.
+    switched with ``session/set_mode``. Three things move with a mode -- the
+    tool-iteration ceiling the loop enforces, the reasoning effort its model
+    calls run at, and an ``overlay`` the loop does not interpret at all: it
+    reaches the hook chain as ``ctx.metadata["mode_overlay"]``, so a product's
+    own hooks read their own knobs from it. Everything else about the agent is
+    the connection's, identically, in every mode.
     """
 
     name: str
@@ -743,8 +743,8 @@ class AcpConfig(Base):
     """The ACP surface's session modes.
 
     The three built-in tiers move what raven asks of its SUB-AGENTS, not what
-    raven does: every one leaves ``maxToolIterations`` inherited and ``overlay``
-    empty. A deployment that declares its own catalogue replaces this one whole;
+    raven does: every one leaves ``maxToolIterations`` and ``reasoningEffort``
+    inherited and ``overlay`` empty. A deployment that declares its own catalogue replaces this one whole;
     one that writes ``"modes": {}`` turns the surface off entirely.
     """
 

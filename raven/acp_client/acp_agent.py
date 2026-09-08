@@ -1224,6 +1224,9 @@ class AcpAgentBackend:
                         responder.cancel()
 
                 stop_reason = (result or {}).get("stopReason") if isinstance(result, dict) else None
+                # The agent's own metadata on the response, kept for the run
+                # record as sent; the host reads none of it.
+                activity.note_response_meta(result.get("_meta") if isinstance(result, dict) else None)
                 text = collector.text
                 frames = self._frames(journal, connection, session_id, frames_start)
                 self._record(span, collector, stop_reason=stop_reason, started=started, frames=frames)

@@ -433,16 +433,38 @@ class LiteLLMProvider(LLMProvider):
             kwargs.update(max(matches, key=lambda item: len(item[0]))[1])
 
     @staticmethod
-    def _extra_msg_keys(original_model: str, resolved_model: str) -> frozenset[str]:
-        """Return provider-specific extra keys to preserve in request messages."""
+    def _is_anthropic_family(original_model: str, resolved_model: str) -> bool:
+        """Whether this request is bound for an Anthropic model, by any spelling.
+
+        One rule for the two decisions that must agree: whether
+        ``thinking_blocks`` ride on the wire (``_extra_msg_keys``) and whether
+        the request may end on an assistant message
+        (``supports_assistant_prefill``). The request Anthropic rejects is
+        exactly those blocks plus a trailing assistant message, so deciding the
+        two separately would let them drift apart.
+        """
         spec = find_by_model(original_model) or find_by_model(resolved_model)
-        if (
+        return bool(
             (spec and spec.name == "anthropic")
             or "claude" in original_model.lower()
             or resolved_model.startswith("anthropic/")
-        ):
+        )
+
+    @staticmethod
+    def _extra_msg_keys(original_model: str, resolved_model: str) -> frozenset[str]:
+        """Return provider-specific extra keys to preserve in request messages."""
+        if LiteLLMProvider._is_anthropic_family(original_model, resolved_model):
             return _ANTHROPIC_EXTRA_KEYS
         return frozenset()
+
+    def supports_assistant_prefill(self, model: str | None = None) -> bool:
+        """Anthropic rejects a trailing assistant message while thinking is on.
+
+        See ``LLMProvider.supports_assistant_prefill``. The family test is the
+        one ``_extra_msg_keys`` applies, on purpose.
+        """
+        original = model or self.default_model
+        return not self._is_anthropic_family(original, self._resolve_model(original))
 
     @staticmethod
     def _normalize_tool_call_id(tool_call_id: Any) -> Any:
@@ -484,6 +506,23 @@ class LiteLLMProvider(LLMProvider):
             if "tool_call_id" in clean and clean["tool_call_id"]:
                 clean["tool_call_id"] = map_id(clean["tool_call_id"])
         return sanitized
+
+    def _mirror_reasoning_for_gateway(self, kwargs: dict[str, Any], reasoning_effort: str) -> None:
+        """Keep ``reasoning_effort`` alive past litellm's ``drop_params``.
+
+        ``drop_params`` silently discards ``reasoning_effort`` for any model
+        litellm cannot map -- which is every newly released model behind a
+        gateway -- and the agent then runs with reasoning off while the config
+        says otherwise. OpenRouter accepts the reasoning object natively, so
+        the effort is mirrored into ``extra_body``, which ``drop_params`` never
+        touches. A reasoning entry already present (a deployment's own config,
+        the qwen default) keeps priority.
+        """
+        if not (self._gateway and self._gateway.name == "openrouter"):
+            return
+        body = dict(kwargs.get("extra_body") or {})
+        body.setdefault("reasoning", {"effort": reasoning_effort})
+        kwargs["extra_body"] = body
 
     async def chat(
         self,
@@ -564,6 +603,7 @@ class LiteLLMProvider(LLMProvider):
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
             kwargs["drop_params"] = True
+            self._mirror_reasoning_for_gateway(kwargs, reasoning_effort)
 
         if tools:
             kwargs["tools"] = tools
@@ -658,6 +698,7 @@ class LiteLLMProvider(LLMProvider):
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
             kwargs["drop_params"] = True
+            self._mirror_reasoning_for_gateway(kwargs, reasoning_effort)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"

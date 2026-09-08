@@ -341,6 +341,20 @@ class LLMProvider(ABC):
         """
         return False
 
+    def supports_assistant_prefill(self, model: str | None = None) -> bool:
+        """Whether a request for ``model`` may end with an assistant message the
+        model is to continue.
+
+        Anthropic rejects a trailing assistant message once thinking is on, and
+        behind a gateway that rejection can surface as a stream that never
+        produces a byte rather than as an error. Empty-response recovery asks
+        this before re-feeding a model its own reasoning (the prefill), and
+        picks a repair that leaves a user or tool message last when the answer
+        is no. Default True: every other vendor accepts the continuation, and
+        the base class knows no dialect. ``None`` asks about the default model.
+        """
+        return True
+
     @abstractmethod
     def get_default_model(self) -> str:
         """Get the default model for this provider."""

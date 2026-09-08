@@ -3980,6 +3980,50 @@ async def test_a_mode_the_agent_refuses_still_runs_the_task(tmp_path: Path) -> N
     assert reply == "pong"
 
 
+# --- the prompt response's _meta, kept on the run record -------------------------
+
+
+async def test_the_prompt_responses_meta_lands_on_the_run_record(tmp_path: Path) -> None:
+    """Whatever the agent attaches to its prompt response under ``_meta`` (the
+    field ACP reserves for an agent's own metadata) is kept on the run record
+    as ``acp_response_meta``, verbatim and namespaced as the agent sent it --
+    the host reads none of it, so a product's report reaches the run's
+    meta.json without the host knowing the product."""
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a", mode="meta"))
+    with activity.collecting() as did:
+        assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "pong"
+
+    expected = {"vendor.report": {"status": "ready", "count": 2}, "vendor.flag": True}
+    assert did.response_meta == expected
+    assert did.as_meta()["acp_response_meta"] == expected
+
+
+async def test_a_prompt_response_without_meta_leaves_the_record_without_the_key(tmp_path: Path) -> None:
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a", mode="ok"))
+    with activity.collecting() as did:
+        assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "pong"
+
+    assert did.response_meta == {}
+    assert "acp_response_meta" not in did.as_meta()
+
+
+def test_note_response_meta_keeps_only_a_table_and_replaces_rather_than_merges() -> None:
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        activity.note_response_meta("not-a-table")
+        assert did.response_meta == {}
+        activity.note_response_meta({"a": 1})
+        activity.note_response_meta({"b": 2})
+        assert did.response_meta == {"b": 2}
+        activity.note_response_meta(None)
+        assert did.response_meta == {"b": 2}, "None is 'nothing said', not 'forget it'"
+
+
 async def test_a_resumed_session_is_put_back_in_its_mode(tmp_path: Path, monkeypatch) -> None:
     """The agent holds the mode in memory keyed by session id, so it does not
     survive a restart of the agent process -- and the pool relaunches that

@@ -233,9 +233,11 @@ def _loop(names=("Raven-Oncall",), verdict='{"watched": true, "paths": ["/tmp/ar
     # `model` is a property over the active binding; give the fallback leg one.
     loop._default_binding = SimpleNamespace(model="test-model")
     loop._llm_calls = 0
+    loop._llm_kwargs = []
 
     async def fake_llm(messages, tools, model, **kwargs):
         loop._llm_calls += 1
+        loop._llm_kwargs.append(dict(kwargs))
         return _Response(verdict)
 
     loop._llm_call_stream = fake_llm
@@ -675,3 +677,42 @@ def test_the_resident_dag_skill_digest_routes_code_work_through_the_roster():
     assert "never a DAG" not in description
     assert "specialist" in description and "run_subagent_dag" in description
     assert "one graph per round" in description
+
+
+# --------------------------------------------------------------------------- #
+# the judgement is a model call of the turn, so it runs at the turn's effort  #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_the_judgement_asks_for_the_turns_effort():
+    """A medium/max session pins an effort for every model call of the turn;
+    the classifier this helper pays for on a look is one of them."""
+    loop, state = _loop()
+    await loop._note_watch_work(
+        state, "read_file", {"path": "/tmp/arena/run.sh"}, "r", "run /tmp/arena", reasoning_effort="max"
+    )
+    assert loop._llm_kwargs == [{"reasoning_effort": "max"}]
+
+
+@pytest.mark.asyncio
+async def test_the_hand_off_judgement_asks_for_the_turns_effort_too():
+    """The other call site: a straight-to-spawn turn judges the hand-off's
+    shape with a classifier call of its own."""
+    loop, state = _loop(verdict='{"watched": true, "code_work": true, "paths": ["/tmp/arena"]}')
+    await loop._note_watch_work(
+        state,
+        "spawn",
+        {"subagent": "Raven-Oncall"},
+        ACCEPTED,
+        "run /tmp/arena and fix the tests",
+        reasoning_effort="medium",
+    )
+    assert loop._llm_kwargs == [{"reasoning_effort": "medium"}]
+
+
+@pytest.mark.asyncio
+async def test_no_pinned_effort_passes_nothing_so_the_provider_default_stands():
+    loop, state = _loop()
+    await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/run.sh"}, "r", "run /tmp/arena")
+    assert loop._llm_kwargs == [{}], "an explicit None would override the provider's sentinel"
