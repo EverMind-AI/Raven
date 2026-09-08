@@ -824,6 +824,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         concurrently, which is the point.
         """
         session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
+        from raven.agent.tools.terminal import bind_terminal_session
+
         flush = True
         try:
             # Pick up a mid-session `deep-research enable` BEFORE the freeze below
@@ -843,6 +845,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 use_binding(self.binding_for_session(session_key)),
                 self.tools.session_scope_for(session_key),
                 self.tools.turn_scope(),
+                bind_terminal_session(session_key),
             ):
                 return await self._run_turn(
                     req,

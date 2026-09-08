@@ -1257,9 +1257,6 @@ class WiringMixin:
             "dag_status",
             "cancel_dag",
             "resolve_dag_node",
-            "create_terminal",
-            "send_terminal",
-            "resolve_agent",
         ):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
@@ -1274,9 +1271,6 @@ class WiringMixin:
                     "dag_status",
                     "cancel_dag",
                     "resolve_dag_node",
-                    "create_terminal",
-                    "send_terminal",
-                    "resolve_agent",
                 ):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:

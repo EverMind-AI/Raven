@@ -1383,3 +1383,108 @@ async def test_a_direct_chat_turn_releases_nothing(tmp_path):
     await loop.run_turn(req, _EmitCollector(), _drain)
 
     assert recorder.calls == []
+
+
+@pytest.mark.parametrize("concurrent", [False, True])
+async def test_terminal_creator_and_reply_follow_each_turn_session(tmp_path, monkeypatch, concurrent):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from raven.agent.registry.identity import IdentityRegistry
+    from raven.contracts.terminal import TerminalRecord
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.subscriptions import SubscriptionEmitter
+    from raven.rpc.terminal_services import TerminalServices
+    from raven.rpc.terminal_tools import register_terminal_tools
+
+    loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path)
+    _stub_edges(loop)
+    rows = [{"name": "generic", "kind": "builtin"}, {"name": "codex", "preset": "codex"}]
+    identities = IdentityRegistry(tmp_path / "identities.json", config_rows=lambda: rows)
+    terminals = {}
+
+    async def create(**params):
+        record = TerminalRecord(worktree_id=params["worktree_id"], worktree_path=str(tmp_path), liveness="live")
+        terminals[record.handle] = record
+        return record
+
+    host = SimpleNamespace(show=terminals.__getitem__, create=create)
+    service = TerminalServices(SubscriptionEmitter(AsyncMock()), AsyncMock(), host=host, identities=identities)
+    service.sessions = loop.sessions
+    dispatcher = Dispatcher()
+    service.register(dispatcher)
+    monkeypatch.setattr(
+        "raven.rpc.terminal_tools.provider_command", lambda provider, unattended=False: ("codex", ["codex"])
+    )
+    monkeypatch.setattr("raven.rpc.terminal_tools.task_worktree", lambda path: f"repo::{path}")
+    register_terminal_tools(loop.tools, dispatcher, session_cwd=lambda key: tmp_path)
+    create_tool = loop.tools.get("create_terminal")
+    send_tool = loop.tools.get("send_terminal")
+    create_tool.set_context("tui", "archived")
+    send_tool.set_context("tui", "archived")
+    results = {}
+
+    async def run_body(req, emit, drain, **kwargs):
+        from raven.agent.loop._shared import LoopOutcome
+
+        session_key = req.conversation
+        name = req.text
+        result = json.loads(
+            await asyncio.create_task(loop.tools.execute("create_terminal", {"provider": "codex", "name": name}))
+        )
+        assert "handle" in result, result
+        results[session_key] = result["handle"]
+        assert create_tool.session_params() == {"session_id": session_key}
+        assert send_tool.session_params() == {"session_id": session_key}
+        return LoopOutcome()
+
+    loop._run_turn = run_body
+    requests = [
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="tui", chat_id="shared", sender_id="human", chat_type=ChatType.DM),
+            conversation=f"tui:{name}",
+            text=name,
+        )
+        for name in ("first", "second")
+    ]
+    for req in requests:
+        loop.sessions.get_or_create(req.conversation)
+    if concurrent:
+        await asyncio.gather(*(loop.run_turn(req, _EmitCollector(), _drain) for req in requests))
+    else:
+        for req in requests:
+            await loop.run_turn(req, _EmitCollector(), _drain)
+    for req in requests:
+        handle = results[req.conversation]
+        assert identities.show(req.text).session_key == req.conversation
+        assert service.conversations[handle] == req.conversation
+        await service.receive_host(f"reply from {req.text}", handle)
+        messages = loop.sessions.peek(req.conversation).messages
+        assert len(messages) == 1
+        assert messages[0]["notice"]["detail"] == f"reply from {req.text}"
+    assert loop.sessions.peek("tui:archived") is None
+    assert create_tool.session_params() == {"session_id": "tui:archived"}
+    assert send_tool.session_params() == {"session_id": "tui:archived"}
+
+
+async def test_terminal_session_binding_resets_when_turn_is_cancelled(tmp_path):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from raven.agent.tools.terminal import SendTerminalTool
+
+    loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path)
+    _stub_edges(loop)
+    tool = SendTerminalTool(AsyncMock())
+    loop.tools.register(tool)
+
+    async def cancelled(req, emit, drain, **kwargs):
+        assert tool.session_params() == {"session_id": "cli:c"}
+        raise asyncio.CancelledError()
+
+    loop._run_turn = cancelled
+    with pytest.raises(asyncio.CancelledError):
+        await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+    assert tool.session_params() == {}
