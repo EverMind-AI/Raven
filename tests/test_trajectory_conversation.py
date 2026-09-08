@@ -670,9 +670,6 @@ def test_other_traces_are_ignored(state):
     assert {r.trace_id for r in records} == {"t1"}
 
 
-# ── review round 1 fixes ──────────────────────────────────────────────
-
-
 def test_artifact_read_is_bounded_and_rejects_non_regular_files(state, monkeypatch):
     big = state / "logs" / "audit-artifacts" / "big.bin"
     big.parent.mkdir(parents=True, exist_ok=True)
@@ -794,3 +791,25 @@ def test_malformed_status_with_readable_body_stays_visible(state):
     assert output.degraded is None
     evidence = _by_label(records, "Tool call")[0]
     assert evidence.degraded == "span record malformed — original status/attributes unreadable"
+
+
+def test_output_only_turn_root_with_children_keeps_start_marker(state):
+    spans = [
+        _span("t1", "turn", "session.turn", start=1, end=9, attrs={"turn.output_preview": "late reply"}),
+        _span("t1", "tool", "tool.call", parent="turn", start=3, end=4, attrs=_tool_attrs(state, "run", {}, "ok")),
+    ]
+    _write_log(state, spans)
+    records = tconv.attempt_conversation(["t1"], state)
+    assert _labels(records) == ["Turn", "Tool input", "Tool output", "Agent reply"]
+    assert records[0].event_time == _ts(1)
+    assert records[0].turn_span_id == "turn"
+
+
+def test_output_only_turn_root_without_children_keeps_start_marker(state):
+    _write_log(
+        state, [_span("t1", "turn", "session.turn", start=1, end=9, attrs={"turn.output_preview": "late reply"})]
+    )
+    records = tconv.attempt_conversation(["t1"], state)
+    assert _labels(records) == ["Turn", "Agent reply"]
+    assert records[0].event_time == _ts(1)
+    assert records[1].text == "late reply"

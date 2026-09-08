@@ -366,13 +366,14 @@ def _emit_slot(
 def _emit_turn(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -> None:
     before = len(records)
     _emit_slot(info, records, state, "User input", _PHASE_INPUT, "turn.input", "turn.input_preview", field="content")
+    has_input = len(records) > before
     _emit_slot(
         info, records, state, "Agent reply", _PHASE_OUTPUT, "turn.output", "turn.output_preview", field="content"
     )
-    # A turn root's identity must survive an empty body: the renderer needs
-    # the turn's own start time and grouping id even when there is nothing to
-    # show (and even when only child spans carry content).
-    if len(records) == before:
+    # A turn's start must stay addressable whatever the root carries: without
+    # an input-phase record (empty body, or an output-only root) the renderer
+    # could not place the turn's own start time, so a marker stands in.
+    if not has_input:
         _emit(info, records, "Turn", _PHASE_INPUT, "")
 
 
