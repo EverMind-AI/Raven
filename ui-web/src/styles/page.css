@@ -868,6 +868,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .wrow.tog:hover .ic, .wrow.tog:hover .cv { color: var(--muted); }
 .wrow .ic { width: 13px; height: 13px; flex: none; color: var(--faint); }
 .wrow.run .ic { animation: breathe 1.5s ease-in-out infinite; }
+/* The one animation in this file with no reduced-motion answer, which mattered
+   while it was the only sign a step was alive. The clock beside it is not an
+   animation, so honouring the setting here now costs nothing. */
+@media (prefers-reduced-motion: reduce) { .wrow.run .ic { animation: none; opacity: .62; } }
 .wrow .g { color: var(--faint); flex: none; width: 12px; font-size: 11px; }
 /* the verb is the quiet part; what it acted on is what the eye wants */
 .wrow .vb { flex: none; }
@@ -1347,7 +1351,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   transition: transform .16s ease, color .12s;
 }
 .open > .cv, .tfold.open > .tfh > .cv { transform: rotate(90deg); }
-.cvslot { display: none; }
+/* How long a step in flight has been going. Monospace so the digits do not
+   shuffle the row as they tick, and `flex: none` so a long verb clips before
+   this does -- the number is the part that says the step is alive. */
+.wrow .runms { flex: none; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
 .wrow .chip { flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 8px; line-height: 16px; }
 /* diff counts read as plain numbers next to the path, not as a pill */
 .wrow .diffn { flex: none; font-family: var(--mono); font-size: 11.5px; }

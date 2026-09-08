@@ -168,6 +168,17 @@ async def write_memory_record_for(
     )
 
 
+# The route back to each conversation, for a report nobody asked for. Process-
+# lifetime and shared by every generation on purpose: a route is a fact about a
+# conversation, not about the manager that happened to learn it, and a runtime
+# swap builds a new manager with nothing in it -- so a per-generation cache
+# left the first wake after a swap "recorded only" (reviewed 2026-09-07). Fed by
+# every announce path that carries an origin and by the two direct-chat doors;
+# read by announce_unprompted_turn. Values are the minimal channel/chat_id pair
+# `_inject` reads, never a whole origin dict.
+SESSION_ROUTES: dict[str, dict[str, str]] = {}
+
+
 class SubagentManager:
     """Manages background subagent execution."""
 
@@ -218,6 +229,20 @@ class SubagentManager:
         # result re-entered the conversation. This announces that seam as its
         # own event; without a sink the announce is merely unmarked, not broken.
         self._delivery_sink = None
+        # Last known route back to each conversation, for a report nobody asked
+        # for. An acp instance can act between prompts (an armed wake, a watch
+        # round), and the turn it produces has no dispatch-time origin to ride --
+        # the dispatch that armed it ended long ago. Fed by every announce path
+        # that does carry an origin; read by announce_unprompted_turn. Measured
+        # 2026-09-01: a watch instance reported finished GPU work five times into
+        # its own log while the main agent slept eleven hours next to it.
+        self._session_origins: dict[str, dict[str, str]] = SESSION_ROUTES
+        self._unprompted_wake_at: dict[tuple[str, str, str], float] = {}
+        # A report that arrived inside the debounce window, held for the trailing
+        # wake: the latest one wins, and it is delivered when the window closes
+        # rather than dropped. Keyed like the stamps above.
+        self._unprompted_held: dict[tuple[str, str, str], str] = {}
+        self._unprompted_trailing: dict[tuple[str, str, str], asyncio.Task] = {}
         self._fallback = ModelBinding(provider, model or provider.get_default_model())
         self.search_api_key = search_api_key
         self.jina_api_key = jina_api_key
@@ -268,6 +293,12 @@ class SubagentManager:
         self.registry.set_builtin_builder(self.build_builtin_backend)
         self._configs = list(agents or [])
         self.registry.apply(self._configs)
+        # Bound at birth, not at first dispatch: a generation that only bound
+        # what it resolved left graph-only agents without a wake route (see
+        # _bind_backend). This touches this manager's own backends only; the
+        # process-lifetime transports are rewired at set_submit.
+        for backend in self.registry.backends():
+            self._bind_backend(backend)
 
     def refresh_agents(self) -> None:
         """Rebuild the agent table from the last-applied configs.
@@ -356,19 +387,19 @@ class SubagentManager:
         """
         self._configs = list(configs)
         self.registry.apply(configs)
+        # Every backend, not only the ones a dispatch will resolve: see _bind_backend.
+        for backend in self.registry.backends():
+            self._bind_backend(backend)
 
-    def _resolve_backend(self, agent: str) -> SubagentBackend:
-        """The execution backend for one agent name.
+    def _bind_backend(self, backend: Any) -> None:
+        """Hand one backend this manager's sinks: session dir, events, caps, wakes.
 
-        Raises rather than substituting: falling back to the in-process loop for
-        an unrecognized name answers *as* that agent, with none of its history and
-        no sign to the caller that a substitution happened.
+        Run for every backend the table holds at apply time (``apply_agents``)
+        and again for the one a dispatch resolves, so a graph-only agent -- whose
+        backend the DAG runner takes straight off the registry -- is bound too,
+        and a new generation's manager rewires the pooled transports the moment
+        it exists rather than at its first dispatch.
         """
-        backend = self.registry.backend(agent)
-        if backend is None:
-            raise RuntimeError(
-                f"sub-agent {agent!r} is not on the agent table (or its backend failed to build); nothing was run"
-            )
         # Where this manager keeps a session's records, handed over for a backend
         # that has to write one without being asked to run anything. An acp agent
         # can act between prompts -- an on-call wake -- and the turn it produces
@@ -394,6 +425,26 @@ class SubagentManager:
         caps = getattr(backend, "bind_caps_listener", None)
         if callable(caps):
             caps(self.refresh_agents)
+        # And who to wake when the agent speaks with nobody waiting: the
+        # recorder above writes the log, this routes the words back into the
+        # conversation that owns the instance (announce_unprompted_turn).
+        wake = getattr(backend, "bind_unprompted_announcer", None)
+        if callable(wake):
+            wake(self.announce_unprompted_turn)
+
+    def _resolve_backend(self, agent: str) -> SubagentBackend:
+        """The execution backend for one agent name.
+
+        Raises rather than substituting: falling back to the in-process loop for
+        an unrecognized name answers *as* that agent, with none of its history and
+        no sign to the caller that a substitution happened.
+        """
+        backend = self.registry.backend(agent)
+        if backend is None:
+            raise RuntimeError(
+                f"sub-agent {agent!r} is not on the agent table (or its backend failed to build); nothing was run"
+            )
+        self._bind_backend(backend)
         return backend
 
     @staticmethod
@@ -719,6 +770,7 @@ class SubagentManager:
             # artifacts under an id a later task can already reference.
             "node_id": node_id or task_id,
         }
+        self.remember_origin(origin)
         instance_key = (quota_key, agent, handle)
 
         # A row before the task even exists: a spawn queued behind a full gate
@@ -796,6 +848,7 @@ class SubagentManager:
         cannot then see. ``upsert_spawn`` already tolerates a failed flush on its
         own, so only a genuine failure reaches the caller.
         """
+        self.remember_session(session_key)
         self._require_addressable(agent, doing="create a new instance")
 
         handle = mint_handle(agent)
@@ -848,6 +901,7 @@ class SubagentManager:
         [no-local-files] cannot open a path, so it is told the attachments stayed
         behind rather than handed a spelling that means nothing where it runs.
         """
+        self.remember_session(session_key)
         self._require_addressable(agent, doing=f"chat with instance {handle!r}")
         row = self.registry.get(agent)
         if media and row is not None and not row.caps.reads_local_files:
@@ -1485,7 +1539,23 @@ class SubagentManager:
             logger.warning("Subagent node {} could not be finalized in the registry: {}", record.node_id, exc)
 
     def set_submit(self, submit) -> None:
+        """Take the generation's scheduler -- the SWAP boundary for this manager.
+
+        Only now can a wake be served, so only now are the process-lifetime
+        transports rewired to this manager: each ACP backend re-points its
+        pooled connection's resident recorder here. Not in the constructor,
+        which runs during BUILD while generation N must keep serving and a
+        candidate may still be abandoned; not at the next dispatch, which may
+        come long after an existing agent has woken on its own.
+        """
         self._submit = submit
+        for backend in self.registry.backends():
+            repoint = getattr(backend, "repoint_pooled_resident", None)
+            if callable(repoint):
+                try:
+                    repoint()
+                except Exception:  # noqa: BLE001 - a transport that cannot be rewired must not fail the swap
+                    logger.debug("unprompted route: could not re-point a pooled recorder", exc_info=True)
 
     def set_delivery_sink(self, sink) -> None:
         """Late-bind where ``subagent.delivered`` and ``subagent.status`` events go.
@@ -1565,6 +1635,7 @@ class SubagentManager:
         # cli backend derives it from a zero exit status alone, and nothing here
         # reads the result text. Calling that success framed a run that had said
         # it could not do the task as a completed one.
+        self.remember_origin(origin)
         status_text = "returned" if status == "ok" else "failed"
 
         # The subagent's result is attacker-influenceable (it may have fetched
@@ -1629,6 +1700,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         attacker-influenceable, and unlike a tool result (which the agent knows
         it asked for) this arrives shaped like an inbound message.
         """
+        self.remember_origin(origin)
         if self._submit is None:
             logger.warning("DAG run {} finished with no submit wired; result not announced", run_id)
             return
@@ -1668,6 +1740,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         a default on a fact two announcers route on is a defect waiting for the next
         caller, and this lane not needing it does not make it safe to guess.
         """
+        self.remember_origin(origin)
         if self._submit is None:
             logger.warning("DAG run {} node {} suspended with no submit wired; not announced", run_id, node_id)
             return
@@ -1710,6 +1783,119 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         self._inject(injected, origin, mark)
         self._emit_delivered(origin, {**mark, "content": injected})
         logger.debug("DAG run [{}] node [{}] reported an exception to {}", run_id, node_id, origin["session_key"])
+
+    def remember_origin(self, origin: dict[str, Any]) -> None:
+        """Keep the route back to this conversation, for later unprompted reports.
+
+        Called by every path an origin dict flows through, so the map holds the
+        most recent channel/chat_id a conversation was reachable at. Stored
+        minimal on purpose: an unprompted announce needs exactly what
+        ``_inject`` reads and nothing an old spawn happened to carry.
+        """
+        session_key = str(origin.get("session_key") or "")
+        channel, chat_id = origin.get("channel"), origin.get("chat_id")
+        if session_key and channel and chat_id:
+            self._session_origins[session_key] = {
+                "channel": str(channel),
+                "chat_id": str(chat_id),
+                "session_key": session_key,
+            }
+
+    def remember_session(self, session_key: str) -> None:
+        """Keep the route back to a conversation known only by its session key.
+
+        A direct chat (`create_instance`, `chat`) carries no origin dict -- the
+        caller is a turn on the spine and hands back the reply itself -- so
+        nothing taught the route cache about it, and an instance a person made
+        by hand and then armed could wake nobody ("recorded only"). The key is
+        the conversation's own `channel:chat_id`, the same pair every origin
+        dict carries and the same default the loop builds when a request names
+        no conversation, so the route is read off it.
+        """
+        channel, sep, chat_id = str(session_key or "").partition(":")
+        if sep and channel and chat_id:
+            self.remember_origin({"session_key": session_key, "channel": channel, "chat_id": chat_id})
+
+    #: One wake per instance per this many seconds. An unprompted report that
+    #: says words is worth a main-agent turn; five of them in five minutes
+    #: (measured 2026-09-01) are one situation, not five, and each wake is a
+    #: full LLM turn. The instance log still records every turn regardless.
+    _UNPROMPTED_WAKE_DEBOUNCE_S = 300.0
+
+    async def announce_unprompted_turn(self, session_key: str, agent: str, handle: str, text: str) -> None:
+        """Wake the owning conversation with what an instance said on its own.
+
+        The missing half of recording an unprompted turn: the log write keeps
+        the account, but a main agent that ended its turn to wait for results
+        is woken by nothing -- measured 2026-09-01, a watch instance reported
+        finished GPU work into its log five times while the main agent slept
+        eleven hours beside idle hardware and an unspent budget. Only turns
+        that said words arrive here (the recorder gates out tool-only wake
+        rounds), and a per-instance debounce keeps a chatty stretch to one wake.
+        """
+        if self._submit is None:
+            logger.info("unprompted turn on {}/{}: no submit wired; recorded only", agent, handle)
+            return
+        origin = self._session_origins.get(session_key)
+        if origin is None:
+            logger.info(
+                "unprompted turn on {}/{}: no route back to {} is known; recorded only",
+                agent,
+                handle,
+                session_key,
+            )
+            return
+        key = (session_key, agent, handle)
+        now = time.monotonic()
+        last = self._unprompted_wake_at.get(key)
+        if last is not None and now - last < self._UNPROMPTED_WAKE_DEBOUNCE_S:
+            # Coalesce, never discard: the latest report is held and delivered
+            # when the window closes. A leading-edge throttle threw away every
+            # later report -- and the one that says "finished, results ready"
+            # tends to follow the one that says "still running" by a minute,
+            # which is the lost-finished-work failure this route exists to end.
+            self._unprompted_held[key] = text
+            if key not in self._unprompted_trailing:
+                delay = self._UNPROMPTED_WAKE_DEBOUNCE_S - (now - last)
+                self._unprompted_trailing[key] = asyncio.get_running_loop().create_task(
+                    self._deliver_held_unprompted(key, origin, delay)
+                )
+            logger.debug("unprompted turn on {}/{}: within debounce; held for the trailing wake", agent, handle)
+            return
+        self._unprompted_wake_at[key] = now
+        self._inject_unprompted(key, origin, text)
+
+    async def _deliver_held_unprompted(self, key: tuple[str, str, str], origin: dict[str, str], delay: float) -> None:
+        try:
+            await asyncio.sleep(max(0.0, delay))
+            text = self._unprompted_held.pop(key, None)
+            if text is None:
+                return
+            self._unprompted_wake_at[key] = time.monotonic()
+            self._inject_unprompted(key, origin, text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- nothing awaits this task; an escape here is a lost report and a
+            # "Task exception was never retrieved" at interpreter exit, not a log line.
+            # The immediate path is caught by UnpromptedRecorder._wake and logged; the
+            # trailing path has the same failure handled the same way (reviewed 2026-09-07).
+            logger.warning("unprompted turn on {}/{}: could not deliver the held report: {}", key[1], key[2], exc)
+        finally:
+            self._unprompted_trailing.pop(key, None)
+
+    def _inject_unprompted(self, key: tuple[str, str, str], origin: dict[str, str], text: str) -> None:
+        session_key, agent, handle = key
+        fenced = wrap_untrusted(text, source="subagent")
+        content = f"""[Unprompted report from '{agent}' (instance {handle})]
+
+This instance acted on its own schedule -- an armed wake, a watch round -- and said the following without being asked in any current turn:
+{fenced}
+
+Read it against the plan this instance serves. If it reports finished work, results ready to collect, or a decision point, continue that plan now -- dispatch the next round or collect what is ready; do not leave finished work waiting for the owner to notice. If it is routine progress only, no action and no reply to the user are needed."""
+        mark = {"kind": "unprompted", "label": f"{agent}/{handle}", "status": "report"}
+        self._inject(content, origin, mark)
+        self._emit_delivered(origin, {**mark, "content": content})
+        logger.info("unprompted turn on {}/{} announced to {}", agent, handle, session_key)
 
     def _inject(self, content: str, origin: dict[str, str], delegated: dict[str, str] | None = None) -> None:
         """Re-inject ``content`` to trigger a main-agent turn in the originating session.
@@ -1846,6 +2032,18 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         tasks = [t for t in self._running_tasks.values() if not t.done()]
         for t in tasks:
             t.cancel()
+        # A report held for the trailing wake belongs to this generation: after
+        # disposal its task would submit to a drained scheduler. It is cancelled
+        # with the rest; the words are not lost, the instance's log has them, and
+        # its next wake reports again.
+        trailing = [t for t in self._unprompted_trailing.values() if not t.done()]
+        for t in trailing:
+            t.cancel()
+        if trailing:
+            logger.info("cancelled {} held unprompted report(s) with this generation", len(trailing))
+            await _drain_cancelled(trailing, "held unprompted reports")
+        self._unprompted_trailing.clear()
+        self._unprompted_held.clear()
         if tasks:
             await _drain_cancelled(tasks, "sub-agent runs")
         # Same for the memory pollers: at shutdown an unreaped one dies pending,

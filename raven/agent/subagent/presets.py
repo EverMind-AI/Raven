@@ -32,9 +32,21 @@ Measured on 2026-08-11, which is what fixed each transport below:
 - ``mirothinker`` - not a local agent at all: MiroMind deep-research over an
   OpenAI-compatible endpoint (set ``apiKey``).
 
-Adapter versions are pinned. ``npx -y`` will fetch one that is not present, so an
-unpinned command would silently change which adapter build a user runs; the cost
-is that these need bumping deliberately.
+What a row is allowed to fetch depends on what the package is. An **ACP shim** --
+a dedicated adapter whose product lives elsewhere, as ``claude_code`` and
+``codex`` are -- is
+plumbing raven brings along: nobody installs one on purpose, it holds no
+credential, and there is no local build to defer to, so raven fetches it and
+pins the version, because ``npx -y`` would otherwise silently change which shim
+build a user runs. The cost is that those need bumping deliberately.
+
+The **agent itself** is never fetched. Its row names the bare executable
+(``hermes acp``, ``opencode acp``), so the agent that answers is the one the user
+installed, at the version they chose, holding the login they already granted --
+and a machine without it says so, because ``_probe_acp`` resolves ``argv[0]`` and
+an ``npx`` command always resolves whether the agent is there or not.
+:data:`SHIM_LAUNCHED_PRESETS` is that split, declared; a test holds every
+command to it.
 
 Every preset runs unattended, so none of them may stop to ask permission: raven
 answers whatever an ACP agent asks (``raven/acp_client/permissions.py``), and the
@@ -56,6 +68,11 @@ mechanism. For an acp preset they are not spelled out because they are not
 from __future__ import annotations
 
 from typing import Any
+
+from raven.agent.subagent.acp_registry_presets import (
+    ACP_REGISTRY_PRESETS,
+    ACP_REGISTRY_SHIM_PRESETS,
+)
 
 # Command templates for the cli transport, kept as reference rather than as
 # presets. Nothing reads them: they exist because the cli backend still runs
@@ -101,7 +118,14 @@ from typing import Any
 # Pinned deliberately; see the module docstring.
 _CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.66.0"
 _CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@1.1.14"
-_OPENCODE_ACP = "npx -y opencode-ai@1.18.16 acp"
+
+SHIM_LAUNCHED_PRESETS = frozenset({"claude_code", "codex"}) | ACP_REGISTRY_SHIM_PRESETS
+"""Presets whose command fetches an ACP shim rather than naming a local agent.
+
+Membership is a fact about the package, not a preference -- see the module
+docstring. Every other acp preset must name an executable the user installed.
+"""
+
 
 THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
     "claude_code": {
@@ -142,16 +166,19 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         "preset": "opencode",
         "kind": "acp",
         "description": (
-            "OpenCode over ACP - open-source coding agent. Uses whichever provider and model "
-            "the local opencode install is configured for. Fetched on first use via npx."
+            "OpenCode over ACP - open-source coding agent. Runs your local opencode install "
+            "and whichever provider and model it is configured for."
         ),
-        "command": _OPENCODE_ACP,
-        "readyTimeoutMs": 120000,
-        # Measured on 1.18.16: two sessions on one connection see each other's
-        # MCP servers, so a dispatch's grant would reach every concurrent
-        # sub-agent of this agent. The other two shipped adapters isolate and
-        # report the same mcpCapabilities, which is why this is declared here
-        # rather than read off the handshake.
+        "command": "opencode acp",
+        # Measured on 1.18.16, when this row still fetched that build: two sessions
+        # on one connection see each other's MCP servers, so a dispatch's grant
+        # would reach every concurrent sub-agent of this agent. The two adapter
+        # presets isolate and report the same mcpCapabilities, which is why this is
+        # declared here rather than read off the handshake. Kept now that the row
+        # runs whatever opencode the user installed (1.18.25 on the host this moved
+        # on): it describes how opencode shares one connection rather than a quirk
+        # of one build, and it withholds delivery rather than degrading it, so the
+        # conservative answer is the right one to carry forward unmeasured.
         "sessionMcp": False,
     },
     "hermes": {
@@ -197,6 +224,7 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         # system prompt entirely, so a replayed transcript continues nothing.
         "stateful": False,
     },
+    **ACP_REGISTRY_PRESETS,
 }
 
 
@@ -252,6 +280,7 @@ def session_mcp_for(cfg: Any) -> bool:
 
 
 __all__ = [
+    "SHIM_LAUNCHED_PRESETS",
     "THIRD_PARTY_SUBAGENT_PRESETS",
     "session_mcp_for",
     "third_party_subagent_presets",
