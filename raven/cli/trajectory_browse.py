@@ -316,18 +316,32 @@ def _sanitize_multiline(value: str) -> str:
 
 
 def _wrap_display(text: str, width: int) -> list[str]:
-    """Split multi-line text into display lines at most ``width`` cells wide
-    (CJK-aware, never splitting a wide character; an unbroken overlong run is
-    hard-wrapped)."""
+    """Split multi-line text into display lines at most ``width`` cells wide.
+
+    CJK-aware (a wide character is never split) and word-aware: an overflowing
+    line breaks after its last space when one exists — only an unbroken
+    overlong run is hard-wrapped mid-word. The single space at a break point
+    is consumed, like any wrapping terminal; all other whitespace survives."""
     lines: list[str] = []
     for raw in text.split("\n"):
         current: list[str] = []
         used = 0
+        last_space = -1
         for ch in raw:
             cell = _cell_width(ch)
             if current and used + cell > width:
-                lines.append("".join(current))
-                current, used = [], 0
+                # Break after the last space only when something precedes it;
+                # a leading-space break would emit an empty line.
+                if last_space > 0:
+                    lines.append("".join(current[:last_space]))
+                    current = current[last_space + 1 :]
+                else:
+                    lines.append("".join(current))
+                    current = []
+                used = sum(_cell_width(c) for c in current)
+                last_space = max((i for i, c in enumerate(current) if c == " "), default=-1)
+            if ch == " ":
+                last_space = len(current)
             current.append(ch)
             used += cell
         lines.append("".join(current))
@@ -341,7 +355,7 @@ def _is_turn_marker(record: Any) -> bool:
     return record.label == "Turn" and not record.text and not record.degraded and not record.error
 
 
-def _record_lines(record: Any, label_col: int, width: int) -> list[Text]:
+def _record_lines(record: Any, label_col: int, width: int, show_meta: bool = True) -> list[Text]:
     """One record as pre-wrapped display lines (label + hanging body + notes).
 
     Every dynamic field is untrusted: the label and the note fields pass the
@@ -386,7 +400,7 @@ def _record_lines(record: Any, label_col: int, width: int) -> list[Text]:
         notes.append((f"(! {_collapse_text(record.degraded) or '?'})", "dim yellow"))
     if record.error:
         notes.append((f"[ERROR] {_collapse_text(record.error) or '?'}", "red"))
-    if record.meta:
+    if record.meta and show_meta:
         meta = _collapse_text(record.meta)
         if meta:
             notes.append((f"({meta})", "dim"))
@@ -415,7 +429,7 @@ def _conversation_lines(records: list[Any], width: int) -> list[Text]:
     lines: list[Text] = []
     seen: dict[tuple[str, str | None], int] = {}
     current: Any = _UNSET
-    for record in records:
+    for index, record in enumerate(records):
         key = (record.trace_id, record.turn_span_id)
         if key != current:
             current = key
@@ -431,7 +445,14 @@ def _conversation_lines(records: list[Any], width: int) -> list[Text]:
                     lines.append(Text(part, style="dim"))
         if _is_turn_marker(record):
             continue
-        lines.extend(_record_lines(record, label_col, width))
+        # One span's records repeat the same meta (an LLM call stamps its
+        # model/tokens on input, thinking, and output alike); show it once,
+        # on the span's last consecutive record.
+        following = records[index + 1] if index + 1 < len(records) else None
+        show_meta = not (
+            following is not None and following.span_id == record.span_id and following.meta == record.meta
+        )
+        lines.extend(_record_lines(record, label_col, width, show_meta))
     return lines
 
 
