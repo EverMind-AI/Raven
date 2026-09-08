@@ -234,10 +234,10 @@ async function openLiveSession(s) {
        id no longer matches the current pointer -- without this redraw the rail shows nothing
        selected until the reader clicks a session themselves. */
     sessionDraw();
-    /* The session's working directory, for the path shortener. It rides on
-       every init bundle and used to be learned from a directory listing, which
-       is a call the page no longer makes. */
+    /* The session's working directory scopes both path shortening and terminal
+       discovery, so the terminal list must reconcile after this assignment. */
     wsSetRoot(r.info && r.info.cwd);
+    RavenIslands.terminal.reconcileTask(s.id);
     const u = (r.info && r.info.usage) || {};
     /* context_estimated rides along in this payload and is not passed on: the
        ring has nowhere to say an estimate, so the writer takes two numbers.

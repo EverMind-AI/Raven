@@ -111,6 +111,7 @@ function harness({ rows, deferSubscribe } = {}) {
     RavenIslands: {
       workspace: { loadDeliveries: (id) => calls.push(['loadDeliveries', id]) },
       view: { resume: (id) => calls.push(['viewResume', id]) },
+      terminal: { reconcileTask: (id) => calls.push(['reconcileTerminals', id]) },
     },
   }
   const install = Function(
@@ -367,6 +368,22 @@ describe('the assembled live session switch', () => {
     await h.settle('a')
 
     expect(h.calls.filter((c) => c[0] === 'loadTier')).toHaveLength(2)
+  })
+
+  it('reconciles terminal tabs after the resumed cwd lands on every reopen', async () => {
+    const h = harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [], info: { cwd: '/workspace/a' } })
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [], info: { cwd: '/workspace/a' } })
+
+    expect(h.calls.filter((call) => ['wsSetRoot', 'reconcileTerminals'].includes(call[0]))).toEqual([
+      ['wsSetRoot', '/workspace/a'],
+      ['reconcileTerminals', 'a'],
+      ['wsSetRoot', '/workspace/a'],
+      ['reconcileTerminals', 'a'],
+    ])
   })
 
   it('reads the tier back when a conversation is left for a new task', async () => {

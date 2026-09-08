@@ -33,6 +33,10 @@ export function setTask(taskId: string | null): void {
   store.setTask(taskId)
 }
 
+export function reconcileTask(taskId: string | null): void {
+  store.reconcileTask(taskId)
+}
+
 export function detach(): void {
   if (frame !== null) cancelAnimationFrame(frame)
   frame = null

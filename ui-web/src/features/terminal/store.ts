@@ -76,11 +76,19 @@ export async function refresh(): Promise<void> {
   }
 }
 
-export function setTask(taskId: string | null): void {
-  if (state.taskId === taskId) return
+function resetTask(taskId: string | null): void {
   requestGeneration += 1
   set({ taskId, terminals: [], activeTab: TRANSCRIPT_TAB, loading: false, error: '', deliveries: {} })
   if (taskId) void refresh()
+}
+
+export function setTask(taskId: string | null): void {
+  if (state.taskId === taskId) return
+  resetTask(taskId)
+}
+
+export function reconcileTask(taskId: string | null): void {
+  resetTask(taskId)
 }
 
 export function selectTab(tab: string): void {
