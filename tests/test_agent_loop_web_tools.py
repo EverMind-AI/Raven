@@ -288,31 +288,77 @@ def test_a_plugin_subclass_of_web_search_is_not_gated_either(workspace) -> None:
 
 def test_a_subagent_exec_tool_reads_the_live_deny_source(workspace, tmp_path: Path, monkeypatch) -> None:
     """A tightened permission gates a delegated shell the same call it gates a
-    direct one: the sub-agent's ExecTool reads the same live deny source the
-    main loop's does, not a construction-time snapshot."""
+    direct one: the sub-agent's gate reads the same live deny source the main
+    loop's does, not a construction-time snapshot."""
     import asyncio
 
     from raven.agent.tools.shell import ExecTool
+    from raven.permissions.turn import start_permission_turn
 
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"tools": {"exec": {"extraDenyPatterns": []}}}), encoding="utf-8")
     monkeypatch.setattr("raven.home._current_config_path", cfg)
 
-    captured: list[ExecTool] = []
+    captured: list[ToolRegistry] = []
     real = ToolRegistry.register
 
     def _spy(self, tool, **kw):  # noqa: ANN001, ANN202
         real(self, tool, **kw)
         if isinstance(tool, ExecTool):
-            captured.append(tool)
+            captured.append(self)
 
     monkeypatch.setattr(ToolRegistry, "register", _spy)
     backend = RavenLoopBackend(provider=_StubProvider(), model="stub", agent_home=workspace / "home")
     asyncio.run(backend.run("task", task_id="t1", workspace=workspace, executor=None))
     assert captured, "the backend registered no ExecTool"
-    tool = captured[-1]
+    registry = captured[-1]
 
     cfg.write_text(json.dumps({"tools": {"exec": {"extraDenyPatterns": ["\\bosascript\\b"]}}}), encoding="utf-8")
 
-    result = asyncio.run(tool.execute("osascript -e beep"))
-    assert "blocked" in result.model_text
+    start_permission_turn(None, conversation_id="sub", turn_id="t1")
+    result = asyncio.run(registry.execute("exec", {"command": "osascript -e beep"}))
+    assert "blocked" in str(result)
+
+
+def test_a_subagent_gate_asks_through_the_parent_turns_responder(workspace, tmp_path: Path, monkeypatch) -> None:
+    """A sub-agent's gate reads the turn's mode instead of pinning full, and
+    reaches the responder the parent turn bound (a ContextVar its task
+    inherits): a delegated exec in ask mode asks the same human a direct one
+    would, rather than running in silence or being refused outright."""
+    import asyncio
+
+    from raven.agent.tools.shell import ExecTool
+    from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
+    from raven.permissions.turn import start_permission_turn
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"permissions": {"mode": "ask"}}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+
+    captured: list[ToolRegistry] = []
+    real = ToolRegistry.register
+
+    def _spy(self, tool, **kw):  # noqa: ANN001, ANN202
+        real(self, tool, **kw)
+        if isinstance(tool, ExecTool):
+            captured.append(self)
+
+    monkeypatch.setattr(ToolRegistry, "register", _spy)
+    backend = RavenLoopBackend(provider=_StubProvider(), model="stub", agent_home=workspace / "home")
+    asyncio.run(backend.run("task", task_id="t1", workspace=workspace, executor=None))
+    assert captured, "the backend registered no ExecTool"
+    registry = captured[-1]
+
+    class _Click:
+        def __init__(self) -> None:
+            self.seen: list[str] = []
+
+        async def await_approval(self, **request):  # noqa: ANN003, ANN202
+            self.seen.append(request["command"])
+            return ApprovalOutcome(choice=ApprovalChoice.DENY)
+
+    click = _Click()
+    start_permission_turn(click, conversation_id="sub", turn_id="t1")
+    result = asyncio.run(registry.execute("exec", {"command": "echo delegated"}))
+    assert click.seen == ["echo delegated"]
+    assert "denied" in str(result).lower()

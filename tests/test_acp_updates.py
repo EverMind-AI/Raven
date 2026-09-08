@@ -1019,6 +1019,7 @@ class TestTerminationIsExactlyOnce:
         # foreign turn's failure from its own without it.
         "error": {"code": -32099, "message": "boom", "reason": "internal", "turn_id": "t"},
         "notice": {"kind": "action_blocked", "detail": "no"},
+        "permission.review": {"phase": "started", "tool": "write_file"},
         "episode.start": {"index": 1},
         "dag.run_started": {"nodes": []},
         "dag.node_updated": {"name": "n"},

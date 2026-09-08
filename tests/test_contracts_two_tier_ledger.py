@@ -91,11 +91,21 @@ LEDGER = {
         "Segment",
         "SegmentBuilder",
         "ChatDelta",
+        "Allow",
+        "ApprovalChoice",
+        "ApprovalOutcome",
+        "Decision",
+        "DecisionSource",
+        "Deny",
+        "NeedsApproval",
+        "PermissionMode",
+        "PARSE_RETRY_INSTRUCTION",
+        "STOP_RETRY_INSTRUCTION",
         "SubagentActionAbortedError",
         "SubagentBackend",
         "SubagentNoAnswerError",
-        "SupportsApprovalTurn",
         "SupportsDirectAsk",
+        "Tier",
         "SupportsLogin",
         "TextPart",
         "TokenStrategy",
@@ -227,7 +237,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("10", "003c6d01f8c437b83e2f97b5b4f504442b0c3328a705048f2af6432642996d16")
+PINNED_CONTRACT_SURFACE = ("11", "ab729a55c3228591d2c6e944ecfbf2c5480d2b7b032a1e9b393a2805d9af5971")
 
 
 def contract_surface_digest(pkg_dir: Path) -> str:

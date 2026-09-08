@@ -31,6 +31,7 @@ visible at the call site.
 from __future__ import annotations
 
 import json
+import weakref
 from pathlib import Path
 from typing import Any
 
@@ -41,10 +42,10 @@ __all__ = [
     "default_model",
     "disabled_playbook_names",
     "disabled_tool_names",
-    "exec_allow_destructive_commands",
     "exec_extra_deny_patterns",
     "mcp_server_configs",
     "media_tool_config",
+    "permissions_config",
     "routing_profile",
     "web_search_key",
 ]
@@ -182,18 +183,6 @@ def exec_extra_deny_patterns(live: LiveConfig) -> list[str] | None:
     return None
 
 
-def exec_allow_destructive_commands(live: LiveConfig) -> bool | None:
-    """Whether deletion safeguards are disabled, or None when unset/invalid."""
-    for key in ("tools.exec.allowDestructiveCommands", "tools.exec.allow_destructive_commands"):
-        value = live.get(key)
-        if value is None:
-            continue
-        if isinstance(value, bool):
-            return value
-        return None
-    return None
-
-
 def web_search_key(live: LiveConfig) -> str | None:
     """The Serper key as the file has it, or None for "no answer".
 
@@ -307,3 +296,40 @@ def disabled_tool_names(live: LiveConfig) -> frozenset[str]:
         if isinstance(value, list):
             names.update(str(x) for x in value if isinstance(x, str))
     return frozenset(names)
+
+
+_LAST_VALID_PERMISSIONS: "weakref.WeakKeyDictionary[LiveConfig, Any]" = weakref.WeakKeyDictionary()
+
+
+def permissions_config(live: LiveConfig) -> "Any":
+    """The permission gate's config, read live and validated.
+
+    Validated on every byte change rather than at loop start so that a mode
+    switched on a settings surface reads on the next tool call, which is the
+    whole point of the gate re-asking.
+
+    A node that does not validate keeps the LAST VALIDATED policy, mirroring
+    ``LiveConfig.raw()``'s stance on a torn file -- and for the same security
+    reason stated there, one step up: resetting to the schema's defaults would
+    drop the user's explicit deny rules, and a default-allow tool a broken
+    edit just un-denied is a policy change nobody made. Only a config that has
+    never validated in this process answers with the defaults, because there
+    is nothing better to keep.
+    """
+    from raven.config.schema import PermissionsConfig
+
+    node = live.raw().get("permissions")
+    if not isinstance(node, dict):
+        node = {}
+    try:
+        validated = PermissionsConfig.model_validate(node)
+    except Exception as exc:  # noqa: BLE001 - a torn or wrong node keeps the last good policy
+        kept = _LAST_VALID_PERMISSIONS.get(live)
+        logger.warning(
+            "live config: permissions node is not valid right now ({}); keeping the {} policy",
+            exc,
+            "last validated" if kept is not None else "default",
+        )
+        return kept if kept is not None else PermissionsConfig()
+    _LAST_VALID_PERMISSIONS[live] = validated
+    return validated

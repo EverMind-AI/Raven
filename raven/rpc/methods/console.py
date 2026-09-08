@@ -681,19 +681,8 @@ def _chk_image_selection(value: Any) -> dict:
 # no confirmation step, so it must not contain the settings that decide what an
 # attacker who reaches it can then do. Editing the config file for those is the
 # friction, and it is the point.
-#
-# `tools.exec.allowDestructiveCommands` is listed on a stated threat model: it
-# is a rail against the model's own mistakes, not a boundary against whoever
-# holds the RPC credential. That holder already has `shell.exec`, which runs a
-# command as the human's own and bypasses the agent-facing deny and approval
-# policy, so flipping this key hands them no deletion they could not already
-# perform; sandbox and workspace containment are untouched by it. A rail against
-# the model is proportionately guarded by the client that asks the human --
-# the WebUI presents an explicit warning before it writes the value -- where a
-# boundary against the holder would have to be confirmed server-side.
 _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.exec.timeout": _chk_int("tools.exec.timeout", 5, 3600),
-    "tools.exec.allowDestructiveCommands": _chk_bool("tools.exec.allowDestructiveCommands"),
     "tools.web.search.apiKey": _chk_str("tools.web.search.apiKey", 200),
     "tools.web.jinaApiKey": _chk_str("tools.web.jinaApiKey", 200),
     "tools.web.search.provider": _chk_enum("tools.web.search.provider", *get_args(WebSearchProvider)),
@@ -714,6 +703,7 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "memory.memoryTopK": _chk_int("memory.memoryTopK", 1, 50),
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
     "agents.defaults.reasoningEffort": _chk_enum("agents.defaults.reasoningEffort", "minimal", "low", "medium", "high"),
+    "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),
 }
 
 

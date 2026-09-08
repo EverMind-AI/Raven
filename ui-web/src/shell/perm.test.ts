@@ -51,14 +51,21 @@ const pop = (): HTMLElement => document.getElementById('permPop')!
 const rows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('#permList .prow')]
 
 describe('the permission chip', () => {
-  it('defaults to full access, which is what Raven actually does today', async () => {
+  it('defaults to ask, the product default the gate ships with', async () => {
     const perm = await load()
+    expect(perm.current()).toBe('ask')
+    perm.draw()
+    expect(document.getElementById('permName')!.textContent).toBe('gui.perm.ask')
+    expect(chip().classList.contains('risk')).toBe(false)
+    expect(chip().getAttribute('aria-label')).toBe('gui.perm.title: gui.perm.ask')
+  })
+
+  it('marks the risky tier on the chip itself', async () => {
+    const perm = await load('full')
     expect(perm.current()).toBe('full')
     perm.draw()
-    expect(document.getElementById('permName')!.textContent).toBe('gui.perm.full')
     /* The risky tier is marked as such on the chip, not just in the panel. */
     expect(chip().classList.contains('risk')).toBe(true)
-    expect(chip().getAttribute('aria-label')).toBe('gui.perm.title: gui.perm.full')
   })
 
   it('restores a stored tier, and drops the risk mark with it', async () => {
@@ -71,7 +78,16 @@ describe('the permission chip', () => {
 
   it('ignores a stored tier no build offers any more', async () => {
     const perm = await load('godmode')
-    expect(perm.current()).toBe('full')
+    expect(perm.current()).toBe('ask')
+  })
+
+  it('takes the mode the live layer loaded from config', async () => {
+    const perm = await load()
+    perm.setFromConfig('smart')
+    expect(perm.current()).toBe('smart')
+    expect(localStorage.getItem('raven.perm')).toBe('smart')
+    perm.setFromConfig('godmode')
+    expect(perm.current()).toBe('smart')
   })
 
   it('puts the tier icon in the chip slot', async () => {
@@ -95,7 +111,7 @@ describe('the permission panel', () => {
       'gui.perm.full',
     ])
     expect(rows().map((r) => r.getAttribute('role'))).toEqual(['radio', 'radio', 'radio'])
-    expect(rows().map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true'])
+    expect(rows().map((r) => r.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false'])
     /* Only the risky tier wears the class, and only the chosen one has a tick. */
     expect(rows().filter((r) => r.classList.contains('risk')).length).toBe(1)
     expect(pop().querySelectorAll('svg.tick').length).toBe(1)
@@ -175,5 +191,34 @@ describe('the permission panel', () => {
       perm.close()
     }).not.toThrow()
     expect(perm.isOpen()).toBe(false)
+  })
+})
+
+describe('persisting a pick', () => {
+  const rows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('#permList .prow')]
+
+  it('commits the chip only after the write is acknowledged', async () => {
+    const perm = await load()
+    ;(window as unknown as { persistPermMode?: (m: string) => Promise<boolean> }).persistPermMode = () =>
+      Promise.resolve(true)
+    perm.open()
+    rows()[1]!.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(perm.current()).toBe('smart')
+    delete (window as unknown as { persistPermMode?: unknown }).persistPermMode
+  })
+
+  it('keeps the engine mode on a rejected write', async () => {
+    const perm = await load()
+    ;(window as unknown as { persistPermMode?: (m: string) => Promise<boolean> }).persistPermMode = () =>
+      Promise.resolve(false)
+    perm.open()
+    rows()[2]!.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(perm.current()).toBe('ask')
+    expect(localStorage.getItem('raven.perm')).not.toBe('full')
+    delete (window as unknown as { persistPermMode?: unknown }).persistPermMode
   })
 })

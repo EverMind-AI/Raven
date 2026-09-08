@@ -55,7 +55,7 @@ import { bindDirectSender } from './directSend.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import { type GatewayRpc, type RpcOptions, type TranscriptRow } from './interfaces.js'
 import { bindLiveAgentsRefresh, fetchLiveAgents } from './liveAgentsSync.js'
-import { $overlayState, patchOverlayState } from './overlayStore.js'
+import { $overlayState, getOverlayState, patchOverlayState } from './overlayStore.js'
 import { scrollWithSelectionBy } from './scroll.js'
 import { turnController } from './turnController.js'
 import { patchTurnState, useTurnSelector } from './turnStore.js'
@@ -1022,14 +1022,26 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   )
 
   const answerApproval = useCallback(
-    (choice: string) => {
-      const approval = overlay.approval
+    (choice: string, feedback = '', approvalId?: string) => {
+      // Read live rather than from this render's closure. One turn can hold two
+      // approvals back to back -- a sub-agent's first command lands a second
+      // after the spawn that created it was allowed -- and a closure a render
+      // behind answers nothing, leaving the live request to expire unanswered.
+      //
+      // ``approvalId`` is what the prompt rendered, and it is the answer's real
+      // subject: a keypress belongs to the request the human was reading and an
+      // expiry to the one its countdown was armed for. Without it a callback
+      // queued against the outgoing request would resolve the incoming one --
+      // granting or refusing something nobody was shown.
+      const approval = getOverlayState().approval
 
-      if (!approval) {
+      if (!approval || (approvalId !== undefined && approvalId !== approval.approvalId)) {
         return
       }
 
-      if (choice === 'deny') {
+      const refusal = choice === 'deny' || choice === 'deny_stop'
+
+      if (refusal) {
         // Denial changes no host state, so the frontend can commit it locally
         // before the RPC round-trip. Approval is different: the overlay remains
         // until the backend confirms that the exact request was still live.
@@ -1042,9 +1054,9 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
       rpc<ApprovalRespondResponse>(
         'approval.respond',
-        buildApprovalRespond(approval.approvalId, approval.conversationId, choice)
+        buildApprovalRespond(approval.approvalId, approval.conversationId, choice, feedback)
       ).then(response => {
-        if (choice === 'deny') {
+        if (refusal) {
           return
         }
 
@@ -1052,12 +1064,19 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
           return
         }
 
+        // The same id match `approval.closed` makes: a newer request can own
+        // the overlay by the time this reply lands, and clearing it here would
+        // take the new prompt off screen with nobody having answered it.
+        if (getOverlayState().approval?.approvalId !== approval.approvalId) {
+          return
+        }
+
         patchOverlayState({ approval: null })
-        patchTurnState({ outcome: choice === 'deny' ? 'denied' : `approved (${choice})` })
+        patchTurnState({ outcome: `approved (${choice})` })
         patchUiState({ status: 'running…' })
       })
     },
-    [overlay.approval, rpc]
+    [rpc]
   )
 
   const answerSudo = useCallback(

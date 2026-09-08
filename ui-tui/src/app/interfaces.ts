@@ -363,7 +363,7 @@ export interface SlashHandlerContext {
 }
 
 export interface AppLayoutActions {
-  answerApproval: (choice: string) => void
+  answerApproval: (choice: string, feedback?: string, approvalId?: string) => void
   answerClarify: (answer: string) => void
   answerConfirm: (answer: boolean) => void
   answerSecret: (value: string) => void
@@ -423,7 +423,7 @@ export interface AppOverlaysProps {
   cols: number
   compIdx: number
   completions: CompletionItem[]
-  onApprovalChoice: (choice: string) => void
+  onApprovalChoice: (choice: string, feedback?: string, approvalId?: string) => void
   onClarifyAnswer: (value: string) => void
   onConfirmAnswer: (answer: boolean) => void
   onModelSelect: (model: string, providerSlug: string) => void

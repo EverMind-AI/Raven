@@ -54,6 +54,7 @@ KNOWN_EVENT_TYPES = frozenset(
         "message.complete",
         "error",
         "notice",
+        "permission.review",
         "episode.start",
         "dag.run_started",
         "dag.node_updated",
@@ -233,7 +234,9 @@ def translate(event: Any, *, cwd: str | None = None) -> Translated:
     # boundary with no ACP counterpart. The dag.* events would map to `plan`, but
     # ``PlanEntry.priority`` is required and raven has no source for it, so a
     # plan would have to be invented. cron.* belongs to a turn nobody in this
-    # session asked for.
+    # session asked for. permission.review is a transient status for a surface
+    # with a live status line; the ACP client already renders the tool call as
+    # pending, and the protocol has no transient-status update to map it to.
     return Translated()
 
 

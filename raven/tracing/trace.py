@@ -14,6 +14,7 @@ Guarantees (so an adopter is safe):
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import logging
 import time
 from typing import Any, Iterator
@@ -427,6 +428,7 @@ def instrument(
                     return await func(*args, **kwargs)
                 with span(name, kind=kind, detached=detached, root=root, **_seed(args, kwargs)) as s:
                     _open(s, args, kwargs)
+                    span_token = _SPAN.set(s)
                     result = exc = None
                     try:
                         result = await func(*args, **kwargs)
@@ -435,6 +437,7 @@ def instrument(
                         exc = e
                         raise
                     finally:
+                        _SPAN.reset(span_token)
                         _close(s, args, kwargs, result, exc)
 
             return awrapper
@@ -445,6 +448,7 @@ def instrument(
                 return func(*args, **kwargs)
             with span(name, kind=kind, detached=detached, root=root, **_seed(args, kwargs)) as s:
                 _open(s, args, kwargs)
+                span_token = _SPAN.set(s)
                 result = exc = None
                 try:
                     result = func(*args, **kwargs)
@@ -453,6 +457,7 @@ def instrument(
                     exc = e
                     raise
                 finally:
+                    _SPAN.reset(span_token)
                     _close(s, args, kwargs, result, exc)
 
         return swrapper
@@ -460,9 +465,24 @@ def instrument(
     return decorate
 
 
+_SPAN: "contextvars.ContextVar[Any | None]" = contextvars.ContextVar("raven_tracing_span", default=None)
+
+
 def current() -> Any | None:
     """The active trace context (or None). Exposed for adopters that need it."""
     return _ctx.current()
+
+
+def current_span() -> Any | None:
+    """The innermost open instrumented span, or None outside one / tracing off.
+
+    Set by ``instrument`` around each call with proper nesting (a token per
+    frame), so a nested ``execute`` sees its own span and restores the parent's
+    on exit -- which a single mutable slot cannot do. Adopters that need to
+    annotate the current span mid-call (the permission gate records its decision
+    this way) read it here rather than plumbing the span object through.
+    """
+    return _SPAN.get()
 
 
 def use_context(ctx: Any | None) -> Any:

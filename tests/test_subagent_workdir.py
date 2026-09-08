@@ -326,6 +326,9 @@ async def test_subagent_fences_on_both_the_session_dir_and_agent_home(tmp_path: 
     class _CapturingRegistry:
         tool_names: tuple[str, ...] = ()
 
+        def __init__(self, **kwargs) -> None:
+            pass
+
         def register(self, tool) -> None:
             captured.setdefault(tool.name, tool)
 

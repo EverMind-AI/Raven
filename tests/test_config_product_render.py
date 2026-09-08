@@ -142,23 +142,6 @@ def test_inherit_llm_names_the_provider_from_the_model_prefix(monkeypatch):
     assert config["agents"]["defaults"]["provider"] == "custom", "host default rather than an empty provider"
 
 
-def test_inherit_exec_policy_carries_the_host_toggle_but_not_over_the_products_own():
-    host = {"tools": {"exec": {"allowDestructiveCommands": True, "timeout": 60}}}
-    config: dict = {"tools": {"exec": {"timeout": 600}}}
-    render.inherit_exec_policy(config, host)
-    assert config["tools"]["exec"] == {"timeout": 600, "allowDestructiveCommands": True}, (
-        "the toggle rides, the timeout stays the product's"
-    )
-
-    pinned = {"tools": {"exec": {"allowDestructiveCommands": False}}}
-    render.inherit_exec_policy(pinned, host)
-    assert pinned["tools"]["exec"]["allowDestructiveCommands"] is False
-
-    untouched: dict = {}
-    render.inherit_exec_policy(untouched, {"tools": {"exec": {"timeout": 60}}})
-    assert untouched == {}, "a host that never chose leaves the product alone"
-
-
 def test_the_own_key_branch_never_reads_the_parent_riders(monkeypatch, tmp_path):
     """The riders belong to inheritance alone: a product paying with its own
     key keeps its own tuned model whatever the spawning parent runs -- the

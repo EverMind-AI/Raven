@@ -7,6 +7,7 @@ import hashlib
 
 import pytest
 
+from raven.contracts.permissions import ApprovalChoice
 from raven.rpc.approval_broker import ApprovalBroker
 
 
@@ -20,9 +21,9 @@ async def _wait_for_frame(frames: list[dict]) -> dict:
 
 @pytest.mark.parametrize(
     ("choice", "expected"),
-    [("allow", True), ("deny", False)],
+    [("allow", ApprovalChoice.ALLOW), ("deny", ApprovalChoice.DENY), ("deny_stop", ApprovalChoice.DENY_STOP)],
 )
-async def test_response_resolves_matching_request(choice: str, expected: bool) -> None:
+async def test_response_resolves_matching_request(choice: str, expected: ApprovalChoice) -> None:
     frames: list[dict] = []
 
     async def send(frame: dict) -> None:
@@ -48,7 +49,7 @@ async def test_response_resolves_matching_request(choice: str, expected: bool) -
     assert params["command"] == "rm file.txt"
     assert params["action_digest"] == hashlib.sha256(b"rm file.txt").hexdigest()
     assert broker.resolve(params["approval_id"], choice, conversation_id="session-a") is True
-    assert await waiting is expected
+    assert (await waiting).choice is expected
 
 
 async def test_wrong_session_cannot_resolve_request() -> None:
@@ -71,7 +72,7 @@ async def test_wrong_session_cannot_resolve_request() -> None:
 
     assert broker.resolve(params["approval_id"], "allow", conversation_id="session-b") is False
     assert broker.resolve(params["approval_id"], "deny", conversation_id="session-a") is True
-    assert await waiting is False
+    assert (await waiting).choice is ApprovalChoice.DENY
 
 
 async def test_duplicate_and_invalid_responses_are_rejected() -> None:
@@ -95,7 +96,7 @@ async def test_duplicate_and_invalid_responses_are_rejected() -> None:
     assert broker.resolve(approval_id, "always", conversation_id="session-a") is False
     assert broker.resolve(approval_id, "allow", conversation_id="session-a") is True
     assert broker.resolve(approval_id, "deny", conversation_id="session-a") is False
-    assert await waiting is True
+    assert (await waiting).approved
 
 
 async def test_timeout_denies_and_expires_request() -> None:
@@ -114,7 +115,7 @@ async def test_timeout_denies_and_expires_request() -> None:
     )
     approval_id = frames[0]["params"]["approval_id"]
 
-    assert result is False
+    assert result.choice is ApprovalChoice.DENY
     assert frames[1] == {
         "jsonrpc": "2.0",
         "method": "approval.closed",
@@ -147,7 +148,7 @@ async def test_request_exposes_the_shorter_frontend_deadline() -> None:
 
     assert 29 <= params["expires_at"] - params["created_at"] <= 30
     assert broker.resolve(params["approval_id"], "deny", conversation_id="session-a") is True
-    assert await waiting is False
+    assert (await waiting).choice is ApprovalChoice.DENY
     assert frames[-1]["method"] == "approval.closed"
     assert frames[-1]["params"]["reason"] == "deny"
 
@@ -178,7 +179,8 @@ async def test_cancel_all_denies_every_pending_request() -> None:
 
     broker.cancel_all()
 
-    assert await asyncio.gather(*waits) == [False, False]
+    outcomes = await asyncio.gather(*waits)
+    assert [o.choice for o in outcomes] == [ApprovalChoice.DENY, ApprovalChoice.DENY]
 
 
 async def test_task_cancellation_expires_request() -> None:
@@ -212,16 +214,14 @@ async def test_send_failure_denies_request() -> None:
 
     broker = ApprovalBroker(send)
 
-    assert (
-        await broker.await_approval(
-            conversation_id="session-a",
-            turn_id="turn-a",
-            tool_call_id="call-a",
-            command="rm file.txt",
-            description="Delete files",
-        )
-        is False
+    outcome = await broker.await_approval(
+        conversation_id="session-a",
+        turn_id="turn-a",
+        tool_call_id="call-a",
+        command="rm file.txt",
+        description="Delete files",
     )
+    assert outcome.choice is ApprovalChoice.DENY
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +290,7 @@ async def test_an_approval_reaches_only_the_surface_that_sent_the_turn() -> None
         assert broadcast_frames == []
 
         assert broker.resolve(frame["params"]["approval_id"], "allow", conversation_id="tui:mine") is True
-        assert await task is True
+        assert (await task).approved
         assert [f["method"] for f in mine_frames] == ["approval.request", "approval.closed"]
         assert other_frames == []
         assert broadcast_frames == []
@@ -320,4 +320,28 @@ async def test_an_unowned_approval_conversation_still_broadcasts() -> None:
     frame = await _wait_for_frame(broadcast_frames)
     assert frame["params"]["conversation_id"] == "weixin:u1"
     assert broker.resolve(frame["params"]["approval_id"], "deny", conversation_id="weixin:u1") is True
-    assert await task is False
+    assert (await task).choice is ApprovalChoice.DENY
+
+
+async def test_feedback_rides_along_on_a_refusal() -> None:
+    frames: list[dict] = []
+
+    async def send(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = ApprovalBroker(send)
+    waiting = asyncio.create_task(
+        broker.await_approval(
+            conversation_id="session-a",
+            turn_id="turn-a",
+            tool_call_id="call-a",
+            command="rm file.txt",
+            description="Delete files",
+        )
+    )
+    params = (await _wait_for_frame(frames))["params"]
+
+    assert broker.resolve(params["approval_id"], "deny", conversation_id="session-a", feedback="keep it, move it aside")
+    outcome = await waiting
+    assert outcome.choice is ApprovalChoice.DENY
+    assert outcome.feedback == "keep it, move it aside"

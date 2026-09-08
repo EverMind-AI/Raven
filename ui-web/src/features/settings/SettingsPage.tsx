@@ -915,29 +915,28 @@ function PermPage({ s }: { s: SettingsState }): JSX.Element {
   const sb = String(V(raw, 'tools.sandbox.backend', 'none'))
   const sbName = sb === 'none' ? t('gui.set.prm.sb_none') : sb === 'auto' ? t('gui.set.prm.sb_auto') : sb
   return (
-    <Scard title={t('gui.set.prm.guard')}>
-      <KvList
-        rows={[
-          [t('gui.set.prm.workspace'), onoff(V(raw, 'tools.restrictToWorkspace', false) === true)],
-          [t('gui.set.prm.sandbox'), sbName, sb === 'none' ? 'unset' : 'ok'],
-        ]}
-      />
-      <SwiRow
-        label={t('gui.set.prm.destructive')}
-        hint={t('gui.set.prm.destructive_w')}
-        k="tools.exec.allowDestructiveCommands"
-        on={V(raw, 'tools.exec.allowDestructiveCommands', false) === true}
-        confirm={(commit) =>
-          sh.confirmAsk(
-            t('gui.set.prm.destructive_confirm'),
-            t('gui.set.prm.destructive_body'),
-            t('gui.set.prm.destructive_yes'),
-            commit,
-          )
-        }
-      />
-      <Srmk configPath={s.snap.configPath} />
-    </Scard>
+    <>
+      <Scard title={t('gui.set.prm.mode')} desc={t('gui.set.prm.mode_note')}>
+        <WPick
+          k="permissions.mode"
+          opts={[
+            ['ask', t('gui.perm.ask'), t('gui.perm.ask_h')],
+            ['smart', t('gui.perm.smart'), t('gui.perm.smart_h')],
+            ['full', t('gui.perm.full'), t('gui.perm.full_h')],
+          ]}
+          val={String(V(raw, 'permissions.mode', 'ask'))}
+        />
+      </Scard>
+      <Scard title={t('gui.set.prm.guard')}>
+        <KvList
+          rows={[
+            [t('gui.set.prm.workspace'), onoff(V(raw, 'tools.restrictToWorkspace', false) === true)],
+            [t('gui.set.prm.sandbox'), sbName, sb === 'none' ? 'unset' : 'ok'],
+          ]}
+        />
+        <Srmk configPath={s.snap.configPath} />
+      </Scard>
+    </>
   )
 }
 

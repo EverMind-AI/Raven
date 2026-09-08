@@ -90,6 +90,16 @@ def parse_fake_now(fake_now: str | None):
     return lambda: frozen
 
 
+def print_deprecated_allow_destructive_notice(config: Config) -> None:
+    """Warn when a config still sets the retired tools.exec.allowDestructiveCommands."""
+    if config.tools.exec.should_warn_deprecated_allow_destructive:
+        console.print(
+            "[yellow]Hint:[/yellow] `tools.exec.allowDestructiveCommands` is ignored: deletes "
+            "answer to the permission tiers (`permissions.mode`, `permissions.tools`), and "
+            "a recursive delete of the root or home tree is refused in every mode. Remove the key."
+        )
+
+
 def print_deprecated_memory_window_notice(config: Config) -> None:
     """Warn when running with old memoryWindow-only config."""
     if config.agents.defaults.should_warn_deprecated_memory_window:

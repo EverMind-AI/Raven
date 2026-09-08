@@ -1,11 +1,11 @@
 import { render } from 'ink-testing-library'
 import React from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Msg } from '../types.js'
 
 import { createGatewayEventHandler } from '../app/createGatewayEventHandler.js'
-import { getOverlayState, resetOverlayState } from '../app/overlayStore.js'
+import { getOverlayState, patchOverlayState, resetFlowOverlays, resetOverlayState } from '../app/overlayStore.js'
 import { resetTurnState } from '../app/turnStore.js'
 import { resetUiState } from '../app/uiStore.js'
 import { ApprovalPrompt } from '../components/prompts.js'
@@ -123,17 +123,49 @@ describe('approval round-trip', () => {
     expect(getOverlayState().approval).toBeNull()
   })
 
-  it('offers only allow once and deny', () => {
-    expect(APPROVAL_OPTIONS).toEqual([
-      { choice: 'allow', label: 'Allow once' },
-      { choice: 'deny', label: 'Deny' }
-    ])
+  it('offers allow once and the two refusals, never a persistent grant', () => {
+    expect(APPROVAL_OPTIONS.map(o => o.choice)).toEqual(['allow', 'deny', 'deny_stop'])
+  })
+
+  it('names its choices through i18n, so the keys follow the locale', async () => {
+    // The labels used to be English literals captured in the module, which left
+    // the one prompt that authorizes a command speaking a language the rest of
+    // the TUI had already switched away from.
+    const { setLocale, t } = await import('../i18n/index.js')
+    const { UI_TEXT } = await import('../i18n/messages.generated.js')
+    const before = APPROVAL_OPTIONS.map(o => t(o.key, o.fallback))
+    expect(before).toEqual(['Allow once', 'Deny (agent continues)', 'Deny and stop the turn'])
+
+    // Compared against the catalogue rather than spelled out: the zh text is
+    // the catalogue's to own, and this file is not a zh fixture zone.
+    setLocale('zh')
+    try {
+      const zh = APPROVAL_OPTIONS.map(o => t(o.key, o.fallback))
+      expect(zh).toEqual(APPROVAL_OPTIONS.map(o => UI_TEXT.zh[o.key]))
+      expect(zh.every(label => label && !before.includes(label))).toBe(true)
+    } finally {
+      setLocale('en')
+    }
   })
 
   it('builds a response bound to the approval and session', () => {
     expect(buildApprovalRespond('approval-a', 'session-a', 'deny')).toEqual({
       approval_id: 'approval-a',
       choice: 'deny',
+      session_id: 'session-a'
+    })
+  })
+
+  it('carries feedback only when a sentence was typed', () => {
+    expect(buildApprovalRespond('approval-a', 'session-a', 'deny', 'use the draft dir')).toEqual({
+      approval_id: 'approval-a',
+      choice: 'deny',
+      feedback: 'use the draft dir',
+      session_id: 'session-a'
+    })
+    expect(buildApprovalRespond('approval-a', 'session-a', 'deny_stop')).toEqual({
+      approval_id: 'approval-a',
+      choice: 'deny_stop',
       session_id: 'session-a'
     })
   })
@@ -170,10 +202,85 @@ describe('approval round-trip', () => {
 
     try {
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(onChoice).toHaveBeenCalledWith('deny')
+      expect(onChoice).toHaveBeenCalledWith('deny', '', 'approval-a')
     } finally {
       rendered.unmount()
       vi.useRealTimers()
     }
+  })
+})
+
+describe('an approval outlives the turn that opened it', () => {
+  beforeEach(() => {
+    resetOverlayState()
+  })
+
+  it('survives the end-of-turn overlay reset, because a sub-agent asks after its parent turn ends', () => {
+    // A spawned sub-agent keeps working once the parent turn has ended, and the
+    // command it asks about is still waiting on an answer. Wiping the prompt
+    // here took it off the screen with nobody having answered, and the call
+    // died at the runtime's hard timeout -- the sub-agent reporting that its
+    // write "was denied or expired" with no prompt the user ever saw.
+    patchOverlayState({
+      approval: {
+        approvalId: 'a-1',
+        command: 'write_file {"path": "notes.md"}',
+        conversationId: 'tui:1',
+        description: 'Approve this action',
+        expiresAt: Date.now() + 30_000
+      },
+      clarify: null
+    })
+
+    resetFlowOverlays()
+
+    expect(getOverlayState().approval?.approvalId).toBe('a-1')
+  })
+
+  it('still clears what the end of a turn owns', () => {
+    patchOverlayState({ sudo: { requestId: 's-1' } })
+
+    resetFlowOverlays()
+
+    expect(getOverlayState().sudo).toBeNull()
+  })
+})
+
+describe('an answer names the request that produced it', () => {
+  beforeEach(() => {
+    resetOverlayState()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('carries the rendered prompt\'s id, so a queued expiry cannot answer its replacement', () => {
+    // The countdown is armed against the request on screen. If a second request
+    // takes the slot before that callback runs -- a sub-agent asking a second
+    // after the spawn that created it was allowed -- an answer with no id would
+    // refuse the new one, which nobody was shown.
+    const answered: Array<[string, string | undefined]> = []
+    const req = {
+      approvalId: 'a-1',
+      command: 'rm notes.md',
+      conversationId: 'tui:1',
+      description: 'Approve this action',
+      expiresAt: Date.now() + 30_000
+    }
+    const app = render(
+      React.createElement(ApprovalPrompt, {
+        cols: 80,
+        onChoice: (choice: string, _feedback?: string, approvalId?: string) => answered.push([choice, approvalId]),
+        req,
+        t: DEFAULT_THEME
+      })
+    )
+
+    vi.advanceTimersByTime(31_000)
+    app.unmount()
+
+    expect(answered).toEqual([['deny', 'a-1']])
   })
 })

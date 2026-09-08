@@ -31,12 +31,6 @@ async def test_bool_key_writes_through(cfg):
     assert _read(cfg)["channels"]["sendProgress"] is True
 
 
-async def test_destructive_delete_mode_writes_through(cfg):
-    r = await rpc_console.settings_set({"key": "tools.exec.allowDestructiveCommands", "value": True})
-    assert r["applied"] is True
-    assert _read(cfg)["tools"]["exec"]["allowDestructiveCommands"] is True
-
-
 async def test_bool_key_rejects_non_bool(cfg):
     with pytest.raises(ConfigValidationError):
         await rpc_console.settings_set({"key": "channels.sendProgress", "value": "yes"})
@@ -275,3 +269,11 @@ async def test_previous_value_returned(cfg):
     await rpc_console.settings_set({"key": "channels.sendProgress", "value": False})
     r = await rpc_console.settings_set({"key": "channels.sendProgress", "value": True})
     assert r["previous"] is False
+
+
+async def test_default_permission_mode_is_a_settings_key(cfg):
+    r = await rpc_console.settings_set({"key": "permissions.mode", "value": "smart"})
+    assert r["applied"] is True
+    assert _read(cfg)["permissions"]["mode"] == "smart"
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": "permissions.mode", "value": "yolo"})

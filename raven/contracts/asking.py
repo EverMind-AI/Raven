@@ -7,8 +7,9 @@ them (the RPC surface, the gateway's channels, the ACP host) and are injected
 at assembly; nothing here imports a machine.
 
 The host side of the same seam is here too: what a tool exposes for an entrance
-to lend it a capability for one turn (``SupportsApprovalTurn``,
-``SupportsDirectAsk``). An entrance probes for that shape, never for the class
+to lend it a capability for one turn (``SupportsDirectAsk``; approval binds the
+turn-scoped permission context instead of any tool). An entrance probes for
+that shape, never for the class
 -- a shelf may seat another Tool implementation, and the entrance must not care.
 """
 
@@ -16,9 +17,18 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
+from raven.contracts.permissions import ApprovalOutcome
+
 
 class ApprovalResponder(Protocol):
-    """Turn-scoped capability that can approve one exact shell command."""
+    """Turn-scoped capability that can approve one exact action.
+
+    ``command`` is the action as the human should read it -- a shell command
+    verbatim, any other tool as a short action line. The outcome distinguishes
+    a refusal that continues the turn from the one click that ends it
+    (:class:`~raven.contracts.permissions.ApprovalChoice`); every transport
+    failure and timeout must come back as a deny, never as an exception.
+    """
 
     async def await_approval(
         self,
@@ -28,7 +38,7 @@ class ApprovalResponder(Protocol):
         tool_call_id: str,
         command: str,
         description: str,
-    ) -> bool: ...
+    ) -> ApprovalOutcome: ...
 
 
 class Asker(Protocol):
@@ -71,25 +81,6 @@ class QuestionResponder(Protocol):
 
 
 @runtime_checkable
-class SupportsApprovalTurn(Protocol):
-    """A tool that takes a per-turn approval binding.
-
-    The seam an entrance lends its ``ApprovalResponder`` through: bound at the
-    start of every turn, ``None`` revoking it for an origin with nobody to ask.
-    Runtime-checkable because the entrance probes whatever sits at ``exec`` for
-    this shape and binds only what has it.
-    """
-
-    def start_approval_turn(
-        self,
-        responder: ApprovalResponder | None,
-        *,
-        conversation_id: str,
-        turn_id: str,
-    ) -> None: ...
-
-
-@runtime_checkable
 class SupportsDirectAsk(Protocol):
     """A tool that can put one host-side question to the user outside a model
     tool call.
@@ -114,5 +105,5 @@ class SupportsDirectAsk(Protocol):
     ) -> str | None: ...
 
 
-__all__ = ["ApprovalResponder", "Asker", "QuestionResponder", "SupportsApprovalTurn", "SupportsDirectAsk"]
+__all__ = ["ApprovalResponder", "Asker", "QuestionResponder", "SupportsDirectAsk"]
 __tier__ = "contract"

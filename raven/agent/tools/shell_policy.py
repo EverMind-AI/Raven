@@ -462,13 +462,81 @@ def _is_recursive_delete(argv: list[str]) -> bool:
     return False
 
 
-def _matches_recursive_delete(command: str, *, _depth: int = 0) -> bool:
-    """Recognize recursive deletion, the one delete no approval can rescue.
+_CATASTROPHIC_TARGETS = frozenset({"/", "~", "$HOME", "${HOME}"})
 
-    Reach has to match `_matches_delete_command` exactly. Anything this misses
-    that the other catches is not merely unclassified: it is downgraded from a
-    refusal into a prompt, and the reader is asked to approve the one command
-    the policy exists to refuse.
+
+def _is_catastrophic_target(target: str) -> bool:
+    """Whether a delete target names the filesystem root or the home tree.
+
+    Read lexically, before any expansion: ``/*`` is one token here and means
+    "everything under /" to the shell that will run it. Trailing slashes and a
+    trailing glob star are spelling, not scope.
+    """
+
+    while target.endswith("/*"):
+        target = target[:-2] or "/"
+    while len(target) > 1 and target.endswith("/"):
+        target = target[:-1]
+    return target in _CATASTROPHIC_TARGETS
+
+
+def _rm_targets(argv: list[str]) -> list[str]:
+    targets: list[str] = []
+    seen_dashdash = False
+    for arg in argv[1:]:
+        if seen_dashdash:
+            targets.append(arg)
+            continue
+        if arg == "--":
+            seen_dashdash = True
+            continue
+        if arg.startswith("-"):
+            continue
+        targets.append(arg)
+    return targets
+
+
+def _argv_is_catastrophic_rm(argv: list[str]) -> bool:
+    """Whether one argv is a recursive ``rm`` aimed at the root or home tree."""
+    argv = _unwrap_command_wrappers(argv)
+    if not argv:
+        return False
+    return (
+        PurePath(argv[0]).name == "rm"
+        and _is_recursive_delete(argv)
+        and any(_is_catastrophic_target(t) for t in _rm_targets(argv))
+    )
+
+
+def _argv_walks_a_delete(argv: list[str], *, _depth: int = 0) -> bool:
+    """Whether a carried command deletes whatever it is handed.
+
+    Directly (``rm``/``unlink``, ``find -delete``) or through a shell it
+    spawns: ``find / -exec sh -c 'rm -rf "$1"' sh {} +`` walks a delete just
+    as ``find / -exec rm {} +`` does, one wrapper deeper.
+    """
+    argv = _unwrap_command_wrappers(argv)
+    if not argv:
+        return False
+    name = PurePath(argv[0]).name
+    if name in {"rm", "unlink"}:
+        return True
+    if name == "find" and "-delete" in argv[1:]:
+        return True
+    if _depth >= _MAX_EMBEDDED_SHELL_DEPTH:
+        return False
+    for inner in (_embedded_shell_command(argv), _runner_inner_command(argv)):
+        if inner is not None and any(_argv_walks_a_delete(seg, _depth=_depth + 1) for seg in _command_segments(inner)):
+            return True
+    return False
+
+
+def _matches_catastrophic_delete(command: str, *, _depth: int = 0) -> bool:
+    """Recognize a recursive delete aimed at the root or the home tree.
+
+    The one delete no mode, rule or click can rescue: everything else the
+    machine holds lives under one of these two paths. An ordinary recursive
+    delete (``rm -rf build/``) is daily work and answers to the tiers instead.
     """
 
     for segment in _command_segments(command):
@@ -476,31 +544,146 @@ def _matches_recursive_delete(command: str, *, _depth: int = 0) -> bool:
         if not segment:
             continue
         executable = PurePath(segment[0]).name
-        if executable == "rm" and _is_recursive_delete(segment):
+        if _argv_is_catastrophic_rm(segment):
             return True
         if executable == "find":
-            for index, token in enumerate(segment[1:], start=1):
-                if token not in {"-exec", "-execdir"}:
-                    continue
-                executed = _unwrap_command_wrappers(segment[index + 1 :])
-                if not executed:
-                    continue
-                if PurePath(executed[0]).name == "rm" and _is_recursive_delete(executed):
+            # Two ways a find deletes catastrophically. One: its SEARCH PATH is
+            # the root or home tree and it deletes anything it walks there --
+            # ``find / -delete`` and ``find / -exec rm {} +`` both erase
+            # everything under ``/``, the carried rm's own target being ``{}``.
+            # Two: a benign search path but the command carried after
+            # -exec/-execdir names a catastrophic target itself
+            # (``find . -exec rm -rf / {} +``) -- read that as its own argv.
+            #
+            # Roots live between find's leading options and the first
+            # expression token: ``/`` in ``find . -path / -delete`` is a
+            # predicate's argument, not a place the walk starts.
+            tokens = segment[1:]
+            start = 0
+            while start < len(tokens) and (
+                tokens[start] in {"-H", "-L", "-P"} or tokens[start].startswith(("-D", "-O"))
+            ):
+                start += 1
+            paths = []
+            while start < len(tokens) and not tokens[start].startswith("-") and tokens[start] not in {"(", "!"}:
+                paths.append(tokens[start])
+                start += 1
+            exec_indices = [i for i, t in enumerate(segment[1:], start=1) if t in {"-exec", "-execdir"}]
+            carried_argvs = [_unwrap_command_wrappers(segment[i + 1 :]) for i in exec_indices]
+            walks_a_delete = "-delete" in segment[1:] or any(
+                _argv_walks_a_delete(argv, _depth=_depth) for argv in carried_argvs
+            )
+            if walks_a_delete and any(_is_catastrophic_target(t) for t in paths):
+                return True
+            for carried in carried_argvs:
+                if _argv_is_catastrophic_rm(carried):
                     return True
-                embedded_exec = _embedded_shell_command(executed)
-                if (
-                    embedded_exec is not None
-                    and _depth < _MAX_EMBEDDED_SHELL_DEPTH
-                    and _matches_recursive_delete(embedded_exec, _depth=_depth + 1)
-                ):
-                    return True
+                for inner in (_embedded_shell_command(carried), _runner_inner_command(carried)):
+                    if (
+                        inner is not None
+                        and _depth < _MAX_EMBEDDED_SHELL_DEPTH
+                        and _matches_catastrophic_delete(inner, _depth=_depth + 1)
+                    ):
+                        return True
         for nested in (_embedded_shell_command(segment), _runner_inner_command(segment)):
             if (
                 nested is not None
                 and _depth < _MAX_EMBEDDED_SHELL_DEPTH
-                and _matches_recursive_delete(nested, _depth=_depth + 1)
+                and _matches_catastrophic_delete(nested, _depth=_depth + 1)
             ):
                 return True
+    return False
+
+
+_WINDOWS_CATASTROPHIC_DELETE = re.compile(
+    r"""(?ix)
+    (?:^|[;&|(\n])\s*                 # a real command boundary; leading blanks are fine
+    (?:rd|rmdir|del|erase)\b          # a windows delete
+    (?=[^;&|]*\s/s\b)                 # recursive only: an /s flag somewhere in it
+    [^;&|]*?\s                        # up to its target
+    (?:[a-z]:[\\/]?\*?|%userprofile%|%homepath%|%homedrive%|%systemroot%|%windir%|%home%)
+    [\\/]?\*?                        # trailing slash or glob is spelling
+    (?=\s|$|[;&|])                    # and NOTHING more: a named subdir is ordinary cleanup
+    """,
+)
+
+
+_QUOTED_STRUCTURE = frozenset(";&|(\n")
+
+
+def _mask_quoted_text(command: str) -> str:
+    """The command with quoted STRUCTURE blanked out, for raw-text pattern checks.
+
+    A quoted region is argument text, never a command position -- an ampersand
+    inside quotes separates nothing, so the characters the pattern reads as
+    boundaries are blanked there, along with the quote marks themselves. The
+    rest of the quoted text stays: quoting a path is ordinary cmd.exe syntax
+    (``rmdir /s "%USERPROFILE%"``), and blanking operands too let exactly that
+    delete through. A quoted delete VERB needs no blanking -- with every quoted
+    separator gone it can never sit at a command boundary. Masking with spaces
+    rather than removing keeps every character where it was, so boundary logic
+    reads the same shape the shell does; backslashes outside quotes pass
+    through verbatim, because Windows paths spell with them.
+    """
+
+    out: list[str] = []
+    quote = ""
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote:
+            if char == quote:
+                quote = ""
+                out.append(" ")
+            elif char == "\\" and quote == '"' and index + 1 < len(command) and command[index + 1] in {'"', "\\"}:
+                # Only these two are escapes inside double quotes here; any
+                # other backslash is a literal path character (C:\Users).
+                out.append("  ")
+                index += 1
+            else:
+                out.append(" " if char in _QUOTED_STRUCTURE else char)
+        elif char in {"'", '"'}:
+            quote = char
+            out.append(" ")
+        elif char == "\\" and index + 1 < len(command):
+            out.append(command[index : index + 2])
+            index += 1
+        else:
+            out.append(char)
+        index += 1
+    return "".join(out)
+
+
+_WINDOWS_CMD_OPTION = re.compile(r"/\w+")
+
+
+def _matches_windows_catastrophic_delete(command: str, *, _depth: int = 0) -> bool:
+    """Recognize a recursive Windows delete of a drive root or the user profile.
+
+    The Windows parallel to ``rm -rf /``: ``rmdir /s C:\\`` and ``del /s %USERPROFILE%``
+    recurse over everything the machine holds. Ordinary Windows cleanup --
+    ``del /f scratch.txt``, ``rmdir /s build`` -- carries no root target and
+    answers to the tiers, exactly as ``rm -rf build`` does. Matched by regex
+    rather than tokens because Windows flags spell with ``/``, which the posix
+    lexer the rest of this module uses would read as paths -- but matched over
+    the quote-masked text, so quoted argument text cannot supply a separator
+    or a delete word. A ``cmd /c`` payload (quoted or not) is walked
+    structurally instead, the way ``sh -c`` payloads are.
+    """
+
+    if _WINDOWS_CATASTROPHIC_DELETE.search(_mask_quoted_text(command)):
+        return True
+    if _depth >= _MAX_EMBEDDED_SHELL_DEPTH:
+        return False
+    for segment in _command_segments(command):
+        segment = _unwrap_command_wrappers(segment)
+        if not segment or PurePath(segment[0]).name.lower() not in {"cmd", "cmd.exe"}:
+            continue
+        tokens = segment[1:]
+        while tokens and _WINDOWS_CMD_OPTION.fullmatch(tokens[0]):
+            tokens = tokens[1:]
+        if tokens and _matches_windows_catastrophic_delete(" ".join(tokens), _depth=_depth + 1):
+            return True
     return False
 
 
@@ -936,6 +1119,10 @@ def surface_approval_families() -> tuple[tuple[str, ApprovalMatcher], ...]:
     return _SURFACE_FAMILIES.get()
 
 
+#: The deletion family, for a surface that wants deletes to force a prompt
+#: (the ACP editor does; the terminal answers to the tiers instead).
+DELETE_MATCHERS: tuple[tuple[str, ApprovalMatcher], ...] = (("delete_command", _matches_delete_command),)
+
 EXTERNAL_EFFECT_MATCHERS: tuple[tuple[str, ApprovalMatcher], ...] = (
     ("publish_command", _matches_publish_command),
     ("install_command", _matches_install_command),
@@ -967,21 +1154,21 @@ sandbox's job, not the classifier's.
 class ShellCommandPolicy:
     """Apply hard-deny and approval rules in their required precedence order."""
 
-    def __init__(self, *, deny_patterns: list[str], allow_destructive_commands: bool = False) -> None:
+    def __init__(self, *, deny_patterns: list[str]) -> None:
         # Compile once because every direct shell execution crosses this policy.
         self._deny_patterns = tuple(re.compile(pattern, re.IGNORECASE) for pattern in deny_patterns)
-        self._allow_destructive_commands = allow_destructive_commands
-        # Deletion is built in and marked as contained: a sandbox really does hold
-        # it, so a sandboxed turn does not have to ask about it.
-        self._approval_matchers: list[tuple[str, ApprovalMatcher, bool]] = [
-            ("delete_command", _matches_delete_command, False)
-        ]
+        # No family asks by default: deletion answers to the permission tiers
+        # like any other mutation (an ordinary rm is daily work), and only the
+        # catastrophic form above is refused outright. A surface that wants a
+        # family to name its prompt declares it -- the ACP editor declares
+        # deletion and the external-effect families below.
+        self._approval_matchers: list[tuple[str, ApprovalMatcher]] = []
         # Whatever this process's surface asks about, picked up at construction so
         # a tool built later -- a sub-agent's, most of all -- carries the same
         # families as the one the surface registered on. Without this a delegated
         # ``git push`` runs unannounced while the main agent's asks.
         for name, matcher in surface_approval_families():
-            self._approval_matchers.append((name, matcher, True))
+            self._approval_matchers.append((name, matcher))
 
     def set_deny_patterns(self, deny_patterns: list[str]) -> None:
         """Replace the hard-deny set, leaving the approval families alone.
@@ -994,23 +1181,12 @@ class ShellCommandPolicy:
         """
         self._deny_patterns = tuple(re.compile(pattern, re.IGNORECASE) for pattern in deny_patterns)
 
-    def set_allow_destructive_commands(self, allowed: bool) -> None:
-        self._allow_destructive_commands = bool(allowed)
+    def register_approval_matcher(self, name: str, matcher: ApprovalMatcher) -> None:
+        """Extend approval classification with a named command-family matcher."""
 
-    def register_approval_matcher(self, name: str, matcher: ApprovalMatcher, *, escapes_sandbox: bool = True) -> None:
-        """Extend approval classification with a named command-family matcher.
+        self._approval_matchers.append((name, matcher))
 
-        ``escapes_sandbox`` says whether a sandbox contains this family's effect.
-        It is True by default because the families a surface registers are the
-        ones whose effects leave the workspace -- pushing, installing, reaching
-        another machine -- and a microVM does not contain a network call. A
-        family a sandbox really does hold (deletion) sets it False, which is what
-        lets a sandboxed turn skip the prompt it does not need.
-        """
-
-        self._approval_matchers.append((name, matcher, escapes_sandbox))
-
-    def approval_reason(self, command: str, *, sandboxed: bool = False) -> str | None:
+    def approval_reason(self, command: str) -> str | None:
         """The name of the family that makes this command need approval.
 
         Separate from :meth:`evaluate` because the caller needs both answers and
@@ -1023,24 +1199,14 @@ class ShellCommandPolicy:
         Returns ``None`` when nothing requires approval, including for a
         hard-denied command: there is no prompt to explain.
         """
-        outcome = self.classify(command, sandboxed=sandboxed)
+        outcome = self.classify(command)
         return outcome.reason_code if outcome.decision is CommandDecision.REQUIRE_APPROVAL else None
 
-    def evaluate(self, command: str, *, sandboxed: bool = False) -> CommandDecision:
-        """Classify a command, reducing authority when a matcher cannot decide.
+    def evaluate(self, command: str) -> CommandDecision:
+        """Classify a command, reducing authority when a matcher cannot decide."""
+        return self.classify(command).decision
 
-        ``sandboxed`` drops the checks a sandbox makes unnecessary and keeps the
-        ones it does not. A microVM contains what a command does to the
-        filesystem, so the deny list and the contained families are skipped; it
-        does not contain a push, an install or a connection to another machine,
-        so those families still ask. Skipping them all -- which is what a plain
-        short-circuit on the sandbox flag does -- makes the safer configuration
-        prompt LESS than the unsandboxed one, for exactly the operations the
-        sandbox has no say over.
-        """
-        return self.classify(command, sandboxed=sandboxed).decision
-
-    def classify(self, command: str, *, sandboxed: bool = False) -> PolicyOutcome:
+    def classify(self, command: str) -> PolicyOutcome:
         """Decide about a command and say which rule decided.
 
         The one place the rules run. :meth:`evaluate` and
@@ -1050,14 +1216,10 @@ class ShellCommandPolicy:
         tripped the short-circuit in ``approval_reason`` and erased the family
         the prompt was going to name.
 
-        ``sandboxed`` drops the checks a sandbox makes unnecessary and keeps the
-        ones it does not. A microVM contains what a command does to the
-        filesystem, so the deny list and the contained families are skipped; it
-        does not contain a push, an install or a connection to another machine,
-        so those families still ask. Skipping them all -- which is what a plain
-        short-circuit on the sandbox flag does -- makes the safer configuration
-        prompt LESS than the unsandboxed one, for exactly the operations the
-        sandbox has no say over.
+        Sandboxed execution gets no relaxation here: the Boxlite VM mounts the
+        real workspace read-write, so a filesystem rule the sandbox supposedly
+        contains still reaches host data through that mount. An executor that
+        can prove it has no writable host mounts may earn a conditional back.
         """
 
         # Hard deny runs first so an approval matcher can never convert an
@@ -1067,19 +1229,16 @@ class ShellCommandPolicy:
         # registered: a comment that decides one of them and not the others is
         # the same divergence this method exists to close.
         executable = executable_text(command)
-        if not sandboxed and any(pattern.search(executable) for pattern in self._deny_patterns):
+        if any(pattern.search(executable) for pattern in self._deny_patterns):
             return PolicyOutcome(CommandDecision.HARD_DENY, "deny_pattern")
         try:
-            if not sandboxed:
-                if not self._allow_destructive_commands and _matches_recursive_delete(executable):
-                    return PolicyOutcome(CommandDecision.HARD_DENY, "recursive_delete")
-                if _matches_system_power_command(executable):
-                    return PolicyOutcome(CommandDecision.HARD_DENY, "system_power")
-            for name, matcher, escapes in self._approval_matchers:
-                if self._allow_destructive_commands and name == "delete_command":
-                    continue
-                if sandboxed and not escapes:
-                    continue
+            if _matches_catastrophic_delete(executable):
+                return PolicyOutcome(CommandDecision.HARD_DENY, "catastrophic_delete")
+            if _matches_windows_catastrophic_delete(executable):
+                return PolicyOutcome(CommandDecision.HARD_DENY, "catastrophic_delete")
+            if _matches_system_power_command(executable):
+                return PolicyOutcome(CommandDecision.HARD_DENY, "system_power")
+            for name, matcher in self._approval_matchers:
                 if matcher(executable):
                     return PolicyOutcome(CommandDecision.REQUIRE_APPROVAL, name)
         except Exception:
@@ -1091,6 +1250,7 @@ class ShellCommandPolicy:
 
 
 __all__ = [
+    "DELETE_MATCHERS",
     "EXTERNAL_EFFECT_MATCHERS",
     "ApprovalMatcher",
     "CommandDecision",

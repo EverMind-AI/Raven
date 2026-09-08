@@ -8,14 +8,16 @@
  * group of three.
  *
  * Three tiers, ordered from the strictest to the one with no brakes, because
- * that is the order a reader should meet them in. Front end only for now:
- * nothing in the engine reads the choice yet, and the panel says so rather than
- * letting the row imply a guarantee it cannot keep. The default is the
- * behaviour Raven actually has today -- full access -- and it is the one tier
- * drawn in the warning colour, since that is a fact about it, not decoration.
+ * that is the order a reader should meet them in. The engine's permission gate
+ * reads the choice live from config, so a pick here holds from the next tool
+ * call. Full access is the one tier drawn in the warning colour, since that is
+ * a fact about it, not decoration.
  *
- * So this module is also the whole of where the choice lives: a value in
- * memory, mirrored to localStorage so it survives a reload.
+ * The config file is the choice's home; localStorage only remembers the last
+ * known value so the chip paints right before the live layer has loaded the
+ * config. The live layer pushes the loaded value in through setFromConfig and
+ * persists a pick through the late-bound window.persistPermMode -- late-bound
+ * so the demo layer, which has no engine, simply has nobody listening.
  */
 
 import { t } from './bridge'
@@ -64,7 +66,26 @@ function read(): string {
   } catch {
     stored = ''
   }
-  return TIERS.some((p) => p.id === stored) ? stored : 'full'
+  return TIERS.some((p) => p.id === stored) ? stored : 'ask'
+}
+
+function commit(value: string): void {
+  mode = value
+  /* Private mode throws on write. Losing the paint cache is the whole cost,
+     and it is not worth taking the commit down with it. */
+  try {
+    localStorage.setItem(KEY, mode)
+  } catch {
+    /* nothing to do about it */
+  }
+  draw()
+}
+
+/* The mode the engine actually holds, pushed in by the live layer once the
+   config has loaded (and again whenever another surface changes it). */
+export function setFromConfig(value: string): void {
+  if (!TIERS.some((p) => p.id === value) || value === mode) return
+  commit(value)
 }
 
 export const current = (): string => mode
@@ -151,16 +172,23 @@ function row(p: Tier): HTMLButtonElement {
   r.append(g, txt)
   if (p.id === mode) r.appendChild(tick())
   r.onclick = () => {
-    mode = p.id
-    /* Private mode throws on write. Losing the preference is the whole cost,
-       and it is not worth taking the click down with it. */
-    try {
-      localStorage.setItem(KEY, mode)
-    } catch {
-      /* nothing to do about it */
-    }
-    draw()
     close()
+    /* Late-bound: the live layer persists to config (the gate reads it live);
+       the demo layer publishes nothing and the pick commits locally. The chip
+       commits only on acknowledgement -- painting the new mode while the write
+       failed would show `ask` over a gate still running `full`, a false
+       security state, so a rejected write leaves the chip on the mode the
+       engine actually holds. */
+    const persist = (window as unknown as { persistPermMode?: (m: string) => Promise<boolean> | boolean })
+      .persistPermMode
+    if (!persist) {
+      commit(p.id)
+      return
+    }
+    Promise.resolve(persist(p.id)).then(
+      (ok) => { if (ok) commit(p.id) },
+      () => {},
+    )
   }
   return r
 }

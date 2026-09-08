@@ -313,6 +313,13 @@ const dispatch = (
       }
       return
     }
+    case 'permission.review': {
+      // The smart-mode reviewer runs inside the tool dispatch; without this the
+      // running tool row reads as an unexplained pause.
+      const phase = (event.payload as { phase?: string } | undefined)?.phase
+      patchUiState({ status: phase === 'started' ? t('gui.perm.reviewing', 'AI is reviewing this action...') : 'running…' })
+      return
+    }
     case 'notice': {
       // Runtime prose, not the model's: never merged into the streamed answer.
       // Handed to the turn rather than appended here, because it arrives mid-turn

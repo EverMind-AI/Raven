@@ -432,6 +432,9 @@ source_modules = [
     # L3 shelf members that had no recorded layer.
     "raven.config", "raven.utils", "raven.i18n", "raven.mcp", "raven.playbook",
     "raven.knowledge", "raven.skill_hub", "raven.trajectory", "raven.eval_engine",
+    # The permission gate: an L3 shelf the registry consults before dispatch;
+    # entrances bind its turn context, it imports no surface itself.
+    "raven.permissions",
     # proactive_engine is an engine (schedulers + sentinel), consumed by the
     # loop, the assembly root and the entrances, and imports no surface itself;
     # its earlier surface seat was a misreading of "originates turns" as
