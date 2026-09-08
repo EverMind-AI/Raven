@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 
 import pytest
+from rich.console import Console
 
 from raven.cli import trajectory_browse as tbrowse
+from raven.trajectory import conversation as tconversation
 from raven.trajectory import store as tstore
 from raven.trajectory import verdict as tverdict
 
@@ -1345,25 +1348,239 @@ def test_turn_previews_sanitize_types_and_length(state, workspace):
     assert len(row.preview) == 32 and row.preview.endswith("…")
 
 
-def test_preview_screen_placeholder_and_escape(monkeypatch):
-    from io import StringIO
+def _rec(label="Tool output", kind="tool", text="", **kw):
+    base = dict(
+        trace_id="t1",
+        span_id="s1",
+        turn_span_id="turn",
+        event_time="2026-08-20T10:00:00+00:00",
+        seq=0,
+        degraded=None,
+        error=None,
+        meta=None,
+    )
+    base.update(kw)
+    return tconversation.ConversationRecord(label=label, kind=kind, text=text, **base)
 
-    from rich.console import Console
+
+def _plain(lines):
+    return [line.plain for line in lines]
+
+
+def test_conversation_lines_alignment_and_hanging_indent():
+    records = [
+        _rec("LLM input", "llm", "question", span_id="a", seq=0),
+        _rec("Tool output", "tool", "line one\nline two", span_id="b", seq=1),
+    ]
+    lines = _plain(tbrowse._conversation_lines(records, 80))
+    label_col = tbrowse._cell_width("Tool output:") + 1
+    assert lines[0].startswith("LLM input:")
+    assert lines[0][label_col:] == "question"
+    assert lines[1][label_col:] == "line one"
+    assert lines[2] == " " * label_col + "line two"
+
+
+def test_conversation_lines_cjk_wrap_keeps_width():
+    records = [_rec("Tool output", "tool", "宽" * 10)]
+    width = 27
+    lines = tbrowse._conversation_lines(records, width)
+    assert all(tbrowse._cell_width(line.plain) <= width for line in lines)
+    joined = "".join(line.plain for line in lines).replace(" ", "")
+    assert joined == "Tooloutput:" + "宽" * 10
+
+
+def test_conversation_lines_kind_styles():
+    records = [
+        _rec("User input", "user", "u", span_id="a", seq=0),
+        _rec("LLM output", "llm", "l", span_id="b", seq=1),
+        _rec("Tool input", "tool", "t", span_id="c", seq=2),
+        _rec("Skill read", "skill", "s", span_id="d", seq=3),
+        _rec("Memory recall", "memory", "m", span_id="e", seq=4),
+        _rec("LLM thinking", "llm", "think", span_id="f", seq=5),
+    ]
+    lines = tbrowse._conversation_lines(records, 100)
+    styles = [str(line.spans[0].style) for line in lines]
+    assert styles == ["green", "cyan", "yellow", "magenta", "dim", "dim cyan"]
+
+
+def test_conversation_lines_sanitize_all_fields():
+    record = _rec(
+        "Bad\x1b[31m\nlabel",
+        "tool",
+        "x[red]y\x1b[31mz\r\tw\nnext",
+        degraded="deg\x1b[7m\nraded",
+        error="err\x1b[0m\nor",
+        meta="me\x1b[1m\nta",
+    )
+    lines = tbrowse._conversation_lines([record], 200)
+    plains = _plain(lines)
+    assert all("\x1b" not in plain and "\r" not in plain and "\t" not in plain for plain in plains)
+    assert "x[red]y" in plains[0]
+    assert any(plain.strip() == "next" for plain in plains)
+    label_line = plains[0]
+    assert label_line.startswith("Bad [31m label:")
+    notes = [plain.strip() for plain in plains[-3:]]
+    assert notes[0].startswith("(! deg [7m raded")
+    assert notes[1].startswith("[ERROR] err [0m or")
+    assert notes[2] == "(me [1m ta)"
+
+
+def test_conversation_lines_note_styles_and_order():
+    record = _rec("Tool output", "tool", "body", degraded="lost", error="boom", meta="run")
+    lines = tbrowse._conversation_lines([record], 80)
+    tail = [(line.plain.strip(), str(line.style)) for line in lines[1:]]
+    assert tail == [("(! lost)", "dim yellow"), ("[ERROR] boom", "red"), ("(run)", "dim")]
+
+
+def test_conversation_lines_turn_separators_no_regroup():
+    records = [
+        _rec("User input", "user", "a1", trace_id="tA", turn_span_id="turnA", span_id="a1", seq=0),
+        _rec("User input", "user", "b1", trace_id="tB", turn_span_id="turnB", span_id="b1", seq=1),
+        _rec("Agent reply", "user", "a2", trace_id="tA", turn_span_id="turnA", span_id="a2", seq=2),
+    ]
+    plains = _plain(tbrowse._conversation_lines(records, 80))
+    assert plains[0].startswith("── Turn 1 · ")
+    assert plains[2].startswith("── Turn 2 · ")
+    assert plains[4] == "── Turn 1 (continued) ──"
+    assert plains[3].endswith("b1")
+    assert plains[5].endswith("a2")
+
+
+def test_conversation_lines_marker_feeds_separator_only():
+    records = [
+        _rec("Turn", "user", "", trace_id="tA", turn_span_id="turnA", event_time="2026-08-20T10:00:00+00:00", seq=0),
+        _rec("User input", "user", "hello", trace_id="tB", turn_span_id="turnB", span_id="b1", seq=1),
+    ]
+    plains = _plain(tbrowse._conversation_lines(records, 80))
+    assert plains[0] == "── Turn 1 · 2026-08-20 10:00 ──"
+    assert plains[1].startswith("── Turn 2 · ")
+    assert len(plains) == 3
+    single = _plain(tbrowse._conversation_lines(records[1:], 80))
+    assert not any(plain.startswith("── Turn") for plain in single)
+
+
+@pytest.mark.parametrize("width", [10, 6, 5, 3])
+def test_conversation_lines_narrow_stacked_layout_keeps_content(width):
+    body = "abcdef宽字符xyz"
+    records = [_rec("Tool output", "tool", body)]
+    lines = tbrowse._conversation_lines(records, width)
+    effective = max(width, 4)
+    assert all(tbrowse._cell_width(line.plain) <= effective for line in lines)
+    joined = "".join(line.plain.strip() for line in lines)
+    assert joined == "Tooloutput:" + body or joined == "Tool output:" + body
+
+
+def _preview_console(monkeypatch):
+    from io import StringIO
 
     buf = StringIO()
     monkeypatch.setattr(tbrowse, "console", Console(file=buf, force_terminal=True, color_system="truecolor", width=500))
+    return buf
 
-    tbrowse._preview_screen(1, _mk_attempt())
-    tbrowse._preview_screen(
-        2, _mk_attempt(turn_previews=(tbrowse._TurnPreview("s", "i", "t", "x[red]y", "pre[/dim]view"),))
-    )
-    tbrowse._preview_screen(3, _mk_attempt(turn_previews=(tbrowse._TurnPreview("s", "i", "t", "", ""),)))
 
+def test_preview_screen_empty_and_marker_only(state, monkeypatch):
+    buf = _preview_console(monkeypatch)
+    assert tbrowse._preview_screen(1, _mk_attempt(traces=("trace-none",)), state) is True
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    assert tbrowse._preview_screen(2, _mk_attempt(traces=("trace-1",)), state) is True
     out = buf.getvalue()
     assert "(no turns recorded)" in out
+    assert "(no preview recorded)" in out  # a bare Turn marker renders no body line
+
+
+def test_preview_screen_falls_back_to_legacy_on_rebuild_failure(monkeypatch):
+    buf = _preview_console(monkeypatch)
+
+    def _boom(traces, state_dir=None):
+        raise RuntimeError("store exploded")
+
+    monkeypatch.setattr(tbrowse.tconversation, "attempt_conversation", _boom)
+    row = _mk_attempt(turn_previews=(tbrowse._TurnPreview("s", "i", "t", "x[red]y", "pre[/dim]view"),))
+    assert tbrowse._preview_screen(1, row) is True
+    out = buf.getvalue()
     assert "x[red]y" in out and "pre[/dim]view" in out
-    assert "(no preview recorded)" in out  # turns exist, but nothing is displayable
     assert "\x1b[31" not in out
+
+
+def test_preview_screen_renders_full_conversation(state, monkeypatch):
+    import json as _json
+
+    buf = _preview_console(monkeypatch)
+    artifact_dir = state / "logs" / "audit-artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    def _artifact(name, payload):
+        path = artifact_dir / f"{name}.json"
+        path.write_text(_json.dumps(payload), encoding="utf-8")
+        return str(path)
+
+    turn = _span("trace-1", session_key="cli:a", span_id="turn")
+    turn["attributes"]["turn.input.artifact_path"] = _artifact("turn-in", {"content": "fix the bug"})
+    llm = _span("trace-1", session_key="cli:a", name="llm.call", span_id="llm")
+    llm["parentSpanId"] = "turn"
+    llm["startTime"] = "2026-08-20T10:00:00.500+00:00"
+    llm["attributes"]["llm.input.artifact_path"] = _artifact(
+        "llm-in", {"messages": [{"role": "user", "content": "fix the bug"}]}
+    )
+    llm["attributes"]["llm.output.artifact_path"] = _artifact("llm-out", {"content": "done", "tool_calls": []})
+    _write_log(state / "logs" / "audit-spans.log", [turn, llm])
+
+    assert tbrowse._preview_screen(1, _mk_attempt(traces=("trace-1",)), state) is True
+    out = buf.getvalue()
+    assert "User input:" in out and "LLM input:" in out and "LLM output:" in out
+    assert "fix the bug" in out and "done" in out
+
+
+def _tall_preview(state):
+    spans = [_span("trace-1", session_key="cli:a", span_id="turn")]
+    spans[0]["attributes"]["turn.input_preview"] = "\n".join(f"line {i}" for i in range(40))
+    _write_log(state / "logs" / "audit-spans.log", spans)
+    return _mk_attempt(traces=("trace-1",))
+
+
+def test_preview_screen_pager_success_skips_waiter(state, monkeypatch):
+    buf = _preview_console(monkeypatch)
+    row = _tall_preview(state)
+    monkeypatch.setattr(tbrowse.shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((80, 10)))
+    monkeypatch.setattr(tbrowse, "_pager_command", lambda: [sys.executable, "-c", "import sys; sys.stdin.read()"])
+    assert tbrowse._preview_screen(1, row, state) is False
+    assert "line 5" not in buf.getvalue()  # paged, not printed to the console
+
+
+@pytest.mark.parametrize(
+    "command",
+    [[sys.executable, "-c", "raise SystemExit(1)"], ["raven-test-definitely-missing-pager"]],
+    ids=["exit-1", "missing-command"],
+)
+def test_preview_screen_pager_failure_prints_and_waits(state, monkeypatch, command):
+    buf = _preview_console(monkeypatch)
+    row = _tall_preview(state)
+    monkeypatch.setattr(tbrowse.shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((80, 10)))
+    monkeypatch.setattr(tbrowse, "_pager_command", lambda: command)
+    assert tbrowse._preview_screen(1, row, state) is True
+    assert "line 5" in buf.getvalue()
+
+
+def test_space_skips_waiter_after_pager(state, workspace, monkeypatch):
+    _two_turn_log(state)
+    monkeypatch.setattr(tbrowse, "_preview_screen", lambda index, row, state_dir=None: False)
+    fake = _browse(monkeypatch, [("pick", "session"), ("hit", " ", "#1"), _BACK, _CANCEL], workspace)
+    assert "press" not in [k for k, _m, _t in fake.prompts]
+
+
+def test_pager_command_requires_full_tty_and_capable_term(monkeypatch):
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr(tbrowse.sys.stdout, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(tbrowse.sys.stdin, "isatty", lambda: False, raising=False)
+    assert tbrowse._pager_command() is None
+    monkeypatch.setattr(tbrowse.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setenv("TERM", "dumb")
+    assert tbrowse._pager_command() is None
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr(tbrowse.shutil, "which", lambda name: None)
+    assert tbrowse._pager_command() is None
+    monkeypatch.setattr(tbrowse.shutil, "which", lambda name: "/usr/bin/less")
+    assert tbrowse._pager_command() == ["/usr/bin/less", "-R"]
 
 
 @pytest.mark.parametrize(

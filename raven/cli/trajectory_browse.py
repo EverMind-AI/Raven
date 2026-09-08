@@ -32,15 +32,18 @@ Control flow contracts:
   overlong lines are clipped at the terminal edge — prompt_toolkit does not
   wrap option rows). Every dynamic cell is collapsed to one plain line before
   any width math, and fixed column widths always fit their headers.
-- Injected keys dispatch by key first: Space on an attempt row prints that
-  attempt's per-turn previews, collected in the same snapshot scan and sorted
-  by a fully-stringified key (ordering never follows log source order; the
-  table PREVIEW cell derives from the same sorted collection); M (either
-  case) opens the multi-select merge and is only bound — and only advertised —
-  when two or more attempts exist. Anything else, and Space on a non-attempt
-  row, is a cursor-keeping no-op. The preview's follow-up waiter maps any key
-  or Esc to a non-None sentinel, so only Ctrl+C keeps the browser-wide cancel
-  meaning.
+- Injected keys dispatch by key first: Space on an attempt row renders that
+  attempt's full conversation — the causally ordered record stream rebuilt by
+  :mod:`raven.trajectory.conversation` (every field sanitized, labels colored
+  by kind, bodies hanging-indented; a stream taller than the screen goes
+  through ``less`` when an interactive pager is confirmed available, and only
+  a clean pager exit skips the follow-up waiter). A rebuild failure falls back
+  to the scan-time per-turn previews; the table PREVIEW cell still derives
+  from that sorted preview collection. M (either case) opens the multi-select
+  merge and is only bound — and only advertised — when two or more attempts
+  exist. Anything else, and Space on a non-attempt row, is a cursor-keeping
+  no-op. The preview's follow-up waiter maps any key or Esc to a non-None
+  sentinel, so only Ctrl+C keeps the browser-wide cancel meaning.
 - Once an action runs — normally, refused, cancelled, or failing controlled —
   the browser rescans everything (``_REFRESH``): actions like report bundle
   before confirming, so even an aborted one may have pinned the attempt.
@@ -55,8 +58,11 @@ Control flow contracts:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
+import subprocess
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,6 +78,7 @@ from raven.cli._theme import POINTER, QMARK
 from raven.session.manager import SessionManager
 from raven.tracing import config as tracing_config
 from raven.trajectory import bugreport as breport
+from raven.trajectory import conversation as tconversation
 from raven.trajectory import review as treview
 from raven.trajectory import store as tstore
 from raven.trajectory.bundle import _default_workspace, collect_bundle
@@ -288,12 +295,218 @@ def _select_screen(
     return _ask(question)
 
 
-def _preview_screen(index: int, row: AttemptRow) -> None:
-    """Print one attempt's conversation previews (input/output per turn).
+_PREVIEW_BODY_MIN = 8
+_PREVIEW_STACK_INDENT_MIN = 10
+_PREVIEW_KIND_STYLES = {
+    "user": "green",
+    "llm": "cyan",
+    "tool": "yellow",
+    "skill": "magenta",
+    "subagent": "blue",
+}
+_PREVIEW_DIM_LABELS = ("LLM thinking",)
+
+
+def _sanitize_multiline(value: str) -> str:
+    """Multi-line variant of the sanitization gate: newlines survive, every
+    other non-printable character becomes a space (ANSI escapes, ``\\r``, and
+    ``\\t`` — a tab has no fixed display width, which would break alignment).
+    Nothing is collapsed or truncated; length is the pager's problem."""
+    return "".join(ch if ch == "\n" or ch.isprintable() else " " for ch in value)
+
+
+def _wrap_display(text: str, width: int) -> list[str]:
+    """Split multi-line text into display lines at most ``width`` cells wide
+    (CJK-aware, never splitting a wide character; an unbroken overlong run is
+    hard-wrapped)."""
+    lines: list[str] = []
+    for raw in text.split("\n"):
+        current: list[str] = []
+        used = 0
+        for ch in raw:
+            cell = _cell_width(ch)
+            if current and used + cell > width:
+                lines.append("".join(current))
+                current, used = [], 0
+            current.append(ch)
+            used += cell
+        lines.append("".join(current))
+    return lines
+
+
+def _is_turn_marker(record: Any) -> bool:
+    """A bare Turn marker carries a turn's identity and start time only; it
+    contributes the separator but never renders a body row. A same-labeled
+    record with content, a degradation, or an error renders normally."""
+    return record.label == "Turn" and not record.text and not record.degraded and not record.error
+
+
+def _record_lines(record: Any, label_col: int, width: int) -> list[Text]:
+    """One record as pre-wrapped display lines (label + hanging body + notes).
+
+    Every dynamic field is untrusted: the label and the note fields pass the
+    single-line collapse gate, the body the multi-line one, and everything is
+    appended as plain text — markup is never interpreted. Each returned Text
+    is exactly one display line no wider than ``width``, so callers can count
+    real lines. Below ``_PREVIEW_BODY_MIN`` of body room the layout stacks
+    (label on its own line, body wrapped from the left edge) instead of
+    clipping — narrow terminals must not lose characters."""
+    label = _collapse_text(record.label) or "?"
+    style = _PREVIEW_KIND_STYLES.get(record.kind, "dim")
+    dim_all = record.label in _PREVIEW_DIM_LABELS
+    if dim_all:
+        style = f"dim {style}"
+    body_style = "dim" if dim_all else None
+    body = _sanitize_multiline(record.text) if record.text else ""
+    lines: list[Text] = []
+    if width - label_col >= _PREVIEW_BODY_MIN:
+        indent = label_col
+        body_width = width - label_col
+        head = Text()
+        if body:
+            body_lines = _wrap_display(body, body_width)
+            head.append(_cell_pad(f"{label}:", label_col), style=style)
+            head.append(body_lines[0], style=body_style)
+            rest = body_lines[1:]
+        else:
+            head.append(f"{label}:", style=style)
+            rest = []
+        lines.append(head)
+    else:
+        indent = 2 if width >= _PREVIEW_STACK_INDENT_MIN else 0
+        body_width = max(width - indent, 2)
+        for part in _wrap_display(f"{label}:", max(width, 2)):
+            lines.append(Text(part, style=style))
+        rest = _wrap_display(body, body_width) if body else []
+    pad = " " * indent
+    for part in rest:
+        lines.append(Text(pad + part, style=body_style))
+    notes: list[tuple[str, str]] = []
+    if record.degraded:
+        notes.append((f"(! {_collapse_text(record.degraded) or '?'})", "dim yellow"))
+    if record.error:
+        notes.append((f"[ERROR] {_collapse_text(record.error) or '?'}", "red"))
+    if record.meta:
+        meta = _collapse_text(record.meta)
+        if meta:
+            notes.append((f"({meta})", "dim"))
+    for note, note_style in notes:
+        for part in _wrap_display(note, body_width):
+            lines.append(Text(pad + part, style=note_style))
+    return lines
+
+
+def _conversation_lines(records: list[Any], width: int) -> list[Text]:
+    """The full conversation as display lines, in the data layer's order.
+
+    A single pass over the already-sorted stream: a separator line is inserted
+    wherever the ``(trace_id, turn_span_id)`` attribution changes (numbered on
+    first appearance, ``(continued)`` on re-entry), records are never regrouped
+    — interleaved traces render exactly as ordered."""
+    width = max(width, 4)
+    shown = [r for r in records if not _is_turn_marker(r)]
+    label_col = max((_cell_width((_collapse_text(r.label) or "?") + ":") for r in shown), default=2) + 1
+    groups = {(r.trace_id, r.turn_span_id) for r in records}
+    lines: list[Text] = []
+    seen: dict[tuple[str, str | None], int] = {}
+    current: Any = _UNSET
+    for record in records:
+        key = (record.trace_id, record.turn_span_id)
+        if key != current:
+            current = key
+            if len(groups) > 1:
+                number = seen.get(key)
+                if number is None:
+                    number = len(seen) + 1
+                    seen[key] = number
+                    separator = f"── Turn {number} · {_fmt_ts_full(record.event_time)} ──"
+                else:
+                    separator = f"── Turn {number} (continued) ──"
+                lines.append(Text(separator, style="dim"))
+        if _is_turn_marker(record):
+            continue
+        lines.extend(_record_lines(record, label_col, width))
+    return lines
+
+
+def _pager_command() -> list[str] | None:
+    """The confirmed-interactive pager command, or None.
+
+    Only ``less`` is trusted: an arbitrary ``PAGER`` value cannot be verified
+    interactive (``PAGER=cat`` pages nothing yet exits 0), so anything else
+    degrades to direct printing. Both stdio ends must be a terminal — pagers
+    read their keys from the tty — and TERM must be able to page."""
+    if not (sys.stdout.isatty() and sys.stdin.isatty()):
+        return None
+    if os.environ.get("TERM") in ("dumb", "emacs"):
+        return None
+    less = shutil.which("less")
+    return [less, "-R"] if less else None
+
+
+def _page_lines(lines: list[Text], width: int) -> bool:
+    """Show the lines in the interactive pager; True only for a clean run.
+
+    The subprocess is managed directly and judged by its exit code — a
+    swallowed write error or a missing command must not read as "paged" (the
+    stdlib pipepager reports neither). A BrokenPipe while feeding is the
+    normal early-quit and is left to the exit code."""
+    command = _pager_command()
+    if command is None:
+        return False
+    buffer = Console(width=width, force_terminal=True, color_system="standard")
+    with buffer.capture() as capture:
+        for line in lines:
+            buffer.print(line, highlight=False)
+    try:
+        process = subprocess.Popen(command, stdin=subprocess.PIPE)
+    except OSError:
+        return False
+    try:
+        if process.stdin is not None:
+            process.stdin.write(capture.get().encode("utf-8", errors="replace"))
+            process.stdin.close()
+    except OSError:
+        pass
+    return process.wait() == 0
+
+
+def _preview_screen(index: int, row: AttemptRow, state_dir: Path | None = None) -> bool:
+    """Render one attempt's full conversation; returns whether the caller
+    still owes the press-any-key wait (False only after the pager actually
+    ran and exited cleanly).
+
+    The record stream comes from ``attempt_conversation``; a rebuild failure
+    falls back to the legacy per-turn preview so old or damaged stores keep a
+    working Space key."""
+    console.print(f"[dim]Preview ❯[/dim] #{index}", highlight=False)
+    try:
+        records = tconversation.attempt_conversation(row.traces, state_dir)
+    except Exception:  # noqa: BLE001 — a broken store must not break browsing
+        _log.debug("conversation rebuild failed; using turn previews", exc_info=True)
+        _preview_screen_legacy(row)
+        return True
+    if not records:
+        console.print("[dim](no turns recorded)[/dim]", highlight=False)
+        return True
+    size = shutil.get_terminal_size((80, 24))
+    lines = _conversation_lines(records, size.columns)
+    if not lines:
+        console.print("[dim](no preview recorded)[/dim]", highlight=False)
+        return True
+    if len(lines) > max(size.lines - 2, 1) and _page_lines(lines, size.columns):
+        return False
+    for line in lines:
+        console.print(line, highlight=False)
+    return True
+
+
+def _preview_screen_legacy(row: AttemptRow) -> None:
+    """The scan-time per-turn preview, kept as the fallback when the
+    conversation rebuild itself fails.
 
     All text is untrusted log content: collapsed at scan time, markup-escaped
     here, auto-highlighter off (the same boundary as breadcrumbs)."""
-    console.print(f"[dim]Preview ❯[/dim] #{index}", highlight=False)
     if not row.turn_previews:
         console.print("[dim](no turns recorded)[/dim]", highlight=False)
         return
@@ -1371,8 +1584,8 @@ def _attempt_screen(session_row: SessionRow, workspace: Path, questionary: Any, 
             default = picked.value
             if picked.key == " " and isinstance(picked.value, tuple):
                 index, row = picked.value
-                _preview_screen(index, row)
-                _preview_wait(questionary, style)
+                if _preview_screen(index, row):
+                    _preview_wait(questionary, style)
             continue
         index, row = picked
         _crumb("Attempt", f"#{index}")
