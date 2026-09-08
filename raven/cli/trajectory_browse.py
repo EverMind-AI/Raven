@@ -402,8 +402,13 @@ def _conversation_lines(records: list[Any], width: int) -> list[Text]:
     A single pass over the already-sorted stream: a separator line is inserted
     wherever the ``(trace_id, turn_span_id)`` attribution changes (numbered on
     first appearance, ``(continued)`` on re-entry), records are never regrouped
-    — interleaved traces render exactly as ordered."""
-    width = max(width, 4)
+    — interleaved traces render exactly as ordered.
+
+    Every produced Text — separators included — is one display line within the
+    real terminal width, so ``len()`` of the result is the true screen usage.
+    The only floor is 2 cells: a wide character cannot be split, so a
+    degenerate narrower terminal renders at 2 and may overflow."""
+    width = max(width, 2)
     shown = [r for r in records if not _is_turn_marker(r)]
     label_col = max((_cell_width((_collapse_text(r.label) or "?") + ":") for r in shown), default=2) + 1
     groups = {(r.trace_id, r.turn_span_id) for r in records}
@@ -422,7 +427,8 @@ def _conversation_lines(records: list[Any], width: int) -> list[Text]:
                     separator = f"── Turn {number} · {_fmt_ts_full(record.event_time)} ──"
                 else:
                     separator = f"── Turn {number} (continued) ──"
-                lines.append(Text(separator, style="dim"))
+                for part in _wrap_display(separator, width):
+                    lines.append(Text(part, style="dim"))
         if _is_turn_marker(record):
             continue
         lines.extend(_record_lines(record, label_col, width))
@@ -463,12 +469,31 @@ def _page_lines(lines: list[Text], width: int) -> bool:
     except OSError:
         return False
     try:
-        if process.stdin is not None:
-            process.stdin.write(capture.get().encode("utf-8", errors="replace"))
-            process.stdin.close()
-    except OSError:
-        pass
-    return process.wait() == 0
+        try:
+            if process.stdin is not None:
+                try:
+                    process.stdin.write(capture.get().encode("utf-8", errors="replace"))
+                finally:
+                    process.stdin.close()
+        except OSError:
+            pass
+        return process.wait() == 0
+    except KeyboardInterrupt:
+        # Ctrl+C while paging: reap the pager before leaving — an orphaned
+        # less keeps owning the terminal — then follow the browser-wide
+        # cancel protocol instead of unwinding as a raw interrupt.
+        try:
+            if process.stdin is not None and not process.stdin.closed:
+                process.stdin.close()
+        except OSError:
+            pass
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        raise _CancelledError() from None
 
 
 def _preview_screen(index: int, row: AttemptRow, state_dir: Path | None = None) -> bool:
