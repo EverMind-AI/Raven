@@ -388,3 +388,76 @@ async def test_send_only_forces_when_explicitly_requested(force):
     assert json.loads(await SendTerminalTool(rpc).execute(to="worker", text="hello", force=force))["accepted"]
     assert sent[0].get("force", False) is force
     assert "human confirms" in SendTerminalTool.parameters["properties"]["force"]["description"]
+
+
+@pytest.mark.parametrize("failure_at", ["resolve", "show", "send"])
+async def test_send_reports_stale_binding_with_last_handle(failure_at):
+    agent = candidate()
+    if failure_at == "resolve":
+        agent["exitedAt"] = 123
+
+    async def rpc(method, params):
+        if method == "agents.resolve":
+            return {"unique": failure_at != "resolve", "candidates": [{"agent": agent}]}
+        if method == "terminal.show" and failure_at != "show":
+            return {"terminal": {**agent["binding"], "connected": True, "writable": True, "orphaned": False}}
+        raise TerminalError("terminal_not_found", "Old handle")
+
+    result = json.loads(await SendTerminalTool(rpc).execute(to="worker", text="hello"))
+    assert result["error"]["code"] == "agent_binding_stale"
+    assert result["error"]["data"]["handle"] == "term_test"
+
+
+async def test_create_after_host_restart_renews_identity_generation(tmp_path):
+    from types import SimpleNamespace
+
+    from raven.agent.registry.identity import IdentityRegistry
+    from raven.contracts.terminal import TerminalRecord
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.subscriptions import SubscriptionEmitter
+    from raven.rpc.terminal_services import TerminalServices
+
+    def rows():
+        return [{"name": "generic", "kind": "builtin"}, {"name": "coder", "preset": "codex"}]
+
+    path = tmp_path / "identities.json"
+    old = TerminalRecord(worktree_id=f"repo::{tmp_path}", worktree_path=str(tmp_path))
+    registry = IdentityRegistry(path, config_rows=rows)
+    registry.register("worker", kind_ref="coder", binding=old)
+    terminals = {}
+
+    def show(handle):
+        if handle not in terminals:
+            raise TerminalError("terminal_not_found", "Host restarted")
+        return terminals[handle]
+
+    async def create(**params):
+        record = TerminalRecord(worktree_id=params["worktree_id"], worktree_path=str(tmp_path), liveness="live")
+        terminals[record.handle] = record
+        return record
+
+    host = SimpleNamespace(show=show, create=create)
+    service = TerminalServices(SubscriptionEmitter(AsyncMock()), AsyncMock(), host=host, identities=registry)
+    assert not registry.resolve("worker")["unique"]
+    assert json.loads(path.read_text())["records"][0]["exited_at"] is not None
+    dispatcher = Dispatcher()
+    service.register(dispatcher)
+
+    async def rpc(method, params):
+        response = await dispatcher.dispatch({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        assert "result" in response, response
+        return response["result"]
+
+    tool = CreateTerminalTool(
+        rpc, lambda provider, unattended=False: ("coder", ["codex"]), lambda task, session: f"repo::{tmp_path}"
+    )
+    result = json.loads(await tool.execute(provider="codex", name="worker"))
+    renewed = registry.show("worker")
+    assert result["handle"] != old.handle
+    assert renewed.binding_generation == 2
+    assert renewed.binding.handle == result["handle"]
+    assert renewed.exited_at is None
+    assert registry.resolve("worker")["unique"]
+    refused = json.loads(await tool.execute(provider="codex", name="worker"))
+    assert refused["error"]["code"] == "agent_name_exists"
+    assert len(terminals) == 1

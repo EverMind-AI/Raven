@@ -27,7 +27,9 @@ def register_agents_methods(
         nonlocal registry
         try:
             if registry is None:
-                registry = IdentityRegistry()
+                registry = IdentityRegistry(terminal_show=terminal_show)
+            elif terminal_show is not None:
+                registry.terminal_show = terminal_show
             if method == "register":
                 name = params.get("name") or params.get("agent_name")
                 if not isinstance(name, str) or not name:

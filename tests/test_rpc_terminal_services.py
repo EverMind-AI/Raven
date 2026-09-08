@@ -102,7 +102,7 @@ async def test_host_reply_uses_identity_session_without_creating_sessions(tmp_pa
     identities = [SimpleNamespace(binding=binding, session_key="tui:creator")]
     if fallback == "ambiguous":
         identities.append(SimpleNamespace(binding=binding, session_key="tui:other"))
-    registry = SimpleNamespace(ensure_host=lambda: None, list=lambda: identities)
+    registry = SimpleNamespace(ensure_host=lambda: None, reconcile=lambda: None, list=lambda: identities)
     host = SimpleNamespace(show=lambda _: record)
     delivery = SimpleNamespace(receive_host=AsyncMock(return_value=None))
     emitter = SimpleNamespace(emit=AsyncMock())
@@ -127,7 +127,7 @@ async def test_host_reply_uses_identity_session_without_creating_sessions(tmp_pa
 
 async def test_host_reply_prefers_sender_over_ack_matched_terminal(tmp_path):
     host = SimpleNamespace(show=lambda handle: None)
-    registry = SimpleNamespace(ensure_host=lambda: None)
+    registry = SimpleNamespace(ensure_host=lambda: None, reconcile=lambda: None)
     delivery = SimpleNamespace(receive_host=AsyncMock(return_value={"handle": "other"}))
     service = TerminalServices(
         SimpleNamespace(emit=AsyncMock()), AsyncMock(), host=host, delivery=delivery, identities=registry

@@ -10,7 +10,7 @@ async def test_identity_rpc_register_list_resolve_and_invalid_kind(tmp_path):
     registry = IdentityRegistry(
         tmp_path / "agent_registry.json", config_rows=lambda: [{"name": "coder", "kind": "builtin"}]
     )
-    record = TerminalRecord(worktree_id="repo::/tmp/work", worktree_path="/tmp/work", owner="human")
+    record = TerminalRecord(worktree_id="repo::/tmp/work", worktree_path="/tmp/work", owner="human", liveness="live")
     dispatcher = Dispatcher()
     register_agents_methods(dispatcher, registry=registry, terminal_show=lambda _: record)
 
