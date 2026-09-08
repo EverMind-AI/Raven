@@ -642,6 +642,7 @@ class WiringMixin:
                 charge=self.subagents.charge_dag_run,
                 ask=self._confirm_graph,
                 control_reachable=self.dag_control_reachable,
+                control_advert=self.dag_control_advert,
                 provider_for=self._verdict_provider,
                 binding_for=self._turn_binding,
                 verdict_config=self.subagent_dag_config,
@@ -1027,6 +1028,7 @@ class WiringMixin:
             provider_for=self._verdict_provider,
             binding_for=self._turn_binding,
             control_reachable=self.dag_control_reachable,
+            control_advert=self.dag_control_advert,
             verdict_config=self.subagent_dag_config,
         )
         from raven.playbook import (
@@ -1340,6 +1342,18 @@ class WiringMixin:
         if self.tool_search_controller is None:
             return False
         return self.tool_search_controller.tool_call_available()
+
+    def dag_control_advert(self, name: str) -> str | None:
+        """One schema-hidden dag control tool's definition, as advertisement text.
+
+        The graph tool's result text and the exception report are the only route
+        these three have to the model, so they carry the definition itself rather
+        than a retelling of it -- generated here, from the registry, so it cannot
+        drift from the tool the way three hand-written copies did.
+        """
+        from raven.agent.subagent.dag_control_advert import render
+
+        return render(self.tools.hidden_definition(name))
 
     def set_dag_progress_sink(self, sink) -> None:
         """Late-bind the graph tools' progress sink (host wires it to the web

@@ -253,7 +253,7 @@ def _campaign_without_ledger(tmp_path):
 
 
 @pytest.mark.asyncio
-# The read tool is gone (exec with machine= covers looking), but three of its checks were
+# The read tool is gone (ops_exec covers looking), but three of its checks were
 # really checks on helpers the edit path still uses -- the case-root resolution
 # and the refusal of paths that escape the case. Re-aimed at the edit tool so
 # that coverage does not leave with the tool that happened to exercise it.

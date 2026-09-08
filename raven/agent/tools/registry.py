@@ -612,6 +612,33 @@ class ToolRegistry:
                 out.append(spec.schema)
         return out
 
+    def hidden_definition(self, name: str) -> dict[str, Any] | None:
+        """One schema-hidden tool's definition, in the shape a visible tool gets.
+
+        A hidden tool reaches the model only through another tool's result text,
+        so that text has to carry the definition -- and carrying a hand-written
+        copy of it is what drifted: the model wrote ``action`` for ``decision``
+        and lost a call to it three runs running. Served from here so the
+        advertisement cannot say anything the door did not check.
+
+        ``None`` when the name is not registered, or when the tool is *not*
+        hidden: a visible tool is already in the array, and advertising it a
+        second time is the duplication this exists to end.
+        """
+        if name not in self._schema_hidden:
+            return None
+        tool = self.get(name)
+        if tool is None:
+            return None
+        spec = self._specs.get(name)
+        # Same snapshot-or-live rule as ``get_definitions``: an AUTHORED
+        # ``to_schema`` is the tool signing for a shape that is not fixed at
+        # admission, and ``resolve_dag_node``'s is -- its node shape carries a
+        # ``subagent`` enum built from the hot-appliable agent table.
+        if spec is None or spec.schema_dynamic:
+            return tool.to_schema()
+        return copy.deepcopy(spec.schema)
+
     @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(
         self,

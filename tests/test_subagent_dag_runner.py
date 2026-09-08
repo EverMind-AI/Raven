@@ -6256,6 +6256,98 @@ def test_the_agent_report_names_the_route_not_just_the_call():
         assert field in report
 
 
+def test_the_agent_report_carries_the_resolve_tools_real_schema():
+    """The invocations in the report are a shape to copy, and a shape to copy is
+    not a schema: three runs running (2026-09-03/04) the model wrote `action`
+    where the tool declares `decision` and lost a call to it. The field names
+    now come from the tool, so a rename cannot leave the report describing the
+    old one.
+    """
+    from raven.agent.subagent.dag_control_advert import render
+    from raven.agent.subagent.dag_control_tools import ResolveDagNodeTool
+    from raven.agent.subagent.dag_runner import _exception_report
+    from raven.agent.subagent.dag_tool import _NODE_SCHEMA
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    class _Graph:
+        def node_schema(self):
+            return _NODE_SCHEMA
+
+    class _ToolTable:
+        def get(self, name):
+            return _Graph() if name == "run_subagent_dag" else None
+
+    class _Loop:
+        tools = _ToolTable()
+
+    tool = ResolveDagNodeTool(loop=_Loop())
+    spec = parse_dag_spec(
+        {
+            "task_summary": "one node",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"}],
+        }
+    )
+    report = _exception_report(
+        run_id="r1",
+        node=spec.nodes[0],
+        verdict=Verdict(accomplished=False, category="missing_credential", what_is_missing="a token"),
+        attempt=1,
+        remaining=2,
+        blocked=["b"],
+        timeout_s=600.0,
+        control_advert=lambda name: render(tool.to_schema()) if name == "resolve_dag_node" else None,
+    )
+
+    declared = set(tool.parameters["properties"])
+    assert declared >= {"run_id", "node_id", "decision", "message", "nodes"}, (
+        "an empty property set would make both checks below vacuous"
+    )
+    for field in declared:
+        assert f'"{field}"' in report, f"{field} is declared but the report never names it"
+    assert "run_subagent_dag" in report, "the node shape is referenced, not re-sent"
+    assert "prompt_template" not in report, "and therefore not inlined"
+
+    # The generated half satisfies the loop above on its own, so it cannot see a
+    # stale field name in the hand-written invocations beside it -- which is the
+    # half that drifts. Read the keys back out of those and require every one to
+    # be a field the tool still declares.
+    examples = "\n".join(line for line in report.splitlines() if "tool_call with name" in line)
+    assert examples, "the report must still carry the concrete invocations"
+    named = set(re.findall(r'"([a-z_]+)":', examples))
+    assert named, "and those invocations must spell their arguments"
+    assert named <= declared, f"the examples name fields the tool no longer declares: {named - declared}"
+
+
+def test_the_agent_report_survives_a_renderer_that_raises():
+    """The schema is an aid to the report. A report that failed to build is a
+    node that waits out its whole timeout with nobody told anything."""
+    from raven.agent.subagent.dag_runner import _exception_report
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    def _boom(_name):
+        raise RuntimeError("registry is gone")
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "one node",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"}],
+        }
+    )
+    report = _exception_report(
+        run_id="r1",
+        node=spec.nodes[0],
+        verdict=Verdict(accomplished=False, category="other", what_is_missing="a token"),
+        attempt=1,
+        remaining=2,
+        blocked=[],
+        timeout_s=600.0,
+        control_advert=_boom,
+    )
+
+    assert "resolve_dag_node" in report
+    assert "complete schema" not in report
+
+
 async def _run_with_reachability(tmp_path, reachable, *, timeout_s=30):
     """One suspending node, run with the given reachability predicate.
 

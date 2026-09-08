@@ -113,19 +113,18 @@ That message arrives mid-run, not at the end. The rest of the graph keeps going:
 blocked branch waits.
 
 Answer it by calling `resolve_dag_node` through `tool_call`: it is not in your tool list,
-and `tool_call` is the only way to name it. The report you receive spells the exact
-arguments; the three shapes are
+and `tool_call` is the only way to name it. The report you receive carries that tool's
+complete schema, so take the field names from there and not from this page. What follows is
+what the three decisions mean, not how to spell them.
 
-- `tool_call` with name `resolve_dag_node` and arguments
-  `{"run_id": ..., "node_id": ..., "decision": "continue", "message": "<what to try next>"}`
-  sends your message to the node and lets it try again, keeping the graph and everything
-  it has already done.
-- the same with `"decision": "abandon"` gives up on that node. Its dependents are skipped;
-  the other branches finish normally.
-- the same with `"decision": "replan"`, plus a `nodes` list, replaces what is left of the
-  graph: this run stops and a new one starts from your nodes. Nodes this run completed are
-  referenced (`depends_on` plus `{{ <id>.output }}`), never re-declared; every other node
-  needs a new id, including a redo of the node that failed.
+- `continue` sends your message to the node and lets it try again, keeping the graph and
+  everything it has already done.
+- `abandon` gives up on that node. Its dependents are skipped; the other branches finish
+  normally.
+- `replan` replaces what is left of the graph: this run stops and a new one starts from the
+  nodes you supply. Nodes this run completed are referenced (`depends_on` plus
+  `{{ <id>.output }}`), never re-declared; every other node needs a new id, including a redo
+  of the node that failed.
 
 **Choosing between them:** when you can supply what the report says is missing, `continue` --
 and if only the user can supply it -- a credential, a decision, a fact about what they want --

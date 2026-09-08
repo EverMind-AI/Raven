@@ -260,15 +260,16 @@ class TurnAccountingHook(AgentHook):
 # ── Axis 3: the work-to-watch judgement ─────────────────────────────
 
 # The looking tools and the argument that names what they looked at (the
-# fork's table, loop/main.py). The machine face rides trunk exec's own
-# ``machine`` parameter, so ``exec`` covers a look whichever computer it
-# lands on.
+# fork's table, loop/main.py). ``ops_exec`` is the fork's ``exec(machine=...)``
+# face under its own name (part 2b: the same-name shadow is an open ruling),
+# so both spellings of a look are judged.
 _WATCHED_TOOLS = {
     "list_dir": "path",
     "read_file": "path",
     "grep": "path",
     "find": "path",
     "exec": "command",
+    "ops_exec": "command",
     "web_fetch": "url",
 }
 
@@ -348,13 +349,9 @@ class WatchedPathHook(AgentHook):
 # ── Axis 4: work killed at the local exec cap ───────────────────────
 
 # The sandbox executor's kill report, rendered by ExecResult.as_text: the only
-# shape a cap kill produces on the local shell. The machine channel's cap writes
+# shape a cap kill produces on the local shell. ops_exec's machine cap writes
 # its own sentence and needs no note here.
 _EXEC_CAP_KILL = re.compile(r"STDERR:\nTimed out after (\d+)(?:\.\d+)?s\b")
-
-# A command whose long half is moving bytes, not computing: its client runs
-# locally, so the background lane is its door, never ops_submit.
-_TRANSFER_SHAPE = re.compile(r"\b(scp|rsync|sftp|curl|wget)\b")
 
 
 class ExecCapKillHook(AgentHook):
@@ -381,38 +378,19 @@ class ExecCapKillHook(AgentHook):
 
     async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
         calls = getattr(ctx.response, "tool_calls", None) or []
-        by_id = {
-            getattr(call, "id", None): str((getattr(call, "arguments", None) or {}).get("command") or "")
-            for call in calls
-            if getattr(call, "name", "") == "exec"
-        }
-        by_id.pop(None, None)
-        if not by_id:
+        ids = {getattr(call, "id", None) for call in calls if getattr(call, "name", "") == "exec"}
+        ids.discard(None)
+        if not ids:
             return HookDecision()
         for message in reversed(ctx.messages or []):
-            if message.get("role") != "tool" or message.get("tool_call_id") not in by_id:
+            if message.get("role") != "tool" or message.get("tool_call_id") not in ids:
                 continue
             payload = _tool_payload(message.get("content"))
             hit = _EXEC_CAP_KILL.search(payload)
             if hit is None or "Exit code: -1" not in payload:
                 continue
             cap = int(hit.group(1))
-            command = by_id[message.get("tool_call_id")]
             _account(ctx)["exec_cap_kill"] = {"cap_s": cap}
-            # Two doors for two shapes. A transfer's client runs locally and
-            # spends no budget, so ops_submit is the wrong pointer for it --
-            # measured 2026-09-03 on this note's first real firing, a killed
-            # whole-tree scp was pointed at a campaign it should never become.
-            if _TRANSFER_SHAPE.search(command):
-                return HookDecision(
-                    append_note=(
-                        f"Killed at the {cap}s exec cap; the copy so far is incomplete. "
-                        "Re-running it the same way dies at the same cap. A transfer belongs "
-                        "in the background lane: run it again with exec's "
-                        "run_in_background=true (it logs to a managed file this turn does "
-                        "not wait on), and cut what you copy -- a .venv does not travel."
-                    )
-                )
             return HookDecision(
                 append_note=(
                     f"Killed at the {cap}s exec cap; whatever it computed is gone with it. "

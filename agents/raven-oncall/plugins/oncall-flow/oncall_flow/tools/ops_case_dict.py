@@ -18,7 +18,7 @@ value, the new value, and a hash of the file before and after, into the campaign
 own event log.
 
 Reading is not here any more. ``ops_read_case_dict`` could only cat a named file,
-and ``exec`` with a ``machine`` runs any command on the campaign's machine -- ``ls``, ``cat``,
+and ``ops_exec`` runs any command on the campaign's machine -- ``ls``, ``cat``,
 ``grep``, ``diff`` -- so keeping a second, narrower way to look only cost a tool
 slot and a description. What stayed is the pair that shell cannot replace:
 ``ops_edit_case_dict``, because the record of a change is the point, and
@@ -310,7 +310,7 @@ class OpsCaseChangesTool(Tool):
         if not reference:
             return (
                 "This campaign's meta declares no 'reference_case', so there is nothing to "
-                "compare against. Read individual files with exec(machine=...) instead."
+                "compare against. Read individual files with ops_exec instead."
             )
         root = _case_root(backend, meta, led, trial)
         if isinstance(root, str):

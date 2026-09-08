@@ -1,26 +1,30 @@
 {
+  "agents": {
+    "defaults": {
+      "maxToolIterations": 60
+    }
+  },
   "drFlow": {
-    "maxIterations": 60,
+    "maxIterations": 30,
     "budgetNote": {
       "warnRatio": 0.8
     },
     "sufficiency": {
-      "enabled": false
+      "minSearches": 5,
+      "timeoutSeconds": 60,
+      "attemptTimeoutSeconds": 30
     },
     "verify": {
-      "maxRevisions": 3,
-      "reviewFinalDraft": true,
-      "evidenceRound": true,
       "timeoutSeconds": 360,
-      "attemptTimeoutSeconds": 360
+      "attemptTimeoutSeconds": 120
     },
     "search": {
       "saturation": {
         "k": 10
       }
     },
-    "plainFirst": {
-      "enabled": false
+    "finalShape": {
+      "reportBounce": true
     }
   }
 }

@@ -45,11 +45,10 @@ factory = "oncall_flow.flow:make_flow_hook"
 # the flow off, so a disabled product casts no schema at all -- the fork's
 # gate (tools.oncall.enabled), said as plugin admission (D6). The scheduling
 # faces declare bind_runtime and hold the wake grant; the loop registers
-# plugin tools last, but no row here shadows a built-in: the machine face
-# is trunk exec's own `machine` parameter (the same-name-shadow ruling closed
-# by moving the face into the trunk tool), and ops_tune_launch stays off the
-# menu on purpose (full-auto never competes with the round-by-round loop;
-# `python -m oncall_flow.tune` is the D5 entry).
+# plugin tools last, but no row here shadows a built-in: the fork's
+# exec(machine=...) face is contributed under its own name (ops_exec), and
+# ops_tune_launch stays off the menu on purpose (full-auto never competes
+# with the round-by-round loop; `python -m oncall_flow.tune` is the D5 entry).
 
 [[plugin.contributes.tools]]
 name = "ops_tune_status"
@@ -102,3 +101,7 @@ factory = "oncall_flow.tools:make_ops_ask_owner"
 [[plugin.contributes.tools]]
 name = "ops_finish"
 factory = "oncall_flow.tools:make_ops_finish"
+
+[[plugin.contributes.tools]]
+name = "ops_exec"
+factory = "oncall_flow.tools:make_ops_exec"

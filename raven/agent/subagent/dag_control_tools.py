@@ -221,6 +221,16 @@ class ResolveDagNodeTool(_ControlTool):
             "required": ["run_id", "node_id"],
         }
 
+    def to_schema(self) -> dict[str, Any]:
+        """Authored to declare this schema dynamic, not to change its shape.
+
+        ``nodes`` carries ``run_subagent_dag``'s own node schema, whose
+        ``subagent`` enum is built from the hot-appliable agent table. Left to
+        the snapshot the registry takes at admission, the advertisement would
+        name the roster as it stood when the loop was wired.
+        """
+        return super().to_schema()
+
     def blocking_for(self, params: dict[str, Any]) -> bool:
         """Blocking only when the named run is a bound foreground run.
 

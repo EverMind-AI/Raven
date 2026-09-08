@@ -1220,3 +1220,204 @@ async def test_resolve_with_neither_name_says_which_field_is_missing():
     out = await tool.execute(run_id="r1", node_id="a")
     assert out == "Error: decision is required: 'continue', 'abandon' or 'replan'."
     assert loop.resolved is None
+
+
+class TestTheHiddenControlsAdvertiseTheirRealSchema:
+    """These three are withheld from the provider schema, so the only thing the
+    model ever reads about them is another tool's result text. That text used to
+    retell the arguments by hand in three places, and a retelling is not a
+    schema: the model reached for `action` where the tool declares `decision`.
+    """
+
+    def test_resolve_declares_its_schema_dynamic(self) -> None:
+        """Its node shape carries a roster the agent table can change at runtime,
+        so the snapshot the registry takes at admission would go stale."""
+        from raven.agent.tools.registry import admit_tool
+
+        assert admit_tool(ResolveDagNodeTool(loop=None)).schema_dynamic
+        # The two static ones make no such claim, and should not.
+        assert not admit_tool(CancelDagTool(loop=None)).schema_dynamic
+        assert not admit_tool(DagStatusTool(loop=None)).schema_dynamic
+
+    def test_the_advert_carries_every_field_the_tool_declares(self) -> None:
+        """Asserted against the schema, not a literal: rename a field and this
+        fails, instead of the advertisement quietly describing the old one."""
+        from raven.agent.subagent.dag_control_advert import render
+
+        tool = ResolveDagNodeTool(loop=_LoopWithNodeSchema())
+        text = render(tool.to_schema())
+
+        assert text is not None
+        declared = tool.parameters["properties"]
+        assert set(declared) >= {"run_id", "node_id", "decision", "message", "nodes"}, (
+            "an empty or shrunken property set would make the loop below vacuous"
+        )
+        for field in declared:
+            assert f'"{field}"' in text, f"{field} is declared but not advertised"
+        for decision in tool.parameters["properties"]["decision"]["enum"]:
+            assert decision in text
+
+    def test_the_advert_points_at_the_graph_tools_node_shape_instead_of_copying_it(self) -> None:
+        """`run_subagent_dag` is not hidden, so its node shape is already in the
+        model's tool list; inlining it again cost ~845 tokens to repeat that."""
+        from raven.agent.subagent.dag_control_advert import render
+
+        tool = ResolveDagNodeTool(loop=_LoopWithNodeSchema())
+        inlined = tool.to_schema()["function"]["parameters"]["properties"]["nodes"]["items"]
+        text = render(tool.to_schema())
+
+        assert text is not None
+        assert "run_subagent_dag" in text, "the reference has to name where the shape is"
+        # Above the compaction threshold the graph tool is cataloged rather than
+        # offered (it is deliberately absent from DEFAULT_ALWAYS_VISIBLE), so a
+        # pointer that only asserts presence is false in that mode.
+        assert "tool_search" in text, "the pointer must name a route true in both disclosure modes"
+        assert "prompt_template" not in text, "the node shape must not be inlined here"
+        assert "prompt_template" in str(inlined), "...but it is what was inlined before"
+        assert len(text) < len(render_without_dedupe(tool)), "the reference must be the smaller one"
+
+    def test_rendering_leaves_the_registrys_own_copy_alone(self) -> None:
+        from raven.agent.subagent.dag_control_advert import render
+
+        tool = ResolveDagNodeTool(loop=_LoopWithNodeSchema())
+        definition = tool.to_schema()
+        render(definition)
+
+        assert "items" in definition["function"]["parameters"]["properties"]["nodes"]
+        assert "prompt_template" in str(definition["function"]["parameters"]["properties"]["nodes"]["items"])
+
+
+class _GraphOnTheTable:
+    """The graph tool as ``_registered_tool`` finds it, serving the real node schema."""
+
+    def node_schema(self) -> dict[str, Any]:
+        from raven.agent.subagent.dag_tool import _NODE_SCHEMA
+
+        return _NODE_SCHEMA
+
+
+class _NodeSchemaToolTable:
+    def get(self, name: str) -> Any:
+        return _GraphOnTheTable() if name == "run_subagent_dag" else None
+
+
+class _LoopWithNodeSchema:
+    """A loop whose graph tool serves the real node schema.
+
+    The resolve tool's ``nodes`` field is ``run_subagent_dag``'s own node shape,
+    so a double that omits it leaves ``items`` a bare object and hides the very
+    duplication these tests are about.
+    """
+
+    tools = _NodeSchemaToolTable()
+
+
+def render_without_dedupe(tool: Any) -> str:
+    import json
+
+    return json.dumps(tool.to_schema())
+
+
+class TestTheGraphToolsResultTextCarriesTheControlDefinitions:
+    """The other two advertisement sites. The background-start text named the
+    three tools, and the foreground report named ``resolve_dag_node`` and no
+    arguments at all -- so the bound lane told the model strictly less than the
+    background lane did.
+    """
+
+    def _tool(self, advert: Any) -> Any:
+        return raven_agent_subagent.SubAgentDagTool(
+            workspace=Path(tempfile.mkdtemp()),
+            registry=None,
+            control_advert=advert,
+        )
+
+    def test_the_named_definitions_are_appended(self) -> None:
+        tool = self._tool(lambda name: f"<{name}-schema>")
+
+        text = tool._advert_for("dag_status", "cancel_dag")
+
+        assert "dag_status: <dag_status-schema>" in text
+        assert "cancel_dag: <cancel_dag-schema>" in text
+        assert "resolve_dag_node" not in text, "only what the caller asked for"
+
+    def test_no_renderer_wired_appends_nothing(self) -> None:
+        # A tool built without a loop, and every test that does the same: the
+        # caller concatenates unconditionally, so this has to be a bare string.
+        assert self._tool(None)._advert_for("dag_status") == ""
+
+    def test_a_renderer_that_raises_costs_the_hint_and_nothing_else(self) -> None:
+        def _boom(_name: str) -> str:
+            raise RuntimeError("registry is gone")
+
+        assert self._tool(_boom)._advert_for("dag_status", "cancel_dag") == ""
+
+    def test_a_name_with_no_definition_is_skipped_not_rendered_empty(self) -> None:
+        tool = self._tool(lambda name: None if name == "cancel_dag" else "<s>")
+
+        text = tool._advert_for("dag_status", "cancel_dag")
+
+        assert "dag_status: <s>" in text
+        assert "cancel_dag" not in text
+
+
+def test_the_foreground_report_advertises_resolve_once_not_twice() -> None:
+    """The report `render_event` fences already carries the schema.
+
+    `_exception_report` appends it, and a Report exists only past the
+    awaiting-decision gate -- which implies `deliverable` and `remaining > 0`,
+    so neither of that function's early returns was taken. Appending it here
+    too emitted the definition twice, once as fenced node evidence and once
+    trusted.
+    """
+    from raven.agent.subagent.dag_adjudication import Report
+    from raven.agent.subagent.dag_control_advert import render
+    from raven.agent.subagent.dag_runner import _exception_report
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    tool = ResolveDagNodeTool(loop=_LoopWithNodeSchema())
+    advert = raven_agent_subagent.SubAgentDagTool(
+        workspace=Path(tempfile.mkdtemp()),
+        registry=None,
+        control_advert=lambda name: render(tool.to_schema()) if name == "resolve_dag_node" else None,
+    )
+    spec = parse_dag_spec(
+        {
+            "task_summary": "t",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "s", "prompt_template": "p"}],
+        }
+    )
+    report = _exception_report(
+        run_id="r1",
+        node=spec.nodes[0],
+        verdict=Verdict(accomplished=False, category="other", what_is_missing="a token"),
+        attempt=1,
+        remaining=2,
+        blocked=[],
+        timeout_s=600.0,
+        control_advert=lambda name: render(tool.to_schema()),
+    )
+    rendered = advert.render_event("r1", Report(node_id="a", text=report)).model_text
+
+    assert rendered.count('"name": "resolve_dag_node"') == 1, "one advertisement, not two"
+    assert "resolve_dag_node" in rendered
+
+
+def test_the_node_shape_pointer_travels_in_a_key_the_model_is_shown() -> None:
+    """`$comment` would read as the right key for a note and is the wrong one.
+
+    JSON Schema defines it as a note to developers that implementations MUST
+    NOT present, so a provider that normalizes the schema is entitled to drop
+    it -- leaving `items` an empty object and the node shape nowhere, which is
+    the failure the reference exists to avoid. The module's docstring gives
+    that reason; this holds it, because flipping the key left the suite green.
+    """
+    from raven.agent.subagent.dag_control_advert import _NODE_SHAPE_REF, render
+
+    assert "description" in _NODE_SHAPE_REF, "the pointer has to be presented to the model"
+    assert "$comment" not in _NODE_SHAPE_REF, "$comment is a note implementations must not present"
+
+    tool = ResolveDagNodeTool(loop=_LoopWithNodeSchema())
+    text = render(tool.to_schema())
+    assert text is not None
+    assert "$comment" not in text, "and it must not reach the rendered advertisement either"

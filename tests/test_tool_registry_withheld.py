@@ -355,3 +355,73 @@ class TestTheChannelHalfStillHolds:
         reg.set_channel("telegram")
 
         assert _offered(reg) == {"exec"}
+
+
+class _DynamicStub(_Stub):
+    """Authors its own ``to_schema``, which is how a tool signs for a shape that
+    is not fixed at admission."""
+
+    def __init__(self, name: str, agents: list[str]) -> None:
+        super().__init__(name)
+        self.agents = agents
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {"agent": {"type": "string", "enum": list(self.agents)}}}
+
+    def to_schema(self) -> dict[str, Any]:
+        return super().to_schema()
+
+
+class TestAHiddenToolsDefinitionIsServedForItsAdvertisement:
+    """A schema-hidden tool reaches the model only through another tool's result
+    text, so that text has to carry the definition -- and three hand-written
+    copies of one is what drifted: the model wrote ``action`` where the tool
+    declared ``decision`` and lost a call to it three runs running.
+    """
+
+    def test_a_hidden_tool_yields_the_same_shape_a_visible_one_gets(self) -> None:
+        reg = _registry("exec", "grep")
+        reg.hide_from_schema("exec")
+
+        visible = next(d for d in reg.get_definitions() if d["function"]["name"] == "grep")
+        hidden = reg.hidden_definition("exec")
+
+        assert hidden is not None
+        assert sorted(hidden) == sorted(visible), "alignment with other tools is the point"
+        assert sorted(hidden["function"]) == sorted(visible["function"])
+        assert hidden["function"]["name"] == "exec"
+
+    def test_a_visible_tool_has_no_advertisement_to_render(self) -> None:
+        # It is already in the array. Rendering it again would be the
+        # duplication this method exists to end.
+        assert _registry("grep").hidden_definition("grep") is None
+
+    def test_an_unregistered_name_yields_nothing(self) -> None:
+        assert _registry().hidden_definition("nope") is None
+
+    def test_a_declared_dynamic_schema_is_served_live(self) -> None:
+        """The roster a hidden tool names can change after the loop was wired."""
+        tool = _DynamicStub("resolve", ["alpha"])
+        reg = ToolRegistry()
+        reg.register(tool)
+        reg.hide_from_schema("resolve")
+
+        tool.agents.append("beta")
+        served = reg.hidden_definition("resolve")
+
+        assert served is not None
+        assert served["function"]["parameters"]["properties"]["agent"]["enum"] == ["alpha", "beta"]
+
+    def test_the_caller_cannot_corrupt_the_admitted_snapshot(self) -> None:
+        """The advertisement edits what it renders, so it must not get the original."""
+        reg = _registry("exec")
+        reg.hide_from_schema("exec")
+
+        first = reg.hidden_definition("exec")
+        assert first is not None
+        first["function"]["parameters"]["properties"]["injected"] = {"type": "string"}
+
+        again = reg.hidden_definition("exec")
+        assert again is not None
+        assert "injected" not in again["function"]["parameters"]["properties"]

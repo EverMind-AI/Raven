@@ -347,6 +347,7 @@ class SubAgentDagTool(Tool):
         charge: QuotaCharger | None = None,
         ask: "Ask | None" = None,
         control_reachable: "Callable[[], bool] | None" = None,
+        control_advert: "Callable[[str], str | None] | None" = None,
         provider_for: "Callable[[], Any] | None" = None,
         binding_for: "Callable[[], tuple[Any, str | None]] | None" = None,
         verdict_config: "SubagentDagConfig | None" = None,
@@ -395,6 +396,7 @@ class SubAgentDagTool(Tool):
         # the loop (the controller's predicate); unwired hosts advertise, which
         # is the old contract a test or an offline entry point expects.
         self._control_reachable = control_reachable
+        self._control_advert = control_advert
         # The judge's model call. Injected rather than imported: this tool is built
         # from the same config as the loop but holds no provider of its own, and an
         # unwired host (tests, offline entry points) simply skips the judgement.
@@ -610,6 +612,12 @@ class SubAgentDagTool(Tool):
             # Fenced like an announced report is (SubagentManager.announce_dag_exception):
             # the report quotes the node's output and transcript.
             return ToolResult(
+                # No advertisement appended here: a Report is built only past
+                # `Outbox.put_report`'s awaiting-decision gate, and a suspending
+                # node implies `deliverable` and `remaining > 0`, so the report
+                # this wraps always carries resolve_dag_node's schema already.
+                # Appending it again emitted the definition twice, once inside
+                # the fence as node evidence and once trusted.
                 model_text=wrap_untrusted(event.text, source="subagent") + "\n\n" + _FOREGROUND_REPORT_TAIL,
                 display_text=f"DAG {run_id}: node {event.node_id} needs a decision",
             )
@@ -618,6 +626,27 @@ class SubAgentDagTool(Tool):
         if isinstance(event, Stopped):
             return f"DAG run {run_id} was stopped before it finished."
         raise TypeError(f"not an outbox event: {event!r}")
+
+    def _advert_for(self, *names: str) -> str:
+        """The named hidden control tools' definitions, ready to append to a report.
+
+        Empty string when no renderer is wired (a tool built without a loop, and
+        every test that does the same), so a caller can concatenate without
+        branching. Failures are swallowed for the reason the reachability
+        predicate's are: this text is an aid, and losing it must not turn an
+        accepted submission into an error result.
+        """
+        if self._control_advert is None:
+            return ""
+        rendered: list[str] = []
+        for name in names:
+            try:
+                text = self._control_advert(name)
+            except Exception:  # noqa: BLE001
+                continue
+            if text:
+                rendered.append(f"{name}: {text}")
+        return ("\n\n" + "\n".join(rendered)) if rendered else ""
 
     def _report_announcer(self, run_id: str, origin: _DagOrigin):
         async def _announce(node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False) -> None:
@@ -1183,7 +1212,7 @@ class SubAgentDagTool(Tool):
             f'and stop it with tool_call name "cancel_dag" arguments {{"run_id": "{run_id}"}}. '
             "If a node reports it could not accomplish its task, you will be told, and you answer the "
             'same way with "resolve_dag_node". These three are not in your tool list; tool_call is how '
-            "you reach them. "
+            "you reach them." + self._advert_for("dag_status", "cancel_dag") + "\n\n"
             if reachable
             else ""
         )
@@ -1724,6 +1753,7 @@ class SubAgentDagTool(Tool):
                 max_continuations=self._verdict_config.max_continuations,
                 adjudication_timeout_s=self._verdict_config.adjudication_timeout_seconds,
                 control_reachable=self._control_reachable,
+                control_advert=self._control_advert,
                 released=released,
                 provider=provider,
                 model=model,

@@ -109,19 +109,6 @@ class AcpTimeoutError(AcpError):
     """A request went unanswered within its budget."""
 
 
-class AcpBusyError(AcpError):
-    """The agent's one connection is occupied by a turn already running.
-
-    Distinct from :class:`AcpTimeoutError`, which it refines, because the two
-    demand opposite recoveries and upstream can only act on the message it
-    gets. Measured 2026-09-02: a watch agent's long turn held its connection,
-    every new node's session open timed out behind it, the judge read each
-    timeout as a transport failure, and the re-dispatch loop produced seven
-    adjudication rounds against an agent that was working correctly the whole
-    time. Busy means wait; broken means fix -- this class says wait.
-    """
-
-
 class AcpProtocolError(AcpError):
     """The agent sent something that is not a usable JSON-RPC frame."""
 

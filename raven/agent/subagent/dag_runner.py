@@ -274,6 +274,7 @@ async def run_dag(
     max_continuations: int = 2,
     origin: dict | None = None,
     control_reachable: "Callable[[], bool] | None" = None,
+    control_advert: "Callable[[str], str | None] | None" = None,
     released: asyncio.Event | None = None,
     provider: Any = None,
     model: str | None = None,
@@ -570,6 +571,7 @@ async def run_dag(
                         dependents=dependents,
                         adjudication_timeout_s=adjudication_timeout_s,
                         control_reachable=control_reachable,
+                        control_advert=control_advert,
                         provider=provider,
                         model=model,
                     )
@@ -745,6 +747,7 @@ def _exception_report(
     blocked: list[str],
     timeout_s: float,
     route_available: bool = True,
+    control_advert: "Callable[[str], str | None] | None" = None,
 ) -> str:
     """The text the main agent is woken with. Everything it needs to decide, once.
 
@@ -806,6 +809,17 @@ def _exception_report(
         "sub-agent. Nodes this run completed are referenced, not re-declared -- name one in "
         "depends_on and read it with {{ <id>.output }}; everything else needs a new id."
     )
+    # The invocations above carry this run's ids; this carries the field names,
+    # and it is generated rather than written. A hand-written retelling is what
+    # sent the model looking for a field called `action` (2026-09-03/04): the
+    # examples are a shape to copy, and a shape to copy is not a schema.
+    if control_advert is not None:
+        try:
+            declared = control_advert("resolve_dag_node")
+        except Exception:  # noqa: BLE001 - an aid to the report must not fail it
+            declared = None
+        if declared:
+            lines.append(f"The complete schema of resolve_dag_node: {declared}")
     return "\n".join(lines)
 
 
@@ -826,6 +840,7 @@ async def _apply_verdict(
     dependents: dict[str, list[str]],
     adjudication_timeout_s: float,
     control_reachable: "Callable[[], bool] | None" = None,
+    control_advert: "Callable[[str], str | None] | None" = None,
 ) -> None:
     """Turn a finished node's verdict into a status, and report a bad one.
 
@@ -865,6 +880,7 @@ async def _apply_verdict(
         blocked=sorted(dependents.get(node.id, [])),
         timeout_s=adjudication_timeout_s,
         route_available=answerable,
+        control_advert=control_advert,
     )
     # `origin` is part of this predicate because whoever is going to be asked is
     # reached through it: a node suspended on a report that cannot be delivered
@@ -1169,6 +1185,7 @@ async def _run_group(
     dependents: dict[str, list[str]] | None = None,
     adjudication_timeout_s: float = 600.0,
     control_reachable: "Callable[[], bool] | None" = None,
+    control_advert: "Callable[[str], str | None] | None" = None,
     provider: Any = None,
     model: str | None = None,
 ) -> None:
@@ -1209,6 +1226,7 @@ async def _run_group(
             dependents=dependents,
             adjudication_timeout_s=adjudication_timeout_s,
             control_reachable=control_reachable,
+            control_advert=control_advert,
             provider=provider,
             model=model,
         )
@@ -1342,6 +1360,7 @@ async def _run_node(
     dependents: dict[str, list[str]] | None = None,
     adjudication_timeout_s: float = 600.0,
     control_reachable: "Callable[[], bool] | None" = None,
+    control_advert: "Callable[[str], str | None] | None" = None,
     provider: Any = None,
     model: str | None = None,
 ) -> None:
@@ -1521,6 +1540,7 @@ async def _run_node(
                 dependents=dependents or {},
                 adjudication_timeout_s=adjudication_timeout_s,
                 control_reachable=control_reachable,
+                control_advert=control_advert,
             )
         turn = await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id), node_output)
         ended_at_ms = _now_ms()

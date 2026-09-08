@@ -3,7 +3,8 @@
 The B-side product must hold the same launch contract as its vendored twin
 while consuming installed raven: secrets merge into a rendered 0600 config
 whose parent decides the data dir, the workspace is pinned, the on-call
-guide is seeded byte-equal from the fork's section, and the exec targets
+guide is seeded from the fork's section -- byte-equal modulo the enumerated
+ops_exec respellings (part 2c) -- and the exec targets
 ``python -m raven acp``. The strongest pin is the loader round-trip: what
 the launcher renders, trunk raven's own loader loads.
 """
@@ -46,14 +47,50 @@ def grounded(launcher, tmp_path, monkeypatch):
 # --- byte parity: the one prompt asset and the roster identity --------------
 
 
-def test_the_oncall_section_is_the_vendored_twins():
-    """Byte parity, no exception list.
+# The five ops_exec respellings: the ONLY bytes where the product's guide may
+# differ from the vendored twin's. The fork's exec(machine=...) face landed as
+# its own contributed tool (ops_exec; the same-name exec shadow is an open
+# ruling), so every machine-face mention teaches the name that exists. The
+# local-exec mentions -- the one-off row, the do-not-reproduce-locally warning
+# -- keep the fork's bytes, because plain exec still runs on this computer.
+OPS_EXEC_RESPELLINGS = [
+    (
+        "\u2192 ops_connections, exec(machine=...), ops_declare, ops_submit",
+        "\u2192 ops_connections, ops_exec(machine=...), ops_declare, ops_submit",
+    ),
+    (
+        "never with\n`exec`. Looking through `exec` is fine -- doing it twice costs a round trip. "
+        "Acting\nthrough `exec` leaves no record",
+        "never with\n`ops_exec`. Looking through `ops_exec` is fine -- doing it twice costs a round trip. "
+        "Acting\nthrough `ops_exec` leaves no record",
+    ),
+    (
+        "**`exec` takes a `machine`**",
+        "**`ops_exec` takes a `machine`**",
+    ),
+    (
+        "a size or a hash. Without `machine` it runs here, which is why a path on someone",
+        "a size or a hash. Plain `exec` runs here, which is why a path on someone",
+    ),
+    (
+        "`exec` with a `machine` already reaches it for looking",
+        "`ops_exec` with a `machine` already reaches it for looking",
+    ),
+]
 
-    The respelling table this test used to carry existed because the fork's
-    exec(machine=...) face was contributed under its own name (ops_exec).
-    Trunk exec now carries the machine parameter itself, so the fork's
-    wording is simply true again and the guide is the twin's, byte for byte."""
-    assert PRODUCT_SECTION.read_text(encoding="utf-8") == FORK_SECTION.read_text(encoding="utf-8")
+
+def test_the_oncall_section_is_the_vendored_twins_modulo_the_ops_exec_respellings():
+    """Byte parity with an enumerated exception list, pinned from both ends.
+
+    Every fork sentence on the list must occur exactly once (a fork edit that
+    moves one fails loudly here instead of silently un-pinning it), and the
+    list applied to the fork's bytes must reproduce the product's copy
+    exactly -- so no byte outside the list may drift."""
+    expected = FORK_SECTION.read_text(encoding="utf-8")
+    for theirs, ours in OPS_EXEC_RESPELLINGS:
+        assert expected.count(theirs) == 1, f"fork sentence moved: {theirs[:40]!r}"
+        expected = expected.replace(theirs, ours)
+    assert PRODUCT_SECTION.read_text(encoding="utf-8") == expected
 
 
 def test_the_seeded_guide_is_the_trunk_template_plus_the_section(grounded, tmp_path):
@@ -234,9 +271,8 @@ def test_a_preexisting_own_registry_stays(grounded, tmp_path):
 
 
 #: The vendored twin's visible tool face, hermetically rebuilt: the fork's
-#: config-intent face (the machine face is exec's own `machine` parameter,
-#: not a row of its own). Intent, not leak -- the fork's ACP host never
-#: passed disabled_tools, so its live face showed
+#: config-intent face plus the ledgered ops_exec addition. Intent, not leak --
+#: the fork's ACP host never passed disabled_tools, so its live face showed
 #: four tools its own config disables; trunk enforces the list. Trunk also
 #: grew six tools the fork never had (create_playbook, deliver_files,
 #: find_skill, load_playbook, plugin, run_subagent_dag), and every one must
@@ -258,6 +294,7 @@ VENDORED_TOOL_FACE = {
     "ops_connections",
     "ops_declare",
     "ops_edit_case_dict",
+    "ops_exec",
     "ops_finish",
     "ops_kill",
     "ops_note",

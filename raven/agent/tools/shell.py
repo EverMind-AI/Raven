@@ -258,22 +258,7 @@ class ExecTool(Tool):
 
     @property
     def description(self) -> str:
-        # Two descriptions, because the second sentence is a lie for an owner
-        # who registered no machines. Read per call rather than fixed at
-        # construction -- the registry can be written mid-session, and the loop
-        # rebuilds the tool schema every turn.
-        base = "Execute a shell command and return its output. Use with caution."
-        from raven.agent.tools.machine_exec import machines_registered
-
-        if not machines_registered():
-            return base
-        return (
-            f"{base} "
-            "Runs on THIS computer unless you name a machine: pass 'machine' with a "
-            "connection id from the owner's registry to run it there instead. A machine "
-            "of the owner's is where their code and their cases live, and work that "
-            "outlives the call belongs to a job runner, so this refuses to detach there."
-        )
+        return "Execute a shell command and return its output. Use with caution."
 
     @property
     def truncation_hint(self) -> str:
@@ -289,7 +274,7 @@ class ExecTool(Tool):
 
     @property
     def parameters(self) -> dict[str, Any]:
-        schema: dict[str, Any] = {
+        return {
             "type": "object",
             "properties": {
                 "command": {
@@ -303,74 +288,25 @@ class ExecTool(Tool):
                 "timeout": {
                     "type": "integer",
                     "description": (
-                        "Timeout in seconds for a command on THIS computer. Increase for long-running "
-                        "commands like compilation or installation (default 60, max 600). Not read with "
-                        "'machine': a look on a registered machine is capped at 60s whatever this says, and "
-                        "anything longer there is a job for the on-call agent's ops_submit."
+                        "Timeout in seconds. Increase for long-running commands "
+                        "like compilation or installation (default 60, max 600)."
                     ),
                     "minimum": 1,
                     "maximum": 600,
                 },
-                "run_in_background": {
-                    "type": "boolean",
-                    "description": (
-                        "Run detached on THIS computer instead of holding the turn: for long "
-                        "mechanical local work (a download, an rsync, packaging). Returns a task id "
-                        "and a log path at once; 'timeout' is not read on this lane, the task runs "
-                        "until it finishes or the session ends. Read the log with a later exec. Not "
-                        "combinable with 'machine': work on a registered machine is ops_submit's job."
-                    ),
-                },
             },
             "required": ["command"],
         }
-        from raven.agent.tools.machine_exec import machines_registered
-
-        if machines_registered():
-            schema["properties"]["machine"] = {
-                "type": "string",
-                "description": "Where to run it: a connection id from the owner's machine "
-                "registry, exactly as listed (an unknown id answers with the list). "
-                "Leave out to run on THIS computer.",
-            }
-        return schema
 
     async def execute(
         self,
         command: str,
         working_dir: str | None = None,
         timeout: int | None = None,
-        machine: str = "",
-        run_in_background: bool = False,
         **kwargs: Any,
     ) -> str | ToolResult:
         self._refresh_allow_destructive()
         self._refresh_deny_patterns()
-        # Someone else's machine is a different place with different rules: the
-        # guards below are about this computer (a deny-list for accidents, an
-        # operator's workspace boundary), while there the rule is that work
-        # outliving the call belongs on a ledger. Branching before them keeps
-        # each set where it means something.
-        #
-        # Imported here and nowhere else in the execute path: a caller who
-        # names no machine must not be able to be broken by the ops layer -- a
-        # malformed connection registry has to leave the plain shell working.
-        if machine and run_in_background:
-            # Background work ON a registered machine is the definition of an
-            # ops_submit job; allowing it here would re-legalise the accounting
-            # bypass this boundary exists for (a main agent once drove 35 jobs
-            # over raw ssh nohup, past the occupancy gate, dedup and the GPU
-            # ledger). The two parameters never combine.
-            return (
-                "Error: 'machine' and 'run_in_background' do not combine. Background work on a "
-                "registered machine is a job: submit it with ops_submit (budget, dedup, ledger). "
-                "run_in_background is for long mechanical work on THIS computer. Nothing was run."
-            )
-        if machine:
-            from raven.agent.tools.machine_exec import run_on_machine
-
-            return await run_on_machine(command, connection=machine, cwd=working_dir)
-
         bound = str(workdir.current() or "") if self.follow_binding else ""
         cwd = working_dir or bound or self.working_dir or os.getcwd()
 
@@ -409,34 +345,6 @@ class ExecTool(Tool):
             approval_error = await self._request_approval(command, sandboxed=sandboxed)
             if approval_error:
                 return approval_error
-
-        if run_in_background:
-            # After the guards and the approval on purpose: the background lane
-            # changes where the output goes and who holds the turn, never what
-            # a command is allowed to do.
-            if sandboxed:
-                # The detached child is a host process; starting one from a
-                # sandboxed session would run the command OUTSIDE the sandbox.
-                return (
-                    "Error: run_in_background is not available in a sandboxed session -- the "
-                    "detached process would run outside the sandbox. Run it synchronously, or "
-                    "split the work. Nothing was run."
-                )
-            from raven.agent.tools import background_exec
-            from raven.sandbox.direct_executor import _baseline_env
-
-            # The same environment hygiene as the synchronous path: the child
-            # gets the executor's baseline allowlist, never the full host
-            # environment, so a detached download cannot read credentials the
-            # capped path already withholds.
-            bg_env = _baseline_env()
-            if self.path_append:
-                bg_env["PATH"] = bg_env.get("PATH", "") + os.pathsep + self.path_append
-            try:
-                task = background_exec.start(command, cwd=cwd, env=bg_env)
-            except OSError as exc:
-                return f"Error starting background command: {exc}"
-            return background_exec.start_note(task)
 
         # Use `is None` check — `timeout or default` would treat timeout=0 as falsy.
         effective_timeout = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
