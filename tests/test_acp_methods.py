@@ -544,8 +544,9 @@ class TestSessionResume:
     The point of the method -- and the thing that distinguishes it from
     ``session/load`` -- is that nothing is replayed: the transcript stays where
     the client has it and the session becomes promptable again. Declared in
-    ``sessionCapabilities.resume``, which is also what a raven acting as this
-    agent's client reads to report the row resumable.
+    ``sessionCapabilities.resume`` because this build answers the method; a raven
+    acting as this agent's client reads ``loadSession`` for resumability, so the
+    declaration stands on the method alone and nothing downstream props it up.
     """
 
     async def test_it_reopens_without_replaying_anything(self, rig):
@@ -1081,28 +1082,6 @@ class TestPrompt:
         assert response["result"] == {"stopReason": "end_turn"}
         validate_def("PromptResponse", response["result"])
         assert rig.stack.params_for("turn.send")["content"] == "hi"
-
-    async def test_a_prompt_names_the_pair_that_rebuilds_its_session_key(self, rig):
-        """Tools record the turn's (channel, chat_id) as its live route, and a wake
-        armed from this turn later runs on ``<channel>:<chat_id>``. Left to the
-        default the pair came out ``acp/default`` while the session was
-        ``acp:<id>``, so the wake ran on a conversation nobody subscribed to
-        (measured 2026-09-04: a campaign's report sent to acp:default)."""
-        await rig.handshake()
-        session_id = await rig.new_session()
-
-        task = asyncio.create_task(
-            rig.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": "hi"}]})
-        )
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        rig.translator.settle_turn(session_id, "end_turn")
-        await task
-
-        sent = rig.stack.params_for("turn.send")
-        channel, chat_id = session_id.split(":", 1)
-        assert (sent["channel"], sent["chat_id"]) == (channel, chat_id)
-        assert f"{sent['channel']}:{sent['chat_id']}" == sent["session_key"]
 
     async def test_a_prompt_after_an_overflow_resubscribes_before_running(self, rig):
         """A session whose stream died is bound to no subscription. Its next

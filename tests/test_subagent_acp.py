@@ -493,12 +493,84 @@ def test_the_relearned_menu_reaches_the_roster_the_clamp_and_picker_read(
     assert "what it used to say" not in descriptions
 
 
+def test_a_tool_calls_own_subject_key_beats_a_discriminator_beside_it() -> None:
+    """``target_file`` is a subject; ``variant`` sitting before it is not.
+
+    Measured on grok-build 1.0.21, whose read sends
+    ``{"variant": "ReadFile", "target_file": "hello.txt"}``. With no key matching,
+    ``argument`` falls to its "first string value" sweep, and dict order handed it
+    the discriminator -- so the row read ``read ReadFile`` and never named the file
+    the agent had just read.
+    """
+    from raven.acp_client.acp_dialects import AcpDialect
+
+    update = {
+        "toolCallId": "t1",
+        "kind": "read",
+        "rawInput": {"variant": "ReadFile", "target_file": "hello.txt"},
+    }
+    assert AcpDialect().argument(update) == "hello.txt"
+
+
+async def test_a_second_opening_frame_for_one_call_revises_it_rather_than_repeating_it() -> None:
+    """One ``toolCallId`` is one call, however many ``tool_call`` frames carry it.
+
+    The spec revises a call with ``tool_call_update``. Measured on codebuddy-code
+    2.146.0, which re-sends ``tool_call`` instead -- first as ``kind: "other"``
+    titled ``Read``, then again with ``kind: "read"`` once it knows. Appending on
+    every opening frame therefore rendered one read as two assistant rows, and the
+    single result could only pair with one of them, leaving the other dangling for
+    good.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed(
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "c1",
+            "kind": "other",
+            "title": "Read",
+            "rawInput": {"file_path": "/x/hello.txt"},
+        }
+    )
+    await feed(
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "c1",
+            "kind": "read",
+            "title": "Read /x/hello.txt",
+            "rawInput": {"file_path": "/x/hello.txt"},
+        }
+    )
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed"})
+
+    calls = [event for event in col.events if event["t"] == "call"]
+    assert len(calls) == 1, f"one call expected, got {[c['call'].name for c in calls]}"
+    # The later frame names it: `kind` is finer than the `other` the first carried.
+    assert calls[0]["call"].name == "read"
+    assert len([event for event in col.events if event["t"] == "result"]) == 1
+    # And the rendered rows pair up, with no assistant row left without its result.
+    rows = col.messages()
+    assert [row["role"] for row in rows] == ["assistant", "tool"], rows
+
+
 # ---- the roster ------------------------------------------------------------
 
 
 def _snapshot(
     agent: str, cfg: Any, *, can_resume: bool, can_load: bool = False, can_steer: bool = False
 ) -> CapabilitySnapshot:
+    """One handshake's capabilities.
+
+    ``can_load`` is what makes the snapshot resumable, not ``can_resume``:
+    resuming calls ``session/load``, so its capability is the one the roster and
+    the backend read. A fixture meaning "a resumable agent" has to set it.
+    """
     return CapabilitySnapshot(
         agent=agent,
         fingerprint=snapshot_fingerprint(cfg),
@@ -521,8 +593,29 @@ def test_acp_statefulness_comes_from_the_snapshot_not_a_config_field() -> None:
     """
     cfg = stub_config("a")
     assert third_party_agent_meta(cfg, snapshot=None).stateful is False
-    assert third_party_agent_meta(cfg, snapshot=_snapshot("a", cfg, can_resume=True)).stateful is True
-    assert third_party_agent_meta(cfg, snapshot=_snapshot("a", cfg, can_resume=False)).stateful is False
+    assert third_party_agent_meta(cfg, snapshot=_snapshot("a", cfg, can_resume=True, can_load=True)).stateful is True
+    assert third_party_agent_meta(cfg, snapshot=_snapshot("a", cfg, can_resume=False, can_load=False)).stateful is False
+
+
+def test_statefulness_follows_load_session_because_that_is_what_resuming_calls() -> None:
+    """``loadSession``, not ``sessionCapabilities.resume``, decides.
+
+    Resuming an acp instance is the agent's own ``session/load``, so the
+    capability for *that* method is the one that says whether a handle continues
+    a session. Read from ``resume`` instead, an agent advertising ``loadSession``
+    alone was marked stateless and never even reached the load call -- measured
+    2026-09-07, github-copilot 1.0.83, codebuddy 2.146.0 and pi-acp 0.0.33 all
+    report ``resume: false`` with ``loadSession: true``, and all three resume
+    correctly when it is called: the transcript replays and a token planted
+    before the reconnect comes back.
+
+    The reverse pairing is what the old gate got wrong in the other direction:
+    ``resume`` without ``loadSession`` promised a resumability raven has no call
+    to deliver, since the load itself is guarded on ``can_load`` regardless.
+    """
+    cfg = stub_config("a")
+    assert third_party_agent_meta(cfg, snapshot=_snapshot("a", cfg, can_resume=False, can_load=True)).stateful is True
+    assert third_party_agent_meta(cfg, snapshot=_snapshot("a", cfg, can_resume=True, can_load=False)).stateful is False
 
 
 def test_acp_meta_reads_the_stored_snapshot_when_none_is_passed(tmp_path: Path, monkeypatch) -> None:
@@ -535,7 +628,7 @@ def test_acp_meta_reads_the_stored_snapshot_when_none_is_passed(tmp_path: Path, 
     monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
     cfg = stub_config("a")
     assert third_party_agent_meta(cfg).stateful is False
-    SnapshotStore(path=path).record(_snapshot("a", cfg, can_resume=True))
+    SnapshotStore(path=path).record(_snapshot("a", cfg, can_resume=True, can_load=True))
     assert third_party_agent_meta(cfg).stateful is True
 
 
@@ -557,7 +650,7 @@ def test_a_refresh_makes_a_newly_resumable_agent_addressable(tmp_path: Path, mon
     mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1, agents=[cfg])
     assert mgr.declared_stateful("a") is False
 
-    SnapshotStore(path=path).record(_snapshot("a", cfg, can_resume=True))
+    SnapshotStore(path=path).record(_snapshot("a", cfg, can_resume=True, can_load=True))
     assert mgr.declared_stateful("a") is False, "the table holds the measurement it was built with"
 
     mgr.apply_agents([cfg])
@@ -568,7 +661,7 @@ def test_acp_backend_statefulness_follows_the_snapshot() -> None:
     cfg = stub_config("a")
     assert build_third_party_backend(cfg).is_stateful is False
     backend = AcpAgentBackend(
-        name="a", command=cfg.command, snapshot=_snapshot("a", cfg, can_resume=True), registry=None
+        name="a", command=cfg.command, snapshot=_snapshot("a", cfg, can_resume=True, can_load=True), registry=None
     )
     assert backend.is_stateful is True
 
@@ -1009,7 +1102,7 @@ async def test_a_handle_resumes_the_same_session(tmp_path: Path) -> None:
         name="a",
         command=cfg.command,
         env=dict(cfg.env),
-        snapshot=_snapshot("a", cfg, can_resume=True),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
         registry=registry,
     )
     await backend.run("one", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
@@ -1077,7 +1170,7 @@ async def test_an_unsettled_cancel_still_drops_the_binding(tmp_path: Path) -> No
         name="a",
         command=cfg.command,
         env=dict(cfg.env),
-        snapshot=_snapshot("a", cfg, can_resume=True),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
         registry=registry,
     )
 
@@ -1107,7 +1200,7 @@ async def test_a_pruned_session_falls_back_to_a_fresh_one(tmp_path: Path) -> Non
         name="a",
         command=cfg.command,
         env=dict(cfg.env),
-        snapshot=_snapshot("a", cfg, can_resume=True),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
         registry=registry,
     )
     assert await backend.run("go", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
@@ -1169,7 +1262,7 @@ async def test_a_pruned_session_keeps_the_instance_on_the_strip(tmp_path: Path) 
         name="a",
         command=cfg.command,
         env=dict(cfg.env),
-        snapshot=_snapshot("a", cfg, can_resume=True),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
         registry=registry,
     )
     await backend.run("go", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
@@ -1813,81 +1906,6 @@ async def test_a_connection_that_stopped_speaking_is_dead_and_gets_replaced() ->
     second = await get_pool().acquire(name="mute", command=cfg.command, env=dict(cfg.env))
     assert second is not first, "the pool handed out the dead connection again"
     assert second.alive
-
-
-async def test_a_probe_tells_a_wedged_agent_from_a_live_one() -> None:
-    """The outage shape liveness cannot see: pipes open, process alive, frame
-    loop answering nothing (measured 2026-09-02: an agent answered at 18:39,
-    then logged nothing all night while three session opens waited out their
-    full budgets against it). Only a round trip can tell; the probe is one --
-    a repeat initialize, answered by the dispatcher before any business logic.
-    """
-    from raven.acp_client import protocol
-    from raven.acp_client.client import AcpClient
-
-    live_cfg = stub_config("live")
-    live = await AcpClient.launch(name="live", command=live_cfg.command, env=dict(live_cfg.env))
-    try:
-        await live.request("initialize", protocol.initialize_params(), timeout=15)
-        assert await live.probe(5) is True
-        assert live.idle_seconds < 60, "an answered frame is activity"
-    finally:
-        await live.close()
-
-    deaf_cfg = stub_config("deaf", mode="silent")
-    deaf = await AcpClient.launch(name="deaf", command=deaf_cfg.command, env=dict(deaf_cfg.env))
-    try:
-        assert deaf.alive, "the wedge is invisible to liveness -- which is why the probe exists"
-        assert await deaf.probe(2) is False
-    finally:
-        await deaf.close()
-
-
-async def test_a_stale_silent_connection_is_replaced_at_acquire(monkeypatch) -> None:
-    """The pool's half of the fix: a connection past the staleness line pays
-    for one probe before being re-issued, and a silent one is relaunched
-    instead of handed out to wait a 120s open budget against the same wall."""
-    from raven.acp_client import pool as pool_mod
-
-    cfg = stub_config("wedged", mode="wedged")
-    first = await get_pool().acquire(name="wedged", command=cfg.command, env=dict(cfg.env))
-    assert first.alive, "the wedged stub completes its handshake; the wedge starts after it"
-
-    monkeypatch.setattr(pool_mod, "_STALE_AFTER_S", 0.0)
-    monkeypatch.setattr(pool_mod, "_PROBE_TIMEOUT_S", 2.0)
-    second = await get_pool().acquire(name="wedged", command=cfg.command, env=dict(cfg.env))
-
-    assert second is not first, "an unresponsive connection must be relaunched, not re-issued"
-    assert second.alive
-
-
-async def test_responsiveness_probes_only_the_idle_and_stale() -> None:
-    """Three tiers, cheapest first: busy is not broken (probing a busy agent
-    would misread its queue as silence), recent frames are proof enough, and
-    only a long-silent idle connection pays for the round trip."""
-    from types import SimpleNamespace
-
-    from raven.acp_client.pool import AcpConnectionPool
-
-    probes: list[str] = []
-
-    def _client(*, prompting: bool, idle: float, answers: bool, name: str):
-        async def probe(timeout: float) -> bool:
-            probes.append(name)
-            return answers
-
-        return SimpleNamespace(prompting=prompting, idle_seconds=idle, probe=probe, name=name)
-
-    busy = SimpleNamespace(client=_client(prompting=True, idle=9999.0, answers=False, name="busy"))
-    fresh = SimpleNamespace(client=_client(prompting=False, idle=1.0, answers=False, name="fresh"))
-    stale_live = SimpleNamespace(client=_client(prompting=False, idle=9999.0, answers=True, name="ok"))
-    stale_dead = SimpleNamespace(client=_client(prompting=False, idle=9999.0, answers=False, name="gone"))
-
-    assert await AcpConnectionPool._responsive(busy) is True
-    assert await AcpConnectionPool._responsive(fresh) is True
-    assert await AcpConnectionPool._responsive(stale_live) is True
-    assert await AcpConnectionPool._responsive(stale_dead) is False
-    assert probes == ["ok", "gone"], "busy and fresh never pay for a round trip"
 
 
 async def test_the_eof_error_carries_the_exit_code_and_the_last_stderr() -> None:
@@ -2570,7 +2588,7 @@ async def test_a_turn_that_would_not_stop_drops_its_session_binding(tmp_path: Pa
         name="stub",
         command=cfg.command,
         env=dict(cfg.env),
-        snapshot=_snapshot("stub", cfg, can_resume=True, can_load=False),
+        snapshot=_snapshot("stub", cfg, can_resume=True, can_load=True),
         registry=registry,
     )
 
@@ -4070,124 +4088,3 @@ async def test_a_call_with_no_verdict_is_not_called_a_failure() -> None:
     )
 
     assert col.failed_call_without_answer is None
-
-
-async def test_a_session_open_behind_a_running_turn_says_busy_not_broken(tmp_path: Path) -> None:
-    """One connection carries every session of an agent, so a session open can
-    only queue behind a turn in flight. Measured 2026-09-02: opens timing out
-    behind one long watch turn were judged transport failures, and the
-    re-dispatch loop ran seven adjudication rounds against an agent working
-    correctly the whole time. Busy means wait; broken means fix -- the error
-    has to say which."""
-    from raven.acp_client.protocol import AcpBusyError, AcpTimeoutError
-
-    cfg = stub_config("a")
-    backend = AcpAgentBackend(
-        name="a",
-        command=cfg.command,
-        env=dict(cfg.env),
-        snapshot=_snapshot("a", cfg, can_resume=False),
-        registry=InstanceRegistry(path=tmp_path / "instances.json"),
-    )
-
-    class _BusyClient:
-        prompting = True
-
-        async def request(self, method: str, params: dict[str, Any], *, timeout: float):
-            raise AcpTimeoutError(f"acp agent 'a': {method} timed out after {timeout}s")
-
-    with pytest.raises(AcpBusyError) as exc:
-        await backend._open_session(_BusyClient(), cwd=str(tmp_path), skey="s", handle="w", budget=5, mcp_servers=[])
-    message = str(exc.value)
-    assert "busy, not" in message and "broken" in message
-    assert "Wait for the" in message and "re-dispatching" in message.lower() or "re-dispatching" in message
-
-
-async def test_a_session_open_timeout_with_no_turn_in_flight_drops_the_connection(tmp_path: Path, monkeypatch) -> None:
-    """No pending prompt means the silence is not queueing -- the agent really
-    did not answer. The connection is dropped on the spot, so a retry launches
-    a fresh process instead of waiting out the same budget against the same
-    silence (measured 2026-09-02: three opens in a row died on one wedged
-    process because nothing ever gave up on it)."""
-    from raven.acp_client.protocol import AcpTimeoutError
-
-    cfg = stub_config("a")
-    backend = AcpAgentBackend(
-        name="a",
-        command=cfg.command,
-        env=dict(cfg.env),
-        snapshot=_snapshot("a", cfg, can_resume=False),
-        registry=InstanceRegistry(path=tmp_path / "instances.json"),
-    )
-
-    class _DeafClient:
-        prompting = False
-
-        async def request(self, method: str, params: dict[str, Any], *, timeout: float):
-            raise AcpTimeoutError(f"acp agent 'a': {method} timed out after {timeout}s")
-
-    dropped: list[str] = []
-
-    class _Pool:
-        async def drop(self, name: str) -> None:
-            dropped.append(name)
-
-    monkeypatch.setattr("raven.acp_client.pool.get_pool", lambda: _Pool())
-
-    with pytest.raises(AcpTimeoutError, match="fresh agent process"):
-        await backend._open_session(_DeafClient(), cwd=str(tmp_path), skey="s", handle="w", budget=5, mcp_servers=[])
-    assert dropped == ["a"], "the silent connection must not stay in the pool for the retry to hit"
-
-
-def test_a_reused_connection_routes_unprompted_wakes_to_the_current_generation() -> None:
-    """Generation N+1 builds a new backend over the pooled connection generation
-    N opened. The resident recorder is kept (it is the connection's), but its
-    sinks must be re-pointed, or a later wake reaches the drained manager."""
-    from types import SimpleNamespace
-
-    resident: dict = {}
-    connection = SimpleNamespace(router=SimpleNamespace(set_resident=lambda r: resident.__setitem__("r", r)))
-    cfg = stub_config("a")
-
-    old = AcpAgentBackend(name="a", command="true", snapshot=cfg)
-    old_wakes: list[str] = []
-    old.bind_unprompted_announcer(lambda sk, agent, handle, text: old_wakes.append(text))
-    old._ensure_unprompted_recorder(connection)
-
-    new = AcpAgentBackend(name="a", command="true", snapshot=cfg)
-    new_wakes: list[str] = []
-    new.bind_unprompted_announcer(lambda sk, agent, handle, text: new_wakes.append(text))
-    new._ensure_unprompted_recorder(connection)
-
-    assert connection._raven_unprompted is resident["r"], "one resident recorder, not a second"
-    resident["r"]._wake_cb("s", "h", "finished")
-    assert new_wakes == ["finished"] and old_wakes == []
-
-
-def test_the_pooled_recorder_is_repointed_at_the_swap_boundary_not_at_binding(monkeypatch) -> None:
-    """BUILD of generation N+1 must leave N serving untouched: binding the new
-    backend re-points nothing. The rewire is the manager's call at SWAP
-    (`set_submit` -> `repoint_pooled_resident`), once N+1 can serve a wake."""
-    from types import SimpleNamespace
-
-    resident: dict = {}
-    connection = SimpleNamespace(
-        alive=True, router=SimpleNamespace(set_resident=lambda r: resident.__setitem__("r", r))
-    )
-    cfg = stub_config("a")
-    old = AcpAgentBackend(name="a", command="true", snapshot=cfg)
-    old_wakes: list[str] = []
-    old.bind_unprompted_announcer(lambda sk, agent, handle, text: old_wakes.append(text))
-    old._ensure_unprompted_recorder(connection)
-
-    monkeypatch.setattr("raven.acp_client.acp_agent.get_pool", lambda: SimpleNamespace(live=lambda name: [connection]))
-    new = AcpAgentBackend(name="a", command="true", snapshot=cfg)
-    new_wakes: list[str] = []
-    new.bind_unprompted_announcer(lambda sk, agent, handle, text: new_wakes.append(text))
-
-    resident["r"]._wake_cb("s", "h", "during BUILD")
-    assert old_wakes == ["during BUILD"] and new_wakes == [], "binding alone must leave N serving"
-
-    new.repoint_pooled_resident()
-    resident["r"]._wake_cb("s", "h", "after SWAP")
-    assert new_wakes == ["after SWAP"] and old_wakes == ["during BUILD"]

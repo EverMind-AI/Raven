@@ -1655,6 +1655,21 @@ _Avoid_: conflating it with the roster's `live-progress` tag, which says a trans
 its *intermediate work* (acp only) and is advertised to the model. Reply streaming is
 invisible to the model and is about the answer itself.
 
+**ACP Shim** (`raven/agent/subagent/presets.py:SHIM_LAUNCHED_PRESETS`):
+A dedicated ACP adapter package whose agent lives somewhere else - `pi-acp` driving a local
+`pi`, `@agentclientprotocol/codex-acp` driving `codex`. The one thing a preset is allowed to
+fetch: its command is a pinned `npx` / `uvx` one, because nobody installs a shim on purpose,
+it carries no credential of its own, and there is no local build to defer to - while an
+unpinned `npx -y` would silently change which shim build a user runs. The **agent itself** is
+never fetched; its preset names the bare executable (`opencode acp`, `hermes acp`), so the
+build that answers is the one the user installed, at the version they chose, holding the login
+they already granted. `SHIM_LAUNCHED_PRESETS` declares that split per preset and a test holds
+every acp command to it.
+_Avoid_: inferring it from the command shape. An agent whose own CLI happens to ship on npm
+(`opencode-ai`) is not a shim, and fetching it would run a second copy beside the user's
+install and report the agent as present on a machine that does not have it - `_probe_acp`
+resolves `argv[0]`, and `npx` always resolves.
+
 **Capability Snapshot** (`raven/acp_client/capabilities.py`):
 What one ACP agent reported at its last handshake - protocol version, whether it can
 resume / fork / load a session, whether it takes a Steer (`canSteer`, from
