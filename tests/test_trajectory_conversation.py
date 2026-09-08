@@ -813,3 +813,34 @@ def test_output_only_turn_root_without_children_keeps_start_marker(state):
     assert _labels(records) == ["Turn", "Agent reply"]
     assert records[0].event_time == _ts(1)
     assert records[1].text == "late reply"
+
+
+def test_error_on_output_only_turn_binds_to_reply_not_marker(state):
+    span = _span(
+        "t1",
+        "turn",
+        "session.turn",
+        start=1,
+        end=9,
+        attrs={"turn.output_preview": "failed reply"},
+        status={"code": "ERROR", "message": "failure at end"},
+    )
+    _write_log(state, [span])
+    records = tconv.attempt_conversation(["t1"], state)
+    assert _labels(records) == ["Turn", "Agent reply"]
+    marker, reply = records
+    assert marker.error is None
+    assert reply.error == "failure at end"
+    assert reply.event_time == _ts(9)
+
+
+def test_error_on_bodyless_turn_gets_completion_placeholder(state):
+    span = _span("t1", "turn", "session.turn", start=1, end=9, status={"code": "ERROR", "message": "boom"})
+    _write_log(state, [span])
+    records = tconv.attempt_conversation(["t1"], state)
+    assert _labels(records) == ["Turn", "Session turn"]
+    marker, placeholder = records
+    assert marker.error is None
+    assert marker.event_time == _ts(1)
+    assert placeholder.error == "boom"
+    assert placeholder.event_time == _ts(9)
