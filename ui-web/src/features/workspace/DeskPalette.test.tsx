@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DeskPalette } from './DeskPalette'
 import {
-  DESK_COLUMN_FLOOR, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_GEOMETRY_KEY,
-  DESK_LAUNCHER_EDGE, DESK_TEXT_GAP,
+  DESK_COLUMN_FLOOR, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_DRAG_THRESHOLD,
+  DESK_GEOMETRY_KEY, DESK_LAUNCHER_EDGE, DESK_TEXT_GAP,
 } from './deskGeometry'
 import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
@@ -785,5 +785,150 @@ describe('an empty tab points at the other one', () => {
 
     expect(screen.getByText('gui.ws.dlv_none_sub')).toBeTruthy()
     expect(document.querySelector('.desk-empty-to')).toBeNull()
+  })
+})
+
+/* Dragging the panel by its handle.
+ *
+ * The handle carries the tab strip, so most of what looks like a title bar is
+ * buttons: measured on the running page, 182 of its 298px, the rest broken into
+ * 3px slivers between the tabs. A press there used to return before doing
+ * anything, which left the panel draggable from 39% of its own handle and let
+ * the browser take the gesture instead. So a press has to be able to become
+ * either a drag or a click, and these cases are where the two part.
+ *
+ * Only what the DOM can answer without a layout: which element the press
+ * reaches, whether the panel detached, and whether the tab's click survived.
+ * The two geometry claims -- that the panel follows the hand through the anchor
+ * instead of freezing in it, and that it goes home when released nearby -- are
+ * measured in a browser and recorded in the commit, because happy-dom lays
+ * nothing out and would pass them either way.
+ */
+describe('the panel drags by its handle', () => {
+  const handle = (): HTMLElement => document.querySelector('.desk-drag') as HTMLElement
+  const panel = (): HTMLElement => document.querySelector('.desk-palette') as HTMLElement
+  const tab = (label: string): HTMLElement =>
+    [...document.querySelectorAll<HTMLElement>('.desk-tabs button')]
+      .find((b) => (b.querySelector('.lb')?.textContent || '') === label)!
+
+  /* Whether the handle took the pointer. Recorded rather than silently stubbed,
+     because WHEN capture is taken is the thing one of these cases is about. */
+  let captured = false
+  const press = async (on: HTMLElement, x: number, y: number): Promise<void> => {
+    captured = false
+    const handle = document.querySelector('.desk-drag') as HTMLElement
+    handle.setPointerCapture = () => { captured = true }
+    handle.hasPointerCapture = () => captured
+    handle.releasePointerCapture = () => { captured = false }
+    await act(async () => {
+      on.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: y }))
+    })
+  }
+  const to = async (x: number, y: number): Promise<void> => {
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: x, clientY: y }))
+    })
+  }
+  const release = async (x: number, y: number): Promise<void> => {
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: x, clientY: y }))
+    })
+  }
+  const at = (): { left: string; top: string } => ({ left: panel().style.left, top: panel().style.top })
+
+  it('starts a drag from a tab, which is most of the handle', async () => {
+    render(<DeskPalette />)
+    await act(async () => { desk.update({ paletteOpen: true }) })
+
+    await press(tab('Diff'), 500, 500)
+    await to(500 + DESK_DRAG_THRESHOLD + 20, 520)
+    await release(520 + DESK_DRAG_THRESHOLD, 520)
+
+    expect(panel().dataset.anchored).toBe('false')
+    expect(at().left).not.toBe('')
+  })
+
+  it('leaves a tab its click when the press did not move', async () => {
+    /* The other half of the same rule: a press that goes nowhere is a click,
+       and swallowing it would make the tabs unusable to fix the handle.
+
+       The capture is what this really guards. Taken on `pointerdown`, pointer
+       events retarget the browser's own click to the capture target, so the
+       click never reaches the tab -- measured in a real browser, a press on
+       `Diff` produced a click on `desk-drag` and the tab did not switch. So the
+       case asserts the handle did NOT capture, which is the condition that
+       lets a real click land, and then lets the click run its own course. */
+    render(<DeskPalette />)
+    await act(async () => { desk.update({ paletteOpen: true, tab: 'deliverables' }) })
+
+    await press(tab('Diff'), 500, 500)
+    await release(500, 501)
+
+    expect(captured).toBe(false)
+    await act(async () => {
+      tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(desk.getState().tab).toBe('diff')
+  })
+
+  it('leaves a tab its click when the hand only shook', async () => {
+    /* The threshold's own case, and it needs a MOVE below it: a press with no
+       pointermove at all never reaches the comparison, so it passes whether the
+       threshold is there or not. */
+    render(<DeskPalette />)
+    await act(async () => { desk.update({ paletteOpen: true, tab: 'deliverables' }) })
+
+    await press(tab('Diff'), 500, 500)
+    await to(501, 501)
+    await release(501, 501)
+
+    expect(captured).toBe(false)
+    await act(async () => {
+      tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(desk.getState().tab).toBe('diff')
+    expect(panel().dataset.anchored).toBe('true')
+  })
+
+  it('does not also switch tab on the drag that ended on one', async () => {
+    /* The gesture ends on a button whose click is about to fire. A panel that
+       moved and changed what it shows did two things for one gesture. */
+    render(<DeskPalette />)
+    await act(async () => { desk.update({ paletteOpen: true, tab: 'deliverables' }) })
+
+    await press(tab('Diff'), 500, 500)
+    /* A drag DOES capture, which is what keeps the pointer with the handle
+       while the hand moves -- checked here, because the release gives it
+       straight back. */
+    expect(captured).toBe(false)
+    await to(600, 600)
+    expect(captured).toBe(true)
+    await release(600, 600)
+
+    await act(async () => {
+      tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(desk.getState().tab).toBe('deliverables')
+  })
+
+  it('keeps the press from an ancestor that would act on it too', async () => {
+    /* An ancestor acting on the same gesture is the other half of what reads as
+       a conflict with the page behind -- the desk's own panes carry
+       `onPointerDown` to raise themselves, and the pane header is a drag handle
+       of its own.
+
+       A REACT ancestor, which is what this reaches and what `resize` beside it
+       has always guarded against. React dispatches from the root, so a native
+       listener further up has already had the event by then and
+       `stopPropagation` cannot take it back; a document-level capture listener
+       runs before the target and could not be stopped by anything here either.
+       This pins the half that is actually in reach. */
+    const seen: string[] = []
+    render(<div onPointerDown={() => seen.push('ancestor')}><DeskPalette /></div>)
+    await act(async () => { desk.update({ paletteOpen: true }) })
+
+    await press(handle(), 500, 500)
+
+    expect(seen).toEqual([])
   })
 })
