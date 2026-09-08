@@ -200,6 +200,9 @@ class ConversationGate:
         self._history_messages = history_messages
         self._history_chars = history_chars
         self._reasoning_effort = reasoning_effort
+        # The prompt and the verdict reader are the two seams a subclass may
+        # replace; the call, its budget and every failure direction are not.
+        self._system = _GATE_SYSTEM
 
     async def decide(self, question: str, history: list[dict[str, Any]]) -> TurnMode:
         """Classify one follow-up. Never raises; every failure is a research turn."""
@@ -208,7 +211,7 @@ class ConversationGate:
             response = await asyncio.wait_for(
                 self._provider.chat_with_retry(
                     messages=[
-                        {"role": "system", "content": _GATE_SYSTEM},
+                        {"role": "system", "content": self._system},
                         {"role": "user", "content": user},
                     ],
                     model=self._model,
@@ -233,10 +236,16 @@ class ConversationGate:
             logger.warning("conversation-gate: generation did not complete; running research")
             return TurnMode(True, "gate_error", str(getattr(response, "finish_reason", "")))
         text = visible_answer(getattr(response, "content", None) or "")
-        verdict = self._parse(text)
-        if verdict is None:
+        mode = self._verdict(text)
+        if mode is None:
             logger.warning("conversation-gate: unparseable verdict; running research")
             return TurnMode(True, "gate_unparsed", "")
+        return mode
+
+    def _verdict(self, text: str) -> TurnMode | None:
+        verdict = self._parse(text)
+        if verdict is None:
+            return None
         research, why = verdict
         return TurnMode(research, "gate", why)
 

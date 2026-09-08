@@ -9,6 +9,12 @@ import type { DeskGeometry, DeskPane } from './deskTypes'
 export const DESK_GEOMETRY_KEY = 'raven.gui.desk.geometry.v6'
 export const DESK_ANCHOR_GAP = 12
 export const DESK_SNAP_DISTANCE = 34
+/* How far the pointer travels before a press on the handle becomes a drag.
+   The handle is mostly tab buttons -- measured on the running page, 182 of its
+   298px -- so a press there has to be able to become either, and this is where
+   the two part. Small enough that a deliberate drag is never mistaken for a
+   click, large enough that a click's own jitter is never mistaken for a drag. */
+export const DESK_DRAG_THRESHOLD = 4
 export const DESK_MIN_SIZE = 250
 export const DESK_MAX_SIZE = 480
 export const DESK_VIEWPORT_GUTTER = 8

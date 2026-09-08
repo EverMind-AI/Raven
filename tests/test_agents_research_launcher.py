@@ -107,7 +107,7 @@ def test_the_render_boards_the_flow_plugin_and_the_modes(grounded, tmp_path):
     modes = data["acp"]["modes"]
     assert list(modes) == ["medium", "high", "max"] and data["acp"]["defaultMode"] == "medium"
     assert modes["medium"]["overlay"]["drFlow"] == {}
-    assert modes["high"]["overlay"]["drFlow"]["maxIterations"] == 30
+    assert modes["high"]["overlay"]["drFlow"]["maxIterations"] == 60
     assert modes["max"]["overlay"]["drFlow"]["sufficiency"] == {"enabled": False}
 
 
@@ -130,7 +130,7 @@ def test_every_mode_ships_one_iteration_budget_the_loop_and_the_flow_share(groun
     modes = data["acp"]["modes"]
     assert {name: entry["maxToolIterations"] for name, entry in modes.items()} == {
         "medium": 20,
-        "high": 30,
+        "high": 60,
         "max": 150,
     }
     for name, entry in modes.items():
@@ -173,11 +173,48 @@ def test_the_shipped_config_claims_no_tool_fence_it_does_not_own(grounded):
     assert data["tools"]["disabledTools"], "the fence that IS enforced stays declared"
 
 
-def test_the_modes_are_the_vendored_twins_overlays(tmp_path):
+#: Mode overlays the twins deliberately disagree on, with the reason. Same rule as
+#: TWIN_DRFLOW_DIVERGED: the file must exist on both sides and differ, so a row cannot
+#: outlive the divergence it records.
+TWIN_MODES_DIVERGED = {
+    "high.json": (
+        "the trunk product's modes are three stop rules rather than three sizes of one "
+        "budget: high drops the sufficiency release instead of moving its threshold, and "
+        "terminates on the reviewer (maxRevisions 3, reviewFinalDraft, evidenceRound). "
+        "The fork's overlay is the one a published batch measured, and that batch is what "
+        "showed the fork's high and its baseline to be the same arm"
+    ),
+    "max.json": (
+        "same redesign one tier up: max keeps high's review bar and adds the evidence "
+        "floor (evidenceFloor: 18 readable pages from 8 sites before a draft may ship), "
+        "a gate consulted on every draft. Its first cut used the retrieval ladder instead "
+        "and measured inverted against high, because the ladder never fired. The fork's "
+        "overlay stays as measured"
+    ),
+}
+
+
+def test_the_modes_are_the_vendored_twins_overlays_or_say_why():
+    """The two launchers' overlays, held equal except where a row says otherwise.
+
+    Both trees carried byte-identical overlays until 2026-09-07, and the pin is what
+    kept a fork edit from reaching the product silently. The product has since
+    redesigned what a mode IS, which the fork must not follow: its overlays are the
+    ones whose numbers were published.
+    """
     ours = RUN_PY.parent / "modes"
     theirs = REPO / "subagents" / "raven-research" / "modes"
-    for name in ("high.json", "max.json"):
-        assert json.loads((ours / name).read_text()) == json.loads((theirs / name).read_text())
+    assert {p.name for p in ours.glob("*.json")} == {p.name for p in theirs.glob("*.json")}, (
+        "one side gained or lost a mode file; a mode that exists on only one launcher is a mode nobody compared"
+    )
+    for path in sorted(ours.glob("*.json")):
+        mine = json.loads(path.read_text())
+        theirs_doc = json.loads((theirs / path.name).read_text())
+        reason = TWIN_MODES_DIVERGED.get(path.name)
+        if reason is None:
+            assert mine == theirs_doc, f"{path.name}: give the divergence a row and a reason"
+        else:
+            assert mine != theirs_doc, f"{path.name}: agrees again, drop its row ({reason})"
 
 
 def test_the_identity_is_the_vendored_twins_override_verbatim():
@@ -195,7 +232,42 @@ TWIN_DRFLOW_EXCEPTIONS = {
 #: Keys both twins write and deliberately disagree on, with the reason. Unlike the table
 #: above these must be PRESENT in both and UNEQUAL, so an entry cannot outlive the
 #: divergence it records: when the fork catches up, this test reddens and the row goes.
+#: Keys only the product writes, with the reason the fork has no row for them. They
+#: must be PRESENT in the trunk slice and ABSENT from the fork's, so an entry cannot
+#: outlive the divergence: when the fork gains the knob, the row moves to the table above.
+TWIN_DRFLOW_PRODUCT_ONLY = {
+    "plainFirst": (
+        "the baseline mode answers settled general knowledge without a research round: "
+        "web tools withheld for the first model call, the plain draft judged, anything "
+        "else escalated to research. Measured on 45 FreshQA research questions with no "
+        "false plain answer and on 35 settled ones with 29 accepted; the fork has no such "
+        "gate and its schema would refuse the key"
+    ),
+}
+
 TWIN_DRFLOW_DIVERGED = {
+    "sufficiency": (
+        "the trunk product raised the judge's budget from 30s/15s to 60s/30s. Every "
+        "attempt on a measured batch stalled past 15s and the gate returned no verdict "
+        "in any of the medium arm's five turns, so the baseline mode's own stop rule was "
+        "unreachable. It also turns on judgeListing, the pre-page judgement over the first "
+        "search listing that lets a settled question ship on snippets; the fork has no "
+        "such knob. The fork's arm is the one that measured; its numbers stay"
+    ),
+    "verify": (
+        "the trunk product pins the reviewer's effort low. Inherited from the agent "
+        "default (high) the verdict was truncated before it was emitted on 6 of 15 turns "
+        "and failed the gate open, which the deep modes now terminate on. It also spends "
+        "the reviewer's budget as one uninterrupted attempt (300s, 360s in the deep modes) "
+        "under a 16384-token cap: on one draft the call ran 44-300s and 3 of 9 calls "
+        "overran 8192 tokens, so a 40s or 120s slice killed verdicts that were minutes "
+        "from arriving. The fork keeps the inherited form its numbers were measured under"
+    ),
+    "finalShape": (
+        "the trunk product turns reportBounce on for every mode: a missing report section "
+        "is a shape defect, not a depth setting, and it belongs to no tier. Measured at 0 "
+        "bounces over 15 turns, so it costs the baseline nothing. The fork ran it off"
+    ),
     "version": (
         "the trunk product's flow now carries the numeric-discipline rule in its deep "
         "report clause and in its reviewer rubric, and the fork's does not. Two "
@@ -220,8 +292,11 @@ def test_the_flow_slice_is_the_vendored_twins_drflow_verbatim():
     """
     fork = json.loads((REPO / "subagents" / "raven-research" / "config.json").read_text())["drFlow"]
     twin = json.loads((RUN_PY.parent / "config.json").read_text())["plugins"]["config"]["research-flow"]
-    skip = set(TWIN_DRFLOW_EXCEPTIONS) | set(TWIN_DRFLOW_DIVERGED)
+    skip = set(TWIN_DRFLOW_EXCEPTIONS) | set(TWIN_DRFLOW_DIVERGED) | set(TWIN_DRFLOW_PRODUCT_ONLY)
     expected = {k: v for k, v in fork.items() if k not in skip}
+    for key, reason in TWIN_DRFLOW_PRODUCT_ONLY.items():
+        assert key in twin, f"{key} left the trunk slice; drop it from TWIN_DRFLOW_PRODUCT_ONLY"
+        assert key not in fork, f"{key} is written by the fork now: move it to TWIN_DRFLOW_DIVERGED ({reason})"
     for key in TWIN_DRFLOW_EXCEPTIONS:
         assert key in fork, f"{key} left the fork config; drop it from TWIN_DRFLOW_EXCEPTIONS"
         assert key not in twin, f"{key} is carried by {TWIN_DRFLOW_EXCEPTIONS[key]}, not by this slice"
@@ -308,7 +383,7 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
     )[1]
     digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
 
-    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank"
+    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain"
     assert digest == "baf5019c4141a463", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
@@ -572,7 +647,7 @@ def test_the_budget_the_launcher_ships_is_the_one_both_observers_divide_by(groun
         context_window_tokens=cfg.context_window_tokens or 0,
     )
 
-    for name, expected in (("medium", 20), ("high", 30), ("max", 150)):
+    for name, expected in (("medium", 20), ("high", 60), ("max", 150)):
         entry = data["acp"]["modes"][name]
         slot = hook._resolve(
             AgentHookContext(

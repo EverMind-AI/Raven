@@ -18,6 +18,14 @@ Four of the fork's fields are deliberately absent: ``toolsAllowlist``,
 the fork's LOOP, and no seam here reaches them. See ``_RETIRED_KEYS`` for who
 owns each surface now and why they are not merely accepted and ignored.
 
+Three fields are this product's own and the fork has no twin for them: ``evidenceFloor``,
+the per-mode evidence demand that makes ``max`` a different stop rule (see
+``gates/evidence_floor.py``); ``sufficiency.judgeListing``, the pre-page judgement that
+lets a settled question ship on search snippets; and ``plainFirst``, the first-reply
+experiment that withholds the web tools until the model has answered or asked for
+research (``gates/plain_first.py``). The parity test names all three, so a fourth has to
+be declared there too rather than slipping in beside them.
+
 ``with_overlay`` is the per-mode entry point: a session mode's ``drFlow`` diff
 (camelCase, arbitrary depth) is deep-merged over the base dict and the result
 re-validated, so a mode changes exactly the knobs it names and nothing else.
@@ -150,6 +158,61 @@ class FetchGateConfig(_Base):
     batch stranded two runs with the attempt-counting valve above at zero."""
 
 
+class EvidenceFloorConfig(_Base):
+    """Evidence demanded before a draft may ship: bounced back to research until it is met.
+
+    This product's own gate, absent from the fork. Off by default and switched on by one
+    mode: it is what makes ``max`` a different stop rule from ``high`` rather than a longer
+    budget, because it is evaluated on every draft instead of waiting on a reviewer's
+    rejection or a dry search streak.
+    """
+
+    enabled: bool = False
+    min_pages: int = 18
+    min_domains: int = 8
+    max_rollbacks: int = 2
+
+
+class PlainFirstConfig(_Base):
+    """First reply without web tools: answer from general knowledge or ask for research.
+
+    Product-only; the class default is off, the product's medium slice turns it on and
+    the deep modes turn it back off. The web tools are withheld for the first model
+    call of a session's first research turn, and of any later turn the conversation
+    gate classes as a new common-knowledge topic; the model either answers or calls
+    ``request_research``. A plain answer is then put to an independent judge
+    (``judge``) that decides two things at once: whether the question is settled general
+    knowledge, and whether the draft is sound. Anything else, and any judge failure,
+    sends the turn into research with the draft kept as a hypothesis.
+
+    ``judge`` may not be switched off while ``enabled`` is on: without it a plain draft
+    ships through ``accepted_unjudged``, the one path that checks nothing.
+    """
+
+    enabled: bool = False
+    judge: bool = True
+    judge_model: str | None = None
+    judge_timeout_seconds: float = 90.0
+    judge_max_tokens: int = 8192
+    # ``None`` leaves the provider's generation default, for backends that reject
+    # the parameter. At the default effort the judge ran 20-500s per call on a
+    # reasoning model; ``low`` keeps the verdicts and cuts the tail.
+    judge_reasoning_effort: str | None = "low"
+
+    @model_validator(mode="after")
+    def _the_judge_stays_on(self) -> "PlainFirstConfig":
+        if self.enabled and not self.judge:
+            raise ValueError("plainFirst.judge cannot be false while plainFirst.enabled is true")
+        return self
+
+    # What the evidence reviewer does with an accepted plain answer. The judge has
+    # already checked the draft's soundness alongside the question's class, and the
+    # reviewer's own rubric is claims against evidence there is none of, so ``skip``
+    # ships the judged draft; ``full`` consults the reviewer anyway. Any draft written
+    # after research is reviewed in full regardless.
+    review: Literal["skip", "full"] = "skip"
+
+
 class SufficiencyConfig(_Base):
     """First-round sufficiency gate: judge retrieved evidence, note when it answers."""
 
@@ -157,6 +220,11 @@ class SufficiencyConfig(_Base):
     model: str | None = None
     min_searches: int = 1
     min_fetches: int = 1
+    # Product-only (the fork has no such field): also ask the judge once on the first
+    # search listing, before any page is opened. A release there lets a settled
+    # question ship on snippets; an insufficient verdict there leaves the page-floor
+    # judgement above exactly as it was.
+    judge_listing: bool = False
     timeout_seconds: float = 60.0
     attempt_timeout_seconds: float = 30.0
     max_tokens: int = 2048
@@ -308,6 +376,17 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     # The fork's live profile at the new rung is not this product's: the deep report
     # clause and the reviewer rubric carry the numeric, identifier and ranking rules here.
     "dr@3.7-filetools-askuser-derive": "dr@3.7-filetools-askuser-derive-numeric-cite-rank",
+    # 2026-09-07: the three modes stopped being three sizes of one budget and became
+    # three stop rules -- medium keeps the sufficiency release and answers settled general
+    # knowledge without a research round (plainFirst), high and max drop both and
+    # terminate on the reviewer, max on an evidence floor before it. A medium report that
+    # cites nothing is now a possible output of the label, so the label moves; the fork
+    # runs none of it.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain",
+    # The interim label this branch's 2026-09-07 batches ran under before it rebased onto
+    # the cite-rank clause and the dr@3.7 rung; never shipped, retired so those bench
+    # configs still load.
+    "dr@3.5-filetools-askuser-derive-numeric-tiers-plain": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain",
 }
 
 
@@ -435,6 +514,8 @@ class FlowConfig(_Base):
     fetch_floor: FetchFloorConfig = Field(default_factory=FetchFloorConfig)
     fetch_gate: FetchGateConfig = Field(default_factory=FetchGateConfig)
     sufficiency: SufficiencyConfig = Field(default_factory=SufficiencyConfig)
+    evidence_floor: EvidenceFloorConfig = Field(default_factory=EvidenceFloorConfig)
+    plain_first: PlainFirstConfig = Field(default_factory=PlainFirstConfig)
     final_shape: FinalShapeConfig = Field(default_factory=FinalShapeConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     ask_user: AskUserConfig = Field(default_factory=AskUserConfig)
@@ -495,6 +576,30 @@ class FlowConfig(_Base):
             )
         return self
 
+    @model_validator(mode="after")
+    def _plain_first_needs_the_conversation_frame(self) -> "FlowConfig":
+        """Refuse ``plainFirst`` on while ``conversation`` is off.
+
+        The gate fires only on a turn the frame has marked first or plain, and the frame
+        that marks them (``TurnFrame``) returns before doing so when the conversation
+        surface is off. The pair would build a gate, write its ``installed`` row, and never
+        produce an outcome - a silence an operator cannot tell from a gate that never
+        fired. Caught here, the way ``plainFirst.judge`` is.
+        """
+        if self.enabled and self.plain_first.enabled and not self.conversation.enabled:
+            raise ValueError(
+                "plainFirst.enabled requires conversation.enabled: the frame that marks a first turn is off"
+            )
+        if self.enabled and self.plain_first.enabled and self.evidence_floor.enabled:
+            # An accepted plain answer rests on zero pages, and the floor is consulted
+            # on every draft the plain-first gate lets stand: together they would
+            # bounce every plain answer twice and release it, so no plain answer
+            # could ship. One is the baseline's door, the other is max's floor.
+            raise ValueError(
+                "plainFirst.enabled and evidenceFloor.enabled cannot both be true: the floor would bounce every plain answer"
+            )
+        return self
+
     @property
     def ask_user_on(self) -> bool:
         """The clarify round, resolved the way the fork's assembly resolved it:
@@ -540,11 +645,13 @@ __all__ = [
     "BudgetNoteConfig",
     "ConversationConfig",
     "DigestConfig",
+    "EvidenceFloorConfig",
     "FetchFloorConfig",
     "FetchGateConfig",
     "FinalShapeConfig",
     "FlowConfig",
     "ForceFinalizeConfig",
+    "PlainFirstConfig",
     "SearchConfig",
     "SearchSaturationConfig",
     "SpinBreakerConfig",

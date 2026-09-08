@@ -148,9 +148,10 @@ class TestDeclaredCapabilities:
         assert "session/list" not in UNIMPLEMENTED_METHODS
 
     def test_resume_is_declared_only_because_the_method_answers(self):
-        """``sessionCapabilities.resume`` is what a raven acting as this agent's
-        client reads to report the row resumable, so the declaration and the
-        method cannot drift apart."""
+        """Declared because this build answers ``session/resume``, so the
+        declaration and the method cannot drift apart. Nothing downstream props
+        it up: a raven acting as this agent's client reads ``loadSession`` to
+        report the row resumable, not this capability."""
         from raven.acp.methods import UNIMPLEMENTED_METHODS
 
         assert "resume" in agent_capabilities()["sessionCapabilities"]

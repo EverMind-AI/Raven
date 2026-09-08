@@ -44,6 +44,7 @@ class FakeHost:
         self.case_written: list[str] | None = None
         self.remembered_writes: dict[str, list[str]] = {}
         self.resources: dict[str, tuple[float, int]] = {}
+        self.busy_gpus: dict[str, int] = {}
 
     @staticmethod
     def _key(cmd: str) -> str:
@@ -150,6 +151,9 @@ class FakeHost:
             return 0, "\n".join(json.dumps(r) for r in self.jobs.get(key, {}).get("progress", []))
         if cmd.startswith("tail -n") and "job.log" in cmd:
             return 0, "traceback: boom"
+        if "nvidia-smi --query-gpu=index,memory.used" in cmd:
+            asked = cmd.split(" -i ", 1)[1].split(" ", 1)[0].split(",")
+            return 0, "\n".join(f"{i}, {self.busy_gpus.get(i, 12)}" for i in asked)
         return 0, ""
 
     # -- helpers a test uses to move the world --
@@ -1205,3 +1209,22 @@ async def test_two_jobs_on_gate_assigned_cards_each_pay_while_pinned_jobs_share(
     pinned.finish("a", minutes=10.0)
     pinned.finish("b", minutes=10.0)
     assert await exe2.spent_minutes() == pytest.approx(10.0), "the template's one device, busy once"
+
+
+@pytest.mark.asyncio
+async def test_busy_devices_names_the_cards_a_stranger_holds_and_nothing_else():
+    """The probe the gate runs before assigning ids: a card over the foreign-use
+    threshold is busy with how much it holds; idle cards, a machine without
+    nvidia-smi, and a failed probe all answer empty, because a probe that cannot
+    answer must not refuse."""
+    host = FakeHost()
+    host.busy_gpus = {"0": 40960}
+    exe = _exe(host)
+
+    assert await exe.busy_devices(["0", "1"]) == {"0": 40960}
+    assert await exe.busy_devices([]) == {}
+
+    def broken(cmd):
+        return 1, "nvidia-smi: not found"
+
+    assert await _exe(broken).busy_devices(["0"]) == {}

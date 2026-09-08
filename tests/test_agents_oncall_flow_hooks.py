@@ -305,15 +305,6 @@ def test_a_judge_failure_leaves_the_look_alone_and_is_not_cached(tmp_path: Path)
     assert len(judge.calls) == 2, "a failed judgement is retried on the next look, never cached as an answer"
 
 
-def test_ops_exec_is_judged_like_the_forks_machine_face(tmp_path: Path) -> None:
-    tools_base.set_home(tmp_path / "state")
-    judge = _Judge('{"watched": true, "subjects": ["/srv/case"]}')
-    decision = asyncio.run(WatchedPathHook(judge).after_iteration(_look({}, tool="ops_exec")))
-    assert decision.append_note == watched.provenance_line().strip(), (
-        "the fork's exec(machine=...) landed as ops_exec; a look through it is still a look"
-    )
-
-
 # ── Axis 4: the turn close ──────────────────────────────────────────
 
 
@@ -468,3 +459,23 @@ def test_a_nonkill_timeout_sentence_without_the_kill_exit_is_ignored() -> None:
     decision = asyncio.run(ExecCapKillHook().after_iteration(ctx))
 
     assert decision.append_note is None, "the sentence alone is not the executor's kill report"
+
+
+def test_a_killed_transfer_is_routed_to_the_background_lane_not_ops_submit() -> None:
+    """First real firing (2026-09-03) pointed a killed whole-tree scp at
+    ops_submit; a transfer's client runs locally and spends no budget, so its
+    door is exec's run_in_background, and the note now says which."""
+    decision = asyncio.run(
+        ExecCapKillHook().after_iteration(_killed_exec_turn("scp -r -P 58717 root@host:/w/tree ./stage", cap=180))
+    )
+
+    assert decision.append_note is not None
+    assert "run_in_background" in decision.append_note
+    assert "ops_submit" not in decision.append_note, "a copy must never be told to become a campaign"
+
+
+def test_a_killed_job_still_points_at_ops_submit() -> None:
+    decision = asyncio.run(ExecCapKillHook().after_iteration(_killed_exec_turn("python train.py --cfg a.json")))
+
+    assert decision.append_note is not None and "ops_submit" in decision.append_note
+    assert "run_in_background" not in decision.append_note

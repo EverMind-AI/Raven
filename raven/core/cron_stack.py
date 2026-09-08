@@ -462,4 +462,59 @@ def build_cron_service(*, allowed_channels: "set[str] | None") -> "CronService":
     return CronService(get_cron_dir() / "jobs.json", allowed_channels=allowed_channels)
 
 
-__all__ = ["build_cron_service", "make_on_cron_job", "make_on_missed_foreign", "chain_cron_activity_reset"]
+def make_on_session_wake(
+    *,
+    submit: "Callable[[TurnRequest], TurnHandle]",
+    channel: str,
+) -> Callable[["CronJob"], Awaitable[str | None]]:
+    """Build the on_job callback for a stack whose client watches one session.
+
+    ``make_on_cron_job`` runs a fired job as a reminder to the main agent on a
+    conversation of the job's own (``cron:<job_id>``), and the surface shows the
+    reply through the tui fan-out. An ACP client has neither: it learns what an
+    agent does from ``session/update`` on the session it subscribed to, and a
+    turn run anywhere else is a round that happened where nobody is listening.
+    Measured 2026-09-04 on a /new-instance on-call session: two wakes fired,
+    fifteen trials ran, the campaign closed and its report went out -- and not
+    one frame reached the client after the operator's last prompt.
+
+    So the job runs ON the session that scheduled it. The session is not looked
+    up: a job records the ``(channel, to)`` of the turn that created it, the ACP
+    prompt gives every turn the pair that rebuilds its own session key, and
+    ``<channel>:<chat_id>`` IS that key. The wake's text goes in verbatim -- the
+    on-call agent is the addressee and a wake turn's message is the whole of what
+    it gets -- and the origin stays CRON so the loop's cron-context guard applies.
+    A prompt in flight is unaffected: the translator defers a runtime turn's
+    ending rather than letting it answer the prompt.
+    """
+    from raven.spine import ChatType, Origin, Source, TurnRequest
+
+    async def on_session_wake(job: "CronJob") -> str | None:
+        job_channel = (job.payload.channel or channel).strip()
+        chat_id = (job.payload.to or "default").strip()
+        conversation = f"{job_channel}:{chat_id}"
+        req = TurnRequest(
+            origin=Origin.CRON,
+            source=Source(channel=job_channel, chat_id=chat_id, sender_id="cron", chat_type=ChatType.DM),
+            text=job.payload.message or "",
+            conversation=conversation,
+        )
+        logger.info("Cron: wake '{}' running on {}", job.name, conversation)
+        outcome = await submit(req).result()
+        if outcome is None:
+            raise RuntimeError("turn was cancelled or failed before it completed")
+        return None
+
+    # Read by the assembly tests: which of the two callbacks a stack wired is
+    # otherwise invisible from outside.
+    on_session_wake.runs_on_session = True  # type: ignore[attr-defined]
+    return on_session_wake
+
+
+__all__ = [
+    "build_cron_service",
+    "make_on_cron_job",
+    "make_on_missed_foreign",
+    "make_on_session_wake",
+    "chain_cron_activity_reset",
+]

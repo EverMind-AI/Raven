@@ -159,6 +159,56 @@ def _slug(text: str) -> str:
     return mint_slug(text)
 
 
+_ALIAS_MARK = "# raven connection {conn_id} (managed; rewritten on every add)"
+
+
+def _write_ssh_alias(row: dict[str, Any]) -> str | None:
+    """Keep a ``Host <id>`` alias in ``~/.ssh/config`` for an ssh row.
+
+    Transfers cannot ride the exec machine channel -- rsync and scp run their
+    client HERE and only address the machine -- so without an alias every
+    transfer carries the raw address, and the raw address then has to live in
+    the model's context (measured 2026-09-03: a task statement shipped the
+    ssh string because nothing else could address the machine). With the
+    alias, ``rsync ... <id>:...`` resolves inside ssh's own config and the
+    context carries only the registry name.
+
+    One managed block per id, replaced in full on re-add; everything outside
+    the markers is the owner's and is never touched. Returns the alias, or
+    None when there is nothing to write (a local row) -- a failure is
+    reported by the caller as a warning, never as a refusal: the alias is a
+    convenience beside the registry, not part of it.
+    """
+    from raven.ops.connections import LOCAL, transport_of
+
+    if transport_of(row) == LOCAL:
+        return None
+    conn_id = str(row["id"])
+    mark = _ALIAS_MARK.format(conn_id=conn_id)
+    block = "\n".join(
+        [
+            mark,
+            f"Host {conn_id}",
+            f"  HostName {row.get('host')}",
+            f"  Port {int(row.get('port') or 22)}",
+            f"  User {row.get('user') or 'root'}",
+            f"  IdentityFile {row.get('key') or '~/.ssh/id_rsa'}",
+            mark,
+        ]
+    )
+    path = Path(os.path.expanduser("~/.ssh/config"))
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if mark in text:
+        head, _, rest = text.partition(mark)
+        _, _, tail = rest.partition(mark)
+        text = head.rstrip("\n") + ("\n" if head.strip() else "") + tail.lstrip("\n")
+    text = (text.rstrip("\n") + "\n\n" if text.strip() else "") + block + "\n"
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o600)
+    return conn_id
+
+
 def _ask(label: str, default: str = "", *, required: bool = True) -> str:
     while True:
         got = str(typer.prompt(label, default=default, show_default=bool(default))).strip()
@@ -257,6 +307,13 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
         console.print("[red]Nothing was written.[/red]")
         raise typer.Exit(1) from None
     console.print(f"[green]wrote {row['id']} to {written}[/green]")
+    try:
+        alias = _write_ssh_alias(row)
+    except OSError as exc:
+        console.print(f"[yellow]ssh alias not written ({exc}); transfers will need the address by hand[/yellow]")
+    else:
+        if alias:
+            console.print(f"[green]ssh alias '{alias}' written to ~/.ssh/config (rsync/scp reach it by id)[/green]")
 
 
 @connection_app.command("list")

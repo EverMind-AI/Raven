@@ -126,6 +126,68 @@ describe('transcript island, history', () => {
   /* Whether a tool result counts as a failure is the source's call, not this
      island's: the two modes classify differently. Nothing asserted that the row
      reflects the answer, so okOf could return anything and stay green. */
+  /* A clock only says a step is alive if it advances, so these run the timers
+   * rather than reading the first frame.
+   */
+  it('advances the clock on a step in flight', () => {
+    vi.useFakeTimers()
+    try {
+      act(() => { mount.ask('read it') })
+      act(() => {
+        const step = mount.step()
+        step.tool('read_file', { path: '/tmp/a.log' }, null)
+      })
+      /* The last row: a step renders its summary row first and only hides it
+         while there is one call, so `.wrow` alone matches that one. */
+      const row = (): Element => [...document.querySelectorAll('.wrow')].at(-1)!
+      expect(row().querySelector('.runms')!.textContent).toBe('\u2026')
+
+      act(() => { vi.advanceTimersByTime(2100) })
+
+      /* The value, not merely a re-render: an implementation that computed once
+         and never scheduled another frame would still show the ellipsis. */
+      expect(row().querySelector('.runms')!.textContent).toBe(store.durText(2100))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('advances it on the summary a multi-call step actually shows', () => {
+    /* Two calls close the work list and the rows behind it are not mounted, so
+       the summary is the only running row a reader sees. */
+    vi.useFakeTimers()
+    try {
+      act(() => { mount.ask('read both') })
+      act(() => {
+        const step = mount.step()
+        step.tool('read_file', { path: '/tmp/a.log' }, null).done(true, 'line1', 12)
+        step.tool('read_file', { path: '/tmp/b.log' }, null)
+      })
+      const sum = (): Element => document.querySelector('.wk > .wrow.sum')!
+      expect(sum()).not.toBeNull()
+      expect(sum().querySelector('.runms')!.textContent).toBe('\u2026')
+
+      act(() => { vi.advanceTimersByTime(2100) })
+
+      expect(sum().querySelector('.runms')!.textContent).toBe(store.durText(2100))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('gives a finished step its chevron back, not a clock', () => {
+    act(() => { mount.ask('read it') })
+    act(() => {
+      const step = mount.step()
+      step.tool('read_file', { path: '/tmp/a.log' }, null).done(true, 'line1', 12)
+    })
+
+    const row = [...document.querySelectorAll('.wrow')].at(-1)!
+    expect(row.className).not.toContain('run')
+    expect(row.querySelector('.runms')).toBeNull()
+    expect(row.querySelector('.vb')!.textContent).toContain('read_file')
+  })
+
   it('marks a tool row bad only when the source calls its result a failure', () => {
     act(() => {
       mount.history([

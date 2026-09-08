@@ -324,6 +324,10 @@ const CallRow = memo(function CallRow({ lane, seg, c }: { lane: Lane; seg: StepD
     + (withDtl ? ' tog' : '')
     + (withDtl && c.open ? ' open' : '')
   const err = c.done && !c.ok ? store.firstErrLine(c.res) : ''
+  /* Nothing else on a running row changes, so without this it cannot be told
+     from a stopped one. Same hook and wording as the spawn card and the dag
+     row, down to the ellipsis under a second. */
+  const elapsed = useTick(!c.done, c.t0)
   return (
     <>
       <div ref={rowRef} className={cls}
@@ -337,7 +341,11 @@ const CallRow = memo(function CallRow({ lane, seg, c }: { lane: Lane; seg: StepD
           <span className="diffn"><span className="a">+{c.hunk.add}</span> <span className="d">-{c.hunk.del}</span></span>
         ) : null}
         {err ? <span className="err">{err}</span> : null}
-        {!c.done ? <span className="cvslot" /> : withDtl ? <Chev /> : null}
+        {/* Where the chevron sits once the row is finished, so the eye finds
+            both in one place. */}
+        {!c.done
+          ? <span className="runms">{elapsed >= 1000 ? store.durText(elapsed) : '\u2026'}</span>
+          : withDtl ? <Chev /> : null}
       </div>
       {/* Built on opening, not merely hidden when shut. `hidden` spares the
           layout and the paint but not the nodes, and a shut detail is up to
@@ -799,6 +807,12 @@ export const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg:
   const live = seg.calls.some((c) => !c.done)
   const failedN = seg.calls.filter((c) => c.done && !c.ok).length
   const showSum = seg.calls.length > 1
+  /* The rows behind a closed summary are not mounted, so the summary carries
+     the clock for them. Timed from the call in flight rather than the step's
+     first: it is the number the row behind it would show, and a total that kept
+     counting finished work would answer a different question. */
+  const inFlight = seg.calls.find((c) => !c.done)
+  const sumElapsed = useTick(!!inFlight, inFlight ? inFlight.t0 : 0)
   const wkinHidden = seg.calls.length === 0 ? true : seg.calls.length === 1 ? false : !seg.wkOpen
   return (
     <div className="step in">
@@ -821,6 +835,9 @@ export const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg:
               <Ico d={one ? actIco((seg.calls[0] as CallData).name) : ACT_ICO.dot as string} cls="ic" />
               <span className="ar">{store.phraseOf(seg.calls)}</span>
               {failedN ? <span className="chip bad">{t('gui.n_failed', { n: failedN })}</span> : null}
+              {inFlight
+                ? <span className="runms">{sumElapsed >= 1000 ? store.durText(sumElapsed) : '\u2026'}</span>
+                : null}
               <Chev />
             </>
           ) : null}

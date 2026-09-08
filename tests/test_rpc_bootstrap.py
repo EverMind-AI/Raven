@@ -129,7 +129,7 @@ async def test_the_owning_stack_drains_queued_writes_before_stopping_the_backend
         order.append("drain")
 
     loop.drain_backend_stores = _drain
-    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda: loop)
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
 
     stack = await bootstrap.build_rpc_stack(_sink, agent_loop=None)
     assert stack.agent_loop is loop
@@ -172,7 +172,7 @@ def test_the_turn_pools_come_from_the_gateway_section_and_zero_is_allowed(tmp_pa
 
 async def test_a_shared_loop_is_used_not_rebuilt(monkeypatch) -> None:
 
-    def _boom():
+    def _boom(**_):
         raise AssertionError("a mounted stack must not build a second engine")
 
     monkeypatch.setattr(bootstrap, "build_agent_loop", _boom)
@@ -245,7 +245,7 @@ async def test_the_default_path_still_owns_the_whole_lifecycle(monkeypatch) -> N
     monkeypatch.setattr(browser_module, "get_browser", lambda: _NoBrowser())
     cron = _FakeCron()
     loop = _FakeLoop(cron)
-    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda: loop)
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
 
     stack = await bootstrap.build_rpc_stack(_sink)
 
@@ -273,7 +273,7 @@ async def test_the_owning_path_prewarms_mcp_instead_of_charging_the_first_turn(m
 
     monkeypatch.setattr(browser_module, "get_browser", lambda: _NoBrowser())
     loop = _FakeLoop(_FakeCron())
-    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda: loop)
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
 
     stack = await bootstrap.build_rpc_stack(_sink)
     try:
@@ -305,7 +305,7 @@ async def test_the_served_page_hears_reminders_dropped_at_startup(monkeypatch) -
     monkeypatch.setattr(browser_module, "get_browser", lambda: _NoBrowser())
     cron = _DroppingCron()
     loop = _FakeLoop(cron)
-    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda: loop)
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
 
     frames: list[dict] = []
 
@@ -393,7 +393,7 @@ async def test_the_channel_reaches_both_collaborators_or_nothing_is_delivered(mo
 
     monkeypatch.setattr(spine_module, "build_rpc_spine", _spy_spine)
     monkeypatch.setattr(methods_module, "register_turn_methods", _spy_register)
-    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda: _FakeLoop())
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: _FakeLoop())
 
     stack = await bootstrap.build_rpc_stack(_sink, agent_loop=_FakeLoop(), channel="acp")
     try:
@@ -445,7 +445,7 @@ async def test_owning_teardown_closes_the_mcp_it_opened_at_assembly(monkeypatch)
         loop.order.append("drain")
 
     loop.drain_backend_stores = _drain
-    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda: loop)
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
 
     stack = await bootstrap.build_rpc_stack(_sink)
     assert loop.prewarms == 1
@@ -465,3 +465,77 @@ async def test_a_mounted_stack_does_not_close_its_host_s_mcp(monkeypatch) -> Non
     stack = await bootstrap.build_rpc_stack(_sink, agent_loop=loop)
     await stack.teardown()
     assert loop.mcp_closed == 0
+
+
+async def test_the_owning_path_builds_the_engine_for_the_channel_it_serves(monkeypatch) -> None:
+    """The engine's cron is partitioned to the channel it was built for. Built
+    for the default while serving acp, it refused every wake the on-call agent
+    armed -- "channel 'acp' is outside this runner's partition" -- and the job
+    sat unclaimed (measured 2026-09-03/04, seven wakes, none fired)."""
+    from raven import browser as browser_module
+
+    class _NoBrowser:
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(browser_module, "get_browser", lambda: _NoBrowser())
+    asked: list[dict] = []
+
+    def _factory(**kwargs):
+        asked.append(kwargs)
+        return _FakeLoop(_FakeCron())
+
+    monkeypatch.setattr(bootstrap, "build_agent_loop", _factory)
+
+    stack = await bootstrap.build_rpc_stack(_sink, channel="acp")
+    await stack.teardown()
+
+    assert asked == [{"channel": "acp"}]
+
+
+def test_the_loop_factory_hands_the_channel_to_the_engine(monkeypatch) -> None:
+    from raven.core import engine_stack
+
+    seen: dict = {}
+
+    class _Runtime:
+        loop = object()
+
+    def _build_engine(**kwargs):
+        seen.update(kwargs)
+        return _Runtime()
+
+    monkeypatch.setattr(engine_stack, "build_engine", _build_engine)
+
+    assert bootstrap.build_agent_loop(channel="acp") is _Runtime.loop
+    assert seen["channel"] == "acp"
+    bootstrap.build_agent_loop()
+    assert seen["channel"] == "tui", "the default surface is unchanged"
+
+
+async def test_an_acp_stack_runs_wakes_on_the_session_and_a_tui_stack_keeps_the_reminder(monkeypatch) -> None:
+    """The reminder callback runs a job on ``cron:<job_id>`` and relies on the tui
+    fan-out to show the reply; an ACP client has no fan-out and watches one
+    session. The stack it builds must wire the callback that runs the wake on
+    that session (measured 2026-09-04: two wakes and a closed campaign, not one
+    frame delivered)."""
+    from raven import browser as browser_module
+
+    class _NoBrowser:
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(browser_module, "get_browser", lambda: _NoBrowser())
+
+    acp_cron = _FakeCron()
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: _FakeLoop(acp_cron))
+    stack = await bootstrap.build_rpc_stack(_sink, channel="acp")
+    await stack.teardown()
+    assert getattr(acp_cron.on_job, "runs_on_session", False) is True
+
+    tui_cron = _FakeCron()
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: _FakeLoop(tui_cron))
+    stack = await bootstrap.build_rpc_stack(_sink, channel="tui")
+    await stack.teardown()
+    assert tui_cron.on_job is not None
+    assert getattr(tui_cron.on_job, "runs_on_session", False) is False, "the served page keeps its reminders"

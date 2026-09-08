@@ -74,6 +74,9 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                       entirely, so the settle budget expires. Proves the timeout
                       path, which unbinds the session rather than reusing it.
 - ``silent``       - reads and never answers, for the timeout path.
+- ``wedged``       - answers the first ``initialize`` and swallows everything
+                     after it, pipes open, process alive: the shape where only
+                     a probe round trip can tell nobody is home.
 - ``mute``         - answers ``initialize``, then closes stdout and sleeps with
                      the process alive: the connection is dead, the pid is not.
 
@@ -559,6 +562,7 @@ def handle_cancel(params) -> None:
 
 
 def main() -> None:
+    global _INITIALIZED
     if MODE == "abort":
         # Dies before speaking, with the reason on stderr only -- the npx shape
         # where the adapter's install/startup fails.
@@ -589,6 +593,12 @@ def main() -> None:
             continue
         if MODE == "silent":
             continue
+        if MODE == "wedged" and _INITIALIZED:
+            # The other real outage shape: the handshake worked, then the frame
+            # loop stopped answering while the process and both pipes live on.
+            # Everything after the first initialize is read and swallowed --
+            # the repeat-initialize probe included, which is the point.
+            continue
         method = frame.get("method")
         request_id = frame.get("id")
         params = frame.get("params") or {}
@@ -602,7 +612,6 @@ def main() -> None:
             if MODE == "reject_init":
                 err(request_id, -32602, "Invalid params")
             else:
-                global _INITIALIZED
                 _INITIALIZED = True
                 ok(request_id, CAPABILITIES)
                 if MODE == "mute":
