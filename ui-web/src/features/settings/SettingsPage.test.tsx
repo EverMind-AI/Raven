@@ -624,18 +624,17 @@ describe('settings island', () => {
     expect(calls).toContainEqual(['set', { key: 'agents.defaults.reasoningEffort', value: 'high' }])
   })
 
-  it('writes the default permission mode pick through settings.set', async () => {
-    const { calls } = install()
+  it('confirms before enabling destructive delete commands', async () => {
+    const { calls } = install(snap({ raw: { tools: { exec: { allowDestructiveCommands: false } } } }))
     await mount()
     await act(async () => {
       screen.getByText('gui.set.pg.perm').click()
     })
     await act(async () => {
-      screen.getByText('gui.perm.smart').click()
+      screen.getByRole('switch', { name: 'gui.set.prm.destructive' }).click()
     })
-    expect(calls).toContainEqual(['set', { key: 'permissions.mode', value: 'smart' }])
+    expect(calls).toContainEqual(['set', { key: 'tools.exec.allowDestructiveCommands', value: true }])
   })
-
 
   /* ---- the toolset panel, which used to be drawn by the legacy layer ---- */
 

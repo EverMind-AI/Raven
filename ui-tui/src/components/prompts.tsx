@@ -9,7 +9,6 @@ import { useEffect, useRef, useState } from 'react'
 import type { Theme } from '../theme.js'
 import type { ApprovalReq, ClarifyReq, ConfirmReq } from '../types.js'
 
-import { t as tr } from '../i18n/index.js'
 import { APPROVAL_OPTIONS, approvalRemainingSeconds } from '../lib/approval.js'
 import { CONFIRM_COUNTDOWN_SECONDS, tickCountdown } from '../lib/confirmCountdown.js'
 import { isMac } from '../lib/platform.js'
@@ -31,13 +30,8 @@ const clarifyRemainingText = (secs: number): string => {
   return whole < 60 ? `${whole}s` : `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, '0')}s`
 }
 
-export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptProps) {
-  // Deny-and-continue is the default: it matches what a timeout does, and an
-  // accidental Enter must never grant authority or kill the turn.
-  const [sel, setSel] = useState(1)
-  // The deny choice a note is being attached to, or null when not typing one.
-  const [noting, setNoting] = useState<null | string>(null)
-  const [note, setNote] = useState('')
+export function ApprovalPrompt({ onChoice, req, t }: ApprovalPromptProps) {
+  const [sel, setSel] = useState(0)
   const [remainingSeconds, setRemainingSeconds] = useState(() => approvalRemainingSeconds(req.expiresAt))
   const expired = useRef(false)
 
@@ -54,7 +48,7 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
       setRemainingSeconds(remaining)
       if (remaining === 0 && !expired.current) {
         expired.current = true
-        onChoice('deny', '', req.approvalId)
+        onChoice('deny')
       }
     }
 
@@ -65,14 +59,6 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
   }, [onChoice, req.approvalId, req.expiresAt])
 
   useInput((ch, key) => {
-    if (noting !== null) {
-      if (key.escape) {
-        setNoting(null)
-      }
-
-      return
-    }
-
     if (key.upArrow && sel > 0) {
       setSel(s => s - 1)
     }
@@ -81,25 +67,16 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
       setSel(s => s + 1)
     }
 
-    // A note only makes sense on a refusal: it travels to the model as the
-    // reason, and an allowed call needs none.
-    if (key.tab && APPROVAL_OPTIONS[sel]!.choice !== 'allow') {
-      setNote('')
-      setNoting(APPROVAL_OPTIONS[sel]!.choice)
-
-      return
-    }
-
     const n = parseInt(ch, 10)
 
     if (n >= 1 && n <= APPROVAL_OPTIONS.length) {
-      onChoice(APPROVAL_OPTIONS[n - 1]!.choice, '', req.approvalId)
+      onChoice(APPROVAL_OPTIONS[n - 1]!.choice)
 
       return
     }
 
     if (key.return) {
-      onChoice(APPROVAL_OPTIONS[sel]!.choice, '', req.approvalId)
+      onChoice(APPROVAL_OPTIONS[sel]!.choice)
     }
   })
 
@@ -110,7 +87,7 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
   return (
     <Box borderColor={t.color.border} borderStyle="round" flexDirection="column" paddingX={1}>
       <Text bold color={t.color.warn}>
-        ⚠ {tr('gui.confirm.title', 'Approval needed')} · {req.description}
+        ⚠ approval required · {req.description}
       </Text>
 
       <Box flexDirection="column" paddingLeft={1}>
@@ -129,54 +106,18 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
 
       <Text />
 
-      {noting !== null ? (
-        <>
-          <Text color={t.color.label}>
-            {'  '}
-            {tr('gui.confirm.note_for', 'note for the model ({what})', {
-              what:
-                noting === 'deny_stop'
-                  ? tr('gui.confirm.deny_stop', 'Deny and stop')
-                  : tr('gui.confirm.deny', 'Deny')
-            })}
+      {APPROVAL_OPTIONS.map((option, i) => (
+        <Text key={option.choice}>
+          <Text bold={sel === i} color={sel === i ? t.color.warn : t.color.muted} inverse={sel === i}>
+            {sel === i ? '▸ ' : '  '}
+            {i + 1}. {option.label}
           </Text>
+        </Text>
+      ))}
 
-          <Box>
-            <Text color={t.color.label}>{'> '}</Text>
-            <TextInput
-              columns={Math.max(20, cols - 6)}
-              onChange={setNote}
-              onSubmit={v => onChoice(noting, v.trim(), req.approvalId)}
-              value={note}
-            />
-          </Box>
-
-          <Text color={t.color.muted}>
-            {tr('gui.confirm.note_keys', 'Enter send · Esc back · expires in {n}s', {
-              n: String(remainingSeconds)
-            })}
-          </Text>
-        </>
-      ) : (
-        <>
-          {APPROVAL_OPTIONS.map((option, i) => (
-            <Text key={option.choice}>
-              <Text bold={sel === i} color={sel === i ? t.color.warn : t.color.muted} inverse={sel === i}>
-                {sel === i ? '▸ ' : '  '}
-                {i + 1}. {tr(option.key, option.fallback)}
-              </Text>
-            </Text>
-          ))}
-
-          <Text color={t.color.muted}>
-            {tr(
-              'gui.confirm.keys',
-              'up/down select · Enter confirm · 1-3 quick pick · Tab add note · Ctrl+C deny · expires in {n}s',
-              { n: String(remainingSeconds) }
-            )}
-          </Text>
-        </>
-      )}
+      <Text color={t.color.muted}>
+        ↑/↓ select · Enter confirm · 1-2 quick pick · Ctrl+C deny · expires in {remainingSeconds}s
+      </Text>
     </Box>
   )
 }
@@ -467,11 +408,7 @@ export function ConfirmPrompt({ onCancel, onConfirm, req, t }: ConfirmPromptProp
 }
 
 interface ApprovalPromptProps {
-  cols?: number
-  // The id of the request THIS prompt rendered. An answer belongs to the
-  // request the human was looking at (or that the countdown was armed for),
-  // never to whichever one happens to occupy the slot when the callback runs.
-  onChoice: (s: string, feedback?: string, approvalId?: string) => void
+  onChoice: (s: string) => void
   req: ApprovalReq
   t: Theme
 }

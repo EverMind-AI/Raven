@@ -372,10 +372,10 @@ class TestBuildStack:
 
 
 class TestApprovalWiring:
-    """The engine's permission gate has to be told what to ask about.
+    """The engine's exec tool has to be told what to ask about.
 
     Without this, an editor's agent runs ``git push``, ``npm install`` and
-    ``curl -o`` with nothing on screen -- the built-in rulings ask about deletion
+    ``curl -o`` with nothing on screen -- the built-in policy asks about deletion
     and nothing else. It is the single most visible difference between an agent
     somebody trusts and one they do not.
     """
@@ -390,69 +390,49 @@ class TestApprovalWiring:
         yield
         shell_policy.set_surface_approval_families(before)
 
-    def test_the_families_reach_a_gate_built_after_the_declaration(self):
-        from raven.contracts.permissions import NeedsApproval
-        from raven.permissions.builtin import BuiltinRulings
+    def test_the_families_reach_a_tool_built_after_the_declaration(self):
+        from raven.agent.tools.shell import ExecTool
+        from raven.agent.tools.shell_policy import CommandDecision
 
         server._ask_before_external_effects()
-        rulings = BuiltinRulings()
+        tool = ExecTool(working_dir="/tmp", follow_binding=False)
 
-        assert isinstance(rulings.ruling("exec", {"command": "git push origin main"}), NeedsApproval)
-        assert isinstance(rulings.ruling("exec", {"command": "npm install lodash"}), NeedsApproval)
-        assert rulings.ruling("exec", {"command": "pytest -q"}) is None
+        assert tool._policy.evaluate("git push origin main") is CommandDecision.REQUIRE_APPROVAL
+        assert tool._policy.evaluate("npm install lodash") is CommandDecision.REQUIRE_APPROVAL
+        assert tool._policy.evaluate("pytest -q") is CommandDecision.ALLOW
 
-    def test_a_sub_agents_own_gate_inherits_them_too(self):
-        """The hole this closed: a sub-agent builds its own gate with its own
-        rulings, so a per-instance registration reached the main loop only and a
+    def test_a_sub_agents_own_tool_inherits_them_too(self):
+        """The hole this closed: a sub-agent builds its own ``ExecTool`` with its
+        own policy, so a per-tool registration reached the main loop only and a
         delegated ``git push`` ran unannounced while the identical command asked
         in the main agent. Declared per process, both carry it.
         """
-        from raven.contracts.permissions import NeedsApproval
-        from raven.permissions.builtin import BuiltinRulings
+        from raven.agent.tools.shell import ExecTool
+        from raven.agent.tools.shell_policy import CommandDecision
 
         server._ask_before_external_effects()
-        main_rulings = BuiltinRulings()
-        sub_rulings = BuiltinRulings()
+        main_tool = ExecTool(working_dir="/tmp", follow_binding=False)
+        sub_tool = ExecTool(working_dir="/tmp", follow_binding=False)
 
-        assert isinstance(main_rulings.ruling("exec", {"command": "git push origin main"}), NeedsApproval)
-        assert isinstance(sub_rulings.ruling("exec", {"command": "git push origin main"}), NeedsApproval)
+        assert main_tool._policy.evaluate("git push origin main") is CommandDecision.REQUIRE_APPROVAL
+        assert sub_tool._policy.evaluate("git push origin main") is CommandDecision.REQUIRE_APPROVAL
 
-    async def test_a_delegated_command_asks_through_the_turn_it_runs_in(self):
-        """A sub-agent's gate reads the turn's mode and asks through the
-        responder the parent turn bound (a ContextVar its task inherits). With
-        nobody bound it fails closed with a reason; with the editor's responder
-        bound, the same push reaches the human and runs on their click.
+    async def test_a_delegated_command_is_refused_because_it_cannot_ask(self):
+        """The deliberate half. A sub-agent's tool has no approval responder, and
+        a tool that cannot ask fails closed -- so the command is refused with a
+        reason rather than run in silence. Asking on a sub-agent's behalf needs a
+        lane's conversation id routed into a task that outlives its turn, which is
+        its own change.
         """
-        from raven.config.schema import PermissionsConfig
-        from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
-        from raven.permissions.builtin import BuiltinRulings
-        from raven.permissions.gate import PermissionGate
-        from raven.permissions.turn import start_permission_turn
+        from raven.agent.tools.shell import ExecTool
 
         server._ask_before_external_effects()
-        gate = PermissionGate(
-            config_source=lambda: PermissionsConfig(mode="ask"),
-            builtin=BuiltinRulings(),
-            allow_ask=True,
-        )
+        sub_tool = ExecTool(working_dir="/tmp", follow_binding=False)
 
-        start_permission_turn(None, conversation_id="acp", turn_id="t1")
-        refused = await gate.enforce("exec", {"command": "git push origin main"})
-        assert refused is not None
-        assert "not interactive" in str(refused.model_text)
+        result = await sub_tool.execute("git push origin main")
 
-        class _Click:
-            def __init__(self) -> None:
-                self.seen: list[str] = []
-
-            async def await_approval(self, **request):
-                self.seen.append(request["description"])
-                return ApprovalOutcome(choice=ApprovalChoice.ALLOW)
-
-        click = _Click()
-        start_permission_turn(click, conversation_id="acp", turn_id="t2")
-        assert await gate.enforce("exec", {"command": "git push origin main"}) is None
-        assert click.seen == ["Publish or push work to a remote"]
+        assert "requires user approval" in str(result)
+        assert "not interactive" in str(result)
 
     def test_a_tool_built_before_the_declaration_keeps_what_it_was_born_with(self):
         """Why ``serve`` declares before it builds the engine. A policy reads the
@@ -460,14 +440,17 @@ class TestApprovalWiring:
         afterwards reaches nothing -- and the surface would look configured while
         every existing tool stayed silent.
         """
-        from raven.contracts.permissions import NeedsApproval
-        from raven.permissions.builtin import BuiltinRulings
+        from raven.agent.tools.shell import ExecTool
+        from raven.agent.tools.shell_policy import CommandDecision
 
-        early = BuiltinRulings()
+        early = ExecTool(working_dir="/tmp", follow_binding=False)
         server._ask_before_external_effects()
 
-        assert early.ruling("exec", {"command": "git push origin main"}) is None
-        assert isinstance(BuiltinRulings().ruling("exec", {"command": "git push origin main"}), NeedsApproval)
+        assert early._policy.evaluate("git push origin main") is CommandDecision.ALLOW
+        assert (
+            ExecTool(working_dir="/tmp", follow_binding=False)._policy.evaluate("git push origin main")
+            is CommandDecision.REQUIRE_APPROVAL
+        )
 
     async def test_the_permission_broker_is_the_stacks_approval_transport(self, stub):
         from raven.acp.permissions import AcpPermissionBroker

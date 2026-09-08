@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { closeApproval, open, openApproval } from './approve'
+import { open } from './approve'
 import { _resetForTests, forget, session, sync } from './sheets'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
@@ -338,45 +338,5 @@ describe('the approval sheet', () => {
     expect(sheet.getAttribute('aria-modal')).toBe('true')
     expect(sheet.getAttribute('aria-label')).toBe('gui.confirm.title')
     expect(document.activeElement).toBe(opts()[0])
-  })
-})
-
-describe('the permission approval sheet', () => {
-  const req = { approvalId: 'ap-1', command: 'rm file.txt', description: 'Delete files' }
-  const sheets = () => [...document.querySelectorAll('.csheet')]
-  const opts = () => [...document.querySelectorAll<HTMLButtonElement>('.csheet .opt')]
-
-  it('offers allow once and the two refusals, in that order', () => {
-    openApproval(req, () => {})
-    expect(opts().map((b) => b.textContent)).toEqual([
-      '1gui.confirm.allow',
-      '2gui.confirm.deny',
-      '3gui.confirm.deny_stop',
-    ])
-  })
-
-  it('reports the choice, with the typed note riding a refusal', () => {
-    const said: Array<[string, string]> = []
-    openApproval(req, (choice, feedback) => said.push([choice, feedback]))
-    document.querySelector<HTMLInputElement>('.csheet .note-in')!.value = ' move it aside '
-    opts()[1]!.click()
-    expect(said).toEqual([['deny', 'move it aside']])
-    expect(sheets().length).toBe(0)
-  })
-
-  it('answers deny_stop from its own button', () => {
-    const said: Array<[string, string]> = []
-    openApproval(req, (choice, feedback) => said.push([choice, feedback]))
-    opts()[2]!.click()
-    expect(said).toEqual([['deny_stop', '']])
-  })
-
-  it('withdraws silently when the server closes the request', () => {
-    const said: Array<[string, string]> = []
-    openApproval(req, (choice, feedback) => said.push([choice, feedback]))
-    closeApproval('ap-1')
-    expect(sheets().length).toBe(0)
-    expect(said).toEqual([])
-    closeApproval('ap-1')
   })
 })

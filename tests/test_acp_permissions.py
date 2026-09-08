@@ -78,7 +78,7 @@ async def _ask(broker, command: str = "git push origin main", **kwargs) -> bool:
         "description": "Publish or push work to a remote",
     }
     params.update(kwargs)
-    return (await broker.await_approval(**params)).approved
+    return await broker.await_approval(**params)
 
 
 class TestTheRequest:

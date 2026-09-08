@@ -94,7 +94,6 @@ declare global {
     loadTier?: typeof tier.load
     toggleTier?: typeof tier.toggle
     closeTierPop?: typeof tier.close
-    setPermMode?: typeof perm.setFromConfig
     paneLoad?: typeof panes.load
     drawFoot?: typeof foot.draw
     drawCtx?: typeof ctxchip.draw
@@ -164,9 +163,6 @@ window.closePermPop = perm.close
 window.loadTier = tier.load
 window.toggleTier = tier.toggle
 window.closeTierPop = tier.close
-/* The live layer pushes the config's mode in once loaded; the pick's write
-   back to config goes the other way, through window.persistPermMode. */
-window.setPermMode = perm.setFromConfig
 /* The context ring's two names. Both have callers on both sides: setCtx from
    each layer's turn bookkeeping (demo's replay, live's message.complete), and
    drawCtx from the boot sequence and each side's language flip -- the ring's
@@ -503,8 +499,6 @@ window.RavenIslands = {
        question is one more thing they do to the same rack. Neither speaks to
        the server -- the caller keeps the transport and passes the answer on. */
     approveSheet: approve.open,
-    approvalSheet: approve.openApproval,
-    approvalClose: approve.closeApproval,
     clarifySheet: clarify.open,
     clarifyClose: clarify.close,
   },

@@ -1212,8 +1212,8 @@
       "zh": "压缩中…"
     },
     "gui.confirm.allow": {
-      "en": "Allow once",
-      "zh": "允许一次"
+      "en": "Allow",
+      "zh": "允许"
     },
     "gui.confirm.deny": {
       "en": "Deny",
@@ -2860,20 +2860,24 @@
       "zh": "完全访问"
     },
     "gui.perm.full_h": {
-      "en": "No prompts -- but platform-level dangerous operations are still refused.",
-      "zh": "不弹审批；平台级高危操作仍会被拒绝"
+      "en": "No restrictions -- it can run dangerous operations.",
+      "zh": "没有权限限制，但可能执行危险操作"
     },
     "gui.perm.smart": {
       "en": "smart",
       "zh": "智能模式"
     },
     "gui.perm.smart_h": {
-      "en": "An AI reviewer pre-screens each action and asks you only when unsure.",
-      "zh": "AI 预审每个操作，拿不准才请求你审批"
+      "en": "The model decides when to ask for approval.",
+      "zh": "模型决定是否请求审批"
     },
     "gui.perm.title": {
       "en": "Permission mode",
       "zh": "权限模式"
+    },
+    "gui.perm.wip": {
+      "en": "Not wired to the engine yet - the choice is remembered here only.",
+      "zh": "还没接到后端，这里的选择只记在界面上。"
     },
     "gui.picker.empty_provider": {
       "en": "No models under this account",
@@ -4303,6 +4307,26 @@
       "en": "Guardrails",
       "zh": "执行护栏"
     },
+    "gui.set.prm.destructive": {
+      "en": "Allow destructive delete commands",
+      "zh": "允许破坏性删除命令"
+    },
+    "gui.set.prm.destructive_w": {
+      "en": "Skips delete confirmation and the recursive-delete guard. Sandbox, workspace limits, and system-level blocks still apply.",
+      "zh": "跳过删除确认和递归删除拦截；沙箱、工作区限制和系统级拦截仍然有效。"
+    },
+    "gui.set.prm.destructive_confirm": {
+      "en": "Allow destructive delete commands?",
+      "zh": "允许破坏性删除命令吗？"
+    },
+    "gui.set.prm.destructive_body": {
+      "en": "The agent may delete files without asking first, including recursive deletes. Keep this off unless you want that behavior.",
+      "zh": "代理可以不经确认删除文件，包括递归删除。除非你明确需要，否则建议保持关闭。"
+    },
+    "gui.set.prm.destructive_yes": {
+      "en": "Allow deletes",
+      "zh": "允许删除"
+    },
     "gui.set.prm.mask": {
       "en": "Mask secrets in the transcript",
       "zh": "记录里遮蔽机密"
@@ -4312,8 +4336,8 @@
       "zh": "权限模式"
     },
     "gui.set.prm.mode_note": {
-      "en": "New conversations start in this mode. The chip next to the composer changes only the open conversation.",
-      "zh": "新会话以这个模式开始；输入框旁边的芯片只改当前会话。"
+      "en": "The mode next to the composer is the one in effect; this one is not wired yet.",
+      "zh": "当前生效的是输入框旁边那个模式；这里还没接后端。"
     },
     "gui.set.prm.ro": {
       "en": "Read-only",
@@ -5714,46 +5738,6 @@
     "gui.imode.failed": {
       "en": "Could not change this instance's effort",
       "zh": "改这个实例的力度没有成功"
-    },
-    "gui.perm.note": {
-      "en": "Takes effect from the next tool call.",
-      "zh": "下一个工具调用起生效。"
-    },
-    "gui.confirm.deny_stop": {
-      "en": "Deny and stop",
-      "zh": "拒绝并停止"
-    },
-    "gui.confirm.note_ph": {
-      "en": "Optional note for the agent (sent with a refusal)",
-      "zh": "可选备注，随拒绝发给智能体"
-    },
-    "gui.perm.save_failed": {
-      "en": "Could not save the permission mode; the engine keeps the previous one.",
-      "zh": "权限模式没有保存成功，引擎仍是原来的模式。"
-    },
-    "gui.perm.reviewing": {
-      "en": "AI is reviewing this action...",
-      "zh": "AI 正在预审此操作…"
-    },
-    "gui.confirm.deny_hint": {
-      "en": "Deny (agent continues)",
-      "zh": "拒绝（智能体继续）"
-    },
-    "gui.confirm.deny_stop_hint": {
-      "en": "Deny and stop the turn",
-      "zh": "拒绝并结束本轮"
-    },
-    "gui.confirm.note_for": {
-      "en": "note for the model ({what})",
-      "zh": "给模型的备注（{what}）"
-    },
-    "gui.confirm.keys": {
-      "en": "up/down select · Enter confirm · 1-3 quick pick · Tab add note · Ctrl+C deny · expires in {n}s",
-      "zh": "上下键选择 · Enter 确认 · 1-3 快选 · Tab 加备注 · Ctrl+C 拒绝 · {n} 秒后过期"
-    },
-    "gui.confirm.note_keys": {
-      "en": "Enter send · Esc back · expires in {n}s",
-      "zh": "Enter 发送 · Esc 返回 · {n} 秒后过期"
     }
   }
 }

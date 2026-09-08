@@ -182,6 +182,22 @@ def inherit_llm(config: dict, host: dict) -> str:
     )
 
 
+def inherit_exec_policy(config: dict, host: dict) -> None:
+    """Carry the host's deletion-safety choice into the product's config.
+
+    ``tools.exec.allowDestructiveCommands`` is set at the host (the page's own
+    toggle) by a person who expects every agent on this machine to follow it;
+    without this the design worker kept refusing ``rm -rf`` after the toggle
+    went on. Only a value the host states travels, and never over one the
+    product's own config already states.
+    """
+    host_exec = (host.get("tools") or {}).get("exec") or {}
+    if "allowDestructiveCommands" not in host_exec:
+        return
+    exec_section = config.setdefault("tools", {}).setdefault("exec", {})
+    exec_section.setdefault("allowDestructiveCommands", host_exec["allowDestructiveCommands"])
+
+
 def product_state_root(product: str, *, override: str | None = None) -> Path:
     """Where a product keeps its WORK -- never in its own folder.
 

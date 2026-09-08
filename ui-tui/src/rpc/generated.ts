@@ -50,7 +50,6 @@ export type TurnEvent =
   | TurnStartedEvent
   | EpisodeStartEvent
   | NoticeEvent
-  | PermissionReviewEvent
   | TokenDeltaEvent
   | ThinkingDeltaEvent
   | ToolStartEvent
@@ -1209,25 +1208,6 @@ export interface EpisodeStartEvent {
   type: 'episode.start';
   payload: {
     index: number;
-  };
-}
-/**
- * The smart-mode permission reviewer started or finished looking at one tool call. Presentational only: it lets a surface name the pause on the running tool row instead of showing an unexplained stall; decisions never depend on it.
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PermissionReviewEvent".
- */
-export interface PermissionReviewEvent {
-  type: 'permission.review';
-  payload: {
-    /**
-     * started | ended.
-     */
-    phase: string;
-    /**
-     * The tool name under review.
-     */
-    tool: string;
   };
 }
 /**
@@ -2512,7 +2492,6 @@ export interface ConfigGetParams {
    * If omitted, return all whitelisted fields. Unknown keys are silently dropped.
    */
   keys?: string[];
-  session_id?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3997,13 +3976,9 @@ export interface PlaybooksGetResult {
 export interface ApprovalRespondParams {
   approval_id: string;
   /**
-   * allow | deny | deny_stop.
+   * allow | deny.
    */
   choice: string;
-  /**
-   * Optional sentence attached to a refusal, relayed to the model.
-   */
-  feedback?: string;
   session_id?: string;
   /**
    * Compatibility spelling of session_id.

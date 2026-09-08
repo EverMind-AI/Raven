@@ -3,8 +3,8 @@
 What separates this from ``nohup`` in the command string is everything the
 tests below pin: the task has a handle, the log has a managed path the result
 names, the child is tracked and reapable, and the lane changes none of the
-rules -- the permission gate (which rules on the call before either lane is
-chosen) and the sandbox boundary still have the last word.
+rules -- the deny-list, the approval gate and the sandbox boundary all still
+have the last word.
 """
 
 from __future__ import annotations
@@ -120,23 +120,11 @@ async def test_a_sandboxed_session_refuses_the_lane(home, tmp_path):
 
 @pytest.mark.asyncio
 async def test_the_deny_list_still_has_the_last_word(home, tmp_path):
-    """The refusal comes from the permission gate at the registry door, which is
-    upstream of both lanes, so the background one is not a way around it."""
-    from raven.agent.tools.registry import ToolRegistry
-    from raven.config.schema import PermissionsConfig
-    from raven.permissions import BuiltinRulings, PermissionGate
+    tool = ExecTool(working_dir=str(tmp_path), deny_patterns=[r"\bmkfs\b"])
 
-    registry = ToolRegistry(
-        permission_gate=PermissionGate(
-            config_source=lambda: PermissionsConfig(mode="full"),
-            builtin=BuiltinRulings(),
-        )
-    )
-    registry.register(ExecTool(working_dir=str(tmp_path)))
+    out = await tool.execute(command="mkfs /dev/sda", run_in_background=True)
 
-    out = await registry.execute("exec", {"command": "mkfs /dev/sda", "run_in_background": True})
-
-    assert "safety guard" in str(out)
+    assert "blocked by safety guard" in str(out)
     assert not background_exec.running(), "a blocked command must not start in the background either"
 
 

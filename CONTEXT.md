@@ -1225,7 +1225,6 @@ Where every package sits, as the machine enforces it. Inner (may not import a su
 the shelves and engines the contract lists as sources (`tracing` among them -- a kernel
 member, seated inner here as well so every package appears in one roster), `config` and
 `utils` and `i18n` (cross-cutting leaves), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`,
-`permissions` (the gate the registry consults; its turn context is bound by entrances),
 `eval_engine` and `proactive_engine` (L3 shelf members -- proactive_engine originates
 turns through its schedulers and sentinel but is an engine the loop and the assembly root
 consume, not a transport), and `core` (the L2 assembly root). `templates` is packaged data
@@ -1312,43 +1311,6 @@ guarded per-hop fetch), the market's vetting (`market/vetting.py`) and the brows
 policy all read; and prompt-injection fences (`trust.py`). A cross-cutting
 mechanism and a member of the channels' shared-services shelf -- cargo may
 depend on it (dingtalk and qq do). Same leaf rule as `auth`.
-
-**Permission Gate** (`permissions/`):
-The decision waterfall `ToolRegistry.execute` consults before dispatching any
-tool call: the builtin unconditional deny list (catastrophe-class commands
-only, a recursive delete of the root or home tree among them), then the
-user's tiers and exec prefix rules from `permissions` in config, then the
-permission mode's reading of the ask tier. A command family a surface declares
-(none by default; the ACP editor declares deletion and the external-effect
-families) does not decide -- it names the prompt the human reads when the call
-lands on one, and is recorded on the call's tool.call span as
-`permission.family` whichever way the tiers then decide. Answers with the `Decision` vocabulary from
-`contracts/permissions.py`; the turn's asking capability is bound through
-`permissions/turn.py` by the entrance. Distinct from a plugin's Tool Gate
-(`contracts/tool_gate.py`): the gate is platform authority, runs first, can
-wait on a human, and answers with a full ToolResult.
-_Avoid_: "tool gate" for this -- that name is the plugin paper's.
-
-**Permission Mode**:
-How the gate reads the ask tier, and only the ask tier: `ask` prompts a human
-for everything in it, `smart` has an LLM reviewer (`permissions/judge.py`,
-fail-closed onto escalation, every review recorded on the tool.call trace span) allow or escalate, `full`
-runs it without prompting. The unconditional deny list and user deny rules hold in every
-mode.
-Stored at `permissions.mode` in config, the default every conversation starts
-on; a conversation can run in a mode of its own (`config.set` with its
-`session_id`), kept the way its model is kept: in memory by
-`permissions/session.py` and on the conversation's record
-(`metadata["permissions_mode"]`), so a restart does not undo it. The gate
-reads both live per tool call, the conversation's own first.
-
-**Tier**:
-One tool call's standing with the gate: `allow` runs, `ask` needs a human (as
-the mode reads it), `deny` is refused. Resolved from the user's
-`permissions.tools` node -- a tool name to a tier, or for `exec` a table of
-command prefix patterns where specific matches resolve strictest-wins and `*`
-is the fallback -- with read-only tools defaulting to allow and everything
-else, unknown tools included, to ask.
 
 **Templates** (`templates/`):
 Packaged data assets, zero Python: read as package data (`utils/workspace.py`)

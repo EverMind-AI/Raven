@@ -85,8 +85,6 @@ let pendingModel = null;
    draft has no session_key, and writing under the empty one lands on a policy
    the first turn will not read. Assigned from the tier source in 120. */
 let pendingTier = null;
-/* The permission mode picked while still a draft: the same pair, the same two resets. */
-let pendingPerm = null;
 
 /* Apply a staged draft pick to the session the first message just minted.
    Awaited before that turn is sent, so the turn runs on the chosen model rather
@@ -127,20 +125,6 @@ async function applyStagedTier(sessionId) {
     toast(`${T('gui.tier.title')}: ${(e && ((e.data && e.data.detail) || e.message)) || e}`);
   }
   void loadTier();
-}
-
-/* The permission mode picked while this was still a draft, written now that
-   there is a session_id to write it under. Awaited before the turn is sent so
-   its first tool call already reads the chosen mode. */
-async function applyStagedPerm(sessionId) {
-  const mode = stagedPerm();
-  if (!mode) return;
-  try {
-    await rpc.call('config.set', { key: 'permissions.mode', value: mode, scope: 'session', session_id: sessionId });
-  } catch (e) {
-    toast(`${T('gui.perm.title')}: ${(e && ((e.data && e.data.detail) || e.message)) || e}`);
-  }
-  void loadPermMode(sessionId);
 }
 
 /* Which switch the visible page belongs to. `session.resume` is a round trip,
@@ -187,7 +171,6 @@ function startDraft() {
      tier staged for a draft that was never sent belongs to nothing, so it goes
      rather than waiting to be spent by whichever conversation is sent next. */
   pendingTier = null; void loadTier();
-  pendingPerm = null; void loadPermMode(null, gen);
   $('#title').textContent = T('gui.new_task');
   pitch(); sessionDraw(); ta.focus();
 }
@@ -216,7 +199,6 @@ async function openLiveSession(s) {
      every session back on the catalogue default -- and the chip went on naming
      the tier from before the gap. */
   pendingTier = null; void loadTier();
-  pendingPerm = null; void loadPermMode(s.id, gen);
   // Opening it IS reading it. ``s`` can be a bare {id, title} from the
   // reconnect path, so clear the flag on the row in sessionRows(), not on the arg.
   const row = sess(s.id);
@@ -365,7 +347,6 @@ function liveSend(text) {
     claimDraft(sessionCurrent());
     await applyStagedModel(s.id, sendGen);
     await applyStagedTier(s.id);
-    await applyStagedPerm(s.id);
     beginNaming(text);
     sessionDraw();
     await subscribe(s.id);

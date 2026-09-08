@@ -35,8 +35,7 @@ $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); }
    parts are an IIFE nested in this script, and the four of them that raise or
    retire a sheet keep calling these by name. */
 const { sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
-  approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose,
-  drawQueue: queueDraw, queuePush, queueShift,
+  approveSheet, clarifySheet, clarifyClose, drawQueue: queueDraw, queuePush, queueShift,
   queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft,
   claimDraft, turn } = RavenIslands.composer;
 const { current: modelCurrent, setCurrent: modelSet } = RavenIslands.model;

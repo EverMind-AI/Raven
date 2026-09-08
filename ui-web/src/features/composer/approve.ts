@@ -21,11 +21,6 @@ import { CROSS, ico } from '../../shell/ico'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from './sheets'
 import { composing } from './store'
 
-/* The permission gate's approval, keyed so approval.closed can withdraw the
-   exact request it retires (a timeout, a teardown, an answer from another
-   surface) without touching a newer one. */
-const openApprovals = new Map<string, () => void>()
-
 export interface Approval {
   /* Takes the sheet down without answering. For a caller that has learned the
      question is moot -- the turn was cancelled, the session closed. */
@@ -133,92 +128,4 @@ export function open(
   const first = sheet.querySelector<HTMLElement>('.opt')
   if (first && sheet.isConnected) first.focus()
   return { close: withdraw }
-}
-
-
-export interface ApprovalReq {
-  approvalId: string
-  command: string
-  description: string
-}
-
-/* The permission gate's ask: allow once, deny (the agent reads the refusal and
-   goes on), or deny and stop the turn. A note typed before a refusal rides to
-   the model as the reason. Same sheet clothes as open() above -- this variant
-   differs in what an answer is, so it reports a choice string instead of
-   calling one of two thunks. */
-export function openApproval(
-  req: ApprovalReq, onChoice: (choice: string, feedback: string) => void, owner?: string,
-): Approval {
-  const key = owner || session()
-  dropClass('csheet', key)
-
-  const sheet = el('div', 'csheet perm')
-  sheet.setAttribute('role', 'dialog')
-  sheet.setAttribute('aria-modal', 'true')
-  sheet.setAttribute('aria-label', t('gui.confirm.title'))
-
-  let answered = false
-  const close = (choice?: string): void => {
-    if (answered) return
-    answered = true
-    openApprovals.delete(req.approvalId)
-    document.removeEventListener('keydown', onKey, true)
-    sheetRemove(sheet)
-    if (choice) onChoice(choice, note.value.trim())
-  }
-  const withdraw = (): void => close()
-  openApprovals.set(req.approvalId, withdraw)
-
-  const head = el('div', 'hd')
-  const x = el('button', 'ic tipdn')
-  x.appendChild(ico(CROSS))
-  x.dataset.tip = t('gui.confirm.deny')
-  x.setAttribute('aria-label', t('gui.confirm.deny'))
-  x.onclick = () => close('deny')
-  head.append(el('div', 'q', `${t('gui.confirm.title')} · ${req.description}`), x)
-  sheet.appendChild(head)
-
-  const body = el('div', 'body')
-  body.appendChild(el('div', 'what', req.command || ''))
-  const note = document.createElement('input')
-  note.className = 'note-in'
-  note.placeholder = t('gui.confirm.note_ph')
-  note.setAttribute('aria-label', t('gui.confirm.note_ph'))
-  body.appendChild(note)
-  const opts: Array<[string, string, boolean]> = [
-    [t('gui.confirm.allow'), 'allow', true],
-    [t('gui.confirm.deny'), 'deny', false],
-    [t('gui.confirm.deny_stop'), 'deny_stop', false],
-  ]
-  opts.forEach(([label, choice, go], i) => {
-    const b = el('button', 'opt' + (go ? ' go' : ''))
-    b.append(el('span', 'n', String(i + 1)), el('span', undefined, label))
-    b.onclick = () => close(choice)
-    body.appendChild(b)
-  })
-  sheet.appendChild(body)
-
-  function onKey(e: KeyboardEvent): void {
-    if (!sheet.isConnected || composing(e)) return
-    if (e.key === 'Escape') { e.preventDefault(); close('deny'); return }
-    /* Digits keep working while the note field is focused only when it is
-       empty: a typed note starts with whatever the reader types, digits
-       included. */
-    if (document.activeElement === note && note.value) return
-    const n = Number(e.key)
-    if (n >= 1 && n <= opts.length) { e.preventDefault(); close(opts[n - 1]![1]) }
-  }
-  document.addEventListener('keydown', onKey, true)
-
-  sheetAdd(sheet, key, withdraw)
-  const first = sheet.querySelector<HTMLElement>('.opt')
-  if (first && sheet.isConnected) first.focus()
-  return { close: withdraw }
-}
-
-/* approval.closed: the server retired this request (timeout, teardown, or an
-   answer from another surface). Nothing is sent back -- the question is over. */
-export function closeApproval(approvalId: string): void {
-  openApprovals.get(approvalId)?.()
 }

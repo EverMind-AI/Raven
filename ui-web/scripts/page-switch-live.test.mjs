@@ -46,7 +46,6 @@ const NAMES = [
   'restoreTurn', 'wsSetRoot', 'setCtx', 'renderHistory', 'wsOnHistory', 'RavenIslands',
   'loadProviders',
   'loadTier',
-  'loadPermMode',
 ]
 
 function harness({ rows, deferSubscribe } = {}) {
@@ -102,7 +101,6 @@ function harness({ rows, deferSubscribe } = {}) {
     markNewCurrent: () => {},
     loadProviders: (sid, gen) => calls.push(['loadProviders', sid, gen]),
     loadTier: () => calls.push(['loadTier']),
-    loadPermMode: (sid) => calls.push(['loadPermMode', sid]),
     plainTitle: (s) => String(s),
     parkedTurns: new Map(),
     restoreTurn: () => calls.push(['restoreTurn']),
@@ -123,8 +121,7 @@ function harness({ rows, deferSubscribe } = {}) {
      return { subscribe, startDraft, openLiveSession,
        /* Test-only reach into the staged tier: it is written from the tier
           source in 120, which this harness does not compile. */
-       stageTier: (m) => { pendingTier = m }, stagedTier: () => pendingTier,
-       stagePerm: (m) => { pendingPerm = m }, stagedPerm: () => pendingPerm };`,
+       stageTier: (m) => { pendingTier = m }, stagedTier: () => pendingTier };`,
   )
   const api = install(env)
   return {
@@ -380,21 +377,6 @@ describe('the assembled live session switch', () => {
     h.startDraft()
 
     expect(h.calls.filter((c) => c[0] === 'loadTier')).toHaveLength(2)
-  })
-
-  it('holds a staged permission mode to the tier\'s rules: reset on both paths, re-read per open', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
-
-    h.stagePerm('full')
-    h.openLiveSession({ id: 'a', title: 'Alpha' })
-    await h.settle('a')
-    expect(h.stagedPerm()).toBeNull()
-    h.stagePerm('full')
-    h.startDraft()
-    expect(h.stagedPerm()).toBeNull()
-
-    /* Keyed to the opened id, then to no id at all: a draft runs the default. */
-    expect(h.calls.filter((c) => c[0] === 'loadPermMode').map((c) => c[1])).toEqual(['a', null])
   })
 
   it('refreshes the model for the conversation being opened, not the one left behind', async () => {

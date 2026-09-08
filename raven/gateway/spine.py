@@ -85,27 +85,14 @@ class GatewayTurnRunner(AgentTurnRunner):
         # Function-level on purpose: the acp client family is future shelf
         # cargo and must not be named at this module's import time
         # (binding-time debt).
-        from raven.acp_client.asker import ApprovalViaAsk, AskViaTool, start_ask_turn
+        from raven.acp_client.asker import AskViaTool, start_ask_turn
         from raven.acp_client.resolver import Autofill
-        from raven.permissions import start_permission_turn
 
         tools = getattr(self._loop, "tools", None)
         ask_tool = tools.get("ask_user") if tools is not None else None
         interactive = req.origin is Origin.USER and isinstance(ask_tool, SupportsDirectAsk)
-        asker = AskViaTool(ask_tool) if interactive else None
-        # A channel user can answer a question, so they can answer an approval:
-        # the responder rides the same broker round-trip the asker below uses.
-        # Every other origin here (cron / sentinel / heartbeat) binds None by
-        # decision, not omission -- those turns are unattended, the ask tier
-        # refuses with a reason, and the operator picks smart or full for
-        # background work that must mutate.
-        start_permission_turn(
-            ApprovalViaAsk(asker, cid) if asker is not None else None,
-            conversation_id=cid,
-            turn_id=req.turn_id or "",
-        )
         start_ask_turn(
-            asker,
+            AskViaTool(ask_tool) if interactive else None,
             Autofill(
                 self._loop,
                 emit=emit,

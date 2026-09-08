@@ -151,7 +151,7 @@ async def build_stack(
 
 
 def _ask_before_external_effects() -> None:
-    """Declare the command families this surface names in its prompts.
+    """Declare the command families this surface must ask about.
 
     The built-in policy asks about exactly one family, deletion -- which fits a
     terminal the reader is already watching and does not fit an agent behind an
@@ -167,18 +167,16 @@ def _ask_before_external_effects() -> None:
     child -- so the declaration belongs at that scope and every tool built here,
     delegated or not, inherits it.
 
-    The families do not decide: every mutation answers to the permission
-    tiers and the mode, and a declared family only supplies the line the human
-    reads when a call lands on a prompt. A delegated command asks through the
-    responder the parent turn bound -- the permission turn is a ContextVar the
-    sub-agent's task inherits -- so ``git push`` from a sub-agent reaches the
-    editor's permission request exactly as the main agent's does.
+    What a delegated command gets is a REFUSAL, not a prompt: a sub-agent's tool
+    has no approval responder, and a tool that cannot ask fails closed. That is
+    the deliberate half of this decision. Asking on a sub-agent's behalf means
+    routing a lane's conversation id into a task that outlives its turn, which is
+    its own change; until then, refusing with a reason beats acting in silence.
     """
-    from raven.agent.tools.shell_policy import DELETE_MATCHERS, EXTERNAL_EFFECT_MATCHERS, set_surface_approval_families
+    from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS, set_surface_approval_families
 
-    families = DELETE_MATCHERS + EXTERNAL_EFFECT_MATCHERS
-    set_surface_approval_families(families)
-    logger.info("acp: {} command families will ask before running", len(families))
+    set_surface_approval_families(EXTERNAL_EFFECT_MATCHERS)
+    logger.info("acp: {} command families will ask before running", len(EXTERNAL_EFFECT_MATCHERS))
 
 
 async def _answer(methods: AcpMethods, frame: dict[str, Any], emit: Any) -> None:

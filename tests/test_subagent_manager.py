@@ -17,6 +17,7 @@ import asyncio
 import json
 import re
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -31,6 +32,7 @@ from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.subagent.registry import AgentRegistry
+from raven.agent.tools.shell import ExecTool
 from raven.config.schema import (
     AgentDefaults,
     BuiltinAgentConfig,
@@ -38,6 +40,7 @@ from raven.config.schema import (
     ThirdPartyCliSubagentConfig,
     ThirdPartyOpenAISubagentConfig,
 )
+from raven.contracts.tool import Continuation
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
@@ -76,11 +79,11 @@ class _DeleteRetryProvider(_StubProvider):
             LLMResponse(
                 content="",
                 tool_calls=[
-                    ToolCallRequest(id="call-a", name="exec", arguments={"command": "rm -rf /"}),
+                    ToolCallRequest(id="call-a", name="exec", arguments={"command": "rm file.txt"}),
                     ToolCallRequest(
                         id="call-b",
                         name="exec",
-                        arguments={"command": 'bash -c "rm -rf /"'},
+                        arguments={"command": 'bash -c "rm file.txt"'},
                     ),
                 ],
                 finish_reason="tool_calls",
@@ -311,10 +314,7 @@ async def test_announce_dag_result_without_a_submit_does_not_raise() -> None:
     await mgr.announce_dag_result("run-1", "summary", {"channel": "cli", "chat_id": "direct", "session_key": "cli"})
 
 
-async def test_subagent_continues_after_a_refused_delete(monkeypatch, tmp_path):
-    """A refused command no longer ends the run: the sub-agent reads the
-    refusal, neither spelling of the catastrophic delete executes, and the
-    run's answer is the model's own next reply."""
+async def test_subagent_stops_after_terminal_shell_decision(monkeypatch, tmp_path):
     provider = _DeleteRetryProvider()
     manager = SubagentManager(provider=provider, workspace=tmp_path)
     executor = _RecordingExecutor()
@@ -338,11 +338,11 @@ async def test_subagent_continues_after_a_refused_delete(monkeypatch, tmp_path):
     )
 
     assert executor.commands == []
-    assert provider.responses == []
+    assert len(provider.responses) == 1
     assert announcements == [
         {
-            "result": "Retried through a shell wrapper.",
-            "status": "ok",
+            "result": manager_mod.ABORTED_ACTION_RESULT,
+            "status": "error",
         }
     ]
 
@@ -360,7 +360,7 @@ class _RefusedThenInnocuousProvider(_StubProvider):
             LLMResponse(
                 content="",
                 tool_calls=[
-                    ToolCallRequest(id="call-a", name="exec", arguments={"command": "rm -rf /"}),
+                    ToolCallRequest(id="call-a", name="exec", arguments={"command": "rm file.txt"}),
                     ToolCallRequest(id="call-b", name="exec", arguments={"command": "echo done"}),
                 ],
                 finish_reason="tool_calls",
@@ -375,10 +375,19 @@ class _RefusedThenInnocuousProvider(_StubProvider):
 async def test_a_blocked_call_stops_its_siblings_even_when_the_turn_goes_on(monkeypatch, tmp_path):
     """The sub-agent loop has to read `blocks_call`, not only `continuation`.
 
-    A gate refusal keeps the turn alive and blocks the call, so the two
-    decisions come apart on the default path now: the sibling written beside
-    the refused call must not run even though the model gets another go.
+    Every refusal asks for ABORT_TURN today, and the raise cancels the siblings
+    on its way out -- so the two decisions only come apart under a refusal that
+    lets the turn continue. `ExecTool._terminal_error` is the one factory every
+    refusal goes through, so patching it drives the real policy gate rather than
+    a stub tool that could agree with the loop by construction.
     """
+    original = ExecTool._terminal_error.__func__
+
+    def _refuse_but_keep_the_turn(cls, message):
+        return replace(original(cls, message), continuation=Continuation.CONTINUE)
+
+    monkeypatch.setattr(ExecTool, "_terminal_error", classmethod(_refuse_but_keep_the_turn))
+
     provider = _RefusedThenInnocuousProvider()
     manager = SubagentManager(provider=provider, workspace=tmp_path)
     executor = _RecordingExecutor()
@@ -415,6 +424,13 @@ async def test_every_advertised_call_gets_a_result_when_one_is_blocked(monkeypat
     would trade a loophole for a broken second request. Asserted on what the
     loop actually sent the second time.
     """
+    original = ExecTool._terminal_error.__func__
+
+    def _refuse_but_keep_the_turn(cls, message):
+        return replace(original(cls, message), continuation=Continuation.CONTINUE)
+
+    monkeypatch.setattr(ExecTool, "_terminal_error", classmethod(_refuse_but_keep_the_turn))
+
     provider = _RefusedThenInnocuousProvider()
     sent: list[list[dict]] = []
     inner = provider.chat_with_retry

@@ -27,7 +27,6 @@ async def approval_respond(
     # compatibility fallback, with the broker enforcing the same binding.
     conversation_id = str(params.get("session_id") or params.get("conversation_id") or "")
     choice = str(params.get("choice", ""))
-    feedback = str(params.get("feedback", "") or "")
     if not approval_id or not conversation_id:
         return {"ok": False}
     return {
@@ -35,7 +34,6 @@ async def approval_respond(
             approval_id,
             choice,
             conversation_id=conversation_id,
-            feedback=feedback,
         )
     }
 

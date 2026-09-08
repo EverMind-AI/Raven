@@ -94,16 +94,3 @@ describe('the live boot guard', () => {
     expect(watch).toBeGreaterThan(clear)
   })
 })
-
-describe('the permission chip mirrors every settings load', () => {
-  /* The push lives outside loadSettings (model-refresh-live.test.mjs extracts
-     that function's source and evaluates it under node), so each caller must
-     invoke it itself -- boot included, or a cold page shows the localStorage
-     cache while the gate enforces the server's mode. */
-  it('each loadSettings call site pushes the mode afterwards', () => {
-    const callers = [...live.matchAll(/(?<!function )loadSettings\(\)/g)].length
-    const pushes = [...live.matchAll(/pushPermMode\(\)|\.then\(pushPermMode\)/g)].length
-    expect(callers).toBeGreaterThanOrEqual(3)
-    expect(pushes).toBe(callers)
-  })
-})

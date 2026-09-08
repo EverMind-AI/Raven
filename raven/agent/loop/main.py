@@ -350,26 +350,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # backgrounded DAG submission -- including default deploys, where an
         # unset attribute would raise instead of answering "no route".
         self.tool_search_controller = None
-        from raven.config.live import permissions_config
-        from raven.permissions import BuiltinRulings, PermissionGate
-
-        # Config is read through a late-bound callable so a mode flipped on a
-        # settings surface reads on the next tool call.
-        permission_gate = PermissionGate(
-            config_source=lambda: permissions_config(self._live_config),
-            builtin=BuiltinRulings(
-                extra_deny_patterns=self.exec_config.extra_deny_patterns,
-                extra_deny_source=self._live_exec_extra_deny,
-            ),
-            judge_provider_for=self._permission_judge_provider,
-            allow_ask=True,
-        )
-        self.tools = ToolRegistry(tool_gates=plugin_tool_gates or (), permission_gate=permission_gate)
-        # A conversation's own mode outlives a restart on its record, the way
-        # its model does; this is how the gate reads it back.
-        from raven.permissions import set_session_mode_restorer
-
-        set_session_mode_restorer(self.stored_session_permission_mode)
+        self.tools = ToolRegistry(tool_gates=plugin_tool_gates or ())
         # Asked once per assembled tool array, so an off switch flipped now is
         # honoured by the next request rather than the next restart.
         self.tools.set_withheld_source(self._withheld_tool_names)

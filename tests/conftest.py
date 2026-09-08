@@ -195,15 +195,6 @@ def _no_real_raven_home(tmp_path_factory, monkeypatch):
     # home would let one test read the config another one wrote.
     home = tmp_path_factory.mktemp("default_home")
     monkeypatch.setenv("HOME", str(home))
-    # The suite's baseline permission mode is full access -- the behaviour the
-    # whole suite was written against before the gate existed, and what a test
-    # about streaming or diffs should keep seeing. The product default is ask;
-    # tests about the gate itself write their own permissions node (LiveConfig
-    # re-reads on byte change, so overwriting this file mid-test takes effect
-    # on the next tool call).
-    raven_home = home / ".raven"
-    raven_home.mkdir()
-    (raven_home / "config.json").write_text('{"permissions": {"mode": "full"}}')
     # Unset rather than set: ``RAVEN_HOME`` outranks everything above, so a
     # developer who exports it hands their own directory to every test that
     # isolates the home some other way. Deleting it is the one move that closes

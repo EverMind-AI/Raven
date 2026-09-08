@@ -53,7 +53,6 @@ _DEFAULTS: dict[str, Any] = {
     "tui.theme": "default",
     "tui.show_token_usage": True,
     "language": "en",
-    "permissions.mode": "ask",
 }
 
 
@@ -107,15 +106,6 @@ def _validate_show_token_usage(value: Any) -> bool:
     return value
 
 
-def _validate_permission_mode(value: Any) -> str:
-    if value not in ("ask", "smart", "full"):
-        raise ConfigValidationError(
-            "permissions.mode must be 'ask', 'smart' or 'full'",
-            data={"field": "permissions.mode", "got": repr(value)},
-        )
-    return value
-
-
 def _validate_language(value: Any) -> str:
     if value not in ("en", "zh"):
         raise ConfigValidationError(
@@ -132,9 +122,6 @@ _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     # Both clients read this to pick their UI language; it also drives the
     # agent's reply language through the system prompt.
     "language": _validate_language,
-    # Read live by the permission gate, so a switch takes effect on the next
-    # tool call rather than the next restart.
-    "permissions.mode": _validate_permission_mode,
 }
 
 # Public: the canonical writable-key set; consumers can iterate to enumerate
@@ -154,7 +141,6 @@ _STORAGE_PATHS: dict[str, str] = {
     "tui.theme": "tui.theme",
     "tui.show_token_usage": "tui.show_token_usage",
     "language": "language",
-    "permissions.mode": "permissions.mode",
 }
 
 
@@ -309,40 +295,7 @@ async def config_get(params: dict) -> dict:
             continue
         value = _get_nested(payload, _STORAGE_PATHS[key])
         out[key] = value if value is not None else _DEFAULTS[key]
-    session_id = params.get("session_id") if isinstance(params, dict) else None
-    if "permissions.mode" in out and isinstance(session_id, str) and session_id:
-        from raven.permissions.session import session_mode
-
-        out["permissions.mode"] = session_mode(session_id) or out["permissions.mode"]
     return {"config": out}
-
-
-def _session_scope(params: dict, key: str) -> tuple[str | None, bool]:
-    """The conversation a scoped write names, and whether the write stays with it.
-
-    Shared by the two keys with a per-conversation reading, ``model`` and
-    ``permissions.mode``. With a ``session_id`` the write is scoped to that
-    conversation unless ``scope="default"`` says otherwise; without one it moves
-    the default a new conversation starts on.
-    """
-    session_id = params.get("session_id")
-    scope = params.get("scope")
-    if scope not in (None, "session", "default"):
-        raise ConfigValidationError(
-            f"config.set {key} scope must be 'session' or 'default'",
-            data={"field": "scope", "got": repr(scope)},
-        )
-    has_session = isinstance(session_id, str) and bool(session_id)
-    if scope == "session" and not has_session:
-        # Never widen a scope the caller narrowed: falling through to the
-        # default branch would move every conversation that never switched.
-        # The TUI sends a session_id that is null until the first
-        # session.create resolves, so this is reachable.
-        raise ConfigValidationError(
-            f"config.set {key} scope 'session' needs a session_id",
-            data={"field": "session_id", "got": repr(session_id)},
-        )
-    return (session_id if has_session else None), scope != "default" and has_session
 
 
 async def config_set(
@@ -388,20 +341,6 @@ async def config_set(
         )
 
     validated = _VALIDATORS[key](raw_value)
-
-    if key == "permissions.mode":
-        session_id, session_scoped = _session_scope(params, key)
-        if session_scoped:
-            from raven.permissions.session import set_session_mode
-
-            # Read by the gate on the conversation's next tool call, and kept
-            # on the conversation's record so a restart does not undo it; the
-            # config file keeps the default a new conversation starts on.
-            previous = set_session_mode(session_id or "", validated)
-            loop = agent_loop_factory() if agent_loop_factory is not None else None
-            if loop is not None:
-                _remember_session_permission_mode(loop, session_id or "", validated)
-            return {"applied": True, "previous": previous}
 
     path = _STORAGE_PATHS[key]
     payload = _load_config()
@@ -504,8 +443,24 @@ def _set_model(
     # the spelling drift the storage rule exists to end.
     raw_value = stored_model_id(new_provider, raw_value)
 
-    session_id, session_scoped = _session_scope(params, "model")
-    has_session = session_id is not None
+    session_id = params.get("session_id")
+    scope = params.get("scope")
+    if scope not in (None, "session", "default"):
+        raise ConfigValidationError(
+            "config.set model scope must be 'session' or 'default'",
+            data={"field": "scope", "got": repr(scope)},
+        )
+    has_session = isinstance(session_id, str) and bool(session_id)
+    if scope == "session" and not has_session:
+        # Never widen a scope the caller narrowed: falling through to the
+        # default branch here would write agents.defaults and move every
+        # session that never switched. The TUI sends a session_id that is null
+        # until the first session.create resolves, so this is reachable.
+        raise ConfigValidationError(
+            "config.set model scope 'session' needs a session_id",
+            data={"field": "session_id", "got": repr(session_id)},
+        )
+    session_scoped = scope != "default" and has_session
 
     loop = agent_loop_factory() if agent_loop_factory is not None else None
     binding = None
@@ -607,21 +562,6 @@ def _remember_session_model(loop: Any, session_key: str, model: str, provider_na
             sessions.save(session)
     except Exception:
         logger.warning("could not persist the model on session {!r}", session_key)
-
-
-def _remember_session_permission_mode(loop: Any, session_key: str, mode: str) -> None:
-    """Persist the conversation's mode on its record, under the same rule as its model:
-    written in memory unconditionally, saved only for a session that already has a file."""
-    sessions = getattr(loop, "sessions", None)
-    if sessions is None:
-        return
-    try:
-        session = sessions.get_or_create(session_key)
-        session.metadata["permissions_mode"] = mode
-        if sessions.exists(session_key):
-            sessions.save(session)
-    except Exception:
-        logger.warning("could not persist the permission mode on session {!r}", session_key)
 
 
 def _build_binding(loop: Any, runtime: Any, model: str, provider_name: str | None) -> Any:

@@ -31,15 +31,13 @@ from uuid import uuid4
 
 from loguru import logger
 
-from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
-
 SendFrame = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 @dataclass
 class _PendingApproval:
     conversation_id: str
-    future: asyncio.Future[tuple[str, str]]
+    future: asyncio.Future[tuple[bool, str]]
 
 
 class ApprovalBroker:
@@ -69,16 +67,14 @@ class ApprovalBroker:
         tool_call_id: str,
         command: str,
         description: str,
-    ) -> ApprovalOutcome:
+    ) -> bool:
         """Wait for an approval decision and fail closed on every error path.
 
-        ``ALLOW`` means the exact action may execute once. User denial, visible
+        ``True`` means the exact command may execute once. User denial, visible
         timeout forwarded by the TUI, backend timeout, connection failure, and
-        broker cancellation all resolve to a deny; ``DENY_STOP`` is the one
-        choice that additionally ends the turn, and only a human's click can
-        produce it. Exceptions are contained here because an approval transport
-        failure must never turn into tool execution or leave the agent loop
-        waiting indefinitely.
+        broker cancellation all resolve to ``False``. Exceptions are contained
+        here because an approval transport failure must never turn into tool
+        execution or leave the agent loop waiting indefinitely.
         """
         approval_id = uuid4().hex
         future = asyncio.get_running_loop().create_future()
@@ -108,19 +104,15 @@ class ApprovalBroker:
                 }
             )
             request_sent = True
-            choice, feedback = await asyncio.wait_for(future, self._hard_timeout_s)
-            close_reason = choice
-            try:
-                return ApprovalOutcome(choice=ApprovalChoice(choice), feedback=feedback)
-            except ValueError:
-                return ApprovalOutcome(choice=ApprovalChoice.DENY)
+            approved, close_reason = await asyncio.wait_for(future, self._hard_timeout_s)
+            return approved
         except TimeoutError:
             close_reason = "timeout"
-            return ApprovalOutcome(choice=ApprovalChoice.DENY)
+            return False
         except Exception:
             close_reason = "error"
             logger.exception("approval_broker: request failed for {}", approval_id)
-            return ApprovalOutcome(choice=ApprovalChoice.DENY)
+            return False
         finally:
             self._pending.pop(approval_id, None)
             if request_sent:
@@ -141,31 +133,25 @@ class ApprovalBroker:
                 except Exception:
                     logger.exception("approval_broker: close notification failed for {}", approval_id)
 
-    def resolve(self, approval_id: str, choice: str, *, conversation_id: str, feedback: str = "") -> bool:
+    def resolve(self, approval_id: str, choice: str, *, conversation_id: str) -> bool:
         """Resolve a live request only when both opaque id and conversation match.
 
         Returning ``False`` for stale, duplicate, cross-conversation, or invalid
         responses makes late UI input harmless and keeps resolution idempotent.
-        ``feedback`` rides along on a refusal for the model to read; it is
-        clipped rather than refused, because a long sentence is still an answer.
         """
-        if choice not in {"allow", "deny", "deny_stop"}:
+        if choice not in {"allow", "deny"}:
             return False
         pending = self._pending.get(approval_id)
         if pending is None or pending.conversation_id != conversation_id or pending.future.done():
             return False
-        pending.future.set_result((choice, feedback[:2000]))
+        pending.future.set_result((choice == "allow", choice))
         return True
 
     def cancel_all(self) -> None:
-        """Fail-close pending approvals during RPC teardown or TUI disconnect.
-
-        "cancelled" is not a wire choice: the awaiting side maps it onto a deny
-        while the closed-notification keeps naming the real cause.
-        """
+        """Fail-close pending approvals during RPC teardown or TUI disconnect."""
         for pending in list(self._pending.values()):
             if not pending.future.done():
-                pending.future.set_result(("cancelled", ""))
+                pending.future.set_result((False, "cancelled"))
 
 
 __all__ = ["ApprovalBroker", "SendFrame"]

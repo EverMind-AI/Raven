@@ -4,15 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
-from raven.config.schema import PermissionsConfig
-from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
-from raven.contracts.tool import Continuation
-from raven.permissions.builtin import BuiltinRulings
-from raven.permissions.gate import PermissionGate
-from raven.permissions.turn import start_permission_turn
+from raven.contracts.tool import Continuation, ToolResult
 from raven.sandbox import ExecResult, SandboxExecutor
 
 
@@ -22,21 +16,6 @@ def policy() -> ShellCommandPolicy:
     # matched here -- a fixture that still pattern-denies it would test a
     # policy no user runs.
     return ShellCommandPolicy(deny_patterns=[r"\b(mkfs|diskpart)\b"])
-
-
-@pytest.fixture
-def asking_policy() -> ShellCommandPolicy:
-    """The ACP editor's shape: the deletion family declared, so deletes ask.
-
-    The terminal ships no asking families -- deletes answer to the tiers -- but
-    the matcher's reach still matters wherever a surface declares it.
-    """
-    from raven.agent.tools.shell_policy import DELETE_MATCHERS
-
-    policy = ShellCommandPolicy(deny_patterns=[r"\b(mkfs|diskpart)\b"])
-    for name, matcher in DELETE_MATCHERS:
-        policy.register_approval_matcher(name, matcher)
-    return policy
 
 
 @pytest.mark.parametrize(
@@ -63,11 +42,10 @@ def test_safe_commands_are_allowed(policy: ShellCommandPolicy, command: str) -> 
 @pytest.mark.parametrize(
     "command",
     [
-        "rm -rf /",
-        "rm -rf /*",
-        "rm -rf ~",
-        "rm -r $HOME",
-        "echo ready && rm -rf /",
+        "rm -r tmp",
+        "rm -rf tmp",
+        "rm -fr tmp",
+        "echo ready && rm -rf tmp",
         "mkfs /dev/test",
         "shutdown now",
         "halt",
@@ -125,19 +103,12 @@ def test_hard_denied_commands_cannot_be_approved(policy: ShellCommandPolicy, com
         'find . -exec sh -c "rm \\"$1\\"" _ {} \\;',
     ],
 )
-def test_delete_commands_require_approval(asking_policy: ShellCommandPolicy, command: str) -> None:
-    assert asking_policy.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
+def test_delete_commands_require_approval(policy: ShellCommandPolicy, command: str) -> None:
+    assert policy.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
 
 
-def test_ordinary_deletes_answer_to_the_tiers_by_default(policy: ShellCommandPolicy) -> None:
-    """The shipped terminal policy declares no asking family: an ordinary
-    delete is a mutation like any other, decided by the permission tiers."""
-    assert policy.evaluate("rm file.txt") is CommandDecision.ALLOW
-    assert policy.evaluate("rm -rf build/") is CommandDecision.ALLOW
-
-
-def test_hard_deny_wins_when_command_also_matches_approval(asking_policy: ShellCommandPolicy) -> None:
-    assert asking_policy.evaluate("unlink old.txt && rm -rf /") is CommandDecision.HARD_DENY
+def test_hard_deny_wins_when_command_also_matches_approval(policy: ShellCommandPolicy) -> None:
+    assert policy.evaluate("unlink old.txt && rm -rf tmp") is CommandDecision.HARD_DENY
 
 
 def test_matcher_failure_is_fail_closed(policy: ShellCommandPolicy) -> None:
@@ -173,34 +144,19 @@ class _ApprovalResponder:
         self.answers = answers
         self.requests: list[dict] = []
 
-    async def await_approval(self, **request) -> ApprovalOutcome:
+    async def await_approval(self, **request) -> bool:
         self.requests.append(request)
-        allowed = self.answers.pop(0)
-        return ApprovalOutcome(choice=ApprovalChoice.ALLOW if allowed else ApprovalChoice.DENY)
-
-
-def _gated_exec(executor, responder, tmp_path, *, mode: str = "ask", families=()):
-    """The real dispatch path: gate at the registry door, ExecTool behind it."""
-    builtin = BuiltinRulings()
-    for name, matcher in families:
-        builtin._policy.register_approval_matcher(name, matcher)
-    gate = PermissionGate(
-        config_source=lambda: PermissionsConfig(mode=mode),
-        builtin=builtin,
-        allow_ask=True,
-    )
-    registry = ToolRegistry(permission_gate=gate)
-    registry.register(ExecTool(executor=executor, working_dir=str(tmp_path)))
-    start_permission_turn(responder, conversation_id="session-a", turn_id="turn-a")
-    return registry
+        return self.answers.pop(0)
 
 
 async def test_direct_delete_executes_once_after_approval(tmp_path) -> None:
     executor = _RecordingExecutor(sandboxed=False)
     responder = _ApprovalResponder([True])
-    registry = _gated_exec(executor, responder, tmp_path)
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    tool.start_approval_turn(responder, conversation_id="session-a", turn_id="turn-a")
+    tool.set_tool_call_id("call-a")
 
-    result = await registry.execute("exec", {"command": "rm file.txt"})
+    result = await tool.execute("rm file.txt")
 
     assert "Exit code: 0" in result
     assert executor.commands == ["rm file.txt"]
@@ -208,41 +164,64 @@ async def test_direct_delete_executes_once_after_approval(tmp_path) -> None:
         {
             "conversation_id": "session-a",
             "turn_id": "turn-a",
-            "tool_call_id": "",
+            "tool_call_id": "call-a",
             "command": "rm file.txt",
-            "description": "Approve this action: rm file.txt",
+            "description": "Delete files using a shell command",
         }
     ]
 
 
 async def test_direct_delete_without_responder_is_denied(tmp_path) -> None:
     executor = _RecordingExecutor(sandboxed=False)
-    registry = _gated_exec(executor, None, tmp_path)
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
 
-    result = await registry.execute("exec", {"command": "unlink file.txt"})
+    result = await tool.execute("unlink file.txt")
 
+    assert isinstance(result, ToolResult)
     assert result.retryable is False
     assert result.blocks_call is True
-    assert result.continuation is Continuation.CONTINUE
-    assert "requires user approval" in str(result)
-    assert "not interactive" in str(result)
-    assert "Do not retry" in str(result)
+    assert result.continuation is Continuation.ABORT_TURN
+    assert "requires user approval" in result.model_text
+    assert "Do not retry" in result.model_text
     assert executor.commands == []
+
+
+async def test_live_destructive_delete_switch_applies_before_next_command(tmp_path) -> None:
+    executor = _RecordingExecutor(sandboxed=False)
+    setting = {"value": False}
+    tool = ExecTool(
+        executor=executor,
+        working_dir=str(tmp_path),
+        allow_destructive_source=lambda: setting["value"],
+    )
+
+    blocked = await tool.execute("rm -rf tmp")
+    assert isinstance(blocked, ToolResult)
+    assert executor.commands == []
+
+    setting["value"] = True
+    allowed = await tool.execute("rm -rf tmp")
+    assert isinstance(allowed, str)
+    assert "Exit code: 0" in allowed
+    assert executor.commands == ["rm -rf tmp"]
 
 
 async def test_denied_command_is_not_prompted_again_in_same_turn(tmp_path) -> None:
     executor = _RecordingExecutor(sandboxed=False)
     responder = _ApprovalResponder([False])
-    registry = _gated_exec(executor, responder, tmp_path)
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    tool.start_approval_turn(responder, conversation_id="session-a", turn_id="turn-a")
 
-    first = await registry.execute("exec", {"command": "find tmp -delete"})
-    second = await registry.execute("exec", {"command": "find tmp -delete"})
+    first = await tool.execute("find tmp -delete")
+    second = await tool.execute("find tmp -delete")
 
+    assert isinstance(first, ToolResult)
     assert first.retryable is False
     assert first.blocks_call is True
-    assert first.continuation is Continuation.CONTINUE
-    assert "denied" in str(first).lower()
-    assert "denied" in str(second).lower()
+    assert first.continuation is Continuation.ABORT_TURN
+    assert "denied" in first.model_text.lower()
+    assert isinstance(second, ToolResult)
+    assert "denied" in second.model_text.lower()
     assert executor.commands == []
     assert len(responder.requests) == 1
 
@@ -250,13 +229,15 @@ async def test_denied_command_is_not_prompted_again_in_same_turn(tmp_path) -> No
 async def test_allow_once_does_not_cover_a_second_execution(tmp_path) -> None:
     executor = _RecordingExecutor(sandboxed=False)
     responder = _ApprovalResponder([True, False])
-    registry = _gated_exec(executor, responder, tmp_path)
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    tool.start_approval_turn(responder, conversation_id="session-a", turn_id="turn-a")
 
-    first = await registry.execute("exec", {"command": "rm file.txt"})
-    second = await registry.execute("exec", {"command": "rm file.txt"})
+    first = await tool.execute("rm file.txt")
+    second = await tool.execute("rm file.txt")
 
     assert "Exit code: 0" in first
-    assert "denied" in str(second).lower()
+    assert isinstance(second, ToolResult)
+    assert "denied" in second.model_text.lower()
     assert executor.commands == ["rm file.txt"]
     assert len(responder.requests) == 2
 
@@ -264,13 +245,15 @@ async def test_allow_once_does_not_cover_a_second_execution(tmp_path) -> None:
 async def test_new_turn_can_prompt_for_a_previously_denied_command(tmp_path) -> None:
     executor = _RecordingExecutor(sandboxed=False)
     responder = _ApprovalResponder([False, True])
-    registry = _gated_exec(executor, responder, tmp_path)
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    tool.start_approval_turn(responder, conversation_id="session-a", turn_id="turn-a")
 
-    first = await registry.execute("exec", {"command": "unlink file.txt"})
-    start_permission_turn(responder, conversation_id="session-a", turn_id="turn-b")
-    second = await registry.execute("exec", {"command": "unlink file.txt"})
+    first = await tool.execute("unlink file.txt")
+    tool.start_approval_turn(responder, conversation_id="session-a", turn_id="turn-b")
+    second = await tool.execute("unlink file.txt")
 
-    assert "denied" in str(first).lower()
+    assert isinstance(first, ToolResult)
+    assert "denied" in first.model_text.lower()
     assert "Exit code: 0" in second
     assert executor.commands == ["unlink file.txt"]
     assert len(responder.requests) == 2
@@ -279,42 +262,41 @@ async def test_new_turn_can_prompt_for_a_previously_denied_command(tmp_path) -> 
 async def test_hard_denied_command_never_requests_approval(tmp_path) -> None:
     executor = _RecordingExecutor(sandboxed=False)
     responder = _ApprovalResponder([True])
-    registry = _gated_exec(executor, responder, tmp_path)
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    tool.start_approval_turn(responder, conversation_id="session-a", turn_id="turn-a")
 
-    result = await registry.execute("exec", {"command": "rm -rf /"})
+    result = await tool.execute("rm -rf tmp")
 
+    assert isinstance(result, ToolResult)
     assert result.retryable is False
     assert result.blocks_call is True
-    assert result.continuation is Continuation.CONTINUE
-    assert "blocked" in str(result)
-    assert "Do not retry" in str(result)
+    assert result.continuation is Continuation.ABORT_TURN
+    assert "blocked" in result.model_text
+    assert "Do not retry" in result.model_text
     assert responder.requests == []
     assert executor.commands == []
 
 
-async def test_a_sandboxed_executor_earns_no_relaxation(tmp_path) -> None:
-    # Boxlite mounts the real workspace read-write into the VM, so a
-    # filesystem catastrophe inside it reaches host data. The deny list
-    # holds through a sandboxed executor exactly as through a direct one.
+async def test_sandboxed_delete_skips_approval_and_deny_policy(tmp_path) -> None:
     executor = _RecordingExecutor(sandboxed=True)
     responder = _ApprovalResponder([False])
-    registry = _gated_exec(executor, responder, tmp_path, mode="full")
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    tool.start_approval_turn(responder, conversation_id="session-a", turn_id="turn-a")
 
-    result = await registry.execute("exec", {"command": "rm -rf /"})
+    result = await tool.execute("rm -rf tmp")
 
-    assert result.blocks_call is True
-    assert "blocked" in str(result)
+    assert "Exit code: 0" in result
     assert responder.requests == []
-    assert executor.commands == []
+    assert executor.commands == ["rm -rf tmp"]
 
 
-class TestTheTargetIsWhatMakesADeleteUnconditional:
-    """Only a recursive delete aimed at ``/`` or the home tree is unconditional.
+class TestRecursionIsWhatMakesADeleteUnconditional:
+    """``rm -f`` names its files; ``rm -rf`` walks a tree it was never shown.
 
-    Everything the machine holds lives under those two paths, so no mode, rule
-    or click can rescue them. An ordinary recursive delete (``rm -rf build/``)
-    is daily work: it answers to the tiers, and to the deletion family on a
-    surface that declares one.
+    Collapsing the two was a live defect: the deny pattern ``\\brm\\s+-[rf]{1,2}\\b``
+    matched a bare ``-f``, and because hard deny outranks approval the user was
+    never even asked. An agent could not delete the scratch files it had just
+    written -- and the turn ended there, because a policy abort is terminal.
     """
 
     @pytest.mark.parametrize(
@@ -326,32 +308,25 @@ class TestTheTargetIsWhatMakesADeleteUnconditional:
             "cd /work && rm -f a.py",
         ],
     )
-    def test_naming_the_files_asks_on_a_declaring_surface(
-        self, asking_policy: ShellCommandPolicy, command: str
-    ) -> None:
-        assert asking_policy.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
+    def test_naming_the_files_asks_instead_of_refusing(self, policy: ShellCommandPolicy, command: str) -> None:
+        assert policy.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
 
     @pytest.mark.parametrize(
         "command",
         [
+            "rm -rf build",
+            "rm -fr build",
+            "rm -R build",
+            "rm --recursive build",
             "sudo rm -rf /",
-            "bash -c 'rm -rf /'",
-            "rm -fr /",
-            "rm -R ~/",
-            "rm --recursive ~",
-            # A separated recursive flag must not walk past the check.
-            "rm -f -r /",
+            "bash -c 'rm -rf /tmp/x'",
+            # The old pattern only read the flag directly after `rm`, so a
+            # separated recursive flag walked straight past it.
+            "rm -f -r build",
         ],
     )
-    def test_catastrophic_targets_stay_unconditional(self, policy: ShellCommandPolicy, command: str) -> None:
+    def test_recursive_forms_stay_unconditional(self, policy: ShellCommandPolicy, command: str) -> None:
         assert policy.evaluate(command) is CommandDecision.HARD_DENY
-
-    @pytest.mark.parametrize(
-        "command",
-        ["rm -rf build", "rm -fr build", "rm -R build", "rm --recursive build", "rm -f -r build"],
-    )
-    def test_an_ordinary_recursive_delete_answers_to_the_tiers(self, policy: ShellCommandPolicy, command: str) -> None:
-        assert policy.evaluate(command) is CommandDecision.ALLOW
 
     def test_a_recursive_delete_quoted_inside_another_command_is_still_text(self, policy: ShellCommandPolicy) -> None:
         """The old regexp searched the raw string, so mentioning the command
@@ -361,36 +336,30 @@ class TestTheTargetIsWhatMakesADeleteUnconditional:
     @pytest.mark.parametrize(
         "command",
         [
-            "timeout 5 rm -rf /",
-            "timeout -s KILL 5 rm -rf /",
-            "timeout --kill-after=2 5s rm -rf ~",
-            "nice rm -rf /",
-            "nice -n 10 rm -rf /",
-            "ionice -c 3 rm -rf ~",
-            "time rm -rf /",
-            "setsid rm -rf /",
-            "stdbuf -oL rm -rf /*",
+            "xargs rm -rf < list.txt",
+            "git ls-files -o | xargs rm -rf",
+            "xargs -0 -n1 rm -rf",
+            "xargs -I{} rm -rf {}",
+            "timeout 5 rm -rf /tmp/x",
+            "timeout -s KILL 5 rm -rf /tmp/x",
+            "timeout --kill-after=2 5s rm -rf /tmp/x",
+            "nice rm -rf /tmp/x",
+            "nice -n 10 rm -rf /tmp/x",
+            "ionice -c 3 rm -rf /tmp/x",
+            "time rm -rf /tmp/x",
+            "setsid rm -rf /tmp/x",
+            "stdbuf -oL rm -rf /tmp/x",
             "sudo timeout 5 rm -rf /",
-            "env FOO=1 timeout 5 rm -rf /",
-            "xargs sh -c 'rm -rf /'",
-            "find / -name '*' -exec rm -rf {} +",
+            "env FOO=1 timeout 5 rm -rf /tmp/x",
+            "xargs sh -c 'rm -rf /tmp/x'",
+            "find . -name '*.pyc' -exec rm -rf {} +",
         ],
     )
-    def test_a_wrapper_does_not_launder_a_catastrophic_delete(self, policy: ShellCommandPolicy, command: str) -> None:
-        """A program that runs another program must not hide the delete behind
-        itself: the wrapper stripping reads through to the target."""
+    def test_a_wrapper_does_not_launder_a_recursive_delete(self, policy: ShellCommandPolicy, command: str) -> None:
+        """Every one of these ran with no approval at all once the raw-string
+        pattern went: the token matcher only ever read the leading word, so a
+        program that runs another program hid the delete behind itself."""
         assert policy.evaluate(command) is CommandDecision.HARD_DENY
-
-    @pytest.mark.parametrize(
-        "command",
-        ["xargs rm -rf < list.txt", "git ls-files -o | xargs rm -rf", "xargs -0 -n1 rm -rf", "xargs -I{} rm -rf {}"],
-    )
-    def test_stdin_fed_targets_are_past_the_tripwire(self, policy: ShellCommandPolicy, command: str) -> None:
-        """The unconditional list is a lexical tripwire, not a boundary: targets
-        arriving on stdin are invisible to it, exactly like a delete written in
-        Python. Those runs answer to the tiers (and the sandbox), which is the
-        actual boundary."""
-        assert policy.evaluate(command) is CommandDecision.ALLOW
 
     @pytest.mark.parametrize(
         "command",
@@ -399,94 +368,8 @@ class TestTheTargetIsWhatMakesADeleteUnconditional:
             "timeout 5 rm a.py",
         ],
     )
-    def test_a_wrapped_named_delete_still_only_asks(self, asking_policy: ShellCommandPolicy, command: str) -> None:
-        assert asking_policy.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            # The search path is benign, so path inspection alone would clear it;
-            # the catastrophic target rides the -exec command, which has to be
-            # read as its own argv.
-            "find . -exec rm -rf --no-preserve-root / {} +",
-            "find . -type f -execdir rm -rf / {} ;",
-            'find . -exec sh -c "rm -rf /" {} +',
-            # The delete rides a shell the carried command spawns: what find
-            # walks under / is deleted all the same, one wrapper deeper.
-            "find / -exec sh -c 'rm -rf \"$1\"' sh {} +",
-            # Or a recognized command runner: timeout/nice hand the walk on.
-            "find / -exec timeout 5 rm -rf --no-preserve-root {} +",
-            "find / -execdir nice -n 5 rm -rf {} +",
-            "find . -exec timeout 5 rm -rf / {} +",
-            # Multiple search roots: the catastrophic one is not first, so
-            # reading only paths[0] would clear it.
-            "find /home / -delete",
-            "find /tmp/scratch ~ -exec rm {} +",
-        ],
-    )
-    def test_a_find_exec_carrying_a_root_delete_is_unconditional(
-        self, policy: ShellCommandPolicy, command: str
-    ) -> None:
-        assert policy.evaluate(command) is CommandDecision.HARD_DENY
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            # -exec of an ordinary delete: the carried command targets what find
-            # matched under a benign path, not the root, so it is daily work.
-            'find . -name "*.log" -exec rm -rf {} +',
-            "find build -execdir rm {} ;",
-            # / here is -path's argument, not a search root: the walk starts
-            # at . and deletes nothing outside it.
-            "find . -path / -delete",
-        ],
-    )
-    def test_an_ordinary_find_exec_answers_to_the_tiers(self, policy: ShellCommandPolicy, command: str) -> None:
-        assert policy.evaluate(command) is CommandDecision.ALLOW
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "rmdir /s C:\\",
-            "rd /s /q C:\\",
-            "del /f /s /q C:\\*",
-            "rmdir /s %USERPROFILE%",
-            "del /s C:",
-            "cmd /c rmdir /s C:\\",
-            "cmd.exe /d /c del /f /s /q C:\\*",
-            'cmd /c "rmdir /s %USERPROFILE%"',
-            "echo done\nrmdir /s %USERPROFILE%",
-            "  rmdir /s %USERPROFILE%",
-            # Quoting the target is ordinary cmd syntax, not a disguise.
-            'rmdir /s "%USERPROFILE%"',
-            'del /f /s /q "C:\\*"',
-        ],
-    )
-    def test_a_recursive_windows_delete_of_a_root_is_unconditional(
-        self, policy: ShellCommandPolicy, command: str
-    ) -> None:
-        assert policy.evaluate(command) is CommandDecision.HARD_DENY
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            # Ordinary Windows cleanup: no /s, or /s over a named subdir. The
-            # Unix parallel is rm -f a.txt and rm -rf build -- both go to tiers.
-            "del /f scratch.txt",
-            "del /q old.log",
-            "rmdir /s build",
-            "rmdir /s C:\\Users\\me\\project",
-            "del /f /q C:\\proj\\build",
-            # cmd in argument position is text, not a wrapper, and a quoted
-            # ampersand separates nothing.
-            "echo cmd /c rmdir /s C:",
-            'echo "safe & rmdir /s C: "',
-            # A quoted named subdir keeps its backslashes and stays ordinary.
-            'rmdir /s "C:\\Users\\me\\my project"',
-        ],
-    )
-    def test_ordinary_windows_deletes_answer_to_the_tiers(self, policy: ShellCommandPolicy, command: str) -> None:
-        assert policy.evaluate(command) is CommandDecision.ALLOW
+    def test_a_wrapped_named_delete_still_only_asks(self, policy: ShellCommandPolicy, command: str) -> None:
+        assert policy.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
 
     @pytest.mark.parametrize(
         "command",
@@ -517,11 +400,9 @@ class TestExternalEffectFamilies:
 
     @pytest.fixture
     def asking(self) -> ShellCommandPolicy:
-        from raven.agent.tools.shell_policy import DELETE_MATCHERS, EXTERNAL_EFFECT_MATCHERS
+        from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS
 
         policy = ShellCommandPolicy(deny_patterns=[])
-        for name, matcher in DELETE_MATCHERS:
-            policy.register_approval_matcher(name, matcher)
         for name, matcher in EXTERNAL_EFFECT_MATCHERS:
             policy.register_approval_matcher(name, matcher)
         return policy
@@ -687,7 +568,7 @@ class TestExternalEffectFamilies:
 
         assert policy.evaluate("mkfs.ext4 /dev/sda1 && git push") is CommandDecision.HARD_DENY
         assert policy.approval_reason("mkfs.ext4 /dev/sda1") is None, "a refusal has no prompt to explain"
-        assert policy.evaluate("rm -rf / && npm publish") is CommandDecision.HARD_DENY
+        assert policy.evaluate("rm -rf build && npm publish") is CommandDecision.HARD_DENY
 
     def test_the_default_policy_asks_about_none_of_them(self, policy: ShellCommandPolicy) -> None:
         """The group is opt-in. A terminal user watching their own shell does not
@@ -714,9 +595,13 @@ async def test_the_prompt_names_the_family_that_fired(tmp_path) -> None:
 
     executor = _RecordingExecutor(sandboxed=False)
     responder = _ApprovalResponder([True])
-    registry = _gated_exec(executor, responder, tmp_path, families=EXTERNAL_EFFECT_MATCHERS)
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    for name, matcher in EXTERNAL_EFFECT_MATCHERS:
+        tool.register_approval_matcher(name, matcher)
+    tool.start_approval_turn(responder, conversation_id="session-a", turn_id="turn-a")
+    tool.set_tool_call_id("call-a")
 
-    await registry.execute("exec", {"command": "git push origin main"})
+    await tool.execute("git push origin main")
 
     assert responder.requests[0]["description"] == "Publish or push work to a remote"
     assert executor.commands == ["git push origin main"]
@@ -728,13 +613,14 @@ async def test_an_unregistered_family_still_gets_a_usable_prompt(tmp_path) -> No
     is worse than naming none."""
     executor = _RecordingExecutor(sandboxed=False)
     responder = _ApprovalResponder([False])
-    families = (("house_style", lambda command: command.startswith("weird")),)
-    registry = _gated_exec(executor, responder, tmp_path, families=families)
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    tool.register_approval_matcher("house_style", lambda command: command.startswith("weird"))
+    tool.start_approval_turn(responder, conversation_id="s", turn_id="t")
 
-    result = await registry.execute("exec", {"command": "weird --thing"})
+    result = await tool.execute("weird --thing")
 
+    assert isinstance(result, ToolResult)
     assert responder.requests[0]["description"] == "Run a command that needs your approval"
-    assert "denied" in str(result).lower()
     assert executor.commands == []
 
 
@@ -752,11 +638,9 @@ class TestAGlobalOptionValueIsNotASubcommand:
 
     @pytest.fixture
     def asking(self) -> ShellCommandPolicy:
-        from raven.agent.tools.shell_policy import DELETE_MATCHERS, EXTERNAL_EFFECT_MATCHERS
+        from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS
 
         policy = ShellCommandPolicy(deny_patterns=[])
-        for name, matcher in DELETE_MATCHERS:
-            policy.register_approval_matcher(name, matcher)
         for name, matcher in EXTERNAL_EFFECT_MATCHERS:
             policy.register_approval_matcher(name, matcher)
         return policy
@@ -836,9 +720,9 @@ class TestAGlobalOptionValueIsNotASubcommand:
             # the real operators that must still split. Both directions, because
             # the fix moves the line between them.
             ("{ rm file.txt; }", CommandDecision.REQUIRE_APPROVAL),
-            ("xargs -I{} rm -rf {}", CommandDecision.REQUIRE_APPROVAL),
+            ("xargs -I{} rm -rf {}", CommandDecision.HARD_DENY),
             (r'find . -name "*.log" -exec rm {} \;', CommandDecision.REQUIRE_APPROVAL),
-            ("rm -rf / && git push", CommandDecision.HARD_DENY),
+            ("rm -rf build && git push", CommandDecision.HARD_DENY),
         ],
     )
     def test_the_operators_that_must_still_split_still_split(
@@ -898,10 +782,10 @@ class TestAGlobalOptionValueIsNotASubcommand:
         assert asking.evaluate("git --future-flag somevalue push") is CommandDecision.REQUIRE_APPROVAL
 
 
-class TestSandboxingDoesNotRelaxClassification:
-    """The classifier has no sandbox input: the Boxlite VM mounts the real
-    workspace read-write, so the filesystem rules a sandbox supposedly
-    contains still reach host data through that mount."""
+class TestASandboxContainsSomeThingsAndNotOthers:
+    """The sandbox short-circuit used to skip the whole classification, which made
+    the SAFER configuration prompt less than the plain one -- for exactly the
+    operations a sandbox has no say over."""
 
     def _asking(self) -> ShellCommandPolicy:
         from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS
@@ -915,10 +799,25 @@ class TestSandboxingDoesNotRelaxClassification:
         "command",
         ["git push origin main", "npm install lodash", "ssh host ls", "curl -o out https://example.com"],
     )
-    def test_external_effects_ask(self, command: str) -> None:
-        assert self._asking().evaluate(command) is CommandDecision.REQUIRE_APPROVAL
-        assert self._asking().approval_reason(command) is not None
+    def test_an_effect_the_sandbox_cannot_hold_still_asks(self, command: str) -> None:
+        """A microVM does not contain a push, an install, or a connection to
+        another machine: the bytes leave the box either way."""
+        assert self._asking().evaluate(command, sandboxed=True) is CommandDecision.REQUIRE_APPROVAL
+        assert self._asking().approval_reason(command, sandboxed=True) is not None
 
-    @pytest.mark.parametrize("command", ["rm -rf /", "shutdown now", "mkfs.ext4 /dev/sda1"])
-    def test_the_deny_list_holds(self, command: str) -> None:
+    @pytest.mark.parametrize("command", ["rm file.txt", "rm -rf tmp", "shutdown now", "mkfs.ext4 /dev/sda1"])
+    def test_what_the_sandbox_does_hold_is_not_asked_about(self, command: str) -> None:
+        """Deleting a tree, powering off, formatting a disk: inside a microVM the
+        machine in question IS the sandbox. Running one is what a sandbox is for,
+        so the prompt and the refusal both drop away."""
+        assert self._asking().evaluate(command, sandboxed=True) is CommandDecision.ALLOW
+        assert self._asking().approval_reason(command, sandboxed=True) is None
+
+    @pytest.mark.parametrize("command", ["rm -rf tmp", "shutdown now", "mkfs.ext4 /dev/sda1"])
+    def test_the_same_commands_are_still_refused_unsandboxed(self, command: str) -> None:
+        """The other half: nothing above weakens the plain configuration."""
         assert self._asking().evaluate(command) is CommandDecision.HARD_DENY
+
+    def test_explicit_destructive_mode_allows_recursive_delete(self) -> None:
+        policy = ShellCommandPolicy(deny_patterns=[], allow_destructive_commands=True)
+        assert policy.evaluate("rm -rf tmp") is CommandDecision.ALLOW

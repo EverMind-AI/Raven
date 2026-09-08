@@ -126,10 +126,6 @@ function onEvent(ev) {
     if (live.st) { live.st.seal(); live.st = null; }
     flushSay();
     noteRow(T('gui.notice.' + (p.kind || ''), null, p.kind || ''), p.detail || '', { quiet: true });
-  } else if (ev.type === 'permission.review') {
-    /* The smart-mode reviewer runs inside the tool dispatch; name the pause. */
-    if (p.phase === 'started') showStatus(T('gui.perm.reviewing'));
-    else killStatus();
   } else if (ev.type === 'thinking.delta') {
     killStatus();
     ensureStep().thinkAppend(p.text || '');

@@ -23,8 +23,7 @@ from typing import Any
 
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.agent.tools.message import MessageTool
-from raven.contracts.asking import ApprovalResponder, SupportsDirectAsk
-from raven.permissions import start_permission_turn
+from raven.contracts.asking import ApprovalResponder, SupportsApprovalTurn, SupportsDirectAsk
 from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import (
     Deliverable,
@@ -176,23 +175,17 @@ class RpcTurnRunner(AgentTurnRunner):
     async def run(self, req: TurnRequest, emit: Emit, drain: Drain) -> TurnOutcome:
         cid = _conversation_id(req)
         tools = getattr(self._loop, "tools", None)
-
-        # Approval capability is rebound for every turn, inside the task that
-        # runs it. Only USER origin receives the TUI responder; CRON and other
-        # background origins can share this process but must still fail closed
-        # as non-interactive. The IDs bind any response to this exact
-        # conversation and turn.
-        async def _on_review(phase: str, tool_name: str) -> None:
-            # The smart-mode reviewer runs inside the tool dispatch, so without
-            # this the surface shows an unexplained pause on the running tool.
-            await self._emitter.emit(cid, {"type": "permission.review", "payload": {"phase": phase, "tool": tool_name}})
-
-        start_permission_turn(
-            self._approval_responder if req.origin is Origin.USER else None,
-            conversation_id=cid,
-            turn_id=req.turn_id or "",
-            on_review=_on_review if req.origin is Origin.USER else None,
-        )
+        exec_tool = tools.get("exec") if tools is not None else None
+        if isinstance(exec_tool, SupportsApprovalTurn):
+            # Approval capability is rebound for every turn. Only USER origin
+            # receives the TUI responder; CRON and other background origins can
+            # share this process but must still fail closed as non-interactive.
+            # The IDs bind any response to this exact conversation and turn.
+            exec_tool.start_approval_turn(
+                self._approval_responder if req.origin is Origin.USER else None,
+                conversation_id=cid,
+                turn_id=req.turn_id or "",
+            )
         # Same rebinding as the shell approval above but a wider gate: a USER
         # turn binds always, and a SUBAGENT relay binds when its conversation
         # has a live watcher. A CRON or otherwise background turn has no

@@ -1,18 +1,18 @@
 """Ask the client's user before running a protected command.
 
 Raven already has an approval round trip, and this is not a second one: it is a
-second *transport* for the same one. The permission gate
-(``raven.permissions``) calls ``ApprovalResponder.await_approval`` when a call
-needs a human; the TUI's implementation emits ``approval.request``
+second *transport* for the same one. ``ExecTool`` calls
+``ApprovalResponder.await_approval`` after ``ShellCommandPolicy`` classifies a
+command as needing approval; the TUI's implementation emits ``approval.request``
 on its own wire, and this one sends ``session/request_permission`` on the ACP
 wire. Everything about authority stays where it was -- the model never decides,
 the grant covers one exact command, and there is no persistent policy.
 
 Two shapes of the protocol constrain what can be offered:
 
-* **There is no "always".** The approval round trip grants one exact action
-  once, and the per-turn ``denied_digests`` memory is cleared at every turn
-  boundary -- there is no always-allow state anywhere. So only ``allow_once``
+* **There is no "always".** ``ApprovalBroker.resolve`` takes ``{allow, deny}``
+  and its docstring says outright that there is no always-allow state;
+  ``denied_digests`` is cleared at every turn boundary. So only ``allow_once``
   and ``reject_once`` are offered. ``allow_always`` is in the schema and an
   editor's user will want it -- offering it with nothing behind it would be a
   lie the client then renders as a saved preference.
@@ -47,17 +47,17 @@ from raven.acp.outbound import (
     RequestFailedError,
 )
 from raven.acp.updates import UpdateTranslator
-from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
 
 ALLOW_KIND = "allow_once"
 REJECT_KIND = "reject_once"
 
 
 class AcpPermissionBroker:
-    """An :class:`~raven.contracts.asking.ApprovalResponder` over the ACP wire.
+    """An :class:`~raven.agent.tools.shell.ApprovalResponder` over the ACP wire.
 
-    Structurally duck-typed rather than declared: importing the paper here
-    would buy nothing for a single method signature.
+    Structurally duck-typed rather than declared: the protocol lives in
+    ``raven.agent.tools.shell`` and importing it here would tie the ACP layer to
+    the tool module for a single method signature.
     """
 
     def __init__(
@@ -88,12 +88,12 @@ class AcpPermissionBroker:
         tool_call_id: str,
         command: str,
         description: str,
-    ) -> ApprovalOutcome:
+    ) -> bool:
         """Ask, and return whether this exact command may run once.
 
-        Fails closed on every path. The signature is the one the permission
-        gate calls, including the keyword-only arguments, so this object can be
-        handed wherever the TUI's broker goes.
+        Fails closed on every path. The signature is the one ``ExecTool`` calls,
+        including the keyword-only arguments, so this object can be handed
+        wherever the TUI's broker goes.
         """
         session_id = self._session_for(conversation_id)
         if session_id is None:
@@ -165,7 +165,7 @@ class AcpPermissionBroker:
 
         return self._read_outcome(result, allow_id=allow_id, reject_id=reject_id)
 
-    def _read_outcome(self, result: Any, *, allow_id: str, reject_id: str) -> ApprovalOutcome:
+    def _read_outcome(self, result: Any, *, allow_id: str, reject_id: str) -> bool:
         """Read the answer, believing only what this request minted."""
         if not isinstance(result, dict):
             logger.warning("acp: permission answer was not an object; treating it as a refusal")
@@ -206,11 +206,9 @@ class AcpPermissionBroker:
         session = self._translator.get(session_of(conversation_id))
         return None if session is None else session.session_id
 
-    def _record(self, outcome: str, allowed: bool) -> ApprovalOutcome:
+    def _record(self, outcome: str, allowed: bool) -> bool:
         self.outcomes[outcome] = self.outcomes.get(outcome, 0) + 1
-        # Two options were offered, so two choices can come back; the editor
-        # protocol has no "stop the turn" variant and never produces one.
-        return ApprovalOutcome(choice=ApprovalChoice.ALLOW if allowed else ApprovalChoice.DENY)
+        return allowed
 
 
 __all__ = ["ALLOW_KIND", "REJECT_KIND", "AcpPermissionBroker"]

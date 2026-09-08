@@ -24,59 +24,11 @@ let RAW = {};
 let configPathLive = '~/.raven/config.json';
 let everosLive = null;
 
-/* The pick's write-back. In a conversation it reaches that conversation only
-   (config.set under its session_id; the gate reads it live). A draft has no
-   session_id to write under yet, so the pick is staged and applied to the
-   session the first message mints -- the shape the model and tier chips take
-   (`applyStagedPerm` in 080). The default is the settings panel's to change.
-   Published here because this file owns the settings transport; the island
-   calls it late-bound. */
-window.persistPermMode = (m) => {
-  const sid = sessionCurrent();
-  if (!sid) { pendingPerm = m; return true; }
-  return rpc.call('config.set', { key: 'permissions.mode', value: m, scope: 'session', session_id: sid })
-    .then((r) => {
-      if (r && r.applied) return true;
-      toast(T('gui.perm.save_failed'));
-      return false;
-    })
-    .catch(() => { toast(T('gui.perm.save_failed')); return false; });
-};
-
-/* Read by the send path, next to the staged model and tier. `pendingPerm` is
-   declared beside them in 080, where all three are reset on the two paths
-   that abandon a draft. */
-function stagedPerm() { const p = pendingPerm; pendingPerm = null; return p; }
-
 async function loadEveros() {
   try {
     everosLive = await rpc.call('settings.everos', {});
   } catch { /* section rows render as unset; writes still surface their error */ }
 }
-
-/* The permission chip mirrors what the gate reads for the visible conversation:
-   its own mode when it has one, else the default. Asked of the server rather
-   than lifted from the settings snapshot, which only knows the default; pushed
-   into the island so the chip needs no transport of its own. Lives out here
-   rather than inside loadSettings because scripts/model-refresh-live.test.mjs
-   extracts that function's source and evaluates it with a supplied `deps` set,
-   under node -- a browser global reached from inside it is a ReferenceError
-   there, and the harness exists precisely to catch the live layer drifting. */
-async function loadPermMode(sid, gen) {
-  // The same ticket loadProviders carries, for the same race: two opens in a
-  // row, the first answer landing last and repainting the one chip with the
-  // mode of a conversation the reader has left.
-  const ticket = gen !== undefined ? gen : viewGen;
-  let r;
-  try {
-    r = await rpc.call('config.get', { keys: ['permissions.mode'], ...(sid ? { session_id: sid } : {}) });
-  } catch {
-    return;
-  }
-  if (ticket !== viewGen) return;
-  window.setPermMode?.(((r && r.config) || {})['permissions.mode'] || 'ask');
-}
-const pushPermMode = () => loadPermMode(sessionCurrent());
 
 async function loadSettings() {
   const r = await rpc.call('settings.get', {});
@@ -145,7 +97,6 @@ DS.settings = {
        demo-layer openSettings binding in live mode. */
     try { await loadExt(); } catch (e) { toast(`加载失败：${e.message || e}`); }
     await loadSettings();
-    pushPermMode();
     await loadEveros();
     return settingsSnapshot();
   },
@@ -155,7 +106,6 @@ DS.settings = {
     try {
       await rpc.call('settings.set', { key, value });
       await loadSettings();
-      pushPermMode();
       toast(T('gui.set.saved'));
     } catch (e) {
       toast(T('gui.plug.op_failed', { err: settingsErr(e) }));

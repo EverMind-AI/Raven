@@ -41,7 +41,7 @@ async def test_approval_respond_resolves_matching_request() -> None:
     )
 
     assert result == {"ok": True}
-    assert (await waiting).approved
+    assert await waiting is True
 
 
 async def test_approval_respond_rejects_missing_fields() -> None:

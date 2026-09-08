@@ -28,12 +28,17 @@ from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
 
 @pytest.fixture
 def policy() -> ShellCommandPolicy:
-    from raven.agent.tools.shell_policy import DELETE_MATCHERS
+    return ShellCommandPolicy(deny_patterns=[r"\b(mkfs|diskpart)\b", r"\bdd\s+if="])
 
-    policy = ShellCommandPolicy(deny_patterns=[r"\b(mkfs|diskpart)\b", r"\bdd\s+if="])
-    for name, matcher in DELETE_MATCHERS:
-        policy.register_approval_matcher(name, matcher)
-    return policy
+
+@pytest.fixture
+def tool(tmp_path) -> ExecTool:
+    """The same deny list the policy fixture carries, on the other gate."""
+    return ExecTool(
+        working_dir=str(tmp_path),
+        deny_patterns=[r"\b(mkfs|diskpart)\b", r"\bdd\s+if="],
+        restrict_to_workspace=False,
+    )
 
 
 @pytest.fixture
@@ -87,20 +92,17 @@ def test_a_comment_cannot_smuggle_a_denied_pattern_into_a_refusal(policy: ShellC
     assert policy.evaluate("ls -la  # unlike dd if=/dev/zero, this one only lists") is CommandDecision.ALLOW
 
 
-async def test_the_real_thing_is_still_denied() -> None:
-    """Asserted through the permission gate, the deny list's one owner now."""
-    from raven.config.schema import PermissionsConfig
-    from raven.permissions.builtin import BuiltinRulings
-    from raven.permissions.gate import PermissionGate
+async def test_the_real_thing_is_still_denied(tool: ExecTool) -> None:
+    """Asserted through `execute` rather than at a named gate.
 
-    gate = PermissionGate(
-        config_source=PermissionsConfig,
-        builtin=BuiltinRulings(extra_deny_patterns=[r"\b(mkfs|diskpart)\b", r"\bdd\s+if="]),
-        allow_ask=False,
-    )
-    result = await gate.enforce("exec", {"command": "dd if=/dev/zero of=/tmp/x"})
+    The deny list used to be read twice -- once in `_guard_command`, once in the
+    policy -- and this pinned the first. It now has one owner, so the question
+    worth asking is whether the command is refused, not which of two places
+    refused it.
+    """
+    result = await tool.execute(command="dd if=/dev/zero of=/tmp/x")
 
-    assert result is not None and not result.ok
+    assert not result.ok
     assert "blocked by safety guard" in result.model_text
 
 
@@ -111,8 +113,8 @@ def test_a_denied_pattern_outside_the_comment_still_denies(policy: ShellCommandP
 @pytest.mark.parametrize(
     "command",
     [
-        "# tidy up\nrm -rf /",
-        "rm -rf /  # tidy up",
+        "# tidy up\nrm -rf /tmp/tree",
+        "rm -rf /tmp/tree  # tidy up",
         "# shutdown notes\nshutdown -h now",
         "shutdown -h now  # going down",
     ],
@@ -157,8 +159,8 @@ def test_a_hash_that_is_not_a_comment_is_left_alone(command: str, policy: ShellC
         #   $ bash -c 'echo X`echo b`#; echo PWNED'   ->  Xb#  then  PWNED
         # The `#` stays part of the word and the `;` still separates a command,
         # so the delete after it runs.
-        "echo $(echo b)#; rm -rf /",
-        "echo `echo b`#; rm -rf /",
+        "echo $(echo b)#; rm -rf /tmp/tree",
+        "echo `echo b`#; rm -rf /tmp/tree",
     ],
     ids=["command-substitution", "backtick"],
 )
@@ -175,7 +177,7 @@ def test_a_hash_after_a_substitution_does_not_open_a_comment(command: str, polic
 def test_a_hash_glued_to_a_word_does_not_hide_what_follows(policy: ShellCommandPolicy) -> None:
     """The adversarial version of the case above: if `foo#` were read as a
     comment, everything after it would leave the classifier's view."""
-    assert policy.evaluate("echo a#b; rm -rf /") is CommandDecision.HARD_DENY
+    assert policy.evaluate("echo a#b; rm -rf /tmp/tree") is CommandDecision.HARD_DENY
 
 
 # ---------- fail-closed, still --------------------------------------------
@@ -197,7 +199,7 @@ def test_an_executable_region_that_cannot_be_parsed_is_still_refused(command: st
 
 def test_a_wrapper_cannot_launder_a_denied_command_through_a_comment(policy: ShellCommandPolicy) -> None:
     """`bash -c` carries its own script, comments and all."""
-    assert policy.evaluate("bash -c '# tidy\nrm -rf /'") is CommandDecision.HARD_DENY
+    assert policy.evaluate("bash -c '# tidy\nrm -rf /tmp/tree'") is CommandDecision.HARD_DENY
 
 
 # ---------- one command, one classification ----------------------------------
@@ -228,7 +230,7 @@ def test_the_approval_prompt_describes_the_command_not_the_comment(policy: Shell
 def test_a_comment_is_not_a_path_the_command_reaches_for(command: str, tmp_path) -> None:
     """Same shape as the incident: a read-only command refused for English
     written beside it, and a message just as opaque about why."""
-    fenced = ExecTool(working_dir=str(tmp_path), restrict_to_workspace=True)
+    fenced = ExecTool(working_dir=str(tmp_path), deny_patterns=[], restrict_to_workspace=True)
 
     assert fenced._guard_command(command, cwd=str(tmp_path)) is None
 
@@ -239,7 +241,7 @@ def test_a_comment_is_not_a_path_the_command_reaches_for(command: str, tmp_path)
     ids=["traversal", "absolute"],
 )
 def test_a_real_path_outside_the_workspace_is_still_refused(command: str, tmp_path) -> None:
-    fenced = ExecTool(working_dir=str(tmp_path), restrict_to_workspace=True)
+    fenced = ExecTool(working_dir=str(tmp_path), deny_patterns=[], restrict_to_workspace=True)
 
     assert fenced._guard_command(command, cwd=str(tmp_path)) is not None
 

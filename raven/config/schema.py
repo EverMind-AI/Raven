@@ -972,19 +972,11 @@ class ExecToolConfig(Base):
 
     timeout: int = 60
     path_append: str = ""
-    # Deprecated compatibility field: accepted from old configs but ignored at runtime.
-    # Deletes answer to the permission tiers (permissions.mode / permissions.tools),
-    # and the catastrophic deletes answer to no configuration at all.
-    allow_destructive_commands: bool = Field(default=False, exclude=True)
+    allow_destructive_commands: bool = False
     # Extra regex deny-patterns appended to ExecTool's built-in destructive-command
     # defaults. Empty by default. Operators (or eval harnesses running the agent
     # un-sandboxed) can add host-specific blocks, e.g. osascript / `open -a`.
     extra_deny_patterns: list[str] = Field(default_factory=list)
-
-    @property
-    def should_warn_deprecated_allow_destructive(self) -> bool:
-        """True when a config still turns the retired deletion toggle on."""
-        return self.allow_destructive_commands is True
 
 
 class AskUserToolConfig(Base):
@@ -1122,37 +1114,6 @@ class ToolSearchConfig(Base):
     """Default number of hits ``tool_search`` returns per query."""
     always_visible: list[str] = Field(default_factory=list)
     """Extra tool names kept exposed every turn, on top of the core set."""
-
-
-class PermissionsConfig(Base):
-    """Permission gating over tool dispatch (``raven.permissions``).
-
-    ``mode`` reads the ask tier only -- builtin rulings and user deny rules hold
-    in every mode. ``tools`` maps a tool name to a tier (``allow``/``ask``/
-    ``deny``), or -- for ``exec`` only -- to a table of command prefix patterns
-    (``"git *"``) each mapping to a tier; several matching patterns resolve to
-    the strictest. ``judge_model`` pins the smart-mode reviewer to one model id;
-    empty means the running turn's own binding.
-    """
-
-    mode: Literal["ask", "smart", "full"] = "ask"
-    tools: dict[str, str | dict[str, str]] = Field(default_factory=dict)
-    judge_model: str = ""
-    judge_timeout_seconds: float = 10.0
-
-    @field_validator("tools")
-    @classmethod
-    def _known_tiers(cls, value: dict[str, str | dict[str, str]]) -> dict[str, str | dict[str, str]]:
-        tiers = {"allow", "ask", "deny"}
-        for tool, entry in value.items():
-            if isinstance(entry, str):
-                if entry not in tiers:
-                    raise ValueError(f"permissions.tools[{tool!r}]: unknown tier {entry!r}")
-                continue
-            for pattern, tier in entry.items():
-                if tier not in tiers:
-                    raise ValueError(f"permissions.tools[{tool!r}][{pattern!r}]: unknown tier {tier!r}")
-        return value
 
 
 class ToolsConfig(Base):
@@ -1984,7 +1945,6 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
-    permissions: PermissionsConfig = Field(default_factory=PermissionsConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
     subagents: SubagentsConfig = Field(default_factory=SubagentsConfig)

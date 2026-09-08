@@ -170,14 +170,8 @@ class ToolRegistry:
     # internal timeout that never returns), not to enforce a tight per-tool SLA.
     DEFAULT_TOOL_TIMEOUT_S = 300.0
 
-    def __init__(self, *, tool_gates: "Sequence[Any]" = (), permission_gate: "Any | None" = None):
+    def __init__(self, *, tool_gates: "Sequence[Any]" = ()):
         self._tools: dict[str, Tool] = {}
-        # The platform's own gate (raven.permissions), distinct from the plugin
-        # gates below: it can wait on a human mid-adjudication and answers with
-        # a full ToolResult, both of which the plugin paper deliberately does
-        # not offer. Fixed at construction like the gates -- an unattended
-        # registry is built with a gate that refuses to ask.
-        self._permission_gate = permission_gate
         # Cast at assembly, fixed for the generation (paper:
         # contracts/tool_gate.py): no setter, no latch -- changing gates is a
         # generation swap. Ordered by (name, contributed_by) so adjudication
@@ -751,23 +745,6 @@ class ToolRegistry:
             errors = validate_params(tool.parameters, params) + tool.validate_params(params)
             if errors:
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
-
-            # Post-validation, pre-dispatch, and ahead of the plugin gates:
-            # platform authority precedes plugin policy. The refusal (or the
-            # human's deny) replaces the call; approval waits deliberately
-            # happen before the timeout ceiling below, so a human deciding is
-            # never timer-killed.
-            if self._permission_gate is not None:
-                refusal = await self._permission_gate.enforce(name, params)
-                if refusal is not None:
-                    return ToolOutput(
-                        refusal.model_text,
-                        refusal.display_text,
-                        retryable=refusal.retryable,
-                        blocks_call=refusal.blocks_call,
-                        continuation=refusal.continuation,
-                        ok=refusal.ok,
-                    )
 
             # Post-validation, pre-dispatch: the point the paper names. Guarded
             # so a registry with no gates runs today's path byte for byte.

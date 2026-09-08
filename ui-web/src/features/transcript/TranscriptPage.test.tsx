@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CARD as dagCARD } from '../dag/graph'
 import * as mount from './mount'
+import { WHEEL_LINE_PX } from './overscroll'
 import * as store from './store'
 import * as tail from './tail'
 import * as attachmentCache from '../../shell/attachment-cache'
@@ -2471,6 +2472,52 @@ describe('transcript island, delegated calls', () => {
     expect(chat?.getAttribute('data-composer')).toBe('false')
     expect(chat?.textContent).toContain('seven files')
     expect(chat?.querySelector('textarea')).toBeNull()
+  })
+
+  it('hands an upward wheel to the page once the stream box is at its top', async () => {
+    /* The box carries `overscroll-behavior: contain`, so at its top edge the
+       browser swallows the gesture and the page does not move -- with the box a
+       third of the window tall, a reader scrolling back has nowhere to put the
+       cursor that works. This is the wiring, not the rule; overscroll.test.ts
+       holds the rule.
+
+       Geometry is fabricated because happy-dom lays nothing out: without it the
+       walk finds no scroller and the case would pass having forwarded nothing. */
+    stream = [{ role: 'assistant', text: 'seven files' }]
+    act(() => {
+      const st = mount.step()
+      st.tool('spawn', { task: 'read the dir' }, null, 'call_7').done(true, 'dispatched', 5)
+      mount.spawnFeed(RUN)
+      st.seal()
+    })
+    await settle()
+    openFolds()
+    act(() => { ($('.wkin .wrow') as HTMLElement).click() })
+    await settle()
+
+    const chat = $('.dlgchat') as HTMLElement
+    expect(chat).not.toBeNull()
+    const page = chat.closest('#scroll') as HTMLElement | null
+      || (document.getElementById('scroll') as HTMLElement)
+    Object.defineProperty(page, 'scrollHeight', { value: 4000, configurable: true })
+    Object.defineProperty(page, 'clientHeight', { value: 900, configurable: true })
+    page.style.overflowY = 'auto'
+    page.scrollTop = 1000
+    chat.scrollTop = 0
+
+    act(() => { chat.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true })) })
+
+    expect(page.scrollTop).toBe(880)
+
+    /* And in the unit the wheel reported it in. Without `deltaMode` reaching the
+       handler a line-mode mouse would move the page three pixels, which is the
+       same freeze with a smaller number. */
+    page.scrollTop = 1000
+    act(() => {
+      chat.dispatchEvent(new WheelEvent('wheel', { deltaY: -3, deltaMode: 1, bubbles: true }))
+    })
+
+    expect(page.scrollTop).toBe(1000 - 3 * WHEEL_LINE_PX)
   })
 
   it('names the agent a spawn ran on, under either argument spelling', () => {

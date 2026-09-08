@@ -43,31 +43,6 @@ rpc.notify['confirm.request'] = (p) => {
   approveSheet(p.prompt || '', () => say(true), () => say(false), owner);
 };
 
-/* The permission gate's ask. Same docking rules as confirm above; what an
-   answer is differs: allow once, deny (the agent reads the refusal and keeps
-   going), or deny and stop the turn, with an optional note that rides to the
-   model as the refusal's reason. The engine fails closed on its own deadline,
-   and approval.closed below is how this sheet learns the question is over. */
-rpc.notify['approval.request'] = (p) => {
-  const owner = p.conversation_id || sessionCurrent();
-  notifyTurn(owner, { type: 'wait' });
-  approvalSheet(
-    { approvalId: p.approval_id, command: p.command || '', description: p.description || '' },
-    (choice, feedback) => {
-      notifyTurn(owner, { type: 'resume' });
-      const params = { approval_id: p.approval_id, choice, session_id: owner };
-      if (feedback) params.feedback = feedback;
-      rpc.call('approval.respond', params).catch(() => {});
-    },
-    owner,
-  );
-};
-
-rpc.notify['approval.closed'] = (p) => {
-  notifyTurn(p.conversation_id || sessionCurrent(), { type: 'resume' });
-  approvalClose(p.approval_id);
-};
-
 /* The question the agent asks mid-turn. The sheet is the island's
    (features/composer/clarify.ts); what is left here is the transport and the
    step marking -- it answers with one string, whichever control the reader

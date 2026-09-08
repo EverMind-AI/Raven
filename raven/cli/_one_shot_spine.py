@@ -85,28 +85,6 @@ class _SummaryTurnRunner:
         return await self._inner.run(req, emit, drain)
 
 
-class _OneShotTurnRunner(AgentTurnRunner):
-    """The one-shot runner: the plain agent runner plus its permission binding.
-
-    Bound to None by decision, not omission: a ``-m`` turn prints one reply and
-    exits, and it has no human round-trip at all -- ``ask_user`` is structurally
-    unavailable here (no broker is ever wired), so an approval prompt would have
-    nobody to reach either. The ask tier therefore refuses with a reason, the
-    same answer a question gets on this surface, and the operator picks smart
-    or full for one-shot work that must mutate.
-    """
-
-    async def run(self, req: TurnRequest, emit: Any, drain: Any) -> Any:
-        from raven.permissions import start_permission_turn
-
-        start_permission_turn(
-            None,
-            conversation_id=req.conversation or "",
-            turn_id=req.turn_id or "",
-        )
-        return await super().run(req, emit, drain)
-
-
 def _build_turn_summary(agent_loop: Any) -> TurnUsageSummary | None:
     """Wire the per-turn usage summary when the config switch is on.
 
@@ -230,7 +208,7 @@ def build_one_shot_spine(
             summary=summary,
         )
     )
-    runner: Any = _OneShotTurnRunner(agent_loop, stream=False, inline_tool_stream=True)
+    runner: Any = AgentTurnRunner(agent_loop, stream=False, inline_tool_stream=True)
     if summary is not None:
         runner = _SummaryTurnRunner(runner, summary)
     scheduler = Scheduler(

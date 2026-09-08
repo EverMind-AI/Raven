@@ -28,7 +28,7 @@ from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool, resolve_vendor_key
-from raven.config.live import LiveConfig, exec_extra_deny_patterns
+from raven.config.live import LiveConfig, exec_allow_destructive_commands, exec_extra_deny_patterns
 from raven.config.schema import ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentNoAnswerError
@@ -51,6 +51,11 @@ def _live_exec_extra_deny() -> list[str] | None:
     permission gates a delegated shell the same call it gates a direct one.
     """
     return exec_extra_deny_patterns(_LIVE_CONFIG)
+
+
+def _live_exec_allow_destructive() -> bool | None:
+    """The deletion-safety preference shared by every sub-agent run."""
+    return exec_allow_destructive_commands(_LIVE_CONFIG)
 
 
 def build_subagent_prompt(
@@ -247,39 +252,8 @@ class RavenLoopBackend:
         # for callers that drive a backend directly.
         provider = provider or self.provider
         model = model or self.model
-        # Build subagent tools (no message tool, no spawn tool). The gate is
-        # unattended by construction: a spawned task inherits the parent turn's
-        # context -- responder included -- and a sub-agent must never pop an
-        # approval prompt of its own. Its ask-tier calls are refused with the
-        # reason in the tool error; the parent can rerun the step in the user's
-        # own turn, where approval is interactive.
-        from raven.config.live import LiveConfig, permissions_config
-        from raven.permissions import BuiltinRulings, PermissionGate
-        from raven.permissions.turn import set_current_tool_call_id
-
-        live_config = LiveConfig()
-
-        def _subagent_permissions():
-            # The parent turn's mode, not a pin: the user authorized the spawn,
-            # not every command the sub-agent composes afterwards. Its ask tier
-            # reaches the same responder the parent turn bound -- the ContextVar
-            # is inherited into this task -- so a delegated push asks the human
-            # exactly as a direct one would, and an unattended parent (cron,
-            # one-shot) leaves it unattended too.
-            return permissions_config(live_config)
-
-        gate = PermissionGate(
-            config_source=_subagent_permissions,
-            builtin=BuiltinRulings(
-                extra_deny_patterns=self.exec_config.extra_deny_patterns,
-                # The same live deny source the main loop's gate reads: a
-                # tightened permission must gate a delegated shell the same
-                # call it gates a direct one.
-                extra_deny_source=_live_exec_extra_deny,
-            ),
-            allow_ask=True,
-        )
-        tools = ToolRegistry(permission_gate=gate)
+        # Build subagent tools (no message tool, no spawn tool).
+        tools = ToolRegistry()
         if self.mcp_source is not None:
             tools.set_withheld_source(self.mcp_source.disabled_tools)
         for wrapper, origin in grant.for_registry():
@@ -311,7 +285,14 @@ class RavenLoopBackend:
                     timeout=self.exec_config.timeout,
                     restrict_to_workspace=self.restrict_to_workspace,
                     path_append=self.exec_config.path_append,
+                    allow_destructive_commands=self.exec_config.allow_destructive_commands,
                     executor=executor,
+                    extra_deny_patterns=self.exec_config.extra_deny_patterns,
+                    # The same live deny source the main loop's ExecTool reads:
+                    # a tightened permission must gate a delegated shell the
+                    # same call it gates a direct one.
+                    extra_deny_source=_live_exec_extra_deny,
+                    allow_destructive_source=_live_exec_allow_destructive,
                     extra_allowed_dirs=allowed_dirs,
                     follow_binding=False,
                 )
@@ -442,7 +423,6 @@ class RavenLoopBackend:
                     # something the sub-agent did, and it is the one a reader
                     # asking "what happened" most needs to see.
                     activity.note_tool_call(tool_call.name)
-                    set_current_tool_call_id(tool_call.id)
                     result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                     # The subagent's loop is an untrusted-data path too — fence its
                     # tool output like the main loop does in add_tool_result.

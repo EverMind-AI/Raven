@@ -103,30 +103,6 @@ async def test_runner_forwards_inline_tool_stream():
     assert loop.calls[0]["inline_tool_stream"] is True
 
 
-async def test_runner_binds_an_unattended_permission_turn():
-    # Decision, not omission: a -m turn has no human round-trip (ask_user has no
-    # broker on this surface), so the permission turn binds with no responder --
-    # the ask tier refuses with a reason instead of waiting on nobody, and the
-    # denied-digest memory is scoped to this turn rather than a shared default.
-    from raven.cli._one_shot_spine import _OneShotTurnRunner
-    from raven.permissions.turn import current_turn
-
-    seen: dict = {}
-
-    class _Recording(FakeAgentLoop):
-        async def run_turn(self, req, emit, drain, **kwargs):
-            turn = current_turn()
-            seen["responder"] = turn.responder
-            seen["conversation_id"] = turn.conversation_id
-            return await super().run_turn(req, emit, drain, **kwargs)
-
-    runner = _OneShotTurnRunner(_Recording(), stream=False, inline_tool_stream=True)
-    events, emit = _collect()
-    await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"), emit, lambda: [])
-    assert seen["responder"] is None
-    assert seen["conversation_id"] == "cli:c1"
-
-
 # --- CliOutlet ---
 
 

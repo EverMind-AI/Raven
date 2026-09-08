@@ -401,25 +401,6 @@ class TestDirectExecutor:
 # ---------------------------------------------------------------------------
 
 
-def _gated_registry(executor, tmp_path, *, extra_deny_patterns=None, extra_deny_source=None):
-    """The dispatch path a real deploy runs: the permission gate at the registry
-    door, in full mode so only the unconditional rulings decide."""
-    from raven.agent.tools.registry import ToolRegistry
-    from raven.agent.tools.shell import ExecTool
-    from raven.config.schema import PermissionsConfig
-    from raven.permissions.builtin import BuiltinRulings
-    from raven.permissions.gate import PermissionGate
-
-    gate = PermissionGate(
-        config_source=lambda: PermissionsConfig(mode="full"),
-        builtin=BuiltinRulings(extra_deny_patterns=extra_deny_patterns, extra_deny_source=extra_deny_source),
-        allow_ask=False,
-    )
-    registry = ToolRegistry(permission_gate=gate)
-    registry.register(ExecTool(executor=executor, working_dir=str(tmp_path)))
-    return registry
-
-
 class TestExecToolWithMockExecutor:
     async def test_sandboxed_skips_deny_list(self, tmp_path):
         """Deny-list guard is skipped for sandboxed executors."""
@@ -519,11 +500,13 @@ class TestExecToolWithMockExecutor:
         assert len(executor.calls) == 1
 
     async def test_non_sandboxed_deny_list_runs(self, tmp_path):
-        """Non-sandboxed executor: the gate's deny rulings are applied."""
+        """Non-sandboxed executor: deny-list guard is applied."""
+        from raven.agent.tools.shell import ExecTool
+
         executor = DirectMockExecutor()
-        registry = _gated_registry(executor, tmp_path)
-        result = await registry.execute("exec", {"command": "rm -rf /"})
-        assert "blocked" in str(result)
+        tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+        result = await tool.execute("rm -rf /important")
+        assert "blocked" in result.model_text
         assert len(executor.calls) == 0
 
     # Host GUI automation (osascript / `open -a|-b`) is NOT a product default —
@@ -534,17 +517,21 @@ class TestExecToolWithMockExecutor:
     async def test_extra_deny_patterns_block_host_gui_automation(self, tmp_path):
         """With extra_deny_patterns set, osascript / `open -a|-b` are blocked
         (non-sandboxed path), while opening a file and benign commands run."""
+        from raven.agent.tools.shell import ExecTool
 
         async def run(cmd):
-            registry = _gated_registry(DirectMockExecutor(), tmp_path, extra_deny_patterns=self._GUI_DENY)
-            return str(await registry.execute("exec", {"command": cmd}))
+            return await ExecTool(
+                executor=DirectMockExecutor(),
+                working_dir=str(tmp_path),
+                extra_deny_patterns=self._GUI_DENY,
+            ).execute(cmd)
 
         for cmd in (
             "osascript -e 'tell application \"Music\" to play'",
             "open -a Music",
             "open -b com.apple.Music",
         ):
-            assert "blocked" in await run(cmd), f"should block: {cmd}"
+            assert "blocked" in (await run(cmd)).model_text, f"should block: {cmd}"
 
         for cmd in ("open notes.txt", "echo hi", "ls -la"):
             assert "blocked" not in await run(cmd), f"should allow: {cmd}"
@@ -552,7 +539,7 @@ class TestExecToolWithMockExecutor:
         # Known accepted collateral: the security-broad ``\bosascript\b`` also
         # trips when 'osascript' is a mere argument. Pinned so a future narrowing
         # to command-position is a deliberate change, not an accident.
-        assert "blocked" in await run("grep osascript /var/log/system.log")
+        assert "blocked" in (await run("grep osascript /var/log/system.log")).model_text
 
     async def test_gui_automation_not_blocked_by_product_default(self, tmp_path):
         """Product default (no extra_deny_patterns): osascript is NOT blocked —
@@ -568,42 +555,56 @@ class TestExecToolWithMockExecutor:
         """Tightening a permission must not wait for the next turn, let alone the
         next process: the pattern list is re-read before each classification.
         Loosening rides the same read -- the list is the operator's own choice in
-        both directions. The list lives on the gate's builtin rulings, so the
-        edit binds every dispatch path, delegated shells included."""
+        both directions."""
+        from raven.agent.tools.shell import ExecTool
+
         extras: dict[str, list[str] | None] = {"value": []}
         executor = DirectMockExecutor()
-        registry = _gated_registry(executor, tmp_path, extra_deny_source=lambda: extras["value"])
-        assert "blocked" not in await registry.execute("exec", {"command": "osascript -e x"})
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            extra_deny_source=lambda: extras["value"],
+        )
+        assert "blocked" not in await tool.execute("osascript -e x")
 
         extras["value"] = [r"\bosascript\b"]
-        assert "blocked" in str(await registry.execute("exec", {"command": "osascript -e x"}))
+        assert "blocked" in (await tool.execute("osascript -e x")).model_text
 
         extras["value"] = []
-        assert "blocked" not in await registry.execute("exec", {"command": "osascript -e x"})
+        assert "blocked" not in await tool.execute("osascript -e x")
 
     async def test_a_bad_live_pattern_rejects_the_edit_not_the_policy(self, tmp_path):
+        from raven.agent.tools.shell import ExecTool
+
         extras: dict[str, list[str] | None] = {"value": [r"\bosascript\b"]}
-        registry = _gated_registry(DirectMockExecutor(), tmp_path, extra_deny_source=lambda: extras["value"])
-        assert "blocked" in str(await registry.execute("exec", {"command": "osascript -e x"}))
+        tool = ExecTool(
+            executor=DirectMockExecutor(),
+            working_dir=str(tmp_path),
+            extra_deny_source=lambda: extras["value"],
+        )
+        assert "blocked" in (await tool.execute("osascript -e x")).model_text
 
         extras["value"] = [r"\bosascript\b", r"([unclosed"]
-        assert "blocked" in str(await registry.execute("exec", {"command": "osascript -e x"})), (
+        assert "blocked" in (await tool.execute("osascript -e x")).model_text, (
             "a pattern that does not compile must keep the current set, not disarm it"
         )
 
     async def test_a_live_deny_edit_reaches_a_registered_approval_matcher_policy(self, tmp_path):
         """The deny list is swapped on the policy in place, so the approval
         families a surface registered survive the edit."""
-        from raven.contracts.permissions import Deny
-        from raven.permissions.builtin import BuiltinRulings
+        from raven.agent.tools.shell import ExecTool
 
         extras: dict[str, list[str] | None] = {"value": []}
-        builtin = BuiltinRulings(extra_deny_source=lambda: extras["value"])
-        builtin._policy.register_approval_matcher("push_command", lambda cmd: cmd.startswith("git push"))
+        tool = ExecTool(
+            executor=DirectMockExecutor(),
+            working_dir=str(tmp_path),
+            extra_deny_source=lambda: extras["value"],
+        )
+        tool.register_approval_matcher("push_command", lambda cmd: cmd.startswith("git push"))
 
         extras["value"] = [r"\bosascript\b"]
-        assert isinstance(builtin.ruling("exec", {"command": "osascript -e x"}), Deny)
-        assert builtin._policy.approval_reason("git push origin main") == "push_command"
+        assert "blocked" in (await tool.execute("osascript -e x")).model_text
+        assert tool._policy.approval_reason("git push origin main") == "push_command"
 
     async def test_path_append_sandboxed_injects_export(self, tmp_path):
         """path_append with sandboxed executor: wraps command with export PATH."""

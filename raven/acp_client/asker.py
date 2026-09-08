@@ -21,7 +21,6 @@ from contextvars import ContextVar
 from typing import Any
 
 from raven.contracts.asking import Asker, SupportsDirectAsk
-from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
 
 
 class AskViaTool:
@@ -47,39 +46,6 @@ class AskViaTool:
         batch: list[dict[str, str]] | None = None,
     ) -> str | None:
         return await self._tool.ask_direct(prompt, choices, conversation_id, index=index, total=total, batch=batch)
-
-
-class ApprovalViaAsk:
-    """Adapts the turn's asker into a permission-approval responder.
-
-    A channel user already answers mid-turn questions through this round-trip
-    (an outbound message, the reply routed back), so an approval rides the same
-    transport rather than growing one of its own: the ask tier keeps its
-    promise wherever a human can already be asked. Fail-closed by shape: a
-    timeout, a skip, or a structurally unavailable round-trip comes back as a
-    deny that continues the turn, and a free-text reply travels to the model as
-    the refusal's feedback -- the same three outcomes the TUI's keys offer.
-    """
-
-    _CHOICES = ("Allow once", "Deny", "Deny and stop")
-
-    def __init__(self, asker: AskViaTool, conversation_id: str) -> None:
-        self._asker = asker
-        self._conversation_id = conversation_id
-
-    async def await_approval(self, **request: Any) -> ApprovalOutcome:
-        description = str(request.get("description") or "This action needs your approval")
-        command = str(request.get("command") or "")
-        prompt = f"{description}\n{command}" if command and command not in description else description
-        answer = await self._asker.ask(prompt, list(self._CHOICES), self._conversation_id)
-        text = (answer or "").strip()
-        lowered = text.lower()
-        if lowered == self._CHOICES[0].lower() or text == "1":
-            return ApprovalOutcome(choice=ApprovalChoice.ALLOW)
-        if lowered == self._CHOICES[2].lower() or text == "3":
-            return ApprovalOutcome(choice=ApprovalChoice.DENY_STOP)
-        feedback = "" if lowered == self._CHOICES[1].lower() or text in {"", "2"} else text
-        return ApprovalOutcome(choice=ApprovalChoice.DENY, feedback=feedback)
 
 
 _TURN: ContextVar[tuple[Any, str]] = ContextVar("acp_ask_turn", default=(None, ""))
@@ -179,7 +145,6 @@ def attribute(agent: str, instance: str, message: str) -> str:
 
 
 __all__ = [
-    "ApprovalViaAsk",
     "AskViaTool",
     "Asker",
     "attribute",

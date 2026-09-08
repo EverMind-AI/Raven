@@ -11,6 +11,7 @@ import { getVersion as deliveriesVersion, humanSize, subscribe as deliveriesSubs
 import {
   fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath,
 } from '../workspace/store'
+import { releaseUpward } from './overscroll'
 import * as store from './store'
 import * as tail from './tail'
 
@@ -531,7 +532,15 @@ function SpawnStream({ c, live }: { c: CallData; live: boolean }): ReactElement 
     })
   }, [lane, c.stream, c.spawnId, live])
   return (
-    <div className="dlgchat" data-composer="false">
+    <div
+      className="dlgchat"
+      data-composer="false"
+      /* The box keeps `overscroll-behavior: contain`, which is what stops a
+         reader who has read the stream to its end from being carried past the
+         card. Upwards it had nothing to hold back and swallowed the gesture
+         instead -- see overscroll.ts. */
+      onWheel={(event) => { releaseUpward(event.currentTarget, event.deltaY, event.deltaMode) }}
+    >
       <AgentStageView lane={lane} />
     </div>
   )
