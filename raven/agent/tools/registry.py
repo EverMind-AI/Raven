@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -156,6 +157,44 @@ def _received_tail(params: dict[str, Any]) -> str:
     if not raw:
         return ""
     return f" Received: {raw[:400]}" + ("..." if len(raw) > 400 else "")
+
+
+# When a running tool first says so, and how often after that. The first line is
+# late enough that ordinary calls never print one, and early enough that a reader
+# tailing the log during a slow call does not have to wait a full minute to learn
+# it is a slow call rather than a dead one.
+HEARTBEAT_FIRST_S = 30.0
+HEARTBEAT_EVERY_S = 60.0
+
+
+async def _heartbeat(name: str, ceiling: float) -> None:
+    """Say that a tool is still running, for as long as it still is.
+
+    A tool between its start line and its result line was indistinguishable from
+    a process that had stopped. Measured on a real run: `ppt_prepare` held the
+    turn for 600 seconds, twice, and the log for that whole window holds three
+    lines -- the call, the timeout, and the next iteration. Nothing said which of
+    the tool's own steps it was in, or that it was in any of them, so the first
+    question asked of the record ("was it working?") had no answer in it.
+
+    A line rather than an event: this is the registry, which has no outlet, and
+    the question it answers is the one asked of a log after the fact. What a
+    reader watching the page sees while a tool runs is a separate seam.
+
+    Cancelled by the caller when the call returns, so the last line is always one
+    the tool outlived.
+    """
+    started = time.monotonic()
+    delay = HEARTBEAT_FIRST_S
+    while True:
+        await asyncio.sleep(delay)
+        delay = HEARTBEAT_EVERY_S
+        logger.info(
+            "tools: {} still running after {:.0f}s of its {:.0f}s ceiling",
+            name,
+            time.monotonic() - started,
+            ceiling,
+        )
 
 
 class ToolRegistry:
@@ -781,7 +820,14 @@ class ToolRegistry:
                 # Intentionally waits on a human — must not be timer-killed.
                 result = await tool.execute(**params)
             else:
-                result = await asyncio.wait_for(tool.execute(**params), timeout=ceiling)
+                # The heartbeat is a bystander: it neither holds the result nor
+                # touches the deadline, so a change here cannot alter what the
+                # tool returns or when it is killed.
+                beat = asyncio.ensure_future(_heartbeat(name, ceiling))
+                try:
+                    result = await asyncio.wait_for(tool.execute(**params), timeout=ceiling)
+                finally:
+                    beat.cancel()
 
             # Unwrap ToolResult here, at the boundary: `execute` promises model
             # text to every caller, and only the agent loop wants the display

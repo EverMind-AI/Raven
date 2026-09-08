@@ -35,7 +35,7 @@ from urllib.parse import quote
 from loguru import logger
 
 from raven.acp import protocol
-from raven.acp.redact import redact, redact_value
+from raven.acp.redact import redact
 from raven.acp.tool_kinds import absolute_path, locations, title_for, tool_kind
 
 # Every event type ``RpcOutlet``, the spine sink, the DAG bridge and the cron
@@ -102,12 +102,6 @@ _CANCELLED_REASON = "cancelled_by_client"
 # already truncates and sets ``truncated``; this is the backstop for a tool that
 # does not, so one runaway result cannot become a multi-megabyte frame.
 MAX_RESULT_PREVIEW = 64 * 1024
-
-# One argument's worth of `rawInput`, per string. A `write_file` carries its
-# whole content there and the client persists the frame, so the arguments would
-# be a second copy of every file the agent writes. Large enough that the values
-# a reader actually needs -- a path, a task, a query -- are never cut.
-MAX_RAW_INPUT_CHARS = 4 * 1024
 
 # Terminal events held while a turn's own id is still unknown. The window is one
 # RPC round trip wide (``turn.send`` emits ``message.start`` before it returns),
@@ -367,38 +361,6 @@ def _usage_update(usage: Any) -> dict[str, Any] | None:
     return update
 
 
-def _clip_deep(value: Any, depth: int = 0) -> Any:
-    """Clip every string in a JSON-shaped value, structure intact.
-
-    Bounded the way :func:`redact_value` is bounded, and for the same reason:
-    the value comes from a tool and may be nested past anything worth walking.
-    """
-    if depth > 12:
-        return "[too deeply nested]"
-    if isinstance(value, str):
-        return value if len(value) <= MAX_RAW_INPUT_CHARS else value[:MAX_RAW_INPUT_CHARS] + "\n[truncated]"
-    if isinstance(value, dict):
-        return {key: _clip_deep(item, depth + 1) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_clip_deep(item, depth + 1) for item in value]
-    return value
-
-
-def _raw_input(arguments: Any) -> dict[str, Any] | None:
-    """The call's arguments for the frame, scrubbed and clipped.
-
-    Redacted before clipping, not after: a credential cut in half by the clip is
-    still a credential, and half of one is what the patterns would then miss.
-    """
-    # Emptiness is decided here and only here, so the caller has one question to
-    # ask. A field carrying `{}` invites a client to draw an empty arguments
-    # panel for a call that had none.
-    if not isinstance(arguments, dict) or not arguments:
-        return None
-    scrubbed = redact_value(arguments)
-    return _clip_deep(scrubbed) if isinstance(scrubbed, dict) else None
-
-
 def _tool_call(payload: dict[str, Any], cwd: str | None, meta: dict[str, Any] | None) -> dict[str, Any]:
     """A ``tool_call`` update for the start of a call.
 
@@ -407,19 +369,11 @@ def _tool_call(payload: dict[str, Any], cwd: str | None, meta: dict[str, Any] | 
     call is running. It is also what a client can draw; a pending row that never
     changes reads as a hang.
 
-    ``rawInput`` carries the call's arguments, as every other ACP agent sends
-    them and as this repo's own client dialects already read them. It was
-    withheld while the redaction table that makes it safe to send did not exist;
-    :func:`redact_value` is that table, written for this and naming ``rawInput``
-    in its own docstring.
-
-    Withholding it did not leave a client with less -- it left one with
-    something false. With no ``rawInput`` the client's ``arguments_json`` falls
-    back to the SUBJECT under the literal key ``argument``, and the subject is
-    lifted off the title, so a run whose call was
-    ``{"project": ..., "task": ...}`` was recorded as
-    ``{"argument": "ppt_prepare"}``. A fabricated argument that outlives the run
-    in a transcript is worse than a missing one: it is read later as evidence.
+    ``rawInput`` is deliberately absent. It would carry the tool's arguments
+    verbatim, and for exec that is the entire command line -- which is a
+    publishing surface rendered in an editor. The redaction table that makes it
+    safe to send is not written yet; the title carries what a client needs to
+    draw the row in the meantime.
     """
     name = payload.get("name")
     arguments = payload.get("arguments")
@@ -435,9 +389,6 @@ def _tool_call(payload: dict[str, Any], cwd: str | None, meta: dict[str, Any] | 
         "kind": tool_kind(name if isinstance(name, str) else None),
         "status": "in_progress",
     }
-    raw = _raw_input(arguments)
-    if raw is not None:
-        update["rawInput"] = raw
     found = locations(arguments, cwd)
     if found:
         update["locations"] = found

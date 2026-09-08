@@ -25,7 +25,6 @@ from raven.acp.updates import (
     KNOWN_EVENT_TYPES,
     MAX_DEFERRED_ENDINGS,
     MAX_MEDIA_ITEMS,
-    MAX_RAW_INPUT_CHARS,
     MAX_RESULT_PREVIEW,
     SIDE_CHANNEL_METHODS,
     AcpSession,
@@ -159,73 +158,6 @@ class TestTranslatedFrames:
         assert update["_meta"]["raven.toolName"] == "glob"
         assert update["kind"] == "other"
         validate_def("SessionUpdate", update)
-
-    def test_a_tool_start_carries_the_arguments_it_was_called_with(self):
-        """The spec's own field for them, and what every other ACP agent sends.
-
-        Without it a client has the title and nothing else, and the title is not
-        arguments: the client's `arguments_json` falls back to the subject under
-        the literal key `argument`, so a call made with `{"project", "task"}` was
-        recorded as `{"argument": "<tool name>"}` -- a fabricated argument that
-        outlives the run in a transcript and is read later as evidence."""
-        result = translate(
-            {
-                "type": "tool.start",
-                "payload": {
-                    "tool_call_id": "t",
-                    "name": "ppt_prepare",
-                    "arguments": {"project": "rl_intro", "task": "make a deck about RL"},
-                },
-            }
-        )
-        update = result.updates[0]
-
-        assert update["rawInput"] == {"project": "rl_intro", "task": "make a deck about RL"}
-        validate_def("SessionUpdate", update)
-
-    def test_a_credential_in_the_arguments_does_not_reach_the_client(self):
-        """`redact_value` is why this field can be sent at all. A key that names
-        its value a secret redacts the value whole, which a per-string pass
-        cannot do: on its own the value is indistinguishable from a hash."""
-        result = translate(
-            {
-                "type": "tool.start",
-                "payload": {
-                    "tool_call_id": "t",
-                    "name": "exec",
-                    "arguments": {"command": "deploy", "env": {"AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI"}},
-                },
-            }
-        )
-
-        assert result.updates[0]["rawInput"]["env"]["AWS_SECRET_ACCESS_KEY"] != "wJalrXUtnFEMI"
-
-    def test_one_huge_argument_does_not_become_a_second_copy_of_the_file(self):
-        """A `write_file` carries its whole content in its arguments and the
-        client persists the frame, so unclipped this field would duplicate every
-        file the agent writes onto the wire and into a transcript."""
-        body = "x" * (MAX_RAW_INPUT_CHARS + 500)
-        result = translate(
-            {
-                "type": "tool.start",
-                "payload": {"tool_call_id": "t", "name": "write_file", "arguments": {"path": "a.py", "content": body}},
-            }
-        )
-        raw = result.updates[0]["rawInput"]
-
-        assert len(raw["content"]) < len(body)
-        assert raw["content"].endswith("[truncated]")
-        # And the short one is untouched: the clip is per value, not per frame.
-        assert raw["path"] == "a.py"
-
-    def test_a_call_with_no_arguments_sends_no_raw_input(self):
-        """An empty mapping is not information, and a field carrying `{}` invites
-        a client to draw an empty arguments panel for a call that had none."""
-        no_key = translate({"type": "tool.start", "payload": {"tool_call_id": "t", "name": "ask_user"}})
-        empty = translate({"type": "tool.start", "payload": {"tool_call_id": "t", "name": "ask_user", "arguments": {}}})
-
-        assert "rawInput" not in no_key.updates[0]
-        assert "rawInput" not in empty.updates[0]
 
     def test_a_blocking_tool_is_marked_in_meta(self):
         """There is no standard field for it, and a client that clocks the stream

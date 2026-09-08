@@ -76,38 +76,6 @@ def test_the_subject_falls_back_to_locations_when_there_is_no_input() -> None:
     assert json.loads(call.arguments_json()) == {"path": "/repo/bridge/tsconfig.json"}
 
 
-def test_raven_own_frame_hands_the_client_the_real_arguments() -> None:
-    """The two sides of the seam, met.
-
-    raven is the ACP agent as well as the client, and it was the only agent
-    sending no ``rawInput``. The client is not at fault for what it made of
-    that: with no input field, ``arguments_json`` falls back to the subject
-    under the literal ``argument`` key, so a real call recorded as
-    ``{"argument": "ppt_prepare"}`` was the fallback doing its job on a frame
-    that had been emptied upstream. Fixing the producer is what makes the
-    client's own path produce the truth, and only a test that runs one into the
-    other can say so.
-    """
-    from raven.acp.updates import translate
-
-    update = translate(
-        {
-            "type": "tool.start",
-            "payload": {
-                "tool_call_id": "call_bace",
-                "name": "ppt_prepare",
-                "arguments": {"project": "rl_intro", "task": "make a deck about RL"},
-            },
-        }
-    ).updates[0]
-
-    call = AcpDialect().call(update)
-
-    assert json.loads(call.arguments_json()) == {"project": "rl_intro", "task": "make a deck about RL"}
-    # And not the shape the empty frame produced: the tool's own name as a value.
-    assert "argument" not in json.loads(call.arguments_json())
-
-
 def test_a_call_with_no_argument_anywhere_still_shows_its_title() -> None:
     """An ACP ``think`` or ``other`` call is titled and carries no input."""
     call = AcpDialect().call({"kind": "think", "title": "Considering the plan", "toolCallId": "x"})
