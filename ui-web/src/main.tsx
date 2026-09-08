@@ -251,6 +251,9 @@ window.RavenIslands = {
     detach: browser.detach,
     hidden: browser.hidden,
   },
+  terminal: {
+    reconcileTask: terminal.reconcileTask,
+  },
   /* What the legacy layers still reach for: wsReset clears the list with the
      session, and the dag sheet (live/240-external-agents.js) opens nodes,
      reads rows and marks the open selection. */

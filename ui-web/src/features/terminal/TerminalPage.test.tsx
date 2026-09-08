@@ -209,6 +209,22 @@ describe('hosted terminal tabs', () => {
     expect(document.querySelector<HTMLElement>('.chat')?.dataset.terminalActive).toBe('true')
   })
 
+  it('drops stale tabs when the current task is reconciled after reconnect', async () => {
+    rows = [terminal()]
+    await mount()
+    expect(screen.getByRole('tab', { name: 'rsi-research-imp' })).toBeTruthy()
+
+    rows = []
+    await act(async () => {
+      terminalIsland.reconcileTask('task-1')
+      await Promise.resolve()
+    })
+
+    expect(source.list).toHaveBeenCalledTimes(2)
+    expect(screen.getAllByRole('tab')).toHaveLength(1)
+    expect(screen.getByRole('tab', { name: 'gui.terminal.transcript' }).getAttribute('aria-selected')).toBe('true')
+  })
+
   it('keeps terminal content across tab switches and falls back when it closes', async () => {
     rows = [terminal()]
     await mount()
