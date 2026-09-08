@@ -3110,7 +3110,9 @@ async def test_cancel_all_gives_up_on_a_run_that_ignores_its_cancellation() -> N
 
     stubborn = asyncio.create_task(_deaf())
     await started.wait()
-    stub = SimpleNamespace(_running_tasks={"h1": stubborn}, _record_tasks=[])
+    stub = SimpleNamespace(
+        _running_tasks={"h1": stubborn}, _record_tasks=[], _unprompted_trailing={}, _unprompted_held={}
+    )
 
     with patch.object(manager_mod, "_CANCEL_DRAIN_TIMEOUT_S", 0.05):
         elapsed = asyncio.get_running_loop().time()
@@ -3224,3 +3226,197 @@ async def test_an_informational_node_notice_is_headed_as_a_notice_not_a_failure(
     submitted.clear()
     await mgr.announce_dag_exception("r1", "n", "gave up", origin, awaiting_decision=False)
     assert "has failed" in submitted[0].text and submitted[0].delegated["status"] == "exception"
+
+
+# --- unprompted-turn wakes ----------------------------------------------------
+
+
+async def test_an_unprompted_report_wakes_the_conversation_a_dag_announce_taught_it() -> None:
+    """The route back is remembered from the announces that carry one: a DAG
+    result names the conversation, and a later unprompted report from the same
+    session rides that memory. Measured 2026-09-01: without this, a watch
+    instance reported finished GPU work five times into its own log while the
+    main agent slept eleven hours beside idle hardware."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    await mgr.announce_dag_result("r1", "done", {"channel": "web", "chat_id": "default", "session_key": "web:sess1"})
+    submitted.clear()
+
+    await mgr.announce_unprompted_turn("web:sess1", "Raven-Oncall", "ar_ops", "seed runs finished")
+
+    assert len(submitted) == 1
+    req = submitted[0]
+    assert req.conversation == "web:sess1"
+    assert req.source.channel == "web"
+    assert "seed runs finished" in req.text
+    assert "Raven-Oncall" in req.text and "ar_ops" in req.text
+
+
+async def test_a_direct_chat_instance_teaches_the_route_back(tmp_path, monkeypatch) -> None:
+    """The ordinary UI flow: a person creates an ACP instance and chats with it,
+    with no spawn and no DAG announce ever carrying an origin. That instance's
+    later wake used to find no route ("recorded only"). The session key is the
+    conversation's own channel:chat_id, and the route is read off it at the two
+    direct-chat doors."""
+    manager = _third_party_manager(
+        tmp_path,
+        monkeypatch,
+        agents=[
+            ThirdPartyCliSubagentConfig(
+                name="Coder", command="cat {agent_id}", resume_command="cat --resume {agent_id}"
+            )
+        ],
+    )
+    submitted: list = []
+    manager.set_submit(submitted.append)
+
+    await manager.create_instance(session_key="web:s9", agent="Coder")
+
+    assert manager._session_origins["web:s9"] == {"channel": "web", "chat_id": "s9", "session_key": "web:s9"}
+
+    await manager.announce_unprompted_turn("web:s9", "Coder", "h1", "finished the refactor")
+
+    assert len(submitted) == 1 and submitted[0].conversation == "web:s9" and submitted[0].source.channel == "web"
+
+
+def test_apply_agents_binds_every_backend_on_the_table_for_unprompted_wakes(tmp_path, monkeypatch) -> None:
+    """The DAG runner takes a node's backend straight off the registry, never
+    through the manager's per-dispatch resolver, so a graph-only ACP agent used
+    to have no wake route at all. Binding at apply time covers every backend."""
+    manager = _third_party_manager(
+        tmp_path,
+        monkeypatch,
+        agents=[ThirdPartyAcpSubagentConfig(name="Watcher", command="true")],
+    )
+
+    backend = manager.registry.backend("Watcher")
+
+    assert backend is not None
+    assert backend._unprompted_announce == manager.announce_unprompted_turn
+    assert backend._event_sink == manager._emit_event
+
+
+async def test_cancel_all_takes_the_held_unprompted_report_down_with_the_generation() -> None:
+    """A report held for the trailing wake is this generation's; left running,
+    its task would submit to a drained scheduler after disposal."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    mgr.remember_origin({"channel": "web", "chat_id": "d", "session_key": "web:s1"})
+
+    await mgr.announce_unprompted_turn("web:s1", "Raven-Oncall", "ar_ops", "first")
+    await mgr.announce_unprompted_turn("web:s1", "Raven-Oncall", "ar_ops", "held")
+    task = next(iter(mgr._unprompted_trailing.values()))
+
+    await mgr.cancel_all()
+
+    assert task.cancelled() or task.done()
+    assert mgr._unprompted_trailing == {} and mgr._unprompted_held == {}
+    assert len(submitted) == 1, "the held report is not submitted by a generation that is gone"
+
+
+async def test_a_swap_hands_the_pooled_recorder_and_the_routes_to_the_generation_that_can_serve(
+    tmp_path, monkeypatch
+) -> None:
+    """The generation contract end to end at the manager: N+1 is BUILT (constructed,
+    every backend bound) while N keeps serving the pooled recorder; an abandoned
+    candidate therefore changes nothing. At SWAP (`set_submit`) the recorder is
+    re-pointed to N+1, and the route N learned is already N+1's, because the
+    route table is process-lifetime rather than a per-generation cache."""
+    from types import SimpleNamespace
+
+    resident: dict = {}
+    connection = SimpleNamespace(
+        alive=True, router=SimpleNamespace(set_resident=lambda r: resident.__setitem__("r", r))
+    )
+    monkeypatch.setattr("raven.acp_client.acp_agent.get_pool", lambda: SimpleNamespace(live=lambda name: [connection]))
+    agents = [ThirdPartyAcpSubagentConfig(name="Watcher", command="true")]
+
+    n = _third_party_manager(tmp_path, monkeypatch, agents=agents)
+    n_submitted: list = []
+    n.set_submit(n_submitted.append)
+    n.registry.backend("Watcher")._ensure_unprompted_recorder(connection)
+    n.remember_origin({"channel": "web", "chat_id": "d", "session_key": "web:s1"})
+
+    candidate = _third_party_manager(tmp_path, monkeypatch, agents=agents)  # BUILD N+1: no scheduler yet
+    await resident["r"]._wake_cb("web:s1", "h1", "woke during build")
+    assert len(n_submitted) == 1 and "woke during build" in n_submitted[0].text, "N still serves during BUILD"
+
+    c_submitted: list = []
+    candidate.set_submit(c_submitted.append)  # SWAP
+    await resident["r"]._wake_cb("web:s1", "h1", "woke after swap")
+    assert len(n_submitted) == 1
+    assert len(c_submitted) == 1 and c_submitted[0].conversation == "web:s1", "the route N learned serves N+1"
+
+
+async def test_an_unprompted_report_with_no_known_route_is_recorded_only() -> None:
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+
+    await mgr.announce_unprompted_turn("web:never-seen", "Raven-Oncall", "ar_ops", "words")
+
+    assert submitted == []
+
+
+async def test_a_failing_trailing_delivery_is_logged_not_left_as_an_unretrieved_task_exception() -> None:
+    """Reviewer 2026-09-07: the immediate path's failure is caught by the
+    recorder and logged; the trailing task had no handler, so a submit that
+    raised there became an asyncio "Task exception was never retrieved" with
+    the held text already gone. Both paths now fail the same way."""
+    from loguru import logger
+
+    mgr = _make_manager(max_concurrent=1)
+    mgr._UNPROMPTED_WAKE_DEBOUNCE_S = 0.1
+    calls: list = []
+
+    def submit(req):
+        calls.append(req)
+        if len(calls) > 1:
+            raise RuntimeError("the outlet is gone")
+
+    mgr.set_submit(submit)
+    mgr.remember_origin({"channel": "web", "chat_id": "d", "session_key": "web:s1"})
+    logged: list[str] = []
+    sink = logger.add(lambda m: logged.append(m.record["message"]), level="WARNING")
+    try:
+        await mgr.announce_unprompted_turn("web:s1", "Raven-Oncall", "ar_ops", "first")
+        await mgr.announce_unprompted_turn("web:s1", "Raven-Oncall", "ar_ops", "held")
+        task = next(iter(mgr._unprompted_trailing.values()))
+        await asyncio.wait_for(task, timeout=2.0)
+    finally:
+        logger.remove(sink)
+
+    assert task.exception() is None, "the failure is handled inside the task, not raised out of it"
+    assert any("could not deliver the held report" in m and "the outlet is gone" in m for m in logged)
+    assert mgr._unprompted_trailing == {} and mgr._unprompted_held == {}
+
+
+async def test_unprompted_wakes_are_debounced_per_instance_and_the_latest_report_still_lands() -> None:
+    """Five reports in five minutes are one situation, not five main-agent
+    turns -- but a coalescing window, not a throttle: the latest report held
+    inside the window is delivered when it closes. A "still running" followed a
+    minute later by "finished" used to lose the "finished" for five minutes, and
+    the owner, told routine progress needs no action, went idle beside finished
+    work. A different instance of the same session is its own situation."""
+    mgr = _make_manager(max_concurrent=1)
+    mgr._UNPROMPTED_WAKE_DEBOUNCE_S = 0.2
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    mgr.remember_origin({"channel": "web", "chat_id": "d", "session_key": "web:s1"})
+
+    await mgr.announce_unprompted_turn("web:s1", "Raven-Oncall", "ar_ops", "first")
+    await mgr.announce_unprompted_turn("web:s1", "Raven-Oncall", "ar_ops", "still running")
+    await mgr.announce_unprompted_turn("web:s1", "Raven-Oncall", "ar_ops", "finished, results ready")
+    await mgr.announce_unprompted_turn("web:s1", "Raven-Oncall", "other", "third")
+
+    assert len(submitted) == 2, "inside the window only the leading report has gone out"
+    assert "first" in submitted[0].text and "third" in submitted[1].text
+
+    await asyncio.sleep(0.35)
+
+    assert len(submitted) == 3, "the window closing delivers the held report"
+    assert "finished, results ready" in submitted[2].text
+    assert "still running" not in submitted[2].text, "the latest report wins, not the first held one"
+    assert "third" in submitted[1].text

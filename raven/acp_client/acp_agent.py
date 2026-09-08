@@ -40,7 +40,14 @@ from raven.acp_client.capabilities import CapabilitySnapshot, relearn_session_mo
 from raven.acp_client.elicitor import Elicitor
 from raven.acp_client.permissions import PERMISSION_METHOD
 from raven.acp_client.pool import get_pool
-from raven.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_METHOD, AcpError, AcpRemoteError
+from raven.acp_client.protocol import (
+    SESSION_MCP_CAPABILITY,
+    STEER_METHOD,
+    AcpBusyError,
+    AcpError,
+    AcpRemoteError,
+    AcpTimeoutError,
+)
 from raven.agent.subagent import activity
 from raven.agent.subagent.attachments import attachment_blocks
 from raven.agent.subagent.backends import turn_rows
@@ -649,6 +656,62 @@ class AcpAgentBackend:
         self._session_dir_for: Any = None
         self._event_sink: Any = None
         self._caps_listener: Any = None
+        self._unprompted_announce: Any = None
+
+    def _resident_sinks(self) -> tuple[Any, Any]:
+        """The two callables a resident recorder routes through, bound to this backend.
+
+        Read through self at call time, not captured: the sinks are re-bound on
+        every dispatch, so a capture would freeze whichever manager happened to
+        dispatch first. `self` is still this backend, though, and a backend lives
+        one generation while the pooled connection lives the process -- which is
+        why an existing recorder is re-pointed (``_repoint_resident``) rather
+        than kept as it was built.
+        """
+        emit = lambda session_key, event: (  # noqa: E731 - the same shape twice, bind and rebind
+            self._event_sink(session_key, event) if self._event_sink is not None else None
+        )
+        announce = lambda session_key, handle, text: (  # noqa: E731
+            self._unprompted_announce(session_key, self.name, handle, text)
+            if self._unprompted_announce is not None
+            else None
+        )
+        return emit, announce
+
+    @staticmethod
+    def _repoint_resident(connection: Any, emit: Any, announce: Any) -> bool:
+        """Re-point the connection's resident recorder, if it has one. True when it did."""
+        existing = getattr(connection, "_raven_unprompted", None)
+        if existing is None:
+            return False
+        rebind = getattr(existing, "rebind", None)
+        if callable(rebind):
+            rebind(emit=emit, announce=announce)
+        return True
+
+    def repoint_pooled_resident(self) -> None:
+        """Re-point the live pooled connection's recorder at this backend now.
+
+        Called by the manager at the SWAP boundary (`set_submit`, when the new
+        generation is given its scheduler) -- never from the binders, which run
+        during BUILD while generation N must keep serving untouched, and never
+        from the next dispatch, which may come long after an existing agent has
+        woken on its own. The pool is process-lifetime; this is the one place
+        the surviving transport is rewired, and only once the generation that
+        takes it can actually serve a wake. A candidate that fails to assemble
+        never reaches here, so N stays connected.
+        """
+        try:
+            connections = get_pool().live(self.name)
+        except Exception:  # noqa: BLE001 - a swap must never fail on a transport that cannot be listed
+            return
+        if not connections:
+            return
+        emit, announce = self._resident_sinks()
+        # One connection per parent binding under the agent's name; every one
+        # of them may hold a recorder, and every one belongs to this generation now.
+        for connection in connections:
+            self._repoint_resident(connection, emit, announce)
 
     def _ensure_unprompted_recorder(self, connection: Any) -> None:
         """Give this connection a resident sink, once.
@@ -661,25 +724,17 @@ class AcpAgentBackend:
         unprompted turn, which is what the situation was before it existed, and
         must not cost the turn now being sent.
         """
-        if getattr(connection, "_raven_unprompted", False):
+        emit, announce = self._resident_sinks()
+        if self._repoint_resident(connection, emit, announce):
             return
         try:
             from raven.acp_client.unprompted import UnpromptedRecorder
 
             recorder = UnpromptedRecorder(
-                self.name,
-                self._registry,
-                self._session_dir_for,
-                # Read through self at call time, not captured: the recorder is
-                # built on the first prompt and the sink is re-bound on every
-                # dispatch, so a capture would freeze whichever manager happened
-                # to dispatch first.
-                emit=lambda session_key, event: (
-                    self._event_sink(session_key, event) if self._event_sink is not None else None
-                ),
+                self.name, self._registry, self._session_dir_for, emit=emit, announce=announce
             )
             connection.router.set_resident(recorder)
-            connection._raven_unprompted = True  # noqa: SLF001 - a marker on a pooled object
+            connection._raven_unprompted = recorder  # noqa: SLF001 - a marker on a pooled object, and the handle to rebind
         except Exception as exc:  # noqa: BLE001 - never at the cost of the turn being sent
             logger.warning("acp agent {!r}: no unprompted-turn recorder: {}", self.name, exc)
 
@@ -691,6 +746,17 @@ class AcpAgentBackend:
         emitter, and last-writer-wins is therefore correct.
         """
         self._event_sink = sink
+
+    def bind_unprompted_announcer(self, announce: Any) -> None:
+        """Take the dispatching manager's wake-the-conversation call.
+
+        Same last-writer-wins shape as the binders around it: every manager's
+        announce routes by the session key the call itself carries, so which
+        manager is held changes nothing about where a wake lands. The pooled
+        connection's resident recorder is not touched here: that happens at the
+        SWAP boundary (`repoint_pooled_resident`), once the manager can serve.
+        """
+        self._unprompted_announce = announce
 
     def bind_caps_listener(self, listener: Any) -> None:
         """Take the dispatching manager's "re-derive the agent table" call.
@@ -1304,6 +1370,40 @@ class AcpAgentBackend:
         mode: str | None = None,
     ) -> tuple[str, bool]:
         """The session to prompt, and whether it continues an earlier one."""
+
+        async def request_or_busy(method: str, params: dict[str, Any]) -> Any:
+            # Busy and broken demand opposite recoveries, and upstream can only
+            # act on the message it gets: measured 2026-09-02, session opens
+            # timing out behind one long-running turn were judged transport
+            # failures, and the re-dispatch loop ran seven adjudication rounds
+            # against an agent working correctly the whole time.
+            try:
+                return await client.request(method, params, timeout=budget)
+            except AcpTimeoutError:
+                if getattr(client, "prompting", False):
+                    raise AcpBusyError(
+                        f"acp agent {self.name!r}: {method} waited {budget:.0f}s behind a turn "
+                        f"already running on this agent's one connection. The agent is busy, not "
+                        f"broken: nothing failed and the transport needs no fixing. Wait for the "
+                        f"running turn to end and submit this work again -- re-dispatching now "
+                        f"only queues another wait behind the same turn."
+                    ) from None
+                # Idle the whole budget and silent: nobody is home on this
+                # connection, and a retry against it would wait out the same
+                # budget against the same silence -- measured 2026-09-02 on the
+                # fork, three session opens in a row died on one wedged
+                # process because nothing ever gave up on it. Dropping it here
+                # is what turns the judge's retry into a fresh launch.
+                from raven.acp_client.pool import get_pool
+
+                await get_pool().drop(self.name)
+                raise AcpTimeoutError(
+                    f"acp agent {self.name!r}: {method} timed out after {budget:.0f}s with no turn "
+                    f"in flight -- the agent answered nothing the whole wait. Its connection was "
+                    f"dropped, so a retry launches a fresh agent process instead of waiting out "
+                    f"the same silence again."
+                ) from None
+
         if self.is_stateful:
             known = await self._registry.lookup(skey, self.name, handle, kind="acp")
             if known is not None and (self._snapshot and self._snapshot.can_load):
@@ -1319,10 +1419,9 @@ class AcpAgentBackend:
                     # the length of the call; the turn's collector takes it over
                     # immediately after.
                     async with _replay_dropped(router, known):
-                        loaded = await client.request(
+                        loaded = await request_or_busy(
                             "session/load",
                             {"sessionId": known, "cwd": cwd, "mcpServers": mcp_servers},
-                            timeout=budget,
                         )
                     self._relearn_modes(loaded)
                     await self._set_mode(client, known, mode, budget=budget)
@@ -1346,7 +1445,7 @@ class AcpAgentBackend:
                     # pruned, so the binding is kept and the caller is told.
                     raise
 
-        result = await client.request("session/new", {"cwd": cwd, "mcpServers": mcp_servers}, timeout=budget)
+        result = await request_or_busy("session/new", {"cwd": cwd, "mcpServers": mcp_servers})
         self._relearn_modes(result)
         session_id = (result or {}).get("sessionId") if isinstance(result, dict) else None
         if not isinstance(session_id, str) or not session_id:

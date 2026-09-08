@@ -1908,6 +1908,81 @@ async def test_a_connection_that_stopped_speaking_is_dead_and_gets_replaced() ->
     assert second.alive
 
 
+async def test_a_probe_tells_a_wedged_agent_from_a_live_one() -> None:
+    """The outage shape liveness cannot see: pipes open, process alive, frame
+    loop answering nothing (measured 2026-09-02: an agent answered at 18:39,
+    then logged nothing all night while three session opens waited out their
+    full budgets against it). Only a round trip can tell; the probe is one --
+    a repeat initialize, answered by the dispatcher before any business logic.
+    """
+    from raven.acp_client import protocol
+    from raven.acp_client.client import AcpClient
+
+    live_cfg = stub_config("live")
+    live = await AcpClient.launch(name="live", command=live_cfg.command, env=dict(live_cfg.env))
+    try:
+        await live.request("initialize", protocol.initialize_params(), timeout=15)
+        assert await live.probe(5) is True
+        assert live.idle_seconds < 60, "an answered frame is activity"
+    finally:
+        await live.close()
+
+    deaf_cfg = stub_config("deaf", mode="silent")
+    deaf = await AcpClient.launch(name="deaf", command=deaf_cfg.command, env=dict(deaf_cfg.env))
+    try:
+        assert deaf.alive, "the wedge is invisible to liveness -- which is why the probe exists"
+        assert await deaf.probe(2) is False
+    finally:
+        await deaf.close()
+
+
+async def test_a_stale_silent_connection_is_replaced_at_acquire(monkeypatch) -> None:
+    """The pool's half of the fix: a connection past the staleness line pays
+    for one probe before being re-issued, and a silent one is relaunched
+    instead of handed out to wait a 120s open budget against the same wall."""
+    from raven.acp_client import pool as pool_mod
+
+    cfg = stub_config("wedged", mode="wedged")
+    first = await get_pool().acquire(name="wedged", command=cfg.command, env=dict(cfg.env))
+    assert first.alive, "the wedged stub completes its handshake; the wedge starts after it"
+
+    monkeypatch.setattr(pool_mod, "_STALE_AFTER_S", 0.0)
+    monkeypatch.setattr(pool_mod, "_PROBE_TIMEOUT_S", 2.0)
+    second = await get_pool().acquire(name="wedged", command=cfg.command, env=dict(cfg.env))
+
+    assert second is not first, "an unresponsive connection must be relaunched, not re-issued"
+    assert second.alive
+
+
+async def test_responsiveness_probes_only_the_idle_and_stale() -> None:
+    """Three tiers, cheapest first: busy is not broken (probing a busy agent
+    would misread its queue as silence), recent frames are proof enough, and
+    only a long-silent idle connection pays for the round trip."""
+    from types import SimpleNamespace
+
+    from raven.acp_client.pool import AcpConnectionPool
+
+    probes: list[str] = []
+
+    def _client(*, prompting: bool, idle: float, answers: bool, name: str):
+        async def probe(timeout: float) -> bool:
+            probes.append(name)
+            return answers
+
+        return SimpleNamespace(prompting=prompting, idle_seconds=idle, probe=probe, name=name)
+
+    busy = SimpleNamespace(client=_client(prompting=True, idle=9999.0, answers=False, name="busy"))
+    fresh = SimpleNamespace(client=_client(prompting=False, idle=1.0, answers=False, name="fresh"))
+    stale_live = SimpleNamespace(client=_client(prompting=False, idle=9999.0, answers=True, name="ok"))
+    stale_dead = SimpleNamespace(client=_client(prompting=False, idle=9999.0, answers=False, name="gone"))
+
+    assert await AcpConnectionPool._responsive(busy) is True
+    assert await AcpConnectionPool._responsive(fresh) is True
+    assert await AcpConnectionPool._responsive(stale_live) is True
+    assert await AcpConnectionPool._responsive(stale_dead) is False
+    assert probes == ["ok", "gone"], "busy and fresh never pay for a round trip"
+
+
 async def test_the_eof_error_carries_the_exit_code_and_the_last_stderr() -> None:
     """`exit None; stderr tail: <empty>` was the whole diagnostic for a child
     that had both an exit code and a written reason: EOF races the reap and the
@@ -4088,3 +4163,124 @@ async def test_a_call_with_no_verdict_is_not_called_a_failure() -> None:
     )
 
     assert col.failed_call_without_answer is None
+
+
+async def test_a_session_open_behind_a_running_turn_says_busy_not_broken(tmp_path: Path) -> None:
+    """One connection carries every session of an agent, so a session open can
+    only queue behind a turn in flight. Measured 2026-09-02: opens timing out
+    behind one long watch turn were judged transport failures, and the
+    re-dispatch loop ran seven adjudication rounds against an agent working
+    correctly the whole time. Busy means wait; broken means fix -- the error
+    has to say which."""
+    from raven.acp_client.protocol import AcpBusyError, AcpTimeoutError
+
+    cfg = stub_config("a")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=False),
+        registry=InstanceRegistry(path=tmp_path / "instances.json"),
+    )
+
+    class _BusyClient:
+        prompting = True
+
+        async def request(self, method: str, params: dict[str, Any], *, timeout: float):
+            raise AcpTimeoutError(f"acp agent 'a': {method} timed out after {timeout}s")
+
+    with pytest.raises(AcpBusyError) as exc:
+        await backend._open_session(_BusyClient(), cwd=str(tmp_path), skey="s", handle="w", budget=5, mcp_servers=[])
+    message = str(exc.value)
+    assert "busy, not" in message and "broken" in message
+    assert "Wait for the" in message and "re-dispatching" in message.lower() or "re-dispatching" in message
+
+
+async def test_a_session_open_timeout_with_no_turn_in_flight_drops_the_connection(tmp_path: Path, monkeypatch) -> None:
+    """No pending prompt means the silence is not queueing -- the agent really
+    did not answer. The connection is dropped on the spot, so a retry launches
+    a fresh process instead of waiting out the same budget against the same
+    silence (measured 2026-09-02: three opens in a row died on one wedged
+    process because nothing ever gave up on it)."""
+    from raven.acp_client.protocol import AcpTimeoutError
+
+    cfg = stub_config("a")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=False),
+        registry=InstanceRegistry(path=tmp_path / "instances.json"),
+    )
+
+    class _DeafClient:
+        prompting = False
+
+        async def request(self, method: str, params: dict[str, Any], *, timeout: float):
+            raise AcpTimeoutError(f"acp agent 'a': {method} timed out after {timeout}s")
+
+    dropped: list[str] = []
+
+    class _Pool:
+        async def drop(self, name: str) -> None:
+            dropped.append(name)
+
+    monkeypatch.setattr("raven.acp_client.pool.get_pool", lambda: _Pool())
+
+    with pytest.raises(AcpTimeoutError, match="fresh agent process"):
+        await backend._open_session(_DeafClient(), cwd=str(tmp_path), skey="s", handle="w", budget=5, mcp_servers=[])
+    assert dropped == ["a"], "the silent connection must not stay in the pool for the retry to hit"
+
+
+def test_a_reused_connection_routes_unprompted_wakes_to_the_current_generation() -> None:
+    """Generation N+1 builds a new backend over the pooled connection generation
+    N opened. The resident recorder is kept (it is the connection's), but its
+    sinks must be re-pointed, or a later wake reaches the drained manager."""
+    from types import SimpleNamespace
+
+    resident: dict = {}
+    connection = SimpleNamespace(router=SimpleNamespace(set_resident=lambda r: resident.__setitem__("r", r)))
+    cfg = stub_config("a")
+
+    old = AcpAgentBackend(name="a", command="true", snapshot=cfg)
+    old_wakes: list[str] = []
+    old.bind_unprompted_announcer(lambda sk, agent, handle, text: old_wakes.append(text))
+    old._ensure_unprompted_recorder(connection)
+
+    new = AcpAgentBackend(name="a", command="true", snapshot=cfg)
+    new_wakes: list[str] = []
+    new.bind_unprompted_announcer(lambda sk, agent, handle, text: new_wakes.append(text))
+    new._ensure_unprompted_recorder(connection)
+
+    assert connection._raven_unprompted is resident["r"], "one resident recorder, not a second"
+    resident["r"]._wake_cb("s", "h", "finished")
+    assert new_wakes == ["finished"] and old_wakes == []
+
+
+def test_the_pooled_recorder_is_repointed_at_the_swap_boundary_not_at_binding(monkeypatch) -> None:
+    """BUILD of generation N+1 must leave N serving untouched: binding the new
+    backend re-points nothing. The rewire is the manager's call at SWAP
+    (`set_submit` -> `repoint_pooled_resident`), once N+1 can serve a wake."""
+    from types import SimpleNamespace
+
+    resident: dict = {}
+    connection = SimpleNamespace(
+        alive=True, router=SimpleNamespace(set_resident=lambda r: resident.__setitem__("r", r))
+    )
+    cfg = stub_config("a")
+    old = AcpAgentBackend(name="a", command="true", snapshot=cfg)
+    old_wakes: list[str] = []
+    old.bind_unprompted_announcer(lambda sk, agent, handle, text: old_wakes.append(text))
+    old._ensure_unprompted_recorder(connection)
+
+    monkeypatch.setattr("raven.acp_client.acp_agent.get_pool", lambda: SimpleNamespace(live=lambda name: [connection]))
+    new = AcpAgentBackend(name="a", command="true", snapshot=cfg)
+    new_wakes: list[str] = []
+    new.bind_unprompted_announcer(lambda sk, agent, handle, text: new_wakes.append(text))
+
+    resident["r"]._wake_cb("s", "h", "during BUILD")
+    assert old_wakes == ["during BUILD"] and new_wakes == [], "binding alone must leave N serving"
+
+    new.repoint_pooled_resident()
+    resident["r"]._wake_cb("s", "h", "after SWAP")
+    assert new_wakes == ["after SWAP"] and old_wakes == ["during BUILD"]

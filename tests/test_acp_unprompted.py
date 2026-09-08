@@ -285,3 +285,85 @@ async def test_a_turn_that_said_something_records_the_words_not_the_count(tmp_pa
     rows = _log_rows(tmp_path)
     assert any(r.get("role") == "assistant" and r["content"] == "the run passed the knee" for r in rows)
     assert not any("no message" in str(r.get("content")) for r in rows)
+
+
+# --- waking the owning conversation ------------------------------------------
+
+
+def _waking_recorder(tmp_path: Path):
+    woken: list[tuple[str, str, str]] = []
+
+    async def announce(session_key: str, handle: str, text: str) -> None:
+        woken.append((session_key, handle, text))
+
+    rec = UnpromptedRecorder(
+        "Oncall",
+        _Registry(),
+        lambda session_key: tmp_path,
+        emit=None,
+        announce=announce,
+    )
+    return rec, woken
+
+
+async def test_a_turn_that_said_words_wakes_the_owning_conversation(tmp_path):
+    """The log write is half the fix; this is the other half. Measured
+    2026-09-01: a watch instance reported finished GPU work into its log five
+    times while the main agent slept eleven hours beside idle hardware -- the
+    record existed and nothing routed the words back to whoever could act."""
+    rec, woken = _waking_recorder(tmp_path)
+
+    await rec(*_frame("agent_message_chunk", "seed runs finished; results ready"))
+    await rec(*_frame("usage_update"))
+
+    assert woken == [("tui:sess-1", "h-1", "seed runs finished; results ready")]
+
+
+async def test_a_tool_only_wake_round_does_not_wake_anyone(tmp_path):
+    """A round that just looked at a ledger is a heartbeat, not a report --
+    five of eight turns in the measured campaign said nothing -- and every wake
+    costs a full main-agent turn. It still lands in the log."""
+    rec, woken = _waking_recorder(tmp_path)
+
+    await rec(*_frame("tool_call", call_id="c1"))
+    await rec(*_frame("usage_update"))
+
+    assert woken == []
+    rows = _log_rows(tmp_path)
+    assert any(r.get("role") == "assistant" for r in rows)
+
+
+async def test_a_failing_announcer_never_costs_the_record(tmp_path):
+    async def announce(session_key: str, handle: str, text: str) -> None:
+        raise RuntimeError("spine is down")
+
+    rec = UnpromptedRecorder(
+        "Oncall",
+        _Registry(),
+        lambda session_key: tmp_path,
+        emit=None,
+        announce=announce,
+    )
+
+    await rec(*_frame("agent_message_chunk", "findings"))
+    await rec(*_frame("usage_update"))
+
+    rows = _log_rows(tmp_path)
+    assert any(r.get("content") == "findings" for r in rows)
+
+
+def test_rebind_points_the_resident_recorder_at_a_new_owner() -> None:
+    """The recorder lives as long as the pooled connection; the backend and its
+    manager live one generation. After a runtime swap the surviving recorder has
+    to route wakes to generation N+1, not to the manager whose scheduler was
+    drained."""
+    old_wakes: list[str] = []
+    new_wakes: list[str] = []
+    rec = UnpromptedRecorder(
+        "a", registry=None, session_dir_for=lambda k: Path("/tmp"), announce=lambda *a: old_wakes.append(a[2])
+    )
+
+    rec.rebind(emit=None, announce=lambda *a: new_wakes.append(a[2]))
+    rec._wake_cb("s", "h", "words")
+
+    assert new_wakes == ["words"] and old_wakes == []
