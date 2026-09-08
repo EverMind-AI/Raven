@@ -154,6 +154,26 @@ re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bou
 nodes of a DAG run — every sub-agent dispatch draws on the one allowance.
 _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and re-enters via Spine.
 
+**Sub-agent role** (`RAVEN_SUBAGENT` → `agent/subagent/role.py`):
+What a raven process knows about why it was started. The host sets it on every child it
+launches, beside the `RAVEN_HOME` it already sends, and a process that reads it as set
+registers none of the tools that hand work to a further agent (`spawn`, `run_subagent_dag`,
+the three graph controls) and builds no playbook funnel, so `load_playbook` and
+`create_playbook` unregister themselves. The `## Delegation` block and the DAG orchestration
+guide follow the tools out on their own, both being conditional on a live dispatch path.
+`WITHHELD_FROM_SUBAGENT` is the specification; the gates enforce it by not building, and the
+tests hold the two in agreement. A config `env` entry outranks the host's, which is how one
+agent is handed back a full registry.
+It is a property of the *process*, and one pooled acp connection serves every call to an
+agent, so the same process answers a dispatched DAG node and a person's direct chat and
+cannot tell them apart. Withholding is correct on both lanes; anything written into the
+`## Sub-agent` prompt section is bounded by it, and may not claim who is reading or that no
+turn follows. Nor may it deny later execution outright: an acp process is wired with a cron
+service, so `cron` is registered and a fired job does run later on the session that armed it.
+_Avoid_: reading it as the same thing as `IN_SUBAGENT_RUN` — that `ContextVar` says a
+*task* is a sub-agent run inside this process and cannot cross a process boundary; this says
+the whole process is one, and is the only form that survives an exec.
+
 **Agent table** (`subagents.agents[]` in config → `agent/subagent/registry.py`):
 The one list of agents raven can dispatch to, materialized once per process as an
 `AgentRegistry` that `spawn`, `run_subagent_dag` and the playbook generator all read.

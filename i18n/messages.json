@@ -4640,8 +4640,8 @@
       "zh": "已记录费用"
     },
     "gui.set.usg.in": {
-      "en": "input tokens (uncached)",
-      "zh": "输入 tokens（不含缓存）"
+      "en": "input tokens",
+      "zh": "输入 tokens"
     },
     "gui.set.usg.llm": {
       "en": "Model calls",
@@ -5755,14 +5755,6 @@
       "en": "Enter send · Esc back · expires in {n}s",
       "zh": "Enter 发送 · Esc 返回 · {n} 秒后过期"
     },
-    "gui.set.usg.cache_read": {
-      "en": "cache read tokens",
-      "zh": "缓存读取 tokens"
-    },
-    "gui.set.usg.cache_write": {
-      "en": "cache write tokens",
-      "zh": "缓存写入 tokens"
-    },
     "gui.set.usg.unknown": {
       "en": "unknown",
       "zh": "未知"
@@ -5774,10 +5766,6 @@
     "gui.set.usg.cost_missing": {
       "en": "{n} calls with unknown cost",
       "zh": "{n} 次调用费用未知"
-    },
-    "gui.set.usg.cache_missing": {
-      "en": "{n} calls missing data",
-      "zh": "{n} 次调用数据缺失"
     },
     "gui.set.usg.legacy": {
       "en": "Historical estimates excluded",

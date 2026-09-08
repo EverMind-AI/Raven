@@ -37,6 +37,7 @@ from raven.agent.loop._shared import (
     resolve_vendor_key,
     workdir,
 )
+from raven.agent.subagent.role import is_subagent_process
 from raven.agent.tools.ask_user import DEFAULT_TIMEOUT_S
 from raven.contracts.token_strategy import UsageSnapshot
 
@@ -632,48 +633,11 @@ class WiringMixin:
         else:
             self.tools.register(DeepResearchOfferTool())
         self.tools.register(MessageTool())
-        self.tools.register(SpawnTool(manager=self.subagents))
-        # Sub-agent DAG orchestration. Registered unconditionally now that
-        # the agent table always holds the package's built-in rows: the tool used
-        # to be gated on an enabled third-party entry existing, because without one
-        # its roster was empty and a node had nothing to name. A graph over
-        # research-raven and code-raven is a graph, so that gate would now be
-        # withholding the tool from every default install.
-        from raven.agent.subagent.dag_tool import SubAgentDagTool
-
-        self.tools.register(
-            SubAgentDagTool(
-                workspace=self.subagents.workspace,
-                registry=self.subagents.registry,
-                guide_skill_id=self._dag_guide_skill_id(),
-                session_dir=self.sessions.session_dir,
-                is_paused=lambda: self.subagents.paused,
-                state_for=self.subagents.instance_state,
-                everos_for=self.subagents.everos_identity,
-                mode_for=self.subagents.resolve_mode,
-                gate=self.subagents.dispatch_gate,
-                announce=self.subagents.announce_dag_result,
-                announce_exception=self.subagents.announce_dag_exception,
-                adopt=self.subagents.adopt_background_run,
-                charge=self.subagents.charge_dag_run,
-                ask=self._confirm_graph,
-                control_reachable=self.dag_control_reachable,
-                control_advert=self.dag_control_advert,
-                provider_for=self._verdict_provider,
-                binding_for=self._turn_binding,
-                verdict_config=self.subagent_dag_config,
-            )
-        )
-        # The graph tool's own acceptance text is the only advertisement these
-        # three get: hidden from the schema so the per-turn tool list carries
-        # nothing a conversation that never starts a DAG has any use for, they
-        # stay reachable through the registry (and tool_call where it exists).
-        from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
-
-        self.tools.register(CancelDagTool(loop=self))
-        self.tools.register(DagStatusTool(loop=self))
-        self.tools.register(ResolveDagNodeTool(loop=self))
-        self.tools.hide_from_schema("cancel_dag", "dag_status", "resolve_dag_node")
+        # Not registered at all for a sub-agent, rather than hidden from the
+        # schema: hiding leaves the tool in the registry, which is exactly how the
+        # graph controls stay reachable through ``tool_call``, so it closes nothing.
+        if not is_subagent_process():
+            self._register_orchestration_tools()
         # The question responder is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
         self.tools.register(AskUserTool(timeout_s=self.ask_user_config.timeout))
@@ -787,6 +751,56 @@ class WiringMixin:
                 ToolSearchStrategy(self.tool_search_controller),
                 first=True,
             )
+
+    def _register_orchestration_tools(self) -> None:
+        """Every tool that hands work to another agent, or steers a hand-off already running.
+
+        Grouped into one method so the sub-agent gate has a single place to
+        refuse, rather than a condition repeated over five registrations that a
+        sixth would quietly not get.
+        """
+        self.tools.register(SpawnTool(manager=self.subagents))
+        # Sub-agent DAG orchestration. Registered unconditionally now that
+        # the agent table always holds the package's built-in rows: the tool used
+        # to be gated on an enabled third-party entry existing, because without one
+        # its roster was empty and a node had nothing to name. A graph over
+        # research-raven and code-raven is a graph, so that gate would now be
+        # withholding the tool from every default install.
+        from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+        self.tools.register(
+            SubAgentDagTool(
+                workspace=self.subagents.workspace,
+                registry=self.subagents.registry,
+                guide_skill_id=self._dag_guide_skill_id(),
+                session_dir=self.sessions.session_dir,
+                is_paused=lambda: self.subagents.paused,
+                state_for=self.subagents.instance_state,
+                everos_for=self.subagents.everos_identity,
+                mode_for=self.subagents.resolve_mode,
+                gate=self.subagents.dispatch_gate,
+                announce=self.subagents.announce_dag_result,
+                announce_exception=self.subagents.announce_dag_exception,
+                adopt=self.subagents.adopt_background_run,
+                charge=self.subagents.charge_dag_run,
+                ask=self._confirm_graph,
+                control_reachable=self.dag_control_reachable,
+                control_advert=self.dag_control_advert,
+                provider_for=self._verdict_provider,
+                binding_for=self._turn_binding,
+                verdict_config=self.subagent_dag_config,
+            )
+        )
+        # The graph tool's own acceptance text is the only advertisement these
+        # three get: hidden from the schema so the per-turn tool list carries
+        # nothing a conversation that never starts a DAG has any use for, they
+        # stay reachable through the registry (and tool_call where it exists).
+        from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
+
+        self.tools.register(CancelDagTool(loop=self))
+        self.tools.register(DagStatusTool(loop=self))
+        self.tools.register(ResolveDagNodeTool(loop=self))
+        self.tools.hide_from_schema("cancel_dag", "dag_status", "resolve_dag_node")
 
     def _bind_plugin_runtime(self) -> None:
         """Grant the late-bound handles to every plugin tool that declared.
@@ -996,7 +1010,11 @@ class WiringMixin:
         every turn.
         """
         cfg = self._playbook_config
-        if cfg is None or not cfg.enabled:
+        # A sub-agent is refused the funnel rather than the two tools directly:
+        # ``load_playbook`` on a ``dag`` playbook dispatches from inside the call,
+        # so it is a third route to a graph -- and leaving the funnel unbuilt is
+        # the path both tools already unregister themselves down.
+        if cfg is None or not cfg.enabled or is_subagent_process():
             return
         try:
             self._playbooks = self._build_playbook_runtime(cfg)

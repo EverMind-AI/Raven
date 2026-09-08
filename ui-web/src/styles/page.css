@@ -3689,11 +3689,10 @@ details[open] summary { margin-bottom: 8px; }
 /* stat tiles: what a usage module is actually for */
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .stat { border: 1px solid var(--line-soft); border-radius: 10px; padding: 11px 12px; display: grid; gap: 3px; }
-.stat .v { font-family: var(--sans); font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums;
+.stat .v { font-family: var(--mono); font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums;
   letter-spacing: -.02em; }
 .stat .v.none { color: var(--faint); font-weight: 400; }
 .stat .k { font-size: 11.5px; color: var(--muted); }
-.stat .note { font-family: var(--sans); font-size: 11.5px; font-weight: 400; line-height: 1.5; color: var(--muted); }
 
 /* read-only mirrors of config.json: the value is the content, so it leads */
 .skv { display: grid; gap: 1px; }
@@ -3709,7 +3708,6 @@ details[open] summary { margin-bottom: 8px; }
 .skv .r .k { font-size: 12.5px; color: var(--muted); flex: none; min-width: 132px; }
 .skv .r .v { font-family: var(--mono); font-size: 12px; margin-left: auto; text-align: right;
   overflow-wrap: anywhere; }
-.skv.text-values .r .v { font-family: var(--sans); line-height: 1.6; }
 .skv .r .v.unset { color: var(--faint); font-family: inherit; font-size: 12px; }
 .skv .r .v.ok { color: var(--moss); }
 

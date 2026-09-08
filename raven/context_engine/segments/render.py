@@ -84,8 +84,11 @@ def _language_directive() -> str:
 DISPATCH_TOOLS = ("spawn", "run_subagent_dag")
 """The tools a delegation instruction can actually be carried out with.
 
-Ordered as the prompt names them. Either name can be withheld for a single
-turn through ``tools.disabled_tools``, so neither is guaranteed present.
+Ordered as the prompt names them. Neither name is guaranteed present, and the
+two routes that withhold one differ in how long they last: ``tools.disabled_tools``
+holds for a single turn, while a process the host launched as a sub-agent
+(``raven.agent.subagent.role``) never registers either of them at all. Both are
+why the section is built from ``live_dispatch_tools`` rather than from this tuple.
 """
 
 
@@ -183,6 +186,45 @@ def _resolved_model_id() -> str:
         return wire_model(model, spec=find_by_name(provider_name), gateway=gateway)
     except Exception:
         return ""
+
+
+def _subagent_note() -> str:
+    """The ``## Sub-agent`` section, for a process the host launched to answer one task.
+
+    Empty for an ordinary raven, separator and all, so the prompt every install
+    renders is byte-identical to what it was.
+
+    Read from the environment rather than taken as an argument, on the same terms
+    as ``_language_directive``: the answer is a property of the process, not of a
+    turn, and both callers of ``identity_text`` -- the request path and the
+    token-estimation path -- must agree on it without either being told.
+
+    Both bullets are claims about *this process*, and that is load-bearing rather
+    than stylistic. One pooled acp connection serves every call to an agent (see
+    ``acp_client/pool.py``, keyed on the launch config), so the same process answers
+    a dispatched DAG node and a person's direct chat, and the variable cannot tell
+    them apart. An earlier draft said the reply was "not shown to a person" and that
+    "nothing follows this turn": true of a dispatched node, false of a direct chat,
+    where the reply streams to the person and the instance stays available.
+
+    The second bullet is conditional for a second reason, and the qualifier is the
+    whole of it. An acp process is wired with a cron service and so registers ``cron``
+    (``WiringMixin``, gated on ``cron_service``), and ``build_rpc_stack`` starts that
+    service with ``make_on_session_wake`` precisely so a fired job runs later on the
+    session that armed it. A flat "nothing runs after your turn ends" would therefore
+    contradict a delivery the process really does make, and tell a model that its own
+    scheduled reminder is worthless. What survives both readings is that an *unscheduled*
+    promise delivers nothing, which is the failure this section exists for.
+    """
+    from raven.agent.subagent.role import is_subagent_process
+
+    if not is_subagent_process():
+        return ""
+    return """## Sub-agent
+- Another raven launched this process to work for it. You hold none of the tools that hand work to a further agent: the task is yours to carry out.
+- Nothing here runs after your turn ends unless a tool call scheduled it. Do not promise later delivery you have not scheduled: report what you did, and if you could not finish, say what is left and why.
+
+"""
 
 
 def _delegation_block(
@@ -293,7 +335,7 @@ You are Raven, a helpful AI assistant.
   - Episodic log: {home_path}/user_memory/episodic/episodes.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
   - Custom skills: {home_path}/skills/{{skill-name}}/SKILL.md
 
-{platform_policy}{delegation}## Raven Guidelines
+{platform_policy}{delegation}{_subagent_note()}## Raven Guidelines
 - State intent before tool calls, but NEVER predict or claim results before receiving them.
 - Before modifying a file, read it first. Do not assume files or directories exist.
 - After writing or editing a file, re-read it if accuracy matters.

@@ -80,6 +80,14 @@ Environment:
                        process.
   RAVEN_HOME           Move the whole instance: config, logs, runtime
                        state. --config moves it for one run.
+  RAVEN_SUBAGENT       1/true/yes/on says another raven launched this
+                       process to answer one task for it, which
+                       withholds the tools that hand work to a further
+                       agent (spawn, run_subagent_dag, the graph
+                       controls, the playbook pair) and says so in the
+                       prompt. Set by the host on every child it
+                       launches; set it yourself only to reproduce
+                       what a sub-agent sees.
 
 Design notes are in docs/specs, in the files named *-acp-*.
 """

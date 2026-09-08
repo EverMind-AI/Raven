@@ -55,6 +55,7 @@ from raven.agent.subagent.mcp_grant import (
     raven_cli_target,
     resolve_grant,
 )
+from raven.agent.subagent.role import subagent_role_env
 from raven.spine.message import Media
 
 if TYPE_CHECKING:
@@ -432,7 +433,10 @@ class CliAgentBackend:
             # while a sub-agent writing back to "the host's store" writes into
             # ~/.raven. The hand-off lands in a file nobody reads and the wake
             # simply never arrives.
-            env = {**env_base, **host_identity_env(), **(runtime_env or {}), **self.env}
+            # ``subagent_role_env`` before ``self.env``, so a config ``env`` entry
+            # is the way to hand one agent back its full registry. A third-party
+            # CLI reads none of these; a ``raven`` one does.
+            env = {**env_base, **host_identity_env(), **subagent_role_env(), **(runtime_env or {}), **self.env}
             logger.info("Subagent [{}] CLI agent {!r}: {}", task_id, self.name, argv[:1])
             proc = await asyncio.create_subprocess_exec(
                 *argv,
