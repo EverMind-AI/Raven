@@ -447,10 +447,15 @@ def _conversation_lines(records: list[Any], width: int) -> list[Text]:
             continue
         # One span's records repeat the same meta (an LLM call stamps its
         # model/tokens on input, thinking, and output alike); show it once,
-        # on the span's last consecutive record.
+        # on the span's last consecutive record. Span identity needs the
+        # trace too: span ids are only unique within one trace, so a merged
+        # attempt may interleave equal ids from different traces.
         following = records[index + 1] if index + 1 < len(records) else None
         show_meta = not (
-            following is not None and following.span_id == record.span_id and following.meta == record.meta
+            following is not None
+            and following.trace_id == record.trace_id
+            and following.span_id == record.span_id
+            and following.meta == record.meta
         )
         lines.extend(_record_lines(record, label_col, width, show_meta))
     return lines
