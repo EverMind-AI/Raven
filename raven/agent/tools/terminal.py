@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Awaitable, Callable
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
@@ -12,6 +13,16 @@ from raven.contracts.terminal import Envelope, TerminalError
 from raven.contracts.tool import Tool
 
 RpcCall = Callable[[str, dict], Awaitable[dict]]
+_turn_session_key: ContextVar[str | None] = ContextVar("terminal_turn_session", default=None)
+
+
+@contextmanager
+def bind_terminal_session(session_key: str):
+    token = _turn_session_key.set(session_key)
+    try:
+        yield
+    finally:
+        _turn_session_key.reset(token)
 
 
 def _failure(exc: TerminalError) -> str:
@@ -27,8 +38,11 @@ class _TerminalTool(Tool):
         self._session_key.set(session_key or f"{channel}:{chat_id}")
 
     def session_params(self):
-        session = self._session_key.get()
+        session = self.session_key()
         return {"session_id": session} if session else {}
+
+    def session_key(self):
+        return _turn_session_key.get() or self._session_key.get()
 
 
 class CreateTerminalTool(_TerminalTool):
@@ -62,7 +76,8 @@ class CreateTerminalTool(_TerminalTool):
         try:
             if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
                 raise TerminalError("invalid_agent_name", "Use a lowercase canonical agent name")
-            worktree = self.task_worktree(task, self._session_key.get())
+            session_key = self.session_key()
+            worktree = self.task_worktree(task, session_key)
             kind, command = self.provider_command(provider, unattended=unattended)
             existing = await self.rpc("agents.resolve", {"mention": name})
             if any(candidate["agent"].get("exitedAt") is None for candidate in existing.get("candidates", [])):
@@ -79,7 +94,7 @@ class CreateTerminalTool(_TerminalTool):
                         "kind": kind,
                         "terminal": terminal["handle"],
                         "task_ref": worktree,
-                        **({"session_key": self._session_key.get()} if self._session_key.get() else {}),
+                        **({"session_key": session_key} if session_key else {}),
                     },
                 )
             except TerminalError as exc:
