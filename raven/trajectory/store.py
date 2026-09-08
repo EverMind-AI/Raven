@@ -620,6 +620,30 @@ def resolve_attempt_id(id_: str, state_dir: Path | None = None) -> str | None:
     return id_ if found else None
 
 
+def member_traces(id_: str, state_dir: Path | None = None) -> tuple[str, ...] | None:
+    """Deduplicated member trace ids of the attempt addressed by ``id_``, ascending.
+
+    Covers every address shape: a definition (by id, alias, or member trace)
+    resolves to its member set; a legacy ``attempt.id`` group or a bare trace
+    id resolves through :func:`resolve_attempt_id` and the matching spans —
+    unlike :func:`attempt_members`, which knows only definitions. Returns
+    ``None`` when nothing matches at all.
+    """
+    defs = definitions(state_dir)
+    owner = _definition_for(id_, defs)
+    if owner is not None:
+        return tuple(sorted(set(defs[owner]["traces"])))
+    resolved = resolve_attempt_id(id_, state_dir)
+    if resolved is None:
+        return None
+    traces = {
+        trace
+        for span in iter_spans(state_dir, attempt_id=resolved)
+        if (trace := _str_value(span.get("traceId"))) is not None
+    }
+    return tuple(sorted(traces)) if traces else None
+
+
 def span_log_paths(state_dir: Path | None = None) -> list[Path]:
     """All span log files in write order: archived (oldest first), then active."""
     base = state_dir or tracing_config.state_dir()
