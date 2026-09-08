@@ -1,4 +1,9 @@
 {
+  "agents": {
+    "defaults": {
+      "reasoningEffort": "high"
+    }
+  },
   "drFlow": {
     "maxIterations": 60,
     "budgetNote": {
@@ -18,9 +23,6 @@
       "saturation": {
         "k": 10
       }
-    },
-    "plainFirst": {
-      "enabled": false
     }
   }
 }

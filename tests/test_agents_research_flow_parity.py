@@ -338,7 +338,7 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
     "plain_first": (
         "the first-reply gate: web tools withheld for the first model call, a plain "
         "answer judged or escalated to research (gates/plain_first.py). Off as a class "
-        "default; the product's medium slice turns it on and the deep overlays turn it off"
+        "default; the product's base slice turns it on and only the max overlay turns it off"
     ),
 }
 

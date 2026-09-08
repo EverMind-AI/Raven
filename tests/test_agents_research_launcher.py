@@ -237,7 +237,7 @@ TWIN_DRFLOW_EXCEPTIONS = {
 #: outlive the divergence: when the fork gains the knob, the row moves to the table above.
 TWIN_DRFLOW_PRODUCT_ONLY = {
     "plainFirst": (
-        "the baseline mode answers settled general knowledge without a research round: "
+        "medium and high answer settled general knowledge without a research round: "
         "web tools withheld for the first model call, the plain draft judged, anything "
         "else escalated to research. Measured on 45 FreshQA research questions with no "
         "false plain answer and on 35 settled ones with 29 accepted; the fork has no such "
@@ -383,7 +383,7 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
     )[1]
     digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
 
-    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain"
+    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high"
     assert digest == "baf5019c4141a463", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
