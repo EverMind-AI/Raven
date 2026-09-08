@@ -541,16 +541,13 @@ The shipped TokenStrategy (`"cache_optimizer"`) that places Anthropic's ≤4 eph
 window). A Hermes-faithful `SystemAndTailCacheStrategy` ships alongside as an A/B reference.
 
 **UsageSnapshot**:
-The token/cost accounting unit for a single LLM or built-in image-generation API call: input / output / cache-read /
+The token/cost accounting unit for a single LLM call: input / output / cache-read /
 cache-write / reasoning tokens plus provider-reported USD cost. Missing cache
 counters and cost remain unknown, distinct from zero. The tracker persists version-2
 records and counts missing values alongside its aggregates; old estimated costs do not
 contribute to reported-cost totals. Chat, Responses, and Anthropic adapters interpret
 API-returned numeric `usage.cost` as USD regardless of provider or endpoint; compatible
 gateways must use that unit. Other monetary fields and SDK estimates are not inferred.
-The built-in image tool records each returned generation/edit response before saving
-image files, through the runtime UsageTracker. Unreported image input/output tokens
-remain null in telemetry and are counted as missing in aggregates.
 _Avoid_: the turn-end wire payload is `TurnUsage` (rpc/models.py), not UsageSnapshot.
 
 **Provider**:
