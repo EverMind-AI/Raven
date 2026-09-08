@@ -1082,6 +1082,28 @@ class TestPrompt:
         validate_def("PromptResponse", response["result"])
         assert rig.stack.params_for("turn.send")["content"] == "hi"
 
+    async def test_a_prompt_names_the_pair_that_rebuilds_its_session_key(self, rig):
+        """Tools record the turn's (channel, chat_id) as its live route, and a wake
+        armed from this turn later runs on ``<channel>:<chat_id>``. Left to the
+        default the pair came out ``acp/default`` while the session was
+        ``acp:<id>``, so the wake ran on a conversation nobody subscribed to
+        (measured 2026-09-04: a campaign's report sent to acp:default)."""
+        await rig.handshake()
+        session_id = await rig.new_session()
+
+        task = asyncio.create_task(
+            rig.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": "hi"}]})
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        rig.translator.settle_turn(session_id, "end_turn")
+        await task
+
+        sent = rig.stack.params_for("turn.send")
+        channel, chat_id = session_id.split(":", 1)
+        assert (sent["channel"], sent["chat_id"]) == (channel, chat_id)
+        assert f"{sent['channel']}:{sent['chat_id']}" == sent["session_key"]
+
     async def test_a_prompt_after_an_overflow_resubscribes_before_running(self, rig):
         """A session whose stream died is bound to no subscription. Its next
         prompt must re-subscribe first, or the turn's events have no subscriber
