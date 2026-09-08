@@ -122,13 +122,22 @@ def _kind(name: str) -> str:
 
 
 def _read_artifact(state: Path, path: str) -> tuple[str | None, str | None]:
-    """(text, degraded reason); (None, reason) means unreadable."""
+    """(text, degraded reason); (None, reason) means unreadable.
+
+    Reads at most ``_ARTIFACT_LIMIT + 1`` bytes — the cap bounds actual I/O and
+    memory, not just the returned text, because the pointer may name any file
+    under ``logs/`` (a rotated multi-GB log included). Non-regular files (a
+    FIFO would block the read) are rejected outright.
+    """
     try:
         logs_root = (state / "logs").resolve()
         target = Path(path).resolve()
         if not target.is_relative_to(logs_root):
             return None, "artifact path outside the trace store"
-        data = target.read_bytes()
+        if target.exists() and not target.is_file():
+            return None, "artifact is not a regular file"
+        with target.open("rb") as handle:
+            data = handle.read(_ARTIFACT_LIMIT + 1)
     except OSError:
         return None, "artifact missing"
     if len(data) > _ARTIFACT_LIMIT:
@@ -355,10 +364,16 @@ def _emit_slot(
 
 
 def _emit_turn(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -> None:
+    before = len(records)
     _emit_slot(info, records, state, "User input", _PHASE_INPUT, "turn.input", "turn.input_preview", field="content")
     _emit_slot(
         info, records, state, "Agent reply", _PHASE_OUTPUT, "turn.output", "turn.output_preview", field="content"
     )
+    # A turn root's identity must survive an empty body: the renderer needs
+    # the turn's own start time and grouping id even when there is nothing to
+    # show (and even when only child spans carry content).
+    if len(records) == before:
+        _emit(info, records, "Turn", _PHASE_INPUT, "")
 
 
 def _emit_llm(info: _SpanInfo, records: list[dict[str, Any]], state: Path, chains: _ChainState) -> None:
@@ -387,10 +402,32 @@ def _emit_llm(info: _SpanInfo, records: list[dict[str, Any]], state: Path, chain
         if isinstance(tool_calls, list):
             lines.extend(_tool_call_line(tc) for tc in tool_calls)
         text = "\n".join(lines)
-        reasoning = obj.get("reasoning_content")
-        if reasoning:
-            _emit(info, records, "LLM thinking", _PHASE_OUTPUT, _display(reasoning), meta=meta)
+        thinking = _thinking_text(obj)
+        if thinking:
+            _emit(info, records, "LLM thinking", _PHASE_OUTPUT, thinking, meta=meta)
     _emit(info, records, "LLM output", _PHASE_OUTPUT, text, degraded=degraded, meta=meta)
+
+
+def _thinking_text(obj: dict[str, Any]) -> str:
+    """Reasoning evidence from the output payload, whichever fields carry it.
+
+    ``reasoning_content`` and ``thinking_blocks`` are persisted independently
+    and either may be the only copy; identical block text is not repeated.
+    """
+    parts: list[str] = []
+    reasoning = obj.get("reasoning_content")
+    if reasoning:
+        parts.append(_display(reasoning))
+    blocks = obj.get("thinking_blocks")
+    if isinstance(blocks, list):
+        for block in blocks:
+            if isinstance(block, dict) and _str(block.get("thinking")):
+                text = block["thinking"]
+            else:
+                text = _compact(block)
+            if text not in parts:
+                parts.append(text)
+    return "\n\n".join(parts)
 
 
 def _emit_tool(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -> None:
@@ -635,8 +672,17 @@ def attempt_conversation(traces: Sequence[str], state_dir: Path | None = None) -
             _emit(
                 info, records, _label(info.name), _PHASE_OUTPUT, "", degraded=f"span unreadable — {type(exc).__name__}"
             )
-        if not records and info.malformed:
-            _emit(info, records, _label(info.name), _PHASE_OUTPUT, "", degraded="span unreadable — malformed record")
+        if info.malformed:
+            # Always a separate evidence record: readable payloads must not
+            # make a span with a corrupt status/attributes read as fully OK.
+            _emit(
+                info,
+                records,
+                _label(info.name),
+                _PHASE_OUTPUT,
+                "",
+                degraded="span record malformed — original status/attributes unreadable",
+            )
         if info.error and records:
             records[-1]["error"] = info.error
         elif info.error:

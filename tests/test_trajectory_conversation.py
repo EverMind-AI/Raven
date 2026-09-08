@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -633,8 +634,8 @@ def test_malformed_spans_stay_visible_among_normal_ones(state):
     _write_log(state, [good, bad_attrs, bad_status, bad_pointer])
     records = tconv.attempt_conversation(["t1"], state)
     by_span = {r.span_id: r for r in records}
-    assert by_span["bad1"].degraded == "span unreadable — malformed record"
-    assert by_span["bad2"].degraded == "span unreadable — malformed record"
+    assert by_span["bad1"].degraded == "span record malformed — original status/attributes unreadable"
+    assert by_span["bad2"].degraded == "span record malformed — original status/attributes unreadable"
     assert by_span["bad3"].degraded == "content unavailable — artifact missing"
     assert _by_label(records, "User input")[0].text == "fix the bug"
     assert _labels(records)[0] == "User input"
@@ -647,7 +648,7 @@ def test_error_status_survives_malformed_attributes(state):
     _write_log(state, [span])
     records = tconv.attempt_conversation(["t1"], state)
     assert len(records) == 1
-    assert records[0].degraded == "span unreadable — malformed record"
+    assert records[0].degraded == "span record malformed — original status/attributes unreadable"
     assert records[0].error == "kept"
 
 
@@ -667,3 +668,129 @@ def test_other_traces_are_ignored(state):
     )
     records = tconv.attempt_conversation(["t1"], state)
     assert {r.trace_id for r in records} == {"t1"}
+
+
+# ── review round 1 fixes ──────────────────────────────────────────────
+
+
+def test_artifact_read_is_bounded_and_rejects_non_regular_files(state, monkeypatch):
+    big = state / "logs" / "audit-artifacts" / "big.bin"
+    big.parent.mkdir(parents=True, exist_ok=True)
+    big.write_bytes(b"B" * (2 * 1024 * 1024))
+    reads: list[int] = []
+    original_open = Path.open
+
+    class _SpyHandle:
+        def __init__(self, handle):
+            self._handle = handle
+
+        def read(self, n=-1):
+            reads.append(n)
+            return self._handle.read(n)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return self._handle.__exit__(*exc)
+
+    def spy_open(self, *args, **kwargs):
+        handle = original_open(self, *args, **kwargs)
+        return _SpyHandle(handle) if self.name == "big.bin" else handle
+
+    monkeypatch.setattr(Path, "open", spy_open)
+    text, degraded = tconv._read_artifact(state, str(big))
+    assert degraded == "content over 512 KiB — truncated"
+    assert len(text) == tconv._ARTIFACT_LIMIT
+    assert reads == [tconv._ARTIFACT_LIMIT + 1]
+
+    fifo = state / "logs" / "audit-artifacts" / "pipe"
+    os.mkfifo(fifo)
+    assert tconv._read_artifact(state, str(fifo)) == (None, "artifact is not a regular file")
+
+
+def test_empty_turn_yields_marker_record(state):
+    _write_log(state, [_span("t1", "turn", "session.turn", start=1, end=2)])
+    records = tconv.attempt_conversation(["t1"], state)
+    assert len(records) == 1
+    marker = records[0]
+    assert marker.label == "Turn"
+    assert marker.text == ""
+    assert marker.degraded is None
+    assert marker.turn_span_id == "turn"
+    assert marker.event_time == _ts(1)
+
+
+def test_empty_turn_between_full_turns_keeps_identity(state):
+    spans = [
+        _span("t1", "turn1", "session.turn", start=0, end=1, attrs=_turn_attrs(state, "t1-turn")),
+        _span("t2", "turn2", "session.turn", start=2, end=3),
+        _span("t3", "turn3", "session.turn", start=4, end=5, attrs=_turn_attrs(state, "t3-turn")),
+    ]
+    _write_log(state, spans)
+    records = tconv.attempt_conversation(["t1", "t2", "t3"], state)
+    assert _labels(records) == ["User input", "Agent reply", "Turn", "User input", "Agent reply"]
+    assert records[2].turn_span_id == "turn2"
+
+
+def test_bodyless_turn_root_with_children_yields_marker_first(state):
+    spans = [
+        _span("t1", "turn", "session.turn", start=0, end=9),
+        _span(
+            "t1",
+            "llm",
+            "llm.call",
+            parent="turn",
+            start=1,
+            end=2,
+            attrs=_llm_attrs(state, "llm", [{"role": "user", "content": "q"}], {"content": "a", "tool_calls": []}),
+        ),
+    ]
+    _write_log(state, spans)
+    records = tconv.attempt_conversation(["t1"], state)
+    assert _labels(records) == ["Turn", "LLM input", "LLM output"]
+    assert all(r.turn_span_id == "turn" for r in records)
+
+
+def test_thinking_blocks_render_when_reasoning_content_absent(state):
+    output = {
+        "content": "answer",
+        "tool_calls": [],
+        "reasoning_content": None,
+        "thinking_blocks": [
+            {"type": "thinking", "thinking": "block thought", "signature": "sig"},
+            {"type": "redacted_thinking", "data": "opaque"},
+        ],
+    }
+    attrs = _llm_attrs(state, "llm", [{"role": "user", "content": "q"}], output)
+    _write_log(state, [_span("t1", "llm", "llm.call", start=1, end=2, attrs=attrs)])
+    records = tconv.attempt_conversation(["t1"], state)
+    thinking = _by_label(records, "LLM thinking")[0]
+    assert "block thought" in thinking.text
+    assert '"redacted_thinking"' in thinking.text
+    assert _by_label(records, "LLM output")[0].text == "answer"
+
+
+def test_thinking_blocks_do_not_duplicate_reasoning_content(state):
+    output = {
+        "content": "answer",
+        "tool_calls": [],
+        "reasoning_content": "same thought",
+        "thinking_blocks": [{"type": "thinking", "thinking": "same thought"}],
+    }
+    attrs = _llm_attrs(state, "llm", [{"role": "user", "content": "q"}], output)
+    _write_log(state, [_span("t1", "llm", "llm.call", start=1, end=2, attrs=attrs)])
+    thinking = _by_label(tconv.attempt_conversation(["t1"], state), "LLM thinking")[0]
+    assert thinking.text == "same thought"
+
+
+def test_malformed_status_with_readable_body_stays_visible(state):
+    span = _span("t1", "tool", "tool.call", start=1, end=2, attrs=_tool_attrs(state, "run", {"x": 1}, "normal"))
+    span["status"] = "ERROR"
+    _write_log(state, [span])
+    records = tconv.attempt_conversation(["t1"], state)
+    output = _by_label(records, "Tool output")[0]
+    assert output.text == "normal"
+    assert output.degraded is None
+    evidence = _by_label(records, "Tool call")[0]
+    assert evidence.degraded == "span record malformed — original status/attributes unreadable"
