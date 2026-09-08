@@ -448,7 +448,8 @@ async def test_send_reports_stale_binding_with_last_handle(failure_at):
     assert result["error"]["data"]["handle"] == "term_test"
 
 
-async def test_create_after_host_restart_renews_identity_generation(tmp_path):
+@pytest.mark.parametrize("resume_session_id", [None, "native-previous"])
+async def test_create_after_host_restart_renews_identity_generation(tmp_path, resume_session_id):
     from types import SimpleNamespace
 
     from raven.agent.registry.identity import IdentityRegistry
@@ -485,13 +486,19 @@ async def test_create_after_host_restart_renews_identity_generation(tmp_path):
 
     async def rpc(method, params):
         response = await dispatcher.dispatch({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        if "error" in response:
+            raise TerminalError(
+                response["error"].get("data", {}).get("code", response["error"]["message"]), "Old host handle"
+            )
         assert "result" in response, response
         return response["result"]
 
     tool = CreateTerminalTool(
-        rpc, lambda provider, unattended=False: ("coder", ["codex"]), lambda task, session: f"repo::{tmp_path}"
+        rpc,
+        lambda provider, unattended=False, **resume: ("coder", ["codex"]),
+        lambda task, session: f"repo::{tmp_path}",
     )
-    result = json.loads(await tool.execute(provider="codex", name="worker"))
+    result = json.loads(await tool.execute(provider="codex", name="worker", resume_session_id=resume_session_id))
     renewed = registry.show("worker")
     assert result["handle"] != old.handle
     assert renewed.binding_generation == 2
@@ -501,3 +508,59 @@ async def test_create_after_host_restart_renews_identity_generation(tmp_path):
     refused = json.loads(await tool.execute(provider="codex", name="worker"))
     assert refused["error"]["code"] == "agent_name_exists"
     assert len(terminals) == 1
+
+
+@pytest.mark.parametrize("provider,operation", [("claude", "--resume"), ("codex", "resume")])
+@pytest.mark.parametrize("unattended", [False, True])
+def test_provider_resume_argv(configured_terminal_kinds, provider, operation, unattended):
+    from raven.rpc.terminal_tools import provider_command
+
+    preset = "claude_code" if provider == "claude" else "codex"
+    configured_terminal_kinds.append({"name": "worker", "preset": preset})
+    flag = "--dangerously-skip-permissions" if provider == "claude" else "--dangerously-bypass-approvals-and-sandbox"
+    assert provider_command(provider, unattended=unattended, resume_session_id="native-session") == (
+        "worker",
+        [provider, operation, "native-session", *([flag] if unattended else [])],
+    )
+
+
+@pytest.mark.parametrize("session_id", ["", "  ", "-last", " --last", "bad\x00id"])
+def test_provider_resume_rejects_invalid_ids(configured_terminal_kinds, session_id):
+    from raven.rpc.terminal_tools import provider_command
+
+    configured_terminal_kinds.append({"name": "worker", "preset": "codex"})
+    with pytest.raises(TerminalError) as error:
+        provider_command("codex", resume_session_id=session_id)
+    assert error.value.code == "invalid_params"
+
+
+@pytest.mark.parametrize("liveness", ["live", "unverifiable", "exited", "missing"])
+async def test_resume_checks_old_host_before_creating(liveness):
+    from unittest.mock import Mock
+
+    provider = Mock(return_value=("codex", ["codex", "resume", "native-session"]))
+    calls = []
+
+    async def rpc(method, params):
+        calls.append((method, params))
+        if method == "agents.resolve":
+            return {"unique": False, "candidates": [{"agent": {**candidate(), "exitedAt": 123}}]}
+        if method == "terminal.show":
+            if liveness == "missing":
+                raise TerminalError("terminal_not_found", "Previous host gone")
+            return {"terminal": {"liveness": liveness}}
+        if method == "terminal.create":
+            return {"terminal": {"handle": "new", "incarnationId": "new-incarnation"}}
+        return {}
+
+    tool = CreateTerminalTool(rpc, provider, lambda task, session: "repo::/selected")
+    tool.set_context("tui", "creator")
+    result = json.loads(await tool.execute(provider="codex", name="worker", resume_session_id="native-session"))
+    provider.assert_called_once_with("codex", unattended=False, resume_session_id="native-session")
+    if liveness in {"live", "unverifiable"}:
+        assert result["error"]["code"] == "agent_name_exists"
+        assert not any(method == "terminal.create" for method, _ in calls)
+    else:
+        assert result["handle"] == "new"
+        assert calls[-1][1]["session_key"] == "tui:creator"
+        assert calls[-1][1]["task_ref"] == "repo::/selected"

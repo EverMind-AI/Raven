@@ -172,3 +172,51 @@ async def test_missing_serve_metadata_returns_json_without_token(monkeypatch, tm
     assert result["ok"] is False
     assert result["error"]["code"] == "runtime_unavailable"
     assert result["_meta"]["runtimeId"] is None
+
+
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        ("claude --model sonnet", ["claude", "--resume", "native-id", "--model", "sonnet"]),
+        ("/usr/bin/codex --model test", ["/usr/bin/codex", "resume", "native-id", "--model", "test"]),
+    ],
+)
+def test_terminal_create_resume_preserves_native_options(monkeypatch, command, expected):
+    from raven.cli import _terminal_rpc
+
+    request = AsyncMock(return_value={"ok": True, "result": {}})
+    monkeypatch.setattr(_terminal_rpc, "request", request)
+    result = CliRunner().invoke(
+        app,
+        ["terminal", "create", "--worktree", "id:repo::/tmp", "--command", command, "--resume", "native-id", "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    assert request.await_args.args[1]["command"] == expected
+
+
+@pytest.mark.parametrize(
+    "command", ["bash", "claude --resume old", "claude -r old", "codex resume old", "claude --session-id=old"]
+)
+def test_terminal_resume_rejects_unsupported_or_duplicate_selector(monkeypatch, command):
+    from raven.cli import _terminal_rpc
+
+    request = AsyncMock()
+    monkeypatch.setattr(_terminal_rpc, "request", request)
+    result = CliRunner().invoke(
+        app, ["terminal", "create", "--worktree", "id:repo::/tmp", "--command", command, "--resume", "native-id"]
+    )
+    assert result.exit_code != 0
+    request.assert_not_awaited()
+
+
+def test_terminal_create_without_resume_preserves_command(monkeypatch):
+    from raven.cli import _terminal_rpc
+
+    request = AsyncMock(return_value={"ok": True, "result": {}})
+    monkeypatch.setattr(_terminal_rpc, "request", request)
+    command = 'python -c "print(1)"'
+    result = CliRunner().invoke(
+        app, ["terminal", "create", "--worktree", "id:repo::/tmp", "--command", command, "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    assert request.await_args.args[1]["command"] == command

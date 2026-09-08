@@ -12,7 +12,9 @@ from raven.contracts.terminal import TerminalError, worktree_id
 from raven.rpc import connection
 
 
-def provider_command(provider: str, unattended: bool = False) -> tuple[str, list[str]]:
+def provider_command(
+    provider: str, unattended: bool = False, resume_session_id: str | None = None
+) -> tuple[str, list[str]]:
     from raven.config.loader import load_config
 
     rows = load_config().subagents.agents
@@ -38,6 +40,10 @@ def provider_command(provider: str, unattended: bool = False) -> tuple[str, list
             "Multiple matching agent kinds. Open External Agents and keep one matching preset, or use its exact name.",
         )
     name, command = matches[0]
+    if resume_session_id is not None:
+        from raven.terminal.commands import resume_command
+
+        command = resume_command(command, resume_session_id)
     if unattended:
         command = command + [
             "--dangerously-skip-permissions" if command[0] == "claude" else "--dangerously-bypass-approvals-and-sandbox"
