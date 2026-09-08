@@ -38,18 +38,10 @@ particular machine still spells it that way -- an agent that renames the flag
 shows up as a handshake failure on that row, with the launch error, and not as a
 silent wrong answer.
 
-``kimi_code`` was added on 2026-09-08 and measured against its own installed
-binary rather than a stand-in, so the command the row carries is the command that
-ran. It is also the only row driven through the whole chain -- tool rendering,
-two prompts on one session, a resume from a fresh process, then spawn, direct
-chat and a two-node DAG through :class:`~raven.agent.subagent.manager.SubagentManager`
-and the DAG tool -- rather than a handshake plus one prompt.
-
 Every row here also **completed a real turn**, rendered its tool calls into the
 rows a reader gets, held context across two prompts on one session, and resumed a
-session from a fresh process. That bar is why there are seven rows and not
-seventeen: the registry offered ten more that reach ``ready`` and then cannot do
-the work,
+session from a fresh process. That bar is why there are six rows and not sixteen:
+the registry offered ten more that reach ``ready`` and then cannot do the work,
 almost all of them waiting on a credential their owner has to grant. They are a
 separate change, once logged in and re-measured, because a roster entry that
 cannot run a task is worse than an absent one -- the model reads it as available.
@@ -64,16 +56,10 @@ Left out, deliberately:
   the whole 240s budget rather than failing, which is the shape a row would have
   had on every user's machine too. The last two were the registry's only ``uvx``
   entries, which is why no row here uses one.
-- Registry entries distributed as a platform binary (cursor, antigravity, goose,
-  junie, devin, amp, mistral-vibe and the rest). A preset is a command, not an
-  installer, and the archive-per-platform table those carry is the installer's
-  job. ``kimi_code`` is not a breach of that: its own installer appends
-  ``$KIMI_INSTALL_DIR/bin`` to the shell rc unless ``KIMI_NO_MODIFY_PATH`` is
-  set, so the row names an executable the user already has on ``PATH`` and raven
-  fetches nothing. The rule bars raven from installing a binary, not from naming
-  one that installed itself. It carries no :data:`ACP_REGISTRY_INSTALL_HINTS`
-  entry for the reason that table gives: its install is one command on
-  macOS/Linux and a different one on Windows, and a hint is a single string.
+- Registry entries distributed as a platform binary (cursor, kimi, antigravity,
+  goose, junie, devin, amp, mistral-vibe and the rest). A preset is a command,
+  not an installer, and the archive-per-platform table those carry is the
+  installer's job.
 - ``agoragentic``, which takes ``--acp`` but is an agent marketplace settling
   per-call payments in USDC rather than an agent, and does not belong in a
   default roster.
@@ -162,13 +148,6 @@ ACP_REGISTRY_PRESETS: dict[str, dict[str, Any]] = {
         "kind": "acp",
         "description": "xAI's coding agent and CLI.",
         "command": "grok agent stdio",
-    },
-    "kimi_code": {
-        "name": "Kimi Code",
-        "preset": "kimi_code",
-        "kind": "acp",
-        "description": "Moonshot AI's coding assistant.",
-        "command": "kimi acp",
     },
     "pi": {
         "name": "Pi",

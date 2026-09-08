@@ -265,9 +265,8 @@ class PlainFirstGate(AgentHook):
         if self._provider is None:
             return self._finish(ctx, state, "accepted_unjudged")
         started = time.monotonic()
-        verdict, reasked = await self._judge(ctx, draft)
+        verdict = await self._judge(ctx, draft)
         state["judge_latency_s"] = round(time.monotonic() - started, 3)
-        state["judge_reasked"] = reasked
         state["judge_reason"] = (verdict or {}).get("reason")
         if verdict is None:
             self._finish(ctx, state, "escalated_judge_failed")
@@ -296,7 +295,6 @@ class PlainFirstGate(AgentHook):
                 "iteration": ctx.iteration,
                 "draft_chars": state.get("draft_chars"),
                 "judge_latency_s": state.get("judge_latency_s"),
-                "judge_reasked": state.get("judge_reasked"),
                 "reason": state.get("judge_reason") or state.get("request_reason"),
             }
         )
@@ -316,22 +314,13 @@ class PlainFirstGate(AgentHook):
         )
         return HookDecision(rollback=True, rollback_inject=inject, notes=[f"plain_first: escalated ({why})"])
 
-    async def _judge(self, ctx: AgentHookContext, draft: str) -> tuple[dict | None, bool]:
-        """The verdict, or None, and whether the judge was asked again for its keys.
-
-        The re-ask bit is carried on the failure side too: a corrective call that
-        then timed out or came back malformed is still a re-ask, and dropping it
-        would undercount exactly the failed ones in the ledger.
-        """
+    async def _judge(self, ctx: AgentHookContext, draft: str) -> dict | None:
         user = f"Question:\n{task_for(ctx)}\n\nDraft answer (written without sources):\n{draft}"
-        verdict, reasked = await _ask_judge(
+        verdict = await _ask_once(
             self._provider,
             system=_JUDGE_SYSTEM,
             user=user,
             key="plain_ok",
-            # Half a verdict is no verdict: a judge that answered the class but not
-            # the soundness question has not checked the draft.
-            require=("sound",),
             model=self._judge_model,
             max_tokens=self._judge_max_tokens,
             timeout_seconds=self._judge_timeout_seconds,
@@ -339,14 +328,21 @@ class PlainFirstGate(AgentHook):
             who="plain-first judge",
         )
         if verdict is None:
-            return None, reasked
+            return None
+        sound = coerce_bool(verdict.get("sound"))
+        if sound is None:
+            # Half a verdict is no verdict: a judge that answered the class but not
+            # the soundness question has not checked the draft.
+            logger.warning("plain-first judge: output missing boolean 'sound'")
+            return None
+        verdict["sound"] = sound
         reason = verdict.get("reason")
         verdict["reason"] = reason.strip()[:200] if isinstance(reason, str) else None
         raw_issues = verdict.get("issues")
         verdict["issues"] = (
             [str(i).strip()[:200] for i in raw_issues if str(i).strip()][:8] if isinstance(raw_issues, list) else []
         )
-        return verdict, reasked
+        return verdict
 
 
 class PlainTurnGate(ConversationGate):
@@ -511,106 +507,41 @@ def _reason_from(arguments) -> str | None:
     return reason.strip()[:200] if isinstance(reason, str) and reason.strip() else None
 
 
-# One corrective re-ask when the reply came back but named the wrong keys. Measured on
-# deepseek-v4-flash at low effort: about one judge call in ten answered with a key of its
-# own ({"correct": true, ...}) after almost no reasoning, and a settled question went to
-# research for it. A timeout or a transport failure is not re-asked: neither is the model
-# misreading the schema, and the reviewer measured 44-303s per call on this model with
-# no gain from a fresh call, so a restart there only forfeits progress. The re-ask gets
-# the same budget as the first call: a judge call runs 8-40s at low effort, and a 30s cap
-# measured on the first re-run cut one off that was answering.
-_REASK_NOTE = (
-    "Your reply did not use the required keys. Reply again with one JSON object and nothing "
-    "else, in the shape the instructions gave, with each of these present as a JSON boolean "
-    "and neither renamed nor merged: {keys}."
-)
-
-
-def _verdict_with(text: str, key: str, require: tuple[str, ...]) -> dict | None:
-    """The parsed reply with ``key`` and every ``require`` key coerced to a bool, else None."""
-    parsed = parse_bool_verdict(text, key) if text else None
-    if parsed is None:
-        return None
-    data, _ = parsed
-    for name in require:
-        value = coerce_bool(data.get(name))
-        if value is None:
-            return None
-        data[name] = value
-    return data
-
-
-async def _ask_judge(
-    provider,
-    *,
-    system,
-    user,
-    key,
-    model,
-    max_tokens,
-    timeout_seconds,
-    who,
-    reasoning_effort=None,
-    require: tuple[str, ...] = (),
-) -> tuple[dict | None, bool]:
-    """One judge call, plus one corrective re-ask when the reply names the wrong keys.
-
-    Returns the verdict with ``key`` and every ``require`` key as real booleans, or
-    None when no usable verdict came back, paired with whether the re-ask was made.
-    The pair is returned on every path so a re-ask that itself failed is recorded.
-    """
+async def _ask_once(
+    provider, *, system, user, key, model, max_tokens, timeout_seconds, who, reasoning_effort=None
+) -> dict | None:
+    """One judge call, one attempt: the reviewer measured 44-303s per call on this
+    model with no gain from a fresh call, so a restart only forfeits progress."""
     # Passed only when configured, the distinction ``sufficiency`` documents: an
     # absent kwarg means the provider's default, an explicit ``None`` suppresses it.
     effort_kwargs = {"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-
-    async def call(timeout: float) -> str | None:
-        try:
-            response = await asyncio.wait_for(
-                provider.chat_with_retry(
-                    messages=messages,
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=0.0,
-                    **effort_kwargs,
-                ),
-                timeout=timeout,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("%s: stalled past %.0fs; failing toward research", who, timeout)
-            return None
-        except Exception as exc:
-            logger.warning("%s: call failed (%s: %s); failing toward research", who, type(exc).__name__, exc)
-            return None
-        if getattr(response, "finish_reason", "") in ("length", "error"):
-            logger.warning("%s: no verdict (finish_reason=%s)", who, response.finish_reason)
-            return None
-        return visible_answer(getattr(response, "content", None) or "")
-
-    text = await call(timeout_seconds)
-    if text is None:
-        return None, False
-    verdict = _verdict_with(text, key, require)
-    if verdict is not None:
-        return verdict, False
-    if not text:
-        logger.warning("%s: empty reply; failing toward research", who)
-        return None, False
-    keys = ", ".join((key, *require))
-    logger.warning("%s: output missing boolean %r; asking once more for %s", who, key, keys)
-    messages = [
-        *messages,
-        {"role": "assistant", "content": text},
-        {"role": "user", "content": _REASK_NOTE.format(keys=keys)},
-    ]
-    text = await call(timeout_seconds)
-    if text is None:
-        return None, True
-    verdict = _verdict_with(text, key, require)
-    if verdict is None:
-        logger.warning("%s: output still missing boolean %r; failing toward research", who, key)
-        return None, True
-    return verdict, True
+    try:
+        response = await asyncio.wait_for(
+            provider.chat_with_retry(
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                model=model,
+                max_tokens=max_tokens,
+                temperature=0.0,
+                **effort_kwargs,
+            ),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("%s: stalled past %.0fs; failing toward research", who, timeout_seconds)
+        return None
+    except Exception as exc:
+        logger.warning("%s: call failed (%s: %s); failing toward research", who, type(exc).__name__, exc)
+        return None
+    if getattr(response, "finish_reason", "") in ("length", "error"):
+        logger.warning("%s: no verdict (finish_reason=%s)", who, response.finish_reason)
+        return None
+    text = visible_answer(getattr(response, "content", None) or "")
+    parsed = parse_bool_verdict(text, key) if text else None
+    if parsed is None:
+        logger.warning("%s: output missing boolean %r", who, key)
+        return None
+    verdict, _ = parsed
+    return verdict
 
 
 __all__ = [

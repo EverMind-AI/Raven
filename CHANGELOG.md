@@ -11,14 +11,14 @@ All notable changes to Raven are documented here.
   without searching: the first model call has the web tools withheld and a
   `request_research` tool offered, a plain draft is put to an independent judge,
   and an accepted one ships saying no sources were consulted (`plainFirst`,
-  medium and high). `high` terminates on the reviewer, with three revisions and an
+  medium only). `high` terminates on the reviewer, with three revisions and an
   evidence round on a rejection. `max` adds an evidence floor: a draft resting on
   fewer than 18 readable pages from 8 sites is sent back to research, at most
   twice (`evidenceFloor`). The reviewer asks for its verdict as a forced tool
   call, runs one uninterrupted attempt with 16384 tokens, and records why it
   failed open. The sufficiency judge can release a turn from the search listing
   before any page is opened (`sufficiency.judgeListing`). The product label
-  moves to `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high`.
+  moves to `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain`.
 
 - `web_search` and `web_fetch` route through a vendor the deployment picks:
   Serper, AnySearch, SerpApi, Tavily, Exa, Brave Search or Firecrawl for
@@ -521,17 +521,6 @@ All notable changes to Raven are documented here.
   deck skill corpus and templates as package data.
 
 ### Fixed
-
-- The research agent's `high` mode may answer a settled general-knowledge
-  question without searching, the way `medium` already could: its overlay no
-  longer turns the plain-first door off, so a question such as an emperor's
-  given name is not sent through search, fetch and a 360-second reviewer wait
-  by the host's default tier. `max` keeps researching every question. The
-  research model's reasoning effort now follows the tier as well: `medium`
-  runs at medium, `high` and `max` at high.
-  The plain-first judge is asked once more when its reply names the wrong keys
-  (`{"correct": true}` for `plain_ok` and `sound`), which on the default model
-  sent about one settled question in ten into research for a parsing miss.
 
 - A shell command the safety guard refuses is refused as a command, not as the
   task: the tool result no longer says "stop this operation immediately", which

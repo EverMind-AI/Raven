@@ -320,13 +320,14 @@ function WPick({ k, opts, val }: { k: string; opts: Array<[string, string, strin
   )
 }
 
-function StatTiles({ rows }: { rows: Array<[string | null, string]> }): JSX.Element {
+function StatTiles({ rows }: { rows: Array<[string | null, string, string?]> }): JSX.Element {
   return (
     <div className="stats">
-      {rows.map(([v, k], i) => (
+      {rows.map(([v, k, note], i) => (
         <div className="stat" key={i}>
           <div className={'v' + (v == null ? ' none' : '')}>{v == null ? t('gui.set.nodata') : String(v)}</div>
           <div className="k">{k}</div>
+          {note && <div className="note">{note}</div>}
         </div>
       ))}
     </div>
@@ -334,9 +335,9 @@ function StatTiles({ rows }: { rows: Array<[string | null, string]> }): JSX.Elem
 }
 
 /* rows: [label, value, kind]. kind '' | 'unset' | 'ok' */
-function KvList({ rows }: { rows: Array<[string, string, string?]> }): JSX.Element {
+function KvList({ rows, prose = false }: { rows: Array<[string, string, string?]>; prose?: boolean }): JSX.Element {
   return (
-    <div className="skv">
+    <div className={'skv' + (prose ? ' text-values' : '')}>
       {rows.map(([k, v, kind], i) => (
         <div className="r" key={i}>
           <span className="k">{k}</span>
@@ -514,13 +515,18 @@ function NotifyPage(): JSX.Element {
 
 /* ---- usage ----------------------------------------------------------- */
 
-const fmtTok = (n: number | null | undefined): string => n == null ? t('gui.set.usg.unknown') : (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n))
+const fmtTok = (n: number): string => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n))
 
 function usageCost(value: number | null | undefined, missing: number): string {
   const amount = value == null ? t('gui.set.usg.unknown')
     : value === 0 ? '$0'
     : value < 0.0001 ? '<$0.0001' : '$' + value.toFixed(4)
   return missing ? amount + ' · ' + t('gui.set.usg.cost_missing', { n: missing }) : amount
+}
+
+function cacheUsage(value: number | null | undefined, missing: number): string {
+  const count = value == null ? t('gui.set.usg.unknown') : fmtTok(value)
+  return missing ? count + ' · ' + t('gui.set.usg.cache_missing', { n: missing }) : count
 }
 
 function UsagePage({ s }: { s: SettingsState }): JSX.Element {
@@ -551,17 +557,43 @@ function UsagePage({ s }: { s: SettingsState }): JSX.Element {
         <StatTiles
           rows={[
             [String(u.llm.total.calls), t('gui.set.usg.calls')],
-            [fmtTok(u.llm.total.input_tokens), t('gui.set.usg.in')],
-            [fmtTok(u.llm.total.output_tokens), t('gui.set.usg.out')],
-            [usageCost(u.llm.total.cost_usd, u.llm.total.cost_missing_calls), t('gui.set.usg.cost')],
+            [cacheUsage(u.llm.total.input_tokens, 0), t('gui.set.usg.in'), u.llm.total.input_missing_calls ? t('gui.set.usg.cache_missing', { n: u.llm.total.input_missing_calls }) : undefined],
+            [cacheUsage(u.llm.total.output_tokens, 0), t('gui.set.usg.out'), u.llm.total.output_missing_calls ? t('gui.set.usg.cache_missing', { n: u.llm.total.output_missing_calls }) : undefined],
+            [
+              usageCost(u.llm.total.cost_usd, 0),
+              t('gui.set.usg.cost'),
+              u.llm.total.cost_missing_calls ? t('gui.set.usg.cost_missing', { n: u.llm.total.cost_missing_calls }) : undefined,
+            ],
+            ...(u.llm.total.cache_read_tokens == null ? [] : [[
+              cacheUsage(u.llm.total.cache_read_tokens, 0),
+              t('gui.set.usg.cache_read'),
+              u.llm.total.cache_read_missing_calls ? t('gui.set.usg.cache_missing', { n: u.llm.total.cache_read_missing_calls }) : undefined,
+            ] as [string, string, string?]]),
+            ...(u.llm.total.cache_write_tokens == null ? [] : [[
+              cacheUsage(u.llm.total.cache_write_tokens, 0),
+              t('gui.set.usg.cache_write'),
+              u.llm.total.cache_write_missing_calls ? t('gui.set.usg.cache_missing', { n: u.llm.total.cache_write_missing_calls }) : undefined,
+            ] as [string, string, string?]]),
           ]}
         />
         {u.llm.total.legacy_cost_calls > 0 && <div className="empty-note">{t('gui.set.usg.legacy')}</div>}
         {u.llm.models.length > 0 && (
           <KvList
+            prose
             rows={u.llm.models
               .slice(0, 12)
-              .map((m) => [m.model, `${m.calls} × · ${fmtTok(m.input_tokens == null && m.output_tokens == null ? null : (m.input_tokens ?? 0) + (m.output_tokens ?? 0))} tok · ${usageCost(m.cost_usd, m.cost_missing_calls)}`])}
+              .map((m) => [
+                m.model,
+                [
+                  `${m.calls} ×`,
+                  `${m.input_tokens == null && m.output_tokens == null && m.cache_read_tokens == null && m.cache_write_tokens == null ? t('gui.set.usg.unknown') : fmtTok((m.input_tokens ?? 0) + (m.output_tokens ?? 0) + (m.cache_read_tokens ?? 0) + (m.cache_write_tokens ?? 0))} tok`,
+                  usageCost(m.cost_usd, m.cost_missing_calls),
+                  m.input_missing_calls ? `${t('gui.set.usg.in')}: ${cacheUsage(m.input_tokens, m.input_missing_calls)}` : '',
+                  m.output_missing_calls ? `${t('gui.set.usg.out')}: ${cacheUsage(m.output_tokens, m.output_missing_calls)}` : '',
+                  m.cache_read_tokens == null ? '' : `${t('gui.set.usg.cache_read')}: ${cacheUsage(m.cache_read_tokens, m.cache_read_missing_calls)}`,
+                  m.cache_write_tokens == null ? '' : `${t('gui.set.usg.cache_write')}: ${cacheUsage(m.cache_write_tokens, m.cache_write_missing_calls)}`,
+                ].filter(Boolean).join(' · '),
+              ])}
           />
         )}
       </Scard>

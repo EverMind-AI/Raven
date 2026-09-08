@@ -205,49 +205,13 @@ def test_a_plain_answer_the_judge_refuses_becomes_a_hypothesis():
 
 
 def test_every_judge_failure_escalates_to_research():
-    # A reply that came back without the keys is asked once more; a failed call or
-    # an empty reply is not, since neither is the model misreading the schema. The
-    # re-ask is recorded whether or not the second call produced a verdict, so the
-    # ledger counts the failed re-asks too.
-    cases = [
-        (_Judge(RuntimeError("boom")), 1, False),
-        (_Judge(_Response("")), 1, False),
-        (_Judge("not json", "still not json"), 2, True),
-        (_Judge('{"plain_ok": true, "reason": "no sound key"}', '{"correct": true}'), 2, True),
-        (_Judge('{"correct": true}', RuntimeError("boom")), 2, True),
-    ]
-    for judge, calls, reasked in cases:
+    for reply in (RuntimeError("boom"), "not json", _Response(""), '{"plain_ok": true, "reason": "no sound key"}'):
+        judge = _Judge(reply)
         gate = PlainFirstGate(judge, judge_timeout_seconds=5)
         meta: dict = {}
         _before(gate, meta)
         d = _after(gate, meta, _Response("Some confident answer."))
-        assert d.rollback is True and meta["plain_first"]["outcome"] == "escalated_judge_failed", judge.replies
-        assert len(judge.calls) == calls, judge.calls
-        assert meta["plain_first"]["judge_reasked"] is reasked, judge.calls
-
-
-def test_a_reply_with_the_wrong_keys_is_asked_once_more_for_the_schema():
-    # Reproduced on deepseek-v4-flash at low effort: about one call in ten answers
-    # {"correct": true, ...} after almost no reasoning. One re-ask recovers the verdict.
-    first = '{"correct": true, "reason": "the founding year is right", "issues": []}'
-    judge = _Judge(first, OK)
-    gate = PlainFirstGate(judge)
-    meta: dict = {}
-    _before(gate, meta)
-    d = _after(gate, meta, _Response("The Summer Palace was founded in 1750."))
-    assert d.rollback is False and meta["plain_first"]["outcome"] == "accepted"
-    assert meta["plain_first"]["judge_reasked"] is True and meta["plain_first"]["judge_sound"] is True
-    assert len(judge.calls) == 2 and judge.calls[1]["reasoning_effort"] == "low"
-    follow_up = judge.calls[1]["messages"]
-    assert follow_up[:2] == judge.calls[0]["messages"]
-    assert follow_up[2] == {"role": "assistant", "content": first}
-    assert follow_up[3]["role"] == "user" and "plain_ok, sound" in follow_up[3]["content"]
-
-    clean = _Judge(OK)
-    meta = {}
-    _before(PlainFirstGate(clean), meta)
-    _after(PlainFirstGate(clean), meta, _Response("Canberra."))
-    assert meta["plain_first"]["judge_reasked"] is False and len(clean.calls) == 1
+        assert d.rollback is True and meta["plain_first"]["outcome"] == "escalated_judge_failed", reply
 
 
 def test_without_a_judge_a_plain_answer_is_accepted_and_says_so():

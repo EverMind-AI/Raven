@@ -1,8 +1,7 @@
 {
   "agents": {
     "defaults": {
-      "maxToolIterations": 150,
-      "reasoningEffort": "high"
+      "maxToolIterations": 150
     }
   },
   "drFlow": {

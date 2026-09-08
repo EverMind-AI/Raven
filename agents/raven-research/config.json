@@ -8,7 +8,7 @@
     "defaults": {
       "model": "openai/gpt-5.6-sol-pro",
       "provider": "openrouter",
-      "reasoningEffort": "medium",
+      "reasoningEffort": "high",
       "maxToolIterations": 40,
       "maxTokens": 16384,
       "contextWindowTokens": 65536,
@@ -107,7 +107,7 @@
           "enabled": true,
           "judge": true
         },
-        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high"
+        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain"
       }
     }
   },

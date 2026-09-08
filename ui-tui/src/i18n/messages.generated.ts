@@ -1361,7 +1361,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.set.use.warn': 'Warn at',
     'gui.set.usg.calls': 'calls',
     'gui.set.usg.cost': 'reported cost',
-    'gui.set.usg.in': 'input tokens',
+    'gui.set.usg.in': 'input tokens (uncached)',
     'gui.set.usg.llm': 'Model calls',
     'gui.set.usg.loading': 'Counting...',
     'gui.set.usg.out': 'output tokens',
@@ -1645,9 +1645,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.keys':
       'up/down select · Enter confirm · 1-3 quick pick · Tab add note · Ctrl+C deny · expires in {n}s',
     'gui.confirm.note_keys': 'Enter send · Esc back · expires in {n}s',
+    'gui.set.usg.cache_read': 'cache read tokens',
+    'gui.set.usg.cache_write': 'cache write tokens',
     'gui.set.usg.unknown': 'unknown',
     'gui.set.usg.cost_unknown': 'cost unknown',
     'gui.set.usg.cost_missing': '{n} calls with unknown cost',
+    'gui.set.usg.cache_missing': '{n} calls missing data',
     'gui.set.usg.legacy': 'Historical estimates excluded'
   },
   zh: {
@@ -2716,7 +2719,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.set.use.warn': '警告线',
     'gui.set.usg.calls': '调用次数',
     'gui.set.usg.cost': '已记录费用',
-    'gui.set.usg.in': '输入 tokens',
+    'gui.set.usg.in': '输入 tokens（不含缓存）',
     'gui.set.usg.llm': '模型调用',
     'gui.set.usg.loading': '统计中…',
     'gui.set.usg.out': '输出 tokens',
@@ -2996,9 +2999,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.note_for': '给模型的备注（{what}）',
     'gui.confirm.keys': '上下键选择 · Enter 确认 · 1-3 快选 · Tab 加备注 · Ctrl+C 拒绝 · {n} 秒后过期',
     'gui.confirm.note_keys': 'Enter 发送 · Esc 返回 · {n} 秒后过期',
+    'gui.set.usg.cache_read': '缓存读取 tokens',
+    'gui.set.usg.cache_write': '缓存写入 tokens',
     'gui.set.usg.unknown': '未知',
     'gui.set.usg.cost_unknown': '费用未知',
     'gui.set.usg.cost_missing': '{n} 次调用费用未知',
+    'gui.set.usg.cache_missing': '{n} 次调用数据缺失',
     'gui.set.usg.legacy': '历史估算未计入'
   }
 } as Record<Locale, Record<string, string>>

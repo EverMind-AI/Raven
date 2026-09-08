@@ -176,8 +176,8 @@ class EvidenceFloorConfig(_Base):
 class PlainFirstConfig(_Base):
     """First reply without web tools: answer from general knowledge or ask for research.
 
-    Product-only; the class default is off, the product's base slice turns it on and
-    only the max overlay turns it back off. The web tools are withheld for the first model
+    Product-only; the class default is off, the product's medium slice turns it on and
+    the deep modes turn it back off. The web tools are withheld for the first model
     call of a session's first research turn, and of any later turn the conversation
     gate classes as a new common-knowledge topic; the model either answers or calls
     ``request_research``. A plain answer is then put to an independent judge
@@ -378,16 +378,11 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     "dr@3.7-filetools-askuser-derive": "dr@3.7-filetools-askuser-derive-numeric-cite-rank",
     # 2026-09-07: the three modes stopped being three sizes of one budget and became
     # three stop rules -- medium keeps the sufficiency release and answers settled general
-    # knowledge without a research round (plainFirst); max drops both, high drops the
-    # sufficiency release, and both terminate on the reviewer, max on an evidence floor
-    # before it. A medium report that cites nothing is now a possible output of the
-    # label, so the label moves; the fork runs none of it.
+    # knowledge without a research round (plainFirst), high and max drop both and
+    # terminate on the reviewer, max on an evidence floor before it. A medium report that
+    # cites nothing is now a possible output of the label, so the label moves; the fork
+    # runs none of it.
     "dr@3.7-filetools-askuser-derive-numeric-cite-rank": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain",
-    # 2026-09-08: high keeps the plain-first door too, and the model's reasoning effort
-    # follows the tier (medium at medium, high and max at high) instead of every tier
-    # running at high. A high report that cites nothing is now a possible output of the
-    # label, and every default-tier run reasons at a lower effort, so the label moves.
-    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high",
     # The interim label this branch's 2026-09-07 batches ran under before it rebased onto
     # the cite-rank clause and the dr@3.7 rung; never shipped, retired so those bench
     # configs still load.

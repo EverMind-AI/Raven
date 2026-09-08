@@ -20,12 +20,10 @@ So each mode now owns a different terminator, and these tests hold that shape:
 * ``max`` additionally demands an evidence floor before any draft ships, so a
   draft on too few readable pages or too few sites goes back to research.
 
-``medium`` and ``high`` also share a door BEFORE research: the plain-first gate
+``medium`` is also the only mode with a door BEFORE research: the plain-first gate
 withholds the web tools for the first model call and lets a judged answer to a
-settled question ship without a round. How a turn ENDS is what the tiers rank, and
-a settled question should not get slower for choosing high. ``max`` is the survey
-tier, chosen so no source is missed, so its overlay turns the door off -- and its
-rollback budget sits exactly on the loop cap, with no room for that bounce anyway.
+settled question ship without a round. The deep modes are chosen for depth, so
+their overlays turn it off.
 
 The first version of this redesign gave max the retrieval ladder and a wider
 evidence round instead, and a second batch found high and max INVERTED: both
@@ -153,33 +151,12 @@ def test_the_baseline_is_the_only_mode_with_an_early_release_door(flows):
     assert flows["max"].sufficiency.enabled is False
 
 
-def test_only_max_never_answers_before_it_researches(flows):
-    """The plain-first door stays open in medium and high; only the survey tier always researches."""
-    for mode in ("medium", "high"):
-        assert flows[mode].plain_first.enabled is True, mode
-        assert flows[mode].plain_first.judge is True, mode
+def test_only_the_baseline_may_answer_before_it_researches(flows):
+    """The plain-first door is a medium-only shortcut; a deep mode never skips research."""
+    assert flows["medium"].plain_first.enabled is True
+    assert flows["medium"].plain_first.judge is True
+    assert flows["high"].plain_first.enabled is False
     assert flows["max"].plain_first.enabled is False
-
-
-def test_the_models_effort_follows_the_tier(launcher):
-    """medium runs the baseline effort, high and max ask the model for ``high``.
-
-    Lifted onto the catalogue entry, where the trunk applies it to every call a
-    session in that mode makes (``AcpModeConfig.reasoningEffort``), so the plain
-    answer a tier allows is also as quick as that tier means it to be.
-    """
-    base = json.loads((AGENT / "config.json").read_text(encoding="utf-8"))["agents"]["defaults"]
-    assert base["reasoningEffort"] == "medium"
-    catalogue = launcher.render.mode_catalogue(
-        launcher.MODES_DIR,
-        launcher.MODE_LABELS,
-        baseline=launcher.BASELINE_MODE,
-        overlay_keys=launcher.OVERLAY_KEYS,
-        resolve=lambda overlay: (None, {}),
-    )
-    assert "reasoningEffort" not in catalogue["medium"], "the baseline inherits agents.defaults"
-    assert catalogue["high"]["reasoningEffort"] == "high"
-    assert catalogue["max"]["reasoningEffort"] == "high"
 
 
 def test_the_deep_modes_terminate_on_the_reviewer(flows):
