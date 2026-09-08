@@ -106,6 +106,14 @@ def sanitise_error_data(data: Any) -> Any:
     return redact.redact_value(kept) or None
 
 
+#: The ``metadata["observers"]`` entry a turn's hooks fill for the ACP client.
+#: The loop files the observers stash onto the turn's last substantive
+#: assistant message (loop_hooks paper); whatever sits under this key there is
+#: answered back as the prompt response's ``_meta``, the field the ACP schema
+#: reserves for an agent's own metadata.
+ACP_META_OBSERVER = "acp_meta"
+
+
 class AcpMethodError(Exception):
     """A JSON-RPC error to answer one request with."""
 
@@ -647,11 +655,13 @@ class AcpMethods:
         return [] if option is None else [option]
 
     async def _session_prompt(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Run one turn and answer with its stop reason.
+        """Run one turn and answer with its stop reason, plus what its hooks filed.
 
         The answer comes from the translator's future, which the outbound event
         stream resolves -- so every update belonging to this turn is on the wire
-        before this returns.
+        before this returns. A turn whose hooks stashed an ``acp_meta`` observer
+        record answers with it as ``_meta``; one that filed nothing answers with
+        the stop reason alone.
         """
         session = self._session_for(params)
         text, media, notes = self._read_prompt(params.get("prompt"))
@@ -669,6 +679,8 @@ class AcpMethods:
             # a prompt that never answers.
             await self._rebind_subscription(session)
 
+        sessions = self._session_manager() if self._agent_loop is not None else None
+        filed_before = len(sessions.get_or_create(session.session_key).messages) if sessions is not None else 0
         try:
             future = self._translator.begin_turn(session.session_id)
         except TurnAlreadyRunningError as exc:
@@ -718,7 +730,36 @@ class AcpMethods:
         finally:
             self._translator.end_turn(session.session_id)
         self._announce_title(session.session_id)
-        return {"stopReason": stop}
+        result: dict[str, Any] = {"stopReason": stop}
+        meta = self._turn_meta(sessions, session.session_key, filed_before)
+        if meta is not None:
+            result["_meta"] = meta
+        return result
+
+    @staticmethod
+    def _turn_meta(sessions: Any, session_key: str, filed_before: int) -> dict[str, Any] | None:
+        """What this turn's hooks filed under ``observers[ACP_META_OBSERVER]``.
+
+        Read back from the shared session record rather than carried through
+        the turn machinery: the loop files the stash and saves the session
+        before the turn's ending reaches the stream, so by the time the
+        prompt's future settles the record is there. Only the messages this
+        turn appended are read -- an earlier turn's stash must not answer this
+        prompt -- and only a non-empty table counts.
+        """
+        if sessions is None:
+            return None
+        messages = sessions.get_or_create(session_key).messages
+        for message in reversed(messages[filed_before:]):
+            if message.get("role") != "assistant":
+                continue
+            observers = message.get("observers")
+            if not isinstance(observers, dict):
+                continue
+            meta = observers.get(ACP_META_OBSERVER)
+            if isinstance(meta, dict) and meta:
+                return dict(meta)
+        return None
 
     async def _session_cancel(self, params: dict[str, Any]) -> None:
         """Cancel the session's turn, and make sure its prompt is answered.
@@ -1320,6 +1361,7 @@ def _file_uri_to_path(uri: str) -> str | None:
 __all__ = [
     "IGNORED_NOTIFICATIONS",
     "MAX_IMAGE_BYTES",
+    "ACP_META_OBSERVER",
     "UNIMPLEMENTED_METHODS",
     "AcpMethodError",
     "AcpMethods",

@@ -523,14 +523,19 @@ class TurnPathMixin:
         changed, _ = cls._window_images(out, cls._SHRINK_KEEP_RECENT_IMAGES, reason="context")
         return (out, changed) if changed else (messages, 0)
 
-    async def _summarize_head(self, messages: list[dict], model: str | None) -> tuple[list[dict], str]:
+    async def _summarize_head(
+        self, messages: list[dict], model: str | None, reasoning_effort: str | None = None
+    ) -> tuple[list[dict], str]:
         """Replace the transcript head with one LLM-written handoff brief.
 
         The system prefix and the first user message never enter the summary,
         and a recent tail (``preserve_recent_tokens`` budget) stays verbatim so
         the model keeps its most recent working state. The summary runs on the
         turn's own provider and model: a pinned summary model would outlive a
-        model switch and then route every summary to a retired endpoint.
+        model switch and then route every summary to a retired endpoint. It
+        also runs at the turn's own reasoning effort when the session policy
+        names one -- a model call of the turn like any other; ``None`` passes
+        nothing, so the provider's configured default stands.
 
         Returns ``(messages, verdict)`` with verdict one of ``"changed"``
         (head replaced), ``"failed"`` (a summary call was paid for and freed
@@ -562,6 +567,7 @@ class TurnPathMixin:
                 tools=None,
                 model=model or self.model,
                 max_tokens=compaction.SUMMARY_MAX_TOKENS,
+                **({"reasoning_effort": reasoning_effort} if reasoning_effort else {}),
             )
         except Exception as exc:
             logger.warning("Transcript head summary call raised: {}", exc)
@@ -586,6 +592,7 @@ class TurnPathMixin:
         fallback_models: list[str] | None,
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
+        reasoning_effort: str | None = None,
     ) -> str:
         """One tools-disabled LLM call to wrap up after the iteration budget runs out.
 
@@ -601,6 +608,9 @@ class TurnPathMixin:
         so a non-streamed wrap-up after an already-streamed turn gets dropped.
         """
         synth_messages = messages + [{"role": "user", "content": _MAX_ITER_SYNTHESIS_PROMPT}]
+        # The wrap-up is a model call of the same turn, so it pays the turn's
+        # effort; absent, the provider's configured default stands.
+        effort_kwargs: dict[str, str] = {} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}
         try:
             if on_token_delta is not None or on_reasoning_delta is not None:
                 response = await self._llm_call_stream(
@@ -609,6 +619,7 @@ class TurnPathMixin:
                     model=model,
                     on_token_delta=on_token_delta,
                     on_reasoning_delta=on_reasoning_delta,
+                    **effort_kwargs,
                 )
             else:
                 response = await self.provider.chat_with_retry(
@@ -616,6 +627,7 @@ class TurnPathMixin:
                     tools=None,
                     model=model,
                     fallback_models=fallback_models,
+                    **effort_kwargs,
                 )
             text = self._strip_think(response.content)
             if response.finish_reason != "error" and text:
@@ -774,6 +786,10 @@ class TurnPathMixin:
         # Read once, here: a mode switched mid-turn lands on the next turn.
         policy = self.session_policy(session_key or "")
         iteration_cap = policy.max_iterations or self.max_iterations
+        # The session's effort rides every model call of the turn as an explicit
+        # argument. Omitted, not None, when the policy names none: an explicit
+        # None would override the provider's sentinel and switch its configured
+        # default off.
 
         # The iteration hook chain's context for this whole turn; None when no
         # hook is registered, so a default install pays nothing here.
@@ -915,7 +931,9 @@ class TurnPathMixin:
                         compaction.should_compact(projected, limit, reserved, self._compaction.trigger_ratio)
                         and compress_retries < self._MAX_COMPRESS_RETRIES
                     ):
-                        summarized, verdict = await self._summarize_head(messages, effective_model)
+                        summarized, verdict = await self._summarize_head(
+                            messages, effective_model, reasoning_effort=policy.reasoning_effort
+                        )
                         if verdict != "skipped":
                             compress_retries += 1
                         if verdict == "changed":
@@ -1103,7 +1121,9 @@ class TurnPathMixin:
                     continue
                 if self._compaction.enabled and not reactive_summary_tried:
                     reactive_summary_tried = True
-                    summarized, verdict = await self._summarize_head(messages, call_model or effective_model)
+                    summarized, verdict = await self._summarize_head(
+                        messages, call_model or effective_model, reasoning_effort=policy.reasoning_effort
+                    )
                     if verdict == "changed":
                         messages = summarized
                         compress_retries += 1
@@ -1296,7 +1316,12 @@ class TurnPathMixin:
                         # the untrusted fence closes, so the model reads it as this
                         # system speaking rather than as data it must not obey.
                         watch_note = await self._note_watch_work(
-                            watch_state, tool_call.name, tool_call.arguments, str(result), watch_request
+                            watch_state,
+                            tool_call.name,
+                            tool_call.arguments,
+                            str(result),
+                            watch_request,
+                            reasoning_effort=policy.reasoning_effort,
                         )
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
@@ -1537,6 +1562,10 @@ class TurnPathMixin:
                 # dud. Try to recover before giving up. Synthetic scaffolding is
                 # marked ``_recovery_synthetic`` and stripped before persistence
                 # / extraction so it can't poison future context.
+                # Asked of the provider for the model this call went to: a
+                # prefill-refusing vendor (Anthropic with thinking on) must never
+                # be handed a request ending on an assistant message.
+                supports_prefill = getattr(self.provider, "supports_assistant_prefill", None)
                 action = classify_empty_response(
                     response,
                     clean,
@@ -1545,6 +1574,7 @@ class TurnPathMixin:
                     prefill_retries=prefill_retries,
                     empty_retries=empty_retries,
                     limits=self._recovery_limits,
+                    prefill_supported=supports_prefill is None or supports_prefill(call_model),
                 )
                 if action is RecoveryAction.PREFILL:
                     prefill_retries += 1
@@ -1638,6 +1668,7 @@ class TurnPathMixin:
                 fallback_models,
                 on_token_delta=on_token_delta,
                 on_reasoning_delta=on_reasoning_delta,
+                reasoning_effort=policy.reasoning_effort,
             )
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,

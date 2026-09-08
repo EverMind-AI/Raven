@@ -1690,3 +1690,83 @@ class TestSessionModes:
         await rig.handshake()
         response = await rig.call("session/set_mode", {"sessionId": "ghost", "modeId": "deep"})
         assert response["error"]["code"] == protocol.RESOURCE_NOT_FOUND
+
+
+class TestPromptMeta:
+    """What a turn's hooks file under ``observers["acp_meta"]`` answers the
+    prompt as its ``_meta``. The loop files that stash onto the turn's last
+    substantive assistant message and saves the session before the turn's
+    ending reaches the stream, so the methods layer reads it back from the
+    shared session record -- and only from the messages this turn appended."""
+
+    @staticmethod
+    def _assistant(text: str, **extra) -> dict:
+        return {"role": "assistant", "content": text, **extra}
+
+    async def _prompt(self, rig, session_id: str, during_turn) -> dict:
+        task = asyncio.create_task(
+            rig.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": "hi"}]})
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        during_turn()
+        rig.translator.settle_turn(session_id, "end_turn")
+        return await task
+
+    async def test_a_turn_that_files_acp_meta_answers_with_it(self, rig):
+        await rig.handshake()
+        session_id = await rig.new_session()
+        record = rig.engine.sessions.get_or_create(session_id)
+        record.messages.append(self._assistant("earlier", observers={"acp_meta": {"vendor.x": {"turn": "old"}}}))
+
+        def turn_runs():
+            record.messages.append({"role": "user", "content": "hi"})
+            record.messages.append(
+                self._assistant("done", observers={"acp_meta": {"vendor.x": {"turn": "new"}, "vendor.y": 1}})
+            )
+
+        response = await self._prompt(rig, session_id, turn_runs)
+
+        assert response["result"]["stopReason"] == "end_turn"
+        assert response["result"]["_meta"] == {"vendor.x": {"turn": "new"}, "vendor.y": 1}
+        validate_def("PromptResponse", response["result"])
+
+    async def test_an_earlier_turns_stash_does_not_answer_this_prompt(self, rig):
+        await rig.handshake()
+        session_id = await rig.new_session()
+        record = rig.engine.sessions.get_or_create(session_id)
+        record.messages.append(self._assistant("earlier", observers={"acp_meta": {"vendor.x": {"turn": "old"}}}))
+
+        def turn_runs():
+            record.messages.append({"role": "user", "content": "hi"})
+            record.messages.append(self._assistant("done, nothing filed"))
+
+        response = await self._prompt(rig, session_id, turn_runs)
+
+        assert response["result"] == {"stopReason": "end_turn"}
+
+    async def test_a_turn_without_a_stash_answers_exactly_as_before(self, rig):
+        await rig.handshake()
+        session_id = await rig.new_session()
+        record = rig.engine.sessions.get_or_create(session_id)
+
+        def turn_runs():
+            record.messages.append({"role": "user", "content": "hi"})
+            record.messages.append(self._assistant("done", observers={"oncall_flow": {"tokens": 3}}))
+
+        response = await self._prompt(rig, session_id, turn_runs)
+
+        assert response["result"] == {"stopReason": "end_turn"}, "another observer's stash is not the wire's"
+
+    async def test_a_stash_that_is_not_a_table_is_ignored(self, rig):
+        await rig.handshake()
+        session_id = await rig.new_session()
+        record = rig.engine.sessions.get_or_create(session_id)
+
+        def turn_runs():
+            record.messages.append({"role": "user", "content": "hi"})
+            record.messages.append(self._assistant("done", observers={"acp_meta": "not-a-table"}))
+
+        response = await self._prompt(rig, session_id, turn_runs)
+
+        assert response["result"] == {"stopReason": "end_turn"}

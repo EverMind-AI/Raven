@@ -85,6 +85,11 @@ class PerModelProvider(LLMProvider):
         routed endpoint is not always the fallback's."""
         return self._pick(model).supports_prompt_caching(model)
 
+    def supports_assistant_prefill(self, model: str | None = None) -> bool:
+        """Asked of the endpoint that would serve this model, like
+        ``supports_prompt_caching``: the vendor rule rides on that endpoint."""
+        return self._pick(model).supports_assistant_prefill(model)
+
     @property
     def disable_auto_cache_control(self) -> bool:
         return getattr(self, "_disable_auto_cache_control", False)

@@ -152,7 +152,9 @@ class AgentHookContext:
     #: hook stashes under ``metadata["observers"]`` (a dict) is filed onto
     #: the turn's last substantive assistant message at persist time, after
     #: the ``after_send`` fire -- a stash from any phase, the send included,
-    #: reaches the filed record.
+    #: reaches the filed record. The entry ``observers["acp_meta"]`` (a dict)
+    #: additionally travels to an ACP client as the prompt response's
+    #: ``_meta`` (raven/acp/methods.py reads it back from the filed record).
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

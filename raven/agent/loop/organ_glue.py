@@ -517,8 +517,21 @@ class OrganGlueMixin:
             [{"id": qid, "source": source, "name": name, "kind": tool_name}],
         )
 
-    async def _note_watch_work(self, state: Any, name: str, args: dict[str, Any], result: str, message: str) -> str:
+    async def _note_watch_work(
+        self,
+        state: Any,
+        name: str,
+        args: dict[str, Any],
+        result: str,
+        message: str,
+        reasoning_effort: str | None = None,
+    ) -> str:
         """The steering line this look earned, or "". The CALLER places it.
+
+        ``reasoning_effort`` is the turn's pinned effort: the judgement this
+        helper may pay for is a model call of the turn like any other, so it
+        asks for the session's effort too. ``None`` passes nothing and the
+        provider's configured default stands.
 
         Returned separately rather than appended to ``result`` because of where
         the result goes next: every tool result is fenced as untrusted data
@@ -544,6 +557,7 @@ class OrganGlueMixin:
         reasoning, and ignored, while a fact arriving in a tool result was acted
         on.
         """
+        effort_kwargs: dict[str, str] = {} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}
         # Only a real hand-off answers the question this line asks for the rest
         # of the turn. The first cut treated every spawn as one and silenced the
         # nudges on refusal too -- at exactly the moment the model chose to run
@@ -576,7 +590,9 @@ class OrganGlueMixin:
                         if verdict is None:
                             verdict = state.verdict = watch_work.read_verdict(
                                 (
-                                    await self._llm_call_stream(watch_work.build_prompt(message), None, self.model)
+                                    await self._llm_call_stream(
+                                        watch_work.build_prompt(message), None, self.model, **effort_kwargs
+                                    )
                                 ).content
                             )
                         if verdict.watched and verdict.code_work:
@@ -629,7 +645,9 @@ class OrganGlueMixin:
             verdict = state.verdict
             if verdict is None:
                 verdict = state.verdict = watch_work.read_verdict(
-                    (await self._llm_call_stream(watch_work.build_prompt(message), None, self.model)).content
+                    (
+                        await self._llm_call_stream(watch_work.build_prompt(message), None, self.model, **effort_kwargs)
+                    ).content
                 )
             if not verdict.watched:
                 return ""

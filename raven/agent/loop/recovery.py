@@ -16,6 +16,11 @@ the turn before giving up, in three bounded modes:
            short user nudge so it processes the tool result.
   RETRY    plain empty — re-request as-is.
 
+A provider that refuses a trailing assistant message (its
+``supports_assistant_prefill`` answers False: Anthropic with thinking on) never
+gets PREFILL. The same thinking-only turn takes NUDGE after a tool, else RETRY,
+so the request handed back never ends on an assistant message.
+
 This is distinct from Sentinel's NudgeInjector / NudgePolicy, which inject
 *proactive suggestions* onto an outbound reply; this module instead recovers an
 empty turn before it is ever sent.
@@ -160,6 +165,7 @@ def classify_empty_response(
     prefill_retries: int,
     empty_retries: int,
     limits: RecoveryLimits,
+    prefill_supported: bool = True,
 ) -> RecoveryAction:
     """Decide how to handle a no-tool-call assistant response.
 
@@ -175,6 +181,20 @@ def classify_empty_response(
         return RecoveryAction.COMPLETE
 
     thinking = has_thinking(response)
+
+    # The provider refuses a trailing assistant message (Anthropic with
+    # thinking on): PREFILL would build a request the vendor rejects, and behind
+    # a gateway that rejection can arrive as a stream that never yields a byte,
+    # so the turn hangs to the wall-clock cap instead of failing. Decided before
+    # PREFILL, with only the actions that leave a user or tool message last:
+    # the post-tool nudge (its synthetic assistant sits before the nudge), then
+    # the plain retry budget, then give up.
+    if thinking and not prefill_supported:
+        if prev_had_tool_calls and nudges_done < limits.post_tool_empty_max_nudges:
+            return RecoveryAction.NUDGE
+        if empty_retries < limits.empty_content_max_retries:
+            return RecoveryAction.RETRY
+        return RecoveryAction.COMPLETE
 
     # thinking-only prefill — the model reasoned but produced no body.
     if thinking and prefill_retries < limits.thinking_prefill_max_retries:

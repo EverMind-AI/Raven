@@ -88,7 +88,7 @@ class TestManifestSessionObservers:
                 version = "0.1.0"
                 [[plugin.contributes.session_observers]]
                 name = "workspace_release"
-                factory = "code_flow.gate:make_release_observer"
+                factory = "some_flow.lifecycle:make_release_observer"
                 """
             )
         )

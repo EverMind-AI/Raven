@@ -73,6 +73,9 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
 - ``cancel_deaf``   - holds the prompt open and ignores ``session/cancel``
                       entirely, so the settle budget expires. Proves the timeout
                       path, which unbinds the session rather than reusing it.
+- ``meta``          - answers like ``ok`` and attaches an agent-authored ``_meta``
+                      table to the prompt response, the field ACP reserves for
+                      it. Proves the host keeps it on the run record verbatim.
 - ``silent``       - reads and never answers, for the timeout path.
 - ``wedged``       - answers the first ``initialize`` and swallows everything
                      after it, pipes open, process alive: the shape where only
@@ -284,6 +287,16 @@ def handle_prompt(request_id, params) -> None:
         update("no-such-session", {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "??"}})
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pong"}})
         ok(request_id, {"stopReason": "end_turn"})
+        return
+    if MODE == "meta":
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pong"}})
+        ok(
+            request_id,
+            {
+                "stopReason": "end_turn",
+                "_meta": {"vendor.report": {"status": "ready", "count": 2}, "vendor.flag": True},
+            },
+        )
         return
     if MODE == "asks":
         send(

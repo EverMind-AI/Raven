@@ -269,3 +269,35 @@ def test_the_catalogue_is_not_runtime_writable_which_is_what_makes_three_caches_
         f"acp became runtime-writable ({writable}); the cached catalogue readers in "
         "raven/acp/methods.py and raven/agent/loop/main.py now need a refresh path"
     )
+
+
+def test_a_declared_mode_may_move_the_reasoning_effort():
+    """The third knob a declared catalogue may move: the reasoning effort the
+    session's model calls run at. Unset inherits the connection's own."""
+    cfg = Config.model_validate(
+        {
+            "acp": {
+                "defaultMode": "high",
+                "modes": {
+                    "medium": {"name": "Medium", "reasoningEffort": "medium"},
+                    "high": {"name": "High"},
+                    "max": {"name": "Max", "reasoningEffort": "max"},
+                },
+            }
+        }
+    )
+    modes = build_session_modes(cfg)
+    assert modes.profile("s1").reasoning_effort is None, "the default rung inherits"
+    modes.set("s1", "medium")
+    assert modes.profile("s1").reasoning_effort == "medium"
+    modes.set("s1", "max")
+    assert modes.profile("s1").reasoning_effort == "max"
+
+
+def test_the_built_in_tiers_leave_the_reasoning_effort_inherited():
+    """Raven's own three rungs stay inert for raven itself: no built-in tier
+    moves the effort, any more than it moves the iteration cap."""
+    for tier in ("medium", "high", "max"):
+        modes = build_session_modes(Config())
+        modes.set("s1", tier)
+        assert modes.profile("s1").reasoning_effort is None, tier

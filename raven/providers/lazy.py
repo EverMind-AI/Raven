@@ -165,6 +165,13 @@ class LazyProvider(LLMProvider):
         """
         return self._built().supports_prompt_caching(model)
 
+    def supports_assistant_prefill(self, model: str | None = None) -> bool:
+        """Forwarded through a build, like ``supports_prompt_caching``: the
+        question is asked once a response has come back, so the build it forces
+        has already happened, and answering the base default instead would
+        leave the guard dead for the shape the CLI actually runs."""
+        return self._built().supports_assistant_prefill(model)
+
     @property
     def disable_auto_cache_control(self) -> bool:
         return self._disable_auto_cache_control

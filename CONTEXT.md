@@ -105,13 +105,16 @@ _Avoid_: "callback" or "middleware" — neither captures the phase-specific, cha
 
 **Session Mode** (`acp/modes.py`; declared under `acp.modes` in config):
 A named per-session operating profile a client switches over ACP `session/set_mode`; every
-session response carries the `SessionModeState`. A mode's own two knobs are the iteration
-cap the loop enforces and an `overlay` the loop hands the hook chain as
-`ctx.metadata["mode_overlay"]` without interpreting -- a product's own hooks read their own
-knobs from it. The shipped built-in catalogue (see **Session Tier**) leaves both knobs at
-their defaults on all three of its modes; a deployment that declares its own catalogue is
-what actually moves them. Session state, not transcript state; a switch lands on the
-session's next turn.
+session response carries the `SessionModeState`. A mode's own three knobs are the iteration
+cap the loop enforces, the reasoning effort its model calls run at (`reasoningEffort`,
+passed as an explicit argument on every call of the turn; unset inherits the connection's
+own), and an `overlay` the loop hands the hook chain as `ctx.metadata["mode_overlay"]`
+without interpreting -- a product's own hooks read their own knobs from it. The shipped
+built-in catalogue (see **Session Tier**) leaves all three knobs at their defaults on all
+three of its modes; a deployment that declares its own catalogue is what actually moves
+them -- `raven-code` declares `medium`/`high`/`max` on the host's own ladder, each moving
+the effort alone. Session state, not transcript state; a switch lands on the session's
+next turn.
 _Avoid_: re-spelling a mode as a `session/set_config_option` entry -- modes are first-class in
 the stable schema.
 
@@ -370,7 +373,12 @@ _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it pro
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
 The opt-in policy for when the model returns no text: re-feed its reasoning (PREFILL),
 inject a nudge after a tool call (NUDGE), or plain RETRY — each bounded by
-`RecoveryLimits`; otherwise the turn COMPLETEs.
+`RecoveryLimits`; otherwise the turn COMPLETEs. PREFILL is asked of the provider first
+(`LLMProvider.supports_assistant_prefill`): the Anthropic family rejects a trailing
+assistant message while thinking is on, and through a gateway that rejection can arrive as
+a stream that never yields a byte, so a provider that answers no never gets PREFILL -- the
+same thinking-only turn takes NUDGE after a tool, else RETRY, and no request handed to it
+ends on an assistant message.
 _Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes.
 
 **Synthesis**:
@@ -1932,6 +1940,55 @@ different from `None` (this lane cannot tell the two apart), which falls back to
 output.
 _Avoid_: calling it the answer - the answer is what the run returns, and for a narrating
 agent the two differ.
+
+**Response Meta** (`raven/acp/methods.py`, `raven/acp_client/acp_agent.py`,
+`raven/agent/subagent/activity.py`):
+What an ACP agent attaches to its `session/prompt` response under `_meta`, the field the
+schema reserves for an agent's own metadata, kept on the run record as `acp_response_meta`
+verbatim and namespaced as sent. Raven serving the agent side fills it from the turn's
+observer stash: whatever a hook filed under `metadata["observers"]["acp_meta"]` is read
+back off the turn's last substantive assistant message once the turn has landed, so the
+loop_hooks paper's filing is the only seam a plugin needs - no plugin touches the wire, and
+a turn that filed nothing answers with its stop reason alone. Raven driving the agent side
+reads none of it: the table reaches the spawn record's `meta.json` and the DAG run's
+per-node entry through the same channel as the frame pointer, and a product's report
+arrives without the host knowing the product.
+_Avoid_: reading it in the host to make a decision - it is a product's record, not a
+protocol the orchestration acts on; "manifest" for the channel - the DAG run already has a
+`manifest.json` of its own, and this is any agent's table, not one product's.
+
+**Harness Manifest** (`agents/raven-code/plugins/code-flow/code_flow/manifest.py`):
+Raven-Code's workspace report, filed at the send of every prompt as the Response Meta entry
+`raven.harnessManifest`: what the working directory shows since this session began,
+machine-read from git against the base commit the session ledger pinned at the session's
+first turn - root, branch, head, the commits past base, the working tree, a diff stat, and a
+status (`no_changes`, `needs_commit`, `ready_for_integration`, `shared_workspace`, or
+`unknown` with the blocker named) that is ready only when every fact answered. Its scope is
+the workspace (`scope: workspace`): HEAD is shared by every session in the directory, so the
+facts are the session's own (`attribution: session`) only while no other session of the
+process has shared the directory during its life, as the ledger's peers record; once one
+has, `attribution` is `shared`, `sharedWith` counts them, the status is `shared_workspace`
+and the report is never ready - a commit past base may be another session's. A directory
+outside git is reported as `plain`. Nothing comes from model prose, and no allocation record
+is needed: the write gate and its worktree isolation retired, and with them the manifest's
+old ride inside the reply text between sentinel lines.
+_Avoid_: reading `readyForIntegration` from a manifest whose status is `unknown` - it is
+false there by construction, never a fact about the tree.
+_Avoid_: reading a `shared` report as one session's work - it is the shared tree's, and
+`baseCommit..HEAD` cannot tell whose.
+
+**Concurrency Notice** (`agents/raven-code/plugins/code-flow/code_flow/flow.py`,
+`code_flow/sessions.py`):
+The paragraph the code-flow hook puts in front of a Raven-Code turn's prompt when other
+sessions of the same process are mid-turn in the same working directory - the parallel
+nodes of one DAG, which the host serves through one connection and one session each - and
+only then; a lone session hears nothing. It replaces the lock: re-read before every write,
+touch only the task's own files, stop and report on a file that changed underneath. The
+count comes from the process's own session ledger (in flight from inbound to send, refreshed
+at every iteration so a long turn stays counted, a mark a failed turn left behind expiring),
+not from the host, which has no per-node place to say it.
+_Avoid_: calling it isolation - nothing prevents two sessions from writing one file; it is
+the cooperation contract that stands where the worktree used to.
 
 **Live rows** (`raven/rpc/methods/instances.py`, `raven/agent/subagent/activity.py`):
 The rows `subagents.instance.history` returns for a turn that is *still running*, marked
