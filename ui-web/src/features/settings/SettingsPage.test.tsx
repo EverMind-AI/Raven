@@ -941,6 +941,50 @@ it.each([
   expect((screen.getByLabelText('gui.caps.image_model') as HTMLSelectElement).value).toBe(selected)
 })
 
+describe('reported usage', () => {
+  it.each([null, 0, 0.84])('renders reported cost %s with cache and missing data', async (cost) => {
+    const total = {
+      calls: 3, input_tokens: 100, output_tokens: 20, cost_usd: cost,
+      cache_read_tokens: 60, cache_write_tokens: null,
+      cost_missing_calls: 1, cache_read_missing_calls: 0,
+      cache_write_missing_calls: 2, legacy_cost_calls: 1,
+    }
+    install(snap(), { usage: async () => ({
+      days: 30, llm: { total, models: [{ model: 'test-model', ...total }] },
+      tools: { total: 0, counts: [] },
+    }) })
+    await mount()
+    expect(screen.getByText('gui.set.usg.cache_read')).toBeTruthy()
+    expect(screen.queryByText(/gui.set.usg.cache_write/)).toBeNull()
+    expect(screen.getByText('gui.set.usg.legacy')).toBeTruthy()
+    expect(screen.getAllByText(/gui.set.usg.cost_missing/).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/gui.set.usg.cache_missing/)).toBeNull()
+    if (cost === null) expect(screen.queryByText(/\$0/)).toBeNull()
+    else expect(screen.getAllByText(cost === 0 ? /\$0 ·/ : /\$0.8400/).length).toBeGreaterThan(0)
+  })
+})
+
+it('shows unknown tokens for an image model that only reports money', async () => {
+  const total = {
+    calls: 1, input_tokens: null, output_tokens: null, cost_usd: 0.2,
+    input_missing_calls: 1, output_missing_calls: 1,
+    cache_read_tokens: null, cache_write_tokens: null,
+    cost_missing_calls: 0, cache_read_missing_calls: 1,
+    cache_write_missing_calls: 1, legacy_cost_calls: 0,
+  }
+  install(snap(), { usage: async () => ({
+    days: 30, llm: { total, models: [{ model: 'image-model', ...total }] },
+    tools: { total: 1, counts: [{ name: 'image_generate', count: 1 }] },
+  }) })
+  await mount()
+  const input = screen.getByText('gui.set.usg.in').closest('.stat')!
+  const output = screen.getByText('gui.set.usg.out').closest('.stat')!
+  expect(input.querySelector('.v')!.textContent).toBe('gui.set.usg.unknown')
+  expect(output.querySelector('.v')!.textContent).toBe('gui.set.usg.unknown')
+  expect(screen.getAllByText(/\$0.2000/).length).toBeGreaterThan(0)
+  expect(screen.queryByText(/· 0 tok/)).toBeNull()
+})
+
 it.each([null, 0, 0.75])('renders persisted reported cost %s without treating unknown as free', async (cost) => {
   const total = {
     calls: 2, input_tokens: 100, output_tokens: 20, cost_usd: cost,
