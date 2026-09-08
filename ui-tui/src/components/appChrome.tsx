@@ -19,6 +19,7 @@ import { $uiState } from '../app/uiStore.js'
 import { FACES } from '../content/faces.js'
 import { VERBS } from '../content/verbs.js'
 import { fmtDuration } from '../domain/messages.js'
+import { t as uiText } from '../i18n/index.js'
 import { hasMeaningfulReasoning } from '../lib/reasoning.js'
 import { buildSubagentTree, treeTotals } from '../lib/subagentTree.js'
 import { clipToWidth, clipToWidthFromEnd, fmtK } from '../lib/text.js'
@@ -435,8 +436,20 @@ export function StatusRule({
           ) : null}
           <SpawnHud t={t} />
           {bgCount > 0 ? <Text color={t.color.muted}> {bgCount} bg</Text> : null}
-          {showCost && typeof usage.cost_usd === 'number' ? (
-            <Text color={t.color.muted}> ${usage.cost_usd.toFixed(4)}</Text>
+          {showCost && usage.cost_usd !== undefined ? (
+            <Text color={t.color.muted}>
+              {' '}
+              {usage.cost_usd === null
+                ? uiText('gui.set.usg.cost_unknown')
+                : usage.cost_usd === 0
+                  ? '$0'
+                  : usage.cost_usd < 0.0001
+                    ? '<$0.0001'
+                    : '$' + usage.cost_usd.toFixed(4)}
+              {usage.cost_missing_calls
+                ? ' · ' + uiText('gui.set.usg.cost_missing', '', { n: usage.cost_missing_calls })
+                : ''}
+            </Text>
           ) : null}
         </Text>
       </Box>

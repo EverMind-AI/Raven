@@ -245,7 +245,11 @@ export async function usageLoad(): Promise<void> {
     if (usage === undefined) {
       usage = {
         days: 30,
-        llm: { total: { calls: 0, input_tokens: 0, output_tokens: 0, cost_usd: 0 }, models: [] },
+        llm: { total: {
+          calls: 0, input_tokens: 0, output_tokens: 0, cost_usd: null,
+          cache_read_tokens: null, cache_write_tokens: null, cost_missing_calls: 0,
+          cache_read_missing_calls: 0, cache_write_missing_calls: 0, legacy_cost_calls: 0,
+        }, models: [] },
         tools: { total: 0, counts: [] },
       }
     }

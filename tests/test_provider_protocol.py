@@ -3,6 +3,7 @@
 import json
 
 import httpx
+import pytest
 
 from raven.config.schema import Config
 from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider, convert_messages
@@ -498,3 +499,129 @@ async def test_tail_breakpoints_survive_the_anthropic_conversion() -> None:
     _, unmarked = convert_messages(messages)
     assert [b for b in assistant["content"] if "cache_control" not in b] == unmarked[-2]["content"][:-1]
     assert {k: v for k, v in assistant["content"][-1].items() if k != "cache_control"} == unmarked[-2]["content"][-1]
+
+
+@pytest.mark.parametrize("protocol", ["responses", "messages", "messages_stream"])
+@pytest.mark.parametrize(
+    "name,endpoint",
+    [
+        ("openrouter", "https://openrouter.ai/api/v1"),
+        ("custom", "https://gateway.example/v1"),
+    ],
+)
+@pytest.mark.parametrize(
+    "cost,expected_cost", [(0.84, 0.84), (0, 0), (None, None), (-1, None), (True, None), ("0.84", None)]
+)
+async def test_native_routes_preserve_reported_usage(monkeypatch, protocol, name, endpoint, cost, expected_cost):
+    from raven.agent.loop.main import AgentLoop
+    from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
+    from raven.providers.openai_responses_provider import OpenAIResponsesProvider
+    from raven.providers.streaming import stream_llm_call
+
+    def without_missing_cost(value):
+        if isinstance(value, dict):
+            return {key: without_missing_cost(item) for key, item in value.items() if key != "cost" or item is not None}
+        if isinstance(value, list):
+            return [without_missing_cost(item) for item in value]
+        return value
+
+    def handler(request):
+        if protocol == "responses":
+            events = [
+                {"type": "response.output_text.delta", "delta": "ok"},
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "status": "completed",
+                        "usage": {
+                            "input_tokens": 100,
+                            "output_tokens": 5,
+                            "total_tokens": 105,
+                            "cost": cost,
+                            "input_tokens_details": {"cached_tokens": 60, "cache_write_tokens": 10},
+                        },
+                    },
+                },
+            ]
+            return httpx.Response(200, content=_anthropic_sse(*without_missing_cost(events)))
+        usage = {
+            "input_tokens": 30,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 60,
+            "cache_creation_input_tokens": 10,
+            "cost": cost,
+        }
+        if protocol == "messages":
+            return httpx.Response(
+                200,
+                json={
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "usage": without_missing_cost(usage),
+                },
+            )
+        events = [
+            {"type": "message_start", "message": {"usage": {**usage, "cost": None}}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 5, "cost": cost},
+            },
+            {"type": "message_stop"},
+        ]
+        return httpx.Response(200, content=_anthropic_sse(*without_missing_cost(events)))
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+    provider_class = OpenAIResponsesProvider if protocol == "responses" else AnthropicMessagesProvider
+    provider = provider_class(api_key="test", api_base=endpoint, provider_name=name, default_model="test")
+    if protocol == "messages_stream":
+        response = await stream_llm_call(
+            provider, messages=[{"role": "user", "content": "hi"}], tools=None, model="test"
+        )
+    else:
+        response = await provider.chat(messages=[{"role": "user", "content": "hi"}], model="test")
+    assert response.finish_reason == "stop", response.content
+    snap = AgentLoop._build_usage_snapshot(response, "test", "session")
+    assert snap.cost_usd == expected_cost
+    assert (snap.input_tokens, snap.output_tokens, snap.cache_read_tokens, snap.cache_write_tokens) == (30, 5, 60, 10)
+
+
+async def test_responses_partial_usage_preserves_cost_and_cache():
+    from raven.providers.openai_codex_provider import _consume_sse
+    from raven.providers.usage import responses_usage
+
+    events = [
+        {
+            "type": "response.completed",
+            "response": {
+                "status": "completed",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 5,
+                    "cost": 0.4,
+                    "input_tokens_details": {"cached_tokens": 60},
+                },
+            },
+        },
+        {
+            "type": "response.done",
+            "response": {
+                "status": "completed",
+                "usage": {
+                    "cost": None,
+                    "total_tokens": 105,
+                    "input_tokens_details": {"cached_tokens": None},
+                },
+            },
+        },
+    ]
+    sink = {}
+    response = httpx.Response(200, content=_anthropic_sse(*events))
+    await _consume_sse(response, 5, usage_sink=sink)
+    usage = responses_usage(sink)
+    assert usage["cost_usd"] == 0.4
+    assert usage["cache_read_input_tokens"] == 60
+    assert usage["prompt_tokens"] == 100
+    assert usage["cache_creation_input_tokens"] is None

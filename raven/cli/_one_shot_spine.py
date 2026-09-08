@@ -55,19 +55,31 @@ class TurnUsageSummary:
         base = self._baseline
         self._baseline = total
         in_tokens = (
-            (total.input_tokens - base.input_tokens)
-            + (total.cache_read_tokens - base.cache_read_tokens)
-            + (total.cache_write_tokens - base.cache_write_tokens)
+            ((total.input_tokens or 0) - (base.input_tokens or 0))
+            + ((total.cache_read_tokens or 0) - (base.cache_read_tokens or 0))
+            + ((total.cache_write_tokens or 0) - (base.cache_write_tokens or 0))
         )
-        out_tokens = total.output_tokens - base.output_tokens
-        if in_tokens <= 0 and out_tokens <= 0:
+        out_tokens = (total.output_tokens or 0) - (base.output_tokens or 0)
+        calls = total.calls - base.calls
+        if in_tokens <= 0 and out_tokens <= 0 and calls <= 0:
             return None
-        parts = [f"{_fmt_tokens(in_tokens)} in / {_fmt_tokens(out_tokens)} out tokens"]
-        cost = (total.estimated_cost_usd or 0.0) - (base.estimated_cost_usd or 0.0)
-        if cost > 0:
-            # Below the 4-decimal render floor a real cost would round to "$0"
-            # and read as a free call; show the floor instead of a lie.
-            parts.append("<$0.0001" if cost < 0.0001 else "$" + f"{cost:.4f}".rstrip("0").rstrip("."))
+        input_missing = total.input_missing_calls - base.input_missing_calls
+        output_missing = total.output_missing_calls - base.output_missing_calls
+        input_text = "unknown" if calls and input_missing == calls else _fmt_tokens(in_tokens)
+        output_text = "unknown" if calls and output_missing == calls else _fmt_tokens(out_tokens)
+        parts = [f"{input_text} in / {output_text} out tokens"]
+        if input_missing and input_missing < calls:
+            parts.append(f"{input_missing} calls with unknown input tokens")
+        if output_missing and output_missing < calls:
+            parts.append(f"{output_missing} calls with unknown output tokens")
+        missing = total.cost_missing_calls - base.cost_missing_calls
+        cost = (total.cost_usd or 0.0) - (base.cost_usd or 0.0)
+        if total.cost_usd is not None and (calls == 0 or calls > missing):
+            parts.append("<$0.0001" if 0 < cost < 0.0001 else "$" + f"{cost:.4f}".rstrip("0").rstrip("."))
+        else:
+            parts.append("cost unknown")
+        if missing:
+            parts.append(f"{missing} calls with unknown cost")
         if self._started is not None:
             parts.append(f"{time.monotonic() - self._started:.1f}s")
         return " · ".join(parts)

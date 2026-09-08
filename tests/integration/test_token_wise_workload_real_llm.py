@@ -355,7 +355,9 @@ async def _run_long_conversation(
                     cache_read=snap.cache_read_tokens,
                     cache_write=snap.cache_write_tokens,
                     completion=snap.output_tokens,
-                    cost_usd=snap.estimated_cost_usd,
+                    cost_usd=snap.cost_usd
+                    if snap.cost_usd is not None
+                    else pytest.skip("Provider did not report cost"),
                 )
             )
             cost_so_far[name] = result.total_cost
@@ -442,7 +444,9 @@ async def _run_tool_accumulation(
                     cache_read=snap.cache_read_tokens,
                     cache_write=snap.cache_write_tokens,
                     completion=snap.output_tokens,
-                    cost_usd=snap.estimated_cost_usd,
+                    cost_usd=snap.cost_usd
+                    if snap.cost_usd is not None
+                    else pytest.skip("Provider did not report cost"),
                 )
             )
         cost_so_far[name] = result.total_cost

@@ -432,23 +432,47 @@ async def test_borrowed_image_selection_updates_without_recreating_tool(monkeypa
     seen = []
 
     def handler(request):
-        assert request.headers["authorization"] == "Bearer worker-key"
-        seen.append(json.loads(request.content))
+        seen.append((str(request.url), request.headers["authorization"], json.loads(request.content)))
         return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
 
     source = tmp_path / "host.json"
-    source.write_text(json.dumps({"tools": {"media": {"image": {"model": "openai/gpt-image-2", "quality": "low"}}}}))
+
+    def configure(base, key, model, quality):
+        source.write_text(
+            json.dumps(
+                {
+                    "tools": {
+                        "media": {
+                            "image": {
+                                "apiBase": base,
+                                "apiKey": key,
+                                "model": model,
+                                "quality": quality,
+                            }
+                        }
+                    }
+                }
+            )
+        )
+
+    configure("https://custom.example/v1", "custom-key", "openai/gpt-image-2", "low")
     tool = _image_tool(monkeypatch, handler, model="", workspace=tmp_path)
     tool._config_static = MediaToolConfig(api_key="worker-key", selection_config=str(source))
     result = json.loads(await tool.execute("a circle", model="qwen/qwen-image-3", quality="high"))
     assert result["model"] == "openai/gpt-image-2" and result["quality"] == "low"
-    source.write_text(json.dumps({"tools": {"media": {"image": {"model": "qwen/qwen-image-3", "quality": ""}}}}))
+    assert seen[-1][:2] == ("https://custom.example/v1/images/generations", "Bearer custom-key")
+    assert seen[-1][2]["quality"] == "low"
+    configure("https://openrouter.ai/api/v1", "router-key", "openai/gpt-image-2", "low")
+    await tool.execute("a circle", quality="high")
+    assert seen[-1][:2] == ("https://openrouter.ai/api/v1/images", "Bearer router-key")
+    assert seen[-1][2]["quality"] == "low"
+    configure("https://openrouter.ai/api/v1", "rotated-key", "qwen/qwen-image-3", "")
     result = json.loads(await tool.execute("a circle", model="openai/gpt-image-2", quality="high"))
     assert result["model"] == "qwen/qwen-image-3" and result["quality"] == ""
-    assert "quality" not in seen[-1]
+    assert "quality" not in seen[-1][2]
     source.write_text("{")
     await tool.execute("a circle")
-    assert seen[-1]["model"] == "qwen/qwen-image-3"
+    assert seen[-1][2]["model"] == "qwen/qwen-image-3"
 
 
 async def test_image_provider_refusal_preserves_reason(monkeypatch, tmp_path):

@@ -283,7 +283,8 @@ export interface Usage {
   context_percent?: number
   context_used?: number
   cost_status?: string
-  cost_usd?: number
+  cost_usd?: number | null
+  cost_missing_calls?: number
   input: number
   output: number
   reasoning?: number

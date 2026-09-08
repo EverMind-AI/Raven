@@ -142,10 +142,7 @@ def test_inherit_llm_names_the_provider_from_the_model_prefix(monkeypatch):
     assert config["agents"]["defaults"]["provider"] == "custom", "host default rather than an empty provider"
 
 
-def test_the_own_key_branch_never_reads_the_parent_riders(monkeypatch, tmp_path):
-    """The riders belong to inheritance alone: a product paying with its own
-    key keeps its own tuned model whatever the spawning parent runs -- the
-    fork's own division, pinned at the launcher that exercises it."""
+def test_design_ignores_own_key_and_inherits_parent_riders(monkeypatch, tmp_path):
     import importlib.util
 
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
@@ -155,13 +152,26 @@ def test_the_own_key_branch_never_reads_the_parent_riders(monkeypatch, tmp_path)
     monkeypatch.setenv("RAVEN_PARENT_REASONING_EFFORT", "low")
     for name in ("DESIGN_ACP_HOME", "DESIGN_IMAGE_API_KEY", "DESIGN_SERPER_API_KEY", "DESIGN_JINA_API_KEY"):
         monkeypatch.delenv(name, raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.json").write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": "host/model", "provider": "custom"}},
+                "providers": {"custom": {"apiKey": "host-key", "apiBase": "https://vendor.example/v1"}},
+            }
+        )
+    )
     launcher_path = Path(render.__file__).resolve().parents[2] / "agents" / "raven-design" / "run.py"
     spec = importlib.util.spec_from_file_location("design_run_riders", launcher_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     data = json.loads(mod.render_config(launcher_path.parent / "config.json").read_text())
-    assert data["agents"]["defaults"]["model"] == "openai/gpt-5.6-sol"
-    assert data["agents"]["defaults"]["reasoningEffort"] == "high"
+    assert data["agents"]["defaults"]["model"] == "vendor/parent-model"
+    assert data["agents"]["defaults"]["reasoningEffort"] == "low"
+
+    assert data["providers"]["custom"]["apiKey"] == "host-key"
+    assert "sk-own" not in json.dumps(data)
 
 
 def test_state_root_prefers_the_override(tmp_path, monkeypatch):

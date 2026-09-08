@@ -1,27 +1,4 @@
-"""The agents/ design launcher: rendering, refusals, the trunk exec, the pinned face.
-
-The exec target is installed raven's own ``raven acp``; the visual capability
-reaches it as the design-engine wheel through the entry-point group, never by
-directory. The launch contract is still the fork launcher's render half: an
-own key reaches every provider block, the optional Serper/Jina keys fall back
-per slot, the image key resolves through the fork's waterfall, the rendered
-file is an owner-only copy under the state root, and the engine's Agent home
-is pinned in the raven data directory (w109). Three renders are the swap
-wave's own (the dw2 debt triple): the wheel's corpus mounted through
-skillForge.localDirs (path-keyed, append-if-absent), taskState.stateRoot
-under the product state root, and the exec line itself.
-
-The hermetic tool-face pin is live (the w96 method): the loop built from this
-render advertises the fork's config-intent face -- eleven trunk-stock rows,
-the three engine tools, image_generate through the key waterfall -- with
-web_search joining only on a Serper key and every trunk-born name held out by
-config rows, not by luck. No identity file ships: design serves the
-host-generic identity, the fork's own ACP-lane behaviour (oncall/code
-precedent -- an added identity file would change the prompt face). The live
-acp lane adds one row the hermetic fixture cannot and need not see: the
-session-namer's emit_session_title side-call schema (ppt-adjudicated host
-gain, carried forward).
-"""
+"""Verify Design host inheritance, engine configuration and tool availability."""
 
 import json
 import stat
@@ -72,8 +49,7 @@ FORK_CONFIG_INTENT = {
 #: The engine wheel's three contributions, admitted by the rendered slice.
 ENGINE_TOOLS = {"preview_file", "render_file", "update_task_state"}
 
-#: image_generate rides the fork's key waterfall; under the grounded render
-#: (own key, OpenRouter base) it is present, exactly as the fork face was.
+#: The host image section makes image_generate available in the grounded render.
 VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | ENGINE_TOOLS | {"image_generate"}
 KEY_GATED = {"web_search"}
 
@@ -108,7 +84,8 @@ def grounded(launcher, tmp_path, monkeypatch):
     """A launcher pointed at a scratch home and state root, secrets set."""
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("DESIGN_STATE_ROOT", str(tmp_path / "state"))
-    monkeypatch.setenv("DESIGN_API_KEY", "sk-own")
+    monkeypatch.setenv("DESIGN_API_KEY", "ignored-own-key")
+    _host_config(tmp_path, {})
     for name in ("DESIGN_ACP_HOME", "DESIGN_IMAGE_API_KEY", "DESIGN_SERPER_API_KEY", "DESIGN_JINA_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     return launcher
@@ -117,7 +94,14 @@ def grounded(launcher, tmp_path, monkeypatch):
 def _host_config(tmp_path: Path, data: dict) -> None:
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
-    (home / "config.json").write_text(json.dumps(data))
+    base = {
+        "agents": {"defaults": {"model": "host-model", "provider": "custom", "reasoningEffort": "low"}},
+        "providers": {"custom": {"apiKey": "host-key", "apiBase": "https://host.example/v1"}},
+        "tools": {"media": {"image": {"apiKey": "host-image-key", "model": "openai/gpt-image-2"}}},
+    }
+    for key, value in data.items():
+        base[key] = value
+    (home / "config.json").write_text(json.dumps(base))
 
 
 def _render(grounded) -> dict:
@@ -160,12 +144,11 @@ def test_the_config_ports_the_forks_leaves_onto_the_trunk_schema():
     ours = json.loads((RUN_PY.parent / "config.json").read_text())
     fork = json.loads((FORK / "config.json").read_text())
 
-    for leaf in ("model", "provider", "reasoningEffort", "contextWindowTokens", "maxToolIterations", "llmCallTimeout"):
+    for leaf in ("contextWindowTokens", "maxToolIterations", "llmCallTimeout"):
         assert ours["agents"]["defaults"][leaf] == fork["agents"]["defaults"][leaf], leaf
     assert ours["language"] == fork["language"] == "zh"
-    assert ours["providers"]["custom"]["apiBase"] == fork["providers"]["custom"]["apiBase"]
-    assert ours["providers"]["custom"]["models"] == fork["providers"]["custom"]["models"]
-    assert "protocol" not in ours["providers"]["custom"]
+    assert "providers" not in ours
+    assert not {"model", "provider", "reasoningEffort"} & ours["agents"]["defaults"].keys()
     # The fork's seven disable rows survive whole; the nine extras are the
     # swap ledger's trunk-born names, held out of the face by config rather
     # than luck (the w96 discipline). emit_session_title is deliberately NOT
@@ -179,11 +162,7 @@ def test_the_config_ports_the_forks_leaves_onto_the_trunk_schema():
     assert ours["tools"]["web"] == fork["tools"]["web"]
     assert ours["memory"] == fork["memory"]
 
-    image = ours["tools"]["media"]["image"]
-    fork_image = fork["tools"]["media"]["image"]
-    assert image["apiBase"] == fork_image["apiBase"] and image["model"] == fork_image["model"]
-    for phantom in ("apiStyle", "allowModelOverride"):
-        assert phantom not in image
+    assert "image" not in ours["tools"]["media"]
 
 
 def test_the_compaction_slice_is_the_four_knob_d2_port_and_nothing_else():
@@ -230,7 +209,7 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
 
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     config = load_config(rendered)
-    assert config.agents.defaults.model == "openai/gpt-5.6-sol"
+    assert config.agents.defaults.model == "host-model"
     compaction = config.agents.defaults.compaction
     assert compaction.enabled is True
     assert compaction.trigger_ratio == 0.8
@@ -242,11 +221,8 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
     assert len(mounts) == 1 and mounts[0].always_enabled and mounts[0].path.endswith("skills")
 
 
-def test_the_render_declares_three_effort_tiers_each_with_its_own_cap_and_effort(grounded):
-    """The built-in tiers are no-ops for a worker: empty overlay, cap inherited.
-    Design declares its own catalogue so the session tier moves what the worker
-    does -- the reasoning effort and the iteration cap -- with config.json as
-    the high baseline and the other two as diffs in modes/."""
+def test_iteration_tiers_all_inherit_host_reasoning_effort(grounded):
+    """Design tiers change iteration caps while keeping the host reasoning effort."""
     from raven.config.loader import load_config
     from raven.config.mode_catalogue import build_mode_catalogue
 
@@ -255,58 +231,65 @@ def test_the_render_declares_three_effort_tiers_each_with_its_own_cap_and_effort
     assert list(modes) == ["medium", "high", "max"]
     assert data["acp"]["defaultMode"] == "high"
     assert {m: (e["maxToolIterations"], e["reasoningEffort"]) for m, e in modes.items()} == {
-        "medium": (60, "medium"),
-        "high": (150, "high"),
-        "max": (300, "max"),
+        "medium": (60, "low"),
+        "high": (150, "low"),
+        "max": (300, "low"),
     }
     # And the trunk reads them as the loop will enforce them.
     catalogue = build_mode_catalogue(load_config(grounded.render_config(RUN_PY.parent / "config.json")))
     assert catalogue.default == "high"
-    assert (catalogue.get("max").max_iterations, catalogue.get("max").reasoning_effort) == (300, "max")
-    assert (catalogue.get("medium").max_iterations, catalogue.get("medium").reasoning_effort) == (60, "medium")
+    assert (catalogue.get("max").max_iterations, catalogue.get("max").reasoning_effort) == (300, "low")
+    assert (catalogue.get("medium").max_iterations, catalogue.get("medium").reasoning_effort) == (60, "low")
 
 
 # --- the render: keys, fallbacks, the image waterfall --------------------------
 
 
-def test_an_own_key_reaches_every_provider_block(grounded, tmp_path):
-    config = {
-        "providers": {
-            "custom": {"apiBase": "https://a.example/v1", "models": ["m1"]},
-            "other": {"apiBase": "https://b.example/v1", "models": ["m2"]},
-        },
-        "agents": {"defaults": {"model": "m1", "provider": "custom"}},
-    }
-    source = tmp_path / "two.json"
-    source.write_text(json.dumps(config))
+def test_own_credentials_and_source_model_are_ignored(grounded, tmp_path):
+    source = tmp_path / "own.json"
+    source.write_text(
+        json.dumps(
+            {
+                "providers": {"other": {"apiKey": "own"}},
+                "agents": {"defaults": {"model": "own", "reasoningEffort": "max"}},
+            }
+        )
+    )
     data = json.loads(grounded.render_config(source).read_text())
-    assert data["providers"]["custom"]["apiKey"] == "sk-own"
-    assert data["providers"]["other"]["apiKey"] == "sk-own"
+    assert list(data["providers"]) == ["custom"]
+    assert data["providers"]["custom"]["apiKey"] == "host-key"
+    assert data["agents"]["defaults"]["model"] == "host-model"
+    assert data["agents"]["defaults"]["reasoningEffort"] == "low"
 
 
-def test_no_llm_key_anywhere_refuses_before_serving(grounded, monkeypatch):
-    monkeypatch.delenv("DESIGN_API_KEY", raising=False)
-    with pytest.raises(SystemExit):
+def test_no_host_llm_key_refuses_even_with_own_key(grounded, tmp_path):
+    _host_config(tmp_path, {"providers": {}})
+    with pytest.raises(SystemExit, match="host Raven settings"):
         grounded.render_config(RUN_PY.parent / "config.json")
 
 
 def test_optional_keys_fall_back_per_slot_to_the_host_config(grounded, tmp_path):
-    _host_config(tmp_path, {"tools": {"web": {"search": {"apiKey": "host-serper"}}}})
+    _host_config(
+        tmp_path,
+        {
+            "tools": {
+                "web": {"search": {"apiKey": "host-serper"}},
+                "media": {"image": {"apiKey": "host-image-key", "model": "openai/gpt-image-2"}},
+            }
+        },
+    )
     data = _render(grounded)
     assert data["tools"]["web"]["search"]["apiKey"] == "host-serper"
 
 
-def test_the_image_key_waterfall_prefers_the_own_key(grounded, monkeypatch):
-    monkeypatch.setenv("DESIGN_IMAGE_API_KEY", "sk-image")
+def test_own_image_key_is_ignored(grounded, monkeypatch):
+    monkeypatch.setenv("DESIGN_IMAGE_API_KEY", "ignored-image-key")
     data = _render(grounded)
-    assert data["tools"]["media"]["image"]["apiKey"] == "sk-image"
-    assert data["tools"]["media"]["image"]["model"] == "openai/gpt-image-2"
+    assert data["tools"]["media"]["image"]["apiKey"] == "host-image-key"
 
 
-def test_the_image_key_waterfall_borrows_compatible_host_media(grounded, tmp_path):
-    """The host's media key rides along with the base and model it was
-    configured for (the fork's borrow), but only when the endpoint is
-    OpenRouter-shaped -- the one backend trunk's media tools speak."""
+def test_image_inherits_openrouter_host_settings(grounded, tmp_path):
+    """Host image credentials and model are inherited together."""
     _host_config(
         tmp_path,
         {
@@ -327,9 +310,8 @@ def test_the_image_key_waterfall_borrows_compatible_host_media(grounded, tmp_pat
     assert image["model"] == "host/image-model"
 
 
-def test_the_image_key_waterfall_skips_an_incompatible_host_media(grounded, tmp_path):
-    """A host media block on a non-OpenRouter endpoint is not borrowed; the
-    waterfall falls through to the host's openrouter provider key."""
+def test_image_inherits_custom_host_settings(grounded, tmp_path):
+    """Custom image credentials must not be replaced by the chat provider."""
     _host_config(
         tmp_path,
         {
@@ -339,13 +321,16 @@ def test_the_image_key_waterfall_skips_an_incompatible_host_media(grounded, tmp_
     )
     data = _render(grounded)
     image = data["tools"]["media"]["image"]
-    assert image["apiKey"] == "sk-host-or"
-    assert image["model"] == "openai/gpt-image-2"
+    assert image["apiKey"] == "sk-foreign"
+    assert image["apiBase"] == "https://images.example/v1"
+    assert image["selectionConfig"]
 
 
-def test_the_image_key_waterfall_ends_at_the_own_llm_key_on_openrouter(grounded):
-    data = _render(grounded)
-    assert data["tools"]["media"]["image"]["apiKey"] == "sk-own"
+def test_image_does_not_fall_back_to_own_llm_key(grounded, tmp_path):
+    _host_config(tmp_path, {"tools": {}})
+    image = _render(grounded)["tools"]["media"]["image"]
+    assert not image.get("apiKey")
+    assert not image.get("model")
 
 
 def test_no_image_key_anywhere_withholds_the_tool(grounded, tmp_path, monkeypatch):
@@ -354,11 +339,11 @@ def test_no_image_key_anywhere_withholds_the_tool(grounded, tmp_path, monkeypatc
     withhold, kept)."""
     source = tmp_path / "offbase.json"
     config = json.loads((RUN_PY.parent / "config.json").read_text())
-    config["tools"]["media"]["image"]["apiBase"] = "https://images.example/v1"
+    _host_config(tmp_path, {"tools": {"media": {"image": {}}}})
     source.write_text(json.dumps(config))
     data = json.loads(grounded.render_config(source).read_text())
-    assert data["tools"]["media"]["image"]["apiKey"] == ""
-    assert data["tools"]["media"]["image"]["model"] == ""
+    assert not data["tools"]["media"]["image"].get("apiKey")
+    assert not data["tools"]["media"]["image"].get("model")
 
 
 # --- the render: placement (state root, agent home, w109 containment) ----------
@@ -590,7 +575,7 @@ def test_the_products_tool_face_is_the_forks_config_intent_plus_the_engine(groun
     """Build the loop from the rendered config; the model-visible tool set is
     the ledgered face and nothing more -- the design-engine plugin discovered
     through the live entry point, its three rows admitted by the rendered
-    slice, image_generate through the key waterfall, and every trunk-born
+    slice, image_generate through host settings, and every trunk-born
     name held out through the config rows."""
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
@@ -601,12 +586,12 @@ def test_the_products_tool_face_is_the_forks_config_intent_plus_the_engine(groun
     assert not (KEY_GATED | ENGINE_TOOLS) & disabled
 
 
-def test_a_serper_key_admits_exactly_web_search(grounded, tmp_path, monkeypatch):
+def test_own_serper_key_does_not_override_host(grounded, tmp_path, monkeypatch):
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
     monkeypatch.setenv("DESIGN_SERPER_API_KEY", "sk-serper")
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     visible = _hermetic_build(rendered, tmp_path, monkeypatch)
-    assert visible == VENDORED_TOOL_FACE | KEY_GATED
+    assert visible == VENDORED_TOOL_FACE
 
 
 def test_a_host_config_serper_key_admits_the_same_row(grounded, tmp_path, monkeypatch):
@@ -614,19 +599,27 @@ def test_a_host_config_serper_key_admits_the_same_row(grounded, tmp_path, monkey
     an env render would -- the pw2b lesson pinned on this product too."""
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
     monkeypatch.delenv("DESIGN_SERPER_API_KEY", raising=False)
-    _host_config(tmp_path, {"tools": {"web": {"search": {"apiKey": "host-serper"}}}})
+    _host_config(
+        tmp_path,
+        {
+            "tools": {
+                "web": {"search": {"apiKey": "host-serper"}},
+                "media": {"image": {"apiKey": "host-image-key", "model": "openai/gpt-image-2"}},
+            }
+        },
+    )
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     visible = _hermetic_build(rendered, tmp_path, monkeypatch)
     assert visible == VENDORED_TOOL_FACE | KEY_GATED
 
 
-def test_without_an_image_key_the_waterfall_withholds_image_generate(grounded, tmp_path, monkeypatch):
+def test_without_host_image_settings_withholds_image_generate(grounded, tmp_path, monkeypatch):
     """The launcher's empty-key-and-model write-back is what withholds the
     tool -- the fork's own registration refusal, surviving the swap."""
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
     source = tmp_path / "offbase.json"
     config = json.loads((RUN_PY.parent / "config.json").read_text())
-    config["tools"]["media"]["image"]["apiBase"] = "https://images.example/v1"
+    _host_config(tmp_path, {"tools": {"media": {"image": {}}}})
     source.write_text(json.dumps(config))
     rendered = grounded.render_config(source)
     visible = _hermetic_build(rendered, tmp_path, monkeypatch)
@@ -650,16 +643,13 @@ def test_image_selection_follows_borrowed_host_credentials(grounded, monkeypatch
     assert image["apiKey"] == (media_key or "host-provider-key")
 
 
-def test_own_image_credentials_keep_own_model_quality(grounded, monkeypatch):
-    monkeypatch.setenv("DESIGN_IMAGE_API_KEY", "own-image-key")
-    config = {"tools": {"media": {"image": {"model": "openai/gpt-image-2", "quality": "low"}}}}
-    host = {"tools": {"media": {"image": {"apiKey": "host", "model": "other", "quality": "high"}}}}
+def test_own_image_settings_are_replaced_by_host(grounded, monkeypatch):
+    monkeypatch.setenv("DESIGN_IMAGE_API_KEY", "ignored-image-key")
+    config = {"tools": {"media": {"image": {"apiKey": "old", "model": "old", "quality": "high"}}}}
+    host = {"tools": {"media": {"image": {"apiKey": "host", "model": "selected", "quality": "low"}}}}
     grounded.configure_image_generation(config, host)
-    assert config["tools"]["media"]["image"] == {
-        "apiKey": "own-image-key",
-        "model": "openai/gpt-image-2",
-        "quality": "low",
-    }
+    image = config["tools"]["media"]["image"]
+    assert (image["apiKey"], image["model"], image["quality"]) == ("host", "selected", "low")
 
 
 def test_borrowing_host_without_quality_removes_worker_override(grounded, monkeypatch):
@@ -669,3 +659,15 @@ def test_borrowing_host_without_quality_removes_worker_override(grounded, monkey
     grounded.configure_image_generation(config, host)
     assert config["tools"]["media"]["image"]["model"] == "openai/gpt-image-2"
     assert "quality" not in config["tools"]["media"]["image"]
+
+
+def test_keyless_custom_images_do_not_fall_back_to_openrouter(grounded, monkeypatch):
+    monkeypatch.delenv("DESIGN_IMAGE_API_KEY", raising=False)
+    config = {"tools": {"media": {"image": {"model": "openai/gpt-image-2"}}}}
+    host = {
+        "tools": {"media": {"image": {"apiBase": "https://custom.example/v1", "quality": "low"}}},
+        "providers": {"openrouter": {"apiKey": "router-key"}},
+    }
+    grounded.configure_image_generation(config, host)
+    assert not config["tools"]["media"]["image"].get("apiKey")
+    assert not config["tools"]["media"]["image"].get("model")

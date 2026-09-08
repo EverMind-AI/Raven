@@ -315,18 +315,32 @@ export interface CronRun {
 }
 export interface ApiUsageModel {
   calls: number;
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cost_usd: number;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  cost_usd?: number | null;
   model: string;
+  cache_write_tokens?: number | null;
+  cost_missing_calls: number;
+  cache_read_missing_calls: number;
+  cache_write_missing_calls: number;
+  legacy_cost_calls: number;
+  input_missing_calls?: number;
+  output_missing_calls?: number;
 }
 export interface ApiUsageTotals {
   calls: number;
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cost_usd: number;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  cost_usd?: number | null;
+  cache_write_tokens?: number | null;
+  cost_missing_calls: number;
+  cache_read_missing_calls: number;
+  cache_write_missing_calls: number;
+  legacy_cost_calls: number;
+  input_missing_calls?: number;
+  output_missing_calls?: number;
 }
 export interface LlmUsage {
   total: ApiUsageTotals;
@@ -826,10 +840,11 @@ export interface TurnUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
-  cost_usd?: number;
+  cost_usd?: number | null;
   context_used?: number;
   context_max?: number;
   context_percent?: number;
+  cost_missing_calls?: number;
 }
 export interface CliResult {
   /**
