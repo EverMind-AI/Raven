@@ -55,6 +55,7 @@ vi.mock('@xterm/addon-fit', () => ({
 }))
 
 import { TerminalApp } from './TerminalPage'
+import * as terminalIsland from './mount'
 import * as store from './store'
 
 import type { Shell } from '../../shell/bridge'
@@ -140,6 +141,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  act(() => terminalIsland.detach())
   cleanup()
   store._resetForTests()
   window.RavenShell = undefined
@@ -150,6 +152,32 @@ afterEach(() => {
 })
 
 describe('hosted terminal tabs', () => {
+  it('waits for the shell bridge before mounting the terminal island', async () => {
+    const publishedShell = window.RavenShell
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    window.RavenShell = undefined
+
+    terminalIsland.mount(document.getElementById('terminalHost')!)
+    expect(document.querySelector('.terminal-surface')).toBeNull()
+
+    act(() => frames.shift()?.(0))
+    expect(document.querySelector('.terminal-surface')).toBeNull()
+    expect(frames).toHaveLength(1)
+
+    window.RavenShell = publishedShell
+    await act(async () => {
+      frames.shift()?.(1)
+      await Promise.resolve()
+    })
+
+    expect(screen.getByRole('tab', { name: 'gui.terminal.transcript' })).toBeTruthy()
+  })
+
   it('starts with only the Raven transcript tab', async () => {
     await mount()
 
