@@ -35,15 +35,17 @@ Control flow contracts:
 - Injected keys dispatch by key first: Space on an attempt row renders that
   attempt's full conversation — the causally ordered record stream rebuilt by
   :mod:`raven.trajectory.conversation` (every field sanitized, labels colored
-  by kind, bodies hanging-indented; a stream taller than the screen goes
-  through ``less`` when an interactive pager is confirmed available, and only
-  a clean pager exit skips the follow-up waiter). A rebuild failure falls back
-  to the scan-time per-turn previews; the table PREVIEW cell still derives
-  from that sorted preview collection. M (either case) opens the multi-select
-  merge and is only bound — and only advertised — when two or more attempts
-  exist. Anything else, and Space on a non-attempt row, is a cursor-keeping
-  no-op. The preview's follow-up waiter maps any key or Esc to a non-None
-  sentinel, so only Ctrl+C keeps the browser-wide cancel meaning.
+  by kind, bodies hanging-indented). On a terminal it opens the full-screen
+  viewer (:mod:`raven.cli._preview_viewer`: scrolling, h help, s collapse,
+  % label filter; q/Esc returns, Ctrl+C is the browser-wide cancel), which
+  needs no follow-up waiter; without a terminal every line prints directly
+  and the waiter runs. A rebuild failure falls back to the scan-time per-turn
+  previews; the table PREVIEW cell still derives from that sorted preview
+  collection. M (either case) opens the multi-select merge and is only bound —
+  and only advertised — when two or more attempts exist. Anything else, and
+  Space on a non-attempt row, is a cursor-keeping no-op. The direct-print
+  preview's follow-up waiter maps any key or Esc to a non-None sentinel, so
+  only Ctrl+C keeps the browser-wide cancel meaning.
 - Once an action runs — normally, refused, cancelled, or failing controlled —
   the browser rescans everything (``_REFRESH``): actions like report bundle
   before confirming, so even an aborted one may have pinned the attempt.
@@ -58,10 +60,8 @@ Control flow contracts:
 from __future__ import annotations
 
 import logging
-import os
 import re
 import shutil
-import subprocess
 import sys
 from collections import Counter
 from dataclasses import dataclass
@@ -73,6 +73,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.text import Text
 
+from raven.cli import _preview_viewer as pviewer
 from raven.cli import trajectory_commands as tcmd
 from raven.cli._theme import POINTER, QMARK
 from raven.session.manager import SessionManager
@@ -305,6 +306,7 @@ _PREVIEW_KIND_STYLES = {
     "subagent": "blue",
 }
 _PREVIEW_DIM_LABELS = ("LLM thinking",)
+_COLLAPSE_LINES = 5
 
 
 def _sanitize_multiline(value: str) -> str:
@@ -348,6 +350,14 @@ def _wrap_display(text: str, width: int) -> list[str]:
     return lines
 
 
+def _fold_body(body_lines: list[str], collapse: bool) -> tuple[list[str], int]:
+    """(kept lines, folded count): more than ``_COLLAPSE_LINES`` display lines
+    fold to the first ``_COLLAPSE_LINES`` when collapsing is on."""
+    if not collapse or len(body_lines) <= _COLLAPSE_LINES:
+        return body_lines, 0
+    return body_lines[:_COLLAPSE_LINES], len(body_lines) - _COLLAPSE_LINES
+
+
 def _is_turn_marker(record: Any) -> bool:
     """A bare Turn marker carries a turn's identity and start time only; it
     contributes the separator but never renders a body row. A same-labeled
@@ -355,7 +365,9 @@ def _is_turn_marker(record: Any) -> bool:
     return record.label == "Turn" and not record.text and not record.degraded and not record.error
 
 
-def _record_lines(record: Any, label_col: int, width: int, show_meta: bool = True) -> list[Text]:
+def _record_lines(
+    record: Any, label_col: int, width: int, show_meta: bool = True, collapse: bool = False
+) -> list[Text]:
     """One record as pre-wrapped display lines (label + hanging body + notes).
 
     Every dynamic field is untrusted: the label and the note fields pass the
@@ -364,7 +376,12 @@ def _record_lines(record: Any, label_col: int, width: int, show_meta: bool = Tru
     is exactly one display line no wider than ``width``, so callers can count
     real lines. Below ``_PREVIEW_BODY_MIN`` of body room the layout stacks
     (label on its own line, body wrapped from the left edge) instead of
-    clipping — narrow terminals must not lose characters."""
+    clipping — narrow terminals must not lose characters.
+
+    ``collapse`` folds a body of more than ``_COLLAPSE_LINES`` *display* lines
+    (the threshold is judged after wrapping, not on source lines) down to the
+    first ``_COLLAPSE_LINES`` plus a dim ellipsis line. Note lines — degraded,
+    error, meta — are never folded: loss evidence must stay visible."""
     label = _collapse_text(record.label) or "?"
     style = _PREVIEW_KIND_STYLES.get(record.kind, "dim")
     dim_all = record.label in _PREVIEW_DIM_LABELS
@@ -376,9 +393,10 @@ def _record_lines(record: Any, label_col: int, width: int, show_meta: bool = Tru
     if width - label_col >= _PREVIEW_BODY_MIN:
         indent = label_col
         body_width = width - label_col
+        body_lines = _wrap_display(body, body_width) if body else []
+        body_lines, folded = _fold_body(body_lines, collapse)
         head = Text()
-        if body:
-            body_lines = _wrap_display(body, body_width)
+        if body_lines:
             head.append(_cell_pad(f"{label}:", label_col), style=style)
             head.append(body_lines[0], style=body_style)
             rest = body_lines[1:]
@@ -391,10 +409,13 @@ def _record_lines(record: Any, label_col: int, width: int, show_meta: bool = Tru
         body_width = max(width - indent, 2)
         for part in _wrap_display(f"{label}:", max(width, 2)):
             lines.append(Text(part, style=style))
-        rest = _wrap_display(body, body_width) if body else []
+        rest, folded = _fold_body(_wrap_display(body, body_width) if body else [], collapse)
     pad = " " * indent
     for part in rest:
         lines.append(Text(pad + part, style=body_style))
+    if folded:
+        for part in _wrap_display(f"… (+{folded} more lines, s to expand)", body_width):
+            lines.append(Text(pad + part, style="dim"))
     notes: list[tuple[str, str]] = []
     if record.degraded:
         notes.append((f"(! {_collapse_text(record.degraded) or '?'})", "dim yellow"))
@@ -410,7 +431,25 @@ def _record_lines(record: Any, label_col: int, width: int, show_meta: bool = Tru
     return lines
 
 
-def _conversation_lines(records: list[Any], width: int) -> list[Text]:
+def _filter_records(records: list[Any], label_filter: str | None) -> list[Any]:
+    """Keep records whose label contains the filter (case-insensitive).
+
+    Turn markers never match by themselves: one survives only when its group
+    keeps at least one visible record, so a filtered-out group produces no
+    separator downstream. An empty or all-control filter keeps everything."""
+    needle = (_collapse_text(label_filter) or "").lower() if label_filter else ""
+    if not needle:
+        return records
+    matching = {id(r) for r in records if not _is_turn_marker(r) and needle in (_collapse_text(r.label) or "?").lower()}
+    live_groups = {(r.trace_id, r.turn_span_id) for r in records if id(r) in matching}
+    return [
+        r for r in records if id(r) in matching or (_is_turn_marker(r) and (r.trace_id, r.turn_span_id) in live_groups)
+    ]
+
+
+def _conversation_lines(
+    records: list[Any], width: int, *, collapse: bool = False, label_filter: str | None = None
+) -> list[Text]:
     """The full conversation as display lines, in the data layer's order.
 
     A single pass over the already-sorted stream: a separator line is inserted
@@ -418,11 +457,16 @@ def _conversation_lines(records: list[Any], width: int) -> list[Text]:
     first appearance, ``(continued)`` on re-entry), records are never regrouped
     — interleaved traces render exactly as ordered.
 
+    ``label_filter`` narrows the stream to matching labels before anything is
+    laid out (the label column shrinks to the visible set); ``collapse`` folds
+    long bodies per record (see :func:`_record_lines`).
+
     Every produced Text — separators included — is one display line within the
     real terminal width, so ``len()`` of the result is the true screen usage.
     The only floor is 2 cells: a wide character cannot be split, so a
     degenerate narrower terminal renders at 2 and may overflow."""
     width = max(width, 2)
+    records = _filter_records(records, label_filter)
     shown = [r for r in records if not _is_turn_marker(r)]
     label_col = max((_cell_width((_collapse_text(r.label) or "?") + ":") for r in shown), default=2) + 1
     groups = {(r.trace_id, r.turn_span_id) for r in records}
@@ -457,79 +501,26 @@ def _conversation_lines(records: list[Any], width: int) -> list[Text]:
             and following.span_id == record.span_id
             and following.meta == record.meta
         )
-        lines.extend(_record_lines(record, label_col, width, show_meta))
+        lines.extend(_record_lines(record, label_col, width, show_meta, collapse))
     return lines
 
 
-def _pager_command() -> list[str] | None:
-    """The confirmed-interactive pager command, or None.
-
-    Only ``less`` is trusted: an arbitrary ``PAGER`` value cannot be verified
-    interactive (``PAGER=cat`` pages nothing yet exits 0), so anything else
-    degrades to direct printing. Both stdio ends must be a terminal — pagers
-    read their keys from the tty — and TERM must be able to page."""
-    if not (sys.stdout.isatty() and sys.stdin.isatty()):
-        return None
-    if os.environ.get("TERM") in ("dumb", "emacs"):
-        return None
-    less = shutil.which("less")
-    return [less, "-R"] if less else None
-
-
-def _page_lines(lines: list[Text], width: int) -> bool:
-    """Show the lines in the interactive pager; True only for a clean run.
-
-    The subprocess is managed directly and judged by its exit code — a
-    swallowed write error or a missing command must not read as "paged" (the
-    stdlib pipepager reports neither). A BrokenPipe while feeding is the
-    normal early-quit and is left to the exit code."""
-    command = _pager_command()
-    if command is None:
-        return False
-    buffer = Console(width=width, force_terminal=True, color_system="standard")
-    with buffer.capture() as capture:
-        for line in lines:
-            buffer.print(line, highlight=False)
-    try:
-        process = subprocess.Popen(command, stdin=subprocess.PIPE)
-    except OSError:
-        return False
-    try:
-        try:
-            if process.stdin is not None:
-                try:
-                    process.stdin.write(capture.get().encode("utf-8", errors="replace"))
-                finally:
-                    process.stdin.close()
-        except OSError:
-            pass
-        return process.wait() == 0
-    except KeyboardInterrupt:
-        # Ctrl+C while paging: reap the pager before leaving — an orphaned
-        # less keeps owning the terminal — then follow the browser-wide
-        # cancel protocol instead of unwinding as a raw interrupt.
-        try:
-            if process.stdin is not None and not process.stdin.closed:
-                process.stdin.close()
-        except OSError:
-            pass
-        process.terminate()
-        try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-        raise _CancelledError() from None
+def _viewer_available() -> bool:
+    """The interactive viewer needs both stdio ends on a real terminal."""
+    return sys.stdout.isatty() and sys.stdin.isatty()
 
 
 def _preview_screen(index: int, row: AttemptRow, state_dir: Path | None = None) -> bool:
     """Render one attempt's full conversation; returns whether the caller
-    still owes the press-any-key wait (False only after the pager actually
-    ran and exited cleanly).
+    still owes the press-any-key wait (False after the interactive viewer
+    ran — it contains its own interaction and exits straight to the list).
 
-    The record stream comes from ``attempt_conversation``; a rebuild failure
-    falls back to the legacy per-turn preview so old or damaged stores keep a
-    working Space key."""
+    On a terminal the preview opens the full-screen viewer (scrolling, h
+    help, s collapse, % label filter); without one it degrades to printing
+    every line. The record stream comes from ``attempt_conversation``; a
+    rebuild failure falls back to the legacy per-turn preview so old or
+    damaged stores keep a working Space key. A viewer cancelled with Ctrl+C
+    raises the browser-wide :class:`_CancelledError`."""
     console.print(f"[dim]Preview ❯[/dim] #{index}", highlight=False)
     try:
         records = tconversation.attempt_conversation(row.traces, state_dir)
@@ -540,14 +531,19 @@ def _preview_screen(index: int, row: AttemptRow, state_dir: Path | None = None) 
     if not records:
         console.print("[dim](no turns recorded)[/dim]", highlight=False)
         return True
-    size = shutil.get_terminal_size((80, 24))
-    lines = _conversation_lines(records, size.columns)
-    if not lines:
+    width = shutil.get_terminal_size((80, 24)).columns
+    if not _conversation_lines(records, width):
         console.print("[dim](no preview recorded)[/dim]", highlight=False)
         return True
-    if len(lines) > max(size.lines - 2, 1) and _page_lines(lines, size.columns):
+    if _viewer_available():
+
+        def _make_lines(collapse: bool, label_filter: str | None, view_width: int) -> list[Text]:
+            return _conversation_lines(records, view_width, collapse=collapse, label_filter=label_filter)
+
+        if pviewer.view_lines(_make_lines, title=f"Preview #{index}"):
+            raise _CancelledError()
         return False
-    for line in lines:
+    for line in _conversation_lines(records, width):
         console.print(line, highlight=False)
     return True
 
