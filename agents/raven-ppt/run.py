@@ -100,6 +100,93 @@ def engine_skill_dir() -> Path | None:
     return Path(spec.origin).parent / "skill"
 
 
+_IMAGE_GATEWAY = "openrouter.ai"
+
+
+def openrouter_key_in_force(config: dict) -> str:
+    """The OpenRouter key this render will actually call with, or ``""``.
+
+    Picture generation has one backend, so the key that can draw a backdrop is
+    whichever provider block in the rendered config addresses OpenRouter. A
+    block says which gateway it is two ways and both have to be read: an
+    explicit ``apiBase``, which is what PPT_API_BASE writes into a block named
+    ``ppt`` for no spec to claim, and -- when that is empty -- the address the
+    registry ships for the block's own name, which is the shape an inherited
+    ``openrouter`` block has. Reading only the first is what left the inherit
+    branch with no key to draw with.
+    """
+    from raven.providers.registry import find_by_name
+
+    for name, provider in (config.get("providers") or {}).items():
+        if not isinstance(provider, dict):
+            continue
+        base = str(provider.get("apiBase") or "")
+        if not base:
+            spec = find_by_name(name)
+            base = spec.usable_default_api_base if spec else ""
+        if _IMAGE_GATEWAY in base and (key := provider.get("apiKey")):
+            return str(key)
+    return ""
+
+
+def configure_image_generation(config: dict, host: dict) -> None:
+    """Give the deck a picture generator, on either LLM branch.
+
+    Called after the branch for the reason the window recalibration is: which
+    key can draw is a fact about the gateway that won, not about whose key paid
+    for the words.
+
+    The host's own ``tools.media.image`` carries the operator's model and
+    quality choice, and ``selectionConfig`` keeps a later Settings edit live
+    rather than frozen at launch. The key keeps the precedence
+    ``apply_secret_slots`` set -- an explicit PPT_IMAGE_API_KEY, else the host's
+    own image key -- and only with both absent does the key paying for the
+    words pay for the pictures too. That last step is what the inherit branch
+    could not reach: it has no PPT_API_KEY to offer, and a host that configured
+    its OpenRouter key for chat alone deliberately surfaces no media tool, so
+    the deck asked for a key nobody had written and drew nothing.
+
+    The engine slice gets a copy for the reason the Serper key does: the
+    trunk's ``image_generate`` reads ``tools.media.image``, while the deck's own
+    ``ppt_generate_image`` is handed a section by the plugin, which sees only
+    its own slice. setdefault, so a slice that shipped one keeps it.
+    """
+    from raven.config.schema import live_media_tool_config
+
+    host_image = ((host.get("tools") or {}).get("media") or {}).get("image")
+    section = live_media_tool_config(host_image, (host.get("providers") or {}).get("openrouter"))
+    image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
+    paid_by = "the host image section"
+    if resolved := render.dig(config, IMAGE_KEY_SLOT):
+        image["apiKey"], paid_by = resolved, "PPT_IMAGE_API_KEY or the host image key"
+    elif not image.get("apiKey") and _IMAGE_GATEWAY in (image.get("apiBase") or _IMAGE_GATEWAY):
+        # Borrowed only towards OpenRouter. The host's image section may name
+        # another endpoint while leaving its key empty -- a state the host's own
+        # borrow declines to fill, because a section holding neither key nor
+        # model is not configured -- and lending the chat credential to an
+        # address its owner never nominated for pictures is the one thing this
+        # backfill must not do.
+        if borrowed := openrouter_key_in_force(config):
+            image["apiKey"], paid_by = borrowed, "the key that pays for the words"
+    # selectionConfig hands the section back to the host file, which the
+    # generator re-reads per call -- so it is written only where that file is
+    # what answers. A section holding neither key nor model answers "no key",
+    # an empty key in a present section being a revocation here, so writing it
+    # beside a borrowed key would erase the borrow on every call (measured);
+    # and an explicit PPT_IMAGE_API_KEY is this deployment's choice, not a
+    # host preference to be overridden by a later Settings edit.
+    host_selects = isinstance(host_image, dict) and bool(host_image.get("apiKey") or host_image.get("model"))
+    if host_selects and not env_value("PPT_IMAGE_API_KEY"):
+        image["selectionConfig"] = str(render.raven_home() / render.CONFIG_FILENAME)
+    config.setdefault("tools", {}).setdefault("media", {})["image"] = image
+    if not image.get("apiKey"):
+        log("[run] images: no OpenRouter key to draw with; the deck keeps only the pictures it can find")
+        return
+    engine_slice = config.setdefault("plugins", {}).setdefault("config", {}).setdefault(ENGINE_PLUGIN_ID, {})
+    engine_slice.setdefault("image", dict(image))
+    log(f"[run] images: {image.get('model') or 'the shipped default'}, paid by {paid_by}")
+
+
 def recommended_llm() -> str:
     """What this folder's manifest says this agent is tuned for."""
     try:
@@ -168,21 +255,6 @@ def render_config(source: Path) -> Path:
             for provider in config.get("providers", {}).values():
                 if isinstance(provider, dict):
                     provider["apiBase"] = api_base
-        # The pictures are paid for by the key that pays for the words, when the
-        # gateway is OpenRouter: GPT Image 2 is an OpenRouter model, and a run
-        # without this asked for tools.media.image.apiKey and drew no backdrop it
-        # could have generated. An explicit PPT_IMAGE_API_KEY has already landed in
-        # the slot above and wins; another gateway gets nothing written, since the
-        # image tool would only send that gateway a request it cannot serve.
-        if not render.dig(config, IMAGE_KEY_SLOT):
-            bases = [
-                str(provider.get("apiBase") or "")
-                for provider in config.get("providers", {}).values()
-                if isinstance(provider, dict)
-            ]
-            if any("openrouter.ai" in base for base in bases):
-                render.put(config, IMAGE_KEY_SLOT, api_key)
-                log("[run] images: the LLM key also pays for GPT Image 2 (tools.media.image.apiKey)")
         defaults = config.get("agents", {}).get("defaults", {})
         log(f"[run] llm: own key (provider={defaults.get('provider')} model={defaults.get('model')})")
     else:
@@ -198,6 +270,8 @@ def render_config(source: Path) -> Path:
             f"[run] llm: inherited from the host ({taken}); tuned for {recommended_llm()}"
             + (f"; ignored {', '.join(ignored)}, which need {llm_key}" if ignored else "")
         )
+
+    configure_image_generation(config, host)
 
     defaults = config.setdefault("agents", {}).setdefault("defaults", {})
     shipped_window = defaults.get("contextWindowTokens")
