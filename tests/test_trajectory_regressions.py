@@ -11,6 +11,7 @@ side must do there.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -316,6 +317,12 @@ checks:
 
 # ── committed cases under tests/trajectories/ ──────────────────────────
 
+# Raised by hand as real cases land; never derived from the directory, so
+# deleting a case is a deliberate, reviewable act.
+MIN_COMMITTED_CASES = 2
+
+REPORT_DIR_ENV = "RAVEN_REGRESSION_REPORT_DIR"
+
 
 def _case_dirs() -> list[Path]:
     if not CASES_ROOT.is_dir():
@@ -323,9 +330,84 @@ def _case_dirs() -> list[Path]:
     return sorted(p for p in CASES_ROOT.iterdir() if (p / "expect.yaml").is_file())
 
 
+def _guard_problems(root: Path, minimum: int) -> list[str]:
+    """Why the committed-case set cannot vouch for anything (empty = fine).
+
+    Counts by the same expect.yaml discovery the parametrization uses: an
+    empty parameter list would make the whole suite pass vacuously. A broken
+    directory missing its expect.yaml is the validate --all gate's job."""
+    if not root.is_dir():
+        return [f"cases root {root} is missing"]
+    count = sum(1 for p in root.iterdir() if (p / "expect.yaml").is_file())
+    if count < minimum:
+        return [f"only {count} committed case(s) under {root}, expected at least {minimum}"]
+    return []
+
+
+def _dump_failure_report(case_dir: Path, report, failures: list[str]) -> None:
+    """Serialize a failed case for the CI artifact, best-effort: the report
+    reuses the replay --json schema (mode comes from the case's expect.yaml
+    by construction) plus the check failures; any serialization problem must
+    never mask the test failure itself."""
+    out_dir = os.environ.get(REPORT_DIR_ENV)
+    if not out_dir or not failures:
+        return
+    try:
+        manifest = json.loads((case_dir / "cassette" / "manifest.json").read_text(encoding="utf-8"))
+        summary = {
+            key: manifest[key]
+            for key in ("attempt_id", "format_version")
+            if isinstance(manifest, dict) and isinstance(manifest.get(key), (str, int))
+        } or None
+    except (OSError, ValueError):
+        summary = None
+    payload = {**report.to_dict(manifest=summary), "check_failures": failures}
+    try:
+        path = Path(out_dir) / f"{case_dir.name}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except (OSError, ValueError):
+        pass
+
+
+async def test_committed_case_guard() -> None:
+    assert _guard_problems(CASES_ROOT, MIN_COMMITTED_CASES) == []
+
+
+async def test_guard_flags_missing_and_empty_roots(tmp_path) -> None:
+    assert _guard_problems(tmp_path / "nope", 1) == [f"cases root {tmp_path / 'nope'} is missing"]
+    problems = _guard_problems(tmp_path, 1)
+    assert problems and "only 0 committed case(s)" in problems[0]
+
+
+async def test_dump_failure_report_writes_the_artifact_schema(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(REPORT_DIR_ENV, str(tmp_path / "reports"))
+    case = _case_copy(tmp_path)
+    _dump_failure_report(case, _report(halted=True), ["checks[0]: failed"])
+    payload = json.loads((tmp_path / "reports" / "case_copy.json").read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["check_failures"] == ["checks[0]: failed"]
+    assert payload["manifest"] == {"attempt_id": "trace-1a02235c198-17f742c1", "format_version": 1}
+    assert payload["halted"] is True
+
+
+async def test_dump_failure_report_is_inert_without_the_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv(REPORT_DIR_ENV, raising=False)
+    _dump_failure_report(tmp_path, _report(), ["boom"])
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_dump_failure_report_swallows_write_errors(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(REPORT_DIR_ENV, str(tmp_path / "reports"))
+    monkeypatch.setattr(Path, "write_text", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    _dump_failure_report(_case_copy(tmp_path), _report(), ["boom"])
+
+
 @pytest.mark.parametrize("case_dir", _case_dirs(), ids=lambda p: p.name)
 async def test_trajectory_regression_case(case_dir: Path) -> None:
     report, failures = await run_regression_case(case_dir)
+    if failures:
+        _dump_failure_report(case_dir, report, failures)
     assert not failures, f"regression case {case_dir.name} failed:\n" + "\n".join(failures)
 
 
