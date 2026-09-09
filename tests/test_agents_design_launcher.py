@@ -10,7 +10,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 RUN_PY = REPO / "agents" / "raven-design" / "run.py"
-FORK = REPO / "subagents" / "raven-design"
+FORK = REPO / "tests" / "fixtures" / "vendored_fork" / "raven-design"
 
 #: The fork compaction leaves with no trunk counterpart (verdict D2): they
 #: must appear nowhere in the shipped compaction slice.

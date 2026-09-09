@@ -1,4 +1,0 @@
-interface:
-  display_name: "编辑与演示设计"
-  short_description: "将演示、报告、长文与信息册编排成清晰可发布的叙事系统"
-  default_prompt: "使用 $design-editorial-and-presentations 按最终消费者和媒介合同选择自然母版，只启用明确要求的交付媒介，并将原始内容编辑成适合该消费任务的发布物。"

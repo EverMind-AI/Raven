@@ -195,6 +195,7 @@ No other languages anywhere in the message — not just the subject; body and fo
 1. **Before writing:** translate the points in your head to English first — don't write a non-English body then translate (that leaves full-width residue).
 2. **After writing:** self-check with `git log -1`; any non-English char → rewrite.
 3. **Already committed but violating:** rewrite the message with `git rebase -i` **only after explicit user authorization**; don't rewrite history unprompted (see §3.4).
+4. **Syncing colleague fixes:** each fix lands as **one** commit — no same-subject twin pairs — and its body passes the same all-English / ASCII rules; the sync pipeline is not exempt from this section.
 
 ### §3.2 ✅ Good / ❌ Bad
 
@@ -395,8 +396,7 @@ Naming: `test_<scope>_<kind>.py`, where `<kind>` ∈:
 
 - Do not commit report assets or standalone web artifacts, regardless of size. This includes images, GIFs, SVGs, videos, audio files, PDFs, HTML files, web manifests, and WASM bundles.
 - The application source trees (`bridge/`, `ui-web/`, `ui-tui/`) are exempt from that extension list: a product frontend carries its own entry HTML and icon SVGs as source, not as report assets. Everything else in this section, including the 1 MiB limit, still applies to them.
-- Packaged `.jpg` benchmark plates under `subagents/raven-design/Raven-Design/raven/memory_engine/skills/<skill>/references/` are functional Skill inputs, not report assets, and are allowed. The 1 MiB limit still applies.
-- The same plates at their migrated home, `.jpg` files under `plugins-dist/design-engine/raven_design/skills/<skill>/references/`, are functional Skill inputs on the same terms: `.jpg` only, only under a skill's `references/`, and the 1 MiB limit still applies. The vendored seat above stays allowed until the fork tree retires.
+- Packaged `.jpg` benchmark plates under `plugins-dist/design-engine/raven_design/skills/<skill>/references/` are functional Skill inputs, not report assets, and are allowed: `.jpg` only, only under a skill's `references/`, and the 1 MiB limit still applies.
 - Store public-report assets outside git and link to them when needed.
 - Do not add or modify files over 1 MiB unless the maintainer explicitly approves it before the commit.
 - Run `make check-large-files` when touching docs, demos, reports, assets, or generated outputs; CI enforces the same rule on added and modified PR files.

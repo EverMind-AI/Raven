@@ -1,4 +1,0 @@
-interface:
-  display_name: "创作插画与视觉场景"
-  short_description: "创作并审查编辑插画、概念视觉、叙事场景、角色与环境世界观"
-  default_prompt: "使用 $create-illustrations-and-scenes 将简报发展为构图清楚、光色一致且可交付的原创插画或场景。"

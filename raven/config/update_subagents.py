@@ -286,12 +286,15 @@ def remove_agent(name: str, *, config_path: Path | None = None) -> bool:
     return True
 
 
-# Pre-``agents`` spellings. Kept as names because the vendored product trees
-# import them: ``subagents/*/install.py`` takes add_ and get_, ``install.sh``
-# takes remove_agent, and the uninstall recipe in ``subagents/README.md`` takes
-# remove_third_party_subagent. ``tests/test_external_consumer_surface.py`` reads
-# that surface out of those files, so what is promised is checked rather than
-# remembered -- and a spelling nothing there reaches is not a promise.
+# Pre-``agents`` spellings. Kept as names because the product trees import
+# them: ``agents/*/install.py`` takes add_, and the uninstall recipe in the
+# agents charter (``agents/README.md``) takes remove_third_party_subagent.
+# ``tests/test_external_consumer_surface.py`` reads that surface out of those
+# files, so what is promised is checked rather than remembered -- and a
+# spelling nothing there reaches is not a promise. ``get_third_party_subagents``
+# is that case now: only the retired fork installers imported it, and copies a
+# wheel already carried into raven homes may still run against this module, so
+# the name stays as a courtesy until that horizon closes; nothing pins it.
 get_third_party_subagents = get_agents
 add_third_party_subagent = add_agent
 remove_third_party_subagent = remove_agent

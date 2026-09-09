@@ -368,10 +368,10 @@ pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an 
 is a revocation rather than a miss; `web_fetch` is always offered, falling back to Jina,
 which reads pages without a key. The two sub-agent launchers inherit the host's selection
 differently: the in-process backend (`agent/subagent/backends/raven_loop.py`) takes it and
-then declines to *register* `web_search` when no key resolves -- the older gate, which the
-vendored-invariant guard still requires there -- while the vendored checkout's launcher
-(`subagents/raven-research/run.py`) declines to copy a selection it cannot key and keeps
-its own default, because its gate exits rather than degrading. Most vendors take the key
+then declines to *register* `web_search` when no key resolves, while the product launcher
+(`agents/raven-research/run.py`, and the retired fork before it -- its snapshot sits in
+`tests/fixtures/vendored_fork/`) refuses to start without a search key, because its gate
+exits rather than degrading. Most vendors take the key
 in a header; SerpApi takes it as a query parameter, so for that one the key travels inside
 every request URL and two surfaces have to keep it out -- the error path renders vendor plus
 status rather than the exception text, and the persisted log sink redacts a URL-borne
@@ -1242,9 +1242,9 @@ outside this paper and its implementers.
 An archive, not a promise: a plan describes the tree as it stood on its own
 date, and holding one to today's layout would make it lie about that date. A
 runnable snippet inside one is therefore not a public seam -- the public surface
-the vendored products pin is read out of `subagents/*/install.py`, `install.sh`
-and the README by `tests/test_external_consumer_surface.py`, and the living-doc
-pointer guard deliberately skips this directory.
+the agent products pin is read out of `agents/*/install.py` and the charter by
+`tests/test_external_consumer_surface.py`, and the living-doc pointer guard
+deliberately skips this directory.
 _Avoid_: updating an old plan to match a rename -- fix the living document that
 cites it instead, or leave it as the record it is.
 
@@ -1274,8 +1274,8 @@ libraries consumed by surfaces, importing none themselves -- the edge is watched
 by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
 package for the repo-level `evolver/` tool (outside the wheel) that drives raven as a library,
 and a fifth import-linter contract keeps the runtime from importing it back. `agents/` is the
-same kind of non-seat: repo-level product definitions (the A/B pilots against the frozen
-`subagents/`) that consume installed raven over `raven acp`, with a sixth contract keeping
+same kind of non-seat: repo-level product definitions (the A/B pilots whose A side is the
+retired `subagents/` fork record) that consume installed raven over `raven acp`, with a sixth contract keeping
 the runtime out of them — the wheel carries the tree as data (`raven/agents`, mapped by
 `hatch_build.py`) for the roster's file-level discovery, which imports nothing from it;
 the directory name is provisional by ruling. One ruled edge: `trajectory` (L3)

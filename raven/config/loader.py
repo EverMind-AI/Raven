@@ -2,7 +2,9 @@
 
 import json
 import logging
+import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +19,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 5
+CURRENT_CONFIG_VERSION = 7
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -27,11 +29,17 @@ CURRENT_CONFIG_VERSION = 5
 # on every config that went through 0.1.11/0.1.12 -- deleting a
 # ``contextWindowTokens: 65536`` the user had put back by hand, after our own
 # notice invited them to. Adding a migration means adding a floor here.
+# The stamp is a scalar: while the research rename holds it at six
+# (_research_rename_pending), every later floor re-runs on each load too, so
+# a new floor must keep the standing discipline -- idempotent, and silent
+# when it changes nothing.
 _CONTEXT_WINDOW_MIGRATION = 1
 _AUTO_PROVIDER_MIGRATION = 2
 _RETIRED_GATEWAY_WEB_MIGRATION = 3
 _LEGACY_LEAVES_MIGRATION = 4
 _PHANTOM_KNOBS_MIGRATION = 5
+_VENDORED_TREE_MIGRATION = 6
+_RESEARCH_RENAME_MIGRATION = 7
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -182,17 +190,19 @@ def _migration_version(config_path: Path) -> int:
         return 0
 
 
-def _write_migration_version(config_path: Path) -> None:
+def _write_migration_version(config_path: Path, version: int = CURRENT_CONFIG_VERSION) -> None:
     """Record that this config has been through the current migrations.
 
     Written even when nothing needed changing -- this is our file, not the
     user's, so stamping it costs the user nothing and buys the guarantee that
     matters: from here on, a ``contextWindowTokens`` the user sets by hand is
-    never second-guessed, whatever its value.
+    never second-guessed, whatever its value. ``version`` lets a pass whose
+    work is blocked (the research rename waiting on a freed name) hold the
+    stamp at the floor below, so that one pass retries on later loads.
     """
     stamp = _stamp_path(config_path)
     try:
-        atomic_replace(stamp, json.dumps({"version": CURRENT_CONFIG_VERSION}) + "\n")
+        atomic_replace(stamp, json.dumps({"version": version}) + "\n")
     except OSError as exc:
         logging.getLogger(__name__).debug("Could not write the migration stamp %s: %s", stamp, exc)
 
@@ -323,7 +333,10 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
     disagreeing with it.
     """
 
+    rename_pending = False
+
     def _apply(_text: str | None) -> tuple[str | None, bool]:
+        nonlocal rename_pending
         # Re-read inside the transaction so the migrated content is exactly
         # what is on disk while the lock is held -- an update_* writer cannot
         # slip an edit in between this read and the replace.
@@ -348,6 +361,11 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
                 changed = _migrate_legacy_leaves(raw) or changed
             if from_version < _PHANTOM_KNOBS_MIGRATION:
                 changed = _migrate_phantom_knobs(raw) or changed
+            if from_version < _VENDORED_TREE_MIGRATION:
+                changed = _migrate_vendored_tree_rows(raw) or changed
+            if from_version < _RESEARCH_RENAME_MIGRATION:
+                changed = _migrate_research_rename(raw) or changed
+                rename_pending = _research_rename_pending(raw)
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -359,7 +377,8 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
         return
 
     if parsed:
-        _write_migration_version(path)
+        target = _RESEARCH_RENAME_MIGRATION - 1 if rename_pending else CURRENT_CONFIG_VERSION
+        _write_migration_version(path, version=target)
 
 
 # The raw channel sections, exactly as the file spells them (sparse: only what
@@ -551,6 +570,257 @@ def _migrate_phantom_knobs(data: dict[str, Any], *, notify: bool = False) -> boo
     return changed
 
 
+# A path token that reaches into the retired vendored tree, on either separator.
+# Only the five product folders count: the word "subagents" alone also names the
+# session-records directory and the config section, neither of which is a path
+# into the tree. The head stops at whitespace, quotes and "=" so a token embedded
+# in --flag=... or a quoted argv is matched from its own start.
+_VENDORED_TOKEN_RE = re.compile(
+    r"[^\s'\"=]*[\\/]subagents[\\/](?P<folder>raven-(?:code|design|oncall|ppt|research))"
+    r"(?P<rest>[\\/][^\s'\"]*)?(?=[\s'\"]|$)"
+)
+
+#: The row name a re-aim is allowed for, per product folder. A stored row is
+#: re-aimed only when its name matches this table, so the rewritten row is one
+#: the folder's launcher can actually serve. ``raven-research`` maps to None --
+#: never re-aim: the fork's research rows were cli-kind on a different flow,
+#: and the product now holds the fork's old display name (the transition-era
+#: ``Raven-Research-NG`` retired with the tree), so a name match there would
+#: select exactly the rows the gate exists to refuse.
+_VENDORED_MANIFEST_NAMES: dict[str, str | None] = {
+    "raven-code": "Raven-Code",
+    "raven-design": "Raven-Design",
+    "raven-oncall": "Raven-Oncall",
+    "raven-ppt": "Raven-PPT",
+    "raven-research": None,
+}
+
+#: Products whose manifest declares an engine wheel a bare runtime install may
+#: lack; the re-aim notice names the caveat instead of probing readiness here.
+_ENGINE_WHEEL_FOLDERS = ("raven-design", "raven-ppt")
+
+
+def _looks_path_rooted(token: str) -> bool:
+    """Whether a matched token starts at a path root rather than mid-path.
+
+    A path containing an unquoted space splits across tokens, and the tail
+    fragment still matches the tree pattern; rewriting it would weld half a
+    path onto the new root. A genuine stored path is absolute (install.py
+    resolved it) or a template placeholder, so anything else is a fragment.
+    """
+    return bool(re.match(r"^(?:[\\/]|~|\{|[A-Za-z]:[\\/])", token))
+
+
+def _reaim_vendored_token(match: "re.Match[str]") -> str:
+    """One rewritten path token: fork-venv interpreters become the running one."""
+    folder = match.group("folder")
+    rest = match.group("rest") or ""
+    if re.search(r"[\\/]\.venv[\\/](?:bin|Scripts)[\\/]python[\w.]*(?:\.exe)?$", rest):
+        # The fork carried its own interpreter; the agents/ launcher is
+        # stdlib-only and runs on whatever interpreter runs raven. Only the
+        # interpreter leaf itself is swapped: any other path through a .venv
+        # (a cert bundle, a data file) is still a path and moves like one.
+        return sys.executable
+    target = raven_home() / "agents" / folder
+    if rest.strip("\\/"):
+        target = target / Path(rest.replace("\\", "/").lstrip("/"))
+    return str(target)
+
+
+def _walk_strings(node: Any):
+    """Yield (container, key, value) for every string under ``node``."""
+    if isinstance(node, dict):
+        items: Any = list(node.items())
+    elif isinstance(node, list):
+        items = list(enumerate(node))
+    else:
+        return
+    for key, value in items:
+        if isinstance(value, str):
+            yield node, key, value
+        elif isinstance(value, (dict, list)):
+            yield from _walk_strings(value)
+
+
+def _row_verdict(row: dict) -> tuple[str, set[str]]:
+    """(verdict, folders): "clean" (no tree paths), "reaim", "orphan" or "manual"."""
+    folders: set[str] = set()
+    rooted = True
+    for _, _, value in _walk_strings(row):
+        for match in _VENDORED_TOKEN_RE.finditer(value):
+            folders.add(match.group("folder"))
+            if not _looks_path_rooted(match.group(0)):
+                rooted = False
+        if re.search(
+            r"[\\/]subagents[\\/]raven-(?:code|design|oncall|ppt|research)(?=[\\/\s'\"]|$)", value
+        ) and not _VENDORED_TOKEN_RE.search(value):
+            rooted = False
+    if not folders:
+        return "clean", folders
+    if not rooted:
+        return "manual", folders
+    name = str(row.get("name") or "")
+    if len(folders) > 1:
+        return "tangled", folders
+    if _VENDORED_MANIFEST_NAMES[next(iter(folders))] == name:
+        return "reaim", folders
+    return "orphan", folders
+
+
+def _migrate_vendored_tree_rows(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Re-aim stored roster rows from the retired vendored tree to ``agents/``.
+
+    A row a product's ``install.py`` wrote before the retirement carries
+    absolute paths into ``<home>/subagents/<folder>/``, and its interpreter
+    token usually names the fork's own ``.venv``, which the thin ``agents/``
+    launchers do not have. A row is re-aimed only when its name still matches
+    the folder's current manifest name, so the rewritten row is one the
+    launcher can actually serve; a row the products no longer name (the
+    research fork's old name) and a row whose paths this migration cannot
+    rewrite whole (an unquoted space splits the token) are left byte-identical,
+    each with a notice saying what to do instead. Rows that name no vendored
+    folder pass through untouched. The old copies on disk stay the user's to
+    delete -- one notice says so once.
+    """
+
+    def _tell(notice: str) -> None:
+        if notify and notice not in _migration_notices:
+            _migration_notices.append(notice)
+
+    changed = False
+    for alias, rows in _subagent_alias_rows(data):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            verdict, folders = _row_verdict(row)
+            name = str(row.get("name") or "?")
+            if verdict == "clean":
+                continue
+            if verdict == "manual":
+                _tell(
+                    f"Migrated: subagents rows updated, except [{name}]: its path into the retired "
+                    "vendored subagents tree could not be rewritten whole (an unquoted space splits "
+                    "it); edit the row by hand or re-run onboarding"
+                )
+                continue
+            if verdict == "tangled":
+                _tell(
+                    f"Migrated: subagents rows updated, except [{name}]: it references more than one "
+                    "retired product folder, which no single launcher can serve; edit the row by hand "
+                    "or re-run onboarding"
+                )
+                continue
+            if verdict == "orphan":
+                _tell(
+                    f"Migrated: subagents.{alias}[{name}] still points at the retired vendored "
+                    "subagents tree and cannot be re-aimed onto the current product; it keeps "
+                    "running only while the old copy remains on disk -- re-run onboarding "
+                    "(raven onboard) to register the current product, then remove this row"
+                )
+                continue
+            for container, key, value in _walk_strings(row):
+                new_value = _VENDORED_TOKEN_RE.sub(_reaim_vendored_token, value)
+                if new_value != value:
+                    container[key] = new_value
+                    changed = True
+            folder = next(iter(folders))
+            notice = (
+                f"Migrated: subagents.{alias}[{name}] now launches from the agents tree (vendored subagents/ retired)"
+            )
+            if folder in _ENGINE_WHEEL_FOLDERS:
+                notice += "; the product declares an engine wheel, which onboarding installs if missing"
+            _tell(notice)
+    if changed:
+        _tell(
+            "Migrated: the vendored subagents tree is retired; leftover copies under "
+            f"{raven_home() / 'subagents'} can be deleted to reclaim space"
+        )
+    return changed
+
+
+def _subagent_alias_rows(data: dict[str, Any]) -> "Iterator[tuple[str, list]]":
+    """The roster lists under every alias spelling, malformed shapes skipped.
+
+    A config a stamp says is current can still be hand-mangled afterwards; a
+    migration that crashes on it would take the load down before the schema
+    could say what is wrong. Yields the alias with the list so a notice can
+    name the spelling the row actually sits under.
+    """
+    section = data.get("subagents")
+    if not isinstance(section, dict):
+        return
+    for alias in ("agents", "thirdParty", "third_party"):
+        rows = section.get(alias)
+        if isinstance(rows, list):
+            yield alias, rows
+
+
+def _research_rename_pending(data: dict[str, Any]) -> bool:
+    """Whether a ``Raven-Research-NG`` row is still waiting for its rename.
+
+    True after a blocked pass: the stamp is then held at floor six so the
+    rename retries on later loads and completes once the name frees.
+    """
+    return any(
+        isinstance(row, dict) and row.get("name") == "Raven-Research-NG"
+        for _alias, rows in _subagent_alias_rows(data)
+        for row in rows
+    )
+
+
+def _migrate_research_rename(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Rename registered ``Raven-Research-NG`` rows to ``Raven-Research``.
+
+    The ``-NG`` suffix existed to coexist with the vendored fork's own row;
+    the fork retired with floor six, so the product reclaims the plain name.
+    Display name only: the machine id ``raven-research-ng`` (state root, ACP
+    home, everos identity, the ``RESEARCH_NG_*`` variables) is a stable key
+    and stays -- renaming it would strand the agent's memory and state.
+
+    A row already holding ``Raven-Research`` (a fork-era registration this
+    build never rewrites) blocks the rename: renaming beside it would mint two
+    rows under one name, and every by-name verb (remove, toggle, dispatch)
+    would then hit both. A blocked rename is the one migration that retries:
+    the persist pass holds the stamp at floor six while a transition row
+    remains (``_research_rename_pending``), so clearing either side -- the
+    row holding the name, or the transition row itself -- lets a later load
+    converge. The orphan advisories stay one-shot because no later pass could
+    complete them; this one can.
+    """
+
+    def _tell(notice: str) -> None:
+        if notify and notice not in _migration_notices:
+            _migration_notices.append(notice)
+
+    old_name, new_name = "Raven-Research-NG", "Raven-Research"
+    holder: dict[str, str] = {}
+    for alias, rows in _subagent_alias_rows(data):
+        for row in rows:
+            if isinstance(row, dict):
+                holder.setdefault(str(row.get("name") or ""), alias)
+    changed = False
+    for alias, rows in _subagent_alias_rows(data):
+        for row in rows:
+            if not (isinstance(row, dict) and row.get("name") == old_name):
+                continue
+            if new_name in holder:
+                _tell(
+                    f"Migrated: subagents.{alias}[{old_name}] keeps its transition-era "
+                    f"name for now: a row in subagents.{holder[new_name]} already holds "
+                    f"'{new_name}'; remove or rename either row (or re-run onboarding) "
+                    "and the roster converges on a later load"
+                )
+                continue
+            row["name"] = new_name
+            holder[new_name] = alias
+            changed = True
+            _tell(
+                f"Migrated: subagents.{alias}[{old_name}] is renamed to {new_name}; "
+                "the transition-era -NG suffix retired with the fork tree"
+            )
+    return changed
+
+
 def _migrate_legacy_leaves(data: dict[str, Any], *, notify: bool = False) -> bool:
     """Retire the three leaves the schema kept accepting after their meaning left.
 
@@ -629,6 +899,10 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
         _migrate_legacy_leaves(data, notify=True)
     if from_version < _PHANTOM_KNOBS_MIGRATION:
         _migrate_phantom_knobs(data, notify=True)
+    if from_version < _VENDORED_TREE_MIGRATION:
+        _migrate_vendored_tree_rows(data, notify=True)
+    if from_version < _RESEARCH_RENAME_MIGRATION:
+        _migrate_research_rename(data, notify=True)
 
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     tools = data.get("tools", {})

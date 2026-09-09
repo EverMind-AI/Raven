@@ -1,4 +1,4 @@
-.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel check-vendored-invariants beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate
+.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
@@ -29,7 +29,6 @@ help:
 	@echo "  check-large-files Validate PR files avoid blocked assets and size bloat"
 	@echo "  check-source-language Validate PR-added lines stay English outside the exemption zones"
 	@echo "  check-core-wheel  Build the raven-core wheel and smoke it in a clean venv"
-	@echo "  check-vendored-invariants Validate vendored subagents carry this trunk's fixes"
 	@echo "  fetch-templates Pull the deck engine's eight bundled templates from the package registry (needs GITLAB_TOKEN)"
 	@echo "  beta           Build this checkout and publish it to the beta channel"
 	@echo "  ci             Run the local CI gate"
@@ -46,7 +45,7 @@ install: install-deps
 	npm ci --prefix ui-tui
 	npm ci --prefix bridge
 
-lint: lint-python lint-ui lint-tui lint-bridge check-vendored-subagents check-vendored-invariants
+lint: lint-python lint-ui lint-tui lint-bridge
 
 lint-python:
 	uv run --frozen --python $(PYTHON_VERSION) --extra dev ruff check $(PYTHON_LINT_TARGETS)
@@ -146,8 +145,3 @@ clean:
 fetch-templates:
 	python3 plugins-dist/ppt-engine/fetch_templates.py
 
-check-vendored-subagents:
-	@python3 scripts/check_vendored_subagents.py
-
-check-vendored-invariants:
-	@python3 scripts/check_vendored_invariants.py

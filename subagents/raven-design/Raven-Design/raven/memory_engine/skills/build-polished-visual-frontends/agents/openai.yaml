@@ -1,4 +1,0 @@
-interface:
-  display_name: "高完成度视觉前端"
-  short_description: "以真实标杆、成熟工具和渲染批评构建高完成度视觉前端"
-  default_prompt: "使用 $build-polished-visual-frontends 为这个视觉产物选择领域、真实标杆和成熟技术栈，并通过实际渲染迭代到高完成度。"

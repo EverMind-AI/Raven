@@ -21,17 +21,17 @@ export interface XaRow {
      `configured` is false on one and why the two lists below filter it out:
      not writing a row is what "use the default" means. */
   builtin?: boolean
-  /* Discovered under `subagents/` rather than written into config: one of the
-     Raven builds this install shipped. Like `builtin` it leaves `configured`
-     false -- there is nothing to delete, and removing it means removing its
-     folder -- so it must be kept out of the "connect one" section too, whose
-     only verb it cannot honour. Unlike `builtin` it is a real subprocess, so it
-     is probed and it can be unready. Absent from a server that predates
-     discovery. */
+  /* Discovered under the `agents/` product tree rather than written into
+     config: one of the agent products this install shipped. Like `builtin` it
+     leaves `configured` false -- there is nothing to delete, and removing it
+     means removing its folder -- so it must be kept out of the "connect one"
+     section too, whose only verb it cannot honour. Unlike `builtin` it is a
+     real subprocess, so it is probed and it can be unready. Absent from a
+     server that predates discovery. */
   vendored?: boolean
-  /* A build of this folder's venv is in flight (`subagents.build`). Its own flag
-     rather than `test_running`: a build and a test are different verbs on the
-     same row, and one must not read as the other. */
+  /* Always false from this server: the fork-era venv build is gone, and
+     `subagents.build` answers that there is nothing to build. Kept for wire
+     compatibility. */
   building?: boolean
   enabled: boolean
   probe_status: XaProbe | string

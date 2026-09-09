@@ -2418,7 +2418,7 @@ def _step6_subagents(*, skip: bool, non_interactive: bool, warnings: list[str]) 
     """Step 6 — the sub-agents in this checkout, optional, forward-only.
 
     This is a wizard step rather than an installer step because it needs a
-    configured host raven, and ``subagents/install.sh`` runs before one exists.
+    configured host raven, and the retired vendored installer ran before one existed.
     Skipped on --skip-subagents or non-interactive; roster membership comes from
     discovery either way, so leaving it undone just means the vendored agents
     stay listed-and-disabled until their venvs are built, and re-running

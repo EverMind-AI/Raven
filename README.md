@@ -61,13 +61,11 @@ Windows PowerShell 5.1 may reject the redirect. Use the direct installer URL ins
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
 ```
 
-Run `./install.sh` from a clone and it also builds the sub-agents in
-`subagents/` - one venv each. Setup then asks about each of them and registers
-the ones you take up, on the model it is tuned for or on this raven's LLM. All
-three are tuned for models served through OpenRouter, so if you configured an
-OpenRouter key in step 1 there is no key to type again. The published installer
-cannot build them: the release artifacts carry `raven/` only. See
-[`subagents/README.md`](subagents/README.md).
+The agent products ship with raven itself: a wheel carries the `agents/`
+product tree and copies it out to your raven home on first use, and a source
+checkout reads the tree in place. Setup asks about each product and registers
+the ones you take up, on the model it is tuned for or on this raven's LLM.
+See [`agents/README.md`](agents/README.md).
 
 ### Onboard and run
 
