@@ -210,6 +210,33 @@ describe('workspace island', () => {
     expect(state.shellCalls).toContainEqual(['showWorkspace', 'file'])
   })
 
+  /* Chromium refuses its PDF viewer inside any frame that carries the sandbox
+     attribute -- the file is fetched and then blocked by the client, and the
+     pane stays a grey box -- so the PDF frame carries none. The response's own
+     CSP sandbox is what keeps the document off the page's origin. */
+  it('frames a PDF without the sandbox attribute', async () => {
+    install(emptyWs({
+      file: { path: '/repo/deck.pdf', kind: 'pdf', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const frame = document.querySelector('.fview iframe') as HTMLIFrameElement
+    expect(frame).not.toBeNull()
+    expect(frame.hasAttribute('sandbox')).toBe(false)
+    expect(frame.getAttribute('src')).toContain('/file?path=%2Frepo%2Fdeck.pdf')
+  })
+
+  /* HTML is a script carrier the agent wrote, so it keeps the empty sandbox:
+     readable, never run. */
+  it('keeps the sandbox on an HTML frame', async () => {
+    install(emptyWs({
+      file: { path: '/repo/report.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const frame = document.querySelector('.fview iframe') as HTMLIFrameElement
+    expect(frame).not.toBeNull()
+    expect(frame.getAttribute('sandbox')).toBe('')
+  })
+
   /* A kind the page cannot render: the note offers the host's own application
      for it. Both actions run where the GATEWAY runs, which is why the offer is
      conditional -- see the withheld case below. */
