@@ -348,6 +348,34 @@ def test_a_turn_that_skipped_the_inbound_phase_is_pointed_at_the_deck_on_its_fir
     assert f"Published a 2-slide deck.\nDeck: {deck}\nMEDIA: {deck}" in outbound.modified_content
 
 
+def test_the_sessions_tier_is_written_where_the_deck_tools_read_it(tmp_path: Path) -> None:
+    """The mode overlay reaches hooks only; ppt_build reads the caps off the deck
+    folder per call, so a tier switched mid-session takes effect on the next build."""
+    from raven_ppt.services import tier
+
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+
+    async def run():
+        with workdir.bind(wd):
+            ctx = AgentHookContext(
+                session_key="s1",
+                iteration=1,
+                metadata={"mode": "high", "mode_overlay": {"buildCap": 10, "readingCap": 3}},
+            )
+            await hook.before_iteration(ctx)
+            capped = tier.read_caps(Path(workdir.current()))
+            await hook.before_iteration(
+                AgentHookContext(session_key="s1", iteration=1, metadata={"mode": "max", "mode_overlay": {}})
+            )
+            return capped, tier.read_caps(Path(workdir.current()))
+
+    capped, uncapped = asyncio.run(run())
+    assert capped == tier.Caps(mode="high", build_cap=10, reading_cap=3)
+    assert uncapped == tier.Caps(mode="max")
+
+
 def test_a_staging_failure_short_circuits_the_turn_with_the_forks_sentence(tmp_path: Path) -> None:
     hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
     wd = tmp_path / "session"

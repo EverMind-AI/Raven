@@ -89,24 +89,6 @@ _PROTOTYPE_WORKSPACE = Path("/nonexistent/design-engine-prototype")
 
 _MALFORMED_SLICE_ERROR = 'the design-engine config slice is malformed; fix plugins.config["design-engine"]'
 
-_METADATA_KEY = "design_engine"
-
-# A turn ends on the first reply without a tool call, and `completion_notice`
-# rides that reply out. In a direct chat the notice is a nudge with a next turn
-# to act on it; dispatched as a DAG node there is no next turn, so the same text
-# reaches the caller's judge as a verdict on work the agent may well have done.
-# One live run wrote the page, reported the path, and was failed on two items it
-# had finished 37 minutes earlier but never ticked. Sending the turn back once
-# lets the agent settle its own record while the reply is still a draft; the
-# second answer then stands, because an item still open after that is a fact the
-# judge should see.
-RECONCILE_NUDGE = (
-    "This reply ends the turn, and the task-state notice above travels out with it -- whoever reads "
-    "the reply is told the task is incomplete. Settle the record before ending: mark every item you "
-    "actually finished as completed, and for anything genuinely not done, name the item in the reply "
-    "and say why. Do not redo or restate the work; reconcile the record and end."
-)
-
 
 def packaged_skills_dir() -> Path:
     """The corpus shipped inside this wheel."""
@@ -167,12 +149,7 @@ def render_selection_block(selection: Any) -> str:
 
 
 def completion_notice(manager: "TaskStateManager", session_key: str) -> str | None:
-    """The fork's turn-end nudge (main.py:1208-1230), verbatim semantics.
-
-    Read from two seats now: `after_send` appends it to the reply, and
-    `after_iteration` shows it to the agent one turn earlier so the reply need
-    not carry it. The text is the same in both, which is why it lives here.
-    """
+    """The fork's turn-end nudge (main.py:1208-1230), verbatim semantics."""
     state = manager.get(session_key)
     if state is None:
         return None
@@ -252,8 +229,6 @@ class MisconfiguredEngineHook(AgentHook):
 class DesignEngineHook(AgentHook):
     """Domain selection on the way in; task-state projection and nudge through."""
 
-    rolls_back_iterations = True
-
     def __init__(
         self,
         cfg: "EngineConfig",
@@ -308,46 +283,6 @@ class DesignEngineHook(AgentHook):
             return HookDecision()
         return HookDecision(append_note=block)
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
-        """Send the turn back once when its reply would carry a stale ledger.
-
-        Decided from the ledger rather than from the prose: whether the reply
-        reads as finished is a language judgement, while "settle the record"
-        is an action the agent can always take, and the two honest outcomes --
-        ticking what is done, or naming what is not -- are both reachable from
-        one nudge.
-        """
-        if self._manager is None:
-            return HookDecision()
-        response = ctx.response
-        if response is None or getattr(response, "tool_calls", None):
-            return HookDecision()
-        if not str(getattr(response, "content", None) or "").strip():
-            return HookDecision()
-        key = self._session_key()
-        if key is None:
-            return HookDecision()
-        try:
-            notice = completion_notice(self._manager, key)
-        except Exception as exc:
-            logger.warning("design-engine: task-state read failed: %s", exc)
-            return HookDecision()
-        if notice is None:
-            return HookDecision()
-        if ctx.metadata is None:
-            # Nothing here to count the nudge in, and an uncounted one would
-            # re-send on every iteration. The loop always seats this dict.
-            return HookDecision()
-        meta = ctx.metadata.setdefault(_METADATA_KEY, {})
-        if meta.get("reconcile_nudged"):
-            return HookDecision(notes=["design_engine: ledger still unfinished after one nudge; letting the turn end"])
-        meta["reconcile_nudged"] = True
-        return HookDecision(
-            rollback=True,
-            rollback_inject=[{"role": "user", "content": f"{notice}\n\n{RECONCILE_NUDGE}"}],
-            notes=["design_engine: reply ending a turn on an unfinished task-state ledger rolled back (1/1)"],
-        )
-
     async def after_send(self, ctx: AgentHookContext) -> HookDecision:
         bound = workdir.current()
         reply = ctx.outbound_content or ""
@@ -373,7 +308,6 @@ __all__ = [
     "FOUNDATION_SKILL_ID",
     "DesignEngineHook",
     "MisconfiguredEngineHook",
-    "RECONCILE_NUDGE",
     "build_selector",
     "completion_notice",
     "packaged_skills_dir",

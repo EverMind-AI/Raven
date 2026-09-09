@@ -9,13 +9,11 @@ Driven against a real AgentLoop with only the LLM provider + sandbox edges faked
 
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass, field
 
 import pytest
 
-from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.hook.adapters import DecisionConsumerAdapter
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import HostWiring, ToolWiring
@@ -1458,100 +1456,3 @@ async def test_a_direct_chat_turn_releases_nothing(tmp_path):
     await loop.run_turn(req, _EmitCollector(), _drain)
 
     assert recorder.calls == []
-
-
-# ── a rolled-back draft must not reach the stream ───────────────────
-
-
-class _RollsBackTheFirstAnswer(AgentHook):
-    """Sends the first tool-call-free response back once, as an engine hook does."""
-
-    rolls_back_iterations = True
-
-    def __init__(self) -> None:
-        self.rolled = 0
-
-    @property
-    def name(self) -> str:
-        return "rollback_probe"
-
-    async def after_iteration(self, ctx):
-        response = ctx.response
-        if response is None or getattr(response, "tool_calls", None):
-            return HookDecision()
-        if self.rolled or not str(getattr(response, "content", "") or "").strip():
-            return HookDecision()
-        self.rolled += 1
-        return HookDecision(rollback=True, rollback_inject=[{"role": "user", "content": "try again"}])
-
-
-async def test_a_rolled_back_draft_never_reaches_the_stream(tmp_path):
-    """`rollback` pops history, and the stream has already left.
-
-    An `after_iteration` hook decides from state the response does not carry, so
-    it can only speak after the content has streamed. Popping the messages then
-    leaves the reader holding text the turn no longer has -- and on the ACP lane
-    the collector concatenates every chunk, so the rejected draft and its
-    replacement arrive as one answer. The deltas are held until something keeps
-    the response, which is what this pins.
-    """
-    provider = _FakeStreamToolProvider([[ChatDelta(content="FIRST DRAFT")], [ChatDelta(content="FINAL REPLY")]])
-    hook = _RollsBackTheFirstAnswer()
-    loop = AgentLoop(
-        provider=provider,
-        workspace=tmp_path,
-        host=HostWiring(hooks=[hook]),
-    )
-    _stub_edges(loop)
-    sink = _EmitCollector()
-
-    await loop.run_turn(_req("hi"), sink, _drain)
-
-    deltas = [e.delta for e in sink.events if isinstance(e, EvStreamDelta)]
-    assert hook.rolled == 1, "the hook never rolled anything back, so this proves nothing"
-    assert deltas == ["FINAL REPLY"], f"the caller saw the rejected draft: {deltas}"
-
-
-class _PassThroughObserver(AgentHook):
-    """`eval_engine`'s judge shape: overrides the phase, awaits inside it, never
-    sends anything back -- and says so, by leaving `rolls_back_iterations` alone."""
-
-    def __init__(self) -> None:
-        self.entered = 0
-        self.finished = 0
-
-    @property
-    def name(self) -> str:
-        return "observer_probe"
-
-    async def after_iteration(self, ctx):
-        self.entered += 1
-        await asyncio.sleep(0)  # an await inside the phase, as a judge call is
-        self.finished += 1
-        return HookDecision()
-
-
-async def test_an_observer_that_cannot_roll_back_keeps_the_chunks(tmp_path):
-    """The other half of holding, and the reason it is declared not inferred.
-
-    Overriding `after_iteration` says a hook watches the phase, not that it can
-    send the response back. `eval_engine`'s judge overrides it, awaits an LLM
-    call inside it, and its own contract says an evaluator never interrupts the
-    reply -- so inferring the capability from the override took the answer away
-    from the reader until the judge returned, for a draft that was never going
-    to be rejected.
-    """
-    provider = _FakeStreamProvider([ChatDelta(content="Hel"), ChatDelta(content="lo")])
-    observer = _PassThroughObserver()
-    loop = AgentLoop(provider=provider, workspace=tmp_path, host=HostWiring(hooks=[observer]))
-    _stub_edges(loop)
-    sink = _EmitCollector()
-
-    await loop.run_turn(_req("hi"), sink, _drain)
-
-    # Both counters, because CompositeHook swallows a hook exception: a body that
-    # raised past the await would leave the entered count alone and still pass.
-    assert observer.entered > 0, "the observer never ran, so this proves nothing"
-    assert observer.finished == observer.entered, "the observer raised inside the phase"
-    deltas = [e.delta for e in sink.events if isinstance(e, EvStreamDelta)]
-    assert deltas == ["Hel", "lo"], f"an observer that cannot roll back lost the reader the chunks: {deltas}"

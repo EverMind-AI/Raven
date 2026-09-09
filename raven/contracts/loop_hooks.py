@@ -228,20 +228,7 @@ class AgentHook(ABC):
 
     All phases default to no-op (return a pass-through ``HookDecision``).
     Subclasses override only the methods they need.
-
-    ``rolls_back_iterations`` is how a subclass says its ``after_iteration`` can
-    answer ``rollback``. It is declared rather than read off the override,
-    because overriding the phase only says the hook *observes* it: the loop
-    holds a response's deltas for a hook that can send the response back, which
-    costs the reader the answer typing out, and an observer would pay that for
-    nothing. ``eval_engine``'s judge is the case in point -- it overrides the
-    phase, awaits an LLM judge inside it, and its own contract says an evaluator
-    never interrupts the reply chain.
     """
-
-    #: See the class docstring: the loop reads this to decide whether this
-    #: turn's response deltas are worth holding.
-    rolls_back_iterations: bool = False
 
     @property
     def name(self) -> str:

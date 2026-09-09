@@ -731,11 +731,6 @@ class ResearchFlowHook(AgentHook):
     threw the real one away, and ran the turn's exit under the wrong knobs.
     """
 
-    #: Six gates in the chain this hook delegates to answer ``rollback``. The
-    #: loop reads the flag off this class before any session chain exists, so it
-    #: cannot be derived from the members that carry the behaviour.
-    rolls_back_iterations = True
-
     cfg: FlowConfig
     provider: "LLMProvider | None"
     tools: ToolHandles

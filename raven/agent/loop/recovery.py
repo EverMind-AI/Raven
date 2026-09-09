@@ -252,53 +252,6 @@ def cut_reasoning_head(text: str | None) -> str | None:
     return rest.lstrip()
 
 
-class DraftGate:
-    """Holds a response's deltas until something has decided to keep it.
-
-    `ContinuationGate` below holds only until a rule can be decided from the
-    text. This holds until a caller says so, because the decision is not in the
-    text: a hook reading state the response does not carry can send the whole
-    thing back (`HookDecision.rollback`), and a rollback pops history the stream
-    has already left. A draft the loop discarded and a reader who saw it are not
-    the same turn -- on the ACP lane `_TurnCollector` concatenates every chunk,
-    so the rejected draft and its replacement arrive as one answer.
-
-    `cut_head` folds in `ContinuationGate`'s job for the iteration that follows a
-    length-truncated response. Holding the whole text makes that cut exact rather
-    than a rule decided on a prefix, which is why the two do not stack.
-    """
-
-    def __init__(self, deliver, *, cut_head: bool = False) -> None:
-        self._deliver = deliver
-        self._cut_head = cut_head
-        self._held = ""
-        self._open = False
-        self._dropped = False
-
-    async def __call__(self, delta: str) -> None:
-        if self._dropped:
-            return
-        if self._open:
-            await self._deliver(delta)
-            return
-        self._held += delta
-
-    async def release(self) -> None:
-        """Deliver what is held, then let the rest through untouched."""
-        if self._dropped or self._open:
-            return
-        self._open = True
-        text = cut_reasoning_head(self._held) if self._cut_head else self._held
-        self._held = ""
-        if text:
-            await self._deliver(text)
-
-    def discard(self) -> None:
-        """Drop the held draft. Nothing kept it, so nobody reads it."""
-        self._held = ""
-        self._dropped = True
-
-
 class ContinuationGate:
     """Streams a continuation's deltas with :func:`cut_reasoning_head` applied.
 

@@ -78,7 +78,7 @@ from raven.agent.loop._shared import (
     uuid4,
     workdir,
 )
-from raven.agent.loop.recovery import ContinuationGate, DraftGate, cut_reasoning_head
+from raven.agent.loop.recovery import ContinuationGate, cut_reasoning_head
 from raven.agent.tools.registry import call_failed
 from raven.permissions.turn import set_current_tool_call_id
 from raven.providers.tool_calls import openai_tool_call
@@ -806,16 +806,6 @@ class TurnPathMixin:
             else None
         )
         hook_rollbacks = 0
-        # Whether anything installed can send a response back. Only then are the
-        # deltas worth holding: holding coalesces the reply into one delta, which
-        # costs the reader the answer typing out, and a hook that never rolls
-        # back would pay that for nothing. Read off the hook's own declaration
-        # rather than from the override: overriding the phase only says a hook
-        # watches it, and eval_engine's judge overrides it, awaits an LLM call
-        # inside it, and promises never to interrupt the reply.
-        holds_drafts = hook_ctx is not None and any(
-            getattr(hook, "rolls_back_iterations", False) for hook in self.hooks
-        )
         iter_msg_base = 0
         pending_gen_overrides: dict[str, Any] | None = None
 
@@ -1029,27 +1019,13 @@ class TurnPathMixin:
                 tool_defs,
                 effective_model,
             )
-            # A hook can send this whole response back, and a rollback pops the
-            # history the stream has already left -- so where hooks are installed
-            # the deltas are held until something keeps the response. The draft
-            # gate owns the continuation head cut in that case: holding the whole
-            # text cuts it exactly, so the two gates never stack.
-            draft = (
-                DraftGate(on_token_delta, cut_head=cut_continuation)
-                if on_token_delta is not None and holds_drafts
-                else None
-            )
-            gate = (
-                ContinuationGate(on_token_delta)
-                if draft is None and cut_continuation and on_token_delta is not None
-                else None
-            )
+            gate = ContinuationGate(on_token_delta) if cut_continuation and on_token_delta is not None else None
             if on_token_delta is not None or on_reasoning_delta is not None:
                 response = await self._llm_call_stream(
                     messages=call_messages,
                     tools=call_tools,
                     model=call_model,
-                    on_token_delta=draft or gate or on_token_delta,
+                    on_token_delta=gate if gate is not None else on_token_delta,
                     on_reasoning_delta=on_reasoning_delta,
                     **gen_overrides,
                 )
@@ -1066,10 +1042,6 @@ class TurnPathMixin:
                 if gate is not None:
                     await gate.finish()
                 response.content = cut_reasoning_head(response.content)
-            if draft is not None and response.tool_calls:
-                # A preamble beside tool calls is not the answer a hook holds back
-                # as final, and holding it would park it for the whole tool run.
-                await draft.release()
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
             usage_snapshot = self._build_usage_snapshot(response, call_model, session_key or "")
@@ -1677,19 +1649,13 @@ class TurnPathMixin:
 
                 # Before the text is persisted, so a short-circuit replaces it
                 # without leaving the replaced draft in history and a rollback
-                # discards-and-re-samples it. The stream is held to match: a
-                # rollback pops history, and only the draft gate can keep the
-                # reader from having seen what history no longer has.
+                # discards-and-re-samples it.
                 if hook_ctx is not None:
                     hook_ctx.messages = messages
                     hook_ctx.response = response
                     decision = await self.hooks.after_iteration(hook_ctx)
                     if _hook_rollback(decision):
-                        if draft is not None:
-                            draft.discard()
                         continue
-                    if draft is not None:
-                        await draft.release()
                     _land_hook_note(decision)
                     if decision.short_circuit_result is not None:
                         final_content = str(decision.short_circuit_result)

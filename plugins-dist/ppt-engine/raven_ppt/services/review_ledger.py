@@ -90,6 +90,7 @@ def record_reading(
     findings: list[dict[str, Any]] = ledger["findings"]
     opened = kept = fixed = 0
     for page, problems in read.items():
+        problems = [problem for problem in problems if problem.get("kind") not in REPLY_ONLY_KINDS]
         current = [entry for entry in findings if entry.get("page") == page and entry.get("status") == OPEN]
         version = versions.get(page, "")
         unmatched = list(current)
@@ -203,6 +204,12 @@ def _only_ownership(reason: str) -> bool:
 # has now said twice, at most three a page; the rest stay in the file, and the count in
 # the reply says how many.
 PRESSING_KINDS = ("claim", "figure", "too_full", "marks", "table")
+# Kinds a reading reports once, in its own reply, and the ledger does not carry: on
+# the audited decks `type` (26 entries: a space before a full stop, a dangling
+# bullet), `alignment` (19: an underline half the width of its word) and `listed`
+# (22, all on the fifteen paper pages whose uniform format the user had confirmed)
+# came back reworded after every fix and pressed on the author every build.
+REPLY_ONLY_KINDS = frozenset({"type", "alignment", "listed"})
 PRESSED_PER_PAGE = 3
 
 
