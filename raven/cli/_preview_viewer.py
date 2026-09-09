@@ -311,7 +311,11 @@ class _PreviewViewer:
         in_help = Condition(lambda: self._state == _STATE_HELP)
         in_filter = Condition(lambda: self._state == _STATE_FILTER)
 
-        content_control = FormattedTextControl(self._content_fragments, focusable=True)
+        # focusable keeps the layout valid (something must hold focus outside
+        # filter input); show_cursor=False stops that focus from painting a
+        # cursor over the first content character in view and help alike —
+        # only the filter input line shows a caret, where typing happens.
+        content_control = FormattedTextControl(self._content_fragments, focusable=True, show_cursor=False)
         content = Window(content_control, wrap_lines=False)
         status = ConditionalContainer(
             Window(FormattedTextControl(self._status_fragments), height=1),
