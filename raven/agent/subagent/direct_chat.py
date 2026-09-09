@@ -25,7 +25,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -292,15 +291,8 @@ class DirectChatHandoff:
     invariant and must not be added here.
     """
 
-    def __init__(self, live: "Callable[[str], Sequence[tuple[str, str, int]]] | None" = None) -> None:
+    def __init__(self) -> None:
         self._pending: dict[str, list[_Entry]] = {}
-        # ``(agent, handle, started_at_ms)`` for the direct chats of a session
-        # answering right now. The entries above are appended as turns land, so
-        # a turn still running is invisible to them, and an instance five
-        # minutes into answering the user was reported as "no turns yet" -- and
-        # dispatched to (2026-09-08). Read at take time, so the block says what
-        # is true at the moment the main agent reads it.
-        self._live = live
 
     def record(self, session_key: str, meta: DirectTurnMeta) -> None:
         self._pending.setdefault(session_key, []).append(meta)
@@ -318,40 +310,25 @@ class DirectChatHandoff:
         case returns before touching anything: this runs on every ordinary user
         turn, so it has to be free when there is nothing to say.
         """
-        entries = self._pending.pop(session_key, None) or []
-        live = list(self._live(session_key)) if self._live is not None else []
-        if not entries and not live:
+        entries = self._pending.pop(session_key, None)
+        if not entries:
             return None
-        return self._render(entries, live)
+        return self._render(entries)
 
-    def _render(self, entries: list["_Entry"], live: "Sequence[tuple[str, str, int]]" = ()) -> str:
+    def _render(self, entries: list["_Entry"]) -> str:
         grouped: dict[tuple[str, str], list[_Entry]] = {}
         for entry in entries:
             grouped.setdefault((entry.agent, entry.handle), []).append(entry)
-        answering = {(agent, handle): started for agent, handle, started in live}
-        for key in answering:
-            grouped.setdefault(key, [])
 
         lines = [_HANDOFF_HEADER]
         for (agent, handle), group in grouped.items():
             lines.append(f"{agent} / {handle}")
             turns = [e for e in group if isinstance(e, DirectTurnMeta)]
-            started = answering.get((agent, handle))
             for creation in (e for e in group if isinstance(e, DirectChatCreation)):
                 # Said explicitly, because an instance sitting unused is what the
                 # main agent can act on and an absent turn line does not say it.
-                # Unused and theirs: the user made it to speak to, so it takes a
-                # task of the main agent's only on the user's word.
-                unused = "" if turns or started is not None else ", no turns yet; theirs to speak to first"
+                unused = "" if turns else ", no turns yet"
                 lines.append(f"  created by the user at {_utc(creation.created_at_ms)}{unused}")
-            if started is not None:
-                # The one line the pending entries cannot carry: the instance is
-                # answering the user now. Dispatching to it would queue behind
-                # that turn and re-label it on every surface as the new task's.
-                lines.append(
-                    f"  answering the user since {_utc(started)} -- still running; "
-                    "it is the user's conversation, do not spawn onto it or reuse its handle until it has finished"
-                )
             if not turns:
                 # No turn has run, so no record directory exists to name. The
                 # same reason the missing-record branch below exists.

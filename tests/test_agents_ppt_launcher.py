@@ -245,10 +245,10 @@ def test_own_key_model_and_base_overrides_apply(grounded, monkeypatch):
 
 
 def test_the_own_key_also_pays_for_the_image_generator_on_openrouter(grounded, monkeypatch):
-    """The picture generator is an OpenRouter model whichever id is default: on the
-    own-key branch against OpenRouter the same key lands in tools.media.image.apiKey,
-    so a deck can generate its backdrops with nothing else set. A different gateway
-    gets nothing written there, and an explicit PPT_IMAGE_API_KEY wins."""
+    """GPT Image 2 is an OpenRouter model: on the own-key branch against OpenRouter
+    the same key lands in tools.media.image.apiKey, so a deck can generate its
+    backdrops with nothing else set. A different gateway gets nothing written there,
+    and an explicit PPT_IMAGE_API_KEY wins."""
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     assert data["tools"]["media"]["image"]["apiKey"] == "sk-own"
 
@@ -259,92 +259,6 @@ def test_the_own_key_also_pays_for_the_image_generator_on_openrouter(grounded, m
     monkeypatch.setenv("PPT_IMAGE_API_KEY", "sk-pictures")
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     assert data["tools"]["media"]["image"]["apiKey"] == "sk-pictures"
-
-
-def _inheriting_host(tmp_path, image: dict | None = None) -> None:
-    """A host on OpenRouter for chat, with no apiBase -- the registry supplies it.
-
-    That null is the shape the launcher used to read as "not OpenRouter", which is
-    why every inherit-branch case below writes the block this way rather than
-    spelling the address out.
-    """
-    home = tmp_path / "home"
-    home.mkdir(parents=True, exist_ok=True)
-    host: dict = {
-        "providers": {"openrouter": {"apiKey": "sk-or-chat", "models": ["vendor/model"]}},
-        "agents": {"defaults": {"provider": "openrouter", "model": "openrouter/vendor/model"}},
-    }
-    if image is not None:
-        host["tools"] = {"media": {"image": image}}
-    (home / "config.json").write_text(json.dumps(host))
-
-
-def test_the_inherit_branch_takes_the_hosts_image_section(grounded, tmp_path, monkeypatch):
-    """The operator's model and quality choice reach the deck, and selectionConfig
-    keeps a later Settings edit live rather than frozen at launch. The engine gets
-    its own copy because a plugin sees only its slice, never tools.media."""
-    monkeypatch.delenv("PPT_API_KEY", raising=False)
-    _inheriting_host(tmp_path, {"apiKey": "sk-pictures", "model": "openai/gpt-image-2.5-sunburst"})
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-
-    image = data["tools"]["media"]["image"]
-    assert image["apiKey"] == "sk-pictures"
-    assert image["model"] == "openai/gpt-image-2.5-sunburst"
-    assert image["selectionConfig"] == str(tmp_path / "home" / "config.json")
-    slice_image = data["plugins"]["config"]["ppt-engine"]["image"]
-    assert slice_image["apiKey"] == "sk-pictures"
-    assert slice_image["model"] == "openai/gpt-image-2.5-sunburst"
-
-
-def test_the_inherit_branch_borrows_the_chat_key_for_pictures(grounded, tmp_path, monkeypatch):
-    """The branch has no PPT_API_KEY to lend, and a host that configured its
-    OpenRouter key for chat alone surfaces no media tool of its own -- so before
-    this, an inheriting deck asked for a key nobody had written and drew nothing."""
-    monkeypatch.delenv("PPT_API_KEY", raising=False)
-    _inheriting_host(tmp_path, {"apiBase": "", "apiKey": "", "model": ""})
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-
-    assert data["tools"]["media"]["image"]["apiKey"] == "sk-or-chat"
-    assert data["plugins"]["config"]["ppt-engine"]["image"]["apiKey"] == "sk-or-chat"
-
-
-def test_a_borrowed_key_is_never_lent_to_another_gateway(grounded, tmp_path, monkeypatch):
-    """An image section naming another endpoint with no key of its own is a state
-    the host's own borrow declines to fill, because a section holding neither key
-    nor model is not configured. The chat credential must not travel to an address
-    its owner never nominated for pictures, so nothing is written and the deck keeps
-    only the pictures it can find."""
-    monkeypatch.delenv("PPT_API_KEY", raising=False)
-    _inheriting_host(tmp_path, {"apiBase": "https://pictures.example/v1", "apiKey": "", "model": ""})
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-
-    assert not data["tools"]["media"]["image"].get("apiKey")
-    assert "image" not in data.get("plugins", {}).get("config", {}).get("ppt-engine", {})
-
-
-def test_selection_config_is_written_only_where_the_host_file_answers(grounded, tmp_path, monkeypatch):
-    """The generator re-resolves this per call, so it is a hand-back to the host
-    file rather than a note. Written beside a borrowed key it would erase the
-    borrow every call -- an empty key in a present section is a revocation -- and
-    over an explicit PPT_IMAGE_API_KEY it would let a later Settings edit
-    override this deployment's own choice."""
-    monkeypatch.delenv("PPT_API_KEY", raising=False)
-    expected = str(tmp_path / "home" / "config.json")
-
-    _inheriting_host(tmp_path, {"apiKey": "sk-host-img", "model": "vendor/pictures"})
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-    assert data["tools"]["media"]["image"]["selectionConfig"] == expected
-
-    _inheriting_host(tmp_path, {"apiBase": "", "apiKey": "", "model": ""})
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-    image = data["tools"]["media"]["image"]
-    assert image["apiKey"] == "sk-or-chat" and "selectionConfig" not in image
-
-    monkeypatch.setenv("PPT_IMAGE_API_KEY", "sk-pictures")
-    _inheriting_host(tmp_path, {"apiKey": "sk-host-img", "model": "vendor/pictures"})
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-    image = data["tools"]["media"]["image"]
-    assert image["apiKey"] == "sk-pictures" and "selectionConfig" not in image
 
 
 def test_the_inherit_branch_ignores_the_own_key_overrides(grounded, tmp_path, monkeypatch):

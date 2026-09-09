@@ -64,7 +64,7 @@ from raven_ppt.contracts import (
 from raven_ppt.services import seen
 from raven_ppt.services.measure.geometry import iter_shapes, open_deck, picture_blob, shows_picture
 from raven_ppt.services.measure.type_size import census, rendered_spans
-from raven_ppt.services.publish import PublishRefusedError, publish, stage, strip_vendor_marks
+from raven_ppt.services.publish import PublishRefusedError, publish, stage
 from raven_ppt.services.publish.deliver import published_digests, record_refused
 from raven_ppt.services.template import house_style, prepared_path
 
@@ -131,11 +131,6 @@ class BuildStage:
         outcome = await self.backend(project, script)
         if not outcome.ok:
             return StageResult(ok=False, data={"outcome": outcome}, note=outcome.note)
-        # Before measuring: the render the gates read, the digest staging takes and
-        # the PDF copied out beside the deck all come from this one file, so the
-        # vendor's signature has to be gone before any of them look.
-        if outcome.pptx_path is not None:
-            strip_vendor_marks(outcome.pptx_path, title=_deck_title(project))
 
         findings = list(await self.measure(project, outcome.pptx_path, outcome, _changed(project, outcome, draft)))
         findings.extend(_page_failure_findings(project))
@@ -208,18 +203,6 @@ class BuildStage:
     def _blocking(self, findings: Sequence[Finding]) -> list[Finding]:
         kinds = self.profile.blocking_kinds
         return [f for f in findings if f.severity is Severity.BLOCKING or f.kind in kinds]
-
-
-def _deck_title(project: Project) -> str | None:
-    """The subject the intake recorded, for the file's own title; None when there is none."""
-    from raven_ppt.contracts.intake import intake_path, load_plan
-
-    try:
-        plan = load_plan(intake_path(project))
-    except (OSError, ValueError):
-        return None
-    topic = (plan.topic if plan is not None else "").strip()
-    return topic or None
 
 
 def _pdf_beside(project: Project, built: Path, delivered: Path) -> Path | None:

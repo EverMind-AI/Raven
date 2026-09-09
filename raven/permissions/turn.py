@@ -29,19 +29,12 @@ class PermissionTurn:
 
     ``denied_digests`` suppresses re-asking about a call already refused in this
     turn; a later user turn binds a fresh object and gets a fresh boundary.
-
-    ``lapsed_digests`` is the subset nobody actually answered. Both suppress the
-    second ask -- a request that expired unseen will expire again, and forty
-    iterations of a 35-second wait is a turn spent waiting rather than working --
-    but they are not the same fact, and the sentence the model is given about the
-    second ask has to be the true one for the first.
     """
 
     responder: ApprovalResponder | None = None
     conversation_id: str = ""
     turn_id: str = ""
     denied_digests: set[str] = field(default_factory=set)
-    lapsed_digests: set[str] = field(default_factory=set)
     # Purely presentational: lets a watching surface say "the reviewer is
     # looking at this" instead of an unexplained pause. Never load-bearing --
     # the gate swallows its errors and decides identically without it.

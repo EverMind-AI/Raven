@@ -53,20 +53,6 @@ ALLOW_KIND = "allow_once"
 REJECT_KIND = "reject_once"
 
 
-# The two outcomes that are a person's answer. Every other name in this file is
-# a way of not getting one -- no session, a closed connection, a client that
-# stopped talking, a reply nothing could parse -- and all of them fail closed,
-# which is right. What they are not is a refusal, and the gate now says the two
-# differently, so the tally's own distinction has to reach it.
-#
-# A literal set is the whole boundary, so every name outside it has a case
-# asserting `answered is False`: adding one here silently turns a non-answer
-# into a refusal everywhere at once. ``cancelled-turn`` is the one exception and
-# cannot have one -- that path records the tally and then re-raises, so the
-# outcome it built is discarded and no caller can observe the field.
-_ANSWERED = frozenset({"allowed", "rejected"})
-
-
 class AcpPermissionBroker:
     """An :class:`~raven.contracts.asking.ApprovalResponder` over the ACP wire.
 
@@ -224,10 +210,7 @@ class AcpPermissionBroker:
         self.outcomes[outcome] = self.outcomes.get(outcome, 0) + 1
         # Two options were offered, so two choices can come back; the editor
         # protocol has no "stop the turn" variant and never produces one.
-        return ApprovalOutcome(
-            choice=ApprovalChoice.ALLOW if allowed else ApprovalChoice.DENY,
-            answered=outcome in _ANSWERED,
-        )
+        return ApprovalOutcome(choice=ApprovalChoice.ALLOW if allowed else ApprovalChoice.DENY)
 
 
 __all__ = ["ALLOW_KIND", "REJECT_KIND", "AcpPermissionBroker"]

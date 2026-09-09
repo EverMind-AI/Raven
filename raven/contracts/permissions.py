@@ -93,12 +93,11 @@ class ApprovalChoice(StrEnum):
 
 @dataclass(frozen=True)
 class ApprovalOutcome:
-    """One round-trip's result. ``feedback`` is the sentence a human attached to
-    a refusal, verbatim; ``answered`` is false when nobody said anything."""
+    """One approval round-trip's result. ``feedback`` carries the sentence a
+    human attached to a refusal, verbatim, for the model to read."""
 
     choice: ApprovalChoice
     feedback: str = ""
-    answered: bool = True
 
     @property
     def approved(self) -> bool:

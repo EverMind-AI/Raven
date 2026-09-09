@@ -197,34 +197,13 @@ def read_verdict(text: str | None) -> Verdict:
     )
 
 
-def reinjected(origin) -> bool:
-    """Whether a turn of this origin is the runtime re-entering the conversation.
-
-    A sub-agent's result relay and a sentinel notice carry no request of the
-    owner's: the "last user message" of such a turn is the report the runtime
-    wrote. Judging it for run-and-watch work answers a question nobody asked,
-    and on 2026-09-08 it cost one relay turn 1229s -- the judgement's model call
-    ran away on a 30k-char report and held the conversation for the whole of
-    it. Cron and heartbeat are deliberately not here: their text is the owner's
-    own instruction, written in advance.
-    """
-    from raven.spine import Origin
-
-    return origin in (Origin.SENTINEL, Origin.SUBAGENT)
-
-
-def asked_for(messages: list[dict], origin=None) -> str:
+def asked_for(messages: list[dict]) -> str:
     """The last thing the owner said, without the runtime metadata glued to it.
 
     The metadata block is prepended to the user content by the assembler, and it
     is separated from the message by a blank line -- so a request that begins
     with it is split there and the rest kept.
-
-    ``origin`` is the turn's. A re-injected turn (``reinjected``) has no request
-    of the owner's to read, so it reads as none and no judgement is paid for it.
     """
-    if origin is not None and reinjected(origin):
-        return ""
     for msg in reversed(messages or []):
         if msg.get("role") != "user":
             continue

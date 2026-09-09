@@ -495,9 +495,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             session_dir=self.sessions.session_dir,
             session_tier=self.session_tier,
         )
-        # Reads the live direct chats through a lambda for the reason the identity
-        # segment does: the manager is rebuilt on a hot config apply.
-        self._direct_handoff = DirectChatHandoff(live=lambda key: self.subagents.live_direct_turns(key))
+        self._direct_handoff = DirectChatHandoff()
         # Kept for hot-applying web config changes and for the operations
         # surfaces that report what config declared, as distinct from what the
         # agent table resolved (the table also holds the package built-in rows).

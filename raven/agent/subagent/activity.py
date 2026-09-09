@@ -212,46 +212,20 @@ def collecting(
     place the moment the run becomes findable: a reader landing in the gap would
     otherwise see a turn with steps and no question, and drop the prompt row it
     had already drawn.
-
-    The instance slot is held by whichever run took it first, and released only
-    by that run: two lanes addressing one instance serialise on ``hold_handle``,
-    so the one answering is the one that got there first, and a second lane
-    registering while it waited for the lock used to take the slot over -- the
-    conversation view then showed the queued turn's prompt and none of the
-    running turn's steps, and the running turn's exit dropped the queued turn's
-    entry with it (2026-09-08). Register through :func:`watching_instance` once
-    the lock is held instead; ``instance`` here stays for the lanes that already
-    hold it when they open the block.
     """
     activity = RunActivity(prompt=prompt)
     token = _current.set(activity)
     if live_key:
         _live[live_key] = activity
-    with watching_instance(activity, instance):
-        try:
-            yield activity
-        finally:
-            _current.reset(token)
-            if live_key:
-                _live.pop(live_key, None)
-
-
-@contextmanager
-def watching_instance(activity: RunActivity, instance: tuple[str, str, str] | None) -> Iterator[None]:
-    """Index ``activity`` as the turn ``instance`` is answering, for the block.
-
-    Takes the slot only when it is free and releases only its own registration,
-    so a lane that opened its block before taking the instance's lock can
-    register here once it holds it, and no lane can unseat the one answering.
-    """
-    owned = False
-    if instance and _live_instances.get(instance) is None:
+    if instance:
         _live_instances[instance] = activity
-        owned = True
     try:
-        yield
+        yield activity
     finally:
-        if owned and _live_instances.get(instance) is activity:
+        _current.reset(token)
+        if live_key:
+            _live.pop(live_key, None)
+        if instance:
             _live_instances.pop(instance, None)
 
 

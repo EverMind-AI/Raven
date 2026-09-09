@@ -406,7 +406,7 @@ async def test_image_selection_is_live_and_settings_win(monkeypatch, tmp_path):
     holder = {"config": MediaToolConfig(api_key="k")}
     tool._config_source = lambda: holder["config"]
     await tool.execute("a circle")
-    assert seen[-1]["model"] == "openai/gpt-image-2.5-sunburst"
+    assert seen[-1]["model"] == "openai/gpt-image-2"
     assert seen[-1]["quality"] == "medium"
     holder["config"] = MediaToolConfig(api_key="k", model="openai/gpt-image-2", quality="low")
     await tool.execute("a circle")
@@ -423,7 +423,7 @@ async def test_image_selection_is_live_and_settings_win(monkeypatch, tmp_path):
     assert "quality" not in seen[-1]
     holder["config"] = MediaToolConfig(api_key="k", quality="")
     await tool.execute("a circle")
-    assert seen[-1]["model"] == "openai/gpt-image-2.5-sunburst" and "quality" not in seen[-1]
+    assert seen[-1]["model"] == "openai/gpt-image-2" and "quality" not in seen[-1]
 
 
 async def test_borrowed_image_selection_updates_without_recreating_tool(monkeypatch, tmp_path):

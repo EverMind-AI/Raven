@@ -13,6 +13,5 @@ no way to call it without having asked.
 """
 
 from raven_ppt.services.publish.deliver import PublishRefusedError, Staged, publish, stage
-from raven_ppt.services.publish.provenance import strip_vendor_marks
 
-__all__ = ["PublishRefusedError", "Staged", "publish", "stage", "strip_vendor_marks"]
+__all__ = ["PublishRefusedError", "Staged", "publish", "stage"]

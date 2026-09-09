@@ -249,27 +249,6 @@ def test_the_live_page_is_what_adds_tui_to_the_cron_partition() -> None:
     assert "page" not in helper_body
 
 
-def test_a_mounted_page_takes_the_relays_that_belong_to_its_sessions() -> None:
-    """A sub-agent's result relay into a page session must queue on the page
-    spine's lane for that session, or it runs beside the page's next turn to the
-    same session (2026-09-08: tool calls drawn twice, the result delivered twice).
-    The wiring lives in the serve command with no import seam, so pin the source:
-    the router is built inside the mounted block, over the page's submit and the
-    gateway's, and both runtime submitters take it."""
-    import inspect
-
-    from raven.cli import gateway_commands
-
-    src = inspect.getsource(gateway_commands.register)
-    mounted = src.split("if page_mount is not None:", 1)[1].split("# Channel inbound runs through", 1)[0]
-    assert "route_submit(page=page_mount.submit, channel=pro_submit)" in mounted
-    assert "agent.subagents.set_submit(routed_submit)" in mounted
-    assert "agent.set_deep_research_submit(routed_submit)" in mounted
-    # The gateway-spine binding still precedes it, for a gateway without a page.
-    before_mount = src.split("if page_mount is not None:", 1)[0]
-    assert "agent.subagents.set_submit(pro_submit)" in before_mount
-
-
 def _gateway_partition_with_the_page_enabled() -> set[str]:
     """The cron partition a page-wanting gateway is built with."""
     from types import SimpleNamespace

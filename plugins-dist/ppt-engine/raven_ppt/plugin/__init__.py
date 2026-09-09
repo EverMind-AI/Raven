@@ -84,7 +84,6 @@ class _Shared:
                 views_per_call=cfg.views_per_call,
                 deck_name=cfg.deck_name,
                 web_proxy=cfg.web_proxy,
-                image_config=cfg.image,
                 reader_effort=cfg.reader_effort or None,
             )
         }
