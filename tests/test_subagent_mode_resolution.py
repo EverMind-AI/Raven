@@ -82,8 +82,8 @@ def test_the_climb_still_happens_when_the_whole_menu_is_legible():
 
 def test_a_menu_with_all_three_tiers_plus_a_foreign_extra_still_clamps():
     """The shape a subset guard would have refused outright: an agent that
-    offers the whole ladder plus one id of its own. Every agent product draws
-    its menu from the medium/high/max ladder, so an agent adding
+    offers the whole ladder plus one id of its own. Every fork under
+    subagents/ is expected to converge on medium/high/max, so an agent adding
     a rung on top (`turbo`) is a natural, desirable menu, not a hazard -- it
     must still clamp tier for tier rather than being declined for not
     matching the ladder exactly.

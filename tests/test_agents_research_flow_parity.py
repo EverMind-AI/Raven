@@ -1,22 +1,23 @@
 """The launcher's own config is the flow we measured, minus a written-down allowlist.
 
-The fork's ``tests/test_shipped_flow_parity.py`` held every config the fork
-shipped to the arm that produced published numbers, and the config the deployed
-launcher actually served was not one of them: the fork's ``run.py`` defaulted to
-the parent folder's ``config.json``, with the ``modes/*.json`` overlays composed
-over it per session. That is the product's medium baseline plus its two deeper
-modes, and this file holds all three under a parity guard.
+The fork's ``tests/test_shipped_flow_parity.py`` holds every config the fork
+ships to the arm that produced published numbers. The config the deployed
+launcher actually serves is not one of them: ``subagents/raven-research/run.py``
+defaults to the parent folder's ``config.json``, and the fork's ``acp.modes``
+compose the ``modes/*.json`` overlays over it per session. That is the product's
+medium baseline plus its two deeper modes, and until this file none of the three
+was under any parity guard - the fork's suite cannot see its caller, and this
+trunk's CI does not run the fork's suite.
 
-The measured side is a frozen snapshot, not a live run: the vendored tree this
-file used to probe in a subprocess (effective values through the fork's own
-schema and ``build_session_modes``) is retired, and a frozen tree's measurement
-is a constant. ``tests/fixtures/vendored_fork/research_parity_probe.json`` is
-that constant, captured from the tree at its record commit; the probe source
-that produced it lives in this file's own git history (any pre-retirement
-revision), so the number can be re-derived from the retired tree in history
-whenever the record itself is questioned.
+Effective values, not written keys, from the fork's own schema: the trunk has a
+``raven`` package of the same name, so the comparison runs in a subprocess with
+the fork's checkout first on the path. Modes go through the fork's own
+``build_session_modes`` - the by-alias dump, ``_deep_merge`` and revalidation the
+ACP server performs - rather than a re-implementation here, so a divergence
+between the launcher's catalogue and the server's merge is a failure, not a
+gap between two copies of the merge.
 
-The snapshot also reports the fork's class defaults and retired-label tables, so
+The same probe reports the fork's class defaults and retired-label tables, so
 the trunk twin (``agents/raven-research/plugins/research-flow``) is held to the
 "same fields, same defaults" its docstring promises - the launcher file's slice
 test cannot see a default underneath a written value.
@@ -26,14 +27,16 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-FIXTURES = REPO / "tests" / "fixtures" / "vendored_fork"
-LAUNCHER = FIXTURES / "run.py"
+FORK = REPO / "subagents" / "raven-research"
+RAVEN_X = FORK / "Raven-X"
+LAUNCHER = FORK / "run.py"
 PLUGIN_DIR = REPO / "agents" / "raven-research" / "plugins" / "research-flow"
 
 sys.path.insert(0, str(PLUGIN_DIR))
@@ -122,19 +125,80 @@ PER_MODE: dict[str, dict[str, str]] = {
     "max": {},
 }
 
+#: Runs inside the fork's checkout. Prints one JSON object: the measured arm, each
+#: mode's effective flow, a deliberately broken baseline, and the fork's own
+#: UNIVERSAL / INERT keys.
+_PROBE = r"""
+import importlib.util, json, sys, tempfile
+from pathlib import Path
+
+args = json.loads(sys.argv[1])
+import raven
+assert Path(raven.__file__).resolve().parent.parent == Path.cwd().resolve(), raven.__file__
+
+spec = importlib.util.spec_from_file_location("shipped_flow_parity", args["parity_module"])
+parity = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(parity)
+from raven.acp.modes import build_session_modes
+from raven.config import load_raven_config
+from raven.config.loader import load_config
+from raven.config.raven import DRFlowConfig
+
+tmp = Path(tempfile.mkdtemp())
+launcher_spec = importlib.util.spec_from_file_location("research_launcher", args["launcher"])
+launcher = importlib.util.module_from_spec(launcher_spec)
+launcher_spec.loader.exec_module(launcher)
+
+source = json.loads(Path(args["config"]).read_text(encoding="utf-8"))
+catalogue = launcher.mode_catalogue()
+source.setdefault("acp", {})["modes"] = catalogue
+source["acp"]["defaultMode"] = launcher.BASELINE_MODE
+served = tmp / "config.json"
+served.write_text(json.dumps(source), encoding="utf-8")
+modes = build_session_modes(load_config(served), load_raven_config(served))
+# The path a session takes: session/set_mode, then the profile its next engine is built from.
+flows = {}
+for mode_id in modes.ids():
+    modes.set("probe", mode_id)
+    flows[mode_id] = parity._flat(modes.profile("probe").dr_flow)
+
+fork_defaults = DRFlowConfig()
+broken_doc = json.loads(Path(args["config"]).read_text(encoding="utf-8"))
+broken_doc["drFlow"].setdefault("spinBreaker", {})["enabled"] = False
+broken_doc["drFlow"].setdefault("digest", {})["verbatimHeadChars"] = 0
+broken = tmp / "broken.json"
+broken.write_text(json.dumps(broken_doc), encoding="utf-8")
+
+out = {
+    "reference": parity._flat(load_raven_config(parity.REFERENCE).dr_flow),
+    "modes": flows,
+    "broken": parity._flat(load_raven_config(broken).dr_flow),
+    "universal": sorted(parity.UNIVERSAL),
+    "inert": sorted(parity.INERT),
+    "fork_defaults": parity._flat(fork_defaults),
+    "fork_superseded_profiles": dict(fork_defaults._SUPERSEDED_PROFILES),
+    "fork_superseded_versions": list(fork_defaults._SUPERSEDED_VERSIONS),
+}
+print(json.dumps(out, default=str))
+"""
+
 
 @pytest.fixture(scope="module")
 def probe() -> dict:
-    """The frozen measurement of the retired fork, loaded, not re-run.
-
-    The snapshot was produced by the probe this fixture used to hold: a
-    subprocess inside the fork's checkout that measured each mode's effective
-    flow through the fork's own schema and ``build_session_modes``, plus a
-    deliberately broken baseline and the fork's UNIVERSAL / INERT keys. The
-    probe source and the tree it measured are both in git history at any
-    pre-retirement revision of this file.
-    """
-    return json.loads((FIXTURES / "research_parity_probe.json").read_text(encoding="utf-8"))
+    args = {
+        "parity_module": str(RAVEN_X / "tests" / "test_shipped_flow_parity.py"),
+        "launcher": str(LAUNCHER),
+        "config": str(FORK / "config.json"),
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", _PROBE, json.dumps(args)],
+        cwd=RAVEN_X,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
 
 
 def _excused(path: str, mode: str, universal: list[str]) -> str | None:
@@ -221,13 +285,13 @@ def test_every_allowlist_entry_names_something_real(probe):
 
 
 def test_the_probe_reads_the_launcher_the_host_actually_spawns():
-    """The manifest's command and the snapshot must name the same launcher."""
-    manifest = json.loads((FIXTURES / "subagent.json").read_text(encoding="utf-8"))
+    """The manifest's command and this file's probe must name the same launcher."""
+    manifest = json.loads((FORK / "subagent.json").read_text(encoding="utf-8"))
     assert "run.py" in manifest["command"], manifest["command"]
     spec = importlib.util.spec_from_file_location("research_launcher", LAUNCHER)
     launcher = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launcher)
-    assert launcher.DEFAULT_CONFIG == FIXTURES / "config.json"
+    assert launcher.DEFAULT_CONFIG == FORK / "config.json"
     assert set(launcher.mode_catalogue()) == set(PER_MODE)
 
 
@@ -243,9 +307,9 @@ def _flat(model, prefix: str = "") -> dict[str, object]:
     return out
 
 
-#: Where the twin deliberately leads the vendored checkout. The snapshot under
-#: ``tests/fixtures/vendored_fork`` is kept as the record of upstream ``a903a424``
-#: (dr@3.5), taken from the retired tree; the twin tracks upstream directly. Each
+#: Where the twin deliberately leads the vendored checkout. The checkout under
+#: ``subagents/raven-research`` is kept as a record of upstream ``a903a424``
+#: (dr@3.5) and is no longer re-vendored; the twin tracks upstream directly. Each
 #: key names the upstream commit that moved it and why, so the allowance cannot
 #: outlive its reason: an entry whose values no longer differ fails below.
 TWIN_LEADS: dict[str, str] = {

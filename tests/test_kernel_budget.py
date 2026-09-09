@@ -33,19 +33,6 @@ the papers are additions-safe by design, but additions inside a budget --
 1,922 lines when the ceiling landed -- so a new paper passes the same
 explicit review a kernel line does, in the same file the reviewer already
 reads for why the numbers are what they are.
-
-The contracts ceiling moved once, 2,500 -> 2,520 (2026-09-09), and this is
-the review. The 578 lines of headroom it landed with were spent, and the
-change that found the end of them adds exactly one line to the papers: an
-``answered`` flag on ``ApprovalOutcome``, so that a permission request nobody
-saw stops being reported to a model as one a human refused. Its prose fits
-the docstring that was already there, so the field is the whole cost.
-
-Twenty rather than one. A ceiling a single line under the count is a ceiling
-that fails on the next field, which is how a guard turns into a formality
-somebody edits on the way past -- the failure mode this docstring names. The
-alternative on the table was to shorten an unrelated paper's prose by a line,
-which buys the same room while hiding that the papers grew.
 """
 
 from __future__ import annotations
@@ -56,7 +43,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 2_520
+CONTRACTS_LINE_CEILING = 2_500
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

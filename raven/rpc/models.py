@@ -108,22 +108,20 @@ class SubagentRow(_Strict):
     vendored: bool = Field(
         default=False,
         description=(
-            "Discovered under the `agents/` product tree rather than written into config: one of "
-            "the agent products that ship with this raven, materialized as a row on every table "
-            "build. Like `builtin` it leaves `configured` false -- there is no config entry to "
-            "delete, and removing it means removing its folder -- but unlike `builtin` it is a "
-            "real subprocess with a command, so it is probed and it can be unready (a missing "
-            "engine wheel leaves it listed and disabled). The wire name predates the tree's "
-            "rename. Absent from a server that predates discovery."
+            "Discovered under `subagents/` rather than written into config: one of the raven "
+            "builds that ship beside this one, materialized as a row on every table build. Like "
+            "`builtin` it leaves `configured` false -- there is no config entry to delete, and "
+            "removing it means removing its folder -- but unlike `builtin` it is a real "
+            "subprocess with a command, so it is probed and it can be unready (an unbuilt venv "
+            "leaves it listed and disabled). Absent from a server that predates discovery."
         ),
     )
     building: bool = Field(
         default=False,
         description=(
-            "Always false from this server: the fork-era venv build is gone with the venvs, and "
-            "`subagents.build` answers that there is nothing to build. Kept for wire "
-            "compatibility with clients that predate the product tree. Absent from a server "
-            "that predates discovery."
+            "A vendored folder's venv is being built right now (`subagents.build`). Its own flag "
+            "rather than `test_running`: a build and a test are different verbs on the same row, "
+            "and one must not read as the other. Absent from a server that predates discovery."
         ),
     )
     stateful: bool = Field(
@@ -1958,10 +1956,6 @@ class SubagentsAddParams(_Strict):
     api_key: str | None = None
     mcps: list[str] | None = None
     allow_mcp_secrets: bool | None = None
-    force: bool = Field(
-        default=False,
-        description="Skip the readiness ping that adding an enabled local preset normally requires. Operator escape hatch, no UI affordance.",
-    )
 
 
 class SubagentsAddResult(_Strict):
@@ -1994,10 +1988,6 @@ class SubagentsRemoveResult(_Strict):
 class SubagentsToggleParams(_Strict):
     name: str
     enabled: bool
-    force: bool = Field(
-        default=False,
-        description="Skip the readiness ping that enabling normally requires. Operator escape hatch, no UI affordance.",
-    )
 
 
 class SubagentsToggleResult(_Strict):
@@ -2832,14 +2822,10 @@ class ToolUsage(_Strict):
 
 
 class SettingsUsageParams(_Strict):
-    session_key: str | None = None
     days: int | None = Field(default=None, description="Window to scan; 30 by default, capped at 90.")
 
 
 class SettingsUsageResult(_Strict):
-    session_key: str | None = None
-    sessions: list[str] = Field(default_factory=list)
-    session_titles: dict[str, str] = Field(default_factory=dict)
     days: int
     llm: LlmUsage
     tools: ToolUsage

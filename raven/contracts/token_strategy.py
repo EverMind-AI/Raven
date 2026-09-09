@@ -32,7 +32,6 @@ class UsageSnapshot:
     cache_read_missing_calls: int = 0
     cache_write_missing_calls: int = 0
     session_key: str | None = None
-    root_session_key: str | None = None
 
 
 class TokenStrategy(ABC):

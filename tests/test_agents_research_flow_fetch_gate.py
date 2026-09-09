@@ -473,9 +473,8 @@ async def test_previous_turns_tool_history_does_not_close_the_gate():
 
 
 # ── the twin against the vendored record ─────────────────────────────────────
-# ``tests/fixtures/vendored_fork/fetch_gate.py`` is kept as the record of upstream
-# a903a424, snapshotted from the retired tree, while this twin takes upstream's
-# changes directly.
+# ``subagents/raven-research/Raven-X`` is kept as the record of upstream a903a424
+# and is no longer re-vendored, while this twin takes upstream's changes directly.
 # So the two module bodies are allowed to differ - but only by what the twin has
 # deliberately taken, named here member by member. A difference outside this
 # table is drift, and an entry that has stopped differing is a stale allowance.
@@ -545,7 +544,7 @@ def test_the_fetch_gate_twin_leads_the_record_by_exactly_the_second_valve():
     twin that drifted anywhere else - would stay green. This names the lead
     member by member and refuses everything outside it.
     """
-    fork = REPO / "tests" / "fixtures" / "vendored_fork" / "fetch_gate.py"
+    fork = REPO / "subagents" / "raven-research" / "Raven-X" / "raven" / "agent" / "fetch_gate.py"
     twin = PLUGIN_DIR / "research_flow" / "support" / "fetch_gate_core.py"
     fork_rest, fork_gate = _top_level(fork)
     twin_rest, twin_gate = _top_level(twin)

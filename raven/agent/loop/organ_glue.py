@@ -517,6 +517,40 @@ class OrganGlueMixin:
             [{"id": qid, "source": source, "name": name, "kind": tool_name}],
         )
 
+    # The judgement is one flash call -- seconds on every model measured -- and
+    # a turn pays it once. A model that runs away on it (2026-09-08: 222k chars
+    # of reasoning and no answer, on a relay turn's 30k-char report) would
+    # otherwise hold the whole turn, so it is cut here and the turn goes on
+    # unjudged. A call that raises is treated the same way, and for one reason:
+    # it settles the quiet-no verdict once. The callers in _note_watch_work
+    # already run under an except Exception, so a raise never ended the turn --
+    # but it left state.verdict unset, and every later path-touching tool call
+    # of the turn paid the failed judgement again. A stop is not an error:
+    # CancelledError is not an Exception and still propagates.
+    _WATCH_JUDGEMENT_TIMEOUT_S: float = 60.0
+
+    async def _judge_watch_work(self, message: str, effort_kwargs: dict[str, str]) -> Any:
+        """The turn's watch-work verdict, a quiet no when the model does not answer."""
+        import asyncio
+
+        from raven.agent.subagent import watch_work
+
+        try:
+            response = await asyncio.wait_for(
+                self._llm_call_stream(watch_work.build_prompt(message), None, self.model, **effort_kwargs),
+                timeout=self._WATCH_JUDGEMENT_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "watch-work judgement did not answer in {:.0f}s; the turn goes on unjudged",
+                self._WATCH_JUDGEMENT_TIMEOUT_S,
+            )
+            return watch_work.read_verdict(None)
+        except Exception as exc:  # noqa: BLE001 -- any provider failure leaves the turn unjudged, never failed
+            logger.warning("watch-work judgement failed ({}); the turn goes on unjudged", exc)
+            return watch_work.read_verdict(None)
+        return watch_work.read_verdict(response.content)
+
     async def _note_watch_work(
         self,
         state: Any,
@@ -588,13 +622,7 @@ class OrganGlueMixin:
                     if name == "spawn" and message:
                         verdict = state.verdict
                         if verdict is None:
-                            verdict = state.verdict = watch_work.read_verdict(
-                                (
-                                    await self._llm_call_stream(
-                                        watch_work.build_prompt(message), None, self.model, **effort_kwargs
-                                    )
-                                ).content
-                            )
+                            verdict = state.verdict = await self._judge_watch_work(message, effort_kwargs)
                         if verdict.watched and verdict.code_work:
                             state.solo = True
                             state.agent = agent
@@ -644,11 +672,7 @@ class OrganGlueMixin:
             state.agent = agent
             verdict = state.verdict
             if verdict is None:
-                verdict = state.verdict = watch_work.read_verdict(
-                    (
-                        await self._llm_call_stream(watch_work.build_prompt(message), None, self.model, **effort_kwargs)
-                    ).content
-                )
+                verdict = state.verdict = await self._judge_watch_work(message, effort_kwargs)
             if not verdict.watched:
                 return ""
             import re as _re

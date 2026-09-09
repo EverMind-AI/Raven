@@ -4,29 +4,6 @@ All notable changes to Raven are documented here.
 
 ## Unreleased
 
-### Removed
-
-- **The vendored subagents tree.** The five product forks under `subagents/`
-  leave the repository: the products live under `agents/` as thin launchers on
-  the installed raven, a wheel carries that tree and copies it out to the raven
-  home on first use, and the design/ppt engines ship as their own wheels. A
-  stored roster row written against the old tree migrates on load (config
-  floor six): paths re-aim at `agents/`, a fork-venv interpreter becomes the
-  running one, and a fork-era row that cannot be re-aimed is left as written
-  with a notice to re-run onboarding. The forks' record stays reachable as byte
-  snapshots under `tests/fixtures/vendored_fork/` and as full trees in git
-  history; leftover copies under `<raven home>/subagents` can be deleted.
-  The research product reclaims the fork's display name: registered
-  `Raven-Research-NG` rows rename to `Raven-Research` on load (config floor
-  seven); if a fork-era row still holds the name, an advisory repeats until
-  that row is removed and the rename completes on a later load. The machine
-  id `raven-research-ng` (state root, ACP home, everos identity, the
-  `RESEARCH_NG_*` variables) is unchanged. References stored during the
-  unreleased pilot window (instance bindings, direct chats under the
-  transition name) are deliberately not carried: no shipped artifact knows
-  that name, and addressing one answers with the explicit not-configured
-  refusal.
-
 ### Added
 
 - The research agent's three modes are three stop rules rather than three sizes
@@ -361,8 +338,7 @@ All notable changes to Raven are documented here.
 
 - A top-level `agents/` directory holds product definitions built on the
   installed runtime, A/B-able against the frozen vendored `subagents/`. The
-  first product, Raven-Research (transition name Raven-Research-NG), rebuilds
-  the vendored research agent's
+  first product, Raven-Research-NG, rebuilds the vendored research agent's
   whole flow as a plugin (`agents/raven-research/plugins/research-flow`) on
   public seams alone; the sixth import-linter contract keeps the runtime from
   importing the products back.
@@ -556,7 +532,24 @@ All notable changes to Raven are documented here.
   The plain-first judge is asked once more when its reply names the wrong keys
   (`{"correct": true}` for `plain_ok` and `sound`), which on the default model
   sent about one settled question in ten into research for a parsing miss.
-
+- A sub-agent's result relay into a page session runs on the page spine's lane
+  for that session, behind whatever the page is running there, instead of on
+  the gateway spine beside it: the two used to run at once, drawing the same
+  tool calls twice and delivering the result twice. The watch-work judgement
+  the loop pays on a turn's first look is no longer paid on a relay or a
+  sentinel notice (the runtime speaking, not the owner), and is cut after 60
+  seconds when the model does not answer; one relay turn spent 1229 seconds in
+  it.
+- A sub-agent instance the user is chatting with is reported to the main agent
+  as answering, with the time it began answering and a line saying it is the
+  user's conversation, instead of as an instance with no turns yet -- which the
+  main agent read as free and dispatched its own task onto. A spawn that
+  reaches an instance mid-answer stays `pending` until the instance is free,
+  and no longer takes over the instance's live view: the direct chat's steps
+  stay on screen, and the spawn's own appear once it runs.
+- When reasoning runs to the model's output ceiling and the loop feeds it back
+  for the model to continue, the continuation's opening clause -- the tail of
+  the cut thought -- no longer reaches the reader as the head of the answer.
 - A shell command the safety guard refuses is refused as a command, not as the
   task: the tool result no longer says "stop this operation immediately", which
   an unattended agent read as the whole job and ended a deck build on.

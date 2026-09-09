@@ -1,8 +1,8 @@
 """FlowConfig: the research flow's knobs, ported from the fork's ``DRFlow*Config`` models.
 
 Same sub-model shapes as the fork's ``raven/config/raven.py``, and the same fields and
-defaults except where this twin has moved past the vendored record: that retired checkout
-was kept at upstream ``a903a424`` while the twin takes upstream's later changes directly, and every
+defaults except where this twin has moved past the vendored record: that checkout is kept
+at upstream ``a903a424`` while the twin takes upstream's later changes directly, and every
 such lead is named in ``TWIN_LEADS`` (``tests/test_agents_research_flow_parity.py``), which
 fails on any difference it does not name. What changed otherwise is only the trunk seam
 the config arrives through.
@@ -318,7 +318,7 @@ SUPERSEDED_VERSIONS: tuple[str, ...] = (
     "dr@3.4",
     # dr@3.5 and dr@3.6 retired together upstream (ea19b948, 2026-09-06): the
     # first batch was stopped mid-flight, the second closed the fetchGate ablation.
-    # The retired fork record stopped at dr@3.5 and lacks both.
+    # The vendored record under subagents/ stays at dr@3.5 and lacks both.
     "dr@3.5",
     "dr@3.6",
 )

@@ -81,19 +81,6 @@ async def _ask(broker, command: str = "git push origin main", **kwargs) -> bool:
     return (await broker.await_approval(**params)).approved
 
 
-async def _outcome(broker, command: str = "git push origin main", **kwargs):
-    """The whole outcome, for the cases that read more than the verdict."""
-    params = {
-        "conversation_id": "acp:s1",
-        "turn_id": "turn-1",
-        "tool_call_id": "call-1",
-        "command": command,
-        "description": "Publish or push work to a remote",
-    }
-    params.update(kwargs)
-    return await broker.await_approval(**params)
-
-
 class TestTheRequest:
     async def test_it_matches_the_schema_and_names_the_command(
         self,
@@ -203,34 +190,6 @@ class TestTheAnswer:
         assert broker.outcomes == {"unknown-outcome": 1}
 
 
-class TestWhetherAnybodyAnswered:
-    """Every path here fails closed, which is right. Only two of them are a
-    person's answer, and the gate now words a refusal and a lapse differently --
-    so the distinction this file's tally already drew has to reach it."""
-
-    async def test_a_rejection_is_an_answer(self):
-        outcome = await _outcome(_rig(_reject)[2])
-
-        assert outcome.approved is False
-        assert outcome.answered is True
-
-    async def test_an_allow_is_an_answer(self):
-        assert (await _outcome(_rig(_allow)[2])).answered is True
-
-    async def test_a_client_that_never_replies_answered_nothing(self):
-        outcome = await _outcome(_rig(silent=True, timeout_s=0.05)[2])
-
-        assert outcome.approved is False
-        assert outcome.answered is False
-
-    async def test_a_turn_with_nobody_to_ask_answered_nothing(self):
-        """ "Nobody to ask" is not permission, and it is not a refusal either."""
-        outcome = await _outcome(_rig(_allow)[2], conversation_id="acp:missing")
-
-        assert outcome.approved is False
-        assert outcome.answered is False
-
-
 class TestTheFourClientFailures:
     async def test_no_answer_at_all_is_a_refusal(self):
         """The deadline is the broker's parameter, not the transport's default --
@@ -254,11 +213,8 @@ class TestTheFourClientFailures:
 
     async def test_an_error_reply_is_a_refusal(self):
         _, _, broker = _rig({"error": {"code": -32601, "message": "session/request_permission is not implemented"}})
-        outcome = await _outcome(broker)
 
-        assert outcome.approved is False
-        # The client saying it cannot ask is not the user saying no.
-        assert outcome.answered is False
+        assert await _ask(broker) is False
         assert broker.outcomes == {"client-error": 1}
 
     async def test_an_unknown_option_id_is_a_refusal(self):
@@ -269,44 +225,13 @@ class TestTheFourClientFailures:
         assert await _ask(broker) is False
         assert broker.outcomes == {"unknown-option": 1}
 
-    async def test_an_explicit_cancellation_fails_closed_without_being_an_answer(self):
+    async def test_an_explicit_cancellation_is_a_refusal_and_not_an_error(self):
         """The one that is not misbehaviour: a client cancelling a turn MUST
-        answer every pending permission with this.
-
-        Named for what it is rather than for what it used to be called. Under
-        the distinction this file now draws, a cancellation is precisely NOT a
-        refusal -- it is a deny nobody made -- and a name saying otherwise
-        teaches the next reader the framing this replaced.
-        """
+        answer every pending permission with this."""
         _, _, broker = _rig({"result": {"outcome": {"outcome": "cancelled"}}})
-        outcome = await _outcome(broker)
 
-        assert outcome.approved is False
-        # `_ANSWERED` is the single place the five non-answer outcomes are told
-        # from the two that are answers, and nothing read this field on any of
-        # them: adding "cancelled" to that set left the whole suite green.
-        assert outcome.answered is False
+        assert await _ask(broker) is False
         assert broker.outcomes == {"cancelled": 1}
-
-    @pytest.mark.parametrize(
-        ("reply", "tally"),
-        [
-            ({"result": {"outcome": {"outcome": "cancelled"}}}, "cancelled"),
-            ({"result": {"outcome": {"outcome": "denied"}}}, "unknown-outcome"),
-            ({"result": {"outcome": {"outcome": "selected", "optionId": "nope"}}}, "unknown-option"),
-            ({"result": "yes"}, "malformed"),
-        ],
-    )
-    async def test_no_acp_non_answer_claims_to_be_one(self, reply, tally):
-        """One case per shape the tally already distinguishes, because the set
-        that separates them is a literal: a name added to it silently turns a
-        non-answer into a refusal, everywhere, and until now nothing said so."""
-        _, _, broker = _rig(reply)
-        outcome = await _outcome(broker)
-
-        assert outcome.approved is False
-        assert outcome.answered is False
-        assert broker.outcomes == {tally: 1}
 
     @pytest.mark.parametrize(
         "reply",
@@ -336,11 +261,8 @@ class TestTheFourClientFailures:
         translator = UpdateTranslator(emit=lambda f: None)
         translator.add(AcpSession(session_id="acp:s1", session_key="acp:s1", cwd="/w", subscription_id="sub"))
         broker = AcpPermissionBroker(outbound=OutboundRequests(emit=_explode), translator=translator)
-        outcome = await _outcome(broker)
 
-        assert outcome.approved is False
-        # A request that never reached anybody is the plainest non-answer there is.
-        assert outcome.answered is False
+        assert await _ask(broker) is False
         assert broker.outcomes == {"transport-error": 1}
 
 
@@ -369,10 +291,8 @@ class TestBoundaries:
     async def test_a_closed_connection_is_a_refusal(self):
         _, outbound, broker = _rig(_allow)
         outbound.close()
-        outcome = await _outcome(broker)
 
-        assert outcome.approved is False
-        assert outcome.answered is False
+        assert await _ask(broker) is False
         assert broker.outcomes == {"connection-closed": 1}
 
     async def test_a_cancelled_turn_propagates_rather_than_denying(self):

@@ -830,17 +830,7 @@ def test_the_appendix_twin_is_the_forks_module_body():
     are stripped before comparing, so the two files may explain themselves in
     their own words; the code has to be one.
     """
-    fork = (
-        REPO
-        / "tests"
-        / "fixtures"
-        / "vendored_fork"
-        / "raven-research"
-        / "Raven-X"
-        / "raven"
-        / "agent"
-        / "process_appendix.py"
-    )
+    fork = REPO / "subagents" / "raven-research" / "Raven-X" / "raven" / "agent" / "process_appendix.py"
     twin = PLUGIN_DIR / "research_flow" / "support" / "process_appendix.py"
     assert _module_body(twin) == _module_body(fork), "port the fork's change or the twin's, so the two agree"
 

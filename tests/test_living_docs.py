@@ -34,6 +34,7 @@ ROOTS = (
     "ui-web/",
     "evolver/",
     "benchmarks/",
+    "subagents/",
     ".github/",
 )
 PATH_LIKE = re.compile(r"`([A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:py|md|json|toml|ts|tsx|mjs|yml|yaml|sh))`")

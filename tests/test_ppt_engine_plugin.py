@@ -28,6 +28,7 @@ from raven_ppt import plugin as plugin_module  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 ENGINE_HOME = REPO / "plugins-dist" / "ppt-engine"
+FORK = REPO / "subagents" / "raven-ppt" / "Raven-PPT"
 
 ENABLED = {"enabled": True, "profile": "script_author"}
 
@@ -116,7 +117,6 @@ def test_a_malformed_slice_casts_the_fail_closed_sentinel(tmp_path: Path) -> Non
         # alternatives; a fallback to script_author with only a process log
         # would be the silent inverse of that contract.
         {"enabled": True, "profile": "script_writer"},
-        {"enabled": True, "image": "nope"},
     )
     for index, slice_ in enumerate(bad_slices):
         ctx = _ctx(dict(slice_), tmp_path / str(index))
@@ -144,40 +144,6 @@ def test_a_malformed_slice_casts_the_fail_closed_sentinel(tmp_path: Path) -> Non
         ).before_user_inbound(AgentHookContext(session_key="s", inbound_content="hi"))
     ).short_circuit_result[0]
     assert "script_writer" in profile_reply and "script_author" in profile_reply
-
-
-def test_the_image_section_reaches_the_generator_it_was_copied_for(tmp_path: Path, monkeypatch) -> None:
-    """A plugin sees only its slice, so the launcher copies the resolved
-    tools.media.image across -- the bridge imageSearch.apiKey already walks.
-
-    Read off the built tool rather than off the call: nothing passed
-    ``image_config`` before this, and the tool answers with the shipped default
-    model and the OPENROUTER_API_KEY environment fallback when it is handed no
-    section at all. Both assertions therefore name values that neither fallback
-    can produce, so a builder that accepted the section and dropped it fails
-    here."""
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    slice_ = {
-        **ENABLED,
-        "image": {"apiKey": "sk-pictures", "model": "google/gemini-3.1-flash-image"},
-    }
-    tools = plugin_module._Shared(_ctx(slice_, tmp_path))._assemble(tmp_path)
-
-    generator = tools["ppt_generate_image"]
-    assert generator.api_key == "sk-pictures"
-    assert generator.model == "google/gemini-3.1-flash-image"
-
-
-def test_no_image_section_leaves_the_generator_on_its_shipped_default(tmp_path: Path, monkeypatch) -> None:
-    """The slice is optional: a config that never mentions pictures keeps the
-    behaviour that shipped, which is the OpenRouter default id and no key of its
-    own."""
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    tools = plugin_module._Shared(_ctx(dict(ENABLED), tmp_path))._assemble(tmp_path)
-
-    generator = tools["ppt_generate_image"]
-    assert generator.api_key == ""
-    assert generator.model == "openai/gpt-image-2.5-sunburst"
 
 
 def test_a_well_typed_slice_never_meets_the_sentinel(tmp_path: Path) -> None:

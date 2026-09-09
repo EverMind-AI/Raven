@@ -1,0 +1,3545 @@
+diff --git a/CONTEXT.md b/CONTEXT.md
+index 1f00369..84ba79d 100644
+--- a/CONTEXT.md
++++ b/CONTEXT.md
+@@ -114,6 +114,21 @@ artifact from the **process appendix**, which is display-only and must never rea
+ _Avoid_: "session memory" — the memo is per conversation and carries retrieval, not findings,
+ and it is unrelated to the cross-session Memory Engine.
+ 
++**Sufficiency gate** (`agent/flow/sufficiency.py`, config `drFlow.sufficiency`, default off):
++The first-round release. Once a research turn has paid the grounding floor — `min_searches`
++searches and `min_fetches` successful page opens, counted from `turn_base` so an earlier
++turn's research cannot pay it — an independent-context judge reads the turn's own fenced
++evidence pack once and answers one boolean: do these pages already decide the task. A
++sufficient verdict appends `sufficiency_notice()` (`agent/harness_text.py`) to the newest
++tool result — in-history, the budget-line channel; every other outcome (insufficient,
++timeout, transport error, unparsed verdict) leaves the turn exactly as it was, so the gate
++fails open toward research. The note releases rather than restricts: the model may keep
++researching, and the draft it writes still passes the verify gate.
++_Avoid_: "triage" — triage classifies the question before any evidence exists, which is the
++rejected design this gate replaces; the sufficiency judge reads retrieved pages. Also not
++the **conversation gate** (turn two's classifier deciding whether research runs at all) and
++not **verify** (which judges a finished draft, not an open round).
++
+ **Clarify turn** (`agent/flow/ask_user.py`, config `drFlow.askUser`):
+ A turn that ends in an `ask_user` handoff and deliberately produces no answer: the model's
+ questions become the turn's reply and the user's next message carries the answer. Nothing
+@@ -207,9 +222,67 @@ _Avoid_: "function" — a Tool is the agent-facing capability, not a Python func
+ The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name and runs
+ its `execute` under a timeout, returning the string result or a structured error.
+ 
++**Search Provider** (`agent/tools/web.py`, `SEARCH_PROVIDERS`):
++One of the interchangeable live-web backends behind the single `web_search` tool —
++`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, or `firecrawl` —
++selected by `tools.web.search.provider`. AnySearch, Tavily, Exa and Firecrawl also
++appear in `FETCH_PROVIDERS`, sharing one Web Vendor credential across both tools;
++Serper, SerpApi and Brave are search-only.
++Each owns an env var and a Web Vendor credential, and every response is normalised to
++the Serper shape before containment, dedup, shaping and rendering read it, so the
++ledger columns mean the same thing on every backend. A provider that serves no result offset declares
++`paginates=False` to the SearchSaturation rule at construction, exactly as the fixed
++corpus does: the page rung is then unreachable rather than reachable-and-unanswerable,
++and the ledger reports `sat_action=stopped_degraded`.
++_Avoid_: "engine" — that is SerpApi's own request parameter (`engine=google`); and
++a per-provider tool name — the model is always offered `web_search`. The corpus
++endpoint is a separate retrieval source, not a search provider.
++
++**Fetch Provider** (`agent/tools/web.py`, `FETCH_PROVIDERS`):
++One of the live-web page readers behind the single `web_fetch` tool — `jina` (default),
++`anysearch`, `tavily`, `exa`, or `firecrawl` — selected by `tools.web.fetch.provider`, with
++`tools.web.fetch.fallback`
++naming further backends to try when the selected one fails to return a page. Which one
++served a page is recorded as `extractor`, in the payload and in the fetch ledger.
++Unlike Search Providers these are **not interchangeable**: measured on one Wikipedia
++article AnySearch returned 49,890 characters against Jina's 27,786 for the same page,
++because it keeps the navigation chrome Jina strips, and it carries no publication date.
++An arm reading pages through it is a different arm, not the same arm on another vendor.
++`needs_key` decides whether the tool may be registered at all — Jina reads pages
++unauthenticated, AnySearch does not.
++_Avoid_: "reader" for the concept — that is Jina's own product name (`r.jina.ai`);
++and calling the fallback chain a retry — a retry re-sends to the same backend
++(`_send_with_retry`), a fallback moves to another vendor. A containment refusal, a
++failed URL validation and "not in corpus" are rules and never fall through.
++
++**Web Vendor** (`config/schema.py`, `WebProvidersConfig`):
++Who issues a web credential, as opposed to which tool spends it. Keys live at
++`tools.web.providers.<vendor>.apiKey` because one AnySearch account serves both
++`web_search` and `web_fetch`; a key held per tool would have to be pasted twice and
++could drift into two values for one credential. `config/loader.py::_migrate_config`
++relocates the pre-vendor fields (`tools.web.search.apiKey`, `tools.web.jinaApiKey`),
++which is also how the host raven's keys are inherited — it is a separate checkout on
++the old layout, so this is not an upgrade path that can eventually be deleted.
++
++**Env Seeding** (`config/loader.py`, `seed_env_from_dotenv`):
++Merging `KEY=VALUE` lines from a `.env` beside the config file into the process
++environment, before the config is read. Seeding only — it adds no way to resolve a
++setting, so a value still has exactly one resolution rule (`config value or environment
++variable`) however it arrived, and the precedence is config file > exported variable >
++`.env`. Anchored on the config file's own directory, the same anchor this runtime uses
++for `sessions/`, `cache/` and `ledger/`. Off when `RAVEN_DOTENV=0`, which the test suite
++sets, because it writes process-global state and the default config path is the
++developer's home.
++_Avoid_: "env substitution" — that is the `${VAR}`-inside-the-config mechanism this
++deliberately is not, and the reason the raven-research launcher renders a config at all.
++Also distinct from `subagents/raven-research/.env` in the host repo, which that launcher
++parses itself under `RESEARCH_`-prefixed names.
++
+ **Checkpoint** (`agent/loop/checkpoint.py`):
+-A once-per-turn commit of the workspace into a shadow git repo (separate from the
+-user's `.git`), so an interrupted or failed turn can be rolled back.
++A once-per-turn commit into a shadow git repo (separate from the user's `.git`), so an
++interrupted or failed turn can be rolled back. Covers the tree the engine's file tools
++are rooted in — the workspace everywhere but ACP, where it is the **Session File Root**,
++so concurrent sessions neither race one repo nor stage each other's edits.
+ _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
+ 
+ **Empty-Response Recovery** (`agent/loop/recovery.py`):
+@@ -359,6 +432,34 @@ A TUI client's registration to receive turn events for a session.
+ The interaction pattern for destructive operations: one `confirm.request` Notification
+ out, the turn pauses, one answering Request back.
+ 
++### ACP
++
++**Session Engine**:
++The `AgentLoop` serving one ACP session. One per session, not per process: the web
++tools keep their per-turn state (saturation, evidence round, seen sets, retry budgets)
++as instance attributes that `run_turn` resets at turn start, so two concurrent turns on
++one engine clear each other's.
++_Avoid_: "the engine" unqualified once more than one is resident.
++
++**Engine Registry**:
++`AcpLoops` — maps a conversation id to its Session Engine, builds one on first use, and
++holds the pieces every engine shares (provider, session manager, memory backend). Also
++the reclaim point: `session/delete` is not served, so the least recently used *idle*
++session's engine is evicted at `acp.maxLoops`. A build that finds every victim mid-turn
++goes over the cap rather than evict a running turn, so reclamation is retried whenever an
++engine is handed out and whenever a turn settles.
++Eviction is only lossless because everything a session needs across turns is held off the
++engine: the transcript in `SessionManager`, and the interrupted-turn recovery record in the
++shared map `AcpShared` hands every engine. Per-engine state added later has to answer the
++same question — a rebuilt engine starts empty.
++
++**Session File Root**:
++The subtree under the shared workspace where one session's file, exec and media tools are
++rooted (`acp_workspaces/<chat_id>`), and with them its **Checkpoint**, so two concurrent
++turns writing the same filename neither overwrite each other nor race one shadow repo. Distinct from the **workspace** itself, which stays shared
++because the system prompt's memory segments and the skill catalogue are read from it.
++_Avoid_: calling it "the session's workspace" — that reads as the whole workspace moving.
++
+ ### Context
+ 
+ **Context Engine** (`context_engine/`):
+diff --git a/QUICKSTART.md b/QUICKSTART.md
+index ecc731e..4315a1b 100644
+--- a/QUICKSTART.md
++++ b/QUICKSTART.md
+@@ -8,8 +8,14 @@ for `uv sync`.
+ - Python **3.12+** (`requires-python = ">=3.12"`)
+ - [`uv`](https://docs.astral.sh/uv/) — the only supported package manager. `pip` is not.
+ - An LLM endpoint. Anything OpenAI-compatible works: OpenRouter, a vLLM/SGLang server, OpenAI.
+-- For live-web research, two keys: [Serper](https://serper.dev) for search and
+-  [Jina Reader](https://jina.ai/reader) for page fetching.
++- For live-web research, a search key: [Serper](https://serper.dev) by default, or
++  [SerpApi](https://serpapi.com) / [AnySearch](https://anysearch.com) / [Tavily](https://tavily.com)
++  / [Exa](https://exa.ai) / [Brave Search](https://brave.com/search/api) /
++  [Firecrawl](https://firecrawl.dev) via `tools.web.search.provider`. Page fetching defaults to
++  [Jina Reader](https://jina.ai/reader), which works unauthenticated at a lower rate
++  limit; `JINA_API_KEY` raises it. AnySearch, Tavily, Exa, and
++  [Firecrawl](https://firecrawl.dev) can also serve `web_fetch` via `tools.web.fetch.provider`,
++  each off the same vendor key as its search side.
+ 
+ ## 1. Install
+ 
+@@ -40,6 +46,18 @@ export SERPER_API_KEY=...
+ export JINA_API_KEY=...
+ ```
+ 
++Or put them in a `.env` beside the config instead of exporting them. It is read
++before the config, never overrides a variable you exported, and `.env` is
++gitignored so it cannot be staged by accident:
++
++```bash
++cat > .env <<'EOF'
++SERPER_API_KEY=...
++JINA_API_KEY=...
++EOF
++chmod 600 .env
++```
++
+ The `.local.json` suffix is deliberate: it is gitignored, so a config carrying your API key
+ cannot be staged by accident. Everything else in this file uses relative paths for
+ readability — if a command reports `No such file or directory`, check that you are in the
+@@ -104,7 +122,7 @@ uv run python -c "from raven.config.raven import DRFlowConfig; print(DRFlowConfi
+ | `Error: No API key configured.` (exit 1) | `providers.<name>.apiKey` missing from the config. Not read from the environment. |
+ | `drFlow.version=... predates this build's flow semantics` | You used a retired label. The message names the value to use. Superseded labels are rejected on purpose — the label keys the measurement ledger, so an old label on a new build would mislabel a whole batch. The example configs omit the label for this reason; only pin one if you are publishing a number. |
+ | `force-finalize: salvage unavailable` in the log, or `answer_chars: 0` / `finalShape.form: "empty"` on a run that plainly answered | `drFlow.thinkClosingTagRequired` is `true` but your model does not emit `</think>`. The answer still reaches you, but every observer reports the turn as answerless and the salvage path burns extra calls. Set it to `false` for a non-think model; `dr_live_web.json` already does. |
+-| Every `web_fetch` fails with `402` | The Jina Reader account is out of credit. Search and fetch are **separate vendors with separate quotas** — search working tells you nothing about fetch. Probe both before a long run. |
++| Every `web_fetch` fails with `402` | The Jina Reader account is out of credit. A dead key is worse than none: the same URL answers `402` with it and `200` without, so delete the field rather than leaving a spent key in place. Search and fetch are **separate vendors with separate quotas** — search working tells you nothing about fetch. Probe both before a long run, or set `tools.web.fetch.fallback` so one vendor's outage does not cost the whole run. |
+ | `web_search` returns nothing usable | Check `SERPER_API_KEY`. Behind a corporate proxy, set `tools.web.proxy` in the config, or rely on the standard `http_proxy` / `https_proxy` environment variables, which the fetch path inherits by default. |
+ | Tests fail in the full suite but pass alone | Suite-order pollution, not a regression. |
+ | `cannot execute: required file not found` after moving the directory | `uv sync --reinstall`. Bare `uv sync` leaves stale absolute-path shebangs in `.venv/bin/`. |
+diff --git a/README.md b/README.md
+index b0e4b3e..db87542 100644
+--- a/README.md
++++ b/README.md
+@@ -403,13 +403,39 @@ must live, is to move the personalizer's clarify onto this same turn-boundary se
+ 
+ ### Environment variables
+ 
++A `.env` file **beside the config file** is merged into the process environment
++before the config is read, so credentials stay out of a config you can publish:
++
++```bash
++# ~/.raven/.env   (or next to whatever --config points at).  chmod 600 it.
++SERPER_API_KEY=sk-...
++JINA_API_KEY=sk-...
++ANYSEARCH_API_KEY=sk-...      # one key, both web tools
++```
++
++It only seeds the environment - it adds no second way to resolve a setting, so
++precedence stays **config file > environment > `.env`**. A real `export` always
++beats the file. The directory is the config's own, the same anchor this runtime
++already uses for `sessions/`, `cache/` and `ledger/`, so the same command reads
++the same `.env` wherever it is launched from. `RAVEN_DOTENV=0` turns it off (the
++test suite sets this). Not to be confused with `subagents/raven-research/.env`
++in the host repo, which is that launcher's own file and uses `RESEARCH_`-prefixed
++names.
++
+ | Variable | Read by | Effect |
+ |---|---|---|
+-| `SERPER_API_KEY` | `web_search` | Required for live-web search. No config equivalent is needed; `tools.web.search.apiKey` overrides it. |
+-| `JINA_API_KEY` | `web_fetch` | Required for live-web page reading. `tools.web.jinaApiKey` overrides it. |
++| `SERPER_API_KEY` | `web_search` | The key for the default search backend. `tools.web.providers.serper.apiKey` overrides it. |
++| `SERPAPI_API_KEY` | `web_search` | Used when `tools.web.search.provider` is `serpapi`; `tools.web.providers.serpapi.apiKey` overrides it. Pages by result offset, so depth works as it does on Serper. |
++| `ANYSEARCH_API_KEY` | `web_search`, `web_fetch` | One key, both tools — the credential is keyed by vendor (`tools.web.providers.anysearch.apiKey`), not by the tool that uses it. As a search backend it serves no page beyond the first, so search depth is unavailable on it: the tool tells the saturation rule up front and the ledger records `sat_action=stopped_degraded` rather than a dry search the endpoint never had a chance to serve. As a fetch backend it has no anonymous tier, so selecting it without this key withholds `web_fetch`. |
++| `TAVILY_API_KEY` | `web_search`, `web_fetch` | One key, both tools (`tools.web.providers.tavily.apiKey`). As search, no documented result offset, same `stopped_degraded` handling as AnySearch. As fetch (`/extract`) it has no anonymous tier, so selecting it without this key withholds `web_fetch`. |
++| `EXA_API_KEY` | `web_search`, `web_fetch` | One key, both tools (`tools.web.providers.exa.apiKey`). As search, neural search over Exa's own index, also with no result offset. As fetch (`/contents`) it has no anonymous tier. |
++| `BRAVE_API_KEY` | `web_search` | Used when `tools.web.search.provider` is `brave`; `tools.web.providers.brave.apiKey` overrides it. Pages by page index (`offset`), unlike SerpApi's result-count `start`. Brave has no vendor fetch/extract endpoint, so it is search-only. |
++| `JINA_API_KEY` | `web_fetch` | The default page reader. **Optional** — `r.jina.ai` answers unauthenticated at a lower rate limit, and a dead key is worse than none (402 where no key answers 200). `tools.web.providers.jina.apiKey` overrides it. |
++| `FIRECRAWL_API_KEY` | `web_search`, `web_fetch` | One key, both tools (`tools.web.providers.firecrawl.apiKey`). No anonymous tier on either endpoint (`/v1/search`, `/v1/scrape`), so selecting it without this key withholds the tool. |
+ | `RAVEN_WEB_LEDGER` | web tools | Name a file and both tools append a per-call JSONL ledger: every search with its **ordered** result URLs and whether the result was replayed from cache, every fetch with url / chars / ok / docid. Unset means off, **except** that `finalShape.processAppendix` opens a turn-scoped one under `<data dir>/ledger/` and deletes it after rendering the trail. Naming the variable always wins and that file is never removed. Write-only — it changes no behaviour and no output byte. |
+ | `RAVEN_TRACING`, `RAVEN_TRACING_DIR` | tracing | Tracing is **on by default**; `RAVEN_TRACING=0` makes it a no-op. `RAVEN_TRACING_DIR` moves the span log off `~/.raven/traces`. |
+ | `RAVEN_CLI_DEBUG` | CLI | Keeps loguru's default handler. Without it the CLI installs a WARNING-only stderr sink, so an INFO-level explanation of a failure is discarded before you see it. |
++| `RAVEN_DOTENV` | config loader | `0` disables the `.env` seeding described above. Anything else (or unset) leaves it on. |
+ | `RAVEN_HOME` | tracing, TUI runtime **only** | Does **not** relocate the workspace, the config, or the session logs — those come from `Path.home()` directly (`raven/config/paths.py`). Use `--workspace` to move the run's output. |
+ | `http_proxy` / `https_proxy` | web tools | Inherited by default, because the fetch path constructs its client with `proxy=None` and leaves `trust_env` on. Set `tools.web.proxy` in the config to override per-arm. |
+ 
+diff --git a/examples/README.md b/examples/README.md
+index b50141e..4da6219 100644
+--- a/examples/README.md
++++ b/examples/README.md
+@@ -1,6 +1,6 @@
+ # Example configs
+ 
+-Four configs, copied from the ones the evaluation harness actually runs, with endpoints and
++Seven configs, copied from the ones the evaluation harness actually runs, with endpoints and
+ keys replaced by placeholders. Copy one, fill in the placeholders, pass it with `--config`.
+ 
+ | File | What it is | Needs |
+@@ -10,6 +10,8 @@ keys replaced by placeholders. Copy one, fill in the placeholders, pass it with
+ | `dr_pinned_corpus.json` | DR Flow over a fixed corpus instead of the live web. Reproduces our controlled measurements. | LLM endpoint, a corpus service on `:8765` |
+ | `anchor_flow_off.json` | The **measurement anchor** (`drFlow.enabled=false`). Not a product configuration — see README "Measurement anchor". | same as above |
+ | `everos_memory.json` | **Memory, not DR.** Wiring the EverOS backend so captured turns land. Recall ships off; one key turns it on. | LLM key, an EverOS service on `:8000` |
++| `dr_ask_user.json` | `dr_multi_turn.json` plus the **ask_user clarify round**: on a conversation's first turn the agent may ask up to 3 questions (tool delivery) before researching. | same as `dr_live_web.json` |
++| `dr_shallow.json` | **A product profile, not a measured arm.** `dr_multi_turn.json` with the priced convergence gates on and the deep report template off - "simple questions get less research". | same as `dr_live_web.json` |
+ 
+ ## These are the measured flow, and a test keeps them that way
+ 
+@@ -57,7 +59,8 @@ so nothing about the output says anything is wrong.
+ 
+ Placeholders to replace: `PUT_YOUR_LLM_API_KEY_HERE`, `YOUR_LLM_HOST`. Web-tool keys are read
+ from the environment (`SERPER_API_KEY` for search, `JINA_API_KEY` for fetch); they can also go
+-in the config under `tools.web.search.apiKey` and `tools.web.jinaApiKey`, but the environment
++in the config under `tools.web.providers.serper.apiKey` and
++`tools.web.providers.jina.apiKey`, but the environment
+ is preferred so a config file can be shared without carrying a secret.
+ 
+ The LLM key has **no environment fallback** — `providers.<name>.apiKey` must be present in the
+@@ -131,6 +134,33 @@ Four knobs deserve a warning:
+   that `toolsAllowlist` only applies when the flow is **on**, so for `anchor_flow_off.json`
+   the denylist is the only fence there is.
+ 
++### `dr_shallow.json`: five deltas, and which of them are depth
++
++This one is not copied from a harness arm. It is the product profile for "simple questions get
++less research", and it differs from `dr_multi_turn.json` in exactly five values - two of which are
++depth and three of which are hygiene:
++
++| Value | | Why |
++|---|---|---|
++| `budgetNote.warnRatio` | 0.8 -> **0.6** | *depth.* Contract rule 2 turns the budget line's warning into an instruction ("stop opening new leads, verify what you have, draft the answer"). It fires at `iteration / maxIterations >= warnRatio`, so at `maxIterations: 20` this moves the converge push from turn 16 to turn 12. It never fires on a question that finishes in five turns - this knob shapes the tail, not the floor. |
++| `finalShape.reportDepth` | true -> **false** | *depth.* Back to the dr@3.4 template byte for byte. The deep clause asks for a causal narrative, a per-datum as-of date and disagreements adjudicated in the open; on a one-fact question that is the bulk of the reply. |
++| `search.saturation.k` | 8 -> **5** | *hygiene.* 5 and 10 are the two points that were priced (33% of searches removed at <=0.66pp, and 27% at 0.00pp); 8 is an interpolation with no reading behind it. |
++| `fetchGate` | off -> **on, k=15** | *hygiene.* Withholds `web_search` from the iteration after 15 searches with no page opened. The action-space channel rather than the advisory one, because a refusal in a return value was re-requested 195 times on one question. |
++| `forceFinalize` | off -> **on** | *hygiene.* A terminal turn whose visible answer is empty gets re-sampled instead of shipping blank. |
++
++**To go deep, flip the two depth values back** (`reportDepth: true`, `warnRatio: 0.8`) and keep the
++three hygiene ones. They remove pathologies, not depth, so a deep profile should carry them too -
++which is why this file exists rather than a "shallow" patch against `dr_multi_turn.json`.
++
++Depth is fixed when the process starts: `drFlow` is read once per entry point
++(`agent_commands.py`, `acp_commands.py`, `gateway_commands.py`) and passed into
++`AgentLoop.__init__`. There is no CLI override, no environment override and no runtime reload, so
++switching depth means a different `--config` on a different process.
++
++What it does **not** buy: a fast answer. The contract's grounding rule is untouched, so a simple
++question still costs one search, one or two fetches and a reviewer call. This profile makes a
++short question's reply shorter and a long question's tail shorter; it does not remove the floor.
++
+ ## Wiring the memory backend (`everos_memory.json`)
+ 
+ The other four configs are DR runs with memory off. This one is the opposite: no flow, a real
+diff --git a/raven/agent/loop/invariants.py b/raven/agent/loop/invariants.py
+index 4ce6e6e..bb37119 100644
+--- a/raven/agent/loop/invariants.py
++++ b/raven/agent/loop/invariants.py
+@@ -63,7 +63,11 @@ def classify_tool_result(content: Any) -> str:
+     body = _unwrap(text).lstrip()
+     if _ERROR_HEAD.match(body[:120]) or body[:12].startswith('{"error"'):
+         return "error"
+-    if "Serper API key not configured" in text:
++    # Provider-independent: the message names whichever backend
++    # ``tools.web.search.provider`` selects, and this classification decides
++    # whether a batch is invalidated - a hole here reads an unanswering
++    # retrieval surface as a legitimate result.
++    if "API key not configured" in text:
+         return "error"
+     if body.startswith(_EMPTY_HEAD):
+         return "empty"
+diff --git a/raven/agent/loop/main.py b/raven/agent/loop/main.py
+index e15ed92..db5bd47 100644
+--- a/raven/agent/loop/main.py
++++ b/raven/agent/loop/main.py
+@@ -291,6 +291,10 @@ _STORE_TURN_BUDGET_S: float = 5.0
+ # land, so a slow memory service cannot grow an unbounded queue behind a fast
+ # typist; if none lands, this turn's write is refused before it starts.
+ _STORE_MAX_INFLIGHT: int = 4
++# Marks a detached write that some drain has taken responsibility for. Carried on
++# the task rather than in a second shared set, so the claim cannot desynchronize
++# from the set the cap above is counted from.
++_STORE_CLAIMED_ATTR = "_raven_store_drain_claimed"
+ # Teardown's total budget for letting those writes finish.
+ _STORE_DRAIN_BUDGET_S: float = 15.0
+ # Teardown's total budget for promoting every session this process captured, and
+@@ -444,6 +448,7 @@ class AgentLoop:
+         context_window_tokens: int = 65_536,
+         context_window_authoritative: bool = False,
+         brave_api_key: str | None = None,
++        web_search_provider: str = "serper",
+         web_proxy: str | None = None,
+         web_corpus_endpoint: str | None = None,
+         web_benchmark_containment: bool = False,
+@@ -466,6 +471,9 @@ class AgentLoop:
+         runtime_config: "RuntimeConfig | None" = None,
+         interactive: bool = True,
+         jina_api_key: str | None = None,
++        web_fetch_provider: str = "jina",
++        web_fetch_fallback: list[str] | None = None,
++        web_provider_keys: dict[str, str] | None = None,
+         max_concurrent_subagents: int = 4,
+         max_subagent_spawns_per_hour: int = 30,
+         media_config: Any = None,
+@@ -497,6 +505,22 @@ class AgentLoop:
+         # DR observers + prompt section + reshaped web tools + versioned
+         # flow stamp. ``None`` / disabled keeps the chat flow byte-identical.
+         dr_flow: "DRFlowConfig | None" = None,
++        # Root the file and exec tools somewhere other than ``workspace``.
++        # ``None`` keeps them on ``workspace``, which is every surface but ACP.
++        # Only the tools move: the system prompt and the skill catalogue are
++        # still assembled from ``workspace``.
++        file_workspace: Path | None = None,
++        # Shared in-flight set for detached memory writes. ``None`` gives this
++        # loop its own, which is right for a process with one loop; a process
++        # running several against ONE backend passes the same set to all of
++        # them, so ``_STORE_MAX_INFLIGHT`` caps the process and not each loop.
++        store_inflight: "set[asyncio.Task] | None" = None,
++        # Shared interrupted-turn recovery records, keyed by session key.
++        # ``None`` gives this loop its own, which is right for a process whose
++        # loop outlives every session it serves; a process that rebuilds a
++        # session's loop (ACP, where the engine cap evicts) passes the same dict
++        # to all of them, or the record dies with the engine that took it.
++        pending_recovery: "dict[str, dict] | None" = None,
+     ):
+         from raven.agent.hook import (
+             CompositeHook,
+@@ -528,6 +552,7 @@ class AgentLoop:
+         self.channels_config = channels_config
+         self.provider = provider
+         self.workspace = workspace
++        self.file_workspace = file_workspace or workspace
+         self.model = model or provider.get_default_model()
+         self.max_iterations = max_iterations
+         # Empty-response recovery budgets. None → enabled defaults.
+@@ -652,7 +677,11 @@ class AgentLoop:
+             f"{self._dr_flow.version}/{_flow_version()}" if self._dr_flow is not None else _flow_version()
+         )
+         self.brave_api_key = brave_api_key
++        self.web_search_provider = web_search_provider
+         self.jina_api_key = jina_api_key
++        self.web_fetch_provider = web_fetch_provider
++        self.web_fetch_fallback = web_fetch_fallback or []
++        self.web_provider_keys = web_provider_keys or {}
+         self.web_proxy = web_proxy
+         self.web_corpus_endpoint = web_corpus_endpoint
+         # One instance shared by web_search and web_fetch: an arm reports one
+@@ -681,7 +710,9 @@ class AgentLoop:
+         self.backend: "MemoryBackend | None" = backend
+         # Writes that outran their turn budget and are still running. Held so
+         # teardown can drain them instead of dropping whatever was slowest.
+-        self._store_inflight: set[asyncio.Task] = set()
++        # Shared when the caller passes a set: the cap and the drain both belong
++        # to whoever owns the backend, which is the process, not this loop.
++        self._store_inflight: set[asyncio.Task] = store_inflight if store_inflight is not None else set()
+         # Writes refused because indexing never caught up. Reported at teardown:
+         # a dropped write is a turn the user will not be able to recall.
+         self._store_dropped = 0
+@@ -817,8 +848,21 @@ class AgentLoop:
+             from raven.agent.loop.checkpoint import CheckpointService
+ 
+             try:
++                # Rooted in ``file_workspace``, which is the tree this engine's
++                # tools can actually write: every file tool, ExecTool's
++                # working_dir and the media tools take that root, so the shared
++                # ``workspace`` is strictly wider than the edits a turn here can
++                # make. The difference is load-bearing once one process serves
++                # several sessions from their own roots (ACP): a shadow repo per
++                # session under one shared work-tree has every session's
++                # ``git add -A`` racing the same ``shadow.git`` -- one turn wins
++                # and the other reports ``could not lock config file`` -- and
++                # even serialized, each snapshot stages the whole shared tree,
++                # so one session's edits land in another's ``edited_files`` and
++                # from there in its recovery prompt. Identical for every other
++                # surface, where ``file_workspace`` IS ``workspace``.
+                 self._checkpoint = CheckpointService(
+-                    workspace,
++                    self.file_workspace,
+                     shadow_dir=runtime_config.checkpoint.shadow_dir,
+                 )
+             except ValueError as exc:
+@@ -829,7 +873,13 @@ class AgentLoop:
+                 logger.warning("runtime.checkpoint disabled — {}", exc)
+         # session_key -> {"checkpoint_id", "files"} stashed when a turn is
+         # interrupted (max-iter); consumed by the next turn's recovery prompt.
+-        self._pending_recovery: dict[str, dict] = {}
++        # Shared when the caller passes a dict, because the record has to
++        # outlive the engine that took it: the reader is the session's NEXT
++        # turn, and on a surface where an idle engine is evicted between the two
++        # (ACP) a per-instance dict is rebuilt empty and the warning is silently
++        # dropped while the files and the shadow commit still exist. The session
++        # key is the discriminator, so one dict serves every session safely.
++        self._pending_recovery: dict[str, dict] = pending_recovery if pending_recovery is not None else {}
+ 
+         self._sandbox_config = sandbox_config
+         self._owned_ids: set[str] = set()
+@@ -838,7 +888,11 @@ class AgentLoop:
+             workspace=workspace,
+             model=self.model,
+             brave_api_key=brave_api_key,
++            web_search_provider=web_search_provider,
+             jina_api_key=jina_api_key,
++            web_fetch_provider=web_fetch_provider,
++            web_fetch_fallback=web_fetch_fallback,
++            web_provider_keys=web_provider_keys,
+             web_proxy=web_proxy,
+             web_corpus_endpoint=web_corpus_endpoint,
+             benchmark_containment=self.benchmark_containment,
+@@ -1058,12 +1112,12 @@ class AgentLoop:
+ 
+     def _register_default_tools(self) -> None:
+         """Register the default set of tools."""
+-        allowed_dir = self.workspace if self.restrict_to_workspace else None
++        allowed_dir = self.file_workspace if self.restrict_to_workspace else None
+         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, GrepTool, FindTool):
+-            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
++            self.tools.register(cls(workspace=self.file_workspace, allowed_dir=allowed_dir))
+         self.tools.register(
+             ExecTool(
+-                working_dir=str(self.workspace),
++                working_dir=str(self.file_workspace),
+                 timeout=self.exec_config.timeout,
+                 restrict_to_workspace=self.restrict_to_workspace,
+                 path_append=self.exec_config.path_append,
+@@ -1072,24 +1126,47 @@ class AgentLoop:
+         )
+         search_kwargs = self._dr_flow.web_search_kwargs if self._dr_flow is not None else {}
+         fetch_kwargs = self._dr_flow.web_fetch_kwargs if self._dr_flow is not None else {}
+-        self.tools.register(
+-            WebSearchTool(
+-                api_key=self.brave_api_key,
+-                proxy=self.web_proxy,
+-                corpus_endpoint=self.web_corpus_endpoint,
+-                containment=self.benchmark_containment,
+-                **search_kwargs,
+-            )
++        # A tool that cannot run must never be advertised: the model reaches for it,
++        # the call fails, and the error text -- naming a config file and an env var --
++        # is relayed to whoever is on the other end of the channel. Ask the tool
++        # rather than the config, because it resolves the key at call time from
++        # either source.
++        # The corpus endpoint is the second source: with one configured this
++        # agent searches a fixed corpus and needs no provider key at all, so
++        # gating on the key alone would withdraw web_search from every
++        # contained benchmark run.
++        web_search = WebSearchTool(
++            api_key=self.brave_api_key,
++            provider=self.web_search_provider,
++            proxy=self.web_proxy,
++            corpus_endpoint=self.web_corpus_endpoint,
++            containment=self.benchmark_containment,
++            **search_kwargs,
+         )
+-        self.tools.register(
+-            WebFetchTool(
+-                api_key=self.jina_api_key,
+-                proxy=self.web_proxy,
+-                corpus_endpoint=self.web_corpus_endpoint,
+-                containment=self.benchmark_containment,
+-                **fetch_kwargs,
++        if web_search.api_key or web_search.corpus_endpoint:
++            self.tools.register(web_search)
++        else:
++            logger.info(
++                "web_search not registered: no {} API key and no web corpus endpoint",
++                web_search.spec.label,
+             )
++        web_fetch = WebFetchTool(
++            api_key=self.jina_api_key,
++            provider=self.web_fetch_provider,
++            fallback=self.web_fetch_fallback,
++            provider_keys=self.web_provider_keys,
++            proxy=self.web_proxy,
++            corpus_endpoint=self.web_corpus_endpoint,
++            containment=self.benchmark_containment,
++            **fetch_kwargs,
+         )
++        if web_fetch.registrable:
++            self.tools.register(web_fetch)
++        else:
++            logger.info(
++                "web_fetch not registered: no {} API key and no web corpus endpoint",
++                web_fetch.spec.label,
++            )
+         # Media tools (image/speech/video) are opt-in: a tool is registered only
+         # when the user configured it (a model or apiKey under tools.media.<tool>),
+         # which Config.effective_media_config() surfaces as a resolved key/model.
+@@ -1105,7 +1182,7 @@ class AgentLoop:
+                 self.tools.register(
+                     cls(
+                         tool_cfg,
+-                        workspace=self.workspace,
++                        workspace=self.file_workspace,
+                         proxy=media.proxy,
+                         output_subdir=media.output_subdir,
+                     )
+@@ -1878,8 +1955,18 @@ class AgentLoop:
+         """
+         if timeout is None:
+             timeout = _STORE_DRAIN_BUDGET_S
+-        pending = {t for t in self._store_inflight if not t.done()}
++        pending = {t for t in self._store_inflight if not t.done() and not getattr(t, _STORE_CLAIMED_ATTR, False)}
+         if pending:
++            # Claimed before the first await, which is what makes the claim
++            # exclusive: the set is shared across loops and both teardown and a
++            # boundary flush drain them concurrently, so a claim taken after the
++            # wait is taken by every drain at once and one lost turn reads as N.
++            # Marked rather than dropped from the set, because the other reader
++            # of that set is the backpressure cap and a write still running
++            # still holds a backend slot. Not cancelled -- the write keeps
++            # running, as everywhere else on this path.
++            for task in pending:
++                setattr(task, _STORE_CLAIMED_ATTR, True)
+             _, still_pending = await asyncio.wait(pending, timeout=timeout)
+             if still_pending:
+                 # Counted, because ``backend.stop()`` closes the client pool
+@@ -2762,6 +2849,11 @@ class AgentLoop:
+                     sorted(set(requested) - set(overrides)),
+                 )
+             hook_rollbacks += 1
++            if hook_ctx is not None:
++                # The honoured count beside the refused one: a gate scoped to the
++                # turn boundary (ask_user) needs to know the iteration number it
++                # sees is a re-sample, and only the loop knows that.
++                hook_ctx.metadata["hook_rollbacks"] = hook_rollbacks
+             del messages[iter_msg_base:]
+             if journal is not None:
+                 journal.rewind(
+@@ -4452,6 +4544,35 @@ class AgentLoop:
+         stream: bool = True,
+         usage_sink: dict[str, Any] | None = None,
+         text_sink: dict[str, Any] | None = None,
++    ) -> TurnOutcome:
++        """Make this session's own tools visible, then run the turn.
++
++        The scope is opened here because this is where the turn's task begins.
++        The ACP handler that accepted the servers cannot open it: it submits the
++        turn onto the spine and the turn runs on a task that inherits nothing
++        from it. Turns from two sessions run concurrently on this one registry,
++        which is the point.
++        """
++        session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
++        with self.tools.session_scope_for(session_key):
++            return await self._run_turn(
++                req,
++                emit,
++                drain,
++                stream=stream,
++                usage_sink=usage_sink,
++                text_sink=text_sink,
++            )
++
++    async def _run_turn(
++        self,
++        req: TurnRequest,
++        emit: Emit,
++        drain: Drain,
++        *,
++        stream: bool = True,
++        usage_sink: dict[str, Any] | None = None,
++        text_sink: dict[str, Any] | None = None,
+     ) -> TurnOutcome:
+         """Spine-native turn entry: consume a TurnRequest, fan the agent's output
+         onto the single ``emit``, return a TurnOutcome. Collapses the legacy
+diff --git a/raven/agent/subagent/manager.py b/raven/agent/subagent/manager.py
+index 153fd38..9701c63 100644
+--- a/raven/agent/subagent/manager.py
++++ b/raven/agent/subagent/manager.py
+@@ -37,6 +37,7 @@ class SubagentManager:
+         workspace: Path,
+         model: str | None = None,
+         brave_api_key: str | None = None,
++        web_search_provider: str = "serper",
+         web_proxy: str | None = None,
+         web_corpus_endpoint: str | None = None,
+         benchmark_containment: "BenchmarkContainment | None" = None,
+@@ -45,6 +46,9 @@ class SubagentManager:
+         sandbox_config: "SandboxConfig | None" = None,
+         owned_ids: set[str] | None = None,
+         jina_api_key: str | None = None,
++        web_fetch_provider: str = "jina",
++        web_fetch_fallback: list[str] | None = None,
++        web_provider_keys: dict[str, str] | None = None,
+         max_concurrent: int = 4,
+         max_spawns_per_hour: int = 30,
+         parent_tool_names: "Callable[[], list[str]] | None" = None,
+@@ -66,7 +70,11 @@ class SubagentManager:
+         self._submit = None
+         self.model = model or provider.get_default_model()
+         self.brave_api_key = brave_api_key
++        self.web_search_provider = web_search_provider
+         self.jina_api_key = jina_api_key
++        self.web_fetch_provider = web_fetch_provider
++        self.web_fetch_fallback = web_fetch_fallback or []
++        self.web_provider_keys = web_provider_keys or {}
+         self.web_proxy = web_proxy
+         # Must be inherited from the parent loop: a fixed-corpus benchmark run is void the
+         # moment any subagent reaches the live web, and the subagent tool registry is built
+@@ -187,22 +195,30 @@ class SubagentManager:
+                     executor=executor,
+                 )
+             )
+-        tools.register(
+-            WebSearchTool(
+-                api_key=self.brave_api_key,
+-                proxy=self.web_proxy,
+-                corpus_endpoint=self.web_corpus_endpoint,
+-                containment=self.benchmark_containment,
+-            )
++        # Withheld without a key, same as the main loop: a sub-agent that reaches
++        # for a search it cannot run reports the failure to its caller, and that
++        # text ends up in the parent turn. A configured corpus endpoint is the
++        # second source, and needs no key.
++        web_search = WebSearchTool(
++            api_key=self.brave_api_key,
++            provider=self.web_search_provider,
++            proxy=self.web_proxy,
++            corpus_endpoint=self.web_corpus_endpoint,
++            containment=self.benchmark_containment,
+         )
+-        tools.register(
+-            WebFetchTool(
+-                api_key=self.jina_api_key,
+-                proxy=self.web_proxy,
+-                corpus_endpoint=self.web_corpus_endpoint,
+-                containment=self.benchmark_containment,
+-            )
++        if web_search.api_key or web_search.corpus_endpoint:
++            tools.register(web_search)
++        web_fetch = WebFetchTool(
++            api_key=self.jina_api_key,
++            provider=self.web_fetch_provider,
++            fallback=self.web_fetch_fallback,
++            provider_keys=self.web_provider_keys,
++            proxy=self.web_proxy,
++            corpus_endpoint=self.web_corpus_endpoint,
++            containment=self.benchmark_containment,
+         )
++        if web_fetch.registrable:
++            tools.register(web_fetch)
+ 
+         # ★★★ dr@2.3: the subagent surface must be a SUBSET of the parent's.
+         #
+diff --git a/raven/agent/tools/web.py b/raven/agent/tools/web.py
+index 8a2a92a..2eebddb 100644
+--- a/raven/agent/tools/web.py
++++ b/raven/agent/tools/web.py
+@@ -5,6 +5,8 @@ import json
+ import os
+ import time
+ import zlib
++from collections.abc import Sequence
++from dataclasses import dataclass
+ from typing import Any, Awaitable, Callable
+ 
+ import httpx
+@@ -88,12 +90,232 @@ def _error_shaping(exc: Exception) -> dict:
+     """
+     shaping = dict(_NO_SHAPING)
+     status = getattr(getattr(exc, "response", None), "status_code", None)
+-    shaping["error"] = f"{type(exc).__name__}: {exc}"[:500]
++    # A status error's own text repeats the request URL, and SerpApi carries
++    # its key as a query parameter: the ledger is written to disk, so the row
++    # gets the status and nothing of the URL.
++    if isinstance(exc, httpx.HTTPStatusError):
++        shaping["error"] = f"HTTPStatusError: HTTP {status}"
++    else:
++        shaping["error"] = f"{type(exc).__name__}: {exc}"[:500]
+     shaping["status"] = int(status) if status is not None else None
+     shaping["quota_err"] = status in (401, 402, 403)
+     return shaping
+ 
+ 
++@dataclass(frozen=True)
++class SearchProviderSpec:
++    """One ``web_search`` backend, described where every reader can see it.
++
++    ``paginates`` is the load-bearing field: a provider that serves no offset
++    cannot answer the saturation rule's page-2 rung, and the rule has to be told
++    up front (``SearchSaturation.paginates``) rather than discovering it from a
++    request that comes back identical. That is the same declaration the corpus
++    path already makes, and for the same reason -- a capability whose activation
++    site is unreachable, with no symptom, is the failure this avoids.
++
++    There is no per-tool key field: the credential lives at
++    ``tools.web.providers.<vendor>.apiKey``, because one AnySearch account serves
++    both web tools and a key held per tool would have to be pasted twice.
++    """
++
++    vendor: str
++    label: str
++    env_var: str
++    paginates: bool
++
++    @property
++    def config_path(self) -> str:
++        return f"tools.web.providers.{self.vendor}.apiKey"
++
++
++DEFAULT_SEARCH_PROVIDER = "serper"
++
++SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
++    "serper": SearchProviderSpec(
++        vendor="serper",
++        label="Serper",
++        env_var="SERPER_API_KEY",
++        paginates=True,
++    ),
++    "anysearch": SearchProviderSpec(
++        vendor="anysearch",
++        label="AnySearch",
++        env_var="ANYSEARCH_API_KEY",
++        # No offset of any kind, so the ``paginate`` rung is declared unavailable
++        # rather than attempted. ``widen`` is NOT affected and stays useful here:
++        # probed live at max_results 3 and 10, this endpoint returns exactly what
++        # was asked for, where Serper answers 8-10 whatever ``num`` says.
++        paginates=False,
++    ),
++    "serpapi": SearchProviderSpec(
++        vendor="serpapi",
++        label="SerpApi",
++        env_var="SERPAPI_API_KEY",
++        # ``start`` is an offset in results, so page N maps onto start=(N-1)*num.
++        paginates=True,
++    ),
++    "tavily": SearchProviderSpec(
++        vendor="tavily",
++        label="Tavily",
++        env_var="TAVILY_API_KEY",
++        # No documented result-offset parameter; breadth here comes from wider
++        # single-shot queries, not paging, so the rung is declared unavailable
++        # up front like AnySearch.
++        paginates=False,
++    ),
++    "exa": SearchProviderSpec(
++        vendor="exa",
++        label="Exa",
++        env_var="EXA_API_KEY",
++        # Neural search over Exa's own index has no documented page offset.
++        paginates=False,
++    ),
++    "brave": SearchProviderSpec(
++        vendor="brave",
++        label="Brave Search",
++        env_var="BRAVE_API_KEY",
++        # ``offset`` is a page index, not a result offset like SerpApi's
++        # ``start``, documented up to 9 pages past the first.
++        paginates=True,
++    ),
++    "firecrawl": SearchProviderSpec(
++        vendor="firecrawl",
++        label="Firecrawl",
++        env_var="FIRECRAWL_API_KEY",
++        # ``/v1/search`` documents no result-offset parameter.
++        paginates=False,
++    ),
++}
++
++
++@dataclass(frozen=True)
++class FetchProviderSpec:
++    """One ``web_fetch`` backend.
++
++    ``needs_key`` decides whether the tool may be advertised at all: Jina reads
++    pages unauthenticated (at a lower rate limit), AnySearch does not. A tool
++    that cannot run must not be registered - the model reaches for it, every
++    call fails, and the error text naming a config path is relayed to whoever is
++    on the other end of the channel.
++
++    ``extractor`` is an instrument column, not a label: it is what the fetch
++    ledger records as having served the page, and the backends are not
++    comparable (see ``WebFetchConfig.provider``).
++    """
++
++    vendor: str
++    label: str
++    env_var: str
++    extractor: str
++    needs_key: bool
++
++    @property
++    def config_path(self) -> str:
++        return f"tools.web.providers.{self.vendor}.apiKey"
++
++
++DEFAULT_FETCH_PROVIDER = "jina"
++
++FETCH_PROVIDERS: dict[str, FetchProviderSpec] = {
++    "jina": FetchProviderSpec(
++        vendor="jina",
++        label="Jina Reader",
++        env_var="JINA_API_KEY",
++        extractor="jina-reader",
++        # Unauthenticated r.jina.ai works, so an absent key is a degradation
++        # rather than a broken tool. A DEAD key is worse than none - it answers
++        # 402 where no key answers 200 - but that is not something a schema can
++        # tell apart from a live one.
++        needs_key=False,
++    ),
++    "anysearch": FetchProviderSpec(
++        vendor="anysearch",
++        label="AnySearch",
++        env_var="ANYSEARCH_API_KEY",
++        extractor="anysearch-extract",
++        needs_key=True,
++    ),
++    "tavily": FetchProviderSpec(
++        vendor="tavily",
++        label="Tavily",
++        env_var="TAVILY_API_KEY",
++        extractor="tavily-extract",
++        needs_key=True,
++    ),
++    "exa": FetchProviderSpec(
++        vendor="exa",
++        label="Exa",
++        env_var="EXA_API_KEY",
++        extractor="exa-contents",
++        needs_key=True,
++    ),
++    "firecrawl": FetchProviderSpec(
++        vendor="firecrawl",
++        label="Firecrawl",
++        env_var="FIRECRAWL_API_KEY",
++        extractor="firecrawl-scrape",
++        # No anonymous tier.
++        needs_key=True,
++    ),
++}
++
++
++def _vendor_key(web_config: Any, vendor: str) -> str:
++    """The configured credential for one vendor, or an empty string."""
++    providers = getattr(web_config, "providers", None)
++    return str(getattr(getattr(providers, vendor, None), "api_key", "") or "")
++
++
++def selected_search_provider(search_config: Any) -> str:
++    """The provider a ``tools.web.search`` section selects, degrading to default."""
++    provider = getattr(search_config, "provider", "") or DEFAULT_SEARCH_PROVIDER
++    return provider if provider in SEARCH_PROVIDERS else DEFAULT_SEARCH_PROVIDER
++
++
++def selected_search_key(web_config: Any) -> tuple[str, str]:
++    """``(provider, configured key)`` for a ``tools.web`` section."""
++    provider = selected_search_provider(getattr(web_config, "search", None))
++    return provider, _vendor_key(web_config, provider)
++
++
++def selected_fetch_provider(fetch_config: Any) -> str:
++    """The provider a ``tools.web.fetch`` section selects, degrading to default."""
++    provider = getattr(fetch_config, "provider", "") or DEFAULT_FETCH_PROVIDER
++    return provider if provider in FETCH_PROVIDERS else DEFAULT_FETCH_PROVIDER
++
++
++def selected_fetch_key(web_config: Any) -> tuple[str, str]:
++    """``(provider, configured key)`` for a ``tools.web`` section."""
++    provider = selected_fetch_provider(getattr(web_config, "fetch", None))
++    return provider, _vendor_key(web_config, provider)
++
++
++def web_provider_keys(web_config: Any) -> dict[str, str]:
++    """Every configured vendor credential, keyed by vendor.
++
++    Handed to the fetch tool whole rather than one key at a time: a fallback
++    entry needs its own vendor's credential, and passing only the selected one
++    would send it to a different vendor's endpoint.
++    """
++    vendors = {spec.vendor for spec in SEARCH_PROVIDERS.values()}
++    vendors |= {spec.vendor for spec in FETCH_PROVIDERS.values()}
++    return {vendor: key for vendor in sorted(vendors) if (key := _vendor_key(web_config, vendor))}
++
++
++def selected_fetch_fallback(fetch_config: Any) -> list[str]:
++    """The fallback chain a ``tools.web.fetch`` section declares, minus the
++    selected provider and anything unknown."""
++    selected = selected_fetch_provider(fetch_config)
++    chain = getattr(fetch_config, "fallback", None) or []
++    seen = {selected}
++    out: list[str] = []
++    for name in chain:
++        if name in FETCH_PROVIDERS and name not in seen:
++            seen.add(name)
++            out.append(name)
++    return out
++
++
+ # The corpus retrieval service clamps to this of its own accord
+ # (``bcplus_serve.py``), so asking for more would silently return the same rows.
+ _MAX_SEARCH_DEPTH = 50
+@@ -221,7 +443,7 @@ _REPEAT_NOTE = (
+ 
+ 
+ class WebSearchTool(Tool):
+-    """Search the web using Serper."""
++    """Search the web through the configured provider (Serper by default)."""
+ 
+     name = "web_search"
+     description = "Search the web. Returns titles, URLs, and snippets."
+@@ -257,7 +479,12 @@ class WebSearchTool(Tool):
+         containment: BenchmarkContainment | None = None,
+         evidence_round: "EvidenceRound | None" = None,
+         saturation: "SearchSaturation | None" = None,
++        provider: str = DEFAULT_SEARCH_PROVIDER,
+     ):
++        if provider not in SEARCH_PROVIDERS:
++            logger.warning("WebSearch: unknown provider '{}', using {}", provider, DEFAULT_SEARCH_PROVIDER)
++            provider = DEFAULT_SEARCH_PROVIDER
++        self.provider = provider
+         self._init_api_key = api_key
+         # Shared with web_fetch so one arm reports one firing rate; a disabled
+         # instance is the neutral default, so ordinary use is unchanged.
+@@ -308,13 +535,22 @@ class WebSearchTool(Tool):
+         # so tell the rule up front that paging is unavailable there rather than
+         # letting a paginate-configured corpus arm quietly behave like a stopping one.
+         self._saturation = saturation
+-        if saturation is not None and corpus_endpoint:
++        # Declared up front for the corpus path and for any provider that serves
++        # no offset: ``_escalate`` cannot raise ``page`` once this is False, so
++        # the rung is never reached rather than being reached and unanswerable.
++        # The ledger still separates the two outcomes -- ``sat_action`` reports
++        # ``stopped_degraded`` here against ``stopped`` on a real exhaustion.
++        if saturation is not None and (corpus_endpoint or not self.spec.paginates):
+             saturation.paginates = False
+ 
++    @property
++    def spec(self) -> SearchProviderSpec:
++        return SEARCH_PROVIDERS[self.provider]
++
+     @property
+     def api_key(self) -> str:
+         """Resolve API key at call time so env/config changes are picked up."""
+-        return self._init_api_key or os.environ.get("SERPER_API_KEY", "")
++        return self._init_api_key or os.environ.get(self.spec.env_var, "")
+ 
+     def start_turn(self, keep_identities: bool = False) -> None:
+         """Drop the per-turn repeat memory.
+@@ -688,9 +924,12 @@ class WebSearchTool(Tool):
+             except Exception:
+                 where = "your Raven config file"
+             logger.error(
+-                "WebSearch: no Serper API key. Set tools.web.search.apiKey in {} "
+-                "or export SERPER_API_KEY, then start the run again.",
++                "WebSearch: no {} API key. Set {} in {} "
++                "or export {}, then start the run again.",
++                self.spec.label,
++                self.spec.config_path,
+                 where,
++                self.spec.env_var,
+             )
+             return (
+                 "Error: web search is unavailable on this run - the search "
+@@ -732,22 +971,15 @@ class WebSearchTool(Tool):
+             # tax on the arm that searches most.
+             async def _send() -> httpx.Response:
+                 async with httpx.AsyncClient(proxy=self.proxy) as client:
+-                    return await client.post(
+-                        "https://google.serper.dev/search",
+-                        json=({"q": query, "num": n} if page <= 1
+-                              else {"q": query, "num": n, "page": page}),
+-                        headers={
+-                            "Accept": "application/json",
+-                            "Content-Type": "application/json",
+-                            "X-API-KEY": self.api_key,
+-                        },
+-                        timeout=10.0,
+-                    )
++                    return await self._provider_request(client, query, n, page)
+ 
+             r = await _send_with_retry(
+                 _send, op="search_retry", key=query, budget=self._retry_budget
+             )
+-            data = r.json()
++            # Normalised to the Serper shape before anything downstream reads it,
++            # so containment, dedup, shaping and rendering stay one code path and
++            # the instrument columns keep meaning the same thing on every backend.
++            data = self._normalise_response(r.json())
+             # Filtered before the slice, not after: dropping a row post-slice
+             # would hand back a shorter list than asked for, and how often that
+             # happens depends on how dataset-adjacent the arm's queries are -
+@@ -813,6 +1045,12 @@ class WebSearchTool(Tool):
+                 self._saturation.observe(urls)
+             shaping["snippet_repeat_marks"] = self._snippet_repeat_marks
+             return "\n".join(lines), urls, shaping
++        except httpx.HTTPStatusError as e:
++            # Vendor and status only, never the exception text: httpx puts the
++            # full request URL in it, and SerpApi's URL carries the key.
++            status = e.response.status_code
++            logger.error("WebSearch error: {} answered HTTP {}", self.spec.label, status)
++            return f"Error: {self.spec.label} answered HTTP {status}", [], _error_shaping(e)
+         except httpx.ProxyError as e:
+             logger.error("WebSearch proxy error: {}", e)
+             return f"Proxy error: {e}", [], _error_shaping(e)
+@@ -821,6 +1059,217 @@ class WebSearchTool(Tool):
+             return f"Error: {e}", [], _error_shaping(e)
+ 
+ 
++    async def _provider_request(
++        self, client: httpx.AsyncClient, query: str, n: int, page: int
++    ) -> httpx.Response:
++        """One search request, built the way the selected provider expects.
++
++        The Serper branch is byte-identical to what this tool has always sent -
++        it is the anchor's wire traffic, and ``test_web_search_saturation_wiring``
++        compares the body against a literal. Do not "tidy" it into the others.
++        """
++        if self.provider == "serper":
++            return await client.post(
++                "https://google.serper.dev/search",
++                json=({"q": query, "num": n} if page <= 1
++                      else {"q": query, "num": n, "page": page}),
++                headers={
++                    "Accept": "application/json",
++                    "Content-Type": "application/json",
++                    "X-API-KEY": self.api_key,
++                },
++                timeout=10.0,
++            )
++        if self.provider == "serpapi":
++            # ``start`` is an offset in results, not a page index, so the rung's
++            # page N is (N-1) whole pages in. Omitted at page 1 so the request an
++            # un-escalated turn sends carries nothing the rule did not ask for.
++            params = {"engine": "google", "q": query, "num": n, "api_key": self.api_key}
++            if page > 1:
++                params["start"] = (page - 1) * n
++            return await client.get(
++                "https://serpapi.com/search",
++                params=params,
++                headers={"Accept": "application/json"},
++                timeout=10.0,
++            )
++        if self.provider == "tavily":
++            # ``page`` cannot appear here: no documented result-offset parameter,
++            # which is why ``spec.paginates`` is False for this vendor.
++            return await client.post(
++                "https://api.tavily.com/search",
++                json={"query": query, "max_results": n},
++                headers={
++                    "Accept": "application/json",
++                    "Content-Type": "application/json",
++                    "Authorization": f"Bearer {self.api_key}",
++                },
++                timeout=10.0,
++            )
++        if self.provider == "exa":
++            # Same reasoning as Tavily: no page offset, so ``paginates`` is False.
++            # ``contents.highlights`` asks for a query-scored excerpt, which is
++            # what the render path reads as the snippet. Not ``text``: that is
++            # the whole page, and ``_snippet_line`` renders whatever it is
++            # handed - probed live, five results carried 138k chars of text
++            # against 1.5k of capped highlights. ``maxCharacters`` is the bound
++            # that holds; ``numSentences``/``highlightsPerUrl`` did not (one
++            # "sentence" came back at 1.3k chars). Highlights are a separately
++            # billed add-on, so they are only requested when snippets are
++            # rendered - a deep-research profile sets ``include_snippets=False``
++            # and would discard them unread.
++            body: dict[str, Any] = {"query": query, "numResults": n}
++            if self.include_snippets:
++                body["contents"] = {"highlights": {"maxCharacters": 300}}
++            return await client.post(
++                "https://api.exa.ai/search",
++                json=body,
++                headers={
++                    "Accept": "application/json",
++                    "Content-Type": "application/json",
++                    "x-api-key": self.api_key,
++                },
++                timeout=10.0,
++            )
++        if self.provider == "brave":
++            # ``offset`` is a page index (unlike SerpApi's result-count
++            # ``start``), so page N maps onto offset=(N-1) directly.
++            params: dict[str, Any] = {"q": query, "count": n}
++            if page > 1:
++                params["offset"] = page - 1
++            return await client.get(
++                "https://api.search.brave.com/res/v1/web/search",
++                params=params,
++                headers={
++                    "Accept": "application/json",
++                    "X-Subscription-Token": self.api_key,
++                },
++                timeout=10.0,
++            )
++        if self.provider == "firecrawl":
++            # No page offset here either, same as Tavily and Exa.
++            return await client.post(
++                "https://api.firecrawl.dev/v1/search",
++                json={"query": query, "limit": n},
++                headers={
++                    "Accept": "application/json",
++                    "Content-Type": "application/json",
++                    "Authorization": f"Bearer {self.api_key}",
++                },
++                timeout=10.0,
++            )
++        # AnySearch. ``page`` cannot appear here: the provider serves no offset,
++        # which is why ``spec.paginates`` is False and the saturation rule is told
++        # so at construction - the rung is unreachable rather than unanswerable.
++        return await client.post(
++            "https://api.anysearch.com/v1/search",
++            json={"query": query, "max_results": n},
++            headers={
++                "Accept": "application/json",
++                "Content-Type": "application/json",
++                "Authorization": f"Bearer {self.api_key}",
++            },
++            timeout=10.0,
++        )
++
++    def _normalise_response(self, data: Any) -> dict[str, Any]:
++        """A provider payload in the Serper shape this tool renders from.
++
++        Only the three keys the render path reads are produced. Anything a
++        provider does not carry is absent rather than empty, so a missing
++        answer box and a suppressed one stay distinguishable in the shaping row.
++        """
++        if self.provider == "serper" or not isinstance(data, dict):
++            return data if isinstance(data, dict) else {}
++        if self.provider == "serpapi":
++            out: dict[str, Any] = {"organic": list(data.get("organic_results") or [])}
++            if box := data.get("answer_box"):
++                out["answerBox"] = box
++            if kg := data.get("knowledge_graph"):
++                out["knowledgeGraph"] = kg
++            return out
++        if self.provider == "tavily":
++            organic = [
++                {
++                    "title": str(item.get("title") or ""),
++                    "link": str(item.get("url") or ""),
++                    "snippet": item.get("content") or "",
++                }
++                for item in data.get("results") or []
++                if isinstance(item, dict)
++            ]
++            out = {"organic": organic}
++            # Tavily returns ``answer`` only when the request opts in with
++            # ``include_answer``, which the request above does not send, so
++            # this slot is empty today. Kept on the answerBox path so an opt-in
++            # later renders through the channel a deep-research profile
++            # already switches off.
++            if answer := data.get("answer"):
++                out["answerBox"] = {"answer": answer}
++            return out
++        if self.provider == "exa":
++            organic = [
++                {
++                    "title": str(item.get("title") or ""),
++                    "link": str(item.get("url") or ""),
++                    # Highlights only, never ``text``: a page body in this slot
++                    # is rendered whole. Whitespace collapsed because a highlight
++                    # carries newlines and the snippet line is indented once.
++                    "snippet": " ".join(
++                        " ".join(h.split()) for h in (item.get("highlights") or []) if isinstance(h, str) and h
++                    ),
++                }
++                for item in data.get("results") or []
++                if isinstance(item, dict)
++            ]
++            return {"organic": organic}
++        if self.provider == "brave":
++            web = data.get("web") if isinstance(data.get("web"), dict) else {}
++            organic = [
++                {
++                    "title": str(item.get("title") or ""),
++                    "link": str(item.get("url") or ""),
++                    "snippet": item.get("description") or "",
++                }
++                for item in (web.get("results") if isinstance(web, dict) else None) or []
++                if isinstance(item, dict)
++            ]
++            return {"organic": organic}
++        if self.provider == "firecrawl":
++            # Errors normally arrive status-coupled (400/500 with ``success:
++            # false``, probed live) and raise in ``_send_with_retry``. This
++            # catches an in-envelope refusal inside a 200 so it renders as an
++            # error rather than a dry search: a zero-hit advances the
++            # saturation streak, and "the endpoint refused" must not.
++            if data.get("success") is False:
++                raise ValueError(f"Firecrawl: {data.get('error') or 'search failed'}")
++            organic = [
++                {
++                    "title": str(item.get("title") or ""),
++                    "link": str(item.get("url") or ""),
++                    "snippet": item.get("description") or "",
++                }
++                for item in data.get("data") or []
++                if isinstance(item, dict)
++            ]
++            return {"organic": organic}
++        # AnySearch publishes the request shape but not the response. Parse
++        # tolerantly: results may sit at the top level or inside the
++        # ``{code, message, data}`` envelope its auth endpoint uses, and an item
++        # spells the URL ``url`` or ``link`` and the text ``snippet`` or ``content``.
++        body = data.get("data") if isinstance(data.get("data"), dict) else data
++        raw = body.get("results") if isinstance(body, dict) else None
++        organic: list[dict[str, Any]] = []
++        for item in raw if isinstance(raw, list) else []:
++            if not isinstance(item, dict):
++                continue
++            organic.append({
++                "title": str(item.get("title") or ""),
++                "link": str(item.get("url") or item.get("link") or ""),
++                "snippet": item.get("snippet") or item.get("content") or "",
++            })
++        return {"organic": organic}
++
+     async def _search_corpus(
+         self, query: str, count: int | None, k: int | None = None
+     ) -> tuple[str, list[str], dict[str, int]]:
+@@ -956,8 +1405,18 @@ def _encoding_lost(text: str) -> bool:
+     return text.count("\ufffd") > max(8, len(text) // 200)
+ 
+ 
++class _ProviderPageError(Exception):
++    """A fetch backend answered, but with no page.
++
++    Its own type so the fallback chain can tell "this vendor could not serve the
++    page" apart from a transport failure while still treating both as reasons to
++    try the next one - and so neither is confused with a containment refusal or a
++    failed URL validation, which are rules and never fall through.
++    """
++
++
+ class WebFetchTool(Tool):
+-    """Fetch and extract content from a URL using Jina Reader."""
++    """Fetch and extract content from a URL through the configured provider."""
+ 
+     name = "web_fetch"
+     description = "Fetch URL and extract readable content via Jina Reader."
+@@ -989,8 +1448,33 @@ class WebFetchTool(Tool):
+         digest_timeout_s: float = 30.0,
+         corpus_endpoint: str | None = None,
+         containment: BenchmarkContainment | None = None,
++        provider: str = DEFAULT_FETCH_PROVIDER,
++        fallback: Sequence[str] | None = None,
++        provider_keys: dict[str, str] | None = None,
+     ):
++        if provider not in FETCH_PROVIDERS:
++            logger.warning(
++                "web_fetch: unknown provider {!r}, using {}", provider, DEFAULT_FETCH_PROVIDER
++            )
++            provider = DEFAULT_FETCH_PROVIDER
++        self.provider = provider
++        # Deduplicated and filtered here rather than at each use: an entry naming
++        # the selected provider would re-issue the request that just failed, and
++        # one naming a provider that does not exist would raise inside the very
++        # path that exists to survive a failure.
++        seen = {provider}
++        self.fallback: list[str] = []
++        for name in fallback or ():
++            if name in FETCH_PROVIDERS and name not in seen:
++                seen.add(name)
++                self.fallback.append(name)
++        self._provider_keys = dict(provider_keys or {})
+         self._init_api_key = api_key
++        # Instance attribute shadowing the class one. With the default provider
++        # this renders the class string byte for byte, so the anchor's tool
++        # schema is unchanged; a non-default provider must not advertise a
++        # vendor it will not call.
++        self.description = f"Fetch URL and extract readable content via {FETCH_PROVIDERS[provider].label}."
+         self.containment = containment or BenchmarkContainment()
+         self.max_chars = max_chars
+         self.proxy = proxy
+@@ -1015,10 +1499,43 @@ class WebFetchTool(Tool):
+         """
+         self._retry_budget = _RetryBudget()
+ 
++    @property
++    def spec(self) -> FetchProviderSpec:
++        return FETCH_PROVIDERS[self.provider]
++
+     @property
+     def api_key(self) -> str:
+         """Resolve API key at call time so env/config changes are picked up."""
+-        return self._init_api_key or os.environ.get("JINA_API_KEY", "")
++        return self._key_for(self.provider)
++
++    @property
++    def registrable(self) -> bool:
++        """Whether this tool may be advertised to the model.
++
++        One predicate, two registries - the main loop's and the sub-agent's.
++        They must agree, and two conditionals in two files with nothing tying
++        them together is how they stop agreeing: gating only the main loop
++        leaves the tool advertised to every nested sub-agent.
++
++        Differs from ``web_search``'s rule in the one way that matters: Jina
++        reads pages unauthenticated, so an absent key there is a rate limit
++        rather than a broken tool, and the default build stays registered
++        exactly as it always was.
++        """
++        return not self.spec.needs_key or bool(self.api_key) or bool(self.corpus_endpoint)
++
++    def _key_for(self, provider: str) -> str:
++        """The credential for one backend, selected or fallback.
++
++        ``api_key`` names the SELECTED provider only. A fallback entry has to
++        find its own key, or a chain would quietly send the selected vendor's
++        credential to a different vendor's endpoint.
++        """
++        if provider == self.provider and self._init_api_key:
++            return self._init_api_key
++        if key := self._provider_keys.get(provider):
++            return key
++        return os.environ.get(FETCH_PROVIDERS[provider].env_var, "")
+ 
+     async def execute(
+         self,
+@@ -1074,10 +1591,16 @@ class WebFetchTool(Tool):
+             return record
+         if not isinstance(payload, dict):
+             return record
++        # ``extractor`` names the backend that actually served the page. It is a
++        # measurement column, not a label: the live-web backends are not
++        # interchangeable (AnySearch keeps the navigation chrome Jina strips, so
++        # the same article arrives ~1.8x longer), and a fallback chain means the
++        # selected provider is not always the one that answered.
+         for key, out_key in (("length", "chars"), ("source_chars", "source_chars"),
+                              ("digested", "digested"), ("docid", "docid"),
+                              ("truncated", "truncated"), ("error", "error"),
+                              ("encoding_lost", "encoding_lost"),
++                             ("extractor", "extractor"),
+                              # 20260831. The digest keeps what the model asked for and
+                              # discards the rest - a median 29,587 source chars down to
+                              # 1,541, so 94% of the page never reaches it. Any later work
+@@ -1144,71 +1667,258 @@ class WebFetchTool(Tool):
+         if not is_valid:
+             return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
+ 
+-        try:
+-            # "no explicit proxy" is not "direct": with trust_env on, httpx
+-            # still honours HTTP(S)_PROXY from the environment.
+-            logger.debug(
+-                "WebFetch: {}",
+-                "proxy enabled" if self.proxy else "no explicit proxy (environment proxies may apply)",
++        # "no explicit proxy" is not "direct": with trust_env on, httpx
++        # still honours HTTP(S)_PROXY from the environment.
++        logger.debug(
++            "WebFetch: {}",
++            "proxy enabled" if self.proxy else "no explicit proxy (environment proxies may apply)",
++        )
++        # The chain starts below the two refusals above, never around them: a
++        # containment refusal and a failed URL validation are rules, and retrying
++        # a rule on another vendor is an end-run around the gate that produced it.
++        # Only a vendor that could not serve the page falls through.
++        #
++        # The turn's retry budget is shared across the chain, so a vendor that
++        # spent it leaves the next one without retries - but never without its
++        # first attempt, which is the property that makes a fallback worth having
++        # during exactly the outage that drains the budget.
++        attempts = [self.provider, *self.fallback]
++        served, text, status = "", "", 0
++        extras: dict[str, Any] = {}
++        failure: str | None = None
++        for index, candidate in enumerate(attempts):
++            remaining = attempts[index + 1:]
++            try:
++                text, status, extras = await self._provider_fetch(candidate, url)
++                # A 200 carrying nothing is a vendor that did not serve the page,
++                # which the AnySearch branch already raises on and the Jina one
++                # cannot see. Conditioned on there being a next vendor: with none,
++                # this returns what the vendor sent, which is what the default
++                # single-provider path has always returned and what the anchor
++                # measures. Widening it to that path is a Flow change (AGENTS.md
++                # 0.4), not a fix to fold in here.
++                if not text.strip() and remaining:
++                    raise _ProviderPageError(f"{candidate} returned no page content")
++                served = candidate
++                break
++            except httpx.HTTPStatusError as e:
++                # Same rule as the search tool: no request URL in the text.
++                status = e.response.status_code
++                logger.error("WebFetch error for {} via {}: HTTP {}", url, candidate, status)
++                failure = f"{candidate} answered HTTP {status}"
++            except httpx.ProxyError as e:
++                logger.error("WebFetch proxy error for {} via {}: {}", url, candidate, e)
++                failure = f"Proxy error: {e}"
++            except Exception as e:
++                logger.error("WebFetch error for {} via {}: {}", url, candidate, e)
++                failure = str(e)
++            if not remaining:
++                return json.dumps({"error": failure, "url": url}, ensure_ascii=False)
++            # Recorded rather than logged only: a run that leaned on its fallback
++            # must not be indistinguishable from one that never needed it.
++            _ledger_append({
++                "ts": time.time(),
++                "op": "fetch_fallback",
++                "url": url,
++                "provider": candidate,
++                "next": remaining[0],
++                "error": failure,
++            })
++
++        spec = FETCH_PROVIDERS[served]
++        encoding_lost = _encoding_lost(text)
++        source_chars = len(text)
++
++        # A page that lost its encoding is not worth a digest call: the
++        # model would distill replacement characters.
++        extracted = None if encoding_lost else await self._try_digest(text, info_to_extract, url)
++        if extracted is not None:
++            return json.dumps(
++                {
++                    "url": url,
++                    "finalUrl": url,
++                    "status": status,
++                    "extractor": f"{spec.extractor}+digest",
++                    "extractMode": extractMode,
++                    "digested": True,
++                    "info_to_extract": info_to_extract,
++                    "source_chars": source_chars,
++                    "length": len(extracted),
++                    "text": extracted,
++                    **extras,
++                },
++                ensure_ascii=False,
+             )
++
++        truncated = len(text) > max_chars
++        if truncated:
++            text = text[:max_chars]
++
++        payload: dict[str, Any] = {
++            "url": url,
++            "finalUrl": url,
++            "status": status,
++            "extractor": spec.extractor,
++            "extractMode": extractMode,
++            "truncated": truncated,
++            "length": len(text),
++            "text": text,
++        }
++        payload.update(extras)
++        if served != DEFAULT_FETCH_PROVIDER:
++            # ``truncated`` is measured against this tool's own cap, so a backend
++            # that truncated first reports False on a page it cut. Only added off
++            # the default path: this is what the model reads, and adding a field
++            # to the DEFAULT payload would move the anchor's distribution. The
++            # digest branch above already carries it on every path.
++            payload["source_chars"] = source_chars
++        if encoding_lost:
++            payload["encoding_lost"] = True
++            payload["warning"] = _ENCODING_LOST_WARNING
++        return json.dumps(payload, ensure_ascii=False)
++
++    async def _provider_fetch(self, provider: str, url: str) -> tuple[str, int, dict[str, Any]]:
++        """One page, read the way the given backend serves it.
++
++        Returns the page text, the status to report, and any extra payload
++        fields that backend can fill in. Raises on anything that did not produce
++        a page, which is what the caller's fallback chain runs on.
++
++        The Jina branch is byte-identical to what this tool has always sent - it
++        is the anchor's wire traffic. Do not "tidy" it into the other.
++        """
++        if provider == "jina":
+             headers = {"Accept": "text/plain"}
+-            if self.api_key:
+-                headers["Authorization"] = f"Bearer {self.api_key}"
++            if key := self._key_for("jina"):
++                headers["Authorization"] = f"Bearer {key}"
+             r = await self._get_with_retry(url, headers)
+-
+             text = r.text
+             if _encoding_lost(text):
+                 # A poisoned cached extraction is the common case, and a fresh
+                 # render usually comes back clean.
+                 r = await self._get_with_retry(url, {**headers, "x-no-cache": "true"})
+                 text = r.text
+-            encoding_lost = _encoding_lost(text)
+-            source_chars = len(text)
++            return text, r.status_code, {}
+ 
+-            # A page that lost its encoding is not worth a digest call: the
+-            # model would distill replacement characters.
+-            extracted = None if encoding_lost else await self._try_digest(text, info_to_extract, url)
+-            if extracted is not None:
+-                return json.dumps(
+-                    {
+-                        "url": url,
+-                        "finalUrl": url,
+-                        "status": r.status_code,
+-                        "extractor": "jina-reader+digest",
+-                        "extractMode": extractMode,
+-                        "digested": True,
+-                        "info_to_extract": info_to_extract,
+-                        "source_chars": source_chars,
+-                        "length": len(extracted),
+-                        "text": extracted,
+-                    },
+-                    ensure_ascii=False,
+-                )
++        if provider == "tavily":
++            headers = {
++                "Accept": "application/json",
++                "Content-Type": "application/json",
++                "Authorization": f"Bearer {self._key_for('tavily')}",
++            }
+ 
+-            truncated = len(text) > max_chars
+-            if truncated:
+-                text = text[:max_chars]
++            async def _send_tavily() -> httpx.Response:
++                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
++                    return await client.post(
++                        "https://api.tavily.com/extract", json={"urls": [url]}, headers=headers
++                    )
+ 
+-            payload = {
+-                "url": url,
+-                "finalUrl": url,
+-                "status": r.status_code,
+-                "extractor": "jina-reader",
+-                "extractMode": extractMode,
+-                "truncated": truncated,
+-                "length": len(text),
+-                "text": text,
++            r = await _send_with_retry(_send_tavily, op="fetch_retry", key=url, budget=self._retry_budget)
++            data = r.json()
++            results = data.get("results") if isinstance(data, dict) else None
++            # A single-URL request has at most one hit; Tavily may normalise the
++            # URL (trailing slash, scheme) so this does not match on equality.
++            hit = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else None
++            if hit is None:
++                failed = data.get("failed_results") if isinstance(data, dict) else None
++                reason = failed[0].get("error") if isinstance(failed, list) and failed and isinstance(failed[0], dict) else None
++                raise _ProviderPageError(f"Tavily: {reason or 'extract failed'}")
++            text = str(hit.get("raw_content") or "")
++            if not text:
++                raise _ProviderPageError("Tavily returned no page content")
++            return text, r.status_code, {}
++
++        if provider == "exa":
++            headers = {
++                "Accept": "application/json",
++                "Content-Type": "application/json",
++                "x-api-key": self._key_for("exa"),
+             }
+-            if encoding_lost:
+-                payload["encoding_lost"] = True
+-                payload["warning"] = _ENCODING_LOST_WARNING
+-            return json.dumps(payload, ensure_ascii=False)
+-        except httpx.ProxyError as e:
+-            logger.error("WebFetch proxy error for {}: {}", url, e)
+-            return json.dumps({"error": f"Proxy error: {e}", "url": url}, ensure_ascii=False)
+-        except Exception as e:
+-            logger.error("WebFetch error for {}: {}", url, e)
+-            return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
++
++            async def _send_exa() -> httpx.Response:
++                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
++                    return await client.post(
++                        "https://api.exa.ai/contents",
++                        json={"urls": [url], "text": True},
++                        headers=headers,
++                    )
++
++            r = await _send_with_retry(_send_exa, op="fetch_retry", key=url, budget=self._retry_budget)
++            data = r.json()
++            results = data.get("results") if isinstance(data, dict) else None
++            hit = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else None
++            if hit is None:
++                raise _ProviderPageError("Exa returned no page content")
++            text = str(hit.get("text") or "")
++            if not text:
++                raise _ProviderPageError("Exa returned no page content")
++            extras: dict[str, Any] = {}
++            if title := hit.get("title"):
++                extras["title"] = str(title)
++            return text, r.status_code, extras
++
++        if provider == "firecrawl":
++            headers = {
++                "Accept": "application/json",
++                "Content-Type": "application/json",
++                "Authorization": f"Bearer {self._key_for('firecrawl')}",
++            }
++
++            async def _send_fc() -> httpx.Response:
++                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
++                    return await client.post(
++                        "https://api.firecrawl.dev/v1/scrape",
++                        json={"url": url, "formats": ["markdown"]},
++                        headers=headers,
++                    )
++
++            r = await _send_with_retry(_send_fc, op="fetch_retry", key=url, budget=self._retry_budget)
++            data = r.json()
++            if not isinstance(data, dict) or not data.get("success"):
++                message = (data.get("error") or "scrape failed") if isinstance(data, dict) else "malformed response"
++                raise _ProviderPageError(f"Firecrawl: {message}")
++            body = data.get("data") if isinstance(data.get("data"), dict) else {}
++            text = str(body.get("markdown") or "")
++            if not text:
++                raise _ProviderPageError("Firecrawl returned no page content")
++            extras: dict[str, Any] = {}
++            metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
++            if title := metadata.get("title"):
++                extras["title"] = str(title)
++            return text, r.status_code, extras
++
++        # AnySearch. No cache-bust header is published, so the garbled-page
++        # re-read above has no counterpart here; the encoding check still runs on
++        # what comes back.
++        headers = {"Accept": "application/json", "Content-Type": "application/json"}
++        if key := self._key_for(provider):
++            headers["Authorization"] = f"Bearer {key}"
++
++        async def _send() -> httpx.Response:
++            async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
++                return await client.post(
++                    "https://api.anysearch.com/v1/extract", json={"url": url}, headers=headers
++                )
++
++        r = await _send_with_retry(_send, op="fetch_retry", key=url, budget=self._retry_budget)
++        data = r.json()
++        if not isinstance(data, dict):
++            raise _ProviderPageError("AnySearch returned a non-object body")
++        # A transport-level failure already raised in ``_send_with_retry``; this
++        # catches the other shape, a 200 whose envelope reports the failure.
++        if data.get("code") not in (0, None):
++            raise _ProviderPageError(f"AnySearch: {data.get('message') or 'extract failed'}")
++        body = data.get("data") if isinstance(data.get("data"), dict) else {}
++        text = str(body.get("content") or "")
++        if not text:
++            raise _ProviderPageError("AnySearch returned no page content")
++        # Carried as its own field rather than prepended to the text the way Jina
++        # embeds its header block: synthesising a partial imitation of that block
++        # would misreport a missing publication date as an undated page.
++        extras = {}
++        if title := body.get("title"):
++            extras["title"] = str(title)
++        return text, r.status_code, extras
+ 
+     async def _fetch_corpus(
+         self, url: str, extract_mode: str, max_chars: int, info_to_extract: str | None
+diff --git a/raven/cli/tui_commands.py b/raven/cli/tui_commands.py
+index 4daa2ae..917fd26 100644
+--- a/raven/cli/tui_commands.py
++++ b/raven/cli/tui_commands.py
+@@ -27,6 +27,14 @@ from typing import Optional, Tuple
+ 
+ import typer
+ 
++from raven.agent.tools.web import (
++    selected_fetch_fallback,
++    selected_fetch_key,
++    selected_fetch_provider,
++    selected_search_key,
++    selected_search_provider,
++    web_provider_keys,
++)
+ from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file, redirect_terminal_fds_to_file
+ 
+ tui_app = typer.Typer(name="tui", help="Launch Raven native TUI (Ink+React).")
+@@ -384,8 +392,12 @@ def _build_tui_agent_loop():
+             context_window_authoritative=config.agents.defaults.context_window_authoritative,
+             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
+             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
+-            brave_api_key=config.tools.web.search.api_key or None,
+-            jina_api_key=config.tools.web.jina_api_key or None,
++            brave_api_key=selected_search_key(config.tools.web)[1] or None,
++            web_search_provider=selected_search_provider(config.tools.web.search),
++            jina_api_key=selected_fetch_key(config.tools.web)[1] or None,
++            web_fetch_provider=selected_fetch_provider(config.tools.web.fetch),
++            web_fetch_fallback=selected_fetch_fallback(config.tools.web.fetch),
++            web_provider_keys=web_provider_keys(config.tools.web),
+             web_proxy=config.tools.web.proxy or None,
+             web_corpus_endpoint=config.tools.web.corpus_endpoint or None,
+             web_benchmark_containment=config.tools.web.benchmark_containment,
+diff --git a/raven/config/loader.py b/raven/config/loader.py
+index ce448c4..885d39e 100644
+--- a/raven/config/loader.py
++++ b/raven/config/loader.py
+@@ -1,6 +1,7 @@
+ """Configuration loading utilities."""
+ 
+ import json
++import os
+ import sys
+ import types
+ from pathlib import Path
+@@ -154,6 +155,63 @@ def warn_unknown_config_keys(data: dict[str, Any], model_cls: type[BaseModel] =
+     return unknown
+ 
+ 
++# Paths already seeded, so a process that loads its config repeatedly parses the
++# file once. Re-seeding would also undo a deliberate `del os.environ[...]` made
++# after the first load.
++_DOTENV_SEEDED: set[Path] = set()
++
++DOTENV_DISABLE_VAR = "RAVEN_DOTENV"
++
++
++def seed_env_from_dotenv(config_path: Path) -> list[str]:
++    """Merge ``KEY=VALUE`` lines from the config's own ``.env`` into the process.
++
++    Seeding only. It adds NO way to resolve a setting: the tools still read
++    ``config value or environment variable`` and nothing else, so a value still
++    has one resolution rule however it arrived. Substituting ``${VAR}`` inside
++    the config file would have been the second mechanism, operating on text that
++    ``_migrate_config`` and ``warn_unknown_config_keys`` have already walked.
++
++    An exported value always beats the file, or a stale ``.env`` would silently
++    override a key given on the command line for one run. Exported-but-EMPTY
++    does not count as a value and is filled in, the same reading of "set" that
++    ``scripts/everos_dr_smoke.py:load_env_file`` and the raven-research
++    launcher's ``env_value`` already use.
++
++    Anchored on the config file's own directory, which is where this runtime
++    already puts ``sessions/``, ``cache/`` and ``ledger/``: one anchor, one rule.
++    Reading the working directory instead would make the same command pick up a
++    different ``.env`` depending on where it was launched from.
++    """
++    env_file = config_path.parent / ".env"
++    if env_file in _DOTENV_SEEDED:
++        return []
++    _DOTENV_SEEDED.add(env_file)
++    try:
++        text = env_file.read_text(encoding="utf-8")
++    except (OSError, UnicodeDecodeError):
++        return []
++    if env_file.stat().st_mode & 0o077:
++        logger.warning(
++            "config: {} is readable by other users; it holds credentials, so chmod 600 it",
++            env_file,
++        )
++    added: list[str] = []
++    for line in text.splitlines():
++        line = line.strip()
++        if not line or line.startswith("#") or "=" not in line:
++            continue
++        key, _, value = line.partition("=")
++        key, value = key.strip(), value.strip().strip("'\"")
++        if key and value and not os.environ.get(key):
++            os.environ[key] = value
++            added.append(key)
++    if added:
++        # Names only. The values are credentials.
++        logger.info("config: seeded {} from {}", ", ".join(added), env_file)
++    return added
++
++
+ def load_config(config_path: Path | None = None) -> Config:
+     """
+     Load configuration from file or create default.
+@@ -165,6 +223,13 @@ def load_config(config_path: Path | None = None) -> Config:
+         Loaded configuration object.
+     """
+     path = config_path or get_config_path()
++    # Before the file is read, because the keys it carries are resolved by the
++    # tools at call time from the environment when the config does not hold
++    # them. Off inside the test suite (see tests/conftest.py): this writes
++    # process-global state, and a suite whose result depends on a file in the
++    # developer's home cannot answer "is this branch green".
++    if os.environ.get(DOTENV_DISABLE_VAR) != "0":
++        seed_env_from_dotenv(path)
+ 
+     config: Config | None = None
+     if path.exists():
+@@ -282,6 +347,45 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
+                     "Migrated: agents.defaults.everosSkillLight → skillForge.everos",
+                 )
+ 
++    # Web credentials moved from the tool that used them to the vendor that
++    # issues them: ``tools.web.search.apiKey`` → ``tools.web.providers.serper``,
++    # ``tools.web.jinaApiKey`` → ``tools.web.providers.jina``, and the same for
++    # the per-tool AnySearch/SerpApi fields. One AnySearch account serves both
++    # web_search and web_fetch, so a per-tool key had to be pasted twice and
++    # could drift into two values for one credential.
++    #
++    # The host raven this agent inherits from is a separate checkout on the old
++    # layout, so its keys arrive in the legacy shape indefinitely; this is not a
++    # one-off upgrade path that can eventually be deleted.
++    web = (data.get("tools") or {}).get("web") if isinstance(data.get("tools"), dict) else None
++    if isinstance(web, dict):
++        search = web.get("search") if isinstance(web.get("search"), dict) else {}
++        legacy_web_keys = (
++            ("jinaApiKey", web, "jina"),
++            ("jina_api_key", web, "jina"),
++            ("apiKey", search, "serper"),
++            ("api_key", search, "serper"),
++            ("anysearchApiKey", search, "anysearch"),
++            ("anysearch_api_key", search, "anysearch"),
++            ("serpapiApiKey", search, "serpapi"),
++            ("serpapi_api_key", search, "serpapi"),
++        )
++        for legacy_key, holder, vendor in legacy_web_keys:
++            value = holder.pop(legacy_key, None)
++            if not value:
++                continue
++            providers = web.setdefault("providers", {})
++            if not isinstance(providers, dict):
++                continue
++            vendor_block = providers.setdefault(vendor, {})
++            # An explicit new-shape value wins: a config carrying both is being
++            # migrated by hand, and the new path is the one its author meant.
++            if isinstance(vendor_block, dict) and not (
++                vendor_block.get("apiKey") or vendor_block.get("api_key")
++            ):
++                vendor_block["apiKey"] = value
++                _log.info("Migrated: tools.web...%s -> tools.web.providers.%s.apiKey", legacy_key, vendor)
++
+     # skills_dir → local_dirs migration now handled by
+     # SkillForgeConfig._migrate_skills_dir model_validator (R5).
+ 
+diff --git a/tests/conftest.py b/tests/conftest.py
+index e012b39..d085add 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -23,6 +23,15 @@ import os
+ # ``setdefault``, so a caller can still run against the remote table on purpose.
+ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+ 
++# Same argument, different file: `load_config()` seeds the process environment
++# from a `.env` beside the config it loads, and the default config path is
++# `~/.raven/config.json`. A developer with `~/.raven/.env` would then run a
++# different suite from CI's, and every "this key is not configured" assertion
++# would depend on their home directory. Off here, on in production.
++#
++# ``setdefault`` again, so `RAVEN_DOTENV=1 uv run pytest` can exercise it.
++os.environ.setdefault("RAVEN_DOTENV", "0")
++
+ import pytest
+ 
+ # The IM-channel adapters import vendor SDKs that are not in this project's
+diff --git a/tests/test_agent_flow_ask_user.py b/tests/test_agent_flow_ask_user.py
+index 7347b7e..11a2089 100644
+--- a/tests/test_agent_flow_ask_user.py
++++ b/tests/test_agent_flow_ask_user.py
+@@ -602,6 +602,9 @@ def _loop(workspace, dr_flow, disabled=None):
+         restrict_to_workspace=True,
+         dr_flow=dr_flow,
+         disabled_tools=disabled,
++        # web_search is withheld without a key; this asserts the tool surface,
++        # not configuredness.
++        brave_api_key="test-key",
+     )
+ 
+ 
+@@ -766,6 +769,18 @@ def _q(text="which entity?", options=()):
+ # ---------------------------------------------------------------------------
+ 
+ 
++def test_parse_asks_a_repeated_question_once() -> None:
++    """The same text twice is one question: a handoff would render it twice and
++    the trunk's blocking tool rejects the whole call for it. The cap counts
++    distinct questions, so a duplicate does not crowd out a real third one."""
++    payload = parse_ask_user_args(
++        {"questions": [_q("a"), _q("a"), _q("b"), _q("c")]},
++        max_questions=3,
++        max_outline_items=2,
++    )
++    assert [q["question"] for q in payload.questions] == ["a", "b", "c"]
++
++
+ def test_parse_caps_both_lists_and_drops_empty_entries() -> None:
+     payload = parse_ask_user_args(
+         {
+@@ -1232,6 +1247,79 @@ def test_a_later_iteration_withholds_the_tool() -> None:
+     assert ctx.metadata["ask_user"]["withheld_reason"] == "not_first_iteration"
+ 
+ 
++def test_a_rollback_re_sample_withholds_the_tool_and_revokes_the_grant() -> None:
++    """A reviewer reject rolls the loop back to the SAME iteration number, so the
++    first-iteration test alone re-offers the tool on a turn that already drafted.
++    The loop counts honoured rollbacks in ``ctx.metadata["hook_rollbacks"]``; any
++    count is past the boundary. And the grant written on the first sampling must
++    go with the schema entry, or a named call still clears ``before_execute_tools``.
++    """
++    gate = _gate()
++    ctx = _ctx()
++
++    async def run():
++        first = await gate.before_iteration(ctx)
++        ctx.metadata["hook_rollbacks"] = 1
++        second = await gate.before_iteration(ctx)
++        # The model names the tool anyway on the re-sample.
++        ctx.response = _ask(questions=[_q("which entity?")])
++        third = await gate.before_execute_tools(ctx)
++        return first, second, third
++
++    first, second, third = _scenario(run)
++    assert first.modified_tools is None
++    assert _withheld(second, ctx)
++    state = ctx.metadata["ask_user"]
++    assert state["withheld_reason"] == "after_rollback"
++    assert "allowed_at" not in state
++    assert third.short_circuit_result is None
++    assert state["called_when_withheld"] is True
++    assert state["asked"] is False
++
++
++def test_the_rollback_reason_outranks_the_iteration_reason() -> None:
++    """Only the first reason is recorded, and after a rollback the informative one
++    is the rollback, not the iteration number it happens to share."""
++    ctx = _ctx(iteration=2)
++    ctx.metadata["hook_rollbacks"] = 1
++    decision = asyncio.run(_gate().before_iteration(ctx))
++    assert _withheld(decision, ctx)
++    assert ctx.metadata["ask_user"]["withheld_reason"] == "after_rollback"
++
++
++def test_a_plain_first_iteration_carries_no_rollback_count() -> None:
++    """The control: with no rollback recorded the tool stays on offer exactly as
++    before, so the new reason cannot fire on the turn shape it exists to protect."""
++    ctx = _ctx()
++    assert "hook_rollbacks" not in ctx.metadata
++    decision = asyncio.run(_gate().before_iteration(ctx))
++    assert decision.modified_tools is None
++    assert ctx.metadata["ask_user"]["allowed_at"] == 1
++
++
++def test_a_rollback_with_the_iteration_flag_off_leaves_the_tool_to_the_search_rule() -> None:
++    """``firstIterationOnly: false`` drops the boundary a re-sample would slip
++    past, so a rollback alone changes nothing there: the tool stays on offer
++    until a search, and a search withholds it for its own reason."""
++    ctx = _ctx()
++    ctx.metadata["hook_rollbacks"] = 1
++    decision = asyncio.run(_gate(first_iteration_only=False).before_iteration(ctx))
++    assert decision.modified_tools is None
++    assert "withheld_reason" not in ctx.metadata["ask_user"]
++
++    searched = _ctx(
++        messages=[
++            {"role": "user", "content": "q"},
++            {"role": "assistant", "tool_calls": [{"function": {"name": "web_search"}}]},
++            {"role": "tool", "name": "web_search", "content": "results"},
++        ]
++    )
++    searched.metadata["hook_rollbacks"] = 1
++    decision = asyncio.run(_gate(first_iteration_only=False).before_iteration(searched))
++    assert _withheld(decision, searched)
++    assert searched.metadata["ask_user"]["withheld_reason"] == "searched"
++
++
+ def test_a_search_this_turn_withholds_it_even_with_the_iteration_flag_off() -> None:
+     """This is what makes the clause honest under ``firstIterationOnly: false``:
+     it tells the model "after your first search it is gone", and without this
+diff --git a/tests/test_agent_flow_dr.py b/tests/test_agent_flow_dr.py
+index 515475e..16e53a8 100644
+--- a/tests/test_agent_flow_dr.py
++++ b/tests/test_agent_flow_dr.py
+@@ -533,6 +533,9 @@ async def test_dr_mode_slims_tools_and_segments(workspace):
+         model="stub",
+         restrict_to_workspace=True,
+         dr_flow=DRFlowConfig(enabled=True),
++        # web_search is withheld without a key; this asserts the tool surface,
++        # not configuredness.
++        brave_api_key="test-key",
+     )
+     assert sorted(agent.tools.names()) == ["web_fetch", "web_search"]
+     # DR mode drops the product identity: eight of its instructions named tools no
+@@ -582,6 +585,9 @@ async def test_repeat_notice_follows_the_flow_switch(workspace, flow_enabled, ex
+         model="stub",
+         restrict_to_workspace=True,
+         dr_flow=DRFlowConfig(enabled=flow_enabled),
++        # web_search is withheld without a key; this asserts the tool surface,
++        # not configuredness.
++        brave_api_key="test-key",
+     )
+     assert agent.tools.get("web_search").repeat_notice is expected
+ 
+@@ -692,6 +698,9 @@ async def test_chat_mode_keeps_full_surface(workspace):
+         workspace=workspace,
+         model="stub",
+         restrict_to_workspace=True,
++        # web_search is withheld without a key; this asserts the tool surface,
++        # not configuredness.
++        brave_api_key="test-key",
+     )
+     names = set(agent.tools.names())
+     assert {"message", "spawn", "read_file", "web_search"} <= names
+diff --git a/tests/test_agent_flow_verify_elision.py b/tests/test_agent_flow_verify_elision.py
+index d5ea2a3..0a75577 100644
+--- a/tests/test_agent_flow_verify_elision.py
++++ b/tests/test_agent_flow_verify_elision.py
+@@ -133,6 +133,9 @@ def test_a_corpus_contained_subagent_registry_has_no_subprocess_tool():
+         provider=_P(),
+         workspace=Path("/tmp/ws"),
+         parent_tool_names=lambda: ["web_search", "web_fetch", "read_file"],
++        # Uncontained, so web_search needs a key to be registered at all; the
++        # fence being tested here is the parent surface, not configuredness.
++        brave_api_key="test-key",
+     )
+     names = sorted(fenced._build_subagent_tools(None).names())
+     assert names == ["read_file", "web_fetch", "web_search"], names
+diff --git a/tests/test_agent_loop_hook_dispatch.py b/tests/test_agent_loop_hook_dispatch.py
+index a1a9b2d..366fedc 100644
+--- a/tests/test_agent_loop_hook_dispatch.py
++++ b/tests/test_agent_loop_hook_dispatch.py
+@@ -509,6 +509,37 @@ class _InjectingRollbackHook(AgentHook):
+         )
+ 
+ 
++class _CountingBounceHook(AgentHook):
++    """Rolls back once and records what before_iteration could read each time."""
++
++    def __init__(self) -> None:
++        self.seen: list[tuple[int | None, int]] = []
++
++    async def before_iteration(self, ctx):
++        self.seen.append((ctx.iteration, ctx.metadata.get("hook_rollbacks", 0)))
++        return HookDecision()
++
++    async def after_iteration(self, ctx):
++        if ctx.metadata.get("rolled"):
++            return HookDecision()
++        ctx.metadata["rolled"] = True
++        return HookDecision(rollback=True)
++
++
++@pytest.mark.asyncio
++async def test_an_honoured_rollback_is_counted_where_the_next_iteration_can_read_it(workspace):
++    """The re-sample carries the same iteration number, so a hook scoped to the
++    turn boundary (``AskUserGate``) cannot tell it from the first sampling by
++    ``ctx.iteration`` alone. The loop records the honoured count beside
++    ``rollbacks_refused``."""
++    hook = _CountingBounceHook()
++    agent = _make_agent(_ConstantProvider(), workspace, hook, max_iterations=3)
++
++    await agent._run_agent_loop([{"role": "user", "content": "go"}])
++
++    assert hook.seen == [(1, 0), (1, 1)]
++
++
+ @pytest.mark.asyncio
+ async def test_injected_user_turns_are_marked_flow_synthetic(workspace):
+     """A hook rollback is the harness re-prompting itself.
+diff --git a/tests/test_agent_loop_invariants.py b/tests/test_agent_loop_invariants.py
+index 0a5f146..7be2af7 100644
+--- a/tests/test_agent_loop_invariants.py
++++ b/tests/test_agent_loop_invariants.py
+@@ -111,6 +111,17 @@ def test_error_text_inside_a_successful_looking_result_is_caught():
+         ("Proxy error: boom", "error"),
+         ('{"error": "Proxy error: boom", "url": "u"}', "error"),
+         ("Error: Serper API key not configured. Set it in ...", "error"),
++        # Every backend names itself in that message. These two reach the
++        # verdict through the "Error:" head like the line above them; the
++        # pair below is what isolates the substring net, which is the only
++        # branch that reads the provider name.
++        ("Error: SerpApi API key not configured. Set it in ...", "error"),
++        ("Error: AnySearch API key not configured. Set it in ...", "error"),
++        # No "Error:" head, so only the substring net can classify it. A
++        # provider-specific match reads an unanswering retrieval surface as
++        # a legitimate result, and that verdict is what invalidates a batch.
++        ("web_search said: SerpApi API key not configured.", "error"),
++        ("web_search said: AnySearch API key not configured.", "error"),
+         ("No results for: who founded X", "empty"),
+         ("1. A page\n2. Another page", "ok"),
+         # The fence is applied by the loop, so the caliber has to see through it.
+diff --git a/tests/test_agent_loop_tool_search.py b/tests/test_agent_loop_tool_search.py
+index 10529df..02ec132 100644
+--- a/tests/test_agent_loop_tool_search.py
++++ b/tests/test_agent_loop_tool_search.py
+@@ -61,6 +61,9 @@ def _make_loop(workspace: Path, cfg, strategies=None) -> AgentLoop:
+         restrict_to_workspace=True,
+         tool_search_config=cfg,
+         strategies=strategies,
++        # web_search is withheld without a key, and these tests use it as the
++        # representative cataloged domain tool.
++        brave_api_key="test-key",
+     )
+ 
+ 
+diff --git a/tests/test_cli_tui_commands.py b/tests/test_cli_tui_commands.py
+index 4d88e9e..3e28b9f 100644
+--- a/tests/test_cli_tui_commands.py
++++ b/tests/test_cli_tui_commands.py
+@@ -35,7 +35,8 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
+     config.agents.defaults.enable_personalization = False
+     config.agents.defaults.max_concurrent_subagents = 2
+     config.agents.defaults.max_subagent_spawns_per_hour = 10
+-    config.tools.web.search.api_key = None
++    config.tools.web.providers.serper.api_key = None
++    config.tools.web.providers.jina.api_key = None
+     config.tools.web.proxy = None
+     config.tools.exec = MagicMock()
+     config.tools.restrict_to_workspace = True
+@@ -162,7 +163,8 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch,
+     config.agents.defaults.enable_personalization = False
+     config.agents.defaults.max_concurrent_subagents = 2
+     config.agents.defaults.max_subagent_spawns_per_hour = 10
+-    config.tools.web.search.api_key = None
++    config.tools.web.providers.serper.api_key = None
++    config.tools.web.providers.jina.api_key = None
+     config.tools.web.proxy = None
+     config.tools.exec = MagicMock()
+     config.tools.restrict_to_workspace = True
+diff --git a/tests/test_config_loader.py b/tests/test_config_loader.py
+index 002e34b..8c87361 100644
+--- a/tests/test_config_loader.py
++++ b/tests/test_config_loader.py
+@@ -7,6 +7,7 @@ configs, plus the default-config fallback path.
+ from __future__ import annotations
+ 
+ import json
++import os
+ from pathlib import Path
+ 
+ import pytest
+@@ -219,13 +220,228 @@ def test_warn_unknown_config_keys_accepts_both_naming_styles() -> None:
+ 
+     data = {
+         "agents": {"defaults": {"maxToolIterations": 16, "max_tool_iterations": 16, "requestTimeoutSeconds": 300}},
+-        "tools": {"web": {"search": {"apiKey": "k"}, "jinaApiKey": "j"}},
++        "tools": {
++            "web": {
++                "search": {"provider": "serper", "maxResults": 5},
++                "providers": {"serper": {"apiKey": "k"}, "jina": {"api_key": "j"}},
++            }
++        },
++    }
++    assert warn_unknown_config_keys(data) == []
++
++
++def test_legacy_web_keys_move_to_their_vendor() -> None:
++    # The per-tool key fields became per-vendor ones: one AnySearch account
++    # serves both web tools, so a key held per tool had to be pasted twice.
++    # The host raven this agent inherits from is a separate checkout still on
++    # the old layout, so its keys keep arriving in the legacy shape.
++    from raven.config.loader import _migrate_config, warn_unknown_config_keys
++
++    data = _migrate_config(
++        {"tools": {"web": {"jinaApiKey": "j", "search": {"apiKey": "s", "anysearchApiKey": "a"}}}}
++    )
++    web = data["tools"]["web"]
++    assert web["providers"] == {
++        "jina": {"apiKey": "j"},
++        "serper": {"apiKey": "s"},
++        "anysearch": {"apiKey": "a"},
+     }
++    assert "jinaApiKey" not in web and "apiKey" not in web["search"]
+     assert warn_unknown_config_keys(data) == []
+ 
+ 
++def test_a_pre_vendor_config_file_still_reaches_the_tools(tmp_path: Path) -> None:
++    # The dict-level assertion above covers the write; this covers the read back,
++    # which is the half that decides whether a deploy on the old layout works.
++    from raven.agent.tools.web import selected_fetch_key, selected_search_key
++
++    p = tmp_path / "config.json"
++    p.write_text(
++        json.dumps({"tools": {"web": {"jinaApiKey": "j", "search": {"apiKey": "s", "maxResults": 7}}}}),
++        encoding="utf-8",
++    )
++    web = load_config(p).tools.web
++
++    assert selected_search_key(web) == ("serper", "s")
++    assert selected_fetch_key(web) == ("jina", "j")
++    assert web.search.max_results == 7
++
++
++def test_a_hand_migrated_key_wins_over_the_legacy_one() -> None:
++    # A config carrying both is being migrated by hand; the new path is the one
++    # its author meant, so the legacy value must not overwrite it.
++    from raven.config.loader import _migrate_config
++
++    data = _migrate_config(
++        {"tools": {"web": {"jinaApiKey": "old", "providers": {"jina": {"apiKey": "new"}}}}}
++    )
++    assert data["tools"]["web"]["providers"]["jina"] == {"apiKey": "new"}
++
++
+ def test_load_config_warns_but_still_loads_on_unknown_key(tmp_path: Path) -> None:
+     p = tmp_path / "config.json"
+     p.write_text(json.dumps({"agents": {"defaults": {"maxIterations": 16}}}), encoding="utf-8")
+     cfg = load_config(p)
+     assert cfg.agents.defaults.max_tool_iterations == 40  # typo ignored, default kept, but warned
++
++
++# --------------------------------------------------------------------------- #
++# .env seeding                                                                  #
++# --------------------------------------------------------------------------- #
++#
++# The suite disables this globally (tests/conftest.py), so every case here turns
++# it back on explicitly. That is deliberate: a test that needed no opt-in would
++# be one the default config path could reach, which is the failure the global
++# switch exists to prevent.
++
++
++_SEEDABLE = (
++    "SERPER_API_KEY",
++    "ANYSEARCH_API_KEY",
++    "SERPAPI_API_KEY",
++    "TAVILY_API_KEY",
++    "EXA_API_KEY",
++    "BRAVE_API_KEY",
++    "FIRECRAWL_API_KEY",
++    "JINA_API_KEY",
++)
++
++
++@pytest.fixture
++def dotenv_on(monkeypatch: pytest.MonkeyPatch):
++    """Enable .env seeding and give each case a clean seeded-paths cache.
++
++    The restore is by hand rather than through monkeypatch: what these cases
++    exercise writes ``os.environ`` directly, and monkeypatch only undoes its own
++    writes - so a seeded key would outlive the test and hand the next one a
++    credential it never asked for.
++    """
++    from raven.config import loader
++
++    monkeypatch.setenv(loader.DOTENV_DISABLE_VAR, "1")
++    monkeypatch.setattr(loader, "_DOTENV_SEEDED", set())
++    before = {name: os.environ.pop(name, None) for name in _SEEDABLE}
++    try:
++        yield
++    finally:
++        for name, value in before.items():
++            os.environ.pop(name, None)
++            if value is not None:
++                os.environ[name] = value
++
++
++def _config_with_dotenv(tmp_path: Path, dotenv: str, config: dict | None = None) -> Path:
++    (tmp_path / ".env").write_text(dotenv, encoding="utf-8")
++    (tmp_path / ".env").chmod(0o600)
++    path = tmp_path / "config.json"
++    path.write_text(json.dumps(config or {}), encoding="utf-8")
++    return path
++
++
++def test_a_dotenv_beside_the_config_reaches_the_tools(dotenv_on, tmp_path: Path) -> None:
++    # The read back, not the write: a key in os.environ that the tool does not
++    # resolve is the same as no key. This is the whole point of the feature.
++    from raven.agent.tools.web import WebFetchTool, WebSearchTool
++
++    path = _config_with_dotenv(
++        tmp_path,
++        "# a comment\n\nSERPER_API_KEY=sk-from-dotenv\nJINA_API_KEY='sk-jina-quoted'\n",
++    )
++    load_config(path)
++
++    assert WebSearchTool().api_key == "sk-from-dotenv"
++    assert WebFetchTool().api_key == "sk-jina-quoted"
++
++
++def test_a_real_export_beats_the_file(dotenv_on, tmp_path: Path, monkeypatch) -> None:
++    # Otherwise a stale .env silently overrides the key a caller exported for
++    # one run, and the run looks like it used the key it was given.
++    monkeypatch.setenv("SERPER_API_KEY", "sk-exported")
++    path = _config_with_dotenv(tmp_path, "SERPER_API_KEY=sk-from-dotenv\n")
++
++    load_config(path)
++
++    assert os.environ["SERPER_API_KEY"] == "sk-exported"
++
++
++def test_the_config_file_still_beats_both(dotenv_on, tmp_path: Path) -> None:
++    from raven.agent.tools.web import selected_search_key
++
++    path = _config_with_dotenv(
++        tmp_path,
++        "SERPER_API_KEY=sk-from-dotenv\n",
++        {"tools": {"web": {"providers": {"serper": {"apiKey": "sk-from-config"}}}}},
++    )
++    web = load_config(path).tools.web
++
++    assert selected_search_key(web) == ("serper", "sk-from-config")
++
++
++def test_the_anchor_is_the_config_directory_not_the_cwd(
++    dotenv_on, tmp_path: Path, monkeypatch
++) -> None:
++    # Same command launched from another directory must read the same .env, or
++    # a run's credentials depend on where the shell happened to be.
++    elsewhere = tmp_path / "elsewhere"
++    elsewhere.mkdir()
++    (elsewhere / ".env").write_text("SERPER_API_KEY=sk-wrong\n", encoding="utf-8")
++    home = tmp_path / "home"
++    home.mkdir()
++    path = _config_with_dotenv(home, "SERPER_API_KEY=sk-right\n")
++    monkeypatch.chdir(elsewhere)
++
++    load_config(path)
++
++    assert os.environ["SERPER_API_KEY"] == "sk-right"
++
++
++def test_no_dotenv_is_not_an_error(dotenv_on, tmp_path: Path) -> None:
++    path = tmp_path / "config.json"
++    path.write_text("{}", encoding="utf-8")
++
++    assert load_config(path).tools.web.search.provider == "serper"
++
++
++def test_a_world_readable_dotenv_is_reported(dotenv_on, tmp_path: Path) -> None:
++    # Through a loguru sink, not caplog/capfd: loguru holds the stderr object it
++    # was given at handler-add time, so neither of pytest's captures sees it.
++    from loguru import logger
++
++    from raven.config.loader import seed_env_from_dotenv
++
++    (tmp_path / ".env").write_text("SERPER_API_KEY=sk-x\n", encoding="utf-8")
++    (tmp_path / ".env").chmod(0o644)
++
++    seen: list[str] = []
++    sink = logger.add(lambda m: seen.append(m.record["message"]), level="INFO")
++    try:
++        seed_env_from_dotenv(tmp_path / "config.json")
++    finally:
++        logger.remove(sink)
++
++    assert any("chmod 600" in line for line in seen)
++    # Names only. A log line that quotes the value defeats the file's purpose.
++    assert not any("sk-x" in line for line in seen)
++
++
++def test_the_file_is_parsed_once_per_process(dotenv_on, tmp_path: Path) -> None:
++    # A command that loads its config repeatedly must not resurrect a variable
++    # something deliberately removed after the first load.
++    from raven.config.loader import seed_env_from_dotenv
++
++    path = _config_with_dotenv(tmp_path, "SERPER_API_KEY=sk-x\n")
++    assert seed_env_from_dotenv(path) == ["SERPER_API_KEY"]
++
++    del os.environ["SERPER_API_KEY"]
++
++    assert seed_env_from_dotenv(path) == []
++    assert "SERPER_API_KEY" not in os.environ
++
++
++def test_the_suite_runs_with_seeding_off() -> None:
++    # The guard itself, asserted rather than assumed: if conftest stopped
++    # setting it, every case above would still pass while the default config
++    # path started reading the developer's home.
++    from raven.config.loader import DOTENV_DISABLE_VAR
++
++    assert os.environ.get(DOTENV_DISABLE_VAR) == "0"
+diff --git a/tests/test_provider_auth_method.py b/tests/test_provider_auth_method.py
+index 7026d08..9979c18 100644
+--- a/tests/test_provider_auth_method.py
++++ b/tests/test_provider_auth_method.py
+@@ -436,6 +436,9 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
+         # Not an LLM provider section: a tool's own key (deep research, media
+         # generation, web search), the router's, or EverOS's.
+         "raven/agent/loop/main.py",
++        # The nested sub-agent's tool set, built from the same web_search key
++        # as the main loop above and withheld on the same condition.
++        "raven/agent/subagent/manager.py",
+         "raven/agent/tools/deep_research.py",
+         "raven/agent/tools/media_gen.py",
+         "raven/agent/tools/web.py",
+@@ -446,6 +449,10 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
+         "raven/cli/tui_commands.py",
+         "raven/config/update_everos.py",
+         "raven/config/update_tools.py",
++        # Relocates a WEB tool's key from the tool that used it to the vendor
++        # that issues it (_migrate_config). It moves the value and never reads it
++        # to rule on whether anything is set up.
++        "raven/config/loader.py",
+         "raven/providers/transcription.py",
+         # Reads a key in order to *use* it -- put it on the request, redact it
+         # for display, rotate it -- rather than to rule on whether a provider is
+diff --git a/tests/test_subagent_manager.py b/tests/test_subagent_manager.py
+index 96bf40b..e8a53b7 100644
+--- a/tests/test_subagent_manager.py
++++ b/tests/test_subagent_manager.py
+@@ -366,3 +366,48 @@ def test_web_corpus_endpoint_defaults_to_none():
+     mgr = SubagentManager(provider=_StubProvider(), workspace=Path("/tmp"))
+ 
+     assert mgr.web_corpus_endpoint is None
++
++
++def _subagent_tool_names(**kwargs) -> set[str]:
++    """The names a subagent is actually offered, through the real builder.
++
++    Driven through ``_build_subagent_tools`` rather than by reconstructing the
++    tools: the withholding rule lives in the builder, and a test that rebuilds
++    the tools asserts the constructor instead of the gate.
++    """
++    mgr = SubagentManager(provider=_StubProvider(), workspace=Path("/tmp"), **kwargs)
++    return set(mgr._build_subagent_tools(executor=None).names())
++
++
++def test_a_keyless_page_reader_is_withheld_from_the_subagent(monkeypatch):
++    """Same rule as the main loop, and it has to be repeated here because this
++    registry is built separately: a tool the model reaches for and that fails
++    every time relays a config path to whoever is on the other end."""
++    monkeypatch.delenv("ANYSEARCH_API_KEY", raising=False)
++    monkeypatch.delenv("JINA_API_KEY", raising=False)
++
++    assert "web_fetch" not in _subagent_tool_names(web_fetch_provider="anysearch")
++
++
++def test_the_default_page_reader_is_offered_without_a_key(monkeypatch):
++    """Unauthenticated r.jina.ai works, so every measured run so far had
++    web_fetch on a checkout with no fetch key at all."""
++    monkeypatch.delenv("JINA_API_KEY", raising=False)
++
++    assert "web_fetch" in _subagent_tool_names()
++
++
++def test_the_subagents_page_reader_follows_the_parents_selection(monkeypatch):
++    monkeypatch.delenv("ANYSEARCH_API_KEY", raising=False)
++    mgr = SubagentManager(
++        provider=_StubProvider(),
++        workspace=Path("/tmp"),
++        web_fetch_provider="anysearch",
++        web_fetch_fallback=["jina"],
++        web_provider_keys={"anysearch": "k-any"},
++    )
++    fetch = mgr._build_subagent_tools(executor=None).get("web_fetch")
++
++    assert fetch.provider == "anysearch"
++    assert fetch.fallback == ["jina"]
++    assert fetch.api_key == "k-any"
+diff --git a/tests/test_tui_cron_tool_wired.py b/tests/test_tui_cron_tool_wired.py
+index 8d680b1..53c9077 100644
+--- a/tests/test_tui_cron_tool_wired.py
++++ b/tests/test_tui_cron_tool_wired.py
+@@ -31,7 +31,8 @@ def patched_tui_build_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
+     config.agents.defaults.max_tool_iterations = 5
+     config.agents.defaults.context_window_tokens = 65_536
+     config.agents.defaults.enable_personalization = False
+-    config.tools.web.search.api_key = None
++    config.tools.web.providers.serper.api_key = None
++    config.tools.web.providers.jina.api_key = None
+     config.tools.web.proxy = None
+     config.tools.exec = MagicMock()
+     config.tools.restrict_to_workspace = True
+diff --git a/tests/test_web_fetch_providers.py b/tests/test_web_fetch_providers.py
+new file mode 100644
+index 0000000..0c6a4cd
+--- /dev/null
++++ b/tests/test_web_fetch_providers.py
+@@ -0,0 +1,560 @@
++"""Per-provider request and response contracts of ``WebFetchTool``.
++
++Several backends read pages behind one tool. What differs is the request, how a
++failure is reported, and what the response carries; everything downstream --
++the SSRF gate, containment, the digest path, truncation and the ledger -- is one
++code path below them.
++
++Three properties matter more than the mapping:
++
++* The Jina request stays byte-identical, and so does its payload. It is the
++  anchor's wire traffic and the anchor's model-visible bytes; a field added to
++  that payload would move every arm at once.
++* A backend that reports failure inside a 200 envelope must not read as a page.
++  ``fetch_result_ok`` gates the fetch floor, so a "successful" empty fetch would
++  release a gate whose whole contract is that a page was opened.
++* The fallback chain runs on a vendor that could not serve the page, never on a
++  refusal. A containment refusal and a failed URL validation are rules, and
++  retrying a rule on another vendor is an end-run around the gate.
++"""
++
++from __future__ import annotations
++
++import json
++from unittest.mock import patch
++
++import httpx
++import pytest
++
++from raven.agent.tools.web import (
++    DEFAULT_FETCH_PROVIDER,
++    FETCH_PROVIDERS,
++    WebFetchTool,
++    fetch_result_ok,
++    selected_fetch_fallback,
++    selected_fetch_key,
++    selected_fetch_provider,
++    web_provider_keys,
++)
++from raven.config.schema import (
++    WebFetchConfig,
++    WebProviderKey,
++    WebProvidersConfig,
++    WebToolsConfig,
++)
++
++PAGE = "para about the topic. " * 40
++
++
++def _anysearch_ok(content: str = PAGE, title: str = "A Title") -> dict:
++    return {
++        "code": 0,
++        "message": "success",
++        "request_id": "r-1",
++        "data": {"url": "https://x.example/", "title": title, "content": content},
++    }
++
++
++class _Recorder:
++    """Client that records what it was asked for and answers per method.
++
++    Keyed by method rather than by call order because the backends do not
++    take the same number of calls: the Jina branch re-reads a garbled page, and
++    a retryable failure is sent up to three times before it gives up. A queue
++    would hand the fallback's response to the selected provider's retry.
++    """
++
++    def __init__(self, get: object = None, post: object = None) -> None:
++        self._by_method = {"GET": get, "POST": post}
++        self.calls: list[dict] = []
++
++    async def __aenter__(self) -> "_Recorder":
++        return self
++
++    async def __aexit__(self, *args: object) -> bool:
++        return False
++
++    def _next(self, method: str, url: str, kwargs: dict) -> object:
++        self.calls.append({"method": method, "url": url, **kwargs})
++        item = self._by_method[method]
++        if isinstance(item, Exception):
++            raise item
++        assert item is not None, f"no {method} response queued"
++        return item
++
++    async def get(self, url, headers=None, **kwargs):
++        return self._next("GET", url, {"headers": dict(headers or {})})
++
++    async def post(self, url, json=None, headers=None, **kwargs):
++        return self._next("POST", url, {"json": json, "headers": dict(headers or {})})
++
++
++def _dead_key() -> httpx.HTTPStatusError:
++    """The measured Jina failure: an out-of-credit key answers 402.
++
++    Not a retryable status, so it fails on the first attempt - which is what
++    makes it the right stand-in here as well as the realistic one.
++    """
++    request = httpx.Request("GET", "https://r.jina.ai/x")
++    return httpx.HTTPStatusError(
++        "402", request=request, response=httpx.Response(402, request=request)
++    )
++
++
++class _Resp:
++    def __init__(self, *, text: str = "", payload: object = None, status: int = 200) -> None:
++        self.text = text
++        self._payload = payload
++        self.status_code = status
++
++    def json(self) -> object:
++        return self._payload
++
++    def raise_for_status(self) -> None:
++        return None
++
++
++class _Patched:
++    """Stub the HTTP client and the SSRF validator (fake hosts do not resolve)."""
++
++    def __init__(self, client: _Recorder, valid: bool = True) -> None:
++        self._client = patch("raven.agent.tools.web.httpx.AsyncClient", lambda **kw: client)
++
++        async def _check(u, **_):
++            return (valid, "" if valid else "blocked")
++
++        self._validator = patch("raven.agent.tools.web.validate_url_target_async", _check)
++
++    def __enter__(self) -> "_Patched":
++        self._client.__enter__()
++        self._validator.__enter__()
++        return self
++
++    def __exit__(self, *args: object) -> bool:
++        self._validator.__exit__(*args)
++        return self._client.__exit__(*args)
++
++
++# --------------------------------------------------------------------------- #
++# request construction                                                          #
++# --------------------------------------------------------------------------- #
++
++
++@pytest.mark.asyncio
++async def test_the_jina_request_is_unchanged() -> None:
++    # Pinned against literals, not against the code that builds them: this is
++    # the anchor's wire traffic, and every measured run so far sent exactly it.
++    client = _Recorder(get=_Resp(text=PAGE))
++    with _Patched(client):
++        await WebFetchTool(api_key="k").execute(url="https://x.example/a#frag")
++
++    assert client.calls[0]["method"] == "GET"
++    assert client.calls[0]["url"] == "https://r.jina.ai/https://x.example/a%23frag"
++    assert client.calls[0]["headers"] == {"Accept": "text/plain", "Authorization": "Bearer k"}
++
++
++@pytest.mark.asyncio
++async def test_jina_without_a_key_sends_no_authorization() -> None:
++    client = _Recorder(get=_Resp(text=PAGE))
++    with _Patched(client):
++        await WebFetchTool().execute(url="https://x.example/")
++
++    assert "Authorization" not in client.calls[0]["headers"]
++
++
++@pytest.mark.asyncio
++async def test_the_anysearch_request_is_a_post_to_extract() -> None:
++    client = _Recorder(post=_Resp(payload=_anysearch_ok()))
++    with _Patched(client):
++        await WebFetchTool(provider="anysearch", api_key="k-any").execute(url="https://x.example/")
++
++    call = client.calls[0]
++    assert call["method"] == "POST"
++    assert call["url"] == "https://api.anysearch.com/v1/extract"
++    assert call["json"] == {"url": "https://x.example/"}
++    assert call["headers"]["Authorization"] == "Bearer k-any"
++
++
++@pytest.mark.asyncio
++async def test_the_tavily_request_is_a_post_to_extract() -> None:
++    client = _Recorder(post=_Resp(payload={"results": [{"url": "https://x.example/", "raw_content": PAGE}]}))
++    with _Patched(client):
++        await WebFetchTool(provider="tavily", api_key="k-tav").execute(url="https://x.example/")
++
++    call = client.calls[0]
++    assert call["method"] == "POST"
++    assert call["url"] == "https://api.tavily.com/extract"
++    assert call["json"] == {"urls": ["https://x.example/"]}
++    assert call["headers"]["Authorization"] == "Bearer k-tav"
++
++
++@pytest.mark.asyncio
++async def test_tavily_extracts_the_matching_urls_raw_content() -> None:
++    client = _Recorder(post=_Resp(payload={"results": [{"url": "https://x.example/", "raw_content": PAGE}]}))
++    with _Patched(client):
++        out = json.loads(
++            await WebFetchTool(provider="tavily", api_key="k").execute(url="https://x.example/")
++        )
++
++    assert out["text"] == PAGE
++    assert out["extractor"] == "tavily-extract"
++
++
++@pytest.mark.asyncio
++async def test_a_failing_tavily_extract_is_not_a_page() -> None:
++    client = _Recorder(
++        post=_Resp(payload={"results": [], "failed_results": [{"url": "https://x.example/", "error": "unsupported"}]})
++    )
++    with _Patched(client):
++        out = await WebFetchTool(provider="tavily", api_key="k").execute(url="https://x.example/")
++
++    assert fetch_result_ok(out) is False
++    assert "unsupported" in json.loads(out)["error"]
++
++
++@pytest.mark.asyncio
++async def test_the_exa_request_is_a_post_to_contents() -> None:
++    client = _Recorder(post=_Resp(payload={"results": [{"url": "https://x.example/", "text": PAGE, "title": "T"}]}))
++    with _Patched(client):
++        await WebFetchTool(provider="exa", api_key="k-exa").execute(url="https://x.example/")
++
++    call = client.calls[0]
++    assert call["method"] == "POST"
++    assert call["url"] == "https://api.exa.ai/contents"
++    assert call["json"] == {"urls": ["https://x.example/"], "text": True}
++    assert call["headers"]["x-api-key"] == "k-exa"
++
++
++@pytest.mark.asyncio
++async def test_exa_carries_its_title_as_its_own_field() -> None:
++    client = _Recorder(post=_Resp(payload={"results": [{"url": "https://x.example/", "text": PAGE, "title": "Real Title"}]}))
++    with _Patched(client):
++        out = json.loads(await WebFetchTool(provider="exa", api_key="k").execute(url="https://x.example/"))
++
++    assert out["title"] == "Real Title"
++    assert out["text"] == PAGE
++    assert out["extractor"] == "exa-contents"
++
++
++@pytest.mark.asyncio
++async def test_an_empty_exa_result_set_is_not_a_page() -> None:
++    client = _Recorder(post=_Resp(payload={"results": []}))
++    with _Patched(client):
++        out = await WebFetchTool(provider="exa", api_key="k").execute(url="https://x.example/")
++
++    assert fetch_result_ok(out) is False
++
++
++@pytest.mark.asyncio
++async def test_the_firecrawl_request_is_a_post_to_scrape() -> None:
++    client = _Recorder(post=_Resp(payload={"success": True, "data": {"markdown": PAGE}}))
++    with _Patched(client):
++        await WebFetchTool(provider="firecrawl", api_key="k-fc").execute(url="https://x.example/")
++
++    call = client.calls[0]
++    assert call["method"] == "POST"
++    assert call["url"] == "https://api.firecrawl.dev/v1/scrape"
++    assert call["json"] == {"url": "https://x.example/", "formats": ["markdown"]}
++    assert call["headers"]["Authorization"] == "Bearer k-fc"
++
++
++# --------------------------------------------------------------------------- #
++# response handling                                                             #
++# --------------------------------------------------------------------------- #
++
++
++@pytest.mark.asyncio
++async def test_a_failing_envelope_in_a_200_is_not_a_page() -> None:
++    # The other failure shape raises in ``_send_with_retry`` (raise_for_status,
++    # and 422 is not retried). This one answers 200 and reports the failure in
++    # the body, so nothing above notices unless the envelope is read.
++    client = _Recorder(post=_Resp(payload={"code": -1, "message": "Unable to extract content from the URL."}))
++    with _Patched(client):
++        out = await WebFetchTool(provider="anysearch", api_key="k").execute(url="https://x.example/")
++
++    assert fetch_result_ok(out) is False
++    assert "Unable to extract content" in json.loads(out)["error"]
++
++
++@pytest.mark.asyncio
++async def test_an_empty_body_in_a_healthy_envelope_is_not_a_page() -> None:
++    client = _Recorder(post=_Resp(payload=_anysearch_ok(content="")))
++    with _Patched(client):
++        out = await WebFetchTool(provider="anysearch", api_key="k").execute(url="https://x.example/")
++
++    assert fetch_result_ok(out) is False
++
++
++@pytest.mark.asyncio
++async def test_a_failing_firecrawl_envelope_is_not_a_page() -> None:
++    client = _Recorder(post=_Resp(payload={"success": False, "error": "This website is no longer supported"}))
++    with _Patched(client):
++        out = await WebFetchTool(provider="firecrawl", api_key="k").execute(url="https://x.example/")
++
++    assert fetch_result_ok(out) is False
++    assert "This website is no longer supported" in json.loads(out)["error"]
++
++
++@pytest.mark.asyncio
++async def test_firecrawl_carries_its_title_as_its_own_field() -> None:
++    client = _Recorder(
++        post=_Resp(payload={"success": True, "data": {"markdown": PAGE, "metadata": {"title": "Real Title"}}})
++    )
++    with _Patched(client):
++        out = json.loads(
++            await WebFetchTool(provider="firecrawl", api_key="k").execute(url="https://x.example/")
++        )
++
++    assert out["title"] == "Real Title"
++    assert out["text"] == PAGE
++    assert out["extractor"] == "firecrawl-scrape"
++
++
++@pytest.mark.asyncio
++async def test_the_title_is_its_own_field_not_a_header_block() -> None:
++    # Jina embeds ``Title:``/``URL Source:``/``Published Time:`` in the text.
++    # Imitating half of that block would report a missing publication date as an
++    # undated page, so the field AnySearch does carry is carried as a field.
++    client = _Recorder(post=_Resp(payload=_anysearch_ok(title="Real Title")))
++    with _Patched(client):
++        out = json.loads(
++            await WebFetchTool(provider="anysearch", api_key="k").execute(url="https://x.example/")
++        )
++
++    assert out["title"] == "Real Title"
++    assert out["text"] == PAGE
++    assert "Title:" not in out["text"]
++
++
++@pytest.mark.asyncio
++async def test_the_extractor_names_the_backend_that_served_the_page(monkeypatch, tmp_path) -> None:
++    ledger = tmp_path / "batch_arm__question.jsonl"
++    monkeypatch.setenv("RAVEN_WEB_LEDGER", str(ledger))
++    client = _Recorder(post=_Resp(payload=_anysearch_ok()))
++    with _Patched(client):
++        out = json.loads(
++            await WebFetchTool(provider="anysearch", api_key="k").execute(url="https://x.example/")
++        )
++
++    assert out["extractor"] == "anysearch-extract"
++    assert json.loads(ledger.read_text().splitlines()[0])["extractor"] == "anysearch-extract"
++
++
++@pytest.mark.asyncio
++async def test_the_default_payload_gains_no_field() -> None:
++    # The payload is what the model reads. Adding a key on the default path is a
++    # distribution change, so the extra columns are only carried off it.
++    client = _Recorder(get=_Resp(text=PAGE))
++    with _Patched(client):
++        default = json.loads(await WebFetchTool().execute(url="https://x.example/"))
++
++    assert set(default) == {
++        "url", "finalUrl", "status", "extractor", "extractMode", "truncated", "length", "text"
++    }
++    assert default["extractor"] == "jina-reader"
++
++
++@pytest.mark.asyncio
++async def test_a_non_default_backend_reports_the_size_it_was_handed() -> None:
++    # ``truncated`` is measured against this tool's own cap, so a backend that
++    # truncated first would report False on a page it cut.
++    client = _Recorder(post=_Resp(payload=_anysearch_ok()))
++    with _Patched(client):
++        out = json.loads(
++            await WebFetchTool(provider="anysearch", api_key="k", max_chars=50).execute(
++                url="https://x.example/"
++            )
++        )
++
++    assert out["truncated"] is True
++    assert out["length"] == 50
++    assert out["source_chars"] == len(PAGE)
++
++
++# --------------------------------------------------------------------------- #
++# fallback chain                                                                #
++# --------------------------------------------------------------------------- #
++
++
++@pytest.mark.asyncio
++async def test_a_dead_backend_falls_through_to_the_next(monkeypatch, tmp_path) -> None:
++    # The measured failure this exists for: an out-of-credit Jina key answered
++    # 402 where no key answers 200, and that run recorded pages_ok 0 of 33.
++    ledger = tmp_path / "batch_arm__question.jsonl"
++    monkeypatch.setenv("RAVEN_WEB_LEDGER", str(ledger))
++    client = _Recorder(get=_dead_key(), post=_Resp(payload=_anysearch_ok()))
++    with _Patched(client):
++        out = json.loads(
++            await WebFetchTool(
++                provider="jina",
++                fallback=["anysearch"],
++                provider_keys={"anysearch": "k-any"},
++            ).execute(url="https://x.example/")
++        )
++
++    assert out["extractor"] == "anysearch-extract"
++    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
++    fell_back = [r for r in rows if r["op"] == "fetch_fallback"]
++    assert len(fell_back) == 1
++    assert fell_back[0]["provider"] == "jina" and fell_back[0]["next"] == "anysearch"
++
++
++@pytest.mark.asyncio
++async def test_a_fallback_entry_uses_its_own_vendors_key() -> None:
++    # ``api_key`` names the SELECTED provider. Reusing it for the fallback would
++    # send one vendor's credential to another vendor's endpoint.
++    client = _Recorder(get=_dead_key(), post=_Resp(payload=_anysearch_ok()))
++    with _Patched(client):
++        await WebFetchTool(
++            api_key="k-jina",
++            fallback=["anysearch"],
++            provider_keys={"anysearch": "k-any"},
++        ).execute(url="https://x.example/")
++
++    assert client.calls[-1]["headers"]["Authorization"] == "Bearer k-any"
++
++
++@pytest.mark.asyncio
++async def test_a_refused_url_never_reaches_the_fallback() -> None:
++    client = _Recorder(post=_Resp(payload=_anysearch_ok()))
++    with _Patched(client, valid=False):
++        out = json.loads(
++            await WebFetchTool(fallback=["anysearch"], provider_keys={"anysearch": "k"}).execute(
++                url="https://x.example/"
++            )
++        )
++
++    assert "URL validation failed" in out["error"]
++    assert client.calls == []
++
++
++@pytest.mark.asyncio
++async def test_an_empty_page_falls_through_to_the_next(monkeypatch, tmp_path) -> None:
++    # A 200 with nothing in it: the shape the Jina branch cannot see, because it
++    # returns whatever the reader sent. Left unchecked it reads as a page, so the
++    # chain stopped at the first vendor and the ledger recorded ok with chars 0 -
++    # a fetch floor released on no evidence.
++    ledger = tmp_path / "batch_arm__question.jsonl"
++    monkeypatch.setenv("RAVEN_WEB_LEDGER", str(ledger))
++    client = _Recorder(get=_Resp(text="   \n"), post=_Resp(payload=_anysearch_ok()))
++    with _Patched(client):
++        out = json.loads(
++            await WebFetchTool(
++                fallback=["anysearch"], provider_keys={"anysearch": "k-any"}
++            ).execute(url="https://x.example/")
++        )
++
++    assert out["extractor"] == "anysearch-extract"
++    assert out["text"] == PAGE
++    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
++    fell_back = [r for r in rows if r["op"] == "fetch_fallback"]
++    assert len(fell_back) == 1
++    assert fell_back[0]["provider"] == "jina" and fell_back[0]["next"] == "anysearch"
++
++
++@pytest.mark.asyncio
++async def test_an_empty_page_with_no_next_backend_is_returned_as_it_was() -> None:
++    # The same response on the default configuration, where the check is off.
++    # What the model reads here is the anchor's, and turning this into an error
++    # would move it - a separate round, never a fix folded into a chain change.
++    client = _Recorder(get=_Resp(text=""))
++    with _Patched(client):
++        out = await WebFetchTool().execute(url="https://x.example/")
++
++    assert fetch_result_ok(out) is True
++    assert json.loads(out)["length"] == 0
++
++
++@pytest.mark.asyncio
++async def test_the_last_backends_failure_is_what_is_reported() -> None:
++    client = _Recorder(get=_dead_key(), post=_dead_key())
++    with _Patched(client):
++        out = json.loads(
++            await WebFetchTool(fallback=["anysearch"], provider_keys={"anysearch": "k"}).execute(
++                url="https://x.example/"
++            )
++        )
++
++    assert fetch_result_ok(json.dumps(out)) is False
++    assert "402" in out["error"]
++
++
++def test_the_chain_drops_the_selected_provider_and_the_unknown() -> None:
++    # An entry naming the selected provider would re-issue the request that just
++    # failed; one naming a provider that does not exist would raise inside the
++    # path that exists to survive a failure.
++    tool = WebFetchTool(provider="jina", fallback=["jina", "bing", "anysearch", "anysearch"])
++    assert tool.fallback == ["anysearch"]
++
++
++# --------------------------------------------------------------------------- #
++# registration and config resolution                                            #
++# --------------------------------------------------------------------------- #
++
++
++def test_only_a_backend_that_needs_a_key_can_be_withheld(monkeypatch) -> None:
++    # Jina reads pages unauthenticated, so a bare checkout must keep offering
++    # web_fetch exactly as it always has. One predicate, because the main loop
++    # and the sub-agent registry both ask it and must agree.
++    monkeypatch.delenv("JINA_API_KEY", raising=False)
++    monkeypatch.delenv("ANYSEARCH_API_KEY", raising=False)
++    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
++    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
++    monkeypatch.delenv("EXA_API_KEY", raising=False)
++    assert FETCH_PROVIDERS[DEFAULT_FETCH_PROVIDER].needs_key is False
++    assert FETCH_PROVIDERS["anysearch"].needs_key is True
++
++    assert WebFetchTool().registrable is True
++    assert WebFetchTool(provider="anysearch").registrable is False
++    assert WebFetchTool(provider="anysearch", api_key="k").registrable is True
++    assert WebFetchTool(provider="anysearch", corpus_endpoint="http://x").registrable is True
++    assert WebFetchTool(provider="firecrawl").registrable is False
++    assert WebFetchTool(provider="firecrawl", api_key="k").registrable is True
++    assert WebFetchTool(provider="tavily").registrable is False
++    assert WebFetchTool(provider="tavily", api_key="k").registrable is True
++    assert WebFetchTool(provider="exa").registrable is False
++    assert WebFetchTool(provider="exa", api_key="k").registrable is True
++
++
++def test_the_dict_key_and_the_specs_vendor_agree() -> None:
++    for name, spec in FETCH_PROVIDERS.items():
++        assert spec.vendor == name
++        assert spec.config_path == f"tools.web.providers.{name}.apiKey"
++
++
++def test_each_provider_resolves_only_its_own_variable(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.delenv("JINA_API_KEY", raising=False)
++    monkeypatch.delenv("ANYSEARCH_API_KEY", raising=False)
++    monkeypatch.setenv("JINA_API_KEY", "sk-jina")
++    assert WebFetchTool().api_key == "sk-jina"
++    assert WebFetchTool(provider="anysearch").api_key == ""
++
++    monkeypatch.setenv("ANYSEARCH_API_KEY", "sk-any")
++    assert WebFetchTool(provider="anysearch").api_key == "sk-any"
++
++
++def test_an_unknown_provider_degrades_to_the_default() -> None:
++    assert WebFetchTool(provider="diffbot").provider == DEFAULT_FETCH_PROVIDER
++    assert selected_fetch_provider(object()) == DEFAULT_FETCH_PROVIDER
++
++
++def test_the_description_only_changes_off_the_default() -> None:
++    # It is part of the tool schema the model is shown, so the default build's
++    # must render byte for byte what the class always declared.
++    assert WebFetchTool().description == WebFetchTool.description
++    assert "AnySearch" in WebFetchTool(provider="anysearch").description
++
++
++def test_one_vendor_key_serves_both_web_tools() -> None:
++    # The whole reason the credential is keyed by vendor: one AnySearch account
++    # answers both /v1/search and /v1/extract.
++    web = WebToolsConfig(
++        fetch=WebFetchConfig(provider="anysearch", fallback=["jina"]),
++        providers=WebProvidersConfig(
++            anysearch=WebProviderKey(api_key="sk-any"),
++            jina=WebProviderKey(api_key="sk-jina"),
++        ),
++    )
++    assert selected_fetch_key(web) == ("anysearch", "sk-any")
++    assert selected_fetch_fallback(web.fetch) == ["jina"]
++    assert web_provider_keys(web) == {"anysearch": "sk-any", "jina": "sk-jina"}
+diff --git a/tests/test_web_search_providers.py b/tests/test_web_search_providers.py
+new file mode 100644
+index 0000000..43c3a91
+--- /dev/null
++++ b/tests/test_web_search_providers.py
+@@ -0,0 +1,511 @@
++"""Per-provider request and response contracts of ``WebSearchTool``.
++
++Several backends share one tool. What differs is the request each expects and the
++payload it answers with; everything downstream -- containment, cross-query
++dedup, the shaping row, the rendering -- is one code path, so each provider is
++normalised to the Serper shape before anything reads it.
++
++Two properties matter more than the mapping itself:
++
++* The Serper request stays byte-identical. It is the anchor's wire traffic, and
++  a provider table that quietly reformats it moves every arm at once.
++* A provider that serves no offset declares that to the saturation rule at
++  construction (``paginates``) rather than issuing a page-2 request it cannot
++  answer. The rule then reports ``stopped_degraded``, which is what keeps "the
++  pool ran out" and "this endpoint cannot page" separable in the ledger.
++"""
++
++from __future__ import annotations
++
++from unittest.mock import patch
++
++import httpx
++import pytest
++
++from raven.agent.search_saturation import SearchSaturation
++from raven.agent.tools.web import (
++    DEFAULT_SEARCH_PROVIDER,
++    SEARCH_PROVIDERS,
++    WebSearchTool,
++    selected_search_key,
++    selected_search_provider,
++)
++from raven.config.schema import (
++    WebProviderKey,
++    WebProvidersConfig,
++    WebSearchConfig,
++    WebToolsConfig,
++)
++
++
++class _FakeResponse:
++    def __init__(self, payload):
++        self._payload = payload
++        self.status_code = 200
++
++    def json(self):
++        return self._payload
++
++    def raise_for_status(self):
++        return None
++
++
++class _RecordingClient:
++    """Records how the tool called out, and answers with one canned payload."""
++
++    def __init__(self, response):
++        self._response = response
++        self.calls: list[tuple[str, str, dict]] = []
++
++    async def __aenter__(self):
++        return self
++
++    async def __aexit__(self, *args):
++        return False
++
++    async def post(self, url, **kwargs):
++        self.calls.append(("POST", url, kwargs))
++        return self._response
++
++    async def get(self, url, **kwargs):
++        self.calls.append(("GET", url, kwargs))
++        return self._response
++
++
++def _patched(payload):
++    client = _RecordingClient(_FakeResponse(payload))
++    return client, patch("raven.agent.tools.web.httpx.AsyncClient", lambda **kw: client)
++
++
++@pytest.fixture(autouse=True)
++def _no_ambient_search_keys(monkeypatch: pytest.MonkeyPatch) -> None:
++    for spec in SEARCH_PROVIDERS.values():
++        monkeypatch.delenv(spec.env_var, raising=False)
++
++
++# ---------------------------------------------------------------------------
++# Request construction
++# ---------------------------------------------------------------------------
++
++
++@pytest.mark.asyncio
++async def test_the_serper_request_body_is_unchanged() -> None:
++    """The anchor's wire traffic. A literal, not a round-trip through the table."""
++    client, patcher = _patched({"organic": []})
++    with patcher:
++        await WebSearchTool(api_key="sk-serper")._search("q1", 3)
++
++    method, url, kwargs = client.calls[0]
++    assert (method, url) == ("POST", "https://google.serper.dev/search")
++    assert kwargs["json"] == {"q": "q1", "num": 3}
++    assert kwargs["headers"] == {
++        "Accept": "application/json",
++        "Content-Type": "application/json",
++        "X-API-KEY": "sk-serper",
++    }
++
++
++@pytest.mark.asyncio
++async def test_serper_page_two_still_carries_the_page_key() -> None:
++    client, patcher = _patched({"organic": []})
++    with patcher:
++        await WebSearchTool(api_key="sk-serper")._search("q1", 3, page=2)
++
++    assert client.calls[0][2]["json"] == {"q": "q1", "num": 3, "page": 2}
++
++
++@pytest.mark.asyncio
++async def test_serpapi_sends_the_key_as_a_parameter_and_pages_by_offset() -> None:
++    client, patcher = _patched({"organic_results": []})
++    tool = WebSearchTool(api_key="sk-serp", provider="serpapi")
++    with patcher:
++        await tool._search("q1", 5)
++        await tool._search("q1", 5, page=3)
++
++    method, url, first = client.calls[0]
++    assert (method, url) == ("GET", "https://serpapi.com/search")
++    assert first["params"] == {"engine": "google", "q": "q1", "num": 5, "api_key": "sk-serp"}
++    # page 3 of 5-wide results begins at the 10th, and page 1 carries no offset
++    # at all so an un-escalated turn sends nothing the rule did not ask for.
++    assert client.calls[1][2]["params"]["start"] == 10
++
++
++@pytest.mark.asyncio
++async def test_anysearch_sends_a_bearer_token_and_never_a_page() -> None:
++    client, patcher = _patched({"results": []})
++    tool = WebSearchTool(api_key="sk-any", provider="anysearch")
++    with patcher:
++        await tool._search("q1", 4)
++
++    method, url, kwargs = client.calls[0]
++    assert (method, url) == ("POST", "https://api.anysearch.com/v1/search")
++    assert kwargs["json"] == {"query": "q1", "max_results": 4}
++    assert kwargs["headers"]["Authorization"] == "Bearer sk-any"
++
++
++@pytest.mark.asyncio
++async def test_tavily_sends_a_bearer_token_and_never_a_page() -> None:
++    client, patcher = _patched({"results": []})
++    tool = WebSearchTool(api_key="sk-tav", provider="tavily")
++    with patcher:
++        await tool._search("q1", 4)
++
++    method, url, kwargs = client.calls[0]
++    assert (method, url) == ("POST", "https://api.tavily.com/search")
++    assert kwargs["json"] == {"query": "q1", "max_results": 4}
++    assert kwargs["headers"]["Authorization"] == "Bearer sk-tav"
++
++
++@pytest.mark.asyncio
++async def test_exa_sends_an_api_key_header_and_asks_for_highlights() -> None:
++    # Highlights, not ``text``: text is the whole page and the render path
++    # would show it whole as the snippet.
++    client, patcher = _patched({"results": []})
++    tool = WebSearchTool(api_key="sk-exa", provider="exa")
++    with patcher:
++        await tool._search("q1", 4)
++
++    method, url, kwargs = client.calls[0]
++    assert (method, url) == ("POST", "https://api.exa.ai/search")
++    # ``maxCharacters`` is the bound that holds on the live endpoint;
++    # ``numSentences`` does not.
++    assert kwargs["json"] == {"query": "q1", "numResults": 4, "contents": {"highlights": {"maxCharacters": 300}}}
++    assert kwargs["headers"]["x-api-key"] == "sk-exa"
++
++
++@pytest.mark.asyncio
++async def test_exa_does_not_buy_contents_when_snippets_are_off() -> None:
++    # Exa bills contents separately; with snippets off the text would have no
++    # reader, so the request must not ask for it.
++    client, patcher = _patched({"results": []})
++    tool = WebSearchTool(api_key="sk-exa", provider="exa", include_snippets=False)
++    with patcher:
++        await tool._search("q1", 4)
++
++    assert client.calls[0][2]["json"] == {"query": "q1", "numResults": 4}
++
++
++@pytest.mark.asyncio
++async def test_brave_sends_a_subscription_token_and_pages_by_offset() -> None:
++    client, patcher = _patched({"web": {"results": []}})
++    tool = WebSearchTool(api_key="sk-brave", provider="brave")
++    with patcher:
++        await tool._search("q1", 5)
++        await tool._search("q1", 5, page=3)
++
++    method, url, first = client.calls[0]
++    assert (method, url) == ("GET", "https://api.search.brave.com/res/v1/web/search")
++    assert first["params"] == {"q": "q1", "count": 5}
++    assert first["headers"]["X-Subscription-Token"] == "sk-brave"
++    # page 3 is offset 2: Brave's offset counts pages, not results.
++    assert client.calls[1][2]["params"]["offset"] == 2
++
++
++@pytest.mark.asyncio
++async def test_firecrawl_search_sends_a_bearer_token_and_never_a_page() -> None:
++    client, patcher = _patched({"success": True, "data": []})
++    tool = WebSearchTool(api_key="sk-fc", provider="firecrawl")
++    with patcher:
++        await tool._search("q1", 4)
++
++    method, url, kwargs = client.calls[0]
++    assert (method, url) == ("POST", "https://api.firecrawl.dev/v1/search")
++    assert kwargs["json"] == {"query": "q1", "limit": 4}
++    assert kwargs["headers"]["Authorization"] == "Bearer sk-fc"
++
++
++# ---------------------------------------------------------------------------
++# Pagination capability, declared rather than discovered
++# ---------------------------------------------------------------------------
++
++
++def test_a_provider_without_an_offset_tells_the_saturation_rule_up_front() -> None:
++    """Otherwise the rung is reachable and unanswerable: the rule escalates to
++    page 2, the request comes back identical, dedup eats it, and the ledger
++    records a dry search the endpoint never had a chance to serve."""
++    for provider in ("anysearch", "tavily", "exa", "firecrawl"):
++        sat = SearchSaturation()
++        WebSearchTool(api_key="k", provider=provider, saturation=sat)
++        assert sat.paginates is False, provider
++
++    for provider in ("serper", "serpapi", "brave"):
++        paging = SearchSaturation()
++        WebSearchTool(api_key="k", provider=provider, saturation=paging)
++        assert paging.paginates is True, provider
++
++
++def test_the_same_dry_streak_pages_on_one_provider_and_degrades_on_the_other() -> None:
++    """``paginated`` against ``stopped_degraded`` on identical evidence.
++
++    The two arms see the same searches come back dry; what differs is only
++    whether their endpoint can serve the next page. Collapsing that into one
++    action would make a backend limitation read as the model giving up.
++    """
++    paging = SearchSaturation(k=2, on_saturate="paginate")
++    WebSearchTool(api_key="k", provider="serper", saturation=paging)
++
++    degrading = SearchSaturation(k=2, on_saturate="paginate")
++    WebSearchTool(api_key="k", provider="anysearch", saturation=degrading)
++
++    for _ in range(2):
++        paging.observe(())
++        degrading.observe(())
++
++    assert paging.counters()["sat_action"] == "paginated"
++    assert not paging.stopped
++
++    assert degrading.counters()["sat_action"] == "stopped_degraded"
++    assert degrading.stopped, "a rung it cannot climb closes search rather than looping"
++
++
++# ---------------------------------------------------------------------------
++# Response normalisation -- every provider renders through the shared path
++# ---------------------------------------------------------------------------
++
++
++@pytest.mark.asyncio
++async def test_serpapi_results_reach_the_shared_rendering() -> None:
++    _, patcher = _patched(
++        {
++            "organic_results": [
++                {"title": "T1", "link": "https://a.example", "snippet": "S1"}
++            ],
++            "answer_box": {"answer": "42"},
++            "knowledge_graph": {"title": "K", "description": "KD"},
++        }
++    )
++    with patcher:
++        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="serpapi")._search("q1", 5)
++
++    assert urls == ["https://a.example"]
++    assert "1. T1\n   https://a.example" in rendered
++    assert "Answer: 42" in rendered
++    assert "Knowledge: K" in rendered
++    # The instrument column means the same thing on every backend: how many rows
++    # the endpoint served, before the width slice and before dedup.
++    assert shaping["n_served"] == 1
++
++
++@pytest.mark.asyncio
++async def test_anysearch_accepts_both_shapes_and_alternate_spellings() -> None:
++    plain = {"results": [{"title": "T1", "url": "https://a.example", "snippet": "S1"}]}
++    # Its auth endpoint wraps payloads in {code, message, data}; the search
++    # response is undocumented, so both have to parse.
++    enveloped = {
++        "code": 0,
++        "data": {"results": [{"title": "T2", "link": "https://b.example", "content": "C2"}]},
++    }
++    for payload, expected in ((plain, "https://a.example"), (enveloped, "https://b.example")):
++        _, patcher = _patched(payload)
++        with patcher:
++            rendered, urls, _ = await WebSearchTool(api_key="k", provider="anysearch")._search("q1", 5)
++        assert urls == [expected]
++        assert expected in rendered
++
++
++@pytest.mark.asyncio
++async def test_tavily_results_reach_the_shared_rendering() -> None:
++    _, patcher = _patched(
++        {
++            "results": [{"title": "T1", "url": "https://a.example", "content": "S1"}],
++            "answer": "42",
++        }
++    )
++    with patcher:
++        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="tavily")._search("q1", 5)
++
++    assert urls == ["https://a.example"]
++    assert "1. T1\n   https://a.example" in rendered
++    assert "Answer: 42" in rendered
++    assert shaping["n_served"] == 1
++
++
++@pytest.mark.asyncio
++async def test_exa_results_reach_the_shared_rendering() -> None:
++    _, patcher = _patched(
++        {"results": [{"title": "T1", "url": "https://a.example", "highlights": ["S1\n\nline two"]}]}
++    )
++    with patcher:
++        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="exa")._search("q1", 5)
++
++    assert urls == ["https://a.example"]
++    # Newlines inside a highlight are collapsed: the snippet stays one indented line.
++    assert "1. T1\n   https://a.example\n   S1 line two\n" in rendered + "\n"
++    assert shaping["n_served"] == 1
++
++
++@pytest.mark.asyncio
++async def test_exa_page_text_is_never_rendered_as_a_snippet() -> None:
++    # Positive and negative on one payload: the highlight is the snippet, and a
++    # ``text`` body riding alongside it never reaches the rendering.
++    body = "whole page body " * 50
++    _, patcher = _patched(
++        {"results": [{"title": "T1", "url": "https://a.example", "highlights": ["H1"], "text": body}]}
++    )
++    with patcher:
++        rendered, _, shaping = await WebSearchTool(api_key="k", provider="exa")._search("q1", 5)
++
++    assert "   H1" in rendered
++    assert "whole page body" not in rendered
++    assert shaping["snippet_chars"] < 20
++
++
++@pytest.mark.asyncio
++async def test_brave_results_reach_the_shared_rendering() -> None:
++    _, patcher = _patched(
++        {"web": {"results": [{"title": "T1", "url": "https://a.example", "description": "S1"}]}}
++    )
++    with patcher:
++        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="brave")._search("q1", 5)
++
++    assert urls == ["https://a.example"]
++    assert "1. T1\n   https://a.example" in rendered
++    assert shaping["n_served"] == 1
++
++
++@pytest.mark.asyncio
++async def test_firecrawl_results_reach_the_shared_rendering() -> None:
++    _, patcher = _patched(
++        {"success": True, "data": [{"title": "T1", "url": "https://a.example", "description": "S1"}]}
++    )
++    with patcher:
++        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="firecrawl")._search("q1", 5)
++
++    assert urls == ["https://a.example"]
++    assert "1. T1\n   https://a.example" in rendered
++    assert shaping["n_served"] == 1
++
++
++@pytest.mark.asyncio
++async def test_a_firecrawl_refusal_inside_a_200_is_an_error_not_a_dry_search() -> None:
++    # Probed live: errors normally arrive status-coupled (400/500). If a refusal
++    # ever lands inside a 200, it must classify as an error - a zero-hit
++    # advances the saturation streak, and "the endpoint refused" must not.
++    _, patcher = _patched({"success": False, "error": "Invalid request body"})
++    with patcher:
++        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="firecrawl")._search("q1", 5)
++
++    assert rendered.startswith("Error:")
++    assert "Invalid request body" in rendered
++    assert urls == []
++    assert shaping["n_served"] is None
++
++
++@pytest.mark.asyncio
++async def test_a_malformed_anysearch_payload_is_a_zero_hit_not_a_crash() -> None:
++    _, patcher = _patched({"results": "not-a-list"})
++    with patcher:
++        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="anysearch")._search("q1", 5)
++
++    assert rendered == "No results for: q1"
++    assert urls == []
++    # The endpoint WAS reached and served nothing usable, which is a different
++    # row from one where no request went out at all.
++    assert shaping["n_served"] == 0
++
++
++# ---------------------------------------------------------------------------
++# Key resolution
++# ---------------------------------------------------------------------------
++
++
++def test_each_provider_resolves_only_its_own_variable(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.setenv("SERPER_API_KEY", "sk-serper")
++    assert WebSearchTool().api_key == "sk-serper"
++    assert WebSearchTool(provider="anysearch").api_key == ""
++    assert WebSearchTool(provider="serpapi").api_key == ""
++
++    monkeypatch.setenv("ANYSEARCH_API_KEY", "sk-any")
++    assert WebSearchTool(provider="anysearch").api_key == "sk-any"
++
++
++def test_selected_search_key_reads_the_vendor_matching_the_provider() -> None:
++    web = WebToolsConfig(
++        search=WebSearchConfig(provider="anysearch"),
++        providers=WebProvidersConfig(
++            serper=WebProviderKey(api_key="sk-serper"),
++            anysearch=WebProviderKey(api_key="sk-any"),
++        ),
++    )
++    assert selected_search_key(web) == ("anysearch", "sk-any")
++    assert selected_search_provider(web.search) == "anysearch"
++
++
++def test_the_dict_key_and_the_specs_vendor_agree() -> None:
++    # They are written twice and the config path is derived from the second, so
++    # a disagreement would send one provider's key lookup at another's field.
++    for name, spec in SEARCH_PROVIDERS.items():
++        assert spec.vendor == name
++        assert spec.config_path == f"tools.web.providers.{name}.apiKey"
++
++
++def test_an_unknown_provider_degrades_to_the_default() -> None:
++    assert WebSearchTool(provider="bing").provider == DEFAULT_SEARCH_PROVIDER
++    assert selected_search_provider(object()) == DEFAULT_SEARCH_PROVIDER
++
++
++class _StatusClient(_RecordingClient):
++    """Answers every call with a real httpx status error, URL and query included,
++    the way the live client would."""
++
++    def __init__(self, status: int) -> None:
++        super().__init__(None)
++        self._status = status
++
++    def _answer(self, method, url, kwargs):
++        self.calls.append((method, url, kwargs))
++        request = httpx.Request(method, url, params=kwargs.get("params"))
++        return httpx.Response(self._status, request=request, json={})
++
++    async def post(self, url, **kwargs):
++        return self._answer("POST", url, kwargs)
++
++    async def get(self, url, **kwargs):
++        return self._answer("GET", url, kwargs)
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("provider", sorted(SEARCH_PROVIDERS))
++async def test_a_status_error_never_echoes_the_key(provider: str) -> None:
++    """httpx puts the whole request URL in a status error, and SerpApi carries
++    its key as a query parameter, so the default text would hand the credential
++    to the model and write it into the ledger. Every vendor renders as vendor
++    plus status, and the shaping row records the status alone."""
++    client = _StatusClient(401)
++    with patch("raven.agent.tools.web.httpx.AsyncClient", lambda **kw: client):
++        rendered, urls, shaping = await WebSearchTool(api_key="SECRET-KEY-123", provider=provider)._search("q1", 3)
++
++    assert "SECRET-KEY-123" not in rendered
++    assert rendered == f"Error: {SEARCH_PROVIDERS[provider].label} answered HTTP 401"
++    assert urls == []
++    assert "SECRET-KEY-123" not in shaping["error"]
++    assert shaping["status"] == 401 and shaping["quota_err"] is True
++
++
++@pytest.mark.asyncio
++async def test_the_unconfigured_error_names_the_selected_provider() -> None:
++    """Named to the OPERATOR, on stderr - not to the model.
++
++    The message is split on purpose (main's product-surface audit): the tool
++    return value tells the model the capability is gone and not to retry, and
++    must not carry our config path, which a return value gets narrated back to
++    whoever is watching. The provider's name, config path and env var go to the
++    log instead - still per-spec, so a selected provider's missing key is never
++    reported as another provider's.
++    """
++    from loguru import logger
++
++    lines: list[str] = []
++    sink_id = logger.add(lines.append, level="ERROR")
++    try:
++        rendered, urls, _ = await WebSearchTool(provider="serpapi")._search("q", 5)
++    finally:
++        logger.remove(sink_id)
++
++    assert rendered.startswith("Error: web search is unavailable")
++    assert "apiKey" not in rendered
++    log = "".join(lines)
++    assert "SerpApi" in log
++    assert "tools.web.providers.serpapi.apiKey" in log
++    assert "SERPAPI_API_KEY" in log
++    assert urls == []

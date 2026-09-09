@@ -1,0 +1,4 @@
+interface:
+  display_name: "创建数据可视化"
+  short_description: "为探索、解释与监测任务构建可信、可访问的数据可视化"
+  default_prompt: "使用 $create-data-visualizations 根据数据关系选择编码与工具，构建来源透明、尺度诚实且可访问的探索或解释视图。"

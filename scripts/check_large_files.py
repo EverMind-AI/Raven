@@ -65,11 +65,19 @@ APP_SOURCE_PREFIXES = (
     "ui-tui/",
 )
 ALLOWED_SKILL_REFERENCE_IMAGE_EXTENSIONS = frozenset({".jpg"})
-# The one home of the raven-design skill plates: the design-engine wheel they
-# migrated to (verdict C4; the frozen fork seat retired with the tree). The
-# rule is unchanged: .jpg only, only under a skill's references/, and the
-# 1 MiB ceiling still applies.
+# The two homes of the raven-design skill plates: the frozen fork checkout
+# (kept until the retirement wave) and the design-engine wheel the plates
+# migrated to (verdict C4). Same rule at both seats: .jpg only, only under a
+# skill's references/, and the 1 MiB ceiling still applies.
 RAVEN_DESIGN_SKILL_PREFIXES = (
+    (
+        "subagents",
+        "raven-design",
+        "Raven-Design",
+        "raven",
+        "memory_engine",
+        "skills",
+    ),
     (
         "plugins-dist",
         "design-engine",

@@ -680,11 +680,11 @@ export interface SubagentRow {
   enabled: boolean;
   configured: boolean;
   /**
-   * Discovered under the `agents/` product tree rather than written into config: one of the agent products that ship with this raven, materialized as a row on every table build. Like `builtin` it leaves `configured` false -- there is no config entry to delete, and removing it means removing its folder -- but unlike `builtin` it is a real subprocess with a command, so it is probed and it can be unready (a missing engine wheel leaves it listed and disabled). The wire name predates the tree's rename. Absent from a server that predates discovery.
+   * Discovered under `subagents/` rather than written into config: one of the raven builds that ship beside this one, materialized as a row on every table build. Like `builtin` it leaves `configured` false -- there is no config entry to delete, and removing it means removing its folder -- but unlike `builtin` it is a real subprocess with a command, so it is probed and it can be unready (an unbuilt venv leaves it listed and disabled). Absent from a server that predates discovery.
    */
   vendored?: boolean;
   /**
-   * Always false from this server: the fork-era venv build is gone with the venvs, and `subagents.build` answers that there is nothing to build. Kept for wire compatibility with clients that predate the product tree. Absent from a server that predates discovery.
+   * A vendored folder's venv is being built right now (`subagents.build`). Its own flag rather than `test_running`: a build and a test are different verbs on the same row, and one must not read as the other. Absent from a server that predates discovery.
    */
   building?: boolean;
   /**
@@ -1956,7 +1956,6 @@ export interface SubagentsAddParams {
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
-  force?: boolean;
 }
 export interface SubagentsAddResult {
   added: boolean;
@@ -1996,7 +1995,6 @@ export interface SubagentsBuildResult {
 export interface SubagentsToggleParams {
   name: string;
   enabled: boolean;
-  force?: boolean;
 }
 export interface SubagentsToggleResult {
   enabled: boolean;
@@ -2681,17 +2679,11 @@ export interface SettingsUsageParams {
    * Window to scan; 30 by default, capped at 90.
    */
   days?: number;
-  session_key?: string | null;
 }
 export interface SettingsUsageResult {
   days: number;
   llm: LlmUsage;
   tools: ToolUsage;
-  session_key?: string | null;
-  sessions?: string[];
-  session_titles?: {
-    [k: string]: string;
-  };
 }
 export interface SettingsEverosParams {}
 export interface SettingsEverosResult {

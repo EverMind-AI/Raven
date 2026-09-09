@@ -70,14 +70,6 @@ class UsageTracker(TokenStrategy):
 
     async def after_llm_call(self, response: dict[str, Any], usage: UsageSnapshot) -> None:
         """Record one LLM call."""
-        from raven.token_wise import usage_context
-
-        session = usage.session_key or usage_context.session_key()
-        usage = replace(
-            usage,
-            session_key=session,
-            root_session_key=usage.root_session_key or usage_context.root_session_key(session),
-        )
         self._call_count += 1
         self._accumulate(usage)
 
@@ -86,32 +78,11 @@ class UsageTracker(TokenStrategy):
                 {
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "schema_version": 2,
-                    "_telemetry_dir": usage_context.telemetry_dir() or str(self.telemetry_dir),
                     **{k: v for k, v in asdict(usage).items() if k != "calls" and not k.endswith("_missing_calls")},
                 }
             )
             if self._call_count % self.flush_every == 0:
                 self._flush()
-
-    async def record_tool_call(self, name: str, tool_call_id: str | None = None) -> None:
-        """Persist one tool call with the active usage ownership."""
-        from raven.token_wise import usage_context
-
-        session = usage_context.session_key()
-        self._buffer.append(
-            {
-                "_type": "tool_call",
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "schema_version": 2,
-                "_telemetry_dir": usage_context.telemetry_dir() or str(self.telemetry_dir),
-                "session_key": session,
-                "root_session_key": usage_context.root_session_key(session),
-                "name": name,
-                "tool_call_id": tool_call_id,
-            }
-        )
-        if len(self._buffer) % self.flush_every == 0:
-            self._flush()
 
     # ---- Public introspection ----
 
@@ -171,20 +142,13 @@ class UsageTracker(TokenStrategy):
         if not self._buffer or not self.persist:
             self._buffer.clear()
             return
-        pending = self._buffer
-        self._buffer = []
-        groups: dict[Path, list[dict[str, Any]]] = {}
-        for row in pending:
-            groups.setdefault(Path(row["_telemetry_dir"]), []).append(row)
-        for destination, rows in groups.items():
-            try:
-                destination.mkdir(parents=True, exist_ok=True)
-                path = destination / f"usage-{date.today().isoformat()}.jsonl"
-                with path.open("a", encoding="utf-8") as f:
-                    for row in rows:
-                        f.write(
-                            json.dumps({k: v for k, v in row.items() if k != "_telemetry_dir"}, ensure_ascii=False)
-                            + "\n"
-                        )
-            except Exception as e:
-                logger.warning("UsageTracker flush failed for {} ({}); dropping {} rows", destination, e, len(rows))
+        try:
+            self.telemetry_dir.mkdir(parents=True, exist_ok=True)
+            path = self.telemetry_dir / f"usage-{date.today().isoformat()}.jsonl"
+            with path.open("a", encoding="utf-8") as f:
+                for row in self._buffer:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            self._buffer.clear()
+        except Exception as e:
+            logger.warning("UsageTracker flush failed ({}); dropping {} rows", e, len(self._buffer))
+            self._buffer.clear()

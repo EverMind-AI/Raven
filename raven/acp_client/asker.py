@@ -78,14 +78,7 @@ class ApprovalViaAsk:
             return ApprovalOutcome(choice=ApprovalChoice.ALLOW)
         if lowered == self._CHOICES[2].lower() or text == "3":
             return ApprovalOutcome(choice=ApprovalChoice.DENY_STOP)
-        if answer is None or not text:
-            # Nobody said anything: `None` is a round trip this turn cannot make
-            # at all, and an empty reply is the ask timing out or being skipped.
-            # Still a deny -- this fails closed by shape -- but the two used to
-            # arrive at the gate spelled the same as a person choosing Deny, and
-            # a model told it was refused stops asking and goes around.
-            return ApprovalOutcome(choice=ApprovalChoice.DENY, answered=False)
-        feedback = "" if lowered == self._CHOICES[1].lower() or text == "2" else text
+        feedback = "" if lowered == self._CHOICES[1].lower() or text in {"", "2"} else text
         return ApprovalOutcome(choice=ApprovalChoice.DENY, feedback=feedback)
 
 

@@ -3,7 +3,7 @@
 
 Runs under an interpreter that imports raven -- inside this repo, the project
 venv -- and writes through ``raven.config.update_subagents``, the same pinned
-surface the retired vendored installers used. ``{PYTHON}`` and ``{SUBAGENT_DIR}`` in
+surface the vendored installers use. ``{PYTHON}`` and ``{SUBAGENT_DIR}`` in
 ``subagent.json`` resolve against this interpreter and this file's location,
 so moving the folder and re-running is the whole migration story. A live
 raven holds the roster it read at startup; restart it afterwards.

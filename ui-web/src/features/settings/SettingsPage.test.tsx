@@ -981,9 +981,6 @@ it('shows unknown tokens for an image model that only reports money', async () =
   const output = screen.getByText('gui.set.usg.out').closest('.stat')!
   expect(input.querySelector('.v')!.textContent).toBe('gui.set.usg.unknown')
   expect(output.querySelector('.v')!.textContent).toBe('gui.set.usg.unknown')
-  // The tile's own missing-data note, not the per-model row's: deleting the
-  // element left every test green until this line.
-  expect(input.querySelector('.note')!.textContent).toContain('gui.set.usg.cache_missing')
   expect(screen.getAllByText(/\$0.2000/).length).toBeGreaterThan(0)
   expect(screen.queryByText(/· 0 tok/)).toBeNull()
 })
@@ -1008,25 +1005,4 @@ it.each([null, 0, 0.75])('renders persisted reported cost %s without treating un
   } else {
     expect(screen.getAllByText(cost === 0 ? /\$0 ·/ : /\$0.7500/).length).toBeGreaterThan(0)
   }
-})
-
-
-it('filters usage by task and restores the global view', async () => {
-  const usage = vi.fn(async (key?: string) => ({
-    days: 30, session_key: key || null, sessions: ['task-a', 'task-b'],
-    session_titles: { 'task-a': 'Poster task', 'task-b': 'Other task' },
-    llm: { total: {
-      calls: key ? 2 : 5, input_tokens: 100, output_tokens: 20, cost_usd: key ? 0.2 : 0.5,
-      cache_read_tokens: 40, cache_write_tokens: 0,
-      cost_missing_calls: 0, cache_read_missing_calls: 0, cache_write_missing_calls: 0, legacy_cost_calls: 0,
-    }, models: [] }, tools: { total: 0, counts: [] },
-  }))
-  install(snap(), { usage })
-  await mount()
-  await act(async () => { fireEvent.change(screen.getByLabelText('Task usage'), { target: { value: 'task-a' } }) })
-  expect(usage).toHaveBeenLastCalledWith('task-a')
-  expect(screen.getByText('$0.2000')).toBeTruthy()
-  await act(async () => { fireEvent.change(screen.getByLabelText('Task usage'), { target: { value: '' } }) })
-  expect(usage).toHaveBeenLastCalledWith(undefined)
-  expect(screen.getByText('$0.5000')).toBeTruthy()
 })

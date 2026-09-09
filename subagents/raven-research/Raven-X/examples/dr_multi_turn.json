@@ -1,0 +1,93 @@
+{
+  "providers": {
+    "openrouter": {
+      "apiBase": "https://openrouter.ai/api/v1",
+      "apiKey": "PUT_YOUR_LLM_API_KEY_HERE"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-sonnet-5",
+      "provider": "openrouter",
+      "temperature": 0.3,
+      "maxToolIterations": 40,
+      "maxTokens": 8192,
+      "contextWindowTokens": 200000,
+      "requestTimeoutSeconds": 900
+    }
+  },
+  "memory": {
+    "backend": null
+  },
+  "drFlow": {
+    "enabled": true,
+    "thinkClosingTagRequired": false,
+    "maxIterations": 20,
+    "spinBreaker": {
+      "enabled": true
+    },
+    "fetchFloor": {
+      "enabled": true
+    },
+    "verify": {
+      "enabled": true,
+      "maxRevisions": 1,
+      "strictRejectOnly": true
+    },
+    "digest": {
+      "verbatimHeadChars": 800
+    },
+    "search": {
+      "includeSnippets": true,
+      "saturation": {
+        "enabled": false
+      }
+    },
+    "toolsAllowlist": [
+      "web_search",
+      "web_fetch"
+    ],
+    "finalShape": {
+      "record": true,
+      "requireMarker": false,
+      "reportStructure": true,
+      "reportFormatOverride": true,
+      "reportDepth": true,
+      "reportReminder": true,
+      "reportBounce": false,
+      "processAppendix": true
+    },
+    "conversation": {
+      "enabled": true,
+      "gate": "agentic",
+      "researchMemo": true,
+      "identityScope": "topic"
+    }
+  },
+  "tools": {
+    "web": {
+      "benchmarkContainment": false
+    },
+    "disabledTools": [
+      "exec",
+      "spawn",
+      "message",
+      "ask_user",
+      "cron",
+      "read_file",
+      "write_file",
+      "edit_file",
+      "find",
+      "grep",
+      "list_dir",
+      "read_skill",
+      "use_skill",
+      "tool_search",
+      "tool_call",
+      "image_generate",
+      "text_to_speech",
+      "video_generate",
+      "understand_media"
+    ]
+  }
+}

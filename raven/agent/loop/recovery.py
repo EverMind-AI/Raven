@@ -213,3 +213,76 @@ def classify_empty_response(
         return RecoveryAction.RETRY
 
     return RecoveryAction.COMPLETE
+
+
+# A continuation after reasoning cut at the output ceiling picks up mid-thought:
+# the model was fed its own truncated reasoning and carries on from the cut,
+# so the first fragment of what it now emits as *content* is the tail of that
+# thought (measured 2026-09-08: " Lägg in an token. Let me start researching."
+# streamed as the head of a research answer). The fragment ends at the first
+# sentence boundary. Only a fragment that reads as mid-sentence is dropped --
+# it starts with whitespace or a lowercase letter -- so an answer that opens on
+# a heading, a list marker or a capitalised sentence is left whole.
+# The second class is the CJK full stop, exclamation and question marks. A
+# Han character has no case, so a continuation that opens directly on CJK
+# never passes the gate above and is left whole -- deliberately: without case
+# there is no way to tell a mid-sentence opening from a sentence's first word,
+# and losing an answer's first sentence costs more than keeping a fragment.
+# The CJK stops are therefore where an admitted fragment ENDS: one that opens
+# on whitespace, or on a lowercase Latin word running into CJK text, stops at
+# the first CJK mark instead of running on to a Latin period or a newline.
+_CUT_BOUNDARY = re.compile(r"\n|[.!?](?=\s|$)|[\u3002\uff01\uff1f]")
+_CUT_HEAD_MAX_CHARS = 200
+
+
+def cut_reasoning_head(text: str | None) -> str | None:
+    """``text`` without a leading mid-sentence fragment, when it has one.
+
+    The rule the stream gate and the stored content both apply, so what the
+    reader saw and what the session keeps agree.
+    """
+    if not text or not (text[0].isspace() or text[0].islower()):
+        return text
+    match = _CUT_BOUNDARY.search(text)
+    if match is None:
+        return text
+    head, rest = text[: match.start()], text[match.end() :]
+    if len(head) > _CUT_HEAD_MAX_CHARS or not rest.strip():
+        return text
+    return rest.lstrip()
+
+
+class ContinuationGate:
+    """Streams a continuation's deltas with :func:`cut_reasoning_head` applied.
+
+    Deltas are held until the rule can be decided -- a boundary followed by
+    content, or more text than a fragment could be -- then released; ``finish``
+    releases whatever is still held once the response has ended.
+    """
+
+    def __init__(self, deliver) -> None:
+        self._deliver = deliver
+        self._held = ""
+        self._open = False
+
+    async def __call__(self, delta: str) -> None:
+        if self._open:
+            await self._deliver(delta)
+            return
+        self._held += delta
+        match = _CUT_BOUNDARY.search(self._held)
+        decided = (match is not None and self._held[match.end() :].strip()) or len(self._held) > _CUT_HEAD_MAX_CHARS
+        if not decided:
+            return
+        await self._release()
+
+    async def finish(self) -> None:
+        if not self._open:
+            await self._release()
+
+    async def _release(self) -> None:
+        self._open = True
+        text = cut_reasoning_head(self._held) or ""
+        self._held = ""
+        if text:
+            await self._deliver(text)

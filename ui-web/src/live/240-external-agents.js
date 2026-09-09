@@ -21,17 +21,17 @@ function xaRowOf(r) {
        they are `configured: false` yet not something to install -- the page needs
        both facts to avoid offering a Connect button for a loop already running. */
     builtin: !!r.builtin,
-    /* The agent products this install shipped, discovered under the
-       `agents/` product tree. Same shape of problem as `builtin` and the same
-       reason it has to be carried explicitly: `configured: false` with nothing to install, so the
+    /* The Raven builds this install shipped, discovered under `subagents/`.
+       Same shape of problem as `builtin` and the same reason it has to be
+       carried explicitly: `configured: false` with nothing to install, so the
        page needs the flag to keep a Connect button off a row that has no preset
        to connect from. This mapper is a whitelist -- a field it does not name is
        a field the island never sees. */
     vendored: !!r.vendored,
-    /* Always false from a current server: the fork-era venv build is gone
-       and `subagents.build` answers that there is nothing to build. Carried
-       for an older server, where the row was the only place the page learned
-       a build was in flight. */
+    /* A build of this folder's venv is in flight. Carried because the row is the
+       only place the page learns it: `subagents.build` returns the moment the
+       build starts, so the button's own promise resolving proves nothing about
+       whether it finished. */
     building: !!r.building,
     enabled: !!r.enabled,
     probe_status: r.probe_status || 'unknown',

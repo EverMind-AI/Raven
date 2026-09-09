@@ -278,6 +278,63 @@ async def test_the_judgement_is_paid_once_per_turn():
 
 
 @pytest.mark.asyncio
+async def test_a_judgement_that_stalls_is_cut_and_paid_once(monkeypatch):
+    """2026-09-08: a relay turn's judgement ran 1229s (222k chars of reasoning,
+    no answer) and held the conversation. The call is bounded; a turn that hits
+    the bound goes on unjudged and does not pay again on its next look."""
+    import asyncio
+
+    from raven.agent.loop.main import AgentLoop
+
+    loop, state = _loop()
+
+    async def stalled(messages, tools, model, **kwargs):
+        loop._llm_calls += 1
+        await asyncio.sleep(5)
+        return _Response('{"watched": true, "paths": ["/tmp/arena"]}')
+
+    loop._llm_call_stream = stalled
+    monkeypatch.setattr(AgentLoop, "_WATCH_JUDGEMENT_TIMEOUT_S", 0.05)
+    first = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
+    second = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/y"}, "r", "run /tmp/arena")
+    assert first == "" and second == ""
+    assert loop._llm_calls == 1, "the cut verdict settles the turn: no second judgement"
+    assert state.verdict is not None and not state.verdict.watched
+
+
+@pytest.mark.asyncio
+async def test_a_judgement_that_raises_leaves_the_turn_unjudged_not_failed():
+    """The callers already swallow a raise, so the turn never failed on one --
+    but the verdict stayed unset and every later look paid the failed call
+    again. A raise is read like a hang: a settled no verdict, paid once."""
+    loop, state = _loop()
+
+    async def broken(messages, tools, model, **kwargs):
+        loop._llm_calls += 1
+        raise RuntimeError("provider down")
+
+    loop._llm_call_stream = broken
+    first = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
+    second = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/y"}, "r", "run /tmp/arena")
+    assert first == "" and second == ""
+    assert loop._llm_calls == 1
+    assert state.verdict is not None and not state.verdict.watched
+
+
+def test_a_reinjected_turn_reads_as_no_request():
+    """A sub-agent's result relay and a sentinel notice are the runtime speaking,
+    not the owner: the judgement has nothing to read, so nothing is paid."""
+    from raven.spine import Origin
+
+    messages = [{"role": "user", "content": "[Subagent 'x' returned]\n\nrun /tmp/arena, 25 min budget"}]
+    assert watch_work.asked_for(messages, origin=Origin.SUBAGENT) == ""
+    assert watch_work.asked_for(messages, origin=Origin.SENTINEL) == ""
+    assert watch_work.asked_for(messages, origin=Origin.USER).startswith("[Subagent")
+    assert watch_work.asked_for(messages, origin=Origin.CRON).startswith("[Subagent")
+    assert watch_work.asked_for(messages) == watch_work.asked_for(messages, origin=None)
+
+
+@pytest.mark.asyncio
 async def test_a_not_watched_verdict_leaves_every_result_alone():
     loop, state = _loop(verdict='{"watched": false, "paths": []}')
     out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "read this file for me")

@@ -155,11 +155,6 @@ class SubagentNotFoundError(RpcError):
     MESSAGE = "subagent_not_found"
 
 
-class SubagentNotReadyError(RpcError):
-    CODE = -32019
-    MESSAGE = "subagent_not_ready"
-
-
 # JSON-RPC pre-defined ``internal_error`` (-32603). Class added so non-dispatcher
 # code-paths can raise typed -32603 cross-module — see ``_build_agent_loop``
 # which runs outside any handler context yet needs to surface init crashes
@@ -198,7 +193,6 @@ JSONRPC_ERROR_REGISTRY: dict[int, type[RpcError]] = {
         NotDispatchCompatibleError,
         SubscriptionCapacityExceededError,
         SubagentNotFoundError,
-        SubagentNotReadyError,
         InternalError,
     )
 }
@@ -222,7 +216,6 @@ __all__ = [
     "NotDispatchCompatibleError",
     "SubscriptionCapacityExceededError",
     "SubagentNotFoundError",
-    "SubagentNotReadyError",
     "InternalError",
     "JSONRPC_ERROR_REGISTRY",
     "PARSE_ERROR",

@@ -213,21 +213,10 @@ importable where raven runs) decides `enabled`, not whether the row exists: an u
 folder is listed and disabled with the reason on the row, because a name the dispatching
 model can pick and then fail on is worse than no name, and hiding it would also hide
 "present, not set up" from the operations view. A missing credential is deliberately not
-a readiness reason: the launcher inherits the host's provider block, so readiness asks
-about the folder, not about a token. Switching one on is the layer where a credential
-does count — `subagents.toggle` sends one real prompt through the row's own backend
-before it writes the flag, and refuses the enable in the agent's own words when nothing
-answers (`force: true` is the operator's override). The two layers therefore ask
-different questions: readiness decides how the row is listed and spends nothing, the
-switch spends one call on that agent's quota before it writes a yes. Neither validates
-retroactively — a folder that ships enabled, and a row already switched on, stay on the
-roster unpinged — because the gate is on the act that turns an agent on, and not on
-membership. That act is the switch, or an add that writes a preset in already enabled:
-`subagents.add` proves a pinged kind the same way and stores nothing when it does not
-answer, so a preset cannot arrive on the roster unproved either.
-Not deletable through config — removing one means removing its folder, or setting
-`"enabled": false` in its own `subagent.json`. On the RPC wire the row source is still
-spelled `vendored`; renaming that is a schema change.
+a readiness reason: the launcher inherits the host's provider block and refuses loudly at
+dispatch when there is truly nothing. Not deletable through config — removing one means
+removing its folder, or setting `"enabled": false` in its own `subagent.json`. On the
+RPC wire the row source is still spelled `vendored`; renaming that is a schema change.
 _Avoid_: "vendored agent" — the retired fork-tree (`subagents/`) meaning, whose rows
 carried venv and credential readiness; "third-party agent" — these are raven's own
 products, and nobody registered them; "builtin" — that is the in-process row, which has
@@ -368,10 +357,10 @@ pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an 
 is a revocation rather than a miss; `web_fetch` is always offered, falling back to Jina,
 which reads pages without a key. The two sub-agent launchers inherit the host's selection
 differently: the in-process backend (`agent/subagent/backends/raven_loop.py`) takes it and
-then declines to *register* `web_search` when no key resolves, while the product launcher
-(`agents/raven-research/run.py`, and the retired fork before it -- its snapshot sits in
-`tests/fixtures/vendored_fork/`) refuses to start without a search key, because its gate
-exits rather than degrading. Most vendors take the key
+then declines to *register* `web_search` when no key resolves -- the older gate, which the
+vendored-invariant guard still requires there -- while the vendored checkout's launcher
+(`subagents/raven-research/run.py`) declines to copy a selection it cannot key and keeps
+its own default, because its gate exits rather than degrading. Most vendors take the key
 in a header; SerpApi takes it as a query parameter, so for that one the key travels inside
 every request URL and two surfaces have to keep it out -- the error path renders vendor plus
 status rather than the exception text, and the persisted log sink redacts a URL-borne
@@ -1242,9 +1231,9 @@ outside this paper and its implementers.
 An archive, not a promise: a plan describes the tree as it stood on its own
 date, and holding one to today's layout would make it lie about that date. A
 runnable snippet inside one is therefore not a public seam -- the public surface
-the agent products pin is read out of `agents/*/install.py` and the charter by
-`tests/test_external_consumer_surface.py`, and the living-doc pointer guard
-deliberately skips this directory.
+the vendored products pin is read out of `subagents/*/install.py`, `install.sh`
+and the README by `tests/test_external_consumer_surface.py`, and the living-doc
+pointer guard deliberately skips this directory.
 _Avoid_: updating an old plan to match a rename -- fix the living document that
 cites it instead, or leave it as the record it is.
 
@@ -1274,8 +1263,8 @@ libraries consumed by surfaces, importing none themselves -- the edge is watched
 by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
 package for the repo-level `evolver/` tool (outside the wheel) that drives raven as a library,
 and a fifth import-linter contract keeps the runtime from importing it back. `agents/` is the
-same kind of non-seat: repo-level product definitions (the A/B pilots whose A side is the
-retired `subagents/` fork record) that consume installed raven over `raven acp`, with a sixth contract keeping
+same kind of non-seat: repo-level product definitions (the A/B pilots against the frozen
+`subagents/`) that consume installed raven over `raven acp`, with a sixth contract keeping
 the runtime out of them — the wheel carries the tree as data (`raven/agents`, mapped by
 `hatch_build.py`) for the roster's file-level discovery, which imports nothing from it;
 the directory name is provisional by ruling. One ruled edge: `trajectory` (L3)
@@ -1708,9 +1697,13 @@ direct-chat activity: per instance, a UTC time span and the paths of each turn's
 `prompt.md` and `out.md`, inside `subagents/direct/<agent>/<handle>/<call_id>/` beside the
 Subagent history. Activity, not only chats - a User-Created Instance is reported in its own
 right, and one with no turns yet names no path, because the record directories are made per
-turn. Carries no transcript text. Accumulated per session by `DirectChatHandoff`
-and taken-and-cleared on the next turn that has no `direct_target`, so a segment is reported
-exactly once. Every byte in it is raven-minted - agent names from config, handles from the
+turn. An instance answering a direct turn at take time is reported as running, with the
+time it began answering (the handle lock held, not the moment the turn queued), read from
+the manager's live view (`live_direct_turns`) because its
+record lands only when the turn ends; that line recurs on every take while the turn runs.
+Carries no transcript text. Accumulated per session by `DirectChatHandoff`
+and taken-and-cleared on the next turn that has no `direct_target`, so a landed segment is
+reported exactly once. Every byte in it is raven-minted - agent names from config, handles from the
 registry (minted, never typed), call ids from `make_call_id` - which is why it is prepended
 unwrapped; a field echoing a sub-agent's own reply would break that.
 _Avoid_: "handoff summary" - it is deliberately not a summary; nothing in it is generated.
@@ -2216,11 +2209,3 @@ Agent home via `sync_workspace_templates()`; gated at startup by `ensure_configu
 The identity files concatenated into every prompt — `soul.md` + `agent.md` + `TOOLS.md` —
 rendered by the Context Builder / bootstrap segment.
 _Avoid_: lumping `user.md` in — the user profile enters via the `# Memory` segment, not bootstrap.
-
-### Usage attribution
-
-`UsageSnapshot.session_key` identifies the session that made a model or image call.
-`root_session_key` identifies the owning top-level session; ACP prompts carry it in `_meta.raven.usage` with the shared usage-log directory.
-The receiving session persists this ownership and binds it for each turn;
-connection-pool bindings remain independent of task identity. A missing owner remains unassigned and is
-included only in global usage totals. Each call is persisted once, with both keys.

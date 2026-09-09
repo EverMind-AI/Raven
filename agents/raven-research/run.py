@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""Host-side launcher for the Raven-Research ACP server -- the B side.
+"""Host-side launcher for the Raven-Research-NG ACP server -- the B side.
 
-The retired vendored Raven-Research carried a whole fork checkout; this
-product carries none. It renders its config and execs the
+The vendored Raven-Research (subagents/raven-research) carries a whole fork
+checkout; this product carries none. It renders its config and execs the
 installed raven's own ``raven acp``, so every turn runs through the same
 assembly door (build_runtime) as the host's TUI and gateway. The machinery
 of rendering lives in the launcher library
@@ -82,9 +82,6 @@ MODE_LABELS = {
 }
 OVERLAY_KEYS = frozenset({"drFlow", "agents"})
 
-# The machine id predates the display rename to Raven-Research and stays:
-# state root, ACP home, everos identity and the RESEARCH_NG_* variables all
-# key on it, and renaming it would strand that state.
 PRODUCT = "raven-research-ng"
 
 # Where each secret belongs in the config raven loads. The paths are trunk
@@ -262,8 +259,8 @@ def _flow_prompts(flow_slice: dict):
 def validate_overlays(base_flow: dict, catalogue: dict) -> None:
     """Refuse to launch on a mode overlay the flow would not read as written.
 
-    The vendored twin validated every declared mode against its schema at
-    startup and failed naming the mode; the plugin's ``FlowConfig`` ignores
+    The vendored twin validates every declared mode against its schema at
+    startup and fails naming the mode; the plugin's ``FlowConfig`` ignores
     unknown keys in its base slice, so without this door a typo in
     ``modes/high.json`` would merge clean and run the base value under the high
     label. Same import seam as the prompt render: the plugin owns the schema.
@@ -446,7 +443,7 @@ def render_config(source: Path) -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Serve Raven-Research over ACP on stdio.")
+    parser = argparse.ArgumentParser(description="Serve Raven-Research-NG over ACP on stdio.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     args = parser.parse_args()
 

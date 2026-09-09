@@ -1,0 +1,303 @@
+generated_at: '2023-04-01T12:00:00'
+persona_id: freelancer-01
+anchor_date: '2026-05-01'
+total_days: 30
+events:
+- at: '2026-05-01T10:15:00'
+  topic: 今天该从薇拉凯瑟哪篇开始改起呢...
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 《薇拉凯瑟短篇集》第三稿 5/10 交稿
+  reveals_new_fact: null
+- at: '2026-05-01T11:30:00'
+  topic: 这段描写农场的英文有没有更诗意的译法？
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - 《薇拉凯瑟短篇集》第三稿 5/10 交稿
+  reveals_new_fact: 最近在重读沈从文
+- at: '2026-05-01T16:20:00'
+  topic: 公众号书单要加新出版的《雪落香杉树》吗...
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 公众号'林字读物' 5 月计划 4 更
+  reveals_new_fact: null
+- at: '2026-05-01T21:45:00'
+  topic: J编辑上次说喜欢哪种文风来着...
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - J 编辑新项目 5/20 前样稿 3 篇
+  reveals_new_fact: null
+- at: '2026-05-02T10:05:00'
+  topic: 咖啡豆没了要记得补货...
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: 偏爱埃塞俄比亚耶加雪菲
+- at: '2026-05-02T14:50:00'
+  topic: 这段意识流翻译得头昏脑胀...
+  kind: vent
+  depth: multi_turn
+  expected_followups: 1
+  related_memory_ids:
+  - 《薇拉凯瑟短篇集》第三稿 5/10 交稿
+  reveals_new_fact: null
+- at: '2026-05-02T17:30:00'
+  topic: 今天该去健身房了——推荐点动力音乐？
+  kind: lifestyle_query
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - 肩颈问题 — 健身房计划每周 2 次
+  reveals_new_fact: 最近迷上Sigur Rós
+- at: '2026-05-03T11:10:00'
+  topic: 出版社B的合同条款要不要再争取下...
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - A/B 两家客户 5/31 合同续签
+  reveals_new_fact: null
+- at: '2026-05-03T15:30:00'
+  topic: 阳台上的薄荷好像该浇水了...
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: 养了三盆香草植物
+- at: '2026-05-04T12:00:00'
+  topic: 青年节该发什么应景的豆瓣广播...
+  kind: social_coord
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-04T16:45:00'
+  topic: 样稿开头用村上风格会不会太冒险...
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - J 编辑新项目 5/20 前样稿 3 篇
+  reveals_new_fact: null
+- at: '2026-05-05T10:30:00'
+  topic: 假期最后一天该赶稿还是放松...
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: 对伍尔夫的《到灯塔去》有执念
+- at: '2026-05-06T11:20:00'
+  topic: 薇拉凯瑟的编辑反馈邮件来了...
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 《薇拉凯瑟短篇集》第三稿 5/10 交稿
+  reveals_new_fact: null
+- at: '2026-05-07T14:00:00'
+  topic: 连续工作四小时肩颈痛又犯了...
+  kind: vent
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 肩颈问题 — 健身房计划每周 2 次
+  reveals_new_fact: null
+- at: '2026-05-08T09:50:00'
+  topic: 母亲节礼物还没准备...
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: 妈妈喜欢薰衣草香
+- at: '2026-05-09T23:30:00'
+  topic: 交稿前夜突然怀疑自己翻译水平...
+  kind: vent
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 《薇拉凯瑟短篇集》第三稿 5/10 交稿
+  reveals_new_fact: null
+- at: '2026-05-10T15:15:00'
+  topic: 交完稿该看哪部电影奖励自己...
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: 收藏了侯麦全集
+- at: '2026-05-11T13:00:00'
+  topic: 菜市场看到新鲜蚕豆——怎么做来着？
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-12T16:30:00'
+  topic: 样稿进度比预期慢怎么办...
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - J 编辑新项目 5/20 前样稿 3 篇
+  reveals_new_fact: null
+- at: '2026-05-13T10:45:00'
+  topic: 客户A突然要加急翻译怎么办...
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - A/B 两家客户 5/31 合同续签
+  reveals_new_fact: null
+- at: '2026-05-14T22:00:00'
+  topic: 五月过半却觉得什么都没完成...
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: 最近在读《西西弗神话》
+- at: '2026-05-15T11:10:00'
+  topic: 这篇样稿用第二人称会不会太大胆...
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - J 编辑新项目 5/20 前样稿 3 篇
+  reveals_new_fact: null
+- at: '2026-05-16T17:00:00'
+  topic: 健身房私教又催续课了...
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 肩颈问题 — 健身房计划每周 2 次
+  reveals_new_fact: null
+- at: '2026-05-17T14:30:00'
+  topic: 被改动的译稿哪里不够'雅'了...
+  kind: vent
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: 讨厌'的地得'乱用的编辑
+- at: '2026-05-18T10:20:00'
+  topic: 周末该约哪个朋友聊近况...
+  kind: social_coord
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: 有个做独立出版的朋友
+- at: '2026-05-19T23:15:00'
+  topic: 赶样稿到深夜需要提神歌单...
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - J 编辑新项目 5/20 前样稿 3 篇
+  reveals_new_fact: null
+- at: '2026-05-20T12:30:00'
+  topic: 交完样稿该不该主动问反馈...
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - J 编辑新项目 5/20 前样稿 3 篇
+  reveals_new_fact: null
+- at: '2026-05-21T16:45:00'
+  topic: 公众号配图用哪张更有氛围...
+  kind: tech_consultation
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 公众号'林字读物' 5 月计划 4 更
+  reveals_new_fact: 偏爱胶片质感照片
+- at: '2026-05-22T11:00:00'
+  topic: 新项目报价单该怎么写...
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - A/B 两家客户 5/31 合同续签
+  reveals_new_fact: null
+- at: '2026-05-23T14:20:00'
+  topic: 连续晴天反而想念雨声白噪音...
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: 收集各地雨声录音
+- at: '2026-05-24T10:15:00'
+  topic: 月末将至才发现公众号还差两篇...
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - 公众号'林字读物' 5 月计划 4 更
+  reveals_new_fact: null
+- at: '2026-05-25T21:30:00'
+  topic: 看旧照片想起大学译诗的日子...
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: 曾翻译过里尔克
+- at: '2026-05-26T15:00:00'
+  topic: 合同电子签怎么操作最稳妥...
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - A/B 两家客户 5/31 合同续签
+  reveals_new_fact: null
+- at: '2026-05-27T13:45:00'
+  topic: 书店偶遇绝版翻译理论书该买吗...
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: 收藏奈达早期著作
+- at: '2026-05-28T17:30:00'
+  topic: 月末健身目标还差一次...
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 肩颈问题 — 健身房计划每周 2 次
+  reveals_new_fact: null
+- at: '2026-05-29T11:50:00'
+  topic: 突然想写篇关于拖延症的随笔...
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 公众号'林字读物' 5 月计划 4 更
+  reveals_new_fact: null
+- at: '2026-05-30T09:30:00'
+  topic: 发票打印机没墨了...
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - A/B 两家客户 5/31 合同续签
+  reveals_new_fact: null
+- at: '2026-05-31T14:00:00'
+  topic: 合同寄出前最后检查哪些项...
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - A/B 两家客户 5/31 合同续签
+  reveals_new_fact: null
+- at: '2026-05-31T23:50:00'
+  topic: 五月最后十分钟的成就清单...
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids: []
+  reveals_new_fact: 想尝试六月每日译诗

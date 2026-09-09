@@ -10,7 +10,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 RUN_PY = REPO / "agents" / "raven-design" / "run.py"
-FORK = REPO / "tests" / "fixtures" / "vendored_fork" / "raven-design"
+FORK = REPO / "subagents" / "raven-design"
 
 #: The fork compaction leaves with no trunk counterpart (verdict D2): they
 #: must appear nowhere in the shipped compaction slice.
@@ -114,17 +114,19 @@ def _render(grounded) -> dict:
 def test_the_roster_row_carries_the_forks_identity_verbatim():
     """The lane flips cli -> acp (the verdict's feature 10); everything the
     fork row said about WHO this agent is -- description, ownership, everos
-    identity pair -- is carried byte-for-byte. The fork's recommendedLlm is
-    not: this product runs on the host's LLM and its launcher reads no key of
-    its own, and a recommended model in the manifest is what told the wizard
-    to take one and certify a product that could not start."""
+    identity pair, the tuned model -- is carried byte-for-byte, the
+    recommendedLlm's custom/openrouter spelling included (C5)."""
     ours = json.loads((RUN_PY.parent / "subagent.json").read_text())
     fork = json.loads((FORK / "subagent.json").read_text())
 
     assert ours["kind"] == "acp" and fork["kind"] == "cli"
-    for field in ("name", "description", "owns", "everos", "maxOutputChars", "timeout"):
+    for field in ("name", "description", "owns", "everos", "recommendedLlm", "maxOutputChars", "timeout"):
         assert ours[field] == fork[field], field
-    assert "recommendedLlm" not in ours and "recommendedLlm" in fork
+    assert ours["recommendedLlm"] == {
+        "provider": "custom",
+        "model": "openai/gpt-5.6-sol",
+        "apiBase": "https://openrouter.ai/api/v1",
+    }
     assert ours["command"] == "{PYTHON} {SUBAGENT_DIR}/run.py --acp"
     assert ours["cwd"] == "{SUBAGENT_DIR}"
 
@@ -157,9 +159,7 @@ def test_the_config_ports_the_forks_leaves_onto_the_trunk_schema():
     # host gain, and that ruling carries forward).
     assert set(fork["tools"]["disabledTools"]) <= set(ours["tools"]["disabledTools"])
     assert set(ours["tools"]["disabledTools"]) - set(fork["tools"]["disabledTools"]) == TRUNK_HELD_OUT
-    # The launcher hands the product the host's ``tools.web`` wholesale, so a
-    # leaf of its own here could never take effect; the trunk config carries none.
-    assert "web" not in ours["tools"]
+    assert ours["tools"]["web"] == fork["tools"]["web"]
     assert ours["memory"] == fork["memory"]
 
     assert "image" not in ours["tools"]["media"]

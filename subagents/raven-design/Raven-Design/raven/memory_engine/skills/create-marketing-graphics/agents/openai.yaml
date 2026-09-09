@@ -1,0 +1,4 @@
+interface:
+  display_name: "营销传播图形"
+  short_description: "为活动、广告、零售与发布制作主视觉和多渠道传播套系"
+  default_prompt: "使用 $create-marketing-graphics 把受众、传播阶段、主张、行动和渠道规格组织成可投放的营销传播图形。"

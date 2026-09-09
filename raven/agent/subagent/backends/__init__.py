@@ -301,20 +301,15 @@ third_party_agent_meta = agent_meta
 enabled_third_party = enabled_agents
 
 
-def build_third_party_backend(
-    cfg: Any, *, registry: Any = None, timeout: int | None = None, ready_timeout_ms: int | None = None
-) -> SubagentBackend:
+def build_third_party_backend(cfg: Any, *, registry: Any = None, timeout: int | None = None) -> SubagentBackend:
     """Build a third-party backend from a config object (duck-typed on ``kind``).
 
     Accepts ThirdPartyCliSubagentConfig / ThirdPartyOpenAISubagentConfig.
 
-    ``registry``, ``timeout`` and ``ready_timeout_ms`` override the config for one
-    call and exist for the availability test in :mod:`raven.agent.subagent.probe`,
-    which has to bound a run whose config declares no timeout and has to keep a
-    stateful create's handle binding out of the user's real instance file. A caller
-    that bounds the run has to bound the handshake too, or a preset declaring a
-    longer readiness window than the caller's cap can only be cancelled from
-    outside and never gets to say the agent never became ready. Building the
+    ``registry`` and ``timeout`` override the config for one call and exist for
+    the availability test in :mod:`raven.agent.subagent.probe`, which has to
+    bound a run whose config declares no timeout and has to keep a stateful
+    create's handle binding out of the user's real instance file. Building the
     backend here rather than in the probe keeps one field list: a duplicated one
     would drift the moment a field is added, and the test would then silently
     exercise a different command than a real spawn. ``registry`` is ignored for
@@ -348,7 +343,7 @@ def build_third_party_backend(
             command=cfg.command,
             cwd=cfg.cwd,
             env=dict(cfg.env),
-            ready_timeout_ms=cfg.ready_timeout_ms if ready_timeout_ms is None else ready_timeout_ms,
+            ready_timeout_ms=cfg.ready_timeout_ms,
             timeout=cfg.timeout if timeout is None else timeout,
             max_output_chars=cfg.max_output_chars,
             snapshot=snapshot if isinstance(snapshot, CapabilitySnapshot) else None,

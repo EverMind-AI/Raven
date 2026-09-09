@@ -7,13 +7,16 @@ lock into a constraints file broke the moment ``plugins-dist/*`` joined the
 workspace. The trunk's export sites therefore use ``--no-emit-workspace``,
 which drops the members along with the root.
 
-This contract is the tripwire for every export site in the repo: any site
-whose owning pyproject declares a workspace must use
-``--no-emit-workspace``. The sites span shell, PowerShell, YAML, and
-Python, which is why it reads text rather than ASTs. (The vendored forks
-this file also used to watch retired with their trees; their
-``--no-emit-project`` was correct to the end, since none declared a
-workspace.)
+The vendored forks under ``subagents/`` still say ``--no-emit-project``,
+and that is correct there today: none of them declares
+``[tool.uv.workspace]``, so the root project is the only editable their
+export could emit. This contract is the tripwire for the day that changes:
+any export site whose owning pyproject declares a workspace must use
+``--no-emit-workspace``. It lives here rather than in
+``check_vendored_invariants.py`` because the forks do not carry a fix to
+keep -- their flag is right until a workspace appears -- and because the
+sites span shell, PowerShell, YAML, and Python, which that script's
+AST-shaped invariants cannot read.
 """
 
 from __future__ import annotations
@@ -108,3 +111,26 @@ def test_trunk_export_sites_are_seen_and_fixed() -> None:
     )
     wrong = [site for site in TRUNK_SITES if "--no-emit-workspace" not in hits[site]]
     assert not wrong, f"Trunk export sites regressed to --no-emit-project: {wrong}"
+
+
+# The vendored trees that pin installs to an exported constraints file today.
+# raven-research is absent on purpose: its installer (install.py) never
+# exports constraints, so there is nothing there for the tripwire to watch.
+# A retired fork comes off this list in the commit that removes its tree.
+FORK_TREES = (
+    "subagents/raven-code/Raven-main",
+    "subagents/raven-design/Raven-Design",
+    "subagents/raven-oncall/Raven-Oncall",
+    "subagents/raven-ppt/Raven-PPT",
+)
+FORK_SITE_FILES = ("install.sh", "install.ps1", ".github/workflows/release.yml")
+
+
+def test_scan_sees_every_fork_export_site() -> None:
+    seen = {path.relative_to(REPO).as_posix() for path, _, _ in _export_flag_lines()}
+    unseen = [f"{tree}/{name}" for tree in FORK_TREES for name in FORK_SITE_FILES if f"{tree}/{name}" not in seen]
+    assert not unseen, (
+        f"Fork export sites the scan never saw: {unseen}. The site moved or "
+        "lost its member-emission flag; the workspace tripwire is blind there "
+        "until the scan sees it again."
+    )
