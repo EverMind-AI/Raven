@@ -448,16 +448,10 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
       </div>
     )
   } else if (asFrame) {
-    /* No sandbox attribute on a PDF frame: Chromium refuses its PDF viewer
-       inside any sandboxed frame -- the request is answered 200 and then
-       blocked by the client, so the pane stayed a grey box with a sad face,
-       whatever tokens the attribute granted (allow-scripts included). The
-       viewer runs in its own extension origin, so the frame being same-origin
-       hands the document nothing of the page's. HTML keeps the empty sandbox:
-       a report the agent wrote is readable without running its scripts. */
-    body = f.kind === 'pdf'
-      ? <iframe referrerPolicy="no-referrer" src={fileURL(f.path)} />
-      : <iframe sandbox="" referrerPolicy="no-referrer" src={fileURL(f.path)} />
+    /* The browser's PDF viewer is script-driven and draws nothing in a frame
+       with scripts denied, so a PDF gets allow-scripts. The origin stays
+       opaque either way -- allow-same-origin is never granted. */
+    body = <iframe sandbox={f.kind === 'pdf' ? 'allow-scripts' : ''} referrerPolicy="no-referrer" src={fileURL(f.path)} />
   } else if (f.kind === 'bin') {
     body = <BinNote f={f} />
   } else if (f.text == null) {

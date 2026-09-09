@@ -4,9 +4,9 @@ Both run host-side and reuse ``_FsTool``'s workspace/allowed_dirs resolution so
 they share the exact same path boundary as read_file/write_file/list_dir — never
 the SandboxExecutor (avoids shuttling large result sets across a VM edge).
 
-``grep`` prefers the ``rg`` (ripgrep) binary when present on PATH for speed and
-.gitignore awareness, and falls back to a pure-Python scan otherwise so raven
-keeps working with zero hard binary dependency.
+``grep`` prefers the ``rg`` binary installed by ripgrep-bin for speed and
+.gitignore awareness, then a system rg on PATH. If neither is available, it
+falls back to a pure-Python scan and reports when that scan is incomplete.
 """
 
 import asyncio
@@ -14,6 +14,7 @@ import fnmatch
 import os
 import re
 import shutil
+import sysconfig
 import time
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,14 @@ _DENY_TRAVERSAL_ROOTS = {Path(p) for p in ("/", "/proc", "/sys", "/dev", "/run",
 # Wall-clock cap on the pure-Python os.walk fallback so an allowed-but-huge tree
 # still cannot hang the loop. ripgrep already has its own _RG_TIMEOUT.
 _WALK_DEADLINE_S = 20.0
+
+
+def _resolve_rg() -> str | None:
+    """Find the installed binary even when the environment's scripts path is absent."""
+    bundled = Path(sysconfig.get_path("scripts")) / ("rg.exe" if os.name == "nt" else "rg")
+    if bundled.is_file() and os.access(bundled, os.X_OK):
+        return str(bundled)
+    return shutil.which("rg")
 
 
 def _denied_traversal_root(base: Path) -> bool:
@@ -157,7 +166,7 @@ class GrepTool(_FsTool):
                 "Specify a narrower directory (e.g. the workspace or a project subtree)."
             )
 
-        rg = shutil.which("rg")
+        rg = _resolve_rg()
         try:
             if rg:
                 return await self._run_rg(rg, pattern, base, glob, output_mode, case_insensitive, context, cap)
@@ -251,33 +260,46 @@ class GrepTool(_FsTool):
         match_files: list[str] = []
         counts: list[tuple[str, int]] = []
 
-        for fp in files:
-            rel = self._relpath(fp, base)
-            try:
-                raw = fp.read_bytes()
-            except OSError:
-                continue
-            if b"\x00" in raw[:8192]:  # skip binary files
-                continue
-            text_lines = raw.decode("utf-8", "replace").splitlines()
+        incomplete = False
+        try:
+            for fp in files:
+                rel = self._relpath(fp, base)
+                try:
+                    raw = fp.read_bytes()
+                except OSError:
+                    continue
+                if b"\x00" in raw[:8192]:  # skip binary files
+                    continue
+                text_lines = raw.decode("utf-8", "replace").splitlines()
 
-            hits = [i for i, line in enumerate(text_lines) if rx.search(line)]
-            if not hits:
-                continue
+                hits = [i for i, line in enumerate(text_lines) if rx.search(line)]
+                if not hits:
+                    continue
 
-            if output_mode == "files_with_matches":
-                match_files.append(rel)
-            elif output_mode == "count":
-                counts.append((rel, len(hits)))
-            else:
-                self._collect_content(content_lines, rel, text_lines, hits, context)
+                if output_mode == "files_with_matches":
+                    match_files.append(rel)
+                elif output_mode == "count":
+                    counts.append((rel, len(hits)))
+                else:
+                    self._collect_content(content_lines, rel, text_lines, hits, context)
+        except TimeoutError:
+            incomplete = True
 
         if output_mode == "files_with_matches":
-            return self._format_lines(match_files, cap, "files") if match_files else "No matches found."
-        if output_mode == "count":
-            rendered = [f"{rel}:{n}" for rel, n in counts]
-            return self._format_lines(rendered, cap, "files") if rendered else "No matches found."
-        return self._format_lines(content_lines, cap, "matching lines") if content_lines else "No matches found."
+            lines, unit = match_files, "files"
+        elif output_mode == "count":
+            lines, unit = [f"{rel}:{n}" for rel, n in counts], "files"
+        else:
+            lines, unit = content_lines, "matching lines"
+        result = self._format_lines(lines, cap, unit) if lines else ""
+        if incomplete:
+            warning = (
+                f"Warning: search incomplete; the Python fallback exceeded its {_WALK_DEADLINE_S:g}s "
+                "traversal budget. Results and counts may be partial; absence of a match is not conclusive. "
+                "Narrow the search path or glob and try again."
+            )
+            return f"{warning}\n\n{result}" if result else warning
+        return result or "No matches found."
 
     @staticmethod
     def _collect_content(
@@ -305,8 +327,7 @@ class GrepTool(_FsTool):
         deadline = time.monotonic() + _WALK_DEADLINE_S
         for root, dirs, names in os.walk(base):
             if time.monotonic() > deadline:
-                # Stop rather than hang on an unexpectedly huge / slow tree.
-                break
+                raise TimeoutError("grep traversal deadline exceeded")
             dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
             for n in sorted(names):
                 if glob and not fnmatch.fnmatch(n, glob):

@@ -61,12 +61,6 @@ def grounded(launcher, tmp_path, monkeypatch):
     # that exports one would otherwise decide what "no proxy configured" renders.
     for name in ("PPT_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
         monkeypatch.delenv(name, raising=False)
-    # The window is sized by asking the serving endpoint and LiteLLM's table;
-    # neither is a thing a unit test reaches, so both answer nothing here and
-    # the tests that are about the window install their own answers.
-    monkeypatch.delenv("PPT_CONTEXT_WINDOW", raising=False)
-    monkeypatch.setattr(launcher, "_get_json", lambda url, api_key: None)
-    monkeypatch.setattr(launcher, "litellm_context_window", lambda model, api_base: None)
     return launcher
 
 
@@ -150,21 +144,7 @@ TRUNK_ONLY_DEFAULTS = {
 #: thinks silently for longer than the fork's 600s is what a hosted run met: one
 #: iteration failed six times in a row at exactly 600s while a standalone run of
 #: the same deck survived a 20-minute call under 1800.
-#: The routing rows are the fork's grok pin plus the trunk model's own: glm-5.3-flash
-#: is fenced to Z.AI, DeepInfra and Novita (an order with fallbacks off), so the
-#: window the launcher sizes is theirs (1,048,576) and OpenRouter never hands a
-#: deck call to one of the other twenty-odd hosts it lists (an fp8 host at 262,144
-#: that would compact the run at a quarter of what the intended providers serve).
-#: The trade-off is that a call finding all three unavailable fails over the
-#: runtime's retry ladder instead of falling back to a smaller-window provider.
-GROK_ROUTING = {"grok": {"extra_body": {"provider": {"only": ["xAI"], "allow_fallbacks": False}}}}
-GLM_ROUTING = {
-    "glm-5.3-flash": {"extra_body": {"provider": {"order": ["Z.AI", "DeepInfra", "Novita"], "allow_fallbacks": False}}}
-}
-TRUNK_OVERRIDDEN_DEFAULTS = {
-    "llmCallTimeout": (600, 1800),
-    "modelOverrides": (GROK_ROUTING, {**GROK_ROUTING, **GLM_ROUTING}),
-}
+TRUNK_OVERRIDDEN_DEFAULTS = {"llmCallTimeout": (600, 1800)}
 
 
 # Engine-slice keys the fork's tools.ppt schema never had. The second reader's own
@@ -411,190 +391,36 @@ def test_no_llm_key_anywhere_refuses_before_serving(grounded, monkeypatch):
         grounded.render_config(RUN_PY.parent / "config.json")
 
 
-def _rendered_window(grounded) -> int:
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-    return data["agents"]["defaults"]["contextWindowTokens"]
-
-
-def _openrouter_endpoints(*rows):
-    def answer(url, api_key):
-        assert api_key == "sk-own", "the probe asks with the run's own credential"
-        if url.endswith("/models/z-ai/glm-5.3-flash/endpoints"):
-            return {"data": {"endpoints": [dict(r) for r in rows]}}
-        return None
-
-    return answer
-
-
-def test_the_window_is_the_smallest_the_reachable_providers_carry(grounded, monkeypatch):
-    """OpenRouter routes a model to many providers, each with its own window, often
-    below the model's card (glm-5.3-flash: 1,310,720 on the card, 1,048,576 at Z.AI,
-    262,144 at one fp8 host). The shipped row fences the request to Z.AI, DeepInfra
-    and Novita (fallbacks off), so the fp8 host is never reached and does not size
-    the run: the smallest serving endpoint among the fenced three is the one number
-    a run can count on, and it replaces the shipped 1,000,000 outright."""
-    monkeypatch.setattr(
-        grounded,
-        "_get_json",
-        _openrouter_endpoints(
-            {"provider_name": "Z.AI", "context_length": 1048576, "status": 0},
-            {"provider_name": "DeepInfra", "context_length": 1024000, "status": 0},
-            {"provider_name": "Novita", "context_length": 8000, "status": -1},
-            {"provider_name": "Io Net", "context_length": 262144, "status": 0},
-        ),
-    )
-    assert _rendered_window(grounded) == 1024000, (
-        "the smallest serving fenced provider; Novita is down, Io Net is outside"
-    )
-
-
-def test_a_provider_routing_narrows_the_window_only_where_it_fences_the_request(grounded, tmp_path, monkeypatch):
-    """A modelOverrides row is the same row the runtime sends. `only` fences the
-    request to those providers, and so does `order` with fallbacks off; `order` with
-    fallbacks on is a priority OpenRouter abandons when the ordered providers are
-    unavailable, so the window stays the smallest of everyone who may serve, and an
-    `ignore` list removes those it names."""
-    monkeypatch.setattr(
-        grounded,
-        "_get_json",
-        _openrouter_endpoints(
-            {"provider_name": "Z.AI", "context_length": 1048576, "status": 0},
-            {"provider_name": "StreamLake", "context_length": 1024000, "status": 0},
-        ),
-    )
-    source = tmp_path / "pinned.json"
-    config = json.loads((RUN_PY.parent / "config.json").read_text())
-    row = config["agents"]["defaults"]["modelOverrides"]["glm-5.3-flash"]
-
-    row["extra_body"]["provider"] = {"order": ["Z.AI"], "allow_fallbacks": True}
-    source.write_text(json.dumps(config))
-    assert (
-        json.loads(grounded.render_config(source).read_text())["agents"]["defaults"]["contextWindowTokens"] == 1024000
-    )
-    assert grounded.served_providers(config["agents"]["defaults"], "z-ai/glm-5.3-flash") == set()
-
-    row["extra_body"]["provider"] = {"order": ["Z.AI"], "allow_fallbacks": False}
-    source.write_text(json.dumps(config))
-    assert (
-        json.loads(grounded.render_config(source).read_text())["agents"]["defaults"]["contextWindowTokens"] == 1048576
-    )
-    assert grounded.served_providers(config["agents"]["defaults"], "z-ai/glm-5.3-flash") == {"z.ai"}
-
-    row["extra_body"]["provider"] = {"order": ["Z.AI"], "allow_fallbacks": True, "ignore": ["StreamLake"]}
-    source.write_text(json.dumps(config))
-    assert (
-        json.loads(grounded.render_config(source).read_text())["agents"]["defaults"]["contextWindowTokens"] == 1048576
-    )
-    assert grounded.ignored_providers(config["agents"]["defaults"], "z-ai/glm-5.3-flash") == {"streamlake"}
-
-    shipped = json.loads((RUN_PY.parent / "config.json").read_text())["agents"]["defaults"]
-    assert grounded.served_providers(shipped, "z-ai/glm-5.3-flash") == {"z.ai", "deepinfra", "novita"}, (
-        "the shipped row is a fence: an order with fallbacks off"
-    )
-    assert grounded.served_providers(shipped, "x-ai/grok-5") == {"xai"}
-    assert grounded.served_providers(shipped, "vendor/other") == set()
-
-
-def test_a_vllm_style_endpoint_answers_with_its_max_model_len(grounded, monkeypatch):
-    monkeypatch.setenv("PPT_API_BASE", "https://gateway.example/v1")
-    monkeypatch.setenv("PPT_MODEL", "qwen3.6-27B")
-
-    def answer(url, api_key):
-        assert url == "https://gateway.example/v1/models"
-        return {"data": [{"id": "qwen3.6-27B", "max_model_len": 262144, "context_length": None}]}
-
-    monkeypatch.setattr(grounded, "_get_json", answer)
-    assert _rendered_window(grounded) == 262144
-
-
-def test_litellms_table_answers_when_the_endpoint_does_not_but_only_downward(grounded, monkeypatch):
-    """A table knows what a model is sold with, not what the endpoint serves. With
-    the probe unanswered (a timeout, an HTTP error), a smaller table number is taken
-    and a larger one is not: the configured 1,000,000 stands rather than the card's
-    1,310,720, which the endpoints that serve glm-5.3-flash do not take."""
-    monkeypatch.setattr(grounded, "litellm_context_window", lambda model, api_base: (900000, "litellm's table"))
-    assert _rendered_window(grounded) == 900000
-    monkeypatch.setattr(grounded, "litellm_context_window", lambda model, api_base: (1310720, "litellm's table"))
-    shipped = json.loads((RUN_PY.parent / "config.json").read_text())["agents"]["defaults"]["contextWindowTokens"]
-    assert _rendered_window(grounded) == shipped
-
-
-def test_a_failed_openrouter_endpoints_call_does_not_fall_back_to_the_model_card(grounded, monkeypatch):
-    """OpenRouter's generic `/models` row carries `top_provider.context_length`, the
-    model card's number, not a serving endpoint's. When `/models/{id}/endpoints`
-    does not answer, the probe answers None rather than reading that row, so the
-    configured number stands instead of being raised to the card's 1,310,720."""
-    seen = []
-
-    def answer(url, api_key):
-        seen.append(url)
-        if url.endswith("/models"):
-            return {"data": [{"id": "z-ai/glm-5.3-flash", "top_provider": {"context_length": 1310720}}]}
-        return None
-
-    monkeypatch.setattr(grounded, "_get_json", answer)
-    shipped = json.loads((RUN_PY.parent / "config.json").read_text())["agents"]["defaults"]["contextWindowTokens"]
-    assert _rendered_window(grounded) == shipped
-    assert not any(url.endswith("/models") for url in seen), "the card row is not an endpoint answer"
-
-
-def test_the_endpoints_own_answer_may_raise_the_configured_number(grounded, monkeypatch):
-    """Only a catalog is held under the configured number; the serving endpoint's
-    figure is exact for these providers and replaces it in either direction."""
-    monkeypatch.setattr(
-        grounded, "_get_json", _openrouter_endpoints({"provider_name": "Z.AI", "context_length": 1048576, "status": 0})
-    )
-    assert _rendered_window(grounded) == 1048576
-
-
-def test_litellm_is_asked_by_the_routed_id_on_openrouter(monkeypatch, launcher):
-    import sys
-    import types
-
-    asked = []
-
-    def get_model_info(candidate):
-        asked.append(candidate)
-        if candidate == "openrouter/z-ai/glm-5.3-flash":
-            return {"max_input_tokens": 1310720}
-        raise Exception("This model isn't mapped yet")
-
-    monkeypatch.setitem(sys.modules, "litellm", types.SimpleNamespace(get_model_info=get_model_info))
-    assert launcher.litellm_context_window("z-ai/glm-5.3-flash", "https://openrouter.ai/api/v1") == (
-        1310720,
-        "litellm's table for openrouter/z-ai/glm-5.3-flash",
-    )
-    assert asked == ["openrouter/z-ai/glm-5.3-flash"]
-    assert launcher.litellm_context_window("nowhere/model", "https://gateway.example/v1") is None
-
-
-def test_the_host_catalog_answers_when_neither_endpoint_nor_table_does(grounded, tmp_path):
+def test_the_window_recalibrates_from_the_host_catalog(grounded, tmp_path):
+    """The catalog's number lands verbatim on whichever model won; the fork
+    reads the host's cache and so does the product."""
     cache = tmp_path / "home" / "cache"
     cache.mkdir(parents=True, exist_ok=True)
     (cache / "model-catalog.json").write_text(
         json.dumps({"models": {"z-ai/glm-5.3-flash": {"context_length": 200000}}})
     )
-    assert _rendered_window(grounded) == 200000
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["agents"]["defaults"]["contextWindowTokens"] == 200000
+
+
+def test_a_configured_window_under_the_catalogs_is_a_cap(grounded, tmp_path):
+    """The catalog's number is the model's ceiling and the configured one is what the
+    run is willing to carry: a run that took a 1.3M ceiling as its window grew to 450k
+    tokens a call, since nothing compacted short of a ceiling it never reached."""
+    cache = tmp_path / "home" / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
     (cache / "model-catalog.json").write_text(
-        json.dumps({"models": {"z-ai/glm-5.3-flash": {"context_length": 2000000}}})
+        json.dumps({"models": {"z-ai/glm-5.3-flash": {"context_length": 1310720}}})
     )
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     shipped = json.loads((RUN_PY.parent / "config.json").read_text())["agents"]["defaults"]["contextWindowTokens"]
-    assert _rendered_window(grounded) == shipped, "a catalog may lower the configured number, never raise it"
+    assert data["agents"]["defaults"]["contextWindowTokens"] == shipped == 1000000
 
 
-def test_the_window_keeps_the_shipped_number_when_nobody_answers(grounded):
+def test_the_window_keeps_the_shipped_number_without_a_catalog(grounded):
     shipped = json.loads((RUN_PY.parent / "config.json").read_text())["agents"]["defaults"]["contextWindowTokens"]
-    assert _rendered_window(grounded) == shipped
-
-
-def test_ppt_context_window_pins_the_number_by_hand(grounded, monkeypatch):
-    monkeypatch.setattr(
-        grounded, "_get_json", _openrouter_endpoints({"provider_name": "Z.AI", "context_length": 1048576})
-    )
-    monkeypatch.setenv("PPT_CONTEXT_WINDOW", "400000")
-    assert _rendered_window(grounded) == 400000
-    monkeypatch.setenv("PPT_CONTEXT_WINDOW", "lots")
-    assert _rendered_window(grounded) == 1048576, "a number that is not one is ignored, not obeyed"
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["agents"]["defaults"]["contextWindowTokens"] == shipped
 
 
 def test_optional_keys_fall_back_per_slot_to_the_host_config(grounded, tmp_path):

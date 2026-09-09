@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, memo, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { flushSync } from 'react-dom'
 
 import * as dag from '../dag/graph'
@@ -931,39 +931,11 @@ export const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg:
   const thinkRef = useRef<HTMLDivElement | null>(null)
   const cotRef = useRef<HTMLDivElement | null>(null)
   const sumRef = useRef<HTMLDivElement | null>(null)
-  /* Whether the reader wants the newest line, kept by the reader's own
-     scrolling rather than measured after the fact.
-
-     Measuring it after an append was the bug. The effect runs with the new
-     text already in the DOM, so the distance to the bottom is not how far the
-     reader scrolled up -- it is how tall this one chunk was. `.cot` is 220px,
-     so a chunk over 40px, about two lines, cleared the threshold by itself: it
-     followed while the model emitted a few words at a time and stopped the
-     first time it emitted a paragraph, permanently, because `scrollTop` never
-     moved again while `scrollHeight` kept growing. Measured on the page, one
-     append of sixty words took the gap from 0 to 113px and then +114px per
-     append, never returning.
-
-     A `scroll` listener is the honest source: appending text does not fire
-     one, so the flag holds whatever the reader last did. Scrolling up clears
-     it and the box stops following; scrolling back to the bottom sets it again
-     and following resumes. Our own follow scrolls to the bottom and so re-arms
-     it, which is what it should mean. */
-  const wantsTail = useRef(true)
+  /* Follow the newest thought line only while the reader is at its bottom. */
   useEffect(() => {
     const cot = cotRef.current
-    if (!cot) return
-    const note = (): void => {
-      wantsTail.current = cot.scrollHeight - cot.scrollTop - cot.clientHeight < 40
-    }
-    cot.addEventListener('scroll', note, { passive: true })
-    return () => cot.removeEventListener('scroll', note)
-  }, [])
-  /* In the layout phase, so the box is never painted at the stale offset. */
-  useLayoutEffect(() => {
-    const cot = cotRef.current
-    if (!cot || !seg.thinkLive || !seg.thinkOpen || !wantsTail.current) return
-    cot.scrollTop = cot.scrollHeight
+    if (!cot || !seg.thinkLive || !seg.thinkOpen) return
+    if (cot.scrollHeight - cot.scrollTop - cot.clientHeight < 40) cot.scrollTop = cot.scrollHeight
   })
   const flipThink = (): void => pinRow(thinkRef.current, () => store.toggleThink(lane, seg))
   const flipWork = (): void => pinRow(sumRef.current, () => store.toggleWork(lane, seg))
