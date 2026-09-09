@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
+import { AgentMark } from '../../shell/agent-mark'
 import { ds, t } from '../../shell/bridge'
 import { SendGlyph } from '../../shell/ico'
 import { composing, fmtSize } from '../composer/store'
@@ -26,15 +27,6 @@ function IcoPlus(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <path d="M12 6v12M6 12h12" />
-    </svg>
-  )
-}
-
-function BotIcon(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-      <rect x="5" y="7" width="14" height="11" rx="3" />
-      <path d="M9 12h.01M15 12h.01M12 7V4M9 18v2M15 18v2" />
     </svg>
   )
 }
@@ -230,7 +222,7 @@ export function AgentList({ s, onOpen, compact = false }: {
                     <path d="m5.5 6.5 2.5 3 2.5-3" />
                   </svg>
                 </span>
-                <span className="agent-bot" aria-hidden="true"><BotIcon /></span>
+                <AgentMark preset={registered?.preset} />
                 <b title={name}>{name}</b>
                 <span className="agent-kind">{registered?.kind || children[0]?.kind || 'agent'}</span>
               </button>
