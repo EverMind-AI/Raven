@@ -34,23 +34,52 @@ Checks read the live requests the replay captured
 ``tool_requests``), so they can assert actual values at and before the
 divergence point even when strict mode halted there. Failures are returned as
 human-readable strings, one per unmet expectation.
+
+Case metadata (YAML, ``case.yaml`` next to ``expect.yaml``)::
+
+    issue: https://github.com/org/repo/issues/123   # the bug this case guards
+    owner: someone                                  # who answers for the case
+    why: the contract the assertions protect        # why it must (not) diverge
+    re_record: when the baseline may be re-recorded
+    risk: low                                       # optional: low|medium|high
+    created_from: att-20260101-abcdef               # optional: source bundle id
+
+The four leading fields are required and must be non-blank — the scaffold
+writes them empty on purpose, so a case cannot pass validation until a human
+fills in the real bug link, owner, and rationale.
+
+:func:`validate_case` is the static commit gate for one case directory (never
+replays): both schemas, cassette completeness down to the replay contract
+(valid JSON is not yet a usable payload), residual-scan coverage and
+cleanliness, and the size budget. :func:`discover_case_dirs` deliberately
+lists *every* subdirectory of the cases root, so a directory missing its
+``expect.yaml`` is reported broken instead of silently skipped.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
 
-from raven.trajectory.replay import REPLAY_MODES, ReplayReport, run_replay
+from raven.trajectory.cassette import replayability_problems
+from raven.trajectory.redact import scan_residuals
+from raven.trajectory.replay import REPLAY_MODES, ReplayReport, load_recording, run_replay
 
 EXPECTATION_FILE = "expect.yaml"
+CASE_FILE = "case.yaml"
 CASSETTE_DIR = "cassette"
 
+MAX_FILE_BYTES = 256 * 1024
+MAX_CASE_BYTES = 1024 * 1024
+
 _TOP_KEYS = {"mode", "divergence", "checks"}
+_CASE_KEYS = {"issue", "owner", "why", "re_record", "risk", "created_from"}
+_CASE_REQUIRED = ("issue", "owner", "why", "re_record")
+_RISK_LEVELS = ("low", "medium", "high")
 _DIVERGENCE_KEYS = {"kind", "index", "field"}
 _CHECK_KEYS = {"call", "index", "op", "value", "message"}
 _KINDS = ("llm", "tool")
@@ -255,3 +284,276 @@ async def run_regression_case(case_dir: Path) -> tuple[ReplayReport, list[str]]:
     expectation = load_expectation(case_dir / EXPECTATION_FILE)
     report = await run_replay(case_dir / CASSETTE_DIR, mode=expectation.mode)
     return report, check_report(report, expectation)
+
+
+@dataclass(frozen=True)
+class CaseMetadata:
+    """The parsed ``case.yaml`` of one regression case — the human contract:
+    who answers for the case, what bug it guards, when re-recording the
+    baseline is legitimate."""
+
+    issue: str
+    owner: str
+    why: str
+    re_record: str
+    risk: str | None = None
+    created_from: str | None = None
+
+
+def load_case_metadata(path: Path) -> CaseMetadata:
+    """Parse and validate one ``case.yaml``; raises ``ValueError`` on any
+    unknown key, malformed field, or blank required field, naming the file
+    and the problem."""
+    path = Path(path)
+    where = str(path)
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if data is None:
+        data = {}
+    _require(isinstance(data, dict), where, f"case metadata must be a mapping, got {type(data).__name__}")
+    unknown = set(data) - _CASE_KEYS
+    _require(not unknown, where, f"unknown key(s) {sorted(unknown)}; allowed: {sorted(_CASE_KEYS)}")
+    for key in _CASE_REQUIRED:
+        value = data.get(key)
+        _require(
+            isinstance(value, str) and value.strip() != "",
+            where,
+            f"{key} is required and must be a non-blank string, got {value!r}",
+        )
+    risk = data.get("risk")
+    _require(risk is None or risk in _RISK_LEVELS, where, f"risk must be one of {_RISK_LEVELS}, got {risk!r}")
+    created_from = data.get("created_from")
+    _require(
+        created_from is None or (isinstance(created_from, str) and created_from.strip() != ""),
+        where,
+        f"created_from must be a non-blank string, got {created_from!r}",
+    )
+    return CaseMetadata(
+        issue=data["issue"],
+        owner=data["owner"],
+        why=data["why"],
+        re_record=data["re_record"],
+        risk=risk,
+        created_from=created_from,
+    )
+
+
+def discover_case_dirs(root: Path) -> list[Path]:
+    """Every direct subdirectory of ``root``, sorted by name.
+
+    Deliberately not filtered by ``expect.yaml`` presence: a case directory
+    missing its expectation must reach :func:`validate_case` and be reported
+    broken, not silently skipped. Plain files under the root (a README) are
+    not cases."""
+    root = Path(root)
+    if not root.is_dir():
+        raise ValueError(f"cases root {root} is not a directory")
+    return sorted(path for path in root.iterdir() if path.is_dir())
+
+
+def validate_case(case_dir: Path) -> list[str]:
+    """Statically validate one case directory; one problem string each, empty
+    list = the case is fit to commit.
+
+    Checks both schemas, cassette completeness down to the replay contract
+    (a referenced artifact must exist, parse, and carry a usable payload —
+    valid JSON alone proves nothing), that every committed file is scannable
+    (the residual scan silently skips unreadable/non-UTF-8 files, so zero
+    findings on such a file would vouch for nothing), that the residual scan
+    reports nothing beyond the baseline reviewed at case creation
+    (:func:`_residual_problems`), and the size budget. Never replays; the
+    pytest suite does that.
+    """
+    case_dir = Path(case_dir)
+    if not case_dir.is_dir():
+        return [f"{case_dir} is not a directory"]
+    problems: list[str] = []
+
+    expect_path = case_dir / EXPECTATION_FILE
+    if expect_path.is_file():
+        try:
+            load_expectation(expect_path)
+        except ValueError as exc:
+            problems.append(str(exc))
+    else:
+        problems.append(f"{EXPECTATION_FILE} is missing")
+
+    case_path = case_dir / CASE_FILE
+    if case_path.is_file():
+        try:
+            load_case_metadata(case_path)
+        except ValueError as exc:
+            problems.append(str(exc))
+    else:
+        problems.append(f"{CASE_FILE} is missing")
+
+    cassette_dir = case_dir / CASSETTE_DIR
+    if cassette_dir.is_dir():
+        problems.extend(_cassette_problems(cassette_dir))
+    else:
+        problems.append(f"{CASSETTE_DIR}/ directory is missing")
+
+    problems.extend(_scannability_problems(case_dir))
+    problems.extend(_residual_problems(case_dir))
+    problems.extend(_size_problems(case_dir))
+    return problems
+
+
+def _residual_problems(case_dir: Path) -> list[str]:
+    """Residual findings not covered by the ``redaction.json`` baseline.
+
+    The scanner reports false positives on legitimate prose (identifier-shaped
+    tokens in tool descriptions), so absolute zero findings would fail every
+    honestly-built case. The gate instead holds the case to the state a human
+    reviewed at creation time: every current finding must match a baseline
+    entry recorded by minimize in ``redaction.json`` by category and masked
+    sample. A token new to the case has no baseline sample and fails. Matching
+    is not by file: a reviewed token legitimately recurs across artifacts and
+    in ``expect.yaml`` check values, and the scanner reports one finding per
+    token with the sample taken from its first occurrence. Findings inside
+    ``redaction.json`` itself are self-referential noise (it stores masked
+    samples and stat keys) and are ignored."""
+    baseline = _residual_baseline(case_dir / CASSETTE_DIR / "redaction.json")
+    problems: list[str] = []
+    for finding in scan_residuals(case_dir):
+        if finding.file == f"{CASSETTE_DIR}/redaction.json":
+            continue
+        if (finding.category, finding.sample) in baseline:
+            continue
+        problems.append(
+            f"residual scan flagged a {finding.category} token in {finding.file}"
+            " not covered by the redaction.json baseline reviewed at case creation"
+        )
+    return problems
+
+
+def _residual_baseline(redaction_path: Path) -> set[tuple[str, str]]:
+    try:
+        data = json.loads(redaction_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return set()
+    findings = data.get("residual_findings") if isinstance(data, dict) else None
+    if not isinstance(findings, list):
+        return set()
+    return {(str(entry.get("category")), str(entry.get("sample"))) for entry in findings if isinstance(entry, dict)}
+
+
+def _cassette_problems(cassette_dir: Path) -> list[str]:
+    problems: list[str] = []
+    manifest_path = cassette_dir / "manifest.json"
+    spans_path = cassette_dir / "spans.jsonl"
+    if not (cassette_dir / "redaction.json").is_file():
+        problems.append("cassette/redaction.json is missing (the cassette never went through redaction)")
+    if not (cassette_dir / "artifacts").is_dir():
+        problems.append("cassette/artifacts/ is missing")
+
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            problems.append(f"cassette/manifest.json cannot be parsed: {exc}")
+            manifest = None
+        if manifest is not None and not isinstance(manifest, dict):
+            problems.append("cassette/manifest.json must hold a JSON object")
+        elif manifest is not None:
+            if "format_version" not in manifest:
+                problems.append("cassette/manifest.json has no format_version")
+            if not isinstance(manifest.get("minimized"), dict):
+                problems.append(
+                    "cassette/manifest.json has no minimized block"
+                    " (cassettes come from trajectory minimize, not from copying a raw bundle)"
+                )
+    else:
+        problems.append("cassette/manifest.json is missing")
+
+    if spans_path.is_file():
+        problems.extend(_span_problems(cassette_dir, spans_path))
+    else:
+        problems.append("cassette/spans.jsonl is missing")
+
+    # Semantic completeness on top of the static checks: load the recording
+    # the way replay does and hold it to the minimize gate's contract.
+    if manifest_path.is_file() and spans_path.is_file():
+        try:
+            recording = load_recording(cassette_dir)
+        except (OSError, ValueError) as exc:
+            problems.append(f"cassette cannot be parsed for replay: {exc}")
+        else:
+            problems.extend(f"cassette is not replayable: {p}" for p in replayability_problems(recording))
+    return problems
+
+
+def _span_problems(cassette_dir: Path, spans_path: Path) -> list[str]:
+    problems: list[str] = []
+    try:
+        lines = spans_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f"cassette/spans.jsonl cannot be read: {exc}"]
+    for line_no, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            span = json.loads(line)
+        except json.JSONDecodeError:
+            problems.append(f"cassette/spans.jsonl line {line_no} is not valid JSON")
+            continue
+        if not isinstance(span, dict):
+            problems.append(f"cassette/spans.jsonl line {line_no} is not a JSON object")
+            continue
+        attrs = span.get("attributes")
+        if not isinstance(attrs, dict):
+            continue
+        for key, ref in attrs.items():
+            if isinstance(key, str) and key.endswith(".artifact_path"):
+                problems.extend(_artifact_ref_problems(cassette_dir, line_no, key, ref))
+    return problems
+
+
+def _artifact_ref_problems(cassette_dir: Path, line_no: int, key: str, ref: Any) -> list[str]:
+    label = f"cassette/spans.jsonl line {line_no}: {key} {ref!r}"
+    if not isinstance(ref, str) or not ref:
+        return [f"{label} is not a usable reference"]
+    if PurePosixPath(ref).is_absolute() or ".." in PurePosixPath(ref).parts:
+        return [f"{label} escapes the cassette"]
+    resolved = (cassette_dir / ref).resolve()
+    if cassette_dir.resolve() not in resolved.parents:
+        return [f"{label} escapes the cassette"]
+    if not resolved.is_file():
+        return [f"{label} does not exist"]
+    try:
+        json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f"{label} cannot be read: {exc}"]
+    except json.JSONDecodeError:
+        return [f"{label} is not valid JSON"]
+    return []
+
+
+def _scannability_problems(case_dir: Path) -> list[str]:
+    problems: list[str] = []
+    for path in sorted(p for p in case_dir.rglob("*") if p.is_file()):
+        try:
+            path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            problems.append(
+                f"{path.relative_to(case_dir)} is not readable as UTF-8 text —"
+                " the residual scan silently skips such files and cannot vouch for them"
+            )
+    return problems
+
+
+def _size_problems(case_dir: Path) -> list[str]:
+    problems: list[str] = []
+    total = 0
+    for path in sorted(p for p in case_dir.rglob("*") if p.is_file()):
+        size = path.stat().st_size
+        total += size
+        if size > MAX_FILE_BYTES:
+            problems.append(
+                f"{path.relative_to(case_dir)} is {size} bytes, over the {MAX_FILE_BYTES}-byte per-file budget"
+                " (sized to stay well under the repo's 1 MiB large-file gate)"
+            )
+    if total > MAX_CASE_BYTES:
+        problems.append(
+            f"the case totals {total} bytes, over the {MAX_CASE_BYTES}-byte budget (the repo's 1 MiB large-file gate)"
+        )
+    return problems

@@ -53,6 +53,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from raven.cli._tty_guard import die_if_not_tty
+from raven.cli.trajectory_regression_commands import regression_app
 from raven.tracing import config as tracing_config
 from raven.trajectory import store as tstore
 from raven.trajectory.bundle import collect_bundle
@@ -63,6 +64,7 @@ from raven.trajectory.verdict import VERDICT_STATUSES, read_verdicts, record_ver
 console = Console()
 
 trajectory_app = typer.Typer(help="Package, label, and protect agent trajectories.")
+trajectory_app.add_typer(regression_app, name="regression")
 
 
 @trajectory_app.callback(invoke_without_command=True)

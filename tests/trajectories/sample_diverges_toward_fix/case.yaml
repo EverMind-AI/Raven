@@ -1,0 +1,13 @@
+# Case metadata (see raven/trajectory/regression.py). Required by
+# `raven trajectory regression validate`.
+issue: "https://github.com/EverMind-AI/Raven/pull/362"
+owner: forrest
+why: >
+  Shape 2 sample: after the simulated bug fix the harness must diverge
+  from the buggy recording at llm call #1, and the live request must
+  carry the fixed text instead of the recorded buggy marker.
+re_record: >
+  Only when the recording format or the sample generation flow changes
+  intentionally; regenerate with a scripted provider and re-run
+  trajectory minimize.
+risk: low

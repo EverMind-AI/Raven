@@ -11,17 +11,23 @@ side must do there.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
 from raven.trajectory.regression import (
+    MAX_FILE_BYTES,
     Check,
     DivergenceExpectation,
     RegressionExpectation,
     check_report,
+    discover_case_dirs,
+    load_case_metadata,
     load_expectation,
     run_regression_case,
+    validate_case,
 )
 from raven.trajectory.replay import Divergence, ReplayReport
 
@@ -321,3 +327,271 @@ def _case_dirs() -> list[Path]:
 async def test_trajectory_regression_case(case_dir: Path) -> None:
     report, failures = await run_regression_case(case_dir)
     assert not failures, f"regression case {case_dir.name} failed:\n" + "\n".join(failures)
+
+
+# ── load_case_metadata ─────────────────────────────────────────────────
+
+
+_ABSENT = object()
+
+
+def _write_case_yaml(root: Path, **overrides) -> Path:
+    data = {"issue": "#362", "owner": "forrest", "why": "guards the fix", "re_record": "never"}
+    data.update(overrides)
+    path = root / "case.yaml"
+    path.write_text(yaml.safe_dump({k: v for k, v in data.items() if v is not _ABSENT}), encoding="utf-8")
+    return path
+
+
+async def test_load_case_metadata_parses_the_full_shape(tmp_path) -> None:
+    path = _write_case_yaml(tmp_path, risk="low", created_from="att-1")
+    meta = load_case_metadata(path)
+    assert meta.issue == "#362"
+    assert meta.owner == "forrest"
+    assert meta.why == "guards the fix"
+    assert meta.re_record == "never"
+    assert meta.risk == "low"
+    assert meta.created_from == "att-1"
+
+
+async def test_load_case_metadata_optionals_default_to_none(tmp_path) -> None:
+    meta = load_case_metadata(_write_case_yaml(tmp_path))
+    assert meta.risk is None and meta.created_from is None
+
+
+@pytest.mark.parametrize("key", ["issue", "owner", "why", "re_record"])
+@pytest.mark.parametrize("value", [_ABSENT, None, "", "   "], ids=["absent", "null", "empty", "blank"])
+async def test_load_case_metadata_rejects_missing_or_blank_required(tmp_path, key, value) -> None:
+    path = _write_case_yaml(tmp_path, **{key: value})
+    with pytest.raises(ValueError, match=f"{key} is required"):
+        load_case_metadata(path)
+
+
+async def test_load_case_metadata_rejects_unknown_keys(tmp_path) -> None:
+    path = _write_case_yaml(tmp_path, ticket="EVE-1")
+    with pytest.raises(ValueError, match="unknown key"):
+        load_case_metadata(path)
+
+
+async def test_load_case_metadata_rejects_bad_risk(tmp_path) -> None:
+    path = _write_case_yaml(tmp_path, risk="serious")
+    with pytest.raises(ValueError, match="risk must be one of"):
+        load_case_metadata(path)
+
+
+async def test_load_case_metadata_rejects_non_mapping(tmp_path) -> None:
+    path = tmp_path / "case.yaml"
+    path.write_text("- a\n- b\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="must be a mapping"):
+        load_case_metadata(path)
+
+
+# ── discover_case_dirs ─────────────────────────────────────────────────
+
+
+async def test_discover_case_dirs_lists_every_subdirectory(tmp_path) -> None:
+    (tmp_path / "good_case").mkdir()
+    (tmp_path / "broken_case").mkdir()
+    (tmp_path / "README.md").write_text("not a case", encoding="utf-8")
+    assert [p.name for p in discover_case_dirs(tmp_path)] == ["broken_case", "good_case"]
+
+
+async def test_discover_case_dirs_rejects_missing_root(tmp_path) -> None:
+    with pytest.raises(ValueError, match="is not a directory"):
+        discover_case_dirs(tmp_path / "nope")
+
+
+# ── validate_case ──────────────────────────────────────────────────────
+
+
+def _case_copy(tmp_path: Path) -> Path:
+    """A validate baseline: a copy of a committed, replayable sample case."""
+    case = tmp_path / "case_copy"
+    shutil.copytree(CASES_ROOT / "sample_reproduces_recording", case)
+    return case
+
+
+def _spans(case: Path) -> list[dict]:
+    return [json.loads(x) for x in (case / "cassette" / "spans.jsonl").read_text(encoding="utf-8").splitlines()]
+
+
+def _write_spans(case: Path, spans: list[dict]) -> None:
+    (case / "cassette" / "spans.jsonl").write_text("".join(json.dumps(s) + "\n" for s in spans), encoding="utf-8")
+
+
+def _artifact_ref(case: Path, key_suffix: str) -> tuple[dict, str]:
+    for span in _spans(case):
+        for key, ref in (span.get("attributes") or {}).items():
+            if key.endswith(key_suffix):
+                return span, ref
+    raise AssertionError(f"no span references {key_suffix}")
+
+
+async def test_validate_case_passes_on_a_sample_copy(tmp_path) -> None:
+    assert validate_case(_case_copy(tmp_path)) == []
+
+
+async def test_validate_committed_cases_pass() -> None:
+    cases = discover_case_dirs(CASES_ROOT)
+    assert cases
+    for case in cases:
+        assert validate_case(case) == [], case.name
+
+
+async def test_validate_case_rejects_missing_files_without_stopping(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    (case / "case.yaml").unlink()
+    (case / "cassette" / "redaction.json").unlink()
+    problems = validate_case(case)
+    assert any("case.yaml is missing" in p for p in problems)
+    assert any("redaction.json is missing" in p for p in problems)
+
+
+async def test_validate_case_rejects_blank_required_metadata(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    _write_case_yaml(case, owner="")
+    problems = validate_case(case)
+    assert any("owner is required" in p for p in problems)
+
+
+async def test_validate_case_rejects_manifest_without_minimized_block(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    manifest_path = case / "cassette" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["minimized"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    problems = validate_case(case)
+    assert any("no minimized block" in p for p in problems)
+
+
+async def test_validate_case_rejects_unparseable_manifest(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    (case / "cassette" / "manifest.json").write_text("{broken", encoding="utf-8")
+    problems = validate_case(case)
+    assert any("manifest.json cannot be parsed" in p for p in problems)
+
+
+async def test_validate_case_rejects_missing_referenced_artifact(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    _, ref = _artifact_ref(case, "llm.output.artifact_path")
+    (case / "cassette" / ref).unlink()
+    problems = validate_case(case)
+    assert any("does not exist" in p for p in problems)
+
+
+async def test_validate_case_rejects_corrupt_referenced_artifact(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    _, ref = _artifact_ref(case, "llm.output.artifact_path")
+    (case / "cassette" / ref).write_text("not json{{", encoding="utf-8")
+    problems = validate_case(case)
+    assert any("is not valid JSON" in p for p in problems)
+
+
+async def test_validate_case_rejects_escaping_artifact_reference(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    spans = _spans(case)
+    spans.append({"spanId": "evil", "attributes": {"llm.output.artifact_path": "../../evil.json"}})
+    _write_spans(case, spans)
+    problems = validate_case(case)
+    assert any("escapes the cassette" in p for p in problems)
+
+
+async def test_validate_case_rejects_semantically_empty_turn_input(tmp_path) -> None:
+    """Valid JSON is not a usable payload: {} yields no replayable turn."""
+    case = _case_copy(tmp_path)
+    _, ref = _artifact_ref(case, "turn.input.artifact_path")
+    (case / "cassette" / ref).write_text("{}", encoding="utf-8")
+    problems = validate_case(case)
+    assert any("no recorded turn inputs" in p for p in problems)
+
+
+async def test_validate_case_rejects_null_tool_result(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    _, ref = _artifact_ref(case, "tool.output.artifact_path")
+    (case / "cassette" / ref).write_text(json.dumps({"result": None}), encoding="utf-8")
+    problems = validate_case(case)
+    assert any("no usable tool.output payload" in p for p in problems)
+
+
+async def test_validate_case_rejects_llm_call_without_input_reference(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    spans = _spans(case)
+    for span in spans:
+        (span.get("attributes") or {}).pop("llm.input.artifact_path", None)
+    _write_spans(case, spans)
+    problems = validate_case(case)
+    assert any("has no llm.input payload" in p for p in problems)
+
+
+async def test_validate_case_rejects_emptied_spans(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    (case / "cassette" / "spans.jsonl").write_text("", encoding="utf-8")
+    problems = validate_case(case)
+    assert any("no recorded turn inputs" in p for p in problems)
+
+
+async def test_validate_case_rejects_unscannable_file(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    (case / "blob.bin").write_bytes(bytes([0xFF, 0xFE, 0x00, 0x01]))
+    problems = validate_case(case)
+    assert any("not readable as UTF-8" in p for p in problems)
+
+
+async def test_validate_case_rejects_residual_findings_beyond_the_baseline(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    (case / "notes.txt").write_text("token a3f9c2b7d8e64a1b9c0d2e5f7a8b3c4d5e6f7a8b9c0d1e2f here", encoding="utf-8")
+    problems = validate_case(case)
+    assert any("residual scan flagged" in p and "notes.txt" in p for p in problems)
+
+
+async def test_validate_case_rejects_new_token_even_with_an_emptied_baseline(tmp_path) -> None:
+    """An empty or unparseable redaction.json leaves an empty baseline: every
+    current finding then counts as new."""
+    case = _case_copy(tmp_path)
+    redaction_path = case / "cassette" / "redaction.json"
+    baseline = json.loads(redaction_path.read_text(encoding="utf-8"))
+    baseline["residual_findings"] = []
+    redaction_path.write_text(json.dumps(baseline), encoding="utf-8")
+    problems = validate_case(case)
+    assert any("residual scan flagged" in p for p in problems)
+
+
+async def test_validate_case_rejects_oversized_file(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    (case / "big.txt").write_text("a" * (MAX_FILE_BYTES + 1), encoding="utf-8")
+    problems = validate_case(case)
+    assert any("per-file budget" in p for p in problems)
+
+
+async def test_validate_case_rejects_oversized_total(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    for i in range(5):
+        (case / f"pad-{i}.txt").write_text("a" * (MAX_FILE_BYTES - 1024), encoding="utf-8")
+    problems = validate_case(case)
+    assert any("over the" in p and "budget" in p and "totals" in p for p in problems)
+
+
+async def test_validate_case_rejects_non_directory(tmp_path) -> None:
+    assert validate_case(tmp_path / "nope") == [f"{tmp_path / 'nope'} is not a directory"]
+
+
+# ── replayability_problems (extracted minimize gate) ───────────────────
+
+
+async def test_replayability_problems_reports_every_gap() -> None:
+    from raven.trajectory.cassette import replayability_problems
+    from raven.trajectory.replay import RecordedLLMCall, RecordedToolCall, Recording
+
+    recording = Recording(
+        bundle_dir=Path("."),
+        manifest={},
+        llm_calls=[RecordedLLMCall(input=None, output=None)],
+        tool_calls=[RecordedToolCall(name=None, params=None, result=None)],
+        turns=[],
+    )
+    problems = replayability_problems(recording)
+    assert "no recorded turn inputs" in problems
+    assert "llm call #1 has no llm.input payload" in problems
+    assert "llm call #1 has no llm.output payload" in problems
+    assert "tool call #1 has no tool.input payload" in problems
+    assert "tool call #1 has no usable tool.output payload" in problems
