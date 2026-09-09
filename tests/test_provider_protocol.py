@@ -719,6 +719,139 @@ def test_response_series_use_declared_vendor_addresses(vendor, model, base):
     assert provider.api_base == base
 
 
+@pytest.mark.parametrize(
+    "vendor,model",
+    [
+        ("moonshot", "moonshot/kimi-k2-turbo-preview"),
+        ("groq", "groq/qwen/qwen3-32b"),
+        ("dashscope", "dashscope/qwen-plus"),
+        ("nvidia_nim", "nvidia_nim/deepseek-ai/deepseek-v3.1"),
+    ],
+)
+def test_an_inferred_native_protocol_steps_aside_where_the_provider_has_no_address_for_it(vendor, model):
+    """The family name reads as responses, and these providers declare no
+    responses address; the base tree served them over chat and the inference
+    turned that into a refusal on 56 curated models of a key-only config. An
+    inference is not a choice, so it steps aside; the bare inference (no
+    provider named) still reads responses, which is what the tables show."""
+    config = _provider_config(vendor, model)
+    assert effective_protocol(None, model) == "responses"
+    assert effective_protocol(config.providers.get(vendor), model, vendor) == "chat"
+    provider = make_provider(config)
+    assert isinstance(provider, LiteLLMProvider) and provider.api_protocol == "chat"
+
+
+def test_a_chosen_native_protocol_without_an_address_is_still_refused():
+    """The user's own selection is final: refusing is the right answer to an
+    explicit responses on a provider with nowhere to send it."""
+    from raven.providers.auth import MissingCredentialsError
+
+    with pytest.raises(MissingCredentialsError, match="requires an explicit API base"):
+        make_provider(_provider_config("moonshot", "moonshot/kimi-k2-turbo-preview", override="responses"))
+
+
+def test_a_gateway_declaring_some_protocols_does_not_serve_the_others_at_its_default_address():
+    """volcengine names a responses address only. The gateway fallback handed
+    that address to an anthropic request as well, so a glm model on volcengine
+    posted /v1/messages to a responses endpoint, and the picker could not warn
+    because the fallback always answered. A gateway that declares nothing per
+    protocol (openrouter) still serves every protocol at its one address."""
+    from raven.providers.protocol import native_api_base
+
+    assert native_api_base("volcengine", "responses") == "https://ark.cn-beijing.volces.com/api/v3"
+    assert native_api_base("volcengine", "anthropic") is None
+    assert native_api_base("openrouter", "responses") == "https://openrouter.ai/api/v1"
+    assert native_api_base("openrouter", "anthropic") == "https://openrouter.ai/api/v1"
+    config = _provider_config("volcengine", "volcengine/glm-4-7-251222")
+    provider = make_provider(config)
+    assert isinstance(provider, LiteLLMProvider) and provider.api_protocol == "chat"
+    # The picker's half of the same-answer claim: it resolves through the same
+    # call, provider named, so its entry says chat too and carries no warning.
+    # Dropping the provider name at the picker alone would read anthropic here.
+    entry = _picker_entry("volcengine", config)
+    assert entry["protocols"]["volcengine/glm-4-7-251222"] == "chat" and entry["warning"] == ""
+
+
+def _picker_entry(vendor: str, config: Config) -> dict:
+    """The model picker's row for ``vendor``, built off the configured section."""
+    from raven.rpc.methods.model import _build_provider_entry
+
+    return _build_provider_entry(
+        vendor,
+        current_provider=None,
+        providers={vendor: {"name": vendor, "configured": True}},
+        section=config.providers.get(vendor),
+    )
+
+
+def _pool_config(vendor: str, model: str, endpoints: list[dict]) -> Config:
+    return Config.model_validate(
+        {
+            "agents": {"defaults": {"model": model, "provider": vendor}},
+            "providers": {vendor: {"endpoints": endpoints}},
+        }
+    )
+
+
+def test_a_mixed_endpoint_pool_stays_on_chat_until_every_member_has_an_address():
+    """One addressed endpoint is not permission to build a native client for the
+    whole rotor: the key-only member has nowhere to send responses, and the
+    rotor failed eagerly while constructing it. The inference steps aside
+    unless every endpoint can be served."""
+    from raven.providers.endpoint_rotor import EndpointRotorProvider
+
+    model = "moonshot/kimi-k2-turbo-preview"
+    mixed = _pool_config(
+        "moonshot",
+        model,
+        [
+            {"label": "bare", "apiKey": "k1"},
+            {"label": "addressed", "apiKey": "k2", "apiBase": "https://kimi.example/v1"},
+        ],
+    )
+    assert effective_protocol(mixed.providers.get("moonshot"), model, "moonshot") == "chat"
+    assert _picker_entry("moonshot", mixed)["protocols"][model] == "chat"
+    provider = make_provider(mixed)
+    assert isinstance(provider, EndpointRotorProvider)
+
+    addressed = _pool_config(
+        "moonshot",
+        model,
+        [
+            {"label": "a", "apiKey": "k1", "apiBase": "https://kimi-a.example/v1"},
+            {"label": "b", "apiKey": "k2", "apiBase": "https://kimi-b.example/v1"},
+        ],
+    )
+    # The picker and the factory read the same endpoint set, so what one shows
+    # is what the other builds: responses here, from every member's address.
+    assert effective_protocol(addressed.providers.get("moonshot"), model, "moonshot") == "responses"
+    assert _picker_entry("moonshot", addressed)["protocols"][model] == "responses"
+    assert isinstance(make_provider(addressed), EndpointRotorProvider)
+
+
+def test_display_resolution_logs_nothing_and_construction_logs_once():
+    """The model picker resolves every catalogue row through effective_protocol;
+    an INFO line per fallback there was 86 records per all-provider row build.
+    The runtime decision -- a client actually built over chat -- is logged once."""
+    from loguru import logger
+
+    records: list[str] = []
+    sink = logger.add(lambda message: records.append(str(message)), level="INFO")
+    try:
+        for vendor, model in (("dashscope", "dashscope/qwen-plus"), ("moonshot", "moonshot/kimi-k2-turbo-preview")):
+            section = _provider_config(vendor, model).providers.get(vendor)
+            assert effective_protocol(section, model, vendor) == "chat"
+        assert records == []
+        make_provider(_provider_config("moonshot", "moonshot/kimi-k2-turbo-preview"))
+        assert sum("using chat" in r for r in records) == 1
+        # An operator's own chat choice is not a stepping-aside, and the provider
+        # it names is not missing an address: nothing to report.
+        make_provider(_provider_config("anthropic", "anthropic/claude-opus-5", override="chat"))
+        assert sum("using chat" in r for r in records) == 1
+    finally:
+        logger.remove(sink)
+
+
 def test_gemini_defaults_to_litellm_chat_without_an_endpoint():
     provider = make_provider(_provider_config("gemini", "gemini/gemini-2.5-flash"))
     assert isinstance(provider, LiteLLMProvider)

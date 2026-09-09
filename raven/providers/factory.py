@@ -9,6 +9,8 @@ raven.core.
 
 from __future__ import annotations
 
+from loguru import logger
+
 from raven.config.schema import Config
 
 
@@ -95,7 +97,7 @@ def make_provider(config: Config, model: str | None = None):
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
-    from raven.providers.protocol import effective_protocol, native_api_base
+    from raven.providers.protocol import configured_protocol, effective_protocol, inferred_protocol, native_api_base
     from raven.providers.registry import endpoints_unsupported_reason, find_by_name
 
     spec = find_by_name(provider_name) if provider_name else None
@@ -106,7 +108,7 @@ def make_provider(config: Config, model: str | None = None):
         if reason:
             raise MissingCredentialsError(reason, provider=provider_name or "")
 
-    protocol = effective_protocol(p, model)
+    protocol = effective_protocol(p, model, provider_name)
 
     if client == "codex":
         provider = OpenAICodexProvider(default_model=model)
@@ -163,6 +165,17 @@ def make_provider(config: Config, model: str | None = None):
         from raven.providers.endpoints import provider_endpoints
         from raven.providers.litellm_provider import LiteLLMProvider
 
+        if provider_name and configured_protocol(p, model) is None and inferred_protocol(model) != "chat":
+            # The stepping-aside itself, logged where the chat client is built:
+            # not in the resolver, which the model picker runs over every
+            # catalogue row for display, and not for an operator's own chat choice.
+            logger.info(
+                "model {!r} reads as {} but {!r} has no {} address on every endpoint; using chat",
+                model,
+                inferred_protocol(model),
+                provider_name,
+                inferred_protocol(model),
+            )
         eps = provider_endpoints(p) if p else []
         if len(eps) > 1:
             from raven.providers.endpoint_rotor import EndpointRotorProvider

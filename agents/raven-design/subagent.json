@@ -16,5 +16,10 @@
   "everos": {
     "userId": "raven-design",
     "agentId": "raven-design"
+  },
+  "recommendedLlm": {
+    "provider": "custom",
+    "model": "openai/gpt-5.6-sol",
+    "apiBase": "https://openrouter.ai/api/v1"
   }
 }
