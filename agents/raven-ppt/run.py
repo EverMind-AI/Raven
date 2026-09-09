@@ -38,6 +38,35 @@ from raven.config import product_render as render
 from raven.home import raven_home
 
 HERE = Path(__file__).resolve().parent
+
+# The host's tier ladder (medium / high / max), as this product spends it. The
+# source config IS the max profile -- every reading, every build, until the gates
+# and the reader are satisfied -- so max needs no overlay file. High keeps the
+# author's effort and caps the run: six measured decks had every useful fix in
+# by the tenth whole-deck build and the third reading, and what followed was
+# churn on taste findings and misread pages. Medium is high at low effort: one
+# run at low effort finished a deck in 32 minutes where medium took 165.
+MODES_DIR = HERE / "modes"
+BASELINE_MODE = "max"
+DEFAULT_MODE = "high"
+MODE_LABELS = {
+    "medium": (
+        "Medium",
+        "Low reasoning effort and a capped run: ten whole-deck builds, three readings, then the deck "
+        "goes out as it stands. The fastest tier; a first draft or a small deck.",
+    ),
+    "high": (
+        "High",
+        "Standard reasoning effort with the same caps: ten whole-deck builds and three readings, then the "
+        "deck is delivered as it stands. The default.",
+    ),
+    "max": (
+        "Max",
+        "No caps: the run builds and reads until the gates and the second reader are satisfied. "
+        "The slowest tier, for a deck that has to be right.",
+    ),
+}
+OVERLAY_KEYS = frozenset({"agents", "plugins"})
 DEFAULT_CONFIG = HERE / "config.json"
 ENGINE_PLUGIN_ID = "ppt-engine"
 ENGINE_PACKAGE = "raven_ppt"
@@ -380,6 +409,12 @@ def model_context_window(model: str) -> int | None:
     return length if isinstance(length, int) and not isinstance(length, bool) and length > 0 else None
 
 
+def resolve_mode(overlay: dict) -> tuple[None, dict]:
+    """The product's half of the mode catalogue: no iteration cap of its own, and the
+    diff the plugin's hook reads is the ppt-engine slice (buildCap / readingCap)."""
+    return None, dict(((overlay.get("plugins") or {}).get("config") or {}).get(ENGINE_PLUGIN_ID) or {})
+
+
 def render_config(source: Path) -> Path:
     """Write a copy of ``source`` with the secrets merged in, under the state root.
 
@@ -514,6 +549,14 @@ def render_config(source: Path) -> Path:
     # never by directory (the everos-memory shape).
     root.mkdir(parents=True, exist_ok=True)
     render.sweep_stale_renders(root)
+    catalogue = render.mode_catalogue(
+        MODES_DIR, MODE_LABELS, baseline=BASELINE_MODE, overlay_keys=OVERLAY_KEYS, resolve=resolve_mode
+    )
+    if catalogue:
+        acp = config.setdefault("acp", {})
+        acp["modes"] = catalogue
+        acp["defaultMode"] = DEFAULT_MODE
+        log(f"[run] modes: {', '.join(catalogue)} (default {DEFAULT_MODE})")
     return render.write_rendered(config, root)
 
 
