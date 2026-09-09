@@ -46,6 +46,18 @@ _BODY_SNIPPET = 200
 TEST_TIMEOUT_SECONDS = 120
 _DETAIL_CAP = 2000
 
+_ENABLE_PING_TIMEOUT_SECONDS = 60
+"""How long the readiness prompt may take before it is called a failure.
+
+Half the explicit-Test budget, because this one is on the path of a settings
+switch a person is waiting on. Two measured agents hang rather than refuse, so
+the cap is what turns "no answer" into an answer.
+
+Handed to the backend as well as to the ``wait_for`` around it, so one number
+means one thing: a backend allowed the longer Test budget could only ever be
+cancelled from outside, never reach its own timeout and describe the failure.
+"""
+
 
 @dataclass(frozen=True)
 class ProbeResult:
@@ -418,6 +430,58 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
     return TestResult(cfg.name, source, "cli", True, "the agent ran and replied", text[:_DETAIL_CAP], elapsed())
 
 
+@dataclass(frozen=True)
+class PingResult:
+    """Whether one agent answered a prompt, and what to tell the operator if not."""
+
+    ok: bool
+    detail: str
+
+
+async def ping_agent(cfg: Any) -> PingResult:
+    """Send one prompt and report whether the agent answered. Never raises.
+
+    The second of two layers. The first -- `which` plus, for acp, the handshake --
+    answers whether the agent is installed and has ACP switched on, and it is free.
+    It cannot answer whether the agent can *work*: ACP has no authenticated-state
+    field, so an agent that defers its credential to the first model call opens a
+    session happily and fails afterwards. Six of thirteen registry agents measured
+    on 2026-09-07 did exactly that.
+
+    So this spends one call on the agent's own quota, which is why it is reached
+    only from an explicit switch-on and never from a listing.
+    """
+    try:
+        with tempfile.TemporaryDirectory(prefix="raven_subagent_ping_") as tmp:
+            backend = build_third_party_backend(
+                cfg,
+                # A stateful create commits a handle binding; a ping must not leave
+                # that in the file the running gateway reads.
+                registry=InstanceRegistry(path=Path(tmp) / "ping_instances.json"),
+                timeout=min(
+                    getattr(cfg, "timeout", None) or _ENABLE_PING_TIMEOUT_SECONDS,
+                    _ENABLE_PING_TIMEOUT_SECONDS,
+                ),
+                ready_timeout_ms=min(
+                    getattr(cfg, "ready_timeout_ms", None) or _ENABLE_PING_TIMEOUT_SECONDS * 1000,
+                    _ENABLE_PING_TIMEOUT_SECONDS * 1000,
+                ),
+            )
+            reply = await asyncio.wait_for(
+                backend.run(PROBE_PROMPT, task_id=f"ping-{uuid.uuid4().hex[:8]}", workspace=Path(tmp), executor=None),
+                timeout=_ENABLE_PING_TIMEOUT_SECONDS,
+            )
+    except asyncio.TimeoutError:
+        return PingResult(False, f"it did not answer within {_ENABLE_PING_TIMEOUT_SECONDS}s")
+    except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
+        return PingResult(False, str(exc)[:_DETAIL_CAP])
+
+    text = (reply or "").strip()
+    if not text:
+        return PingResult(False, "it started and then answered nothing")
+    return PingResult(True, "it ran and replied")
+
+
 async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     """Verify an acp agent by connecting to it, and remember what it reported.
 
@@ -528,11 +592,13 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
 
 __all__ = [
     "PROBE_PROMPT",
+    "PingResult",
     "ProbeResult",
     "ProbeStatus",
     "Source",
     "TEST_TIMEOUT_SECONDS",
     "TestResult",
+    "ping_agent",
     "probe_all",
     "probe_one",
     "run_test",

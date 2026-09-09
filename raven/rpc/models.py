@@ -1958,6 +1958,10 @@ class SubagentsAddParams(_Strict):
     api_key: str | None = None
     mcps: list[str] | None = None
     allow_mcp_secrets: bool | None = None
+    force: bool = Field(
+        default=False,
+        description="Skip the readiness ping that adding an enabled local preset normally requires. Operator escape hatch, no UI affordance.",
+    )
 
 
 class SubagentsAddResult(_Strict):
@@ -1990,6 +1994,10 @@ class SubagentsRemoveResult(_Strict):
 class SubagentsToggleParams(_Strict):
     name: str
     enabled: bool
+    force: bool = Field(
+        default=False,
+        description="Skip the readiness ping that enabling normally requires. Operator escape hatch, no UI affordance.",
+    )
 
 
 class SubagentsToggleResult(_Strict):
