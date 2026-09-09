@@ -903,6 +903,127 @@ describe('transcript island, history', () => {
  * and wrong for the turn the reader was just watching, whose sequence of steps
  * they were reading a second before it became the word "steps".
  */
+/** Whether the thought box keeps up with the model, and whose choice that is.
+ *
+ * happy-dom lays nothing out, so the geometry is defined rather than measured
+ * -- which is the point: what these assert is the number the component wrote
+ * to `scrollTop`, and the number it did NOT write.
+ */
+describe('a thought box while the model is still thinking', () => {
+  const sized = (el: HTMLElement, scrollHeight: number, clientHeight: number): void => {
+    Object.defineProperty(el, 'scrollHeight', { value: scrollHeight, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: clientHeight, configurable: true })
+  }
+  const cot = (): HTMLElement => $('.cot') as HTMLElement
+
+  /* `thinkAppend` does not repaint per chunk -- it coalesces through
+     `requestAnimationFrame`, which is why the box follows a stream at all
+     rather than thrashing. Nothing renders until that frame runs, so a test
+     that appends and asserts in the same tick measures the render before its
+     own input. */
+  const appended = async (fn: () => void): Promise<void> => {
+    await act(async () => {
+      fn()
+      await new Promise<void>((done) => requestAnimationFrame(() => done()))
+    })
+  }
+
+  /* A live, open thought box with a scrollable amount of text in it. */
+  function thinking(): ReturnType<typeof mount.step> {
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      mount.ask('why did it fail')
+      st = mount.step()
+      st.thinkAppend('first line')
+      /* `reveal` is what makes a thought live and opens it; `setThinkOpen`
+         alone pins it and leaves `thinkLive` false, which is a settled box. */
+      st.reveal()
+    })
+    sized(cot(), 400, 220)
+    return st
+  }
+
+  it('follows a chunk far bigger than the old forty-pixel threshold', async () => {
+    /* The bug, in one case. The follow used to be gated on the distance to the
+       bottom measured AFTER the append, so a chunk taller than 40px -- about
+       two lines of a 220px box -- looked like a reader who had scrolled away.
+       One paragraph was enough, and it never recovered. */
+    const st = thinking()
+    cot().scrollTop = 180
+
+    await appended(() => st.thinkAppend('x'.repeat(4000)))
+    sized(cot(), 4000, 220)
+    await appended(() => st.thinkAppend('and more'))
+
+    expect(cot().scrollTop).toBe(4000)
+  })
+
+  it('keeps following append after append, however large each one is', async () => {
+    /* The other half of "it stops after a few seconds": one miss used to be
+       permanent, because `scrollTop` then never moved again while the content
+       kept growing. */
+    const st = thinking()
+    for (let i = 1; i <= 4; i += 1) {
+      await appended(() => st.thinkAppend('y'.repeat(2000)))
+      sized(cot(), 1000 * i, 220)
+      await appended(() => st.thinkAppend('.'))
+      expect(cot().scrollTop).toBe(1000 * i)
+    }
+  })
+
+  it('stops following once the reader scrolls up, and does not snatch them back', async () => {
+    /* What the old threshold was for, and the thing a naive fix breaks: the
+       reader is reading something further up and the box must leave them
+       there. Driven as a real scroll, because that is the only thing that
+       tells this apart from an append. */
+    const st = thinking()
+
+    cot().scrollTop = 0
+    act(() => { cot().dispatchEvent(new Event('scroll')) })
+    await appended(() => st.thinkAppend('z'.repeat(3000)))
+
+    expect(cot().scrollTop).toBe(0)
+  })
+
+  it('resumes following when the reader scrolls back down', async () => {
+    /* Leaving them stranded would be the same defect facing the other way. */
+    const st = thinking()
+    cot().scrollTop = 0
+    act(() => { cot().dispatchEvent(new Event('scroll')) })
+    await appended(() => st.thinkAppend('z'.repeat(3000)))
+    expect(cot().scrollTop).toBe(0)
+
+    cot().scrollTop = 180
+    act(() => { cot().dispatchEvent(new Event('scroll')) })
+    await appended(() => st.thinkAppend('more'))
+
+    expect(cot().scrollTop).toBe(400)
+  })
+
+  it('does not move a box whose thought has settled', () => {
+    /* `thinkLive` is the gate: a finished thought is a thing to read from the
+       top, and scrolling it would be taking a reader somewhere they did not
+       ask to go.
+
+       Not driven with `thinkAppend`: that revives a settled thought
+       (`thinkLive` goes back to true), so a case built on it asserts nothing
+       about the gate. The re-render comes from the step's own prose instead,
+       and the box is left AT the bottom so that `wantsTail` cannot be the
+       reason it stays put -- the only thing left holding it is `thinkLive`. */
+    const st = thinking()
+    act(() => { st.thinkDone() })
+    /* Held open so what is asserted is `thinkLive`, not the box being hidden. */
+    act(() => { st.setThinkOpen(true) })
+    cot().scrollTop = 180
+    act(() => { cot().dispatchEvent(new Event('scroll')) })
+    sized(cot(), 4000, 220)
+
+    act(() => { st.setSay('here is the answer') })
+
+    expect(cot().scrollTop).toBe(180)
+  })
+})
+
 describe('the fold over a turn just finished', () => {
   const folds = (): HTMLElement[] => $$('.tfold') as HTMLElement[]
   const openState = (): boolean[] => folds().map((f) => f.classList.contains('open'))
