@@ -85,7 +85,7 @@ export interface SettingsSource {
      the page is only ever shown a redacted key, so it has nothing to send. */
   everosSet(section: string, fields: Record<string, string> | null,
     borrowFrom?: string): Promise<SettingsSnapshot>
-  usage(): Promise<UsageStats | null>
+  usage(sessionKey?: string): Promise<UsageStats | null>
   provider(op: ProviderOp, params: Record<string, unknown>): Promise<SettingsSnapshot>
   model(): string
   /* The configured default provider, paired with model() above: the default

@@ -36,6 +36,7 @@ export interface SettingsState {
   toolKeyEdit: string | null
   /* undefined = never answered (drawn as loading), null = no counter behind
      the page (the demo's no-data note). */
+  usageSession: string
   usage: UsageStats | null | undefined
   provOpen: string | null
   provAll: boolean
@@ -55,6 +56,7 @@ const initial = (): SettingsState => ({
   mdlAdv: false,
   memEdit: null,
   toolKeyEdit: null,
+  usageSession: '',
   usage: undefined,
   provOpen: null,
   provAll: false,
@@ -235,12 +237,19 @@ export function checkUpdate(btn: HTMLButtonElement): void {
 /* Every open re-reads the counters; the floor keeps the redraw-triggered
    re-asks from spinning, and a failed refresh keeps the numbers it already
    has rather than reporting "no usage" for a dropped call. */
+export function usageSelect(session: string): void {
+  set({ usageSession: session, usage: undefined })
+  usageAt = 0
+  void usageLoad()
+}
+
 export async function usageLoad(): Promise<void> {
   if (usageBusy || Date.now() - usageAt < 3000) return
   usageBusy = true
+  const selected = state.usageSession
   let usage = state.usage
   try {
-    usage = await source().usage()
+    usage = await source().usage(selected || undefined)
   } catch {
     if (usage === undefined) {
       usage = {
@@ -255,6 +264,7 @@ export async function usageLoad(): Promise<void> {
     }
   }
   usageBusy = false
+  if (selected !== state.usageSession) { void usageLoad(); return }
   usageAt = Date.now()
   set({ usage })
 }

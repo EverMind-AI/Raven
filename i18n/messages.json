@@ -4659,6 +4659,7 @@
       "en": "Tool calls",
       "zh": "工具调用"
     },
+    "gui.set.usg.all_tasks": {"en": "All tasks", "zh": "全部任务"},
     "gui.set.usg.window": {
       "en": "last {d} days",
       "zh": "近 {d} 天"
@@ -5466,6 +5467,18 @@
     "gui.agent.migrate_body": {
       "en": "The preset for {name} now reaches it over {to}. The entry is removed and added back from that preset, so handles from runs already in flight stop resolving.",
       "zh": "{name} 的预设改成走 {to} 了 · 会先移除再按新预设装回来，已经在跑的会话句柄会失效"
+    },
+    "gui.agent.rename": {
+      "en": "Rename this agent",
+      "zh": "重命名这个智能体"
+    },
+    "gui.agent.redescribe": {
+      "en": "Edit what this agent is for",
+      "zh": "编辑这个智能体的用途说明"
+    },
+    "gui.agent.about_none": {
+      "en": "No description yet",
+      "zh": "还没有说明"
     },
     "gui.pb.back": {
       "en": "Playbooks",
