@@ -1126,41 +1126,224 @@ def test_report_bug_non_tty_without_yes_fails_before_side_effects(state, _no_mac
     assert tstore_module.pins(state) == {}
 
 
-def test_report_bug_needs_review_requires_accept_risk(state, _no_machine_secrets):
+def test_report_bug_suspected_without_flags_lists_items_and_both_flags(state, _no_machine_secrets):
     from raven.trajectory import bugreport as breport
 
     _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
 
     assert r.exit_code == 1
+    assert "1 item(s) require your decision" in r.output
+    assert "Paths are relative to the trajectory snapshot inside the package." in r.output
+    assert "Suspected: high-entropy token" in r.output
+    assert f"Token: {_ENTROPY_TOKEN}" in r.output
+    assert "Seen at:" in r.output
+    assert "the span log — spans.jsonl:1" in r.output
+    assert "--keep-findings or --redact-findings" in r.output
     assert "--accept-risk" in r.output
-    assert "residual scan flagged" in r.output
     assert breport.list_reports(state) == []
     assert _staging_entries(state) == []
 
 
-def test_report_bug_accept_risk_ships_needs_review(state, _no_machine_secrets):
+def _inner_spans_text(record, tmp_path):
+    import tarfile as _tarfile
+
+    with _tarfile.open(record["package"]["path"]) as tar:
+        inner = tar.extractfile(f"{record['report_id']}/trajectory/trace-1.tar.gz").read()
+    inner_tar = tmp_path / "inner.tar.gz"
+    inner_tar.write_bytes(inner)
+    extract_dir = tmp_path / "inner"
+    with _tarfile.open(inner_tar) as tar:
+        tar.extractall(extract_dir, filter="data")
+    return (extract_dir / "trace-1" / "spans.jsonl").read_text(encoding="utf-8")
+
+
+def test_report_bug_keep_findings_with_accept_risk_ships_kept(state, _no_machine_secrets, tmp_path):
     from raven.trajectory import bugreport as breport
 
     _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes", "--accept-risk"])
+    r = runner.invoke(
+        trajectory_app,
+        ["report-bug", "trace-1", "-d", "it broke", "--yes", "--keep-findings", "--accept-risk"],
+    )
 
     assert r.exit_code == 0, r.output
     ((_dir, record),) = breport.list_reports(state)
     assert record["redaction"]["classification"] == "needs_review"
     assert record["status"] == "local_ready"
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["kept"]
+    assert _ENTROPY_TOKEN not in json.dumps(record["redaction"]["user_decisions"])
+    assert _ENTROPY_TOKEN in _inner_spans_text(record, tmp_path)
 
 
-def test_report_bug_blocked_cannot_be_forced(state, _no_machine_secrets):
+def test_report_bug_redact_findings_with_accept_risk_ships_scrubbed(state, _no_machine_secrets, tmp_path):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    r = runner.invoke(
+        trajectory_app,
+        ["report-bug", "trace-1", "-d", "it broke", "--yes", "--redact-findings", "--accept-risk"],
+    )
+
+    assert r.exit_code == 0, r.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert record["status"] == "local_ready"
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["redacted"]
+    assert _ENTROPY_TOKEN not in json.dumps(record)
+    spans = _inner_spans_text(record, tmp_path)
+    assert _ENTROPY_TOKEN not in spans
+    assert "[REDACTED:user-confirmed]" in spans
+
+
+def test_report_bug_flags_are_mutually_exclusive(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+    from raven.trajectory import store as tstore_module
+
+    _simple_log(state)
+    r = runner.invoke(
+        trajectory_app,
+        ["report-bug", "trace-1", "-d", "x", "--yes", "--keep-findings", "--redact-findings"],
+    )
+
+    assert r.exit_code == 1
+    assert "mutually exclusive" in r.output
+    assert breport.list_reports(state) == []
+    assert not (breport.bugreports_root(state) / breport.STAGING_DIR).exists()
+    assert tstore_module.pins(state) == {}
+
+
+@pytest.mark.parametrize("flag", ["--keep-findings", "--redact-findings"])
+def test_report_bug_flag_without_accept_risk_fails_before_application(state, _no_machine_secrets, flag):
+    """The missing-flag failure must precede any decision application: the
+    original context is listed intact and nothing was replaced or frozen."""
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", flag])
+
+    assert r.exit_code == 1
+    assert "Suspected: high-entropy token" in r.output
+    assert _ENTROPY_TOKEN in r.output
+    assert "--accept-risk" in r.output
+    assert "--keep-findings or --redact-findings" not in r.output
+    assert "[REDACTED:user-confirmed]" not in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_accept_risk_without_keep_or_redact_lists_that_flag(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
+
+    assert r.exit_code == 1
+    assert "--keep-findings or --redact-findings" in r.output
+    assert "Pass: --keep-findings or --redact-findings (--yes does not imply them)." in r.output
+    assert breport.list_reports(state) == []
+
+
+def test_report_bug_both_kinds_ship_with_full_flags(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN} and {_PEM}"})
+    r = runner.invoke(
+        trajectory_app,
+        ["report-bug", "trace-1", "-d", "x", "--yes", "--redact-findings", "--accept-risk"],
+    )
+
+    assert r.exit_code == 0, r.output
+    ((_dir, record),) = breport.list_reports(state)
+    actions = sorted(entry["action"] for entry in record["redaction"]["user_decisions"])
+    assert actions == ["acknowledged", "redacted"]
+    assert record["redaction"]["security_notices"] != []
+
+
+def test_report_bug_policy_only_review_needs_accept_risk(state, _no_machine_secrets, monkeypatch):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_REQUIRE_REVIEW", "1")
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes"])
+    assert r.exit_code == 1
+    assert "organization policy requires manual review" in r.output
+    assert breport.list_reports(state) == []
+
+    r2 = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
+    assert r2.exit_code == 0, r2.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert record["redaction"]["classification"] == "needs_review"
+    assert record["redaction"]["user_decisions"] == []
+
+
+def test_report_bug_tty_full_flags_skip_all_prompts(state, _no_machine_secrets, monkeypatch):
+    """On a TTY, flags pre-decide their kinds: with everything covered plus
+    --yes, no questionary prompt may appear at all."""
+    import raven.cli.trajectory_browse as tbrowse
+    from raven.cli import trajectory_commands as tcmd
+    from raven.trajectory import bugreport as breport
+
+    def _no_prompts():
+        raise AssertionError("questionary must not be used when flags cover every item")
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
+    monkeypatch.setattr(tbrowse, "_require_questionary", _no_prompts)
+
+    r = runner.invoke(
+        trajectory_app,
+        ["report-bug", "trace-1", "-d", "x", "--yes", "--keep-findings", "--accept-risk"],
+    )
+
+    assert r.exit_code == 0, r.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["kept"]
+
+
+def test_report_bug_tty_flags_without_accept_risk_still_confirm_risk(state, _no_machine_secrets, monkeypatch):
+    """--keep-findings covers the items, but the risk consent still gates the
+    ship on a TTY when --accept-risk was not given; declining keeps nothing."""
+    import raven.cli.trajectory_browse as tbrowse
+    from raven.cli import trajectory_commands as tcmd
+    from raven.trajectory import bugreport as breport
+
+    def _no_prompts():
+        raise AssertionError("no per-item prompt is expected: the flag covers every item")
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
+    monkeypatch.setattr(tbrowse, "_require_questionary", _no_prompts)
+    confirms: list[str] = []
+
+    def _reject(message, *_a, **_k):
+        confirms.append(message)
+        return False
+
+    monkeypatch.setattr(tcmd.typer, "confirm", _reject)
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--keep-findings"])
+
+    assert r.exit_code == 1
+    assert confirms == ["Ship the package with the risks listed above?"]
+    assert "Cancelled — no bug report was created." in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_private_key_ships_with_accept_risk(state, _no_machine_secrets):
     from raven.trajectory import bugreport as breport
 
     _simple_log(state, attrs={"llm.output": _PEM})
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes", "--accept-risk"])
 
-    assert r.exit_code == 1
-    assert "private key block" in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
+    assert r.exit_code == 0, r.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert record["status"] == "local_ready"
+    assert record["redaction"]["security_notices"] == [
+        "the original trajectory contained 1 private key block(s), replaced before export"
+    ]
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["acknowledged"]
+    assert _PEM not in json.dumps(record)
 
 
 def test_report_bug_rejects_bogus_severity(state, _no_machine_secrets):
@@ -1225,26 +1408,30 @@ def test_report_bug_blank_description_fails_before_side_effects(state, _no_machi
     assert tstore_module.pins(state) == {}
 
 
-def test_report_bug_blocked_by_description_has_problem_wording(state, _no_machine_secrets):
+def test_report_bug_private_key_in_description_requires_accept_risk(state, _no_machine_secrets):
     from raven.trajectory import bugreport as breport
 
     _simple_log(state)
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", f"look: {_PEM}", "--yes"])
 
     assert r.exit_code == 1
-    assert "Cannot create a bug report with these details." in r.output
-    assert "without pasting the key itself" in r.output
+    assert "Confirmed sensitive: private key block (already replaced)" in r.output
+    assert "Pass: --accept-risk (--yes does not imply them)." in r.output
     assert breport.list_reports(state) == []
     assert _staging_entries(state) == []
 
 
-def test_report_bug_blocked_by_trajectory_has_source_wording(state, _no_machine_secrets):
+def test_report_bug_private_key_in_trajectory_requires_accept_risk(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
     _simple_log(state, attrs={"llm.output": _PEM})
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes"])
 
     assert r.exit_code == 1
-    assert "Cannot create a bug report from this attempt." in r.output
-    assert "raven trajectory report" in r.output
+    assert "Confirmed sensitive: private key block (already replaced)" in r.output
+    assert "Pass: --accept-risk (--yes does not imply them)." in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
 
 
 def test_report_bug_tty_confirmation_shows_canonical_summary(state, _no_machine_secrets, monkeypatch):
@@ -1312,17 +1499,115 @@ def test_report_bug_summary_shows_session_and_trajectory_context(state, _no_mach
     assert "session record" in r.output
 
 
-def test_report_bug_needs_review_shows_sanitized_samples(state, _no_machine_secrets, monkeypatch):
-    """The independent authorization is judged on the bounded sample block."""
+class _FakeReviewQuestionary:
+    """Minimal questionary stand-in: every select resolves via the factory.
+
+    No ``application`` attribute, so ``_inject_bindings`` leaves it untouched
+    and the real ``_ask`` / ``_ask_action`` conversion logic runs.
+    """
+
+    class Choice:
+        def __init__(self, title, value=None):
+            self.title = title
+            self.value = value if value is not None else title
+
+    def __init__(self, result_factory):
+        self._factory = result_factory
+
+    def select(self, *_a, **_k):
+        factory = self._factory
+        return type("_Ask", (), {"unsafe_ask": staticmethod(factory)})()
+
+    def text(self, *_a, **_k):
+        factory = self._factory
+        return type("_Ask", (), {"unsafe_ask": staticmethod(factory)})()
+
+
+def _tty_review_setup(state, monkeypatch, attrs):
     from raven.cli import trajectory_commands as tcmd
+
+    _simple_log(state, attrs=attrs)
+    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
+
+
+def test_report_bug_tty_escape_during_review_cancels(state, _no_machine_secrets, monkeypatch):
+    import raven.cli.trajectory_browse as tbrowse
+    from raven.trajectory import bugreport as breport
+
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
+    monkeypatch.setattr(tbrowse, "_require_questionary", lambda: _FakeReviewQuestionary(lambda: tbrowse._BACK))
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
+
+    assert r.exit_code == 1
+    assert "Cancelled — no bug report was created." in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_tty_ctrl_c_during_review_cancels(state, _no_machine_secrets, monkeypatch):
+    import raven.cli.trajectory_browse as tbrowse
+    from raven.trajectory import bugreport as breport
+
+    def _interrupt():
+        raise KeyboardInterrupt
+
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
+    monkeypatch.setattr(tbrowse, "_require_questionary", lambda: _FakeReviewQuestionary(_interrupt))
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
+
+    assert r.exit_code == 1
+    assert "Cancelled — no bug report was created." in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_tty_conflict_then_cancel(state, _no_machine_secrets, monkeypatch):
+    import raven.cli.trajectory_browse as tbrowse
+    from raven.trajectory import bugreport as breport
+
+    inner = "Hj5tR8uE3iO7pA1sD4fGk9lZ"
+    outer = inner + "W6xC2v"
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"a {inner} b {outer}"})
+    answers = iter(["k", "r", "c"])
+    monkeypatch.setattr(tbrowse, "_require_questionary", lambda: _FakeReviewQuestionary(lambda: next(answers)))
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
+
+    assert r.exit_code == 1
+    assert "must share one decision" in r.output
+    assert "Cancelled — no bug report was created." in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_summary_shows_semantic_decisions(state, _no_machine_secrets, monkeypatch):
+    """The confirmation summary lists every decision with its semantic source."""
+    from raven.cli import trajectory_commands as tcmd
+    from raven.trajectory import bugreport as breport
 
     _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
 
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--keep-findings", "--accept-risk"])
     assert r.exit_code == 0, r.output
     assert "residual scan flagged" in r.output
-    assert "spans.jsonl:" in r.output
+    assert "decision(s) complete" in r.output
+    assert "the span log" in r.output
+    assert _ENTROPY_TOKEN not in r.output
 
+    # TTY path: the interactive decider is stubbed to keep-all; declining the
+    # single risk confirmation must leave nothing behind.
+    import raven.cli.trajectory_browse as tbrowse
+    from raven.trajectory import review as treview
+
+    def _keep_all(_questionary, _style):
+        def _decide(items, _reasons):
+            return [treview.ReviewDecision(item.id, treview.ACTION_KEPT) for item in items]
+
+        return _decide
+
+    monkeypatch.setattr(tbrowse, "make_review_decider", _keep_all)
     monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
     confirms: list[str] = []
 
@@ -1334,4 +1619,7 @@ def test_report_bug_needs_review_shows_sanitized_samples(state, _no_machine_secr
     _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
     r2 = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
     assert r2.exit_code == 1
-    assert "spans.jsonl:" in r2.output
+    assert "the span log" in r2.output
+    assert confirms == ["Ship the package with the risks listed above?"]
+    assert len(breport.list_reports(state)) == 1  # only the first run's report
+    assert _staging_entries(state) == []

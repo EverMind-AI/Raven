@@ -1064,6 +1064,11 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
                 restrict_to_workspace=True,
                 session_manager=sessions,
             )
+            # The loop's ContextBuilder starts the skill file watcher, a
+            # daemon thread nothing here would ever stop: a replay feeds
+            # recorded content only, and leaked watcher threads crash the
+            # process at interpreter shutdown once probes run repeatedly.
+            loop.context.skills.stop_file_watcher()
             loop.tools = registry
             for turn in recording.turns:
                 if state.halted:
