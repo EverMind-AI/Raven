@@ -1,10 +1,11 @@
 """The disk-layout invariants raven and its out-of-tree readers hold each other to.
 
 A paper of constants, not a resolver: these values name what may not drift.
-``raven.home`` implements the home rule from them, and the vendored launchers
-under ``subagents/`` re-derive the same facts by hand (they must run under
-bare python3, so they cannot import raven) -- their git history is a list of
-the breakages this paper exists to prevent. The glossary's rule stands here
+``raven.home`` implements the home rule from them; the retired vendored
+launchers re-derived the same facts by hand (they ran under bare python3,
+unable to import raven), and their git history is a list of the breakages
+this paper exists to prevent. The agents launchers that replaced them run on
+installed raven and ask it instead. The glossary's rule stands here
 in code: resolving the home again anywhere else is how two directories become
 the answer to one question.
 

@@ -1035,7 +1035,7 @@ class TurnPathMixin:
                 response.content = cut_reasoning_head(response.content)
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
-            usage_snapshot = self._build_usage_snapshot(response, call_model, "")
+            usage_snapshot = self._build_usage_snapshot(response, call_model, session_key or "")
             await self.strategies.after_llm_call(
                 {
                     "content": response.content,
@@ -1283,6 +1283,9 @@ class TurnPathMixin:
                         setter(tool_call.id)
                     set_current_tool_call_id(tool_call.id)
                     tool_t0 = time.monotonic()
+                    tracker = self.strategies.get("usage_tracker")
+                    if tracker is not None:
+                        await tracker.record_tool_call(tool_call.name, tool_call.id)
                     preempted = ""
                     if tool_call.name == "ask_user":
                         from raven.agent.subagent import watch_work as _ww
@@ -2717,7 +2720,12 @@ class TurnPathMixin:
             # just the _set_tool_context call inside _process_message) so every
             # path-aware tool sees it, including on the exception and cancellation
             # paths below -- workdir.bind's finally always resets the ContextVar.
-            with workdir.bind(turn_workdir):
+            from raven.token_wise import usage_context
+
+            with (
+                workdir.bind(turn_workdir),
+                usage_context.bind(cid, self.sessions.get_or_create(cid).metadata.get("usage_owner", {})),
+            ):
                 try:
                     await self._start_executor()
                     # Fire and forget: a turn must not wait on a handshake, and

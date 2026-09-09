@@ -218,7 +218,7 @@ def _prune_shadowing_rows(
     a user edits a vendored agent, so nothing is deleted unasked: the rows
     are listed, a disabled row is flagged (removing it would re-enable the
     agent), and a decline keeps everything. The full list is backed up
-    first (the same fail-safe as ``subagents/install.sh --prune-stale``): a
+    first (the same fail-safe as the retired vendored installer's ``--prune-stale``): a
     backup that cannot be written stops the prune.
     """
     path = config_path or get_config_path()
@@ -343,8 +343,9 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
     if not can_inherit:
         console.print(
             t(
-                "  [dim]This raven has no provider key to lend (an OAuth sign-in is not one),"
-                " so each agent needs a key of its own.[/dim]"
+                "  [dim]This raven has no provider key to lend (an OAuth sign-in is not one):"
+                " an agent tuned for its own model needs a key of its own, and one that runs on"
+                " this raven's LLM is not ready until a provider is configured.[/dim]"
             )
         )
 
@@ -360,6 +361,21 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
         verdict = unready.get(folder.name)
         if verdict is not None and not verdict.ready:
             console.print(t("  [yellow]Not ready[/yellow]: {a0}", a0=verdict.detail))
+            continue
+
+        if not folder.recommended_model:
+            # A folder that recommends no model of its own runs on this raven's
+            # LLM and nothing else: there is no key to take (the launcher would
+            # not read it) and no model to recommend. It is ready exactly when
+            # this raven has a key to lend; otherwise the launcher refuses to
+            # start, and a tick here would certify a product that cannot.
+            if can_inherit:
+                set_up += 1
+                console.print(f"  [green]\u2713[/green] {t('ready')} {t("(runs on this raven's LLM)")}")
+            else:
+                console.print(
+                    t("  [yellow]Not ready[/yellow]: runs on this raven's LLM; configure a model provider first")
+                )
             continue
 
         # The recommended model goes first: it is what the folder was tuned for,

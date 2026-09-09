@@ -146,6 +146,64 @@ async def test_denied_digest_not_reasked_within_turn():
 
 
 @pytest.mark.asyncio
+async def test_a_lapsed_approval_is_not_reported_as_a_refusal():
+    """The two shared one sentence, and they are not one fact.
+
+    Observed: three approvals expired unanswered in a row, the model read
+    "user denied", stopped asking, went around, and told the reader the task
+    had hit a system error -- having delivered something else. What it was
+    told is what it acted on.
+    """
+    gate = gate_for(PermissionsConfig())
+    bind(Responder(ApprovalOutcome(ApprovalChoice.DENY, answered=False)))
+
+    refusal = await gate.enforce("write_file", {"path": "a.txt", "content": "x"})
+
+    assert refusal is not None
+    assert "expired with no answer" in refusal.model_text
+    assert "Nobody refused it" in refusal.model_text
+    # The word the model acts on must not be there at all: "denied" is what sent
+    # it looking for another way.
+    assert "denied" not in refusal.model_text
+    # Still refused. Failing closed is not what is being changed.
+    assert refusal.ok is False
+
+
+@pytest.mark.asyncio
+async def test_an_answered_refusal_still_says_the_user_refused():
+    """The other half. A real denial must keep reading as one, feedback and
+    all, or the change has only moved the ambiguity."""
+    gate = gate_for(PermissionsConfig())
+    bind(Responder(ApprovalOutcome(ApprovalChoice.DENY, feedback="not in prod")))
+
+    refusal = await gate.enforce("write_file", {"path": "a.txt", "content": "x"})
+
+    assert refusal is not None
+    assert "User denied this action." in refusal.model_text
+    assert "not in prod" in refusal.model_text
+    assert "expired" not in refusal.model_text
+
+
+@pytest.mark.asyncio
+async def test_the_second_ask_after_a_lapse_says_it_lapsed_too():
+    """A lapsed request is still deduped -- it would expire the same way, and
+    forty iterations of a 35-second wait is a turn spent waiting. But the
+    sentence about the second ask has to be true about the first, or the fix
+    only moves the false one further down the turn."""
+    gate = gate_for(PermissionsConfig())
+    responder = Responder(ApprovalOutcome(ApprovalChoice.DENY, answered=False))
+    bind(responder)
+
+    await gate.enforce("write_file", {"path": "a.txt", "content": "x"})
+    second = await gate.enforce("write_file", {"path": "a.txt", "content": "x"})
+
+    assert second is not None
+    assert "expired with no answer" in second.model_text
+    assert "denied" not in second.model_text
+    assert len(responder.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_deny_stop_aborts_turn():
     gate = gate_for(PermissionsConfig())
     bind(Responder(ApprovalOutcome(ApprovalChoice.DENY_STOP)))

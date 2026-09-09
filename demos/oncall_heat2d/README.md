@@ -41,9 +41,10 @@ to recognise `nx ~ 224` as the ceiling for the default step.
   the job script prefers that venv over whatever `python3` the machine has
   (set `HEAT2D_PYTHON` to override; with no NumPy anywhere it fails with rc 3
   rather than pretending)
-- The on-call sub-agent installed: `bash subagents/install.sh` (builds
-  `subagents/raven-oncall`'s venv), and its `.env` carrying `ONCALL_API_KEY`
-  (see `subagents/raven-oncall/.env.example`)
+- The on-call agent product registered: run `raven onboard` (its products step
+  registers `agents/raven-oncall`, which serves on this raven -- no separate
+  venv to build), and its `.env` carrying `ONCALL_API_KEY`
+  (see `agents/raven-oncall/.env.example`)
 - A provider key in your own raven config (the demo copies it into a
   demo-local home)
 

@@ -203,7 +203,7 @@ def test_the_modes_are_the_vendored_twins_overlays_or_say_why():
     ones whose numbers were published.
     """
     ours = RUN_PY.parent / "modes"
-    theirs = REPO / "subagents" / "raven-research" / "modes"
+    theirs = REPO / "tests" / "fixtures" / "vendored_fork" / "modes"
     assert {p.name for p in ours.glob("*.json")} == {p.name for p in theirs.glob("*.json")}, (
         "one side gained or lost a mode file; a mode that exists on only one launcher is a mode nobody compared"
     )
@@ -218,7 +218,7 @@ def test_the_modes_are_the_vendored_twins_overlays_or_say_why():
 
 
 def test_the_identity_is_the_vendored_twins_override_verbatim():
-    fork = json.loads((REPO / "subagents" / "raven-research" / "config.json").read_text())
+    fork = json.loads((REPO / "tests" / "fixtures" / "vendored_fork" / "config.json").read_text())
     assert (RUN_PY.parent / "soul.md").read_text().rstrip("\n") == fork["drFlow"]["identityOverride"].rstrip("\n")
 
 
@@ -290,7 +290,7 @@ def test_the_flow_slice_is_the_vendored_twins_drflow_verbatim():
     class defaults underneath the slice are pinned separately, in
     ``test_agents_research_flow_parity.py``.
     """
-    fork = json.loads((REPO / "subagents" / "raven-research" / "config.json").read_text())["drFlow"]
+    fork = json.loads((REPO / "tests" / "fixtures" / "vendored_fork" / "config.json").read_text())["drFlow"]
     twin = json.loads((RUN_PY.parent / "config.json").read_text())["plugins"]["config"]["research-flow"]
     skip = set(TWIN_DRFLOW_EXCEPTIONS) | set(TWIN_DRFLOW_DIVERGED) | set(TWIN_DRFLOW_PRODUCT_ONLY)
     expected = {k: v for k, v in fork.items() if k not in skip}

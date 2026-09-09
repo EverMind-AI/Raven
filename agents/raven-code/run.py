@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Host-side launcher for Raven-Code -- the B side, on installed raven.
 
-The vendored Raven-Code (subagents/raven-code) carries a whole fork
+The retired vendored Raven-Code carried a whole fork
 checkout; this product carries its assets only, and as of the exec-target
 swap the process it starts is installed raven itself. Two hostings, the
 fork launcher's own pair:

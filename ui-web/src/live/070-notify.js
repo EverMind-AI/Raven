@@ -66,6 +66,16 @@ rpc.notify['approval.request'] = (p) => {
 rpc.notify['approval.closed'] = (p) => {
   notifyTurn(p.conversation_id || sessionCurrent(), { type: 'resume' });
   approvalClose(p.approval_id);
+  /* `reason` was arriving and being dropped. A sheet the reader answered closes
+     because they answered it, and needs no notice; one that expired closes the
+     same way and said nothing at all, so a run whose approvals had merely lapsed
+     went on to tell the reader it had hit a system error. The only two reasons
+     nobody chose are these, and both mean the action did not run.
+
+     Not scoped to the conversation on screen: a request that lapsed in another
+     one stalled that run just as completely, and the reader is the only person
+     who can unstick either. */
+  if (p.reason === 'timeout' || p.reason === 'error') toast(T('gui.confirm.lapsed'));
 };
 
 /* The question the agent asks mid-turn. The sheet is the island's

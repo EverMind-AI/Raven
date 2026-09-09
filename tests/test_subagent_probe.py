@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 from contextlib import closing
@@ -548,6 +549,168 @@ async def test_testing_a_builtin_agent_is_refused_rather_than_attempted() -> Non
     assert result.ok is False
     assert "nothing to test" in result.detail
     assert "unknown third-party" not in result.detail
+
+
+# --- ping ----------------------------------------------------------------
+
+
+async def test_ping_dispatches_the_probe_prompt_and_passes_on_a_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Layer 2 is a real turn, because layer 1 cannot see a credential.
+
+    Measured 2026-09-07: six registry agents answered `initialize` and
+    `session/new` and then failed the first model call, which is where their
+    credential is actually checked.
+    """
+    sent: list[str] = []
+
+    class _Answers:
+        async def run(self, prompt, **kwargs):
+            sent.append(prompt)
+            return "PONG"
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Answers())
+
+    cfg = ThirdPartyAcpSubagentConfig(name="ping-acp", kind="acp", command="fake-agent acp")
+    result = await probe_mod.ping_agent(cfg)
+
+    assert sent == [probe_mod.PROBE_PROMPT]
+    assert result.ok is True
+    assert "replied" in result.detail
+
+
+async def test_ping_fails_when_the_agent_answers_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty reply is a signal, not a pass -- openclaw answered its own
+    workspace bootstrap instead of the task and returned nothing."""
+
+    class _Silent:
+        async def run(self, prompt, **kwargs):
+            return "   "
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Silent())
+
+    cfg = ThirdPartyAcpSubagentConfig(name="silent-acp", kind="acp", command="fake-agent acp")
+    result = await probe_mod.ping_agent(cfg)
+
+    assert result.ok is False
+    assert "answered nothing" in result.detail
+
+
+async def test_ping_fails_and_keeps_the_reason_when_the_model_call_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact shape six measured agents have: layer 1 fine, model call refused.
+
+    The reason has to survive into the detail, because it is the whole value of
+    the failure -- "sign in" and "-32603" send an operator to different places.
+    """
+
+    class _Refuses:
+        async def run(self, prompt, **kwargs):
+            raise RuntimeError("Internal error: You need to sign in to use this model.")
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Refuses())
+
+    cfg = ThirdPartyAcpSubagentConfig(name="unauthed-acp", kind="acp", command="fake-agent acp")
+    result = await probe_mod.ping_agent(cfg)
+
+    assert result.ok is False
+    assert "sign in" in result.detail
+
+
+async def test_ping_fails_on_a_timeout_rather_than_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """gemini and dirac hang rather than refuse, so an unbounded wait would sit
+    on the settings switch and then say nothing useful."""
+
+    class _Hangs:
+        async def run(self, prompt, **kwargs):
+            await asyncio.sleep(30)
+            return "too late"
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Hangs())
+    monkeypatch.setattr(probe_mod, "_ENABLE_PING_TIMEOUT_SECONDS", 1)
+
+    cfg = ThirdPartyAcpSubagentConfig(name="hanging-acp", kind="acp", command="fake-agent acp")
+    result = await probe_mod.ping_agent(cfg)
+
+    assert result.ok is False
+    assert "did not answer within" in result.detail
+
+
+async def test_ping_hands_the_backend_the_same_bound_it_waits_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One number, or the inner bound is unreachable: a backend allowed the
+    longer explicit-Test budget can only ever be cancelled by the `wait_for`
+    around it, never reach its own timeout and describe the failure.
+
+    This half asserts what `ping_agent` asks for, and can assert nothing more:
+    the builder is replaced below, so a builder that accepted both numbers and
+    used neither would satisfy every line of it. The other half is
+    `test_the_factory_honours_the_bounds_its_caller_overrides`, which builds for
+    real and reads them back off the backend."""
+    seen: dict = {}
+
+    class _Answers:
+        async def run(self, prompt, **kwargs):
+            return "PONG"
+
+    def _capture(cfg, **kw):
+        seen.update(kw)
+        return _Answers()
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", _capture)
+
+    await probe_mod.ping_agent(ThirdPartyAcpSubagentConfig(name="ping-acp", kind="acp", command="fake-agent acp"))
+    assert seen["timeout"] == probe_mod._ENABLE_PING_TIMEOUT_SECONDS
+
+    # A row that asks for less than the cap still gets its own number.
+    tight = ThirdPartyAcpSubagentConfig(name="ping-tight", kind="acp", command="fake-agent acp", timeout=5)
+    await probe_mod.ping_agent(tight)
+    assert seen["timeout"] == 5
+
+    # The handshake is bounded the same way, or the claim above holds only for
+    # the run: several shipped presets declare a readiness window of 120s, twice
+    # this cap, and a stalled handshake would then be cancelled from outside
+    # instead of the backend saying the agent never became ready.
+    slow_start = ThirdPartyAcpSubagentConfig(
+        name="ping-slow-start", kind="acp", command="fake-agent acp", ready_timeout_ms=120000
+    )
+    await probe_mod.ping_agent(slow_start)
+    assert seen["ready_timeout_ms"] == probe_mod._ENABLE_PING_TIMEOUT_SECONDS * 1000
+
+    quick_start = ThirdPartyAcpSubagentConfig(
+        name="ping-quick-start", kind="acp", command="fake-agent acp", ready_timeout_ms=4000
+    )
+    await probe_mod.ping_agent(quick_start)
+    assert seen["ready_timeout_ms"] == 4000
+
+
+def test_the_factory_honours_the_bounds_its_caller_overrides() -> None:
+    """Both overrides exist for one caller, so both are read off a real build.
+
+    Asserting on the arguments a replaced builder recorded proves the request and
+    not the effect: dropping either honouring line left the whole subagent suite
+    green. Read them back off the object instead, and the test stays true of the
+    next bound the factory learns to take.
+    """
+    from raven.agent.subagent.backends import build_third_party_backend
+
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="factory-bounds",
+        kind="acp",
+        command="fake-agent acp",
+        ready_timeout_ms=120000,
+        timeout=300,
+    )
+    backend = build_third_party_backend(cfg, ready_timeout_ms=45000, timeout=60)
+    assert backend.ready_timeout_ms == 45000
+    assert backend.timeout == 60
+
+    # Omitted, and the config's own numbers stand -- the overrides are for the
+    # caller that has a shorter budget, not a rewrite of the row.
+    untouched = build_third_party_backend(cfg)
+    assert untouched.ready_timeout_ms == 120000
+    assert untouched.timeout == 300
 
 
 class _FakeRow:

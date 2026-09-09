@@ -22,7 +22,6 @@ import asyncio
 from typing import Any
 
 import requests
-
 from raven.agent.tools.base import Tool
 
 

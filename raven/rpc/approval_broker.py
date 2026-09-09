@@ -113,14 +113,19 @@ class ApprovalBroker:
             try:
                 return ApprovalOutcome(choice=ApprovalChoice(choice), feedback=feedback)
             except ValueError:
-                return ApprovalOutcome(choice=ApprovalChoice.DENY)
+                # Not a wire choice, so not a person's answer: `cancel_all` puts
+                # the synthetic "cancelled" here during teardown, and a client
+                # sending something outside the enum said nothing this side can
+                # read. Both fail closed, and neither is a refusal.
+                return ApprovalOutcome(choice=ApprovalChoice.DENY, answered=False)
         except TimeoutError:
             close_reason = "timeout"
-            return ApprovalOutcome(choice=ApprovalChoice.DENY)
+            # Still a deny -- failing closed is the point -- but nobody said so.
+            return ApprovalOutcome(choice=ApprovalChoice.DENY, answered=False)
         except Exception:
             close_reason = "error"
             logger.exception("approval_broker: request failed for {}", approval_id)
-            return ApprovalOutcome(choice=ApprovalChoice.DENY)
+            return ApprovalOutcome(choice=ApprovalChoice.DENY, answered=False)
         finally:
             self._pending.pop(approval_id, None)
             if request_sent:

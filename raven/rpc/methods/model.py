@@ -250,7 +250,8 @@ def _build_provider_entry(
     models = _provider_models(slug, configured=configured, section=section)
     from raven.providers.protocol import effective_protocol, native_api_base
 
-    protocols = {model: effective_protocol(section if section is not _UNLOADED else None, model) for model in models}
+    loaded = section if section is not _UNLOADED else None
+    protocols = {model: effective_protocol(loaded, model, slug) for model in models}
     if configured and not (spec and spec.client):
         from raven.providers.endpoints import provider_endpoints
 

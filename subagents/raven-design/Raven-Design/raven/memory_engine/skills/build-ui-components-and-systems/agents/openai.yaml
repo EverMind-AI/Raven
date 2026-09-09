@@ -1,4 +1,0 @@
-interface:
-  display_name: "UI 组件与设计系统"
-  short_description: "复用成熟原语，建立 token、组件族、主题、文档与工程接入"
-  default_prompt: "使用 $build-ui-components-and-systems 先识别 mode、最终消费者与受影响 concern；Create/Edit 只实现目标 claim 所需切片，Diagnose/Audit 保持只读，不默认建设完整 token、组件、主题、文档或迁移体系。"
