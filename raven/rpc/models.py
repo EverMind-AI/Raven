@@ -2832,10 +2832,14 @@ class ToolUsage(_Strict):
 
 
 class SettingsUsageParams(_Strict):
+    session_key: str | None = None
     days: int | None = Field(default=None, description="Window to scan; 30 by default, capped at 90.")
 
 
 class SettingsUsageResult(_Strict):
+    session_key: str | None = None
+    sessions: list[str] = Field(default_factory=list)
+    session_titles: dict[str, str] = Field(default_factory=dict)
     days: int
     llm: LlmUsage
     tools: ToolUsage

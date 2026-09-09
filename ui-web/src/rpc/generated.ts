@@ -2681,11 +2681,17 @@ export interface SettingsUsageParams {
    * Window to scan; 30 by default, capped at 90.
    */
   days?: number;
+  session_key?: string | null;
 }
 export interface SettingsUsageResult {
   days: number;
   llm: LlmUsage;
   tools: ToolUsage;
+  session_key?: string | null;
+  sessions?: string[];
+  session_titles?: {
+    [k: string]: string;
+  };
 }
 export interface SettingsEverosParams {}
 export interface SettingsEverosResult {

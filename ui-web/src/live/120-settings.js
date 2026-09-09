@@ -179,7 +179,7 @@ DS.settings = {
     }
     return settingsSnapshot();
   },
-  usage: () => rpc.call('settings.usage', {}),
+  usage: (sessionKey) => rpc.call('settings.usage', { session_key: sessionKey || null }),
   provider: async (op, params) => {
     await rpc.call('model.' + op, params);
     await loadProviders();

@@ -223,3 +223,53 @@ def test_snapshot_uses_protocol_convention_not_token_inequality(includes_cache, 
     assert snap.input_tokens == expected
     assert normalize(usage, "model")["input_tokens"] == expected
     assert snap.cost_usd is None
+
+
+async def test_concurrent_image_usage_keeps_turn_ownership(tmp_path, monkeypatch):
+    import asyncio
+
+    from raven.token_wise import usage_context
+
+    monkeypatch.delenv("RAVEN_USAGE_ROOT_SESSION", raising=False)
+    tracker = UsageTracker(telemetry_dir=tmp_path)
+
+    async def record(key):
+        with usage_context.bind(key):
+            await asyncio.sleep(0)
+            await tracker.after_llm_call({}, UsageSnapshot(model="image", cost_usd=0.2))
+
+    await asyncio.gather(record("task-a"), record("task-b"))
+    rows = [json.loads(line) for line in next(tmp_path.glob("usage-*.jsonl")).read_text().splitlines()]
+    assert {(row["session_key"], row["root_session_key"]) for row in rows} == {
+        ("task-a", "task-a"),
+        ("task-b", "task-b"),
+    }
+    assert usage_context.session_key() is None
+
+
+async def test_buffered_delegated_usage_keeps_each_sessions_owner_and_destination(tmp_path):
+    import asyncio
+
+    from raven.token_wise import usage_context
+
+    tracker = UsageTracker(telemetry_dir=tmp_path / "local", flush_every=10)
+
+    async def record(name):
+        owner = {"root_session_key": name, "telemetry_dir": str(tmp_path / name)}
+        with usage_context.bind("child-" + name, owner):
+            await asyncio.sleep(0)
+            with usage_context.bind("tool-" + name):
+                assert usage_context.delegation()["root_session_key"] == name
+                await tracker.after_llm_call({}, UsageSnapshot(model="image", cost_usd=0.1))
+
+    await asyncio.gather(record("a"), record("b"))
+    assert usage_context.root_session_key() is None
+    assert usage_context.telemetry_dir() is None
+    tracker.close()
+    for name in ("a", "b"):
+        rows = [json.loads(line) for line in next((tmp_path / name).glob("usage-*.jsonl")).read_text().splitlines()]
+        assert len(rows) == 1
+        assert rows[0]["root_session_key"] == name
+        assert rows[0]["session_key"] == "tool-" + name
+        assert "_telemetry_dir" not in rows[0]
+    assert not (tmp_path / "local").exists()
