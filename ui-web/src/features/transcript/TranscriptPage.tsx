@@ -1451,9 +1451,12 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
         <span className="tm">{seg.time || ''}</span>
         <Chev />
       </button>
-      {/* Every turn of a resumed conversation arrives shut, so this is where
-          the weight was: a forty-turn session built 7361 nodes of which 6400
-          sat in shut fold bodies. */}
+      {/* A shut body is not built, which is where the weight was: a forty-turn
+          session built 7361 nodes of which 6400 sat in shut fold bodies. At
+          most one fold is open -- the turn the reader is looking at, whether
+          they just watched it finish (`collapse`) or just reopened the
+          conversation on it (`openLastFold`) -- so one body IS built, and one
+          is not a session's worth. */}
       <div className="tfb" hidden={!seg.open}>
         {seg.open ? seg.steps.map((s) => <StepView key={s.id} lane={lane} seg={s} />) : null}
       </div>
