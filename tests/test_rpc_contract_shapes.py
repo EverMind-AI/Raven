@@ -619,29 +619,3 @@ async def test_usage_persisted_cost_round_trip(workspace, tmp_path, monkeypatch,
     for totals in (result["llm"]["total"], result["llm"]["models"][0]):
         assert totals["cost_usd"] == cost
         assert totals["cost_missing_calls"] == int(cost is None)
-
-
-async def test_task_usage_includes_children_and_images_once(workspace, tmp_path, monkeypatch):
-    from raven.contracts.token_strategy import UsageSnapshot
-    from raven.rpc.methods.console import settings_usage
-    from raven.token_wise import usage_context
-    from raven.token_wise.usage_tracker import UsageTracker
-
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
-    monkeypatch.delenv("RAVEN_USAGE_ROOT_SESSION", raising=False)
-    tracker = UsageTracker()
-    await tracker.after_llm_call({}, UsageSnapshot(model="main", session_key="task-a", cost_usd=0.1))
-    await tracker.after_llm_call({}, UsageSnapshot(model="main", session_key="task-b", cost_usd=0.8))
-    await tracker.after_llm_call({}, UsageSnapshot(model="historical", cost_usd=0.9))
-    with usage_context.bind("child", {"root_session_key": "task-a"}):
-        await tracker.after_llm_call({}, UsageSnapshot(model="design", session_key="child", cost_usd=0.2))
-        await tracker.after_llm_call({}, UsageSnapshot(model="image", cost_usd=0.3, cache_read_tokens=40))
-    result = await settings_usage({"session_key": "task-a"})
-    _check("settings.usage", result)
-    assert result["llm"]["total"]["calls"] == 3
-    assert result["llm"]["total"]["cost_usd"] == pytest.approx(0.6)
-    assert result["llm"]["total"]["cache_read_tokens"] == 40
-    assert result["sessions"] == ["task-a", "task-b"]
-    assert (await settings_usage({"session_key": "task-b"}))["llm"]["total"]["cost_usd"] == 0.8
-    assert (await settings_usage({"session_key": "absent"}))["llm"]["total"]["calls"] == 0
-    assert (await settings_usage({}))["llm"]["total"]["cost_usd"] == pytest.approx(2.3)

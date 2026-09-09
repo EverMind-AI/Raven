@@ -3640,7 +3640,6 @@ export interface SettingsUsageParams {
    * Window to scan; 30 by default, capped at 90.
    */
   days?: number;
-  session_key?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3650,11 +3649,6 @@ export interface SettingsUsageResult {
   days: number;
   llm: LlmUsage;
   tools: ToolUsage;
-  session_key?: string | null;
-  sessions?: string[];
-  session_titles?: {
-    [k: string]: string;
-  };
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

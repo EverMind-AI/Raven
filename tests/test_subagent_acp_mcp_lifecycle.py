@@ -615,17 +615,3 @@ async def test_a_bridged_server_without_oauth_is_dialled_with_no_credential(
             pass
 
     assert opened.get("echo") is None
-
-
-async def test_dispatch_keeps_usage_ownership_out_of_process_binding(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
-
-    import raven.acp_client.acp_agent as module
-
-    acquire = AsyncMock(side_effect=RuntimeError("stop before launch"))
-    monkeypatch.setattr(module, "get_pool", lambda: SimpleNamespace(acquire=acquire))
-    backend = AcpAgentBackend(name="usage-test", command="unused")
-    with pytest.raises(RuntimeError, match="stop before launch"):
-        await backend.run("draw", task_id="node", workspace=tmp_path, executor=None, session_key="task-a", mcps=[])
-    assert acquire.call_args.kwargs["binding"] is None

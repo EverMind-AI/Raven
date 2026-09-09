@@ -4328,23 +4328,3 @@ def test_the_pooled_recorder_is_repointed_at_the_swap_boundary_not_at_binding(mo
     new.repoint_pooled_resident()
     resident["r"]._wake_cb("s", "h", "after SWAP")
     assert new_wakes == ["after SWAP"] and old_wakes == ["during BUILD"]
-
-
-async def test_usage_owner_travels_on_each_prompt_over_one_connection(trace_dir, tmp_path):
-    from raven.token_wise import usage_context
-
-    backend = build_third_party_backend(stub_config("a"))
-    for session, root in (("s1", "root-a"), ("s2", "root-b")):
-        with usage_context.bind(session, {"root_session_key": root, "telemetry_dir": str(tmp_path)}):
-            assert (
-                await backend.run("ping", task_id=session, session_key=session, workspace=tmp_path, executor=None)
-                == "pong"
-            )
-    connection = _only_connection("a")
-    rows = [json.loads(line) for line in connection.client.journal.path.read_text().splitlines()]
-    prompts = [
-        r["frame"]["params"]
-        for r in rows
-        if r.get("dir") == "out" and r.get("frame", {}).get("method") == "session/prompt"
-    ]
-    assert [p["_meta"]["raven.usage"]["root_session_key"] for p in prompts] == ["root-a", "root-b"]

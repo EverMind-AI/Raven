@@ -23,6 +23,83 @@ def _png() -> bytes:
     return stream.getvalue()
 
 
+def _mock_images(monkeypatch, requested: list[httpx.Request]) -> None:
+    """Answer every /images post with one PNG, recording the request."""
+    encoded = base64.b64encode(_png()).decode("ascii")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": encoded}]})
+
+    transport = httpx.MockTransport(handler)
+    real = httpx.AsyncClient
+
+    def client(*args, **kwargs):
+        kwargs.pop("proxy", None)
+        return real(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+
+
+def test_a_host_edit_after_assembly_reaches_the_generator(monkeypatch, tmp_path: Path) -> None:
+    """SessionTool keeps this tool for the life of the process, so a section
+    read once at assembly would serve a rotated key and a changed model until
+    the product restarts. A section carrying selectionConfig is re-resolved
+    per call against the host file."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    host = tmp_path / "config.json"
+    host.write_text(json.dumps({"tools": {"media": {"image": {"apiKey": "sk-boot", "model": "vendor/boot"}}}}))
+    tool = PptGenerateImageTool(
+        tmp_path,
+        MediaToolConfig.model_validate({"apiKey": "sk-boot", "model": "vendor/boot", "selectionConfig": str(host)}),
+    )
+    assert (tool.api_key, tool.model) == ("sk-boot", "vendor/boot")
+
+    host.write_text(json.dumps({"tools": {"media": {"image": {"apiKey": "sk-rotated", "model": "vendor/new"}}}}))
+    assert (tool.api_key, tool.model) == ("sk-rotated", "vendor/new")
+
+
+def test_a_section_without_a_selection_stays_the_one_assembly_handed_over(monkeypatch, tmp_path: Path) -> None:
+    """The launcher writes selectionConfig only where the host file is what
+    answers -- a borrowed key lives in the rendered config alone, and an empty
+    key in a present host section is a revocation, so re-resolving one would
+    erase it every call."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    tool = PptGenerateImageTool(tmp_path, MediaToolConfig(api_key="sk-borrowed"))
+    assert tool.api_key == "sk-borrowed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("section", "asked", "sent"),
+    [
+        ({"apiKey": "k", "quality": "low"}, None, "low"),
+        ({"apiKey": "k", "quality": "low"}, "high", "low"),
+        ({"apiKey": "k", "quality": ""}, "high", None),
+        ({"apiKey": "k"}, None, "high"),
+    ],
+)
+async def test_the_configured_quality_travels_on_the_request(
+    monkeypatch, tmp_path: Path, section: dict, asked: str | None, sent: str | None
+) -> None:
+    """The host's own setting outranks the call argument, the shared media
+    tool's precedence, and an explicitly empty one means the provider's
+    default -- which travels as no `quality` field rather than an empty
+    string. Asserted on the outgoing body, because the copied section was
+    already right while the request was not."""
+    requested: list[httpx.Request] = []
+    _mock_images(monkeypatch, requested)
+    tool = PptGenerateImageTool(tmp_path, MediaToolConfig.model_validate(section))
+
+    call: dict = {"project": "talk", "prompt": "a plain blue square, no text", "filename": "sq"}
+    if asked is not None:
+        call["quality"] = asked
+    assert json.loads(await tool.execute(**call))["ok"] is True
+
+    body = json.loads(requested[0].content)
+    assert body.get("quality") == sent
+
+
 @pytest.mark.asyncio
 async def test_generated_image_enters_sources_and_returns_a_figure_id(monkeypatch, tmp_path: Path) -> None:
     requested: list[httpx.Request] = []
@@ -171,9 +248,10 @@ def test_key_out_green_clears_the_screen_and_keeps_white_and_the_subject() -> No
 
 @pytest.mark.asyncio
 async def test_a_transparent_request_asks_for_a_green_screen_and_keys_it_out(monkeypatch, tmp_path: Path) -> None:
-    """OpenRouter's gpt-image-2 refuses `background: transparent` and paints a checkerboard
-    when asked in words, so the tool asks for a green screen and keys it out itself; the
-    caller learns how much was keyed."""
+    """OpenRouter's gpt-image models refuse `background: transparent` and paint a
+    checkerboard when asked in words, so the tool asks for a green screen and keys it out
+    itself; the caller learns how much was keyed. This case drives the shipped default,
+    so it follows whichever id `_OPENROUTER_MODEL` names."""
     from PIL import Image
 
     requested: list[httpx.Request] = []
