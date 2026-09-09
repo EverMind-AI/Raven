@@ -76,20 +76,34 @@ FORK_MODEL = "anthropic/claude-sonnet-5"
 TRUNK_MODEL = "z-ai/glm-5.3-flash"
 
 
-def test_the_roster_row_is_the_vendored_twins_modulo_two_ledgered_deltas():
-    """The whole row, not a field list, with exactly two ledgered deltas. The
+def test_the_roster_row_is_the_vendored_twins_modulo_the_ledgered_deltas():
+    """The whole row, not a field list, with exactly three ledgered deltas. The
     ``engine`` declaration product discovery probes readiness with (the fork
     twin's venv gate has no counterpart here, so the wheel probe is what keeps
-    an engineless install listed-but-disabled instead of failing at dispatch),
-    and the model this product recommends. Everything the host router reads
-    stays the twin's: ownsWatchedWork stays absent on both sides, and
-    recommendedLlm.provider keeps the load-bearing name ``ppt`` (C2: gateway
-    detection and prompt caching key on it)."""
+    an engineless install listed-but-disabled instead of failing at dispatch);
+    the model this product recommends; and the briefing sentence in the
+    description. The fork told the delegating agent to "give detailed
+    requirements of the deck", and on the host that reads as an order to fill in
+    the audience, the length, the style and an outline the user never stated --
+    measured on a live instance: "make a deck about Shanghai's city plan" became
+    a 13-point brief, the deck agent had nothing left to ask, and the user was
+    never asked anything. This product's row tells it to hand over the user's own
+    words and leave the asking to the deck agent, which has ask_user and the
+    host relays it. Everything the host router reads stays the twin's:
+    ownsWatchedWork stays absent on both sides, and recommendedLlm.provider
+    keeps the load-bearing name ``ppt`` (C2: gateway detection and prompt
+    caching key on it)."""
     ours = json.loads((RUN_PY.parent / "subagent.json").read_text(encoding="utf-8"))
     theirs = json.loads((FORK / "subagent.json").read_text(encoding="utf-8"))
     assert ours.pop("engine") == {"package": "raven_ppt", "wheel": "ppt-engine"}
     assert ours["recommendedLlm"].pop("model") == TRUNK_MODEL
     assert theirs["recommendedLlm"].pop("model") == FORK_MODEL
+    told = ours.pop("description")
+    fork_told = theirs.pop("description")
+    assert "give detailed requirements" in fork_told
+    assert "hand it the user's request in the user's own words" in told
+    assert "Do not fill in what the user did not say" in told
+    assert told.startswith(fork_told.split("IMPORTANT:")[0]), "only the briefing sentence differs"
     assert ours == theirs
     assert "ownsWatchedWork" not in ours
     assert ours["recommendedLlm"]["provider"] == "ppt"

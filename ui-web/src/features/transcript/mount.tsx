@@ -168,14 +168,7 @@ export function turnKept(): boolean {
 }
 
 export function history(messages: HistoryMessage[]): void {
-  const lane = mainLane()
-  store.history(lane, messages)
-  /* Here rather than inside `store.history`, which the sub-agent stage also
-     calls: that lane repaints on every poll and restores the reader's own
-     toggles afterwards, so a fold opened per paint would be fighting them. This
-     is the whole-conversation repaint -- opening a session, or replaying one
-     after a reconnect -- and the only one with a "last turn" to speak of. */
-  store.openLastFold(lane)
+  store.history(mainLane(), messages)
 }
 
 export function delivered(p: {

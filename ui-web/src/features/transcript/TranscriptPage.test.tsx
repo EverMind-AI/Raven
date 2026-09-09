@@ -85,17 +85,7 @@ const $$ = (sel: string): Element[] => [...document.querySelectorAll(sel)]
 /* A shut body is not built, so reading inside one means opening it the way the
    reader does -- through its own control, which is also the only way a reader
    ever sees that content. Three nested lids, outermost first: the turn's fold,
-   the step's work list, then a row's detail.
-
-   `openFolds` does nothing wherever every fold is already open, and after the
-   live and replay rules that is the ordinary single-turn fixture: one turn is
-   one fold, and it is the turn the conversation ends on. Measured over this
-   file, 19 call sites, 8 of which still have something to open. They are kept
-   rather than pruned per fixture -- they are how a reader reaches the inner
-   lids, and they stay correct when a fixture grows a second turn -- but a case
-   whose POINT is that a body is not built until opened has to end on a turn
-   with no work of its own, so that the fold it means really is shut.
-   `RESTORED` does, and says so. */
+   the step's work list, then a row's detail. */
 const openFolds = (): void => {
   act(() => { $$('.tfold:not(.open) .tfh').forEach((b) => (b as HTMLElement).click()) })
 }
@@ -894,185 +884,6 @@ describe('transcript island, history', () => {
     expect(notes[0]?.textContent).toContain('en:gui.notice.memory_flush')
     expect(notes[1]?.classList.contains('bad')).toBe(true)
     expect((notes[1] as HTMLElement).title).toBe('send failed · socket closed')
-  })
-})
-
-/** Which fold is open, and who decided.
- *
- * Shut is right for a replayed conversation -- that is where the weight is --
- * and wrong for the turn the reader was just watching, whose sequence of steps
- * they were reading a second before it became the word "steps".
- */
-describe('the fold over a turn just finished', () => {
-  const folds = (): HTMLElement[] => $$('.tfold') as HTMLElement[]
-  const openState = (): boolean[] => folds().map((f) => f.classList.contains('open'))
-  /* Through the reader's own control, which is the only way one ever moves. */
-  const clickFold = (i: number): void => {
-    act(() => { (folds()[i]?.querySelector('.tfh') as HTMLElement).click() })
-  }
-  /* Two episodes, because one is not a turn shaped like the reader's: the LAST
-     prose of a turn is promoted out of the fold and becomes the answer, so a
-     single-step fixture would leave the fold holding nothing said and prove
-     nothing about what survives inside it. */
-  const liveTurn = (ask: string, said: string, answered: string, time: string): void => {
-    let first!: ReturnType<typeof mount.step>
-    let last!: ReturnType<typeof mount.step>
-    act(() => {
-      mount.ask(ask)
-      first = mount.step()
-      first.setSay(said)
-      first.tool('read_file', { path: '/tmp/a.log' }, null).done(true, 'line1', 12)
-      first.seal()
-      last = mount.step()
-      last.setSay(answered)
-      last.tool('read_file', { path: '/tmp/b.log' }, null).done(true, 'line2', 9)
-      last.seal()
-    })
-    act(() => { mount.finishTurn(last, [first, last], time) })
-  }
-
-  it('leaves the steps on screen, without the reader opening anything', () => {
-    liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
-
-    expect(openState()).toEqual([true])
-    /* Open, and actually holding the step -- a shut body is not built at all,
-       so the class alone would not say the sequence survived. */
-    expect($$('.tfold.open .tfb .step')).toHaveLength(2)
-    expect($('.tfold .tfb')?.textContent).toContain('let me check the log')
-    /* And the answer is out in the open, where a finished turn puts it. */
-    expect($('.answer .prose')?.textContent).toBe('the pool is the problem')
-  })
-
-  it('arrives shut for every replayed turn but the one the conversation ends on', () => {
-    /* The forty-turn session is the case the shut default exists for: 6400 of
-       its 7361 nodes sat in fold bodies nobody had asked for. Thirty-nine of
-       those forty stay shut; the reader came back to the bottom of the
-       conversation, and one body is not a session's worth. */
-    const t0 = Date.now() - 600000
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'first', timestamp: iso(t0) },
-        {
-          role: 'assistant', reasoning_content: 'thinking', reasoning_ms: 500, text: '',
-          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }],
-        },
-        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'ok' },
-        { role: 'assistant', text: 'done one', timestamp: iso(t0 + 3000) },
-        { role: 'user', text: 'second', timestamp: iso(t0 + 4000) },
-        {
-          role: 'assistant', reasoning_content: 'thinking again', reasoning_ms: 500, text: '',
-          tool_calls: [{ id: 'c2', name: 'read_file', arguments: '{}' }],
-        },
-        { role: 'tool', tool_call_id: 'c2', name: 'read_file', text: 'ok' },
-        { role: 'assistant', text: 'done two', timestamp: iso(t0 + 7000) },
-      ])
-    })
-
-    expect(openState()).toEqual([false, true])
-    /* One body built, and it is the last turn's. */
-    expect($$('.tfold .tfb .step')).toHaveLength(1)
-    expect($('.tfold.open .tfb')?.textContent).toContain('en:gui.act.v.read_file')
-  })
-
-  it('opens nothing when the replayed conversation ends on a turn with no work', () => {
-    /* The last fold is then one turn further back, and that turn is not the one
-       the reader returned to. The scan stops at the question above it, the way
-       `collapse` stops from the other end. */
-    const t0 = Date.now() - 600000
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'first', timestamp: iso(t0) },
-        {
-          role: 'assistant', reasoning_content: 'thinking', reasoning_ms: 500, text: '',
-          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }],
-        },
-        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'ok' },
-        { role: 'assistant', text: 'done one', timestamp: iso(t0 + 3000) },
-        { role: 'user', text: 'just say yes', timestamp: iso(t0 + 4000) },
-        { role: 'assistant', text: 'yes', timestamp: iso(t0 + 5000) },
-      ])
-    })
-
-    expect(openState()).toEqual([false])
-    expect($$('.tfold .tfb .step')).toHaveLength(0)
-  })
-
-  it('shuts the last turn own fold as the next turn opens one', () => {
-    /* One open fold is the turn on screen. Letting them accumulate would walk
-       back into the weight the shut default was for, a turn at a time. */
-    liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
-    liveTurn('and the other one', 'now the other log', 'the disk is full', '3s')
-
-    expect(openState()).toEqual([false, true])
-    expect($$('.tfold.open .tfb .step')).toHaveLength(2)
-    expect($('.tfold.open .tfb')?.textContent).toContain('now the other log')
-    expect($('.tfold.open .tfb')?.textContent).not.toContain('let me check the log')
-  })
-
-  it('leaves a fold the reader opened open when the next turn arrives', () => {
-    /* Shut folds are the runtime's to open and the runtime's to shut. One the
-       reader reached for is theirs from then on -- shutting it under them is
-       the same rudeness in the other direction.
-
-       Two replayed turns, and the reader opens the FIRST: the last one is the
-       runtime's own doing and would prove nothing about ownership. */
-    const t0 = Date.now() - 600000
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'first', timestamp: iso(t0) },
-        {
-          role: 'assistant', reasoning_content: 'thinking', reasoning_ms: 500, text: '',
-          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }],
-        },
-        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'ok' },
-        { role: 'assistant', text: 'done one', timestamp: iso(t0 + 3000) },
-        { role: 'user', text: 'second', timestamp: iso(t0 + 4000) },
-        {
-          role: 'assistant', reasoning_content: 'thinking again', reasoning_ms: 500, text: '',
-          tool_calls: [{ id: 'c2', name: 'read_file', arguments: '{}' }],
-        },
-        { role: 'tool', tool_call_id: 'c2', name: 'read_file', text: 'ok' },
-        { role: 'assistant', text: 'done two', timestamp: iso(t0 + 7000) },
-      ])
-    })
-    clickFold(0)
-    expect(openState()).toEqual([true, true])
-
-    liveTurn('and now this', 'working on it', 'all set', '4s')
-
-    /* The reader's stays. The replay's own -- still the runtime's -- shuts. */
-    expect(openState()).toEqual([true, false, true])
-  })
-
-  it('leaves a fold the reader shut shut, rather than opening it again', () => {
-    /* The other half of the same rule, and the half a fold that opens by
-       itself gets wrong: the reader shut THIS turn's fold, so the next turn
-       must not treat it as still the runtime's and must not reopen it. */
-    liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
-    clickFold(0)
-    expect(openState()).toEqual([false])
-
-    liveTurn('and the other one', 'now the other log', 'the disk is full', '3s')
-
-    expect(openState()).toEqual([false, true])
-  })
-
-  it('leaves an auto-opened fold the reader changed their mind about', () => {
-    /* The case the other two cannot see. A fold from replay is already not the
-       runtime's, and shutting an auto fold looks the same whoever did it -- so
-       neither notices if the toggle forgets to hand ownership over. Here the
-       reader shuts THIS turn's own fold and opens it again: the state they
-       leave it in is the state the runtime would not have left it in, and the
-       next turn must not take it back. */
-    liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
-    expect(openState()).toEqual([true])
-    clickFold(0)
-    clickFold(0)
-    expect(openState()).toEqual([true])
-
-    liveTurn('and the other one', 'now the other log', 'the disk is full', '3s')
-
-    expect(openState()).toEqual([true, true])
   })
 })
 
@@ -2505,21 +2316,11 @@ describe('transcript island, delegated calls', () => {
 
   /* A conversation as `session.resume` hands it back: the assistant's call, then
      the tool row the server stamped the run's task id onto. */
-  /* The spawn turn, and then a turn that only answered.
-     
-     That second turn is what keeps the first one's fold SHUT, which is the
-     state every case below is about: a replay opens the fold of the turn the
-     conversation ends on, and a turn with no work of its own has no fold to
-     open. Without it the card would exist from the moment history landed, and
-     the `openFolds()` each case drives -- the reader reaching the card -- would
-     be a no-op asserting nothing. */
   const RESTORED = [
     { role: 'user', text: 'read the dir' },
     { role: 'assistant', text: '', tool_calls: [{ id: 'call_7', name: 'spawn', arguments: JSON.stringify({ task: 'read the dir', subagent: 'Raven' }) }] },
     { role: 'tool', tool_call_id: 'call_7', name: 'spawn', text: 'dispatched', spawn_task_id: '78da7ea7' },
     { role: 'assistant', text: 'sent it off' },
-    { role: 'user', text: 'thanks' },
-    { role: 'assistant', text: 'any time' },
   ] as HistoryMessage[]
 
   it('resolves a restored card through subagent.list, and only when opened', async () => {
@@ -2539,8 +2340,7 @@ describe('transcript island, delegated calls', () => {
 
     /* Opening the turn builds the card and still asks for nothing: main builds a
        shut body only when it opens, so before this the card did not exist, and
-       after it the card exists shut. The read waits for the card itself, not
-       for the fold. */
+       after it the card exists shut. The read waits for the card itself. */
     openFolds()
     expect(rostered).toBe(0)
 
@@ -2568,8 +2368,8 @@ describe('transcript island, delegated calls', () => {
       mount.history(RESTORED)
     })
     await settle()
-    /* The spawn turn's fold is shut (see RESTORED), and main builds a shut body
-       only when it opens -- so the card does not exist until the reader gets
+    /* A resumed conversation arrives with every turn shut, and main builds a shut
+       body only when it opens -- so the card does not exist until the reader gets
        there. Driven the way a reader drives it: outer lid first. */
     openFolds()
     act(() => {
@@ -2590,8 +2390,8 @@ describe('transcript island, delegated calls', () => {
       mount.history(RESTORED)
     })
     await settle()
-    /* The spawn turn's fold is shut (see RESTORED), and main builds a shut body
-       only when it opens -- so the card does not exist until the reader gets
+    /* A resumed conversation arrives with every turn shut, and main builds a shut
+       body only when it opens -- so the card does not exist until the reader gets
        there. Driven the way a reader drives it: outer lid first. */
     openFolds()
     act(() => {
@@ -2615,8 +2415,8 @@ describe('transcript island, delegated calls', () => {
       mount.history(RESTORED)
     })
     await settle()
-    /* The spawn turn's fold is shut (see RESTORED), and main builds a shut body
-       only when it opens -- so the card does not exist until the reader gets
+    /* A resumed conversation arrives with every turn shut, and main builds a shut
+       body only when it opens -- so the card does not exist until the reader gets
        there. Driven the way a reader drives it: outer lid first. */
     openFolds()
     act(() => {
@@ -2646,11 +2446,8 @@ describe('transcript island, delegated calls', () => {
       ] as HistoryMessage[])
     })
     await settle()
-    /* The work list is the lid that matters here: a step that grew past a single
-       call folds it, and main builds a shut body only when it opens. The turn's
-       own fold is this conversation's last and so already open; `openFolds` is
-       kept because it is how a reader reaches the inner lid, and it stays
-       correct if the fixture grows another turn. Outermost first either way. */
+    /* Two lids here, not one: a step that grew past a single call folds its work
+       list, and main builds a shut body only when it opens. Outermost first. */
     openFolds()
     openWork()
     act(() => {
@@ -2671,8 +2468,8 @@ describe('transcript island, delegated calls', () => {
       mount.history(RESTORED)
     })
     await settle()
-    /* The spawn turn's fold is shut (see RESTORED), and main builds a shut body
-       only when it opens -- so the card does not exist until the reader gets
+    /* A resumed conversation arrives with every turn shut, and main builds a shut
+       body only when it opens -- so the card does not exist until the reader gets
        there. Driven the way a reader drives it: outer lid first. */
     openFolds()
     act(() => {
@@ -2945,10 +2742,10 @@ describe('transcript island, delegated calls', () => {
       st.seal()
     })
     await settle()
-    /* A live step with no `finishTurn`, so there is no fold to open here -- the
-       row is already on the stage. The `openFolds()` its siblings drive was
-       copied in and never did anything on this case; deleted rather than left
-       reading as coverage. */
+    /* A resumed conversation arrives with every turn shut, and main builds a shut
+       body only when it opens -- so the card does not exist until the reader gets
+       there. Driven the way a reader drives it: outer lid first. */
+    openFolds()
     act(() => {
       ;($('.wkin .wrow') as HTMLElement).click()
     })
@@ -2977,9 +2774,7 @@ describe('transcript island, delegated calls', () => {
       st.seal()
     })
     await settle()
-    /* No fold here at all: a live step with no `finishTurn` leaves the row loose
-       on the stage. The `openFolds()` its siblings drive was copied in and never
-       had anything to open on this case. */
+    openFolds()
     act(() => { ($('.wkin .wrow') as HTMLElement).click() })
     await settle()
 
@@ -3677,24 +3472,19 @@ describe('transcript island, delegated calls', () => {
 })
 
 /* What a conversation costs to open should be what it shows, not everything it
-   could show. Every turn of a resumed conversation arrives shut but the one it
-   ends on, and three nested lids used to be rendered-then-hidden: the turn's
-   fold, the step's work list, and each call's detail card. `hidden` spares the layout and the paint
+   could show. Every turn of a resumed conversation arrives shut, and three
+   nested lids used to be rendered-then-hidden: the turn's fold, the step's work
+   list, and each call's detail card. `hidden` spares the layout and the paint
    but not the nodes, so a long conversation paid for a whole transcript nobody
    had opened -- once on arrival, and again on every redraw(), which is what a
    theme flip and a click in the workspace panel both run. */
 describe('transcript island, a shut body is not built', () => {
-  /* Two turns: the first is the one being sized, and stays shut. Inside its
-     fold either one round of work or thirty, and the visible part is identical
-     either way, because every step of a finished turn lives in the fold body --
-     so any difference in what got built is the shut part being charged to the
-     cost of opening the conversation. The size is varied where the weight
-     actually was: a resumed conversation is nothing but shut folds, save the
-     last.
-
-     The second turn is fixed and is the one a replay now opens. It is here so
-     that what is measured is a SHUT fold: sizing the open one would measure the
-     opposite property and pass for the wrong reason. */
+  /* One turn, one question, one answer, one shut fold -- and inside the fold
+     either one round of work or thirty. The visible part is identical either
+     way, because every step of a finished turn lives in the fold body, so any
+     difference in what got built is the shut part being charged to the cost of
+     opening the conversation. The size is varied where the weight actually was:
+     a resumed conversation is nothing BUT shut folds. */
   const stored = (rounds: number): unknown[] => {
     const out: unknown[] = [{ role: 'user', text: 'why did the suite fail' }]
     for (let i = 0; i < rounds; i += 1) {
@@ -3705,13 +3495,6 @@ describe('transcript island, a shut body is not built', () => {
       out.push({ role: 'tool', tool_call_id: `c${i}`, name: 'exec', text: 'line one\nline two' })
     }
     out.push({ role: 'assistant', text: 'a stale lock file' })
-    out.push({ role: 'user', text: 'and the other suite' })
-    out.push({
-      role: 'assistant', text: '',
-      tool_calls: [{ id: 'last', name: 'exec', arguments: JSON.stringify({ command: 'check other' }) }],
-    })
-    out.push({ role: 'tool', tool_call_id: 'last', name: 'exec', text: 'line one\nline two' })
-    out.push({ role: 'assistant', text: 'the same lock' })
     return out
   }
   const built = (messages: unknown[]): number => {
@@ -3729,20 +3512,13 @@ describe('transcript island, a shut body is not built', () => {
 
   it('mounts a fold body on opening and takes it down again on closing', () => {
     act(() => { mount.history(stored(3) as never) })
-    /* The first turn's, which arrives shut; the conversation's last fold is
-       open and holds its own step throughout. */
-    const shut = (): HTMLElement => $$('.tfold')[0] as HTMLElement
-    const inShut = (): number => shut().querySelectorAll('.tfb .step').length
-    expect(shut().classList.contains('open')).toBe(false)
-    expect(inShut()).toBe(0)
-
-    act(() => { (shut().querySelector('.tfh') as HTMLElement).click() })
-    expect(inShut()).toBe(1)
-
+    expect($$('.tfb .step')).toHaveLength(0)
+    openFolds()
+    expect($$('.tfb .step')).toHaveLength(1)
     /* Down again, so a conversation read through does not accumulate every
        turn the reader ever glanced at. */
-    act(() => { (shut().querySelector('.tfh') as HTMLElement).click() })
-    expect(inShut()).toBe(0)
+    act(() => { ($('.tfold .tfh') as HTMLElement).click() })
+    expect($$('.tfb .step')).toHaveLength(0)
   })
 
   it('mounts a work list only while its summary is open', () => {

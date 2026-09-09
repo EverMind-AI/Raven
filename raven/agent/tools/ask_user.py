@@ -85,8 +85,46 @@ def _normalize_options(raw: Any) -> list[str]:
     if raw is None:
         return []
     if not isinstance(raw, list):
-        return [str(raw)]
-    return [str(o) for o in raw]
+        return [_option_text(raw)]
+    return [_option_text(o) for o in raw]
+
+
+_OPTION_TEXT_KEYS = ("option", "label", "text", "value", "title", "name")
+
+
+def _option_text(option: Any) -> str:
+    """One option as the words the user picks, whatever shape the model wrote it in.
+
+    The schema says strings; live runs wrote objects instead -- ``{"option": "dark",
+    "description": "...", "recommended": true}``, and ``{"description": "...",
+    "recommended": false}`` with no name at all -- and ``str()`` put each dict's repr
+    on the user's screen as the thing to click. The option is the text under the
+    first key that names the answer, with its description after a dash so nothing
+    the model said is lost; an object that carries only a description is that
+    description. A flag on it is read by `_flagged`.
+    """
+    if not isinstance(option, dict):
+        return str(option)
+    text = next(
+        (option[k].strip() for k in _OPTION_TEXT_KEYS if isinstance(option.get(k), str) and option[k].strip()), ""
+    )
+    detail = option.get("description")
+    detail = detail.strip() if isinstance(detail, str) and detail.strip() else ""
+    if text and detail:
+        return f"{text} -- {detail}"
+    return text or detail or str(option)
+
+
+def _flagged(raw: Any) -> int | None:
+    """The index of the option the model flagged ``recommended`` on the option itself, or None."""
+    if isinstance(raw, str):
+        raw = _loads(raw)
+    if not isinstance(raw, list):
+        return None
+    for index, option in enumerate(raw):
+        if isinstance(option, dict) and option.get("recommended") is True:
+            return index
+    return None
 
 
 def _loads(raw: Any) -> Any:
@@ -366,6 +404,10 @@ class AskUserTool(Tool):
             for entry in _normalize_questions(params["questions"]):
                 entry = dict(entry)
                 if "options" in entry:
+                    # A flag written on an option is the recommendation when the
+                    # model stated no index; read before the options become text.
+                    if entry.get("recommended") is None and (flagged := _flagged(entry["options"])) is not None:
+                        entry["recommended"] = flagged
                     entry["options"] = _normalize_options(entry["options"])
                 entries.append(entry)
             params["questions"] = entries
