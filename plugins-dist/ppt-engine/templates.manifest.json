@@ -9,7 +9,7 @@
     "note": "a new template cut is a new package version: upload the files, rewrite the pins, bump this url; the old version stays downloadable for older checkouts"
   },
   "destination": "raven_ppt/assets/templates",
-  "source_of_truth": "GitLab generic package ppt-templates/2026.09.03 (project 84258686): the eight re-cut templates this branch bundles; the sealed fork under subagents/ keeps its own twelve and is not the payload",
+  "source_of_truth": "GitLab generic package ppt-templates/2026.09.03 (project 84258686): the eight re-cut templates this branch bundles; the retired fork kept its own twelve and was never the payload (its record: git history at the subagents/ removal commit)",
   "files": [
     {
       "name": "amber_wave_quarterly_summary.pptx",

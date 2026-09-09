@@ -197,11 +197,11 @@ def _verify_wheel(wheel: Path) -> None:
         raise PublishError("page assets missing from wheel")
     if any("node_modules" in name for name in names):
         raise PublishError("node_modules leaked into wheel")
-    # The sub-agent tree degrades quietly in the other direction: a wheel built
+    # The agent-product tree degrades quietly in the other direction: a wheel built
     # from an sdist simply has no folders, and onboarding step 5 reports an empty
     # installation rather than failing.
     if not any(name.endswith("/subagent.json") for name in names):
-        raise PublishError("vendored sub-agents missing from wheel")
+        raise PublishError("agent products missing from wheel")
     leaked = [name for name in names if _is_secret_entry(name)]
     if leaked:
         raise PublishError(f"secrets leaked into wheel: {leaked}")

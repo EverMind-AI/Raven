@@ -17,7 +17,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 RUN_PY = REPO / "agents" / "raven-oncall" / "run.py"
-FORK = REPO / "subagents" / "raven-oncall"
+FORK = REPO / "tests" / "fixtures" / "vendored_fork" / "raven-oncall"
 FORK_SECTION = FORK / "Raven-Oncall" / "raven" / "templates" / "TOOLS_ONCALL.md"
 PRODUCT_SECTION = RUN_PY.parent / "plugins" / "oncall-flow" / "prompts" / "TOOLS_ONCALL.md"
 

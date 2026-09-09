@@ -1,9 +1,10 @@
 # Raven-PPT 设计决策（插件时代）
 
 从 D24 起，ppt 引擎的设计决策记在这里，随 `plugins-dist/ppt-engine` 一起演进。D1–D23 写在
-冻结的 fork 树 `subagents/raven-ppt/Raven-PPT/docs/ppt-raven-design.md` 里，那棵树是 A/B
-对照的 A 面，不再改动；读旧决策去那里，写新决策来这里。硬不变量见同目录 fork 树的
-`raven/ppt/AGENTS.md`（同样只读）。
+已退役的 fork 树 `subagents/raven-ppt/Raven-PPT/docs/ppt-raven-design.md` 里——那棵树曾是
+A/B 对照的 A 面，现已整树移出工作区，删除 `subagents/` 的提交是 git 历史锚（字节快照见
+`tests/fixtures/vendored_fork/`）；读旧决策走历史锚，写新决策来这里。硬不变量原在 fork 树
+的 `raven/ppt/AGENTS.md`，同在历史锚处。
 
 **D24 模板的插画要能整个换掉，换进去的图要能坐在模板自己的底色上。** 模板的节页插画
 有两种画法：一种是 `p:pic`（teal 6/13、gold 7），一种是十几个 freeform 组成的组

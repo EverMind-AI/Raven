@@ -1,4 +1,0 @@
-interface:
-  display_name: "地图与空间规划"
-  short_description: "制作可核验的地图、路线、服务区与场地或室内规划"
-  default_prompt: "使用 $create-maps-and-spatial-plans 制作一份基于真实空间数据、方向与比例可核验的地图或空间规划交付。"

@@ -1,4 +1,0 @@
-interface:
-  display_name: "技术示意图设计"
-  short_description: "围绕流程、拓扑、时序、剖面与机制构建可验收技术示意交付物"
-  default_prompt: "使用 $create-technical-diagrams 构建可读、可验证的结构、流程或机制图。"

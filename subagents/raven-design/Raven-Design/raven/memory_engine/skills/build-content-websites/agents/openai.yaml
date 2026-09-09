@@ -1,4 +1,0 @@
-interface:
-  display_name: "内容型网站"
-  short_description: "按发布连续性与发现复杂度构建可信内容网站"
-  default_prompt: "使用 $build-content-websites 按真实内容责任选择发布连续性与发现复杂度，构建可发现、可阅读、可追溯的内容型网站。"

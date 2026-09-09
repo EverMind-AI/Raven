@@ -5,8 +5,8 @@ The engine this launcher serves is installed raven's own: the deck capability
 arrives as the ppt-engine wheel (plugins-dist/ppt-engine), discovered through
 the ``raven.plugins`` entry-point group -- eleven deck tools and the
 material/deck turn hook, with the eight templates as sha256-pinned package
-data. The vendored fork checkout is no longer on the exec path; what remains
-of it here is the A side of the A/B verification, run by its own wrapper.
+data. The vendored fork checkout is retired; the A side of the A/B verification
+survives as byte snapshots under ``tests/fixtures/vendored_fork/``.
 
 The launch contract is still the fork launcher's ACP half: refuse without any
 LLM key, give an own key to every provider block, honour PPT_MODEL/PPT_API_BASE
@@ -313,7 +313,7 @@ def serve(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Serve Raven-PPT over ACP on stdio.")
     # The roster row's command carries --acp, kept byte-identical to the
-    # vendored row; ACP is this launcher's only hosting, so the flag selects
+    # fork-era row; ACP is this launcher's only hosting, so the flag selects
     # nothing. The fork's one-job CLI mode is retired dead freight, not a
     # pending rebuild (dead-freight ruling 3).
     parser.add_argument("--acp", action="store_true", help="serve ACP on stdio (the only hosting)")

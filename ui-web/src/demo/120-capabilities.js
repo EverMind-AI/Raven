@@ -107,17 +107,17 @@ function drawXa() {
    switched off. */
 const XA_FIXTURE = [
   /* `vendored` is not decoration: it is what tells the page that connecting this
-     row means running the tree's installer, not writing a config entry from a
+     row means running the product's installer, not writing a config entry from a
      preset it does not have. A fixture missing it read as a preset nobody could
      add. */
   { name: 'Raven-Research', preset: null, kind: 'cli', configured: false, builtin: false, vendored: true, enabled: true,
     probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
     last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
-    description: 'A vendored build, discovered under subagents/ and registered as cli.' },
+    description: 'A product row, discovered under agents/ rather than written into config.' },
   { name: 'Raven-PPT', preset: null, kind: 'cli', configured: false, builtin: false, vendored: true, enabled: false,
-    probe_status: 'missing', probe_detail: 'venv not built in Raven-PPT', has_api_key: false, test_running: false,
+    probe_status: 'missing', probe_detail: 'the ppt-engine engine wheel is not installed', has_api_key: false, test_running: false,
     last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
-    description: 'A vendored build whose venv is not built yet, so it is listed and disabled.' },
+    description: 'A product row whose engine wheel is missing, so it is listed and disabled.' },
   { name: 'raven', preset: null, kind: 'builtin', configured: false, builtin: true, enabled: true,
     probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
     last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,

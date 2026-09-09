@@ -95,13 +95,13 @@ def test_allows_blocked_extensions_inside_application_source(tmp_path: Path) -> 
 
 
 def test_allows_only_jpg_raven_design_skill_reference_images(tmp_path: Path) -> None:
-    prefix = "subagents/raven-design/Raven-Design/raven/memory_engine/skills/example"
+    prefix = "plugins-dist/design-engine/raven_design/skills/example"
     paths = [
         f"{prefix}/references/benchmark.jpg",
         f"{prefix}/references/nested/benchmark.jpg",
         f"{prefix}/references/benchmark.png",
         f"{prefix}/assets/benchmark.jpg",
-        "subagents/other/Raven-Design/raven/memory_engine/skills/example/references/benchmark.jpg",
+        "plugins-dist/other-engine/raven_design/skills/example/references/benchmark.jpg",
         "docs/benchmark.jpg",
     ]
     for path in paths:
@@ -115,7 +115,7 @@ def test_allows_only_jpg_raven_design_skill_reference_images(tmp_path: Path) -> 
         check_large_files.BlockedAssetViolation(path=f"{prefix}/references/benchmark.png", extension=".png"),
         check_large_files.BlockedAssetViolation(path=f"{prefix}/assets/benchmark.jpg", extension=".jpg"),
         check_large_files.BlockedAssetViolation(
-            path="subagents/other/Raven-Design/raven/memory_engine/skills/example/references/benchmark.jpg",
+            path="plugins-dist/other-engine/raven_design/skills/example/references/benchmark.jpg",
             extension=".jpg",
         ),
         check_large_files.BlockedAssetViolation(path="docs/benchmark.jpg", extension=".jpg"),
@@ -151,7 +151,7 @@ def test_allows_jpg_plates_at_the_design_engine_wheel_seat(tmp_path: Path) -> No
 
 
 def test_raven_design_skill_reference_images_still_obey_size_limit(tmp_path: Path) -> None:
-    path = "subagents/raven-design/Raven-Design/raven/memory_engine/skills/example/references/benchmark.jpg"
+    path = "plugins-dist/design-engine/raven_design/skills/example/references/benchmark.jpg"
     candidate = tmp_path / path
     candidate.parent.mkdir(parents=True)
     candidate.write_bytes(b"x" * 1025)

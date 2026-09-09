@@ -21,9 +21,9 @@ _COMPLETE = (
     "raven/ui-tui/dist/entry.js",
     "raven/ui/dist/index.html",
     "raven/ui/dist/assets/app.js",
-    "raven/subagents/install.sh",
-    "raven/subagents/raven-code/subagent.json",
-    "raven/subagents/raven-code/.env.example",
+    "raven/agents/raven-code/run.py",
+    "raven/agents/raven-code/subagent.json",
+    "raven/agents/raven-code/.env.example",
 )
 
 
@@ -45,7 +45,7 @@ def test_a_complete_wheel_passes(tmp_path: Path) -> None:
         ("raven/ui-tui/dist/entry.js", "entry.js missing"),
         ("raven/ui/dist/index.html", "index.html missing"),
         ("raven/ui/dist/assets/app.js", "page assets missing"),
-        ("raven/subagents/raven-code/subagent.json", "vendored sub-agents missing"),
+        ("raven/agents/raven-code/subagent.json", "agent products missing"),
     ],
 )
 def test_each_missing_artifact_is_refused(tmp_path: Path, dropped: str, message: str) -> None:
@@ -59,7 +59,7 @@ def test_a_leaked_secrets_file_is_refused(tmp_path: Path) -> None:
     """The tree is read from git's index so this cannot happen upstream. It is
     still refused here: the cost of that rule being wrong once is a provider key
     published to everyone who installs the build."""
-    names = (*_COMPLETE, "raven/subagents/raven-code/.env")
+    names = (*_COMPLETE, "raven/agents/raven-code/.env")
 
     with pytest.raises(PublishError, match="secrets leaked"):
         _verify_wheel(_wheel(tmp_path, names))
@@ -71,7 +71,7 @@ def test_the_template_beside_it_is_not_mistaken_for_one(tmp_path: Path) -> None:
     _verify_wheel(_wheel(tmp_path, _COMPLETE))
 
     with pytest.raises(PublishError, match="secrets leaked"):
-        _verify_wheel(_wheel(tmp_path, (*_COMPLETE, "raven/subagents/raven-code/.env.local")))
+        _verify_wheel(_wheel(tmp_path, (*_COMPLETE, "raven/agents/raven-code/.env.local")))
 
 
 def test_node_modules_is_still_refused(tmp_path: Path) -> None:

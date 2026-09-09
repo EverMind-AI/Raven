@@ -35,7 +35,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 RUN_PY = REPO / "agents" / "raven-ppt" / "run.py"
-FORK = REPO / "subagents" / "raven-ppt"
+FORK = REPO / "tests" / "fixtures" / "vendored_fork" / "raven-ppt"
 ENGINE_HOME = REPO / "plugins-dist" / "ppt-engine"
 CARRIED_PROMPTS = ("SOUL.md", "AGENTS.md", "TOOLS.md")
 

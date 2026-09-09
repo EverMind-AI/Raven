@@ -1,4 +1,0 @@
-interface:
-  display_name: "字体与字形设计"
-  short_description: "设计、生产并验证字标、字体家族、数字系统与多语种字形"
-  default_prompt: "使用 $design-typefaces-and-lettering 设计、扩展或验证一项可生产的字体与字形交付。"
