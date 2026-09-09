@@ -704,12 +704,24 @@ the replay layer.
 
 **Trajectory Regression Case** (`raven/trajectory/regression.py`, `tests/trajectories/`):
 One directory pinning a fixed harness bug into CI: a Trajectory Cassette
-(`cassette/`) plus an expectation file (`expect.yaml`) declaring where the
+(`cassette/`), an expectation file (`expect.yaml`) declaring where the
 replay's first Replay Divergence must land and what the live side must do
-there (message contains/not-contains/equals, tool name/params checks).
-Discovered and run by `tests/test_trajectory_regressions.py`; asserting
-"divergence at the expected call, live value = fixed behavior" is the normal
-shape — zero divergence is the special case guarding faithful reproduction.
+there (message contains/not-contains/equals, tool name/params checks), and a
+metadata file (`case.yaml`) carrying the human contract — `issue`, `owner`,
+`why`, and `re_record` are required non-blank, `risk`/`created_from` are
+optional, and `reviewed_residuals` lists per-token human sign-offs on
+residual-scan findings (full-token sha256 plus a reason; nothing is exempted
+automatically). Scaffolded by `raven trajectory regression init` (minimize
+into staging, interactive residual review, atomic publish — the result is a
+draft until the metadata TODOs are filled) and gated statically by
+`raven trajectory regression validate` (both schemas, cassette completeness
+down to the replay contract, residual review coverage, a 256 KiB / 1 MiB size
+budget). Discovered and run by `tests/test_trajectory_regressions.py`, whose
+hand-raised `MIN_COMMITTED_CASES` floor keeps the suite from passing
+vacuously; the CI `trajectory` job runs the replays and `validate --all`.
+Asserting "divergence at the expected call, live value = fixed behavior" is
+the normal shape — zero divergence is the special case guarding faithful
+reproduction.
 
 **Conversation Record** (`raven/trajectory/conversation.py`):
 One labeled conversation event (`User input`, `LLM input`, `Tool output`, …)
