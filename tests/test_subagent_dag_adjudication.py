@@ -613,6 +613,49 @@ def test_a_replan_nobody_waits_for_sets_nothing() -> None:
     assert desk.take_plan() is None
 
 
+def test_resolving_a_continue_sets_the_continued_event() -> None:
+    desk = AdjudicationDesk()
+    desk.open("a")
+    assert not desk.continued.is_set()
+
+    assert desk.resolve("a", CONTINUE, "try again") is True
+
+    assert desk.continued.is_set()
+
+
+def test_resolving_a_replan_leaves_the_continued_event_alone() -> None:
+    desk = AdjudicationDesk()
+    desk.open("a")
+
+    assert desk.resolve("a", REPLAN, "the plan was wrong", plan=_plan()) is True
+
+    assert not desk.continued.is_set(), "a replan stops the round's nodes rather than handing them on"
+
+
+def test_a_continue_nobody_waits_for_sets_nothing() -> None:
+    desk = AdjudicationDesk()
+
+    assert desk.resolve("gone", CONTINUE, "too late") is False
+
+    assert not desk.continued.is_set(), "an unrecorded answer must not end the round"
+
+
+def test_resolving_an_abandon_sets_neither_event() -> None:
+    """Abandon is deliberately outside both escapes.
+
+    It shares the continue's wait for the round to drain, but nothing is owed the
+    graph by shortening it: an abandoned node's dependents cascade to `skipped`
+    and none of them could have been dispatched sooner.
+    """
+    desk = AdjudicationDesk()
+    desk.open("a")
+
+    assert desk.resolve("a", ABANDON, None) is True
+
+    assert not desk.continued.is_set()
+    assert not desk.replanned.is_set()
+
+
 def test_take_plan_consumes() -> None:
     desk = AdjudicationDesk()
     desk.open("a")

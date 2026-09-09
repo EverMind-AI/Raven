@@ -244,10 +244,15 @@ class PptBuildTool(Tool):
         outcome = result.data.get("outcome")
 
         if outcome is None or not getattr(outcome, "ok", False):
+            # The note travels on a failure too. A helper the author edited is
+            # restored by provisioning, which happens before the script runs, so
+            # the build that then dies is exactly the case that needs telling --
+            # nine failed builds in a row is what the silence cost.
             return _return.failed(
                 "the build script did not produce a deck",
                 stderr=getattr(outcome, "stderr", "") or None,
                 stdout=getattr(outcome, "stdout", "") or None,
+                note=getattr(outcome, "note", "") or None,
                 hint="fix the script and run ppt_build again",
             )
 

@@ -122,6 +122,12 @@ is `replan`, and `_run_ready_groups` races the round against it as it already ra
 `cancel`. In-flight node tasks are then cancelled the instant it fires, releasing their
 semaphore slots.
 
+Since superseded in part: `continue` now leaves the round early too, through
+`AdjudicationDesk.continued`. That signal ends the round *without* cancelling it -- the
+nodes still running are handed to the next round rather than reaped -- so the
+drained-round property this section reasons from now holds only for the signals that
+stop work, not for every decision sitting on the desk.
+
 The event belongs on the desk rather than in a fourth per-run index on the tool: the desk
 is already the per-run rendezvous that the tool writes to and the runner holds, so
 nothing new has to be threaded from one to the other.

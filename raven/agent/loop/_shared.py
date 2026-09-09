@@ -29,6 +29,7 @@ from raven.agent.loop.failure_streak import (
     is_hard_tool_failure,
     loop_break_nudge,
 )
+from raven.agent.loop.no_progress import no_progress_key, no_progress_nudge
 from raven.agent.loop.recovery import (
     POST_TOOL_NUDGE,
     RecoveryAction,

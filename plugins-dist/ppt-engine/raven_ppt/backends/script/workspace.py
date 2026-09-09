@@ -104,7 +104,11 @@ def with_template_helpers(helpers: HelperSources | None, template) -> HelperSour
         indent=1,
     )
     extra[TEMPLATE_HELPER] = helper_source()
-    return replace(base, extra=tuple(sorted(extra.items())))
+    # And the module's own instructions with it: one entry is taken by iteration,
+    # and against one entry a named theme raises.
+    return replace(
+        base, theme=script_helpers.theme_module_source(single_theme=True), extra=tuple(sorted(extra.items()))
+    )
 
 
 def asset_helpers() -> HelperSources:
@@ -121,6 +125,27 @@ def asset_helpers() -> HelperSources:
     theme = files.pop(script_helpers.THEME_MODULE_FILENAME, "")
     icons = files.pop(script_helpers.ICON_MODULE_FILENAME, "")
     return HelperSources(theme=theme, icons=icons, extra=tuple(sorted(files.items())))
+
+
+def restored_helpers(project: Project, helpers: HelperSources | None = None) -> tuple[str, ...]:
+    """Helpers whose text on disk differs from what `provision` is about to write.
+
+    Read before provisioning, because provisioning is what erases the evidence.
+    The restore itself is deliberate (see `provision`) and stays; this only lets
+    the build say it happened, which the run that motivated it needed and did not
+    get: its own themes.json went back to the engine's on the next build, and it
+    spent an hour re-reading that file for a writer it never found. A missing file
+    is not a difference -- the first build of a project writes all of them.
+    """
+    changed: list[str] = []
+    for name, body in (helpers or HelperSources()).files():
+        target = project.build_dir / name
+        try:
+            if target.is_file() and target.read_text(encoding="utf-8") != body:
+                changed.append(name)
+        except OSError:
+            continue
+    return tuple(changed)
 
 
 def provision(project: Project, helpers: HelperSources | None = None) -> Path:
