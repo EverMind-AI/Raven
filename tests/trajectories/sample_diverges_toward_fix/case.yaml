@@ -11,3 +11,10 @@ re_record: >
   intentionally; regenerate with a scripted provider and re-run
   trajectory minimize.
 risk: low
+reviewed_residuals:
+  - sha256: fdb11d7f69607dd72171ae368b9c50aaeccb5aa09cad89bf48f7888060c86896
+    note: the token recorded-by-buggy-harness, the sample's deliberate buggy marker
+  - sha256: c8687dcb5a592e08ecef13e23c403d21d4c93418f2f861b3105a1b5a65248a3c
+    note: the token most-recently-modified, identifier-shaped prose in the recorded tool description
+  - sha256: 0dd3a1e75544f9ea43ff18f56886bed99cf32ab7c4339bb00495dc1f61f73c37
+    note: the token config_secrets_loaded, a stat key of redaction.json itself

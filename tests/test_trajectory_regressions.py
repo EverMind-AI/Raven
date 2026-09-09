@@ -386,6 +386,38 @@ async def test_load_case_metadata_rejects_non_mapping(tmp_path) -> None:
         load_case_metadata(path)
 
 
+async def test_load_case_metadata_turns_yaml_syntax_errors_into_valueerror(tmp_path) -> None:
+    path = tmp_path / "case.yaml"
+    path.write_text("issue: [\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="cannot be parsed as YAML"):
+        load_case_metadata(path)
+
+
+async def test_load_case_metadata_parses_reviewed_residuals(tmp_path) -> None:
+    digest = "a" * 64
+    path = _write_case_yaml(tmp_path, reviewed_residuals=[{"sha256": digest.upper(), "note": "benign prose"}])
+    meta = load_case_metadata(path)
+    assert meta.reviewed_residuals[0].sha256 == digest
+    assert meta.reviewed_residuals[0].note == "benign prose"
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected_error"),
+    [
+        ("not-a-mapping", "must be a mapping"),
+        ({"sha256": "abc", "note": "n"}, "64-hex"),
+        ({"sha256": "z" * 64, "note": "n"}, "64-hex"),
+        ({"sha256": "a" * 64}, "note is required"),
+        ({"sha256": "a" * 64, "note": "n", "extra": 1}, "unknown key"),
+    ],
+    ids=["non-mapping", "short-digest", "non-hex", "missing-note", "unknown-key"],
+)
+async def test_load_case_metadata_rejects_bad_reviewed_residuals(tmp_path, entry, expected_error) -> None:
+    path = _write_case_yaml(tmp_path, reviewed_residuals=[entry])
+    with pytest.raises(ValueError, match=expected_error):
+        load_case_metadata(path)
+
+
 # ── discover_case_dirs ─────────────────────────────────────────────────
 
 
@@ -471,6 +503,30 @@ async def test_validate_case_rejects_unparseable_manifest(tmp_path) -> None:
     assert any("manifest.json cannot be parsed" in p for p in problems)
 
 
+async def test_validate_case_rejects_null_manifest(tmp_path) -> None:
+    """JSON null parses fine and must not slip past the object checks."""
+    case = _case_copy(tmp_path)
+    (case / "cassette" / "manifest.json").write_text("null", encoding="utf-8")
+    problems = validate_case(case)
+    assert any("must hold a JSON object" in p for p in problems)
+
+
+async def test_validate_case_collects_malformed_case_yaml_instead_of_raising(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    (case / "case.yaml").write_text("issue: [\n", encoding="utf-8")
+    problems = validate_case(case)
+    assert any("cannot be parsed as YAML" in p for p in problems)
+
+
+async def test_validate_case_collects_non_mapping_span_attributes_instead_of_raising(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    spans = _spans(case)
+    spans[0]["attributes"] = ["not", "a", "mapping"]
+    _write_spans(case, spans)
+    problems = validate_case(case)
+    assert any("attributes must be a mapping" in p for p in problems)
+
+
 async def test_validate_case_rejects_missing_referenced_artifact(tmp_path) -> None:
     case = _case_copy(tmp_path)
     _, ref = _artifact_ref(case, "llm.output.artifact_path")
@@ -537,22 +593,52 @@ async def test_validate_case_rejects_unscannable_file(tmp_path) -> None:
     assert any("not readable as UTF-8" in p for p in problems)
 
 
-async def test_validate_case_rejects_residual_findings_beyond_the_baseline(tmp_path) -> None:
+async def test_validate_case_rejects_unreviewed_residual_findings(tmp_path) -> None:
     case = _case_copy(tmp_path)
     (case / "notes.txt").write_text("token a3f9c2b7d8e64a1b9c0d2e5f7a8b3c4d5e6f7a8b9c0d1e2f here", encoding="utf-8")
     problems = validate_case(case)
     assert any("residual scan flagged" in p and "notes.txt" in p for p in problems)
 
 
-async def test_validate_case_rejects_new_token_even_with_an_emptied_baseline(tmp_path) -> None:
-    """An empty or unparseable redaction.json leaves an empty baseline: every
-    current finding then counts as new."""
+async def test_validate_case_rejects_a_new_token_sharing_a_reviewed_prefix_and_suffix(tmp_path) -> None:
+    """The review entry hashes the full token, so a different token that keeps
+    the first/last four characters of a reviewed one must still fail."""
     case = _case_copy(tmp_path)
-    redaction_path = case / "cassette" / "redaction.json"
-    baseline = json.loads(redaction_path.read_text(encoding="utf-8"))
-    baseline["residual_findings"] = []
-    redaction_path.write_text(json.dumps(baseline), encoding="utf-8")
+    reviewed_token = "most-recently-modified"
+    collided_token = "mostAb9Cx7De6Fg5Hi4Jk3Lm2Nofied"
+    assert (reviewed_token[:4], reviewed_token[-4:]) == (collided_token[:4], collided_token[-4:])
+    replaced = 0
+    for path in sorted(p for p in (case / "cassette").rglob("*") if p.is_file()):
+        text = path.read_text(encoding="utf-8")
+        if reviewed_token in text:
+            path.write_text(text.replace(reviewed_token, collided_token), encoding="utf-8")
+            replaced += 1
+    assert replaced
     problems = validate_case(case)
+    assert any("residual scan flagged" in p for p in problems)
+
+
+async def test_validate_case_exempts_listed_digest_literals_but_not_other_hex(tmp_path) -> None:
+    """The 64-hex digests in reviewed_residuals are themselves high-entropy
+    tokens to the scanner; a listed digest literal passes, unlisted hex of the
+    same shape still fails."""
+    case = _case_copy(tmp_path)
+    meta = load_case_metadata(case / "case.yaml")
+    listed = meta.reviewed_residuals[0].sha256
+    unlisted = "b7e4a19c3f5d28061e9c4a7b5d3f18092c6e4a1b8d7f3052a9c1e6b4d8f27a30"
+    assert unlisted not in {entry.sha256 for entry in meta.reviewed_residuals}
+    (case / "notes.txt").write_text(f"listed {listed} unlisted {unlisted}\n", encoding="utf-8")
+    problems = validate_case(case)
+    residual = [p for p in problems if "residual scan flagged" in p]
+    assert len(residual) == 1 and "notes.txt" in residual[0]
+
+
+async def test_validate_case_rejects_findings_when_case_yaml_is_unusable(tmp_path) -> None:
+    """No case.yaml means no review entries: every finding fails."""
+    case = _case_copy(tmp_path)
+    (case / "case.yaml").unlink()
+    problems = validate_case(case)
+    assert any("case.yaml is missing" in p for p in problems)
     assert any("residual scan flagged" in p for p in problems)
 
 
