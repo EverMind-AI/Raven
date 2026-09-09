@@ -130,8 +130,15 @@ def _require(condition: bool, where: str, problem: str) -> None:
         raise ValueError(f"{where}: {problem}")
 
 
+def _require_str_keys(where: str, data: dict) -> None:
+    # Guards every unknown-key sorted() over external YAML: a mixed int/str
+    # key set would raise TypeError instead of reporting a problem.
+    _require(all(isinstance(key, str) for key in data), where, "mapping keys must be strings")
+
+
 def _parse_divergence(where: str, data: Any) -> DivergenceExpectation:
     _require(isinstance(data, dict), where, f"divergence must be a mapping, got {type(data).__name__}")
+    _require_str_keys(where, data)
     unknown = set(data) - _DIVERGENCE_KEYS
     _require(not unknown, where, f"unknown divergence key(s) {sorted(unknown)}; allowed: {sorted(_DIVERGENCE_KEYS)}")
     kind = data.get("kind")
@@ -150,6 +157,7 @@ def _parse_divergence(where: str, data: Any) -> DivergenceExpectation:
 def _parse_check(where: str, pos: int, data: Any) -> Check:
     where = f"{where}: checks[{pos}]"
     _require(isinstance(data, dict), where, f"must be a mapping, got {type(data).__name__}")
+    _require_str_keys(where, data)
     unknown = set(data) - _CHECK_KEYS
     _require(not unknown, where, f"unknown key(s) {sorted(unknown)}; allowed: {sorted(_CHECK_KEYS)}")
     call = data.get("call")
@@ -190,6 +198,7 @@ def _load_yaml_mapping(path: Path, what: str) -> dict[str, Any]:
     if data is None:
         data = {}
     _require(isinstance(data, dict), where, f"{what} must be a mapping, got {type(data).__name__}")
+    _require_str_keys(where, data)
     return data
 
 
@@ -331,6 +340,7 @@ class CaseMetadata:
 def _parse_reviewed_residual(where: str, pos: int, data: Any) -> ReviewedResidual:
     where = f"{where}: reviewed_residuals[{pos}]"
     _require(isinstance(data, dict), where, f"must be a mapping, got {type(data).__name__}")
+    _require_str_keys(where, data)
     unknown = set(data) - _REVIEWED_KEYS
     _require(not unknown, where, f"unknown key(s) {sorted(unknown)}; allowed: {sorted(_REVIEWED_KEYS)}")
     digest = data.get("sha256")
@@ -566,6 +576,10 @@ def _span_problems(cassette_dir: Path, spans_path: Path) -> tuple[list[str], lis
         if not isinstance(span, dict):
             structural.append(f"cassette/spans.jsonl line {line_no} is not a JSON object")
             continue
+        span_id = span.get("spanId")
+        if span_id is not None and not isinstance(span_id, str):
+            structural.append(f"cassette/spans.jsonl line {line_no}: spanId must be a string")
+            continue
         attrs = span.get("attributes")
         if attrs is None:
             continue
@@ -574,28 +588,38 @@ def _span_problems(cassette_dir: Path, spans_path: Path) -> tuple[list[str], lis
             continue
         for key, ref in attrs.items():
             if isinstance(key, str) and key.endswith(".artifact_path"):
-                references.extend(_artifact_ref_problems(cassette_dir, line_no, key, ref))
+                ref_structural, ref_references = _artifact_ref_problems(cassette_dir, line_no, key, ref)
+                structural.extend(ref_structural)
+                references.extend(ref_references)
     return structural, references
 
 
-def _artifact_ref_problems(cassette_dir: Path, line_no: int, key: str, ref: Any) -> list[str]:
+def _artifact_ref_problems(cassette_dir: Path, line_no: int, key: str, ref: Any) -> tuple[list[str], list[str]]:
+    """Checks for one artifact reference: (structural problems, reference problems).
+
+    A missing, unreadable, or non-JSON payload is a reference problem —
+    ``load_recording`` degrades those to ``None`` and the semantic pass
+    reports the gap. A payload that parses to a non-object is structural:
+    the loaders index into it and must not be fed the file."""
     label = f"cassette/spans.jsonl line {line_no}: {key} {ref!r}"
     if not isinstance(ref, str) or not ref:
-        return [f"{label} is not a usable reference"]
+        return [], [f"{label} is not a usable reference"]
     if PurePosixPath(ref).is_absolute() or ".." in PurePosixPath(ref).parts:
-        return [f"{label} escapes the cassette"]
+        return [], [f"{label} escapes the cassette"]
     resolved = (cassette_dir / ref).resolve()
     if cassette_dir.resolve() not in resolved.parents:
-        return [f"{label} escapes the cassette"]
+        return [], [f"{label} escapes the cassette"]
     if not resolved.is_file():
-        return [f"{label} does not exist"]
+        return [], [f"{label} does not exist"]
     try:
-        json.loads(resolved.read_text(encoding="utf-8"))
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError) as exc:
-        return [f"{label} cannot be read: {exc}"]
+        return [], [f"{label} cannot be read: {exc}"]
     except json.JSONDecodeError:
-        return [f"{label} is not valid JSON"]
-    return []
+        return [], [f"{label} is not valid JSON"]
+    if not isinstance(payload, dict):
+        return [f"{label} must hold a JSON object"], []
+    return [], []
 
 
 def _scannability_problems(case_dir: Path) -> list[str]:

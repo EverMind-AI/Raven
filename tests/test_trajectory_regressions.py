@@ -527,6 +527,42 @@ async def test_validate_case_collects_non_mapping_span_attributes_instead_of_rai
     assert any("attributes must be a mapping" in p for p in problems)
 
 
+async def test_validate_case_collects_non_object_artifact_payload_instead_of_raising(tmp_path) -> None:
+    """[1] is valid JSON but not a payload the loaders can index into."""
+    case = _case_copy(tmp_path)
+    _, ref = _artifact_ref(case, "tool.output.artifact_path")
+    (case / "cassette" / ref).write_text("[1]", encoding="utf-8")
+    problems = validate_case(case)
+    assert any("must hold a JSON object" in p for p in problems)
+
+
+async def test_validate_case_collects_non_string_span_id_instead_of_raising(tmp_path) -> None:
+    """A list spanId would make load_recording's dedup key unhashable."""
+    case = _case_copy(tmp_path)
+    spans = _spans(case)
+    spans[0]["spanId"] = ["bad"]
+    _write_spans(case, spans)
+    problems = validate_case(case)
+    assert any("spanId must be a string" in p for p in problems)
+
+
+async def test_validate_case_collects_non_string_case_yaml_keys_instead_of_raising(tmp_path) -> None:
+    """Mixed int/str keys must not crash the unknown-key sort."""
+    case = _case_copy(tmp_path)
+    (case / "case.yaml").write_text("42: foo\nbadkey: bar\n", encoding="utf-8")
+    problems = validate_case(case)
+    assert any("keys must be strings" in p for p in problems)
+
+
+async def test_load_expectation_rejects_non_string_keys_at_every_level(tmp_path) -> None:
+    top = _write_expect(tmp_path, "42: foo\nmode: strict\n")
+    with pytest.raises(ValueError, match="keys must be strings"):
+        load_expectation(top)
+    nested = _write_expect(tmp_path, "divergence: {42: llm, index: 0}\n")
+    with pytest.raises(ValueError, match="keys must be strings"):
+        load_expectation(nested)
+
+
 async def test_validate_case_rejects_missing_referenced_artifact(tmp_path) -> None:
     case = _case_copy(tmp_path)
     _, ref = _artifact_ref(case, "llm.output.artifact_path")
