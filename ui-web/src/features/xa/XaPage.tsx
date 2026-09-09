@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useSyncExternalStore } from 'react'
 
@@ -210,6 +210,89 @@ function AgentRow({ row, sel }: { row: XaRow; sel: boolean }): JSX.Element {
   )
 }
 
+/* A fact on the card the reader owns, edited where it is read.
+
+   Two of the three things this card says are the reader's: what this agent is
+   called here, and what it is for. The rest -- how Raven reaches it, whether it
+   answered -- belongs to the transport and to the agent. `subagents.update` has
+   always taken both, `DS.xa` has always forwarded both, and the store has always
+   moved an open sheet onto a new name; the page was the only piece missing, and
+   it went out with the form this card replaced.
+
+   Not that form back. There is no second field to fill in and no save button to
+   find: the text is the control, Enter commits and Escape restores. Blur commits
+   too -- clicking away from a field you have just typed into means the typing,
+   and the alternative is a card that discards work whenever the reader reaches
+   for something else. In the multi-line one Enter is a newline, so there the
+   blur is the only commit. */
+function Editable({
+  value,
+  multiline,
+  placeholder,
+  label,
+  onCommit,
+}: {
+  value: string
+  multiline?: boolean
+  placeholder: string
+  label: string
+  onCommit: (next: string) => void
+}): JSX.Element {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value)
+  /* The rows are re-read after every write, and a rename lands as a new value
+     for this same field. Without this the box would go on showing what was
+     typed even where the server settled on something else. */
+  useEffect(() => setDraft(value), [value])
+
+  if (!editing) {
+    return (
+      <button className="xaedit" type="button" aria-label={label} title={label} onClick={() => setEditing(true)}>
+        {value || <span className="none">{placeholder}</span>}
+      </button>
+    )
+  }
+
+  const commit = (): void => {
+    setEditing(false)
+    const next = multiline ? draft : draft.trim()
+    if (next !== value) onCommit(next)
+  }
+  const onKeyDown = (event: { key: string; preventDefault: () => void }): void => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setEditing(false)
+      setDraft(value)
+    } else if (event.key === 'Enter' && !multiline) {
+      event.preventDefault()
+      commit()
+    }
+  }
+  return multiline ? (
+    <textarea
+      autoFocus
+      aria-label={label}
+      className="xaedit on"
+      onBlur={commit}
+      onChange={(e) => setDraft(e.target.value)}
+      onKeyDown={onKeyDown}
+      rows={3}
+      value={draft}
+    />
+  ) : (
+    <input
+      autoFocus
+      aria-label={label}
+      className="xaedit on"
+      onBlur={commit}
+      onChange={(e) => setDraft(e.target.value)}
+      onKeyDown={onKeyDown}
+      type="text"
+      value={draft}
+    />
+  )
+}
+
 /* One agent's card, drawn into the same #detail dialog the skill and plugin
    details use -- and with their anatomy, not one of its own: identity block,
    then a described section. Three things about the agent (who it is, what it is
@@ -237,13 +320,43 @@ function AgentCard({ row }: { row: XaRow }): JSX.Element {
     if (!api_key) return
     void store.run(row.configured ? 'update' : 'connect', row, { api_key })
   }
+  /* An agent with an entry to write. A discovered folder has none yet and
+     `subagents.update` writes one from its own manifest, which is why it counts.
+     A preset nobody has connected has nothing to update, and making the fields
+     live there would leave a typed name either vanishing or -- worse --
+     connecting the agent, which is not what typing a name asks for. Connect
+     first and describe after: neither field is out of reach either way. */
+  const owned = row.configured || !!row.vendored
+  /* And the name is narrower than the description. `subagents.update` refuses a
+     rename on a row it had to materialise from a shipped launcher -- "its name
+     binds it to the shipped launcher" -- so offering the control there would be
+     offering a write the server always refuses. The description has no such
+     rule and writes the entry, after which the row is configured and its name
+     is the reader's like any other. */
+  const renamable = row.configured
+  const edit = (patch: { description?: string; new_name?: string }): void => {
+    void store.run('update', row, patch)
+  }
   return createPortal(
     <>
       <div className="pmdhead">
         <Tile name={row.name} />
         <div className="pmdmeta">
           <div className="l1">
-            <b>{row.name}</b>
+            <b>
+              {renamable ? (
+                <Editable
+                  label={t('gui.agent.rename')}
+                  onCommit={(next) => {
+                    if (next) edit({ new_name: next })
+                  }}
+                  placeholder={row.name}
+                  value={row.name}
+                />
+              ) : (
+                row.name
+              )}
+            </b>
           </div>
           <div className="l2">{wayIn(row)}</div>
         </div>
@@ -251,10 +364,26 @@ function AgentCard({ row }: { row: XaRow }): JSX.Element {
             there is nothing to type into. */}
         <div className="dact">{stage === 'key' ? null : <AgentAct row={row} />}</div>
       </div>
-      {row.description ? (
+      {/* An owned agent gets the section whether or not it has a description:
+          the empty one is where the reader writes the first. An unowned row
+          keeps the old rule -- a heading over nothing is a heading about
+          nothing. */}
+      {owned || row.description ? (
         <div className="pmsec">
           <div className="cap">{t('gui.plug.sec_about')}</div>
-          <div className="pmdesc">{row.description}</div>
+          <div className="pmdesc">
+            {owned ? (
+              <Editable
+                label={t('gui.agent.redescribe')}
+                multiline
+                onCommit={(next) => edit({ description: next })}
+                placeholder={t('gui.agent.about_none')}
+                value={row.description || ''}
+              />
+            ) : (
+              row.description
+            )}
+          </div>
         </div>
       ) : null}
       {stage === 'key' ? (
