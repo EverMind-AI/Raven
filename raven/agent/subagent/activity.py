@@ -59,6 +59,11 @@ class RunActivity:
     """
 
     tool_calls: list[str] = field(default_factory=list)
+    # The subset of those that reported failure, in order. Recorded because the
+    # tally was the one fact about a run that nothing kept: a run whose calls all
+    # failed and which then said nothing new left a record indistinguishable from
+    # a run that worked, and the caller reading it announced success.
+    tool_failures: list[str] = field(default_factory=list)
     tokens_in: int | None = None
     tokens_out: int | None = None
     thought_chars: int = 0
@@ -148,6 +153,8 @@ class RunActivity:
         meta: dict[str, Any] = {}
         if self.tool_calls:
             meta["tool_calls"] = self.tool_calls
+        if self.tool_failures:
+            meta["tool_failures"] = self.tool_failures
         if self.tokens_in is not None:
             meta["tokens_in"] = self.tokens_in
         if self.tokens_out is not None:
@@ -305,6 +312,21 @@ def note_tool_call(name: str) -> None:
     _touch(activity)
     if len(activity.tool_calls) < _MAX_TOOL_CALLS:
         activity.tool_calls.append(name)
+
+
+def note_tool_failure(name: str) -> None:
+    """Record that one call reported failure.
+
+    Separate from :func:`note_tool_call` rather than a flag on it, because the
+    two are known at different moments: a call is announced before it runs, and
+    a run that dies mid-call must still show the call it died in.
+    """
+    activity = _current.get()
+    if activity is None or not isinstance(name, str) or not name:
+        return
+    _touch(activity)
+    if len(activity.tool_failures) < _MAX_TOOL_CALLS:
+        activity.tool_failures.append(name)
 
 
 def note_usage(usage: Any) -> None:
@@ -504,6 +526,7 @@ __all__ = [
     "note_steps",
     "note_thoughts",
     "note_tool_call",
+    "note_tool_failure",
     "note_transcript",
     "note_usage",
     "persisted_output",

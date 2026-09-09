@@ -472,6 +472,22 @@ class _TurnCollector:
         return [call.label for call in self.calls]
 
     @property
+    def failed_calls(self) -> list[str]:
+        """The label of every call whose result reported failure, in order.
+
+        Paired back to the call by id rather than by position: a run interleaves
+        calls and results freely, and an agent that opens two before either
+        answers would otherwise attribute each outcome to the wrong one. A
+        result with no call behind it is dropped -- there is nothing to name.
+        """
+        labels = {ev["id"]: ev["call"].label for ev in self.events if ev["t"] == "call"}
+        return [
+            labels[ev["id"]]
+            for ev in self.events
+            if ev["t"] == "result" and not ev.get("ok") and ev.get("id") in labels
+        ]
+
+    @property
     def text(self) -> str:
         return "".join(self.answer).strip()
 
@@ -1540,6 +1556,8 @@ class AcpAgentBackend:
         # agent's `usage_update` is cumulative for the turn.
         for title in collector.tool_calls:
             activity.note_tool_call(title)
+        for title in collector.failed_calls:
+            activity.note_tool_failure(title)
         activity.note_usage(collector.usage)
         activity.note_steps(counts)
         activity.note_thoughts(thought_chars)

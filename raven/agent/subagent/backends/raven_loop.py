@@ -25,7 +25,7 @@ from raven.agent.subagent.mcp_grant import (
     resolve_grant,
 )
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
-from raven.agent.tools.registry import ToolRegistry
+from raven.agent.tools.registry import ToolRegistry, call_failed
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool, resolve_vendor_key
 from raven.config.live import LiveConfig, exec_extra_deny_patterns
@@ -444,6 +444,12 @@ class RavenLoopBackend:
                     activity.note_tool_call(tool_call.name)
                     set_current_tool_call_id(tool_call.id)
                     result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
+                    # Recorded beside the call, so the run's account says how
+                    # its calls went and not only that it made them. Through the
+                    # registry's own predicate: a call refused before dispatch
+                    # comes back as a bare string with no `ok` to read.
+                    if call_failed(result):
+                        activity.note_tool_failure(tool_call.name)
                     # The subagent's loop is an untrusted-data path too — fence its
                     # tool output like the main loop does in add_tool_result.
                     messages.append(

@@ -14,6 +14,10 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      and still reports ``stopReason: end_turn``, with the real
                      reason on stderr. This is the shape measured on a live
                      ``hermes acp`` whose provider rejected the credential.
+- ``failed_call``  - like ``ok``, but the tool call answers ``status: "failed"``
+                     and the turn goes on to say something after it. A run that
+                     failed a call and still finished, which is the shape a
+                     record could not tell from one that worked.
 - ``noisy``        - like ``ok``, but writes non-JSON diagnostics to stdout and a
                      large volume to stderr before answering.
 - ``flood``        - like ``ok``, but writes one stderr line past the reader's limit,
@@ -553,7 +557,10 @@ def handle_prompt(request_id, params) -> None:
         {
             "sessionUpdate": "tool_call_update",
             "toolCallId": "t1",
-            "status": "completed",
+            # Saying something after it matters: a turn that ends ON a failed
+            # call is already refused upstream, and the case this mode is for is
+            # the one that goes on and finishes.
+            "status": "failed" if MODE == "failed_call" else "completed",
             "content": [{"type": "content", "content": {"type": "text", "text": "the file says hello"}}],
         },
     )

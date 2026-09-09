@@ -77,6 +77,7 @@ from raven.agent.loop._shared import (
     workdir,
 )
 from raven.agent.loop.recovery import ContinuationGate, cut_reasoning_head
+from raven.agent.tools.registry import call_failed
 from raven.permissions.turn import set_current_tool_call_id
 from raven.providers.tool_calls import openai_tool_call
 
@@ -1349,7 +1350,7 @@ class TurnPathMixin:
                                 # The tool's own verdict, with the registry's
                                 # failure text kept as the backstop for a result
                                 # that carried none. See ToolEvent.ok.
-                                "ok": bool(getattr(result, "ok", True)) and not model_text.startswith("Error"),
+                                "ok": not call_failed(result),
                                 # The one hop the diff has to make by hand: the
                                 # registry attaches it to the result, and only
                                 # this event reaches a UI.

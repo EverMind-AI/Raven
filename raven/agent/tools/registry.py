@@ -159,6 +159,26 @@ def _received_tail(params: dict[str, Any]) -> str:
     return f" Received: {raw[:400]}" + ("..." if len(raw) > 400 else "")
 
 
+def call_failed(result: Any) -> bool:
+    """Whether one tool call went wrong, by the registry's own convention.
+
+    The tool's verdict when it gave one, and the failure text as the backstop
+    when it did not: ``execute`` returns a :class:`ToolOutput` on the paths that
+    run a tool, and a bare string on the ones that refuse before dispatch
+    (unparseable arguments, an invalid parameter set, a timeout), where there is
+    no object to carry ``ok`` and the leading ``Error`` is the whole of the
+    signal.
+
+    One function because the rule had begun to be copied: reading only ``ok``
+    calls a refused-before-dispatch call a success, and reading only the text
+    calls a tool that answers with the word Error a failure.
+    """
+    if not bool(getattr(result, "ok", True)):
+        return True
+    text = getattr(result, "model_text", None)
+    return str(text if text is not None else result).startswith("Error")
+
+
 # When a running tool first says so, and how often after that. The first line is
 # late enough that ordinary calls never print one, and early enough that a reader
 # tailing the log during a slow call does not have to wait a full minute to learn

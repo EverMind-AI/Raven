@@ -4348,3 +4348,103 @@ async def test_usage_owner_travels_on_each_prompt_over_one_connection(trace_dir,
         if r.get("dir") == "out" and r.get("frame", {}).get("method") == "session/prompt"
     ]
     assert [p["_meta"]["raven.usage"]["root_session_key"] for p in prompts] == ["root-a", "root-b"]
+
+
+async def test_the_collector_names_the_calls_that_failed() -> None:
+    """Which of a run's calls failed was seen and then dropped.
+
+    The frames carry it -- a ``tool_call_update`` says ``status: "failed"`` --
+    and the run's account recorded only the names of the calls it made. So the
+    record of a run whose calls all failed read the same as one that worked, and
+    the caller reading it announced success.
+
+    Paired back by id rather than by position: an agent may open a second call
+    before the first answers, and pairing by order would then attribute each
+    outcome to the wrong call.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "a", "title": "ppt_prepare", "status": "pending"})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "b", "title": "ppt_brief", "status": "pending"})
+    # Out of order on purpose: b answers first.
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "b", "status": "completed"})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "a", "status": "failed"})
+
+    # The label is whatever `tool_calls` uses -- the point is which call it names,
+    # not how the name is spelled.
+    assert len(col.failed_calls) == 1
+    assert "ppt_prepare" in col.failed_calls[0]
+    assert "ppt_brief" not in col.failed_calls[0]
+    assert len(col.tool_calls) == 2
+
+
+async def test_a_run_with_no_failures_names_none() -> None:
+    """The other half: a clean run must report an empty list, not the calls it
+    made. A tally that counts every call as a failure is worse than none."""
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "a", "title": "read", "status": "pending"})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "a", "status": "completed"})
+
+    assert col.failed_calls == []
+
+
+async def test_a_result_with_no_call_behind_it_names_nothing() -> None:
+    """There is nothing to name. A frame that answers a call this turn never saw
+    open is a gap in what was received, and inventing a label for it would put a
+    failure in the tally that no reader can trace to anything."""
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    await col(
+        "session/update", {"update": {"sessionUpdate": "tool_call_update", "toolCallId": "ghost", "status": "failed"}}
+    )
+
+    assert col.failed_calls == []
+
+
+async def test_a_failed_call_reaches_the_run_own_account(tmp_path: Path) -> None:
+    """End to end, because the collector knowing is not the same as the record
+    saying: the wiring between them is one loop, and without it the tally is
+    computed and thrown away exactly as before.
+
+    `as_meta` is asserted too -- that is the form a reader opens, and the panel
+    and the announcement both read it rather than the live object.
+    """
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a", mode="failed_call"))
+    with activity.collecting() as did:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert len(did.tool_failures) == 1
+    assert "read" in did.tool_failures[0]
+    assert did.as_meta()["tool_failures"] == did.tool_failures
+    # And the run still finished: this is the shape the tally exists for, not a
+    # turn that died on the call.
+    assert did.tool_calls
+
+
+async def test_a_clean_run_writes_no_failure_key(tmp_path: Path) -> None:
+    """Absent, not empty. A reader treats a missing key as "not reported", and
+    writing `[]` for every clean run would put a field in every record to say
+    nothing happened."""
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a"))
+    with activity.collecting() as did:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert did.tool_failures == []
+    assert "tool_failures" not in did.as_meta()

@@ -568,3 +568,32 @@ async def test_a_registry_built_with_no_gates_casts_nothing_and_serves_as_before
     with pytest.raises(AttributeError):
         reg.tool_gates = ("late",)  # type: ignore[misc]
     assert await reg.execute("plain", {}) == "plain output"
+
+
+class TestWhetherOneCallWentWrong:
+    """`call_failed` is one rule with two halves, and each half answers a case
+    the other cannot. It was being copied inline before it was a function."""
+
+    def test_a_tool_own_verdict_is_read_even_when_the_text_reads_fine(self):
+        """A policy refusal carries `ok=False` and says why in ordinary prose.
+        Reading only the leading word would call it a success."""
+        from raven.agent.tools.registry import call_failed
+        from raven.contracts.tool import ToolOutput
+
+        assert call_failed(ToolOutput("The reviewer declined this change.", ok=False)) is True
+
+    def test_a_bare_string_is_read_for_the_failure_text(self):
+        """`execute` returns a plain string on the paths that refuse before
+        dispatch -- unparseable arguments, an invalid parameter set, a timeout.
+        There is no object to carry `ok`, and the leading `Error` is the whole of
+        the signal. Reading only `ok` calls every one of them a success."""
+        from raven.agent.tools.registry import call_failed
+
+        assert call_failed("Error: Tool 'sleeper' timed out after 600s.") is True
+
+    def test_a_call_that_worked_is_not_a_failure(self):
+        from raven.agent.tools.registry import call_failed
+        from raven.contracts.tool import ToolOutput
+
+        assert call_failed(ToolOutput("wrote 12 lines", ok=True)) is False
+        assert call_failed("wrote 12 lines") is False

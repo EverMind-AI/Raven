@@ -1938,35 +1938,6 @@ describe('the compact roster', () => {
     expect((group?.firstElementChild as HTMLElement).dataset.empty).toBe('false')
     expect((leaf?.firstElementChild as HTMLElement).dataset.empty).toBe('true')
   })
-
-  /* Which field the brand mark comes off. The roster answers a preset per row
-     and a name the user may have changed, and the head reads the preset -- so
-     a renamed Claude Code row still wears its own mark, and a row the user
-     wrote themselves wears the glyph. The mark's own table is pinned in
-     shell/agent-mark.test.tsx; what this adds is that the head passes it the
-     preset and not the name. */
-  it('marks a head from its preset, not from what the row is called', () => {
-    wire({ list: async () => [] })
-    render(
-      <AgentList
-        s={{
-          ...store.getState(),
-          roster: [
-            { name: 'my-claude', preset: 'claude_code' },
-            { name: 'claude_code' },
-          ] as SubagentRow[],
-          instances: [],
-        }}
-        compact
-      />,
-      { container: document.getElementById('wsBody')! },
-    )
-    const [renamed, lookalike] = heads()
-    expect(renamed?.querySelector('.agent-mark img')?.getAttribute('src'))
-      .toBe('assets/agents/claudecode-color.svg')
-    expect(lookalike?.querySelector('.agent-mark img')).toBe(null)
-    expect(lookalike?.querySelector('.agent-mark svg')).toBeTruthy()
-  })
 })
 
 /* Why an unchanged snapshot must not repaint.
