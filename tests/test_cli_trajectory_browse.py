@@ -1943,7 +1943,7 @@ def test_bug_report_declined_confirmation_keeps_nothing(state, workspace, monkey
     assert breport.list_reports(state) == []
 
 
-def test_bug_report_needs_review_requires_second_confirm(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+def test_bug_report_review_single_risk_confirm_declined(state, workspace, monkeypatch, capsys, _no_machine_secrets):
     from raven.trajectory import bugreport as breport
 
     _write_log(
@@ -1951,18 +1951,26 @@ def test_bug_report_needs_review_requires_second_confirm(state, workspace, monke
         [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
     )
 
-    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, True, False, _CANCEL])
+    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, "k", False, _CANCEL])
 
     out = capsys.readouterr().out
+    assert "Redaction review — 1 item(s) need your decision" in out
+    assert "Paths are relative to the trajectory snapshot inside the package." in out
+    assert "Suspected: high-entropy token" in out
+    assert f"Token: {_ENTROPY_TOKEN}" in out
+    assert "the span log" in out
+    assert "spans.jsonl:1" in out
     assert "NEEDS REVIEW" in out
-    assert "residual scan flagged" in out
+    assert "Review decisions are complete. Confirm the report contents shown above." in out
+    assert "Reviewed:" in out and "1 kept" in out
     assert "Cancelled — no bug report was created." in out
     assert breport.list_reports(state) == []
-    ship_prompt = next(msg for kind, msg, _t in fake.prompts if "Ship the package anyway?" in msg)
-    assert "flagged content may include real secrets" in ship_prompt
+    assert any("Ship the package with the risks listed above?" in msg for _k, msg, _t in fake.prompts)
+    # One confirmation only: the risk consent replaces the plain create prompt.
+    assert not any("Create the bug report?" in msg for _k, msg, _t in fake.prompts)
 
 
-def test_bug_report_needs_review_accepted_ships(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+def test_bug_report_review_kept_finding_ships(state, workspace, monkeypatch, capsys, _no_machine_secrets):
     import tarfile as _tarfile
 
     _write_log(
@@ -1970,48 +1978,49 @@ def test_bug_report_needs_review_accepted_ships(state, workspace, monkeypatch, c
         [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
     )
 
-    _bug_flow(monkeypatch, workspace, ["it broke", False, True, True, _CANCEL])
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "k", True, _CANCEL])
 
     _record_dir, record = _single_report(state)
     assert record["status"] == "local_ready"
     assert record["redaction"]["classification"] == "needs_review"
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["kept"]
     with _tarfile.open(record["package"]["path"]) as tar:
         meta = json.loads(tar.extractfile(f"{record['report_id']}/bugreport.json").read().decode("utf-8"))
     assert meta["redaction"]["risk_accepted"] is True
+    assert meta["redaction"]["user_decisions"] == record["redaction"]["user_decisions"]
 
 
-def test_bug_report_blocked_trajectory_stops_before_input(state, workspace, monkeypatch, capsys, _no_machine_secrets):
-    from raven.trajectory import bugreport as breport
-
+def test_bug_report_private_key_acknowledged_ships(state, workspace, monkeypatch, capsys, _no_machine_secrets):
     _write_log(
         state / "logs" / "audit-spans.log",
         [_span("trace-1", session_key="cli:a", attrs={"llm.output": _PEM})],
     )
 
-    fake = _bug_flow(monkeypatch, workspace, [_CANCEL])
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "", True, _CANCEL])
 
     out = capsys.readouterr().out
-    assert "Cannot create a bug report from this attempt." in out
-    assert "private key block" in out
-    assert "raven trajectory report" in out
-    assert breport.list_reports(state) == []
-    assert not any(kind == "text" for kind, _m, _t in fake.prompts)
+    assert "Confirmed sensitive: private key block (already replaced)" in out
+    _record_dir, record = _single_report(state)
+    assert record["status"] == "local_ready"
+    assert record["redaction"]["security_notices"] == [
+        "the original trajectory contained 1 private key block(s), replaced before export"
+    ]
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["acknowledged"]
 
 
-def test_bug_report_blocked_description_stops_before_confirm(
-    state, workspace, monkeypatch, capsys, _no_machine_secrets
-):
+def test_bug_report_review_cancel_keeps_nothing(state, workspace, monkeypatch, capsys, _no_machine_secrets):
     from raven.trajectory import bugreport as breport
 
     _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
 
-    fake = _bug_flow(monkeypatch, workspace, [f"look: {_PEM}", False, _CANCEL])
+    fake = _bug_flow(monkeypatch, workspace, [f"look: {_PEM}", False, "c", _CANCEL])
 
     out = capsys.readouterr().out
-    assert "Cannot create a bug report with these details." in out
-    assert "without pasting the key itself" in out
+    assert "Cancelled — no bug report was created." in out
     assert breport.list_reports(state) == []
-    assert not any("Create the bug report?" in msg for _k, msg, _t in fake.prompts)
+    staging = breport.bugreports_root(state) / breport.STAGING_DIR
+    assert not any(staging.iterdir())
+    assert not any("Ship the package" in msg for _k, msg, _t in fake.prompts)
 
 
 def test_bug_report_concurrent_member_change_rejected(state, workspace, monkeypatch, capsys, _no_machine_secrets):
@@ -2098,21 +2107,196 @@ def test_bug_report_io_failure_shows_prepare_block(state, workspace, monkeypatch
 
 
 def test_bug_report_policy_review_flow(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    """A zero-item review (policy only) skips the item screen but still gets
+    the risk-worded confirmation — never the plain create prompt."""
     from raven.trajectory import bugreport as breport
 
     monkeypatch.setenv("RAVEN_BUGREPORT_REQUIRE_REVIEW", "1")
     _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
 
-    _bug_flow(monkeypatch, workspace, ["it broke", False, True, False, _CANCEL])
+    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, False, _CANCEL])
     out = capsys.readouterr().out
     assert "organization policy requires manual review" in out
     assert "Cancelled — no bug report was created." in out
     assert breport.list_reports(state) == []
+    assert any("Ship the package with the risks listed above?" in msg for _k, msg, _t in fake.prompts)
+    assert not any("Create the bug report?" in msg for _k, msg, _t in fake.prompts)
+    assert not any(str(msg).startswith("Decision") for _k, msg, _t in fake.prompts)
+    assert "Review decisions are complete." not in out
 
-    _bug_flow(monkeypatch, workspace, ["it broke", False, True, True, _CANCEL])
+    _bug_flow(monkeypatch, workspace, ["it broke", False, True, _CANCEL])
     ((_record_dir, record),) = breport.list_reports(state)
     assert record["status"] == "local_ready"
     assert "organization policy requires manual review" in record["redaction"]["reasons"]
+
+
+def test_bug_report_review_lists_every_item(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    tokens = [f"qT7zK9mP4vX2sW8dQ5nR{suffix}" for suffix in ("fJ3a", "fJ3b", "fJ3c", "fJ3d", "fJ3e", "fJ3f")]
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": " ".join(tokens)})],
+    )
+
+    answers = ["it broke", False] + ["k"] * 6 + [True, _CANCEL]
+    fake = _bug_flow(monkeypatch, workspace, answers)
+
+    out = capsys.readouterr().out
+    assert "Redaction review — 6 item(s) need your decision" in out
+    assert "[6/6]" in out
+    assert sum(1 for _k, msg, _t in fake.prompts if str(msg).startswith("Decision")) == 6
+    _record_dir, record = _single_report(state)
+    assert len(record["redaction"]["user_decisions"]) == 6
+
+
+def test_bug_report_review_suspected_item_has_no_default(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    """A bare Enter (or any unknown input) records nothing; the item is
+    re-asked until k, r, or c is typed."""
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
+    )
+
+    answers = ["it broke", False, "", "x", "k", True, _CANCEL]
+    fake = _bug_flow(monkeypatch, workspace, answers)
+
+    out = capsys.readouterr().out
+    assert out.count("Choose k, r, or c — this item has no default.") == 2
+    decision_prompts = [msg for _k, msg, _t in fake.prompts if str(msg).startswith("Decision")]
+    assert len(decision_prompts) == 3
+    assert "[k] keep" in decision_prompts[0]
+    _record_dir, record = _single_report(state)
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["kept"]
+
+
+def test_bug_report_private_key_default_stays_acknowledge(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": _PEM})],
+    )
+
+    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, "", True, _CANCEL])
+
+    decision_prompts = [msg for _k, msg, _t in fake.prompts if str(msg).startswith("Decision")]
+    assert "[Enter] acknowledge and continue" in decision_prompts[0]
+    _record_dir, record = _single_report(state)
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["acknowledged"]
+
+
+def test_bug_report_review_locations_survive_context_cap(
+    state, workspace, monkeypatch, capsys, tmp_path, _no_machine_secrets
+):
+    """Only context text is capped: with six distinct contexts across six
+    files, every location stays visible and the extras say so."""
+    attrs = {}
+    for i in range(6):
+        artifact = tmp_path / f"ctx{i}.json"
+        artifact.write_text(f"lead{i} {_ENTROPY_TOKEN} tail{i}", encoding="utf-8")
+        attrs[f"x{i}.artifact_path"] = str(artifact)
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a", attrs=attrs)])
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "k", True, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert f"Token: {_ENTROPY_TOKEN} — the same value in 6 place(s)" in out
+    assert "Context 1 of 6" in out
+    assert "... 1 more distinct context(s), locations listed below:" in out
+    assert "(context omitted)" in out
+    for i in range(6):
+        assert f"ctx{i}.json:1" in out
+
+
+def test_bug_report_review_same_line_double_hit_keeps_positions(
+    state, workspace, monkeypatch, capsys, tmp_path, _no_machine_secrets
+):
+    """Two hits of the same value on one short line stay one context group
+    with both positions counted (display-text dedup must not lose them)."""
+    artifact = tmp_path / "double.json"
+    artifact.write_text(f"a {_ENTROPY_TOKEN} b {_ENTROPY_TOKEN} c", encoding="utf-8")
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"x.artifact_path": str(artifact)})],
+    )
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "k", True, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert "the same value in 2 place(s)" in out
+    assert "(identical in 2 place(s))" in out
+    assert out.count("Seen at:") == 1
+
+
+def test_grouped_occurrences_keep_every_span_for_identical_windows(tmp_path):
+    """Two hits on a just-over-300 line render the same windowed text; the
+    merged group must keep both highlight spans."""
+    from raven.trajectory import redact as tredact
+    from raven.trajectory import review as treview
+
+    token = _ENTROPY_TOKEN
+    line = "a" * 100 + f" {token} " + "b" * 30 + f" {token} " + "c" * 140
+    assert len(line) > tbrowse._REVIEW_WHOLE_LINE_LIMIT
+    tree = tmp_path / "trajectory"
+    tree.mkdir()
+    (tree / "long.json").write_text(line, encoding="utf-8")
+    report = tredact.RedactionReport(bundle_dir=tree, redacted_dir=tree.resolve())
+    report.findings = tredact.scan_residuals(tree)
+    (item,) = treview.build_review_items([report])
+    assert len(item.occurrences) == 2
+
+    (group,) = tbrowse._grouped_occurrences(item)
+
+    assert len(group["occurrences"]) == 2
+    assert sorted(group["spans"]) == [(101, 125), (157, 181)]
+
+
+def test_bug_report_review_long_line_windowed(state, workspace, monkeypatch, capsys, tmp_path, _no_machine_secrets):
+    artifact = tmp_path / "long.json"
+    artifact.write_text("m" * 400 + f" {_ENTROPY_TOKEN} end", encoding="utf-8")
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"x.artifact_path": str(artifact)})],
+    )
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "k", True, _CANCEL])
+
+    flat = "".join(capsys.readouterr().out.split())
+    assert "..." in flat
+    assert "m" * 250 not in flat
+    assert "m" * 100 in flat
+
+
+def test_bug_report_review_mixed_decisions(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    keep = "qW3eR5tY7uI9oP1aS2dF4gH6"
+    drop = "zX8cV6bN4mL2kJ9hG7fD5sQ3"
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"keep {keep} drop {drop}"})],
+    )
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "k", "r", True, _CANCEL])
+
+    _record_dir, record = _single_report(state)
+    actions = sorted(entry["action"] for entry in record["redaction"]["user_decisions"])
+    assert actions == ["kept", "redacted"]
+    assert drop not in json.dumps(record)
+
+
+def test_bug_report_review_conflict_reasks_linked_group(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    inner = "Hj5tR8uE3iO7pA1sD4fGk9lZ"
+    outer = inner + "W6xC2v"
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"a {inner} b {outer}"})],
+    )
+
+    answers = ["it broke", False, "k", "r", "r", "r", True, _CANCEL]
+    fake = _bug_flow(monkeypatch, workspace, answers)
+
+    out = capsys.readouterr().out
+    assert "must share one decision" in out
+    assert sum(1 for _k, msg, _t in fake.prompts if str(msg).startswith("Decision")) == 4
+    _record_dir, record = _single_report(state)
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["redacted", "redacted"]
+    assert inner not in json.dumps(record) and outer not in json.dumps(record)
 
 
 def test_bug_report_details_show_completeness(state, workspace, monkeypatch, capsys, _no_machine_secrets):

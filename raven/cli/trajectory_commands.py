@@ -14,8 +14,9 @@ wrappers over the trajectory layer:
   a Bug Report (record + shippable package with the problem metadata) for an
   explicit attempt and description (:mod:`raven.trajectory.bugreport`). Unlike
   ``report``, its deliverable embeds the trajectory inside a problem-metadata
-  envelope and is gated by the redaction classification; ``blocked`` cannot be
-  bypassed by any flag.
+  envelope and is gated by the redaction classification: review findings are
+  adjudicated per item, and shipping a review report always takes an explicit
+  risk authorization (never implied by ``--yes``).
 - ``replay``  — feed a bundle's recorded model replies and tool results back
   through the live harness (:func:`raven.trajectory.replay.run_replay`; no
   real tool code runs, no spans are emitted).
@@ -296,7 +297,14 @@ def trajectory_report_bug(
     accept_risk: bool = typer.Option(
         False,
         "--accept-risk",
-        help="Grant the separate needs_review authorization (--yes does not imply it)",
+        help="Authorize a review report: acknowledges confirmed-sensitive items"
+        " and grants the risk consent (--yes does not imply it)",
+    ),
+    keep_findings: bool = typer.Option(
+        False, "--keep-findings", help="Keep every suspected finding as-is (confirms they are harmless)"
+    ),
+    redact_findings: bool = typer.Option(
+        False, "--redact-findings", help="Replace every suspected finding with [REDACTED:user-confirmed]"
     ),
     workspace: Path | None = typer.Option(
         None, "--workspace", "-w", help="Workspace holding the session records (default: the configured workspace)"
@@ -309,10 +317,14 @@ def trajectory_report_bug(
 
     The package embeds a redacted, path-sanitized Trajectory Report inside a
     problem-metadata envelope (completeness, environment, redaction summary).
-    Without a TTY, --yes is required and needs_review additionally requires
-    --accept-risk; blocked reports cannot be produced by any flag.
+    Review findings are adjudicated per item on a TTY (a flag pre-decides the
+    items of its kind); without one, --yes is required, suspected findings
+    need --keep-findings or --redact-findings, and every review report needs
+    --accept-risk — a run missing flags fails listing all items and every
+    missing flag at once, producing nothing.
     """
     from raven.trajectory import bugreport as breport
+    from raven.trajectory import review as treview
 
     description = description.strip()
     if not description:
@@ -322,6 +334,11 @@ def trajectory_report_bug(
         raise typer.Exit(code=1)
     if severity and severity not in breport.SEVERITIES:
         console.print(f"[red]--severity must be one of: {', '.join(breport.SEVERITIES)}[/red]")
+        raise typer.Exit(code=1)
+    if keep_findings and redact_findings:
+        console.print(
+            "[red]--keep-findings and --redact-findings are mutually exclusive; nothing was collected or pinned.[/red]"
+        )
         raise typer.Exit(code=1)
 
     interactive = _stdin_is_tty()
@@ -342,12 +359,70 @@ def trajectory_report_bug(
         raise typer.Exit(code=1)
     console.print("Snapshot collected; the attempt was pinned so cleanup won't remove it.")
 
+    def _deny_noninteractive(reasons: list[str]) -> None:
+        console.print(
+            "[red]The redaction needs review; pass --accept-risk to grant the separate"
+            " authorization (--yes does not imply it):[/red]"
+        )
+        for reason in reasons:
+            console.print(f"  - {escape(reason)}", highlight=False)
+
+    def _print_review_failure(items: list, reasons: list[str], missing: list[str]) -> None:
+        from raven.cli import trajectory_browse as tbrowse
+
+        console.print(f"[red]The redaction needs review; {len(items)} item(s) require your decision:[/red]")
+        console.print(f"  {tbrowse._REVIEW_PATHS_NOTE}", highlight=False)
+        for warning in tbrowse._review_warnings(reasons):
+            console.print(f"  [yellow]! {escape(warning)}[/yellow]", highlight=False)
+        index_by_id = {item.id: index for index, item in enumerate(items, 1)}
+        for index, item in enumerate(items, 1):
+            tbrowse._print_review_item(item, index, len(items), index_by_id)
+        console.print(f"[red]Pass: {'; '.join(missing)} (--yes does not imply them).[/red]")
+
+    def _decide(items: list, reasons: list[str]) -> list:
+        if not interactive:
+            # Missing flags are judged on the ORIGINAL items, before any
+            # early return or decision application: otherwise a run whose
+            # items are all flag-covered but that lacks --accept-risk would
+            # keep exporting and fail late without the item listing (a
+            # redact run would even rewrite the context before failing).
+            missing = []
+            if any(item.kind == treview.KIND_SUSPECTED for item in items) and not (keep_findings or redact_findings):
+                missing.append("--keep-findings or --redact-findings")
+            if not accept_risk:
+                missing.append("--accept-risk")
+            if missing:
+                _print_review_failure(items, reasons, missing)
+                raise typer.Exit(code=1)
+        flag_decisions: list = []
+        remaining: list = []
+        for item in items:
+            if item.kind == treview.KIND_CONFIRMED and accept_risk:
+                flag_decisions.append(treview.ReviewDecision(item.id, treview.ACTION_ACKNOWLEDGED))
+            elif item.kind == treview.KIND_SUSPECTED and (keep_findings or redact_findings):
+                action = treview.ACTION_REDACTED if redact_findings else treview.ACTION_KEPT
+                flag_decisions.append(treview.ReviewDecision(item.id, action))
+            else:
+                remaining.append(item)
+        if not remaining:
+            return flag_decisions
+        # Only reachable on a TTY (without one, missing flags exited above
+        # and complete flags leave nothing remaining). Linked groups exist
+        # only among suspected items and the flags cover a kind whole, so a
+        # group is never split between flags and interaction.
+        from raven.cli import trajectory_browse as tbrowse
+        from raven.cli._styles import RAVEN_STYLE
+
+        try:
+            decided = tbrowse.make_review_decider(tbrowse._require_questionary(), RAVEN_STYLE)(remaining, reasons)
+        except (tbrowse._ActionCancelledError, tbrowse._CancelledError) as exc:
+            # Esc/Ctrl-C during adjudication: the CLI has no outer screen
+            # to unwind to, so both mean "cancel this report".
+            raise treview.ReviewCancelledError("cancelled from the review screen") from exc
+        return flag_decisions + decided
+
     exit_code = 0
     try:
-        if prep.classification == breport.CLASSIFICATION_BLOCKED:
-            _print_blocked_cli("trajectory")
-            exit_code = 1
-            return
         try:
             prep = breport.freeze_export(
                 prep,
@@ -357,41 +432,38 @@ def trajectory_report_bug(
                 severity=severity,
                 steps=steps,
                 reporter=reporter,
+                decide=_decide,
             )
+        except treview.ReviewCancelledError:
+            console.print("Cancelled — no bug report was created.")
+            exit_code = 1
+            return
         except breport.PreparationError as exc:
             console.print(
                 f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False
             )
             exit_code = 1
             return
-        if prep.classification == breport.CLASSIFICATION_BLOCKED:
-            _print_blocked_cli("problem")
-            exit_code = 1
-            return
 
         _print_bug_cli_summary(prep)
-        if not yes and not typer.confirm("Create the bug report?", default=True):
-            console.print("Cancelled — no bug report was created.")
-            exit_code = 1
-            return
         if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW and not accept_risk:
+            # The review authorization can only come from --accept-risk or
+            # this risk-worded consent; --yes never grants it.
             if interactive:
-                if not typer.confirm(
-                    "The redaction needs review: flagged content may include real secrets. Ship the package anyway?",
-                    default=False,
-                ):
+                if prep.user_decisions:
+                    console.print("Review decisions are complete. Confirm the report contents shown above.")
+                if not typer.confirm("Ship the package with the risks listed above?", default=False):
                     console.print("Cancelled — no bug report was created.")
                     exit_code = 1
                     return
             else:
-                console.print(
-                    "[red]The redaction needs review; pass --accept-risk to grant the separate"
-                    " authorization (--yes does not imply it):[/red]"
-                )
-                for reason in prep.reasons:
-                    console.print(f"  - {escape(reason)}", highlight=False)
+                _deny_noninteractive(prep.reasons)
                 exit_code = 1
                 return
+        elif not yes and not typer.confirm("Create the bug report?", default=True):
+            console.print("Cancelled — no bug report was created.")
+            exit_code = 1
+            return
 
         try:
             _record_dir, record = breport.confirm_and_package(prep)
@@ -426,28 +498,6 @@ def _stdin_is_tty() -> bool:
     import sys
 
     return sys.stdin.isatty()
-
-
-def _print_blocked_cli(trigger: str) -> None:
-    """The blocked refusal, trigger-specific: the recovery action differs."""
-    if trigger == "trajectory":
-        console.print("[red]✗ Cannot create a bug report from this attempt.[/red]")
-        console.print(
-            "  The original trajectory contains a private key block. Even though the copy\n"
-            "  was redacted, this material is not allowed to leave the machine as a bug\n"
-            "  report package.\n"
-            "  Remove the key from the source data and retry, or use the expert command\n"
-            "  `raven trajectory report` at your own risk.",
-            highlight=False,
-        )
-    else:
-        console.print("[red]✗ Cannot create a bug report with these details.[/red]")
-        console.print(
-            "  The problem details you entered contain a private key block. This material\n"
-            "  is not allowed to leave the machine as a bug report package.\n"
-            "  Run again and describe the problem without pasting the key itself.",
-            highlight=False,
-        )
 
 
 def _print_bug_cli_summary(prep) -> None:
@@ -496,17 +546,17 @@ def _print_bug_cli_summary(prep) -> None:
     counts = f"{exact} known-value + {patterns} pattern replacement(s)"
     if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW:
         console.print(f"  Redaction:    {counts} · NEEDS REVIEW", highlight=False)
-        findings = redaction["residual_findings"]
+        for notice in redaction.get("security_notices") or []:
+            console.print(f"    [yellow]! {escape(notice)}[/yellow]", highlight=False)
         for reason in prep.reasons:
-            suffix = ":" if reason.startswith("residual") and findings else ""
-            console.print(f"    - {escape(reason)}{suffix}", highlight=False)
-            if reason.startswith("residual"):
-                # The bounded sample block the independent authorization is
-                # judged on — sanitized canonical values, never raw input.
-                for finding in findings[:5]:
-                    console.print(f"        {escape(f'{finding["file"]}: {finding["sample"]}')}", highlight=False)
-                if len(findings) > 5:
-                    console.print(f"        ... and {len(findings) - 5} more (see redaction.json)", highlight=False)
+            console.print(f"    - {escape(reason)}", highlight=False)
+        decisions = redaction.get("user_decisions") or []
+        if decisions:
+            from raven.cli.trajectory_browse import _decision_line, _decision_tally
+
+            console.print(f"  Reviewed:     {_decision_tally(decisions)}", highlight=False)
+            for entry in decisions:
+                console.print(f"    - {escape(_decision_line(entry))}", highlight=False)
     else:
         console.print(f"  Redaction:    {counts} · residual scan: clean", highlight=False)
     console.print(
