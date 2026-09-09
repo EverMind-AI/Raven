@@ -63,6 +63,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -410,7 +412,14 @@ def discover_case_dirs(root: Path) -> list[Path]:
     root = Path(root)
     if not root.is_dir():
         raise ValueError(f"cases root {root} is not a directory")
-    return sorted(path for path in root.iterdir() if path.is_dir())
+    return sorted(
+        path
+        for path in root.iterdir()
+        # ".init-*" is this feature's own publish-staging pattern (skipped so
+        # an interrupted init cannot read as a broken case); any other dot
+        # directory is still discovered — the gate stays whole-directory.
+        if path.is_dir() and not path.name.startswith(".init-")
+    )
 
 
 def validate_case(case_dir: Path) -> list[str]:
@@ -651,3 +660,120 @@ def _size_problems(case_dir: Path) -> list[str]:
             f"the case totals {total} bytes, over the {MAX_CASE_BYTES}-byte budget (the repo's 1 MiB large-file gate)"
         )
     return problems
+
+
+_CASE_NAME = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
+_VERSIONISH_SEGMENT = re.compile(r"^(?:v|eve|phase|ticket|issue|pr)?\d+$")
+
+EXPECT_TEMPLATE = """\
+# Regression expectation (see raven/trajectory/regression.py).
+# TODO: point `divergence` at the call where the fixed harness must depart
+# from this recording and add `checks` asserting the fixed live behavior.
+# Keep `divergence: null` only to guard faithful reproduction.
+mode: strict
+divergence: null
+checks: []
+"""
+
+
+def case_name_problem(name: str) -> str | None:
+    """Why ``name`` cannot name a case directory (None = acceptable)."""
+    if not _CASE_NAME.match(name):
+        return f"case name {name!r} must be lower snake_case, starting with a letter"
+    for segment in name.split("_"):
+        if _VERSIONISH_SEGMENT.match(segment):
+            return f"case name {name!r} must not carry a version or ticket segment ({segment!r})"
+    return None
+
+
+def render_case_template(created_from: str, reviewed: list[ReviewedResidual]) -> str:
+    """The ``case.yaml`` draft the scaffold publishes: required fields empty
+    on purpose (validation must fail until a human fills them), plus the
+    residual review entries collected interactively. Hand-rendered — the YAML
+    dumper would drop the TODO comments; user-supplied strings are embedded
+    as JSON string literals (valid YAML scalars, safely quoted)."""
+    lines = [
+        "# Case metadata (see raven/trajectory/regression.py). Required by",
+        "# `raven trajectory regression validate`; fill every TODO before commit.",
+        'issue: ""  # TODO: bug/issue/PR link this case guards',
+        'owner: ""  # TODO: who answers for this case',
+        'why: ""  # TODO: the contract the assertions protect',
+        're_record: ""  # TODO: when re-recording the baseline is legitimate',
+        f"created_from: {json.dumps(created_from)}",
+    ]
+    if reviewed:
+        lines.append("reviewed_residuals:")
+        for entry in reviewed:
+            lines.append(f"  - sha256: {entry.sha256}")
+            lines.append(f"    note: {json.dumps(entry.note)}")
+    return "\n".join(lines) + "\n"
+
+
+def _tar_member_problem(member: tarfile.TarInfo) -> str | None:
+    name = member.name
+    if name.startswith("/") or PurePosixPath(name).is_absolute():
+        return f"member {name!r} has an absolute name"
+    if ".." in PurePosixPath(name).parts:
+        return f"member {name!r} escapes the extraction root"
+    if not (member.isreg() or member.isdir()):
+        return f"member {name!r} is not a regular file or directory"
+    return None
+
+
+def _extract_tar(tar_path: Path, dest: Path) -> None:
+    """Extract ``tar_path`` under ``dest``, accepting only regular files and
+    directories with root-contained relative names. The explicit member check
+    is the gate; ``filter="data"`` stays on as defense in depth (on its own it
+    strips a leading ``/`` instead of rejecting it and allows links whose
+    target lands inside the root)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        with tarfile.open(tar_path, "r:gz") as tar:
+            for member in tar.getmembers():
+                problem = _tar_member_problem(member)
+                if problem is not None:
+                    raise ValueError(f"{tar_path}: {problem}")
+            tar.extractall(dest, filter="data")
+    except (OSError, tarfile.TarError) as exc:
+        raise ValueError(f"{tar_path} cannot be extracted: {exc}") from exc
+
+
+def _single_bundle_root(extracted: Path, source: Path) -> Path:
+    dirs = [path for path in extracted.iterdir() if path.is_dir()]
+    if len(dirs) != 1 or not (dirs[0] / "manifest.json").is_file():
+        raise ValueError(f"{source} does not hold a single bundle directory with a manifest.json")
+    return dirs[0]
+
+
+def _bug_report_root(outer: Path) -> Path | None:
+    if (outer / "bugreport.json").is_file():
+        return outer
+    dirs = [path for path in outer.iterdir() if path.is_dir()]
+    if len(dirs) == 1 and (dirs[0] / "bugreport.json").is_file():
+        return dirs[0]
+    return None
+
+
+def extract_bundle_source(tar_path: Path, work_dir: Path) -> Path:
+    """The bundle directory inside ``tar_path``, extracted under ``work_dir``.
+
+    Accepts both report shapes: a trajectory report tarball (a single root
+    directory holding a bundle) and a bug report package (``bugreport.json``
+    beside ``trajectory/<attempt-id>.tar.gz``, extracted through a second,
+    equally-guarded pass). Raises ``ValueError`` on unsafe members or an
+    unrecognized layout."""
+    tar_path = Path(tar_path)
+    outer = work_dir / "outer"
+    _extract_tar(tar_path, outer)
+    package_root = _bug_report_root(outer)
+    if package_root is not None:
+        trajectory_dir = package_root / "trajectory"
+        inner_tars = sorted(trajectory_dir.glob("*.tar.gz")) if trajectory_dir.is_dir() else []
+        if len(inner_tars) != 1:
+            raise ValueError(
+                f"{tar_path}: a bug report package must embed exactly one trajectory/*.tar.gz, found {len(inner_tars)}"
+            )
+        inner = work_dir / "inner"
+        _extract_tar(inner_tars[0], inner)
+        return _single_bundle_root(inner, inner_tars[0])
+    return _single_bundle_root(outer, tar_path)

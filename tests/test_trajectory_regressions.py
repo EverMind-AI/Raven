@@ -433,6 +433,15 @@ async def test_discover_case_dirs_rejects_missing_root(tmp_path) -> None:
         discover_case_dirs(tmp_path / "nope")
 
 
+async def test_discover_case_dirs_skips_only_init_staging_directories(tmp_path) -> None:
+    """Only this feature's own .init- publish-staging pattern is skipped;
+    any other dot directory is still discovered by the gate."""
+    (tmp_path / ".init-some_case-abc123").mkdir()
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / "real_case").mkdir()
+    assert [p.name for p in discover_case_dirs(tmp_path)] == [".hidden", "real_case"]
+
+
 # ── validate_case ──────────────────────────────────────────────────────
 
 
