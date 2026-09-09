@@ -1003,7 +1003,7 @@ class MediaToolConfig(Base):
 
     Empty fields fall back at call time: ``api_key`` → ``providers.openrouter``
     / ``OPENROUTER_API_KEY``; ``api_base`` → OpenRouter; ``model`` → the tool's
-    default (gpt-image-2.5-sunburst for images). Empty quality uses the provider default.
+    default (gpt-image-2 for images). Empty quality uses the provider default.
     """
 
     api_key: str = ""

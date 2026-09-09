@@ -136,6 +136,13 @@ class PermissionGate:
         """None waves the call through; a ``ToolResult`` replaces it."""
         turn = current_turn()
         digest = action_digest(tool_name, params)
+        if digest in turn.lapsed_digests:
+            self._annotate({"permission.decision": "deny", "permission.source": "lapsed_earlier"})
+            return self._refusal(
+                "Error: This action was already sent for approval in this turn and the request "
+                "expired with no answer. Asking again would expire the same way. Tell the user the "
+                "approval lapsed and let them decide."
+            )
         if digest in turn.denied_digests:
             self._annotate({"permission.decision": "deny", "permission.source": "denied_earlier"})
             return self._refusal("Error: User denied this action earlier in the current turn")
@@ -177,18 +184,34 @@ class PermissionGate:
                 "permission.decision": "allow" if outcome.approved else "deny",
                 "permission.source": DecisionSource.APPROVAL.value,
                 "permission.approval.choice": outcome.choice.value,
+                "permission.approval.answered": outcome.answered,
             }
         )
         if outcome.choice is ApprovalChoice.ALLOW:
             return None
         turn.denied_digests.add(digest)
+        if not outcome.answered:
+            turn.lapsed_digests.add(digest)
         feedback = f' The user said: "{outcome.feedback}"' if outcome.feedback else ""
         if outcome.choice is ApprovalChoice.DENY_STOP:
             return self._refusal(
                 "Error: User denied this action and asked to stop here." + feedback,
                 continuation=Continuation.ABORT_TURN,
             )
-        return self._refusal("Error: User denied this action or the approval request expired." + feedback)
+        if not outcome.answered:
+            # Not a refusal. The request went out and the deadline passed with
+            # nobody having answered it, and the two shared one sentence: a model
+            # told it had been denied stops asking and goes around, which is how a
+            # run whose approvals had merely lapsed reported a system error and
+            # delivered something else instead. Said plainly, the next move is to
+            # tell the reader, not to find another way.
+            return self._refusal(
+                "Error: This action needed the user's approval, and the request expired with no "
+                "answer. Nobody refused it. Tell the user the approval lapsed and ask whether to "
+                "retry; do not repeat this call in this turn, and do not look for another way "
+                "around it."
+            )
+        return self._refusal("Error: User denied this action." + feedback)
 
     @staticmethod
     def _annotate(attributes: dict) -> None:

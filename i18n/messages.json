@@ -5468,18 +5468,6 @@
       "en": "The preset for {name} now reaches it over {to}. The entry is removed and added back from that preset, so handles from runs already in flight stop resolving.",
       "zh": "{name} 的预设改成走 {to} 了 · 会先移除再按新预设装回来，已经在跑的会话句柄会失效"
     },
-    "gui.agent.rename": {
-      "en": "Rename this agent",
-      "zh": "重命名这个智能体"
-    },
-    "gui.agent.redescribe": {
-      "en": "Edit what this agent is for",
-      "zh": "编辑这个智能体的用途说明"
-    },
-    "gui.agent.about_none": {
-      "en": "No description yet",
-      "zh": "还没有说明"
-    },
     "gui.pb.back": {
       "en": "Playbooks",
       "zh": "剧本"
@@ -5767,6 +5755,10 @@
     "gui.confirm.note_keys": {
       "en": "Enter send · Esc back · expires in {n}s",
       "zh": "Enter 发送 · Esc 返回 · {n} 秒后过期"
+    },
+    "gui.confirm.lapsed": {
+      "en": "An approval request expired unanswered - the action did not run",
+      "zh": "一个操作等待批准超时未回应 · 该操作没有执行"
     },
     "gui.set.usg.cache_read": {
       "en": "cache read tokens",
