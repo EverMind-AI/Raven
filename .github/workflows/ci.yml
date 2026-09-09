@@ -144,6 +144,43 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  trajectory:
+    name: trajectory regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: make install-deps
+
+      - name: Replay committed regression cases
+        env:
+          RAVEN_REGRESSION_REPORT_DIR: ${{ runner.temp }}/trajectory-reports
+        run: uv run pytest tests/test_trajectory_regressions.py -q
+
+      - name: Validate case format, redaction review, and size budget
+        if: ${{ !cancelled() }}
+        run: uv run raven trajectory regression validate --all
+
+      - name: Upload failure reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trajectory-failure-reports
+          path: ${{ runner.temp }}/trajectory-reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
   windows-upgrade:
     name: Windows self-upgrade
     runs-on: windows-latest
