@@ -213,10 +213,21 @@ importable where raven runs) decides `enabled`, not whether the row exists: an u
 folder is listed and disabled with the reason on the row, because a name the dispatching
 model can pick and then fail on is worse than no name, and hiding it would also hide
 "present, not set up" from the operations view. A missing credential is deliberately not
-a readiness reason: the launcher inherits the host's provider block and refuses loudly at
-dispatch when there is truly nothing. Not deletable through config — removing one means
-removing its folder, or setting `"enabled": false` in its own `subagent.json`. On the
-RPC wire the row source is still spelled `vendored`; renaming that is a schema change.
+a readiness reason: the launcher inherits the host's provider block, so readiness asks
+about the folder, not about a token. Switching one on is the layer where a credential
+does count — `subagents.toggle` sends one real prompt through the row's own backend
+before it writes the flag, and refuses the enable in the agent's own words when nothing
+answers (`force: true` is the operator's override). The two layers therefore ask
+different questions: readiness decides how the row is listed and spends nothing, the
+switch spends one call on that agent's quota before it writes a yes. Neither validates
+retroactively — a folder that ships enabled, and a row already switched on, stay on the
+roster unpinged — because the gate is on the act that turns an agent on, and not on
+membership. That act is the switch, or an add that writes a preset in already enabled:
+`subagents.add` proves a pinged kind the same way and stores nothing when it does not
+answer, so a preset cannot arrive on the roster unproved either.
+Not deletable through config — removing one means removing its folder, or setting
+`"enabled": false` in its own `subagent.json`. On the RPC wire the row source is still
+spelled `vendored`; renaming that is a schema change.
 _Avoid_: "vendored agent" — the retired fork-tree (`subagents/`) meaning, whose rows
 carried venv and credential readiness; "third-party agent" — these are raven's own
 products, and nobody registered them; "builtin" — that is the in-process row, which has

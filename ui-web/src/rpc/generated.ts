@@ -1956,6 +1956,7 @@ export interface SubagentsAddParams {
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
+  force?: boolean;
 }
 export interface SubagentsAddResult {
   added: boolean;
@@ -1995,6 +1996,7 @@ export interface SubagentsBuildResult {
 export interface SubagentsToggleParams {
   name: string;
   enabled: boolean;
+  force?: boolean;
 }
 export interface SubagentsToggleResult {
   enabled: boolean;

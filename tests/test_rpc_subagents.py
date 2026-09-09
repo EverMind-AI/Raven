@@ -268,7 +268,21 @@ def _stored(path: Path) -> list[dict]:
     return json.loads(path.read_text())["subagents"]["agents"]
 
 
-async def test_add_writes_the_preset_template_under_a_chosen_name(config_path: Path) -> None:
+async def _pings_ok(cfg):
+    """A `ping_agent` stand-in for a toggle test whose fixture command cannot
+    really answer one -- a fake path, or a real but empty script. Those tests
+    are about bookkeeping (does the right row survive, get dropped, get
+    written), not about readiness, so the gate should still run for real
+    against the row it composes; only the live model call is stubbed."""
+    from raven.agent.subagent.probe import PingResult
+
+    return PingResult(True, "it ran and replied")
+
+
+async def test_add_writes_the_preset_template_under_a_chosen_name(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
     out = await subagents_add({"preset": "opencode", "name": "Builder", "description": "builds"})
     assert out == {"added": True, "name": "Builder"}
 
@@ -283,13 +297,19 @@ async def test_add_writes_the_preset_template_under_a_chosen_name(config_path: P
     assert entry["description"] == "builds"
 
 
-async def test_add_defaults_name_and_description_to_the_preset(config_path: Path) -> None:
+async def test_add_defaults_name_and_description_to_the_preset(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
     await subagents_add({"preset": "opencode"})
     entry = next(e for e in _stored(config_path) if e["name"] == "OpenCode")
     assert entry["description"]  # the preset's shipped text, not blank
 
 
-async def test_add_preserves_empty_mcps_and_false_secret_policy(config_path: Path) -> None:
+async def test_add_preserves_empty_mcps_and_false_secret_policy(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
     await subagents_add(
         {
             "preset": "opencode",
@@ -317,22 +337,272 @@ async def test_add_keeps_an_openai_preset_enabled_when_a_key_is_supplied(config_
     assert entry["enabled"] is True
 
 
-async def test_add_keeps_a_cli_preset_enabled(config_path: Path) -> None:
+def _as_a_cli_preset(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Make ``subagents_add`` see a ``kind: "cli"`` template, and return it.
+
+    The gate reads ``_PINGED_KINDS``, not the ``acp`` literal, and no shipped
+    preset is ``kind: "cli"`` any more -- so without a synthesized template the
+    ``cli`` half of that tuple would be unpinned on the add path.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+
+    template = {
+        "name": "Local",
+        "kind": "cli",
+        "command": "local -p {prompt}",
+        "description": "a local cli agent",
+        "enabled": True,
+    }
+    monkeypatch.setattr(subagents_mod, "third_party_subagent_preset", lambda _name: dict(template))
+    return template
+
+
+async def test_add_proves_a_preset_of_a_pinged_kind_and_lands_it_enabled(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One call, and the row is dispatchable when it returns.
+
+    This test asserted the opposite for one commit (`arrives disabled`, so the
+    switch would be the only gated enable path), which turned the page's single
+    Connect into add-then-enable: `stageOf` read the added row as configured and
+    off, offered Connect again, and only the second click reached the ping. The
+    gate belongs on the add for that reason -- the roster's entry criterion for
+    these kinds is that the agent answers now, and the add is where the caller
+    asked for it.
+
+    `opencode` is an `acp` preset, which is the kind every shipped local preset
+    carries today. The `cfg` the gate hands `ping_agent` is captured, because
+    what must be proved is the entry this call assembled, not whatever a re-read
+    of config would have found under that name.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    seen = []
+
+    async def _capture(cfg):
+        seen.append(cfg)
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _capture)
+
+    assert await subagents_add({"preset": "opencode"}) == {"added": True, "name": "OpenCode"}
+    entry = next(e for e in _stored(config_path) if e["name"] == "OpenCode")
+    assert entry["kind"] in subagents_mod._PINGED_KINDS
+    assert entry["enabled"] is True, "one Connect must leave the row dispatchable"
+    assert len(seen) == 1
+    assert seen[0].command == entry["command"], "the gate must prove the entry this add assembled"
+
+
+async def test_add_proves_a_cli_preset_the_same_way(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    template = _as_a_cli_preset(monkeypatch)
+
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    seen = []
+
+    async def _capture(cfg):
+        seen.append(cfg)
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _capture)
+
     await subagents_add({"preset": "opencode"})
+    entry = next(e for e in _stored(config_path) if e["name"] == "Local")
+    assert entry["kind"] == "cli"
+    assert entry["enabled"] is True
+    assert [c.command for c in seen] == [template["command"]]
+
+
+async def test_a_refused_add_stores_nothing_at_all(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Not the row disabled -- no row.
+
+    This is the half of the contract that keeps Connect one verb on the failure
+    path too: a stored-but-off row reads as `stageOf` stage `off`, which offers
+    Connect a second time for an agent that just refused to answer, and the
+    second click would take the *other* branch (`subagents.toggle`). With
+    nothing stored the row stays at stage `add`, the reason is toasted, and the
+    one thing to do about it is still Connect.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    before = _stored(config_path)
+
+    async def _refuses(cfg):
+        return PingResult(False, "Internal error: You need to sign in to use this model.")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _refuses)
+
+    with pytest.raises(subagents_mod.SubagentNotReadyError) as caught:
+        await subagents_add({"preset": "opencode"})
+
+    assert "sign in" in str(caught.value), "the refusal must carry the agent's own reason"
+    assert caught.value.data is not None
+    assert "sign in" in caught.value.data["detail"], "the UI reads data.detail, not just the message"
+    assert [e for e in _stored(config_path) if e["name"] == "OpenCode"] == [], "a refused add must store no row"
+    assert _stored(config_path) == before, "and must leave the rest of the list alone"
+
+
+async def test_a_refused_add_of_a_cli_preset_stores_nothing_either(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _as_a_cli_preset(monkeypatch)
+
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    before = _stored(config_path)
+
+    async def _refuses(cfg):
+        return PingResult(False, "Internal error: You need to sign in to use this model.")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _refuses)
+
+    with pytest.raises(subagents_mod.SubagentNotReadyError):
+        await subagents_add({"preset": "opencode"})
+
+    assert _stored(config_path) == before
+
+
+async def test_force_adds_a_preset_of_a_pinged_kind_without_a_ping(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same escape hatch as the switch's, and the same strictness: a working
+    agent whose provider is briefly down must not be un-addable."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    seen = []
+
+    async def _capture(cfg):
+        seen.append(cfg)
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _capture)
+
+    await subagents_add({"preset": "opencode", "force": True})
     entry = next(e for e in _stored(config_path) if e["name"] == "OpenCode")
     assert entry["enabled"] is True
+    assert seen == [], "force must skip the ping entirely, not just tolerate its answer"
 
 
-async def test_add_rejects_a_duplicate_name_without_writing(config_path: Path) -> None:
+async def test_a_truthy_non_boolean_force_does_not_skip_the_add_gate(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`force` is declared a boolean here too, and `"no"` is truthy in Python
+    while reading as a refusal to whoever sent it."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    seen = []
+
+    async def _refuses(cfg):
+        seen.append(cfg)
+        return PingResult(False, "Internal error: You need to sign in to use this model.")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _refuses)
+
+    with pytest.raises(subagents_mod.SubagentNotReadyError):
+        await subagents_add({"preset": "opencode", "force": "no"})
+
+    assert len(seen) == 1, "a non-boolean force must not skip the ping"
+    assert [e for e in _stored(config_path) if e["name"] == "OpenCode"] == []
+
+
+async def test_add_never_pings_an_openai_preset(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An endpoint's credential is already settled by the free models probe, so
+    charging a completion for the add would buy nothing -- the gate must never
+    even ask, keyed or keyless. And the keyless rule is unchanged: that row is
+    the one kind of add that still lands disabled, waiting for its key."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    seen = []
+
+    async def _capture(cfg):
+        seen.append(cfg)
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _capture)
+
+    await subagents_add({"preset": "mirothinker", "name": "Keyed", "api_key": "sk-live"})
+    await subagents_add({"preset": "mirothinker", "name": "Keyless"})
+
+    stored = {e["name"]: e for e in _stored(config_path)}
+    assert stored["Keyed"]["enabled"] is True
+    assert stored["Keyless"]["enabled"] is False
+    assert seen == [], "an openai row is not a pinged kind, so the gate must not run"
+
+
+async def test_a_write_that_lands_during_an_adds_ping_is_not_reverted(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The add's gate has the same await between its read and its write that the
+    switch's has, and `set_agents` replaces the whole list -- so writing the
+    list read before a ping of up to a minute would silently revert every other
+    `subagents.*` write that landed during it, each of which has already
+    answered success to its own client."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    await subagents_toggle({"name": "Researcher", "enabled": False})
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hangs_until_released(cfg):
+        in_flight.set()
+        await release.wait()
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _hangs_until_released)
+
+    adding = asyncio.ensure_future(subagents_add({"preset": "opencode"}))
+    await in_flight.wait()
+    # Another client, on the ordinary path: Researcher is `openai`, so its own
+    # switch is exempt from the gate and this write does not wait on anything.
+    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
+    assert {e["name"]: e.get("enabled") for e in _stored(config_path)}["Researcher"] is True
+
+    release.set()
+    assert await adding == {"added": True, "name": "OpenCode"}
+
+    after = {e["name"]: e.get("enabled") for e in _stored(config_path)}
+    assert after["OpenCode"] is True, "the added row must survive"
+    assert after["Researcher"] is True, "the write made during the ping must survive the add's write"
+
+
+async def test_add_rejects_a_duplicate_name_without_writing_or_pinging(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A collision is not a readiness question, and the schema keeps the first of
+    two rows carrying one name -- so a gate that ran ahead of this refusal would
+    ping the *stored* `Coder` and report "did not answer" for what is really a
+    name already in use. The write's own refusals come first; only then is the
+    agent's quota spent."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    seen = []
+
+    async def _capture(cfg):
+        seen.append(cfg)
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _capture)
+
     before = _stored(config_path)
     # Surfaced as ConfigValidationError (-32011), not the -32603 internal_error
     # the dispatcher would otherwise turn a bare ValueError into.
     with pytest.raises(ConfigValidationError, match="Coder"):
         await subagents_add({"preset": "opencode", "name": "Coder"})
     assert _stored(config_path) == before
+    assert seen == [], "an add the write was always going to refuse must spend nothing"
 
 
-async def test_add_trims_a_padded_name(config_path: Path) -> None:
+async def test_add_trims_a_padded_name(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
     await subagents_add({"preset": "opencode", "name": "  Builder  "})
     names = [e["name"] for e in _stored(config_path)]
     assert "Builder" in names
@@ -585,6 +855,9 @@ async def test_switching_a_discovered_folder_back_on_drops_its_switch_row(
     await subagents_toggle({"name": "Raven-Probe", "enabled": False})
     assert any(e["name"] == "Raven-Probe" for e in _stored(config_path))
 
+    # The fixture's command cannot really answer one; the gate must still run
+    # for real against the row it composes, so only the live call is stubbed.
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
     assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
 
     assert [e for e in _stored(config_path) if e["name"] == "Raven-Probe"] == []
@@ -605,9 +878,80 @@ async def test_switching_a_discovered_folder_on_with_no_row_writes_nothing(
         lambda root=None: [discovered],
     )
 
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
     assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
 
     assert [e for e in _stored(config_path) if e["name"] == "Raven-Probe"] == []
+
+
+async def test_enabling_a_discovered_folder_for_the_first_time_pings_its_own_command(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No stored row exists yet -- the first-time-enable shape the feature
+    exists for. Composing the gate from a fresh disk read instead of this
+    call's own ``entries`` found nothing and raised ``SubagentNotFoundError``
+    before a ping ever ran; this asserts the ping runs, and runs against the
+    folder's own command, by capturing the ``cfg`` the gate actually hands it."""
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    discovered = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe", kind="cli", command="/tmp/py /tmp/raven-probe/run.py", enabled=True
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_product_rows",
+        lambda root=None: [discovered],
+    )
+
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    seen = []
+
+    async def _capture(cfg):
+        seen.append(cfg)
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _capture)
+
+    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
+    assert len(seen) == 1
+    assert seen[0].command == "/tmp/py /tmp/raven-probe/run.py"
+
+
+async def test_re_enabling_a_switched_off_discovered_folder_pings_its_real_command(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Off writes a stub with ``command: ""``. Composing the gate from a fresh
+    disk read instead of this call's own ``entries`` still saw that stub after
+    the toggle-on had already dropped it in memory, so the gate pinged an empty
+    command and could never pass. This asserts the ping receives the folder's
+    real command instead, by capturing the ``cfg`` the gate actually hands it."""
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    discovered = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe", kind="cli", command="/tmp/py /tmp/raven-probe/run.py", enabled=True
+    )
+    monkeypatch.setattr(
+        "raven.agent.subagent.vendored_agents.discover_product_rows",
+        lambda root=None: [discovered],
+    )
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+    assert any(e["name"] == "Raven-Probe" for e in _stored(config_path)), "off must write the stub this test relies on"
+
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    seen = []
+
+    async def _capture(cfg):
+        seen.append(cfg)
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _capture)
+
+    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
+    assert len(seen) == 1
+    assert seen[0].command == "/tmp/py /tmp/raven-probe/run.py"
 
 
 async def test_switching_on_keeps_a_row_nobody_marked_as_a_switch(
@@ -638,7 +982,7 @@ async def test_switching_on_keeps_a_row_nobody_marked_as_a_switch(
         config_path=config_path,
     )
 
-    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
+    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True, "force": True}) == {"enabled": True}
 
     rows = [e for e in _stored(config_path) if e["name"] == "Raven-Probe"]
     assert len(rows) == 1
@@ -681,6 +1025,7 @@ async def test_a_drifted_switch_row_cannot_override_the_folder_it_names(
         "raven.agent.subagent.vendored_agents.discover_product_rows",
         lambda root=None: [v2],
     )
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
     assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
     assert [e for e in _stored(config_path) if e["name"] == "Raven-Probe"] == []
 
@@ -736,7 +1081,7 @@ async def test_a_switch_row_that_lost_its_marker_is_still_only_a_flag(
     assert [(r.name, r.enabled) for r in merged] == [("Raven-Probe", False)]
 
     # And the switch still knows the row for what it is, marker or no marker.
-    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
+    assert await subagents_toggle({"name": "Raven-Probe", "enabled": True, "force": True}) == {"enabled": True}
     assert [e for e in _stored(config_path) if e["name"] == "Raven-Probe"] == []
 
 
@@ -786,6 +1131,7 @@ async def test_a_switch_row_survives_an_older_rewrite_and_a_folder_upgrade(
         "raven.agent.subagent.vendored_agents.discover_product_rows",
         lambda root=None: [v2],
     )
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
     assert await subagents_toggle({"name": "Raven-Probe", "enabled": True}) == {"enabled": True}
     assert [e for e in _stored(config_path) if e["name"] == "Raven-Probe"] == []
 
@@ -901,6 +1247,7 @@ async def test_a_folder_switched_on_still_obeys_its_own_readiness(
         lambda root=None: [ready],
     )
     await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
     await subagents_toggle({"name": "Raven-Probe", "enabled": True})
 
     # The venv breaks, or the launcher goes: discovery reports the row disabled.
@@ -954,6 +1301,206 @@ async def test_a_fork_era_off_survives_the_folders_move_to_acp(
     merged = merge_product_seeds(stored, [v2])
 
     assert [(r.name, r.kind, r.enabled) for r in merged] == [("Raven-Probe", "acp", False)]
+
+
+async def test_enabling_a_local_agent_runs_a_ping_and_refuses_a_failure(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The switch answers what is true, the way it already does for a row with
+    no launcher: a yes the roster would have to overrule is not written."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    # The fixture's Coder starts enabled; disable it first so a refusal that
+    # left the flag untouched is distinguishable from one that never fired.
+    await subagents_toggle({"name": "Coder", "enabled": False})
+
+    async def _refuses(cfg):
+        return PingResult(False, "Internal error: You need to sign in to use this model.")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _refuses)
+
+    with pytest.raises(subagents_mod.SubagentNotReadyError) as caught:
+        await subagents_toggle({"name": "Coder", "enabled": True})
+
+    assert "sign in" in str(caught.value), "the refusal must carry the agent's own reason"
+    entry = next(e for e in _stored(config_path) if e["name"] == "Coder")
+    assert entry["enabled"] is not True, "a refused enable must not be written"
+
+
+async def test_a_ping_refusal_carries_its_reason_in_data_detail(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dispatcher only synthesizes `data={"detail": ...}` when a handler
+    passes no `data` of its own, so a handler that passes a custom `data`
+    without a `detail` key drops the human-readable reason from the wire --
+    the same trap `subagents_build`'s `SubagentNotFoundError` raise documents
+    and avoids a few lines below this one. `str(caught.value)` is not enough
+    to prove this: the message argument survives either way, only `data` is
+    at risk."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    await subagents_toggle({"name": "Coder", "enabled": False})
+
+    async def _refuses(cfg):
+        return PingResult(False, "Internal error: You need to sign in to use this model.")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _refuses)
+
+    with pytest.raises(subagents_mod.SubagentNotReadyError) as caught:
+        await subagents_toggle({"name": "Coder", "enabled": True})
+
+    assert caught.value.data is not None
+    assert "sign in" in caught.value.data["detail"], "the UI reads data.detail, not just the message"
+
+
+async def test_enabling_a_local_agent_succeeds_when_the_ping_answers(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    async def _answers(cfg):
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _answers)
+
+    assert await subagents_toggle({"name": "Coder", "enabled": True}) == {"enabled": True}
+    entry = next(e for e in _stored(config_path) if e["name"] == "Coder")
+    assert entry["enabled"] is True
+
+
+async def test_an_openai_agent_still_switches_on_without_a_prompt(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An endpoint's credential is already settled by the free models probe, so
+    charging a completion for the switch would buy nothing -- the gate must
+    never even ask. The fixture's Researcher row is `kind: "openai"`, which is
+    what this exemption keys on."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    seen = []
+
+    async def _capture(cfg):
+        seen.append(cfg)
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _capture)
+
+    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
+    entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
+    assert entry["enabled"] is True
+    assert seen == [], "an openai row is not a pinged kind, so the gate must not run"
+
+
+async def test_force_switches_a_local_agent_on_despite_no_test(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A working agent whose provider is briefly down must not be un-switchable."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    seen = []
+
+    async def _capture(cfg):
+        seen.append(cfg)
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _capture)
+
+    assert await subagents_toggle({"name": "Coder", "enabled": True, "force": True}) == {"enabled": True}
+    entry = next(e for e in _stored(config_path) if e["name"] == "Coder")
+    assert entry["enabled"] is True
+    assert seen == [], "force must skip the ping entirely, not just tolerate its answer"
+
+
+async def test_a_truthy_non_boolean_force_does_not_skip_the_gate(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`force` is declared a boolean and is the one documented way past the gate.
+    `"no"` -- which a client could plausibly send -- is truthy in Python while
+    reading as a refusal to whoever sent it, so only a real boolean opens it."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    await subagents_toggle({"name": "Coder", "enabled": False})
+    seen = []
+
+    async def _refuses(cfg):
+        seen.append(cfg)
+        return PingResult(False, "Internal error: You need to sign in to use this model.")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _refuses)
+
+    with pytest.raises(subagents_mod.SubagentNotReadyError):
+        await subagents_toggle({"name": "Coder", "enabled": True, "force": "no"})
+
+    assert len(seen) == 1, "a non-boolean force must not skip the ping"
+    entry = next(e for e in _stored(config_path) if e["name"] == "Coder")
+    assert entry["enabled"] is not True
+
+
+async def test_switching_a_local_agent_off_needs_no_test(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gate is on the yes. Off is always allowed, or a broken agent could
+    not be switched off."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    seen = []
+
+    async def _capture(cfg):
+        seen.append(cfg)
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _capture)
+
+    assert await subagents_toggle({"name": "Coder", "enabled": False}) == {"enabled": False}
+    entry = next(e for e in _stored(config_path) if e["name"] == "Coder")
+    assert entry["enabled"] is False
+    assert seen == [], "switching off must never ping"
+
+
+async def test_a_write_that_lands_during_the_ping_window_is_not_reverted(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate's await sits between reading the agent list and writing it back.
+
+    `set_agents` replaces the whole list, so writing the list that was read
+    before a ping of up to a minute silently reverts every other
+    `subagents.*` write that landed during it -- and the clobbered call has
+    already answered success to its own client. The server dispatches each
+    frame in its own task, so a second write really does run inside that window.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    await subagents_toggle({"name": "Coder", "enabled": False})
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hangs_until_released(cfg):
+        in_flight.set()
+        await release.wait()
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _hangs_until_released)
+
+    pinged = asyncio.ensure_future(subagents_toggle({"name": "Coder", "enabled": True}))
+    await in_flight.wait()
+    # Another client, on the ordinary path: Researcher is `openai`, so its own
+    # switch is exempt from the gate and this write does not wait on anything.
+    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
+    mid = {e["name"]: e.get("enabled") for e in _stored(config_path)}
+    assert mid["Researcher"] is True, "the concurrent write must reach disk"
+
+    release.set()
+    assert await pinged == {"enabled": True}
+
+    after = {e["name"]: e.get("enabled") for e in _stored(config_path)}
+    assert after["Coder"] is True, "the pinged toggle's own write must survive"
+    assert after["Researcher"] is True, "the write made during the ping must survive the toggle's write"
 
 
 async def test_toggle_still_refuses_a_name_nothing_knows(config_path: Path) -> None:

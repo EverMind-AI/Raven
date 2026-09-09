@@ -210,17 +210,18 @@ def get_agents(*, config_path: Path | None = None) -> list[dict]:
     return [cfg.model_dump(by_alias=True) for cfg in validated.agents]
 
 
-def set_agents(entries: list[dict], *, config_path: Path | None = None) -> None:
-    """Replace the whole ``subagents.agents`` list (validate-then-write).
+def validate_agents(entries: list[dict], *, config_path: Path | None = None) -> SubagentsConfig:
+    """Every refusal ``set_agents`` makes, without writing anything.
 
     Raises ``ValidationError`` if any entry violates the schema, or ``ValueError``
-    on duplicate names or a built-in row redeclared under another transport --
-    nothing is written in any of those cases.
+    on duplicate names or a built-in row redeclared under another transport.
 
-    Duplicates are a hard error here while the load path only warns and keeps the
-    first: on load, refusing would take the whole ``Config`` down and raven would
-    stop starting behind the very config a user needs the UI to fix. Here the
-    caller is holding the value and can be told.
+    Split out of ``set_agents`` so a caller that must do something expensive
+    between deciding on a list and writing it -- the ``subagents.add`` handler
+    sends a real prompt to the agent it is about to enable -- can get those
+    refusals first, and not spend an agent's quota proving a row the write was
+    always going to reject. The write validates again, over whatever list it
+    finally holds.
     """
     path = config_path or get_config_path()
     reject_builtin_transport_changes([e for e in entries if isinstance(e, dict)], existing=_raw_entries(path))
@@ -232,8 +233,23 @@ def set_agents(entries: list[dict], *, config_path: Path | None = None) -> None:
     dupes = {n for n in names if n is not None and names.count(n) > 1}
     if dupes:
         raise ValueError(f"duplicate sub-agent name(s): {sorted(dupes)}")
-    validated = SubagentsConfig(agents=entries)
-    dumped = validated.model_dump(by_alias=True)[_ALIAS]
+    return SubagentsConfig(agents=entries)
+
+
+def set_agents(entries: list[dict], *, config_path: Path | None = None) -> None:
+    """Replace the whole ``subagents.agents`` list (validate-then-write).
+
+    Raises whatever ``validate_agents`` raises -- a schema violation, a duplicate
+    name, a built-in row redeclared under another transport -- and nothing is
+    written in any of those cases.
+
+    Duplicates are a hard error here while the load path only warns and keeps the
+    first: on load, refusing would take the whole ``Config`` down and raven would
+    stop starting behind the very config a user needs the UI to fix. Here the
+    caller is holding the value and can be told.
+    """
+    path = config_path or get_config_path()
+    dumped = validate_agents(entries, config_path=path).model_dump(by_alias=True)[_ALIAS]
 
     data = _raw_config(path)
     data.setdefault("subagents", {})
@@ -292,4 +308,5 @@ __all__ = [
     "remove_agent",
     "remove_third_party_subagent",
     "set_agents",
+    "validate_agents",
 ]

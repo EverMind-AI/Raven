@@ -2657,6 +2657,7 @@ export interface SubagentsAddParams {
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
+  force?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -2728,6 +2729,7 @@ export interface SubagentsBuildResult {
 export interface SubagentsToggleParams {
   name: string;
   enabled: boolean;
+  force?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

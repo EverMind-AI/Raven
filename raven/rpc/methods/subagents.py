@@ -29,7 +29,7 @@ from raven.agent.subagent.presets import (
     third_party_subagent_preset,
     third_party_subagent_presets,
 )
-from raven.agent.subagent.probe import ProbeResult, probe_all, run_test
+from raven.agent.subagent.probe import ProbeResult, ping_agent, probe_all, run_test
 from raven.agent.subagent.probe_state import TestStateStore
 from raven.config.loader import get_config_path
 from raven.config.schema import SubagentsConfig
@@ -38,8 +38,14 @@ from raven.config.update_subagents import (
     reject_unsupported_openai_fields,
     remove_agent,
     set_agents,
+    validate_agents,
 )
-from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError, SubagentNotFoundError
+from raven.rpc.errors import (
+    ConfigFieldReadonlyError,
+    ConfigValidationError,
+    SubagentNotFoundError,
+    SubagentNotReadyError,
+)
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -375,6 +381,16 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     Only presentation, credentials and MCP policy fields come from the caller;
     every execution field (command, resumeCommand, idSource, transcriptFormat,
     ...) comes from the preset, which is already correct and version-verified.
+
+    An entry that would land enabled and carries a pinged kind is proved first:
+    the same one real prompt `subagents.toggle` sends, through this entry's own
+    backend, and a refusal in the agent's own words when nothing answers. So
+    this spends one call on that agent's own quota, and can hold the add for up
+    to `_ENABLE_PING_TIMEOUT_SECONDS`. `force: true` bypasses it, as on the
+    switch. A refusal stores nothing at all -- not the row disabled -- because
+    the surface that calls this offers one verb per row: an added row is
+    connected, and a row that could not be proved has to stay one Connect away
+    rather than becoming a second thing to switch on.
     """
     preset_name = params.get("preset")
     if preset_name not in THIRD_PARTY_SUBAGENT_PRESETS:
@@ -397,14 +413,34 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     # Every preset ships `enabled: true`, but an openai entry with no key cannot
     # answer: advertising it to the model would produce a sub-agent that fails on
     # first dispatch. Added disabled instead, so the user enables it once the key
-    # is in. A cli preset is added enabled - the roster is how it becomes usable,
-    # and its probe status is already shown in the row.
+    # is in. A preset of a pinged kind lands enabled because the gate below proves
+    # it before the write -- the roster's entry criterion for those kinds is that
+    # the agent answers now, and this add establishes it rather than leaving a
+    # second, ungated way onto the roster.
     if entry.get("kind") == "openai" and not (entry.get("apiKey") or "").strip():
         entry["enabled"] = False
+    # Every refusal the write owes, before the gate spends anything: a name
+    # already taken, or an entry the schema will not have. Without this the ping
+    # would run for an add that could never land -- and for a duplicate name it
+    # would run against the *stored* row of that name, because the schema keeps
+    # the first of two, so it would prove a row this call is not writing.
     try:
         reject_unsupported_openai_fields([entry])
-        kept = list(get_agents(config_path=get_config_path()))
-        set_agents([*kept, entry], config_path=get_config_path())
+        entries = [*_read_agents(), entry]
+        validate_agents(entries, config_path=get_config_path())
+    except (ValueError, ValidationError) as exc:
+        _raise_config_error(exc)
+    # `force is not True` for the same reason the switch reads it that way: it is
+    # declared a boolean, and `"no"` / `"0"` / `"false"` are all truthy in Python
+    # while reading as a refusal to whoever sent them.
+    if entry.get("enabled") and params.get("force") is not True:
+        await _refuse_unless_it_answers(entries, str(entry["name"]), refusal="so it was not added")
+        # Re-read over the ping, the same way the switch does: the list read
+        # before it would revert every other `subagents.*` write that landed
+        # during it. Only this call's own entry is carried across.
+        entries = [*_read_agents(), entry]
+    try:
+        set_agents(entries, config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
         _raise_config_error(exc)
     _hot_apply(agent_loop_factory)
@@ -513,14 +549,88 @@ def _discovered_entry(name: str) -> dict | None:
     return None
 
 
-async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
-    """Set `enabled` on one entry - the flag the roster filter reads."""
-    name = params.get("name")
-    enabled = bool(params.get("enabled"))
+_PINGED_KINDS = ("cli", "acp")
+"""Kinds whose readiness can only be settled by running them.
+
+`openai` is an endpoint, and the free `/models` probe already answers whether its
+credential works, so charging a completion for the switch would buy nothing.
+`builtin` is this process. Neither can fail the way these two do.
+"""
+
+
+async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: str) -> None:
+    """Layer 2, on the path of every enable it gates: enable only what replies.
+
+    Run live rather than read from a recorded verdict, because the question is
+    whether the agent works *now* -- a pass recorded before a token expired would
+    put a dead agent back on the roster.
+
+    Composed from ``entries`` -- this call's own post-mutation, in-memory list --
+    the same way `subagents_list` composes the roster it renders, rather than a
+    fresh disk read: a fresh read only ever sees this call's own resolution as it
+    stood *before* this write, which is exactly wrong at the three points this
+    gate exists to cover. A discovered folder enabled for the first time has no
+    stored row yet, so a fresh read finds nothing and answers "not configured"
+    before a ping ever runs. A folder switched off and back on has a stub of
+    `command: ""` on disk from the off; this call has already dropped that stub
+    from `entries`, but a fresh read still sees it and pings an empty command
+    that can never pass. And an add's entry is not on disk at all yet -- the
+    whole point of gating it there is that a failure never puts it there.
+
+    ``refusal`` is what this caller did not do, and every caller states it,
+    because the two differ in what a failure leaves behind: the switch leaves
+    the row it declined to turn on, the add leaves no row at all.
+    """
+    from raven.agent.subagent.builtin_agents import merge_builtin_seeds
+    from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
+
+    merged = merge_builtin_seeds(merge_product_seeds(_as_configs(entries), discover_product_rows()))
+    cfg = next((c for c in merged if getattr(c, "name", None) == name), None)
+    if cfg is None:
+        # The merge dropping the row means the roster will not dispatch it
+        # either, so there is nothing here to prove -- and refusing would break
+        # bookkeeping this helper is not responsible for.
+        return
+    if getattr(cfg, "kind", None) not in _PINGED_KINDS:
+        return
+    result = await ping_agent(cfg)
+    if result.ok:
+        return
+    # `detail` is repeated inside `data` deliberately: the dispatcher fills
+    # `data` from `detail` only when a handler passed no `data` of its own, so a
+    # call site passing both drops the human-readable half.
+    detail = f"sub-agent {name!r} did not answer a test message, {refusal}: {result.detail}"
+    raise SubagentNotReadyError(
+        detail,
+        data={"name": name, "field": "enabled", "detail": detail},
+    )
+
+
+def _read_agents() -> list[dict]:
+    """The editable agent list, or the config error the malformed section is.
+
+    A helper because the toggle and the add both read the list twice -- once to
+    compose the row they ping, once to write -- and every read owes the same
+    error translation.
+    """
     try:
-        entries = get_agents(config_path=get_config_path())
+        return get_agents(config_path=get_config_path())
     except ValidationError as exc:
         _raise_config_error(exc)
+
+
+def _resolve_toggle(entries: list[dict], name: Any, enabled: bool) -> tuple[list[dict], bool]:
+    """Apply one switch to a freshly read agent list, in memory only.
+
+    Extracted from ``subagents_toggle`` so it can run twice over two
+    independently read lists: the enable gate has to ping before the write, and
+    a list held across that await would revert whatever else wrote config in the
+    meantime. Each pass mutates only the dicts of the list it was handed, so two
+    passes cannot contaminate each other.
+
+    Returns the list to write and the flag that was actually resolved, which is
+    not always the flag that was asked for.
+    """
     # A built-in row may also exist in config (as a field-level override of the
     # seed), and writing the switch onto that row would report success for a
     # change ``merge_builtin_seeds`` then discards -- a seed row's switch is the
@@ -580,6 +690,40 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
         enabled = False
     else:
         target["enabled"] = enabled
+    return entries, enabled
+
+
+async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+    """Set `enabled` on one entry - the flag the roster filter reads.
+
+    Switching a `cli` or `acp` row *on* first sends one real prompt through that
+    row's own backend and refuses the enable, in the agent's own words, when
+    nothing answers: for those kinds the roster's entry criterion is that the
+    agent works now, not that it is installed. So this spends one call on that
+    agent's own quota and can hold the switch for up to
+    `_ENABLE_PING_TIMEOUT_SECONDS`. Exempt: switching off, an `openai` row
+    (whose credential the free `/models` probe already settles), and
+    `force: true`, the operator's override for an agent whose provider is
+    briefly down. A refusal writes nothing.
+    """
+    name = params.get("name")
+    requested = bool(params.get("enabled"))
+    entries, enabled = _resolve_toggle(_read_agents(), name, requested)
+    # `force is not True`, not a falsy read of a truthy value: it is declared a
+    # boolean and is the one documented way past this gate, and `"no"` / `"0"` /
+    # `"false"` are all truthy in Python while reading as a refusal to whoever
+    # sent them.
+    if enabled and params.get("force") is not True:
+        await _refuse_unless_it_answers(entries, str(name), refusal="so it was not switched on")
+        # Resolve again over a fresh read. The ping is the only await this
+        # handler has, and writing the list read before it would revert every
+        # other ``subagents.*`` write that landed during it; re-reading here
+        # leaves no await between the read and ``set_agents``, which is what
+        # made the pre-gate handler's read-modify-write atomic. The row that
+        # was pinged is therefore up to one ping-duration stale -- deliberately,
+        # because the ping asks whether the agent is healthy, not what the
+        # config bytes currently say.
+        entries, enabled = _resolve_toggle(_read_agents(), name, requested)
     try:
         set_agents(entries, config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
