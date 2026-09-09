@@ -10,9 +10,9 @@ survives as byte snapshots under ``tests/fixtures/vendored_fork/``.
 
 The launch contract is still the fork launcher's ACP half: refuse without any
 LLM key, give an own key to every provider block, honour PPT_MODEL/PPT_API_BASE
-on the own-key branch only, size the context window from the endpoint that
-will serve whichever model won, render into a 0600 copy whose parent decides
-the data dir. Three renders are this hosting's own, each the trunk
+on the own-key branch only, recalibrate the context window from the host's
+model catalog for whichever model won, render into a 0600 copy whose parent
+decides the data dir. Three renders are this hosting's own, each the trunk
 runtime's seat for something the fork engine did per checkout: the agent home
 is pinned under the state root (the fork fenced per-session workspaces inside
 its own process; a pooled loop reads identity, sessions and skills from ONE
@@ -32,7 +32,6 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
 
 from raven.config import product_render as render
 from raven.home import raven_home
@@ -197,171 +196,8 @@ def recommended_llm() -> str:
     return f"{rec.get('model', '?')} via {rec.get('apiBase') or rec.get('provider', '?')}"
 
 
-PROBE_TIMEOUT_S = 8.0
-
-
-def _get_json(url: str, api_key: str) -> Any:
-    """One GET with the run's own credential, JSON back, None on any failure.
-
-    Environment proxies apply on purpose: this runs on the host machine before
-    any raven client exists, and asks the very gateway the run will talk to.
-    """
-    import urllib.request
-
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=PROBE_TIMEOUT_S) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return None
-
-
-def _length(value: Any) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
-
-
-def served_providers(defaults: dict, model: str) -> set[str]:
-    """The OpenRouter providers this config lets ``model`` reach, lower-cased;
-    empty when any may serve it. Read off the same ``modelOverrides`` rows the
-    runtime sends as ``extra_body.provider``. An ``only`` list is the whole set.
-    An ``order`` is a priority, not a fence: with fallbacks left on, OpenRouter
-    hands the call to any other provider once the ordered ones are unavailable,
-    so ``order`` narrows the set only when ``allow_fallbacks`` is false. The
-    window is sized for every provider the request may land on. The shipped
-    glm-5.3-flash row is a fence (its order with fallbacks off), so the run is
-    sized by those three providers and never routed to the fp8 host OpenRouter
-    also lists; the price is that a call finding all three unavailable fails
-    over the runtime's retry ladder rather than to a smaller-window provider."""
-    names: set[str] = set()
-    for key, override in (defaults.get("modelOverrides") or {}).items():
-        if key not in model or not isinstance(override, dict):
-            continue
-        provider = (override.get("extra_body") or {}).get("provider") or {}
-        if provider.get("only"):
-            names.update(provider["only"])
-        elif provider.get("allow_fallbacks") is False:
-            names.update(provider.get("order") or ())
-    return {str(name).lower() for name in names}
-
-
-def ignored_providers(defaults: dict, model: str) -> set[str]:
-    """The providers the same rows tell OpenRouter never to use, lower-cased."""
-    names: set[str] = set()
-    for key, override in (defaults.get("modelOverrides") or {}).items():
-        if key in model and isinstance(override, dict):
-            names.update(((override.get("extra_body") or {}).get("provider") or {}).get("ignore") or ())
-    return {str(name).lower() for name in names}
-
-
-def probe_context_window(
-    model: str, api_base: str, api_key: str, served: set[str], ignored: set[str] = frozenset()
-) -> tuple[int, str] | None:
-    """The window the serving endpoint reports for ``model``, and where it came from.
-
-    OpenRouter lists every provider it routes a model to with that provider's
-    own context length, which is often below the model's headline number
-    (glm-5.3-flash: 1,310,720 on the card, 1,048,576 at Z.AI, DeepInfra and
-    Novita, 262,144 at an fp8 host the shipped row's fence keeps the run away
-    from); the smallest of the providers the request may reach is the one
-    number a run can rely on. On OpenRouter that listing is the only endpoint
-    answer: its generic ``/models`` row carries the model card's number, not a
-    serving endpoint's, so it is not consulted there and a failed endpoints
-    call answers None. An OpenAI-compatible server (vLLM and its kind) states
-    ``max_model_len`` in its model listing. None means the endpoint did not
-    answer, or answered without a number, and the caller then holds any
-    catalog figure under the configured number.
-    """
-    base = (api_base or "").rstrip("/")
-    if not base or not model:
-        return None
-    if "openrouter.ai" in base:
-        data = _get_json(f"{base}/models/{model}/endpoints", api_key)
-        endpoints = ((data or {}).get("data") or {}).get("endpoints") if isinstance(data, dict) else None
-        lengths = []
-        for endpoint in endpoints or []:
-            if not isinstance(endpoint, dict):
-                continue
-            name = str(endpoint.get("provider_name") or "").lower()
-            if (served and name not in served) or name in ignored:
-                continue
-            if endpoint.get("status") not in (None, 0):
-                continue
-            if length := _length(endpoint.get("context_length")):
-                lengths.append(length)
-        if lengths:
-            return min(lengths), f"the smallest of the {len(lengths)} OpenRouter endpoints serving it"
-        return None
-    data = _get_json(f"{base}/models", api_key)
-    rows = data.get("data") if isinstance(data, dict) else data
-    short = model.rsplit("/", 1)[-1]
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict):
-            continue
-        row_id = str(row.get("id") or "")
-        if row_id not in (model, short) and not row_id.endswith("/" + model):
-            continue
-        for field in ("max_model_len", "context_length", "context_window", "max_context_length"):
-            if length := _length(row.get(field)):
-                return length, f"{field} in the endpoint's model listing"
-    return None
-
-
-def litellm_context_window(model: str, api_base: str) -> tuple[int, str] | None:
-    """LiteLLM's table for the model, or None: the number a model is sold with,
-    which the endpoint may serve less of, so it is asked only after the endpoint."""
-    try:
-        import litellm
-    except Exception:
-        return None
-    routed = f"openrouter/{model}"
-    candidates = (routed,) if "openrouter.ai" in (api_base or "") else (model, routed)
-    for candidate in candidates:
-        try:
-            info = litellm.get_model_info(candidate)
-        except Exception:
-            continue
-        if length := _length(info.get("max_input_tokens") or info.get("max_tokens")):
-            return length, f"litellm's table for {candidate}"
-    return None
-
-
-def resolve_context_window(model: str, defaults: dict, provider_block: dict) -> tuple[int, str] | None:
-    """The window to render, and its source, or None to keep the shipped number.
-
-    ``PPT_CONTEXT_WINDOW`` pins it by hand. Otherwise the serving endpoint is
-    asked first, and its answer is the window outright: the exact number for
-    this gateway and the providers the request may reach, in either direction.
-    When the endpoint does not answer, LiteLLM's table and then the host's
-    catalog are asked, but a catalog knows the number a model is sold with,
-    not what the endpoint serves, so a catalog answer may only lower the
-    configured number, never raise it: a probe that timed out must not leave a
-    long-lived run trimming against 1,310,720 when its endpoints take 1,048,576.
-    The runtime sizes its pre-send trimming against this number, so an
-    invented margin in either direction would be a number nobody reading the
-    rendered config could account for.
-    """
-    if pinned := env_value("PPT_CONTEXT_WINDOW"):
-        if length := _length(int(pinned) if pinned.strip().isdigit() else None):
-            return length, "PPT_CONTEXT_WINDOW"
-        log(f"[run] window: ignoring PPT_CONTEXT_WINDOW={pinned!r}, not a positive integer")
-    api_base = str(provider_block.get("apiBase") or "")
-    api_key = str(provider_block.get("apiKey") or "")
-    served = served_providers(defaults, model)
-    if found := probe_context_window(model, api_base, api_key, served, ignored_providers(defaults, model)):
-        return found
-    found = litellm_context_window(model, api_base)
-    if found is None and (length := model_context_window(model)):
-        found = length, "the host model catalog"
-    if found is None:
-        return None
-    shipped = _length(defaults.get("contextWindowTokens"))
-    if shipped and found[0] > shipped:
-        return shipped, f"the configured number, kept under {found[1]} ({found[0]}) since the endpoint did not answer"
-    return found
-
-
 def model_context_window(model: str) -> int | None:
-    """This model's ceiling from the host's catalog, or None to leave the pin.
+    """This model's real ceiling from the host's catalog, or None to leave the pin.
 
     None covers every way the catalog can decline to answer -- never fetched,
     unreadable, or holding no row for this id -- and the caller then keeps
@@ -440,16 +276,20 @@ def render_config(source: Path) -> Path:
     defaults = config.setdefault("agents", {}).setdefault("defaults", {})
     shipped_window = defaults.get("contextWindowTokens")
     model = defaults.get("model") or ""
-    provider_block = config.get("providers", {}).get(defaults.get("provider") or "")
-    if found := resolve_context_window(model, defaults, provider_block if isinstance(provider_block, dict) else {}):
-        window, source = found
-        defaults["contextWindowTokens"] = window
-        note = "" if window == shipped_window else f", replacing the configured {shipped_window}"
-        log(f"[run] window: {window} for {model}, from {source}{note}")
+    if window := model_context_window(model):
+        # The catalog's number is the model's ceiling, and the configured one is
+        # allowed to be lower: it is what the deck run is willing to carry. A run
+        # that took the catalog's 1.3M as its window let the transcript grow to
+        # 450k tokens a call -- 62M input tokens and 77 seconds a turn over 137
+        # turns -- because nothing compacted short of a ceiling it never reached.
+        if isinstance(shipped_window, int) and 0 < shipped_window < window:
+            log(f"[run] window: {shipped_window} from config, under the {window} the host catalog gives {model}")
+        else:
+            defaults["contextWindowTokens"] = window
+            note = "" if window == shipped_window else f", replacing the configured {shipped_window}"
+            log(f"[run] window: {window} for {model}, from the host model catalog{note}")
     else:
-        log(
-            f"[run] window: {shipped_window} from config; no endpoint, table or catalog answered for {model or '(no model)'}"
-        )
+        log(f"[run] window: {shipped_window} from config; the host catalog has no entry for {model or '(no model)'}")
 
     # The picture-search key reaches both consumers from ONE source of truth:
     # the tools.web slot AFTER apply_secret_slots, which is the env key when
