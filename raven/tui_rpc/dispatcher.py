@@ -26,6 +26,7 @@ from raven.tui_rpc.errors import (
     METHOD_NOT_FOUND,
     PARSE_ERROR,
     RpcError,
+    error_data,
 )
 
 Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -106,10 +107,9 @@ class Dispatcher:
                 "code": exc.code,
                 "message": exc.message,
             }
-            if exc.data is not None:
-                err_payload["data"] = exc.data
-            elif exc.detail:
-                err_payload["data"] = {"detail": exc.detail}
+            payload_data = error_data(exc)
+            if payload_data is not None:
+                err_payload["data"] = payload_data
             return {"jsonrpc": "2.0", "id": frame_id, "error": err_payload}
         except SystemExit as exc:
             # Click/Typer can leak SystemExit even with standalone_mode=False;
