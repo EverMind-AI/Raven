@@ -76,6 +76,7 @@ from raven.agent.loop._shared import (
     uuid4,
     workdir,
 )
+from raven.agent.loop.recovery import ContinuationGate, cut_reasoning_head
 from raven.permissions.turn import set_current_tool_call_id
 from raven.providers.tool_calls import openai_tool_call
 
@@ -679,8 +680,13 @@ class TurnPathMixin:
         drain: Drain | None = None,
         hook_metadata: dict[str, Any] | None = None,
         session_history: list[dict[str, Any]] | None = None,
+        origin: "Origin | None" = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
+
+        ``origin`` is the turn's: the watch-work judgement reads the owner's
+        request off the messages, and a turn the runtime re-injected has none
+        to read (``watch_work.asked_for``).
 
         ``drain``, when wired, is called at the top of each iteration to pull
         any user messages injected mid-turn (BusyPolicy.INJECT) and merge them
@@ -745,6 +751,9 @@ class TurnPathMixin:
         prev_had_tool_calls = False
         post_tool_nudges = 0
         prefill_retries = 0
+        # Set when a prefill re-feeds reasoning the ceiling cut: the next call
+        # continues mid-thought, and its opening fragment is not content.
+        cut_continuation = False
         empty_retries = 0
         # The watch-work judgement's state, owned by this turn: the loop is a
         # singleton and turns from other sessions run concurrently, so anything
@@ -753,7 +762,7 @@ class TurnPathMixin:
         from raven.agent.subagent import watch_work as _watch_work
 
         watch_state = _watch_work.TurnWatch()
-        watch_request = _watch_work.asked_for(initial_messages)
+        watch_request = _watch_work.asked_for(initial_messages, origin=origin)
 
         # Read once, here: a mode switched mid-turn lands on the next turn.
         policy = self.session_policy(session_key or "")
@@ -1001,12 +1010,13 @@ class TurnPathMixin:
                 tool_defs,
                 effective_model,
             )
+            gate = ContinuationGate(on_token_delta) if cut_continuation and on_token_delta is not None else None
             if on_token_delta is not None or on_reasoning_delta is not None:
                 response = await self._llm_call_stream(
                     messages=call_messages,
                     tools=call_tools,
                     model=call_model,
-                    on_token_delta=on_token_delta,
+                    on_token_delta=gate if gate is not None else on_token_delta,
                     on_reasoning_delta=on_reasoning_delta,
                     **gen_overrides,
                 )
@@ -1018,6 +1028,11 @@ class TurnPathMixin:
                     fallback_models=fallback_models,
                     **gen_overrides,
                 )
+            if cut_continuation:
+                cut_continuation = False
+                if gate is not None:
+                    await gate.finish()
+                response.content = cut_reasoning_head(response.content)
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
             usage_snapshot = self._build_usage_snapshot(response, call_model, session_key or "")
@@ -1572,6 +1587,9 @@ class TurnPathMixin:
                     )
                     messages[-1]["_recovery_synthetic"] = True
                     prev_had_tool_calls = False
+                    # Reasoning that ended on the ceiling was cut mid-thought, so
+                    # the continuation opens on the rest of that thought.
+                    cut_continuation = response.finish_reason == "length"
                     continue
                 if action is RecoveryAction.NUDGE:
                     post_tool_nudges += 1
@@ -2066,6 +2084,7 @@ class TurnPathMixin:
                     drain=drain,
                     hook_metadata=turn_hook_meta,
                     session_history=session.messages,
+                    origin=req.origin,
                 )
         except asyncio.CancelledError:
             # A stop is not a failure, but it is also not amnesia: what already

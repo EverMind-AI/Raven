@@ -39,6 +39,9 @@ async def test_the_mounted_page_answers_like_raven_serve(home: Path) -> None:
         assert SERVE.hosted_by_gateway is True
         # The page's own broker is exposed for the host's routing shim.
         assert mount.question_broker is not None
+        # And its spine's submit, so a relay into a page session queues on the
+        # page's lane for that session rather than beside it.
+        assert mount.submit is not None
 
         # serve.json carries this process, so `raven web` and the GUI shell
         # find the page, and `raven serve` can match the pid to the lock's.

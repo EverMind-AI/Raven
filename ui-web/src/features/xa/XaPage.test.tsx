@@ -129,6 +129,32 @@ const pressEnter = async (el: Element | null | undefined): Promise<void> => {
   })
 }
 
+/* React installs its own `value` setter on the element, so assigning `.value`
+   and firing `input` leaves its state untouched and the field reverts on the
+   next render -- a test that did that watched its own typing disappear. The
+   native setter is what React's onChange reads back. */
+const typeInto = async (el: Element | null | undefined, text: string): Promise<void> => {
+  expect(el, 'the field under test').toBeTruthy()
+  const field = el as HTMLInputElement | HTMLTextAreaElement
+  const proto = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')!.set!
+  await act(async () => {
+    setter.call(field, text)
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+/* React delegates `onBlur` from the root and listens for `focusout`, not for
+   the non-bubbling `blur` -- dispatching the latter reached nothing, and a case
+   asserting "no write happened" passed for that reason rather than the one it
+   was written for. */
+const blur = async (el: Element | null | undefined): Promise<void> => {
+  expect(el, 'the field under test').toBeTruthy()
+  await act(async () => {
+    ;(el as HTMLElement).dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+  })
+}
+
 const click = async (el: Element | null | undefined): Promise<void> => {
   expect(el, 'the control under test').toBeTruthy()
   await act(async () => {
@@ -540,9 +566,12 @@ describe('xa island', () => {
     })
 
     it('omits the described section for an agent that describes itself nowhere', async () => {
-      install([row({ description: '' })])
+      /* Still the rule for a row with nothing to write to. For one the reader
+         owns, the empty section is where the first description gets typed --
+         see "offers the about section even when there is no description". */
+      install([row({ name: 'codex', configured: false, description: '' })])
       await mount()
-      await openCard('claude_code')
+      await openCard('codex')
       expect(document.querySelector('#dBody .pmsec')).toBeNull()
     })
 
@@ -700,4 +729,136 @@ describe('xa island', () => {
       expect(toasts).toEqual(['gui.agent.failed {"detail":"gateway said no"}'])
     })
   })
+  /* Editing the two facts on the card the reader owns. `subagents.update` has
+     always taken both and the store has always moved the open sheet onto a new
+     name; the page was the only piece missing, and it went out with the form
+     the card replaced (!374, which named three other removals and not this
+     one). The terminal kept its own. */
+  describe('the name and the description are the reader\'s', () => {
+    const nameBox = (): HTMLElement | null =>
+      document.querySelector('#dBody .pmdhead .l1 .xaedit')
+    const aboutBox = (): HTMLElement | null => document.querySelector('#dBody .pmdesc .xaedit')
+
+    it('renames on Enter, through update and not connect', async () => {
+      const { acts } = install([row({ name: 'Coder', configured: true })])
+      await mount()
+      await openCard('Coder')
+
+      await click(nameBox())
+      const field = document.querySelector<HTMLInputElement>('#dBody .pmdhead .l1 input')!
+      await typeInto(field, 'My Coder')
+      await act(async () => {
+        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      })
+
+      expect(acts).toEqual([['update', 'Coder', { new_name: 'My Coder' }]])
+    })
+
+    it('restores on Escape and writes nothing', async () => {
+      /* Escape is the way out. Without it the only exit from a field opened by
+         mistake would be to type the old value back. */
+      const { acts } = install([row({ name: 'Coder' })])
+      await mount()
+      await openCard('Coder')
+
+      await click(nameBox())
+      const field = document.querySelector<HTMLInputElement>('#dBody .pmdhead .l1 input')!
+      await typeInto(field, 'Nope')
+      await act(async () => {
+        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      })
+
+      expect(acts).toEqual([])
+      expect(nameBox()!.textContent).toBe('Coder')
+    })
+
+    it('writes nothing when the text was not changed', async () => {
+      /* Opening a field and clicking away is not an edit, and a write there
+         would move the sheet and reload the roster for nothing. */
+      const { acts } = install([row({ name: 'Coder' })])
+      await mount()
+      await openCard('Coder')
+
+      await click(nameBox())
+      await blur(document.querySelector<HTMLInputElement>('#dBody .pmdhead .l1 input'))
+
+      expect(acts).toEqual([])
+      /* And the field really closed, so the blur reached the commit and the
+         commit is what decided not to write. */
+      expect(document.querySelector('#dBody .pmdhead .l1 input')).toBeNull()
+    })
+
+    it('keeps an emptied name, because a nameless agent is unaddressable', async () => {
+      const { acts } = install([row({ name: 'Coder' })])
+      await mount()
+      await openCard('Coder')
+
+      await click(nameBox())
+      const field = document.querySelector<HTMLInputElement>('#dBody .pmdhead .l1 input')!
+      await typeInto(field, '   ')
+      await act(async () => {
+        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      })
+
+      expect(acts).toEqual([])
+    })
+
+    it('edits the description on blur, since Enter is a newline there', async () => {
+      const { acts } = install([row({ name: 'Coder', description: 'old' })])
+      await mount()
+      await openCard('Coder')
+
+      await click(aboutBox())
+      const field = document.querySelector<HTMLTextAreaElement>('#dBody .pmdesc textarea')!
+      await typeInto(field, 'writes code\nand tests')
+      await blur(field)
+
+      expect(acts).toEqual([['update', 'Coder', { description: 'writes code\nand tests' }]])
+    })
+
+    it('offers the about section even when there is no description to read', async () => {
+      /* The empty one is where the first description gets written. Without it
+         the only agents that could be described are the ones already were. */
+      install([row({ name: 'Coder', description: '' })])
+      await mount()
+      await openCard('Coder')
+
+      expect(aboutBox()).not.toBeNull()
+      expect(aboutBox()!.textContent).toBe('gui.agent.about_none')
+    })
+
+    it('leaves a preset nobody has connected alone', async () => {
+      /* There is no entry to update, and a field that wrote one would connect
+         the agent -- which is not what typing a name asks for. Connect first,
+         rename after. */
+      install([row({ name: 'OpenCode', configured: false, vendored: false, description: 'the preset prose' })])
+      await mount()
+      await openCard('OpenCode')
+
+      expect(nameBox()).toBeNull()
+      expect(aboutBox()).toBeNull()
+      expect(document.querySelector('#dBody .pmdesc')!.textContent).toBe('the preset prose')
+    })
+
+    it('describes a discovered folder but does not offer to rename it', async () => {
+      /* `subagents.update` materialises a discovered row from its own manifest,
+         so a description lands. A rename does not: the server refuses one on a
+         materialised row -- "its name binds it to the shipped launcher" -- and
+         a control for a write that is always refused is a control that lies. */
+      const { acts } = install([row({ name: 'Raven-Code', configured: false, vendored: true, description: 'ships with raven' })])
+      await mount()
+      await openCard('Raven-Code')
+
+      expect(nameBox()).toBeNull()
+      expect(aboutBox()).not.toBeNull()
+
+      await click(aboutBox())
+      const field = document.querySelector<HTMLTextAreaElement>('#dBody .pmdesc textarea')!
+      await typeInto(field, 'the shipped coder')
+      await blur(field)
+
+      expect(acts).toEqual([['update', 'Raven-Code', { description: 'the shipped coder' }]])
+    })
+  })
+
 })

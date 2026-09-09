@@ -28,6 +28,10 @@ Plugin-only keys, none of which the shipped product config carries:
                       fork's launcher-rendered tools.web.proxy fed
   imageSearch.apiKey  Serper key for ppt_image_search; falls back to
                       $SERPER_API_KEY (the research-flow spelling)
+  image               the media section ppt_generate_image draws with
+                      (apiKey/apiBase/model/quality, as tools.media.image
+                      spells them); without it the tool sees no section at all
+                      and only $OPENROUTER_API_KEY can pay for a picture
   deckPerSession      true by default: each session builds its deck in
                       <workdir>/decks/<session>/ rather than in <workdir>/deck,
                       so sessions sharing one channel directory do not share a deck
@@ -86,6 +90,10 @@ class EngineConfig:
     # engine per session; here the hook repoints the turn's working directory instead.
     deck_per_session: bool = True
     image_search_api_key: str | None = None
+    # What ppt_generate_image is handed as its section. A plugin sees only its
+    # own slice, so the launcher copies the resolved tools.media.image across --
+    # the bridge imageSearch.apiKey already walks for the picture SEARCH key.
+    image: Any | None = None
     # The second reader's reasoning effort, passed through to the provider as given
     # ("low", "none", ...). Empty means the provider's own default, which is the
     # author's setting -- sized for writing a deck, and on one live run 200 seconds
@@ -101,6 +109,17 @@ class EngineConfig:
         key = image_search.get("apiKey", "")
         if not isinstance(key, str):
             raise ValueError(f"imageSearch.apiKey must be a string, got {key!r}")
+        image_raw = raw.get("image")
+        if image_raw is not None and not isinstance(image_raw, dict):
+            raise ValueError(f"image must be an object, got {image_raw!r}")
+        image = None
+        if image_raw:
+            from raven.config.schema import MediaToolConfig
+
+            # Validated here, loudly, for the reason the profile name is: a
+            # mistyped key in this section would otherwise reach the tool as a
+            # section that looks present and answers nothing.
+            image = MediaToolConfig.model_validate(image_raw)
         # The fork validated the route name at config load ("a typo in a
         # config file is a startup error naming the alternatives, not a
         # silent fallback" -- fork schema.py:872-880); without this check a
@@ -124,5 +143,6 @@ class EngineConfig:
             web_proxy=_text(raw, "webProxy", "") or None,
             deck_per_session=_flag(raw, "deckPerSession", True),
             image_search_api_key=key or None,
+            image=image,
             reader_effort=_text(raw, "readerEffort", ""),
         )

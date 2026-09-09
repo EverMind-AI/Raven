@@ -273,6 +273,155 @@ async def test_thinking_only_recovers_via_prefill(workspace):
 
 
 # --------------------------------------------------------------------------- #
+# loop: reasoning cut at the ceiling -> prefill -> the continuation's head      #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_mid_sentence_head_is_cut_and_an_answer_opening_is_kept():
+    from raven.agent.loop.recovery import cut_reasoning_head
+
+    junk = " Lägg in an token. Let me start researching.\n\n## Answer\nfinal"
+    assert cut_reasoning_head(junk) == "Let me start researching.\n\n## Answer\nfinal"
+    assert cut_reasoning_head("so the answer is\n## Answer\nfinal") == "## Answer\nfinal"
+    # Openings that read as content are left whole: a heading, a list, a sentence.
+    for whole in ("## Answer\nfinal", "- first\n- second", "Yes. It does.", "1. step one\n2. step two"):
+        assert cut_reasoning_head(whole) == whole
+    # A fragment with nothing after it, or one longer than a fragment could be, stays.
+    assert cut_reasoning_head(" trailing thought.") == " trailing thought."
+    assert cut_reasoning_head(" " + "x" * 300 + ". rest") == " " + "x" * 300 + ". rest"
+    assert cut_reasoning_head("") == "" and cut_reasoning_head(None) is None
+    # CJK has no case, so a continuation opening directly on it is left whole; the
+    # CJK stops end a fragment the gate did admit (leading whitespace, or a lowercase
+    # Latin word running into CJK text) instead of letting it run to a Latin period.
+    han_answer = "\u597d\u7684\u3002\u6211\u5f00\u59cb\u7814\u7a76\u3002"
+    assert cut_reasoning_head(han_answer) == han_answer
+    assert cut_reasoning_head(" " + han_answer) == han_answer[3:]
+    assert cut_reasoning_head("so \u7b54\u6848\u662f\u3002\n## \u7b54\u6848") == "## \u7b54\u6848"
+
+
+@pytest.mark.asyncio
+async def test_the_gate_streams_what_the_stored_content_keeps():
+    """The reader must see exactly what the session keeps: deltas are held until
+    the head rule can be decided, then released with the fragment removed."""
+    from raven.agent.loop.recovery import ContinuationGate, cut_reasoning_head
+
+    async def run(deltas: list[str]) -> str:
+        seen: list[str] = []
+
+        async def deliver(text: str) -> None:
+            seen.append(text)
+
+        gate = ContinuationGate(deliver)
+        for d in deltas:
+            await gate(d)
+        await gate.finish()
+        return "".join(seen)
+
+    deltas = [" Lägg in", " an token.", " Let me", " start.\n\n## Answer\nfinal"]
+    assert await run(deltas) == cut_reasoning_head("".join(deltas)) == "Let me start.\n\n## Answer\nfinal"
+    # Nothing is released before the rule can be decided.
+    seen: list[str] = []
+
+    async def deliver(text: str) -> None:
+        seen.append(text)
+
+    gate = ContinuationGate(deliver)
+    await gate(" Lägg in")
+    await gate(" an token.")
+    assert seen == [], "a boundary with nothing after it is not yet decidable"
+    await gate(" Let")
+    assert seen == ["Let"]
+    await gate(" me")
+    assert seen == ["Let", " me"]
+    # A continuation that never reaches a boundary is delivered whole at the end.
+    assert await run([" a fragment with no end"]) == " a fragment with no end"
+    assert await run(["## Answer\n", "final"]) == "## Answer\nfinal"
+
+
+class _CutThinkingThenAnswerProvider(LLMProvider):
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(content="", reasoning_content="let me think about the tok", finish_reason="length")
+        return LLMResponse(
+            content=" Lägg in an token. Let me start researching.\n\n## Answer\nfinal", finish_reason="stop"
+        )
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_after_cut_reasoning_loses_its_mid_thought_head(workspace):
+    """2026-09-08: a 131072-token reasoning run hit the ceiling, the prefill fed
+    it back, and the continuation's first clause reached the reader as the head
+    of the answer."""
+    provider = _CutThinkingThenAnswerProvider()
+    agent = _make_agent(workspace, provider)
+
+    out = await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+    )
+
+    assert out is not None
+    assert out[0] == "Let me start researching.\n\n## Answer\nfinal"
+    session = agent.sessions.get_or_create("s1")
+    stored = [m for m in session.messages if m.get("role") == "assistant"]
+    assert stored and stored[-1]["content"] == "Let me start researching.\n\n## Answer\nfinal"
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_after_complete_reasoning_is_left_whole(workspace):
+    """Reasoning that ended on its own (``stop``) was not cut, so the continuation
+    opens where the model meant it to; the head rule is for the ceiling case."""
+
+    class _Whole(_CutThinkingThenAnswerProvider):
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+            reasoning_effort=None,
+            tool_choice=None,
+        ):
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
+            return LLMResponse(content=" lowercase start. Then the rest.", finish_reason="stop")
+
+    agent = _make_agent(workspace, _Whole())
+    out = await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+    )
+    assert out is not None and out[0] == "lowercase start. Then the rest."
+
+
+# --------------------------------------------------------------------------- #
 # loop: persistently empty is bounded then falls back                          #
 # --------------------------------------------------------------------------- #
 

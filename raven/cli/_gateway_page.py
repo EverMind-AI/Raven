@@ -34,6 +34,11 @@ class PageMount:
     question_broker: Any
     teardown: Callable[[], Awaitable[None]]
     direct_targets: dict[str, dict[str, str]]
+    # The page spine's ``Scheduler.submit``: a turn the host runs for a page
+    # session (a sub-agent's result relay) goes here, so it shares the lane
+    # with the page's own turns to that session. None when the stack built no
+    # spine.
+    submit: Callable[[Any], Any] | None = None
 
 
 async def _standalone_serve_owner() -> tuple[int, int] | None:
@@ -185,6 +190,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
         question_broker=stack.question_broker,
         teardown=teardown,
         direct_targets=stack.direct_targets,
+        submit=stack.turn_scheduler.submit if stack.turn_scheduler is not None else None,
     )
 
 

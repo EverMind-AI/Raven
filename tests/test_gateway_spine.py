@@ -411,20 +411,25 @@ class _ScriptedAsker:
 
 
 @pytest.mark.parametrize(
-    ("answer", "choice", "feedback"),
+    ("answer", "choice", "feedback", "answered"),
     [
-        ("Allow once", "allow", ""),
-        ("1", "allow", ""),
-        ("Deny", "deny", ""),
-        ("2", "deny", ""),
-        ("Deny and stop", "deny_stop", ""),
-        ("3", "deny_stop", ""),
-        ("keep it, I need that file", "deny", "keep it, I need that file"),
-        (None, "deny", ""),
-        ("", "deny", ""),
+        ("Allow once", "allow", "", True),
+        ("1", "allow", "", True),
+        ("Deny", "deny", "", True),
+        ("2", "deny", "", True),
+        ("Deny and stop", "deny_stop", "", True),
+        ("3", "deny_stop", "", True),
+        ("keep it, I need that file", "deny", "keep it, I need that file", True),
+        # Nobody said anything. `None` is a round trip this turn cannot make at
+        # all; an empty reply is the ask timing out or being skipped. Both still
+        # deny -- this fails closed by shape -- and both used to reach the gate
+        # spelled exactly like a person choosing Deny, so a model was told it had
+        # been refused and went looking for another way.
+        (None, "deny", "", False),
+        ("", "deny", "", False),
     ],
 )
-async def test_approval_via_ask_maps_the_reply(answer, choice, feedback):
+async def test_approval_via_ask_maps_the_reply(answer, choice, feedback, answered):
     asker = _ScriptedAsker(answer)
     responder = ApprovalViaAsk(asker, "telegram:u1")
 
@@ -434,6 +439,7 @@ async def test_approval_via_ask_maps_the_reply(answer, choice, feedback):
 
     assert outcome.choice.value == choice
     assert outcome.feedback == feedback
+    assert outcome.answered is answered
     call = asker.calls[0]
     assert "rm scratch.txt" in call["prompt"]
     assert call["choices"] == ["Allow once", "Deny", "Deny and stop"]

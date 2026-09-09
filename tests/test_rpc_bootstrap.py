@@ -185,8 +185,11 @@ async def test_a_shared_loop_is_used_not_rebuilt(monkeypatch) -> None:
         assert stack.build_error is None
         # Host lifecycle untouched: the subagent submit stays the gateway's
         # (its hubs can route any channel's delivery; this stack's hub only
-        # knows the page's), and cron was neither rewired nor started.
+        # knows the page's), and cron was neither rewired nor started. The
+        # stack's own spine is exposed instead, for the host to route the
+        # relays that belong to page sessions onto.
         assert loop.subagents.submit is None
+        assert stack.turn_scheduler is not None
         assert cron.on_job is None
         assert cron.started is False
         # Page-facing hooks applied, so the host mounting this stack after its
