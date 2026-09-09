@@ -44,7 +44,6 @@ from raven.spine import (
     TurnOutcome,
     TurnRequest,
     TurnStarted,
-    conversation_id,
 )
 from raven.spine.delivery import Capabilities, DeliveryHub
 from raven.spine.events import TurnEvent
@@ -63,6 +62,10 @@ _DAG_WIRE_EVENT = {
     "dag_node_stalled": "dag.node_stalled",
     "dag_run_completed": "dag.run_completed",
 }
+
+
+def _conversation_id(req: TurnRequest) -> str:
+    return req.conversation or f"{req.source.channel}:{req.source.chat_id}"
 
 
 def _present(source: dict, keys: tuple[str, ...]) -> dict:
@@ -171,7 +174,7 @@ class RpcTurnRunner(AgentTurnRunner):
         self._approval_responder = approval_responder
 
     async def run(self, req: TurnRequest, emit: Emit, drain: Drain) -> TurnOutcome:
-        cid = conversation_id(req)
+        cid = _conversation_id(req)
         tools = getattr(self._loop, "tools", None)
 
         # Approval capability is rebound for every turn, inside the task that

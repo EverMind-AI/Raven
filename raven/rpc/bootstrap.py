@@ -39,11 +39,6 @@ class RpcStack:
     # a per-conversation routing shim over both (see RoutingQuestionBroker).
     question_broker: Any = None
     deliverables: Any = None
-    # This stack's turn spine, for a host that runs the engine and needs a turn
-    # of its own -- a sub-agent's result relay into a page session -- to queue
-    # on the same lane as the page's turns rather than beside it. None on a
-    # stack built without an engine.
-    turn_scheduler: Any = None
 
 
 _TUI_INIT_CRASH_TYPES: tuple[type[BaseException], ...] = (
@@ -152,13 +147,10 @@ async def build_rpc_stack(
     gateway hosting the page in its own process) instead of building one here.
     The host keeps every process-lifecycle responsibility: it started cron and
     the memory backend and will stop them, it owns ``subagents.set_submit``
-    (a subagent's result turn into an IM conversation must run on the host
-    spine, whose hubs can route any channel's delivery -- this stack's hub only
-    knows the page's; the host routes the relays that belong to page sessions
-    back to this stack's scheduler, exposed as ``RpcStack.turn_scheduler``, so
-    they queue behind the page's own turns instead of running beside them),
-    and this stack's teardown then stops only what it built (its brokers and
-    its turn spine). The page-facing sinks and brokers are applied either way; a host
+    (a subagent's result turn must run on the host spine, whose hubs can route
+    any channel's delivery -- this stack's hub only knows the page's), and this
+    stack's teardown then stops only what it built (its brokers and its turn
+    spine). The page-facing sinks and brokers are applied either way; a host
     with a question surface of its own then re-binds ask_user / deep-research
     through a per-conversation routing shim over this stack's broker (exposed
     as ``RpcStack.question_broker``) and its own, so the page answers its own
@@ -464,7 +456,6 @@ async def build_rpc_stack(
         direct_targets=direct_targets,
         question_broker=question_broker,
         deliverables=getattr(agent_loop, "_deliverables", None),
-        turn_scheduler=turn_scheduler,
     )
 
 

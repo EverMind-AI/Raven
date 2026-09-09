@@ -39,41 +39,32 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
   const [noting, setNoting] = useState<null | string>(null)
   const [note, setNote] = useState('')
   const [remainingSeconds, setRemainingSeconds] = useState(() => approvalRemainingSeconds(req.expiresAt))
+  const expired = useRef(false)
 
   useEffect(() => {
-    // The runtime sends an absolute wall-clock deadline rather than a duration.
-    // Recomputing from that value matters when rendering is delayed or the
-    // terminal process is briefly suspended: mounting the component must not
-    // accidentally grant a fresh approval window.
-    //
-    // The countdown reaching zero answers nothing. It used to send `deny`, and
-    // that was the one place a lapse became a refusal: the runtime's own hard
-    // ceiling sits a few seconds past this deadline precisely so it can be the
-    // party that decides, and answering first took the decision away from it and
-    // spelled "nobody was here" as "the user said no". The runtime closes this
-    // overlay with `approval.closed` when its ceiling fires; until then a key
-    // pressed inside that window is still a real answer and still lands.
-    const update = () => setRemainingSeconds(approvalRemainingSeconds(req.expiresAt))
+    expired.current = false
+
+    const update = () => {
+      // The runtime sends an absolute wall-clock deadline rather than a duration.
+      // Recomputing from that value matters when rendering is delayed or the
+      // terminal process is briefly suspended: mounting the component must not
+      // accidentally grant a fresh approval window. The ref makes auto-denial
+      // edge-triggered while the interval continues to render the 0-second state.
+      const remaining = approvalRemainingSeconds(req.expiresAt)
+      setRemainingSeconds(remaining)
+      if (remaining === 0 && !expired.current) {
+        expired.current = true
+        onChoice('deny', '', req.approvalId)
+      }
+    }
 
     update()
     const timer = setInterval(update, 250)
 
     return () => clearInterval(timer)
-  }, [req.expiresAt])
-
-  // Zero seconds is not a shorter deadline, it IS the deadline. The runtime's
-  // ceiling sits a few seconds past it so that a choice made BEFORE it survives
-  // event-loop and RPC lag -- transport tolerance, not five more seconds of
-  // authority. `resolve` cannot tell the two apart (measured: an `allow` sent
-  // after the visible deadline is accepted and runs), so the prompt is what has
-  // to stop offering. It answers nothing either way; the runtime closes it.
-  const expired = remainingSeconds === 0
+  }, [onChoice, req.approvalId, req.expiresAt])
 
   useInput((ch, key) => {
-    if (expired) {
-      return
-    }
-
     if (noting !== null) {
       if (key.escape) {
         setNoting(null)
@@ -155,9 +146,7 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
             <TextInput
               columns={Math.max(20, cols - 6)}
               onChange={setNote}
-              /* Its own guard: `TextInput` submits on Enter through ink's own
-                 handler, which `useInput` above never sees. */
-              onSubmit={v => (expired ? undefined : onChoice(noting, v.trim(), req.approvalId))}
+              onSubmit={v => onChoice(noting, v.trim(), req.approvalId)}
               value={note}
             />
           </Box>

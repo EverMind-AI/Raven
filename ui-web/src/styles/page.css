@@ -3128,32 +3128,6 @@ details[open] summary { margin-bottom: 8px; }
 .pmperm .row { display: flex; gap: 9px; align-items: baseline; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
 .pmperm .pmdot { background: var(--gold); position: relative; top: -2px; }
 .pmdesc { font-size: 12.5px; color: var(--muted); line-height: 1.7; white-space: pre-wrap; }
-
-/* A card fact the reader owns. Unpressed it is the text itself and nothing else
-   -- no box, no pencil, no second colour: the card's job is to be read, and a
-   control drawn around every editable line is five things to look at again. The
-   hover tint is the whole of the affordance, and the title says what it does. */
-.xaedit {
-  font: inherit; color: inherit; text-align: left; width: 100%;
-  background: none; border: 0; border-radius: 6px; padding: 1px 5px; margin: -1px -5px;
-  cursor: text; white-space: pre-wrap;
-}
-.xaedit:hover { background: var(--surface); }
-.xaedit .none { color: var(--faint); }
-/* Once pressed it is a field, and looks like one: the reader is typing and needs
-   to see where the text ends. */
-.xaedit.on {
-  background: var(--ink); border: 1px solid var(--line); cursor: text;
-  padding: 1px 5px; resize: vertical; outline: none;
-}
-.xaedit.on:focus { border-color: var(--line-strong, var(--line)); }
-
-/* The pictures a generate call produced, in the card the call opens. The shelf's
-   own `.pic` chrome, so a generated image and a delivered one are the same
-   object to look at -- they are the same file, one of them handed over. */
-.gshots { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
-.gshots .pic.shot img { cursor: zoom-in; max-height: 260px; width: auto; }
-.gshots.set .pic.shot img { max-height: 160px; }
 .pmtool {
   font-family: var(--mono); font-size: 11px; color: var(--muted);
   background: var(--surface); border-radius: 7px; padding: 5px 10px; margin-bottom: 4px;
@@ -4639,8 +4613,50 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .agent-head:hover .agent-fold { color: var(--muted); }
 .agent-fold[data-open="true"] { transform: rotate(0); }
 .agent-fold svg { width: 12px; height: 12px; stroke-linecap: round; stroke-linejoin: round; }
-.agent-bot { width: 15px; height: 15px; flex: none; color: var(--muted); }
-.agent-bot svg { display: block; width: 15px; height: 15px; stroke-linecap: round; stroke-linejoin: round; }
+/* One slot, two things in it: a brand mark for a row with a preset behind it,
+   the generic glyph for one without. The slot is what carries the size, so the
+   roster starts its names at one x either way -- the same failure the fold slot
+   above has a guard for.
+   The frame is the idea .provider-icon.fallback already uses for a provider
+   with no icon, at this row's weight (--line-soft, like the kind pill beside
+   it, rather than --line): thirteen logos drawn by thirteen houses share no
+   silhouette, no weight and no margin, and a common frame is what makes them
+   read as one column instead of a ransom note. It also settles miromind.svg,
+   which came with a card of its own and was the one mark with a background
+   before every mark had one. */
+.agent-mark { width: 20px; height: 20px; display: grid; place-items: center; flex: none;
+  border: 1px solid var(--line-soft); border-radius: 5px; background: var(--surface);
+  overflow: hidden; color: var(--muted); }
+.agent-mark svg { display: block; width: 14px; height: 14px; stroke-linecap: round; stroke-linejoin: round; }
+.agent-mark img { display: block; width: 14px; height: 14px; object-fit: contain; }
+/* The one mark that IS a tile: MiroMind's file is a favicon and carries its own
+   rounded card, so it fills the frame instead of sitting a card inside one. */
+.agent-mark img[data-agent="mirothinker"] { width: 100%; height: 100%; }
+/* Only the marks that draw in currentColor, which an <img> resolves against its
+   own document and so renders black. `mono` is every shape, so the whole file
+   inverts, as the provider marks already do. `hybrid` is qoder alone: brand
+   green beside one currentColor tone, where a plain invert takes the green to
+   magenta and the hue rotation puts it back. A file with no currentColor at all
+   carries its own palette and gets neither.
+   Both theme paths need each rule: an explicit choice stamps data-theme, the
+   default setting stamps nothing. Guarded by ui-web/scripts/agent-mark-css.test.mjs. */
+:root[data-theme="dark"] .agent-mark img[data-tone="mono"] { filter: invert(1); }
+:root[data-theme="dark"] .agent-mark img[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .agent-mark img[data-tone="mono"] { filter: invert(1); }
+  :root:not([data-theme="light"]) .agent-mark img[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
+}
+/* One mark answers the theme from inside its own file: miromind.svg is a favicon
+   and carries a prefers-color-scheme rule. An <img>'s SVG evaluates that against
+   the used color-scheme of the element embedding it, NOT against this page's
+   data-theme, so without these two lines it follows the operating system while
+   the rest of the roster follows the switch -- and since the app's default is
+   explicitly light, a fresh install on a dark OS is a normal way to see it.
+   Declared on the tile rather than on :root: there it would also hand every
+   native scrollbar and form control to the dark palette, which is a change to
+   the whole page and not to a mark. */
+:root[data-theme="dark"] .agent-mark img { color-scheme: dark; }
+:root[data-theme="light"] .agent-mark img { color-scheme: light; }
 .agent-kind { flex: none; padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: 999px;
   background: var(--surface); color: var(--muted); font: 8.5px/1.45 var(--mono); text-transform: lowercase; }
 .agent-headrow { display: flex; align-items: center; min-width: 0; }

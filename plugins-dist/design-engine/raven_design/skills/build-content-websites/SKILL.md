@@ -29,12 +29,9 @@ URL、媒体来源和发布历史不因介质改变。先读 [领域模式](refe
    先调用 `image_generate` 产出并查看项目级主视觉母版；已有合法真实资产只有在完成同一语义工作时
    才可替代。每个主要页面族在布局前填写 `page_family / opening_job / visual_role / asset_lineage /
    reason / final_evidence`，`visual_role` 只用 `dominant_background / integrated_visual_field /
-   content_first` 并默认第一种，先按大背景路线完成代表帧。若实际像素显示它妨碍主要阅读或操作任务，
-   先检查构图、裁切与文字关系；若冲突来自任务本身，可改用 `integrated_visual_field` 或 `content_first`。
-   在当前页面族的 `reason` 与 `final_evidence` 中记录具体冲突、调整前后像素和主要任务改善的证据，
-   并更新参考合同与视觉角色声明；单个页面族的例外不得推广到全站。实现便利、生成失败、资产成本、
-   没有真图、未经像素验证的可读性顾虑或模型偏好不能单独成为改路线的理由。
-   `visual_role` 声明须与渲染返回的 `opening_visual` 读数相符。大背景建立页面族开场，不要求每个
+   content_first` 并默认第一种。如果最终像素表明大背景妨碍了阅读，调整文字大小或位置，或重新
+   生成背景，而不是放弃大背景；实现便利、资产成本、没有真图、担心可读性或模型偏好不是选择
+   `integrated_visual_field` 或 `content_first` 的理由；`visual_role` 声明须与渲染返回的 `opening_visual` 读数相符。大背景建立页面族开场，不要求每个
    后续区块铺图；后续用同源资产、排印、内容结构或交互延续身份，不能退回默认内容块。
 3. 遇到对比、评测或选型任务，先判断读者意图属于
    `decision_support / neutral_comparison / benchmark_report / editorial_analysis`，关键词本身不决定

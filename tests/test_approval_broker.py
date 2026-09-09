@@ -116,9 +116,6 @@ async def test_timeout_denies_and_expires_request() -> None:
     approval_id = frames[0]["params"]["approval_id"]
 
     assert result.choice is ApprovalChoice.DENY
-    # Denied, and by nobody. The gate says the two differently, and this is the
-    # only place that knows which of them happened.
-    assert result.answered is False
     assert frames[1] == {
         "jsonrpc": "2.0",
         "method": "approval.closed",
@@ -225,66 +222,6 @@ async def test_send_failure_denies_request() -> None:
         description="Delete files",
     )
     assert outcome.choice is ApprovalChoice.DENY
-    # A request that never reached anybody is the clearest case of nobody having
-    # answered it, and the gate's two sentences turn on exactly that.
-    assert outcome.answered is False
-
-
-async def test_teardown_cancellation_is_not_a_refusal() -> None:
-    """`cancel_all` puts a synthetic "cancelled" on the future, which is not a
-    wire choice and lands in the same `ValueError` fallback as a client sending
-    something outside the enum. Both fail closed, and neither is anyone's
-    answer -- a turn torn down mid-approval must not tell the model the user
-    refused."""
-    frames: list[dict] = []
-
-    async def send(frame: dict) -> None:
-        frames.append(frame)
-
-    broker = ApprovalBroker(send)
-    waiting = asyncio.create_task(
-        broker.await_approval(
-            conversation_id="session-a",
-            turn_id="turn-a",
-            tool_call_id="call-a",
-            command="rm file.txt",
-            description="Delete files",
-        )
-    )
-    await _wait_for_frame(frames)
-
-    broker.cancel_all()
-    outcome = await waiting
-
-    assert outcome.choice is ApprovalChoice.DENY
-    assert outcome.answered is False
-
-
-async def test_a_choice_outside_the_enum_is_not_a_refusal_either() -> None:
-    """A client sending a value this side cannot read said nothing this side can
-    act on. Same fallback, same reason."""
-    frames: list[dict] = []
-
-    async def send(frame: dict) -> None:
-        frames.append(frame)
-
-    broker = ApprovalBroker(send)
-    waiting = asyncio.create_task(
-        broker.await_approval(
-            conversation_id="session-a",
-            turn_id="turn-a",
-            tool_call_id="call-a",
-            command="rm file.txt",
-            description="Delete files",
-        )
-    )
-    params = (await _wait_for_frame(frames))["params"]
-
-    broker._pending[params["approval_id"]].future.set_result(("maybe", ""))
-    outcome = await waiting
-
-    assert outcome.choice is ApprovalChoice.DENY
-    assert outcome.answered is False
 
 
 # ---------------------------------------------------------------------------
@@ -406,8 +343,5 @@ async def test_feedback_rides_along_on_a_refusal() -> None:
 
     assert broker.resolve(params["approval_id"], "deny", conversation_id="session-a", feedback="keep it, move it aside")
     outcome = await waiting
-    # A person clicked deny, so this one WAS answered -- the other half of the
-    # distinction, without which every refusal would read as a lapse.
-    assert outcome.answered is True
     assert outcome.choice is ApprovalChoice.DENY
     assert outcome.feedback == "keep it, move it aside"

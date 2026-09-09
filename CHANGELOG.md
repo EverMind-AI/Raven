@@ -556,24 +556,7 @@ All notable changes to Raven are documented here.
   The plain-first judge is asked once more when its reply names the wrong keys
   (`{"correct": true}` for `plain_ok` and `sound`), which on the default model
   sent about one settled question in ten into research for a parsing miss.
-- A sub-agent's result relay into a page session runs on the page spine's lane
-  for that session, behind whatever the page is running there, instead of on
-  the gateway spine beside it: the two used to run at once, drawing the same
-  tool calls twice and delivering the result twice. The watch-work judgement
-  the loop pays on a turn's first look is no longer paid on a relay or a
-  sentinel notice (the runtime speaking, not the owner), and is cut after 60
-  seconds when the model does not answer; one relay turn spent 1229 seconds in
-  it.
-- A sub-agent instance the user is chatting with is reported to the main agent
-  as answering, with the time it began answering and a line saying it is the
-  user's conversation, instead of as an instance with no turns yet -- which the
-  main agent read as free and dispatched its own task onto. A spawn that
-  reaches an instance mid-answer stays `pending` until the instance is free,
-  and no longer takes over the instance's live view: the direct chat's steps
-  stay on screen, and the spawn's own appear once it runs.
-- When reasoning runs to the model's output ceiling and the loop feeds it back
-  for the model to continue, the continuation's opening clause -- the tail of
-  the cut thought -- no longer reaches the reader as the head of the answer.
+
 - A shell command the safety guard refuses is refused as a command, not as the
   task: the tool result no longer says "stop this operation immediately", which
   an unattended agent read as the whole job and ended a deck build on.
