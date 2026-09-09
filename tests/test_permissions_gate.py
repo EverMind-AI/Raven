@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+import raven.permissions.rules as rules_module
 from raven.config.schema import PermissionsConfig
 from raven.contracts.permissions import (
     Allow,
@@ -20,7 +22,7 @@ from raven.contracts.permissions import (
 from raven.contracts.tool import Continuation
 from raven.permissions.builtin import BuiltinRulings, action_digest, action_line
 from raven.permissions.gate import PermissionGate
-from raven.permissions.rules import exec_rule_tier
+from raven.permissions.rules import DEFAULT_ALLOW_TOOLS, exec_rule_tier
 from raven.permissions.session import set_session_mode
 from raven.permissions.turn import start_permission_turn
 
@@ -228,6 +230,37 @@ async def test_read_only_default_runs_without_asking():
     gate = gate_for(PermissionsConfig())
     bind(None)
     assert await gate.enforce("read_file", {"path": "a.txt"}) is None
+
+
+@pytest.mark.asyncio
+async def test_deliver_files_default_runs_without_asking():
+    """The one default-allow tool that is not a read. Handing the user a file
+    they asked for is not an effect they need to approve, and the approval it
+    used to raise expired unanswered often enough to lose finished work."""
+    gate = gate_for(PermissionsConfig())
+    bind(None)
+    assert await gate.enforce("deliver_files", {"files": [{"path": "deck.pptx"}]}) is None
+
+
+def test_the_documented_default_tier_names_its_one_exception():
+    """The set, the module contract and `CONTEXT.md` are three homes for one rule.
+
+    Both texts stated it as "read-only tools run, everything else asks" without
+    naming anything, so adding the first non-read default made both false while
+    a grep for the tool's name found neither. Pinned against the rendered text
+    with whitespace collapsed, so a later rewrap cannot void this silently, and
+    sliced to the `Tier` entry so a mention elsewhere cannot fake a pass.
+    """
+
+    def flat(text: str) -> str:
+        return " ".join(text.split())
+
+    assert "deliver_files" in DEFAULT_ALLOW_TOOLS
+    assert "deliver_files" in flat(rules_module.__doc__ or ""), "the module contract does not name it"
+
+    context = (Path(__file__).resolve().parents[1] / "CONTEXT.md").read_text(encoding="utf-8")
+    tier = context.split("**Tier**:", 1)[1].split("\n**", 1)[0]
+    assert "deliver_files" in flat(tier), "the CONTEXT.md Tier entry does not name it"
 
 
 @pytest.mark.asyncio
