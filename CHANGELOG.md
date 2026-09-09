@@ -19,6 +19,19 @@ All notable changes to Raven are documented here.
   and then the host catalog are asked, but a catalog may only lower the number
   in `config.json`, never raise it. `PPT_CONTEXT_WINDOW` pins it by hand.
 
+### Added
+
+- Raven-PPT runs with the host's context compaction on (`compaction.enabled`,
+  `triggerRatio` 0.85, every other threshold the host's default) and the
+  ppt-engine plugin appends a deck ledger under each compaction summary: the
+  user's own messages and `ask_user` answers verbatim (journaled as the running
+  turn sees them, since the filed record ends with the previous turn), and the deck's state as
+  the tools left it on disk (brief, template, sources, figure catalogue, outline
+  pages, the reader's open findings, published and refused records). Replayed on
+  a recorded 34-page deck session, the host's summary alone lost the page limit,
+  the language and style requirements, both `ask_user` answers and the source
+  path; the ledger carries them.
+
 ### Removed
 
 - **The vendored subagents tree.** The five product forks under `subagents/`

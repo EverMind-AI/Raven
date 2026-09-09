@@ -143,6 +143,11 @@ TRUNK_HELD_OUT = {
 TRUNK_ONLY_DEFAULTS = {
     "llmRetryAfterOutput": True,
     "llmErrorRetryDelays": [30, 60, 120, 240, 300, 300, 300, 300],
+    # The fork ran with compaction off and a 20-page deck reached 450k tokens a call
+    # (62M input tokens over 137 turns). The host's own compaction, at the host's
+    # own thresholds but for the trigger ratio; the deck-specific part is the
+    # plugin's ledger under the summary, not a different threshold.
+    "compaction": {"enabled": True, "triggerRatio": 0.85},
 }
 
 #: agents.defaults rows both sides carry with different values, as (fork, trunk).
