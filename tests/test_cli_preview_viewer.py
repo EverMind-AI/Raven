@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -369,3 +370,37 @@ def test_help_scrolling_preserves_preview_position():
     assert result == pviewer._RESULT_DONE
     assert viewer._offset == 2  # the preview position survived the help visit
     assert viewer._state == pviewer._STATE_VIEW
+
+
+def test_cursor_hidden_in_view_and_help_but_visible_while_filtering():
+    from prompt_toolkit.application.current import set_app
+    from prompt_toolkit.layout.controls import BufferControl
+
+    output = _SizedOutput(columns=40, rows=10)
+    for state in (pviewer._STATE_VIEW, pviewer._STATE_HELP):
+        viewer = pviewer._PreviewViewer(_static_lines(30), "Preview #1")
+        with create_pipe_input() as pipe:
+            app = viewer._build_app(input=pipe, output=output)
+            viewer._app = app
+            viewer._state = state
+            with set_app(app):
+                app.renderer.render(app, app.layout)
+            assert app.renderer.last_rendered_screen.show_cursor is False
+
+    viewer = pviewer._PreviewViewer(_static_lines(30), "Preview #1")
+    with create_pipe_input() as pipe:
+        app = viewer._build_app(input=pipe, output=output)
+        viewer._app = app
+        viewer._state = pviewer._STATE_FILTER
+        buffer_control = next(c for c in app.layout.find_all_controls() if isinstance(c, BufferControl))
+        app.layout.focus(buffer_control)
+
+        async def _render():
+            # Rendering a focused BufferControl schedules background tasks
+            # and needs a running loop; let them settle before asserting.
+            with set_app(app):
+                app.renderer.render(app, app.layout)
+            await asyncio.sleep(0)
+
+        asyncio.run(_render())
+        assert app.renderer.last_rendered_screen.show_cursor is True
