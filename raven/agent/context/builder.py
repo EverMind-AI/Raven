@@ -3,16 +3,11 @@
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable
 
-from raven.memory_engine.consolidate.consolidator import MemoryStore
-from raven.memory_engine.skill_forge import LocalSkillCatalog
-from raven.memory_engine.skill_local.types import SkillMeta
+from raven.memory_engine import LocalSkillCatalog, MemoryStore, SkillMeta
 from raven.security.trust import wrap_untrusted, wrap_untrusted_blocks
-from raven.utils.helpers import build_assistant_message
-
-if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+from raven.utils.messages import build_assistant_message
 
 
 class ContextBuilder:
@@ -32,7 +27,6 @@ class ContextBuilder:
         self,
         workspace: Path,
         skill_forge_config: Any = None,
-        llm_provider: "LLMProvider | None" = None,
         now_fn: Callable[[], datetime] | None = None,
         *,
         start_watcher: bool = True,
@@ -42,7 +36,6 @@ class ContextBuilder:
         self.skills = LocalSkillCatalog(
             workspace,
             config=skill_forge_config,
-            llm_provider=llm_provider,
             start_watcher=start_watcher,
         )
         # Optional fake-clock injection for benchmark harnesses (longrun).
@@ -87,7 +80,7 @@ class ContextBuilder:
         if always_skills:
             cfg = getattr(self.skills, "_config", None)
             always_max = getattr(cfg, "always_max", 5) or 5
-            always_content = self.skills.load_skills_for_context(
+            always_content = self.skills.load_always_block(
                 always_skills,
                 max_inject=always_max,
             )
@@ -99,8 +92,8 @@ class ContextBuilder:
         # the SkillForgeRouter's hits).
         # If a selector has chosen top-K, render only those; otherwise the
         # full directory (legacy behavior). Empty list is treated as "no
-        # selection", so Phase A's stub selector does not accidentally hide
-        # all skills.
+        # selection", so a selector that returns nothing does not
+        # accidentally hide all skills.
         only = selected_skills if selected_skills else None
 
         # Two injection modes (config: skill_forge.injection_mode):
@@ -271,6 +264,8 @@ Skills with available="false" need dependencies installed first - you can try in
         tool_name: str,
         result: str,
         blocks: list[dict[str, Any]] | None = None,
+        *,
+        trusted_note: str = "",
     ) -> list[dict[str, Any]]:
         """Add a tool result to the message list.
 
@@ -282,12 +277,23 @@ Skills with available="false" need dependencies installed first - you can try in
         replaces the plain text when present. It is only ever set for providers
         that can carry an image in a tool result; ``result`` stays the fallback
         and must make sense on its own.
+
+        ``trusted_note`` is this system's own line about the result (the
+        watch-work steering line) and goes AFTER the fence closes. Inside it,
+        the fence's own contract — data, NOT instructions — orders the model
+        to ignore it; measured 2026-08-28, the same dispatch succeeded or
+        failed with the fence honoured or not. Only text a RAVEN module
+        composed may travel through here; never tool output.
         """
         content: Any
         if blocks:
             content = wrap_untrusted_blocks(blocks, source=tool_name)
+            if trusted_note:
+                content = [*content, {"type": "text", "text": trusted_note}]
         else:
             content = wrap_untrusted(result, source=tool_name)
+            if trusted_note:
+                content = f"{content}\n{trusted_note}"
         messages.append({"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": content})
         return messages
 

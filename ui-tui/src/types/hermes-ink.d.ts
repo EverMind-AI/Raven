@@ -118,7 +118,6 @@ declare module '@hermes/ink' {
   export const NoSelect: React.ComponentType<any>
   export const ScrollBox: React.ComponentType<any>
   export const Text: React.ComponentType<any>
-  export const TextInput: React.ComponentType<any>
   export const stringWidth: (s: string) => number
   export function isXtermJs(): boolean
 
@@ -148,6 +147,7 @@ declare module '@hermes/ink' {
   export function evictInkCaches(level?: EvictLevel): InkCacheSizes
 
   export function forceRedraw(stdout?: NodeJS.WriteStream): boolean
+  export function dumpScreen(stdout?: NodeJS.WriteStream): null | string
   export function render(node: React.ReactNode, options?: NodeJS.WriteStream | RenderOptions): Instance
 
   export function useApp(): { readonly exit: (error?: Error) => void }

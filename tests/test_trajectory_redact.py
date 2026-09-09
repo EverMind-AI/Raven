@@ -77,7 +77,7 @@ def test_original_bundle_untouched(tmp_path):
 
 
 def test_json_escaped_secret_cleared(tmp_path):
-    secret = 'to"ken\\值-abc123456'
+    secret = 'to"ken\\é-abc123456'
     once = json.dumps(secret, ensure_ascii=False)[1:-1]
     twice = json.dumps(once, ensure_ascii=False)[1:-1]
     ascii_form = json.dumps(secret, ensure_ascii=True)[1:-1]
@@ -202,72 +202,6 @@ def test_residual_scan_reports_never_rewrites(tmp_path):
     report = tredact.redact_bundle(bundle, tmp_path / "red", secrets=[])
 
     assert (report.redacted_dir / "spans.jsonl").read_text(encoding="utf-8") == leftover
-
-
-def test_residual_finding_carries_token_and_occurrences(tmp_path):
-    leftover = "qT7zXp2LmV9wRb4KsD8fGh3J"
-    spans = f"first {leftover} here\nplain line\nagain {leftover}"
-    bundle = _make_bundle(tmp_path, spans_text=spans, artifact_text=f"also {leftover}")
-
-    report = tredact.redact_bundle(bundle, tmp_path / "red", secrets=[])
-
-    assert len(report.findings) == 1
-    finding = report.findings[0]
-    assert finding.token == leftover
-    assert finding.count == 3
-    assert [(o["file"], o["line_no"]) for o in finding.occurrences] == [
-        ("artifacts/tool.output.json", 1),
-        ("spans.jsonl", 1),
-        ("spans.jsonl", 3),
-    ]
-    occurrence = finding.occurrences[1]
-    assert occurrence["line"] == f"first {leftover} here"
-    assert occurrence["line"][occurrence["start"] : occurrence["end"]] == leftover
-
-
-def test_metadata_serializes_no_token_or_occurrences(tmp_path):
-    leftover = "qT7zXp2LmV9wRb4KsD8fGh3J"
-    bundle = _make_bundle(tmp_path, spans_text=f"prefix {leftover} suffix", artifact_text="clean")
-
-    report = tredact.redact_bundle(bundle, tmp_path / "red", secrets=[])
-
-    meta = json.loads((report.redacted_dir / tredact.REDACTION_METADATA_FILE).read_text(encoding="utf-8"))
-    (entry,) = meta["residual_findings"]
-    assert set(entry) == {"category", "sample", "file", "count"}
-    assert leftover not in json.dumps(meta)
-
-
-def test_residual_scan_exempts_known_benign_literals(tmp_path):
-    """Provider usage field names are fixed literals; only exact matches skip."""
-    lines = [
-        "completion_tokens_details",
-        "prompt_tokens_details",
-        "Xcompletion_tokens_details",
-        "prompt_tokens_details2",
-    ]
-    bundle = _make_bundle(tmp_path, spans_text="\n".join(lines), artifact_text="clean")
-
-    report = tredact.redact_bundle(bundle, tmp_path / "red", secrets=[])
-
-    tokens = {f.token for f in report.findings}
-    assert "completion_tokens_details" not in tokens
-    assert "prompt_tokens_details" not in tokens
-    assert "Xcompletion_tokens_details" in tokens
-    assert "prompt_tokens_details2" in tokens
-
-
-def test_residual_scan_exempts_provider_call_ids(tmp_path):
-    call_id = "call_9Q7zXp2LmV4wRb8KsD3fT6yH"
-    hyphenated = "call-9Q7zXp2LmV4wRb8KsD3fT6yH"
-    prefixed = "Xcall_9Q7zXp2LmV4wRb8KsD3fT6yH"
-    bundle = _make_bundle(tmp_path, spans_text=f"{call_id}\n{hyphenated}\n{prefixed}", artifact_text="clean")
-
-    report = tredact.redact_bundle(bundle, tmp_path / "red", secrets=[])
-
-    tokens = {f.token for f in report.findings}
-    assert call_id not in tokens
-    assert hyphenated in tokens
-    assert prefixed in tokens
 
 
 # ── binary policy ─────────────────────────────────────────────────────
@@ -423,7 +357,7 @@ def test_collect_covers_extension_blocks_and_both_configs(tmp_path, monkeypatch)
     )
     alt_cfg = tmp_path / "alt.json"
     alt_cfg.write_text(json.dumps({"providers": {"openai": {"apiKey": "fk-alternate-key-123456"}}}), encoding="utf-8")
-    monkeypatch.setattr("raven.config.loader._current_config_path", default_cfg)
+    monkeypatch.setattr("raven.home._current_config_path", default_cfg)
 
     secrets, complete = tredact.collect_known_secrets(config_path=alt_cfg, environ={})
 
@@ -445,7 +379,7 @@ def test_placeholder_exemption_scoped_to_api_key_fields(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
 
     secrets, complete = tredact.collect_known_secrets(environ={})
 
@@ -457,7 +391,7 @@ def test_placeholder_exemption_scoped_to_api_key_fields(tmp_path, monkeypatch):
 def test_collect_flags_unreadable_config(tmp_path, monkeypatch):
     broken = tmp_path / "broken.json"
     broken.write_text("{ not json", encoding="utf-8")
-    monkeypatch.setattr("raven.config.loader._current_config_path", broken)
+    monkeypatch.setattr("raven.home._current_config_path", broken)
 
     secrets, complete = tredact.collect_known_secrets(environ={"SOME_API_KEY": "fk-env-still-works-1"})
 
@@ -525,15 +459,15 @@ def test_end_to_end_report_with_real_tracer(tmp_path, monkeypatch):
     # A leaked junk credential (provider tests write these into os.environ)
     # must not corrupt the placeholders of the real secrets.
     monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
-    monkeypatch.setattr("raven.config.loader._current_config_path", config_path)
+    monkeypatch.setattr("raven.home._current_config_path", config_path)
     monkeypatch.setattr("raven.trajectory.bundle._default_workspace", lambda: tmp_path / "ws")
     _spans._store = None
     try:
-        # A single turn is addressed by its trace id (attempt id = trace id).
-        with trace.span("session.turn", session_key="cli:e2e") as root:
+        aid = trace.begin_attempt("cli:e2e")
+        with trace.span("session.turn", session_key="cli:e2e"):
             with trace.span("tool.call") as s:
                 s.artifact("tool.output", {"stdout": f"auth={fake_env_key} cfg={fake_config_key}"})
-        aid = root.trace_id
+        trace.end_attempt("cli:e2e")
 
         out = tmp_path / "report.tar.gz"
         result = CliRunner().invoke(trajectory_app, ["report", aid, "--yes", "--out", str(out)])

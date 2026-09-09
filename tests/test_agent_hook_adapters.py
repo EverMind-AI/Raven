@@ -34,6 +34,7 @@ from raven.agent.hook import (
 )
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
+from tests._wiring import wire
 
 
 @dataclass
@@ -133,7 +134,7 @@ class TestOnUserInboundAdapter:
 
     def test_name(self):
         adapter = OnUserInboundAdapter(lambda m: None)
-        assert adapter.name == "Legacy(on_user_inbound)"
+        assert adapter.name == "callback(on_user_inbound)"
 
 
 # ===========================================================================
@@ -179,7 +180,7 @@ class TestDecisionConsumerAdapter:
 
     def test_name(self):
         adapter = DecisionConsumerAdapter(AsyncMock())
-        assert adapter.name == "Legacy(decision_consumer)"
+        assert adapter.name == "callback(decision_consumer)"
 
 
 # ===========================================================================
@@ -252,7 +253,7 @@ class TestResponseModifierAdapter:
 
     def test_name(self):
         adapter = ResponseModifierAdapter(lambda k, c: c)
-        assert adapter.name == "Legacy(response_modifier)"
+        assert adapter.name == "callback(response_modifier)"
 
 
 # ===========================================================================
@@ -286,42 +287,21 @@ def _make_agent(workspace, **kwargs):
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        **kwargs,
+        **wire(max_iterations=2, restrict_to_workspace=True, **kwargs),
     )
 
 
 class TestAgentLoopHookWireUp:
-    """Verify the constructor builds ``self.hooks`` from the three
-    legacy params in the documented order."""
+    """Verify the constructor takes finished hooks only: the chain is the
+    host's list, in the host's order, and the legacy callback params are
+    gone."""
 
-    def test_empty_composite_when_no_callbacks(self, workspace):
+    def test_empty_composite_when_no_hooks(self, workspace):
         agent = _make_agent(workspace)
         assert isinstance(agent.hooks, CompositeHook)
         assert len(agent.hooks) == 0
 
-    def test_on_user_inbound_only(self, workspace):
-        agent = _make_agent(workspace, on_user_inbound=lambda m: None)
-        hooks = list(agent.hooks)
-        assert len(hooks) == 1
-        assert isinstance(hooks[0], OnUserInboundAdapter)
-
-    def test_decision_consumer_only(self, workspace):
-        agent = _make_agent(workspace, decision_consumer=AsyncMock())
-        hooks = list(agent.hooks)
-        assert len(hooks) == 1
-        assert isinstance(hooks[0], DecisionConsumerAdapter)
-
-    def test_response_modifier_only(self, workspace):
-        agent = _make_agent(workspace, response_modifier=lambda k, c: c)
-        hooks = list(agent.hooks)
-        assert len(hooks) == 1
-        assert isinstance(hooks[0], ResponseModifierAdapter)
-
-    def test_canonical_ordering(self, workspace):
-        """Order: OnUserInbound → DecisionConsumer → [explicit hooks] → ResponseModifier."""
-
+    def test_hooks_extend_in_list_order(self, workspace):
         class Explicit(AgentHook):
             @property
             def name(self) -> str:
@@ -329,25 +309,43 @@ class TestAgentLoopHookWireUp:
 
         agent = _make_agent(
             workspace,
-            on_user_inbound=lambda m: None,
-            decision_consumer=AsyncMock(),
-            response_modifier=lambda k, c: c,
-            hooks=CompositeHook([Explicit()]),
+            hooks=CompositeHook(
+                [
+                    OnUserInboundAdapter(lambda m: None),
+                    DecisionConsumerAdapter(AsyncMock()),
+                    Explicit(),
+                    ResponseModifierAdapter(lambda k, c: c),
+                ]
+            ),
         )
 
         hooks = list(agent.hooks)
-        assert len(hooks) == 4
-        assert isinstance(hooks[0], OnUserInboundAdapter)
-        assert isinstance(hooks[1], DecisionConsumerAdapter)
-        assert isinstance(hooks[2], Explicit)
-        assert isinstance(hooks[3], ResponseModifierAdapter)
+        assert [type(h) for h in hooks] == [
+            OnUserInboundAdapter,
+            DecisionConsumerAdapter,
+            Explicit,
+            ResponseModifierAdapter,
+        ]
+
+    def test_the_loop_grows_no_legacy_callback_params(self, workspace):
+        # The retirement's bite: a caller still passing the old callables
+        # gets the typo error, not a silent drop.
+        import pytest
+
+        for legacy in ("on_user_inbound", "decision_consumer", "response_modifier"):
+            with pytest.raises(TypeError):
+                _make_agent(workspace, **{legacy: lambda *a: None})
 
     async def test_user_inbound_observer_fires_when_no_short_circuit(self, workspace):
         received = []
         agent = _make_agent(
             workspace,
-            on_user_inbound=lambda m: received.append(m.text),
-            decision_consumer=AsyncMock(return_value=None),
+            hooks=CompositeHook(
+                [
+                    OnUserInboundAdapter(lambda m: received.append(m.text)),
+                    DecisionConsumerAdapter(AsyncMock(return_value=None)),
+                ]
+            ),
         )
 
         # Drive _process_message indirectly — we only care that the
@@ -368,8 +366,12 @@ class TestAgentLoopHookWireUp:
 
         agent = _make_agent(
             workspace,
-            on_user_inbound=lambda m: received.append(m.text),
-            decision_consumer=AsyncMock(return_value=decision_handled),
+            hooks=CompositeHook(
+                [
+                    OnUserInboundAdapter(lambda m: received.append(m.text)),
+                    DecisionConsumerAdapter(AsyncMock(return_value=decision_handled)),
+                ]
+            ),
         )
 
         ctx = AgentHookContext(
@@ -385,8 +387,25 @@ class TestAgentLoopHookWireUp:
     async def test_response_modifier_invoked_in_after_send(self, workspace):
         agent = _make_agent(
             workspace,
-            response_modifier=lambda k, c: c + " [appended]",
+            hooks=CompositeHook([ResponseModifierAdapter(lambda k, c: c + " [appended]")]),
         )
         ctx = AgentHookContext(session_key="cli:c1", outbound_content="hi")
         decision = await agent.hooks.after_send(ctx)
         assert decision.modified_content == "hi [appended]"
+
+    def test_callbacks_live_only_in_the_hook_chain(self, workspace):
+        """The adapters are the callbacks' one home: the loop keeps no
+        parallel copy for a caller to read and find stale."""
+        agent = _make_agent(
+            workspace,
+            hooks=CompositeHook(
+                [
+                    OnUserInboundAdapter(lambda m: None),
+                    ResponseModifierAdapter(lambda k, c: c),
+                ]
+            ),
+        )
+        assert [type(h) for h in agent.hooks] == [OnUserInboundAdapter, ResponseModifierAdapter]
+        assert not hasattr(agent, "on_user_inbound")
+        assert not hasattr(agent, "response_modifier")
+        assert not hasattr(agent, "decision_consumer")

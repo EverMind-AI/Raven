@@ -1,7 +1,7 @@
 """What a call cost, given what it used.
 
-Used by ``UsageTracker`` and ``BudgetAlerter``. Returning a consistent cost from
-one place prevents drift between "what we tracked" and "what we budgeted".
+Available for explicit price comparisons. Runtime accounting and tracing use
+provider-reported amounts instead; this estimate must not enter their totals.
 
 The rates themselves are a fact about the provider's catalogue, so they come from
 ``raven.providers.rates``; what lives here is the arithmetic on top of them --
@@ -13,13 +13,18 @@ than a rate:
 
 Non-Anthropic providers (no cache support) pass ``cache_read_tokens=0``,
 ``cache_write_tokens=0`` and the function collapses to the standard formula.
+
+The write multiplier is asked of ``providers.prompt_cache`` rather than fixed
+here, because ``tokenWise.cacheTtl`` chooses it: an hour-long write costs 2.0x
+the uncached prompt rate where the default five-minute one costs 1.25x.
 """
 
 from __future__ import annotations
 
 from loguru import logger
 
-from raven.providers.rates import is_plan_billed, rates_offline_active, token_rates
+from raven.providers.prompt_cache import write_rate_multiplier
+from raven.providers.rates import is_plan_billed, token_rates
 
 # Track which unknown models we've already warned about so we log once each.
 _WARNED_UNKNOWN: set[str] = set()
@@ -46,12 +51,6 @@ def estimate_cost_usd(
     pay-as-you-go rate the user is not paying -- $2.50 per million for a Copilot
     seat. Callers already degrade on None; the tokens are still counted.
     """
-    if rates_offline_active():
-        # An offline context (a trajectory replay, say) prices nothing — and it
-        # must leave no trace: falling through would log the one-time
-        # unknown-model warning and consume it from the process-global cache,
-        # stealing it from the next real turn.
-        return None
     if is_plan_billed(model):
         return None
 
@@ -67,7 +66,7 @@ def estimate_cost_usd(
         input_tokens * prompt_rate
         + output_tokens * completion_rate
         + cache_read_tokens * prompt_rate * 0.1
-        + cache_write_tokens * prompt_rate * 1.25
+        + cache_write_tokens * prompt_rate * write_rate_multiplier()
     )
 
 

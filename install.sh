@@ -148,6 +148,70 @@ ensure_node() {
   # so no PATH change is needed for `raven tui` to find it.
 }
 
+# --- 2b. build the web assets a source checkout does not carry -------------
+# `ui-tui/dist/entry.js` (the TUI bundle) and `ui-web/dist/index.html` (the page
+# `raven web` serves) are both gitignored build artifacts. A release wheel
+# carries them; an editable install of a checkout gets neither, so without this
+# a clone install has no TUI and no page. Both must exist before first run.
+build_web_assets() {
+  src="$1"
+  need_tui=0
+  need_page=0
+  [ -f "$src/ui-tui/dist/entry.js" ] || need_tui=1
+  [ -f "$src/ui-web/dist/index.html" ] || need_page=1
+  [ "$need_tui" = 1 ] || [ "$need_page" = 1 ] || return 0
+
+  # One probe for both builds. ensure_node may have provisioned a private
+  # runtime that never reaches PATH, so look there before giving up.
+  node_bin="$(command -v node || true)"
+  [ -n "$node_bin" ] || node_bin="$(private_node_bin || true)"
+  node_dir=""
+  blocker=""
+  if [ -z "$node_bin" ] || [ ! -x "$node_bin" ]; then
+    blocker="No usable node found"
+  elif ! PATH="$(dirname "$node_bin"):$PATH" command -v npm >/dev/null 2>&1; then
+    # npm ships alongside node, but verify explicitly before relying on it.
+    blocker="Found node but not npm"
+  else
+    node_dir="$(dirname "$node_bin")"
+  fi
+
+  if [ "$need_tui" = 1 ]; then
+    if [ -n "$blocker" ]; then
+      warn "$blocker; skipping TUI build; raven tui may not work"
+    else
+      info "Building the TUI bundle (ui-tui/dist/entry.js)..."
+      ( cd "$src/ui-tui" && PATH="$node_dir:$PATH" npm ci && PATH="$node_dir:$PATH" npm run build )
+    fi
+  fi
+
+  if [ "$need_page" = 1 ]; then
+    if [ -n "$blocker" ]; then
+      warn "$blocker; skipping the served-page build; raven web will not start"
+    else
+      info "Building the served page (ui-web/dist/index.html)..."
+      # Warned rather than propagated, unlike the bundle above: bare `raven`
+      # opens the TUI, so a machine that cannot build the page still gets the
+      # surface this script exists to deliver.
+      build_page "$src" "$node_dir" \
+        || warn "The served page did not build (see above); raven web will not start"
+    fi
+  fi
+}
+
+# Vite emits ui-web/.modern/modern.iife.js, then ui-web/build.py inlines it with the
+# page sources and the shared i18n catalogue into the single-file dist.
+#
+# Kept to one `&&` chain on purpose: `set -e` does not apply inside a function
+# whose caller guards it with `||`, so a second statement would run even after
+# npm ci had failed. Python comes from uv, which is already a hard requirement
+# here, rather than from a bare `python3` -- on a machine without the Command
+# Line Tools that name is a stub macOS answers with an install prompt.
+build_page() {
+  ( cd "$1/ui-web" && PATH="$2:$PATH" npm ci && PATH="$2:$PATH" npm run build ) \
+    && uv run --no-project python "$1/ui-web/build.py"
+}
+
 # --- 3. install raven ------------------------------------------------------
 # True when $1 holds a raven source checkout (its own pyproject, not a dep's).
 is_raven_source() {
@@ -176,33 +240,23 @@ install_raven() {
   fi
   if [ -n "$script_dir" ]; then
     info "Local raven source detected; editable install: $script_dir"
-    # The TUI bundle must exist before first run. In a dev checkout it isn't
-    # committed, so build it now if Node is available.
-    if [ ! -f "$script_dir/ui-tui/dist/entry.js" ]; then
-      node_bin="$(command -v node || true)"
-      [ -n "$node_bin" ] || node_bin="$(private_node_bin || true)"
-      if [ -n "$node_bin" ] && [ -x "$node_bin" ]; then
-        node_dir="$(dirname "$node_bin")"
-        # npm ships alongside node, but verify explicitly before relying on it.
-        if PATH="$node_dir:$PATH" command -v npm >/dev/null 2>&1; then
-          info "Building the TUI bundle (ui-tui/dist/entry.js)..."
-          ( cd "$script_dir/ui-tui" && PATH="$node_dir:$PATH" npm ci && PATH="$node_dir:$PATH" npm run build )
-        else
-          warn "Found node but not npm; skipping TUI build; raven tui may not work"
-        fi
-      else
-        warn "No usable node found; skipping TUI build; raven tui may not work"
-      fi
-    fi
+    build_web_assets "$script_dir"
     # Pin to the locked dependency set so an install matches what we test.
     constraints="$(mktemp)"
-    uv export --directory "$script_dir" --frozen --all-extras --no-hashes --no-emit-project -o "$constraints"
+    uv export --directory "$script_dir" --frozen --all-extras --no-hashes --no-emit-workspace -o "$constraints"
     # Install all channel adapters by default. If the umbrella extra fails to
     # resolve/build on this platform, fall back to base raven so one broken
     # channel SDK cannot block the whole install.
-    if ! uv tool install --force -c "$constraints" -e "$script_dir[channels]"; then
-      warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-      uv tool install --force -c "$constraints" -e "$script_dir"
+    # The default config names the everos memory backend, which ships as its
+    # own distribution beside the wheel -- carry it, and degrade loudly (the
+    # host boots memoryless and `raven doctor` says why) if it cannot build.
+    plugin_dir="$script_dir/plugins-dist/everos-memory"
+    if ! uv tool install --force -c "$constraints" --with-editable "$plugin_dir" -e "$script_dir[channels]"; then
+      warn "Channel dependencies failed to install; retrying with base raven. Some channels stay unavailable (see: raven channels list)."
+      if ! uv tool install --force -c "$constraints" --with-editable "$plugin_dir" -e "$script_dir"; then
+        warn "EverOS memory plugin failed to install; long-term memory stays off (raven doctor explains)."
+        uv tool install --force -c "$constraints" -e "$script_dir"
+      fi
     fi
   else
     # Remote mode: install the latest published release wheel, which bundles
@@ -213,8 +267,12 @@ install_raven() {
     wheel_url="${RAVEN_WHEEL_URL:-}"
     if [ -z "$wheel_url" ]; then
       info "Resolving the latest raven release from GitHub..."
-      wheel_url="$(curl -fsSL "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" 2>/dev/null \
-        | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1)"
+      release_json="$(curl -fsSL "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" 2>/dev/null)"
+      wheel_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1)"
+      # The everos memory plugin ships as a sibling wheel from the same
+      # release; older releases carry none, and its absence only means the
+      # default memory backend degrades loudly at boot.
+      everos_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/everos_memory-[^"]*\.whl' | head -n1)"
     fi
     if [ -z "$wheel_url" ]; then
       # The GitHub API caps unauthenticated callers at 60 requests/hour per IP, so a
@@ -270,9 +328,19 @@ install_raven() {
     fi
     info "  installing $wheel_url"
     # shellcheck disable=SC2086  # $c_args is an intentional word-split option pair.
-    if ! uv tool install --force $c_args "raven[channels] @ $wheel_url"; then
+    p_args=""
+    if [ -n "${everos_url:-}" ]; then
+      # No spaces in the requirement: unquoted expansion must yield exactly
+      # "--with" plus one argument, or uv rejects the extra words.
+      p_args="--with everos-memory@$everos_url"
+      info "  with memory plugin $everos_url"
+    else
+      warn "This release carries no EverOS memory plugin wheel; long-term memory stays off (raven doctor explains)."
+    fi
+    # shellcheck disable=SC2086  # $c_args / $p_args are intentional word-split option pairs.
+    if ! uv tool install --force $c_args $p_args "raven[channels] @ $wheel_url"; then
       warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-      uv tool install --force $c_args "$wheel_url"
+      uv tool install --force $c_args $p_args "$wheel_url" || uv tool install --force $c_args "$wheel_url"
     fi
   fi
   # Ensure ~/.local/bin (uv tool bin dir) is on PATH for future shells.

@@ -1,0 +1,7 @@
+{
+  "agents": {
+    "defaults": {
+      "maxToolIterations": 60
+    }
+  }
+}

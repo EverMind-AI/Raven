@@ -19,7 +19,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 from loguru import logger
@@ -33,22 +33,89 @@ from raven.channels.errors import retryable_http
 from raven.channels.media import save_media_bytes
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_runtime_subdir
-from raven.config.schema import WeixinConfig
-from raven.utils.helpers import split_message
+from raven.i18n import t
+from raven.utils.atomic_io import atomic_replace
+from raven.utils.messages import split_message
 
 _DEDUP_CAP = 1000
+
+# How long the poll parks before re-reading a session pause it may no longer be
+# under (see `_poll_once`).
+_PAUSE_TICK_S = 30
+
+
+def _registrable_domain(host: str) -> str:
+    labels = [part for part in host.lower().strip(".").split(".") if part]
+    return ".".join(labels[-2:])
+
+
+def _operator_base(candidate: str, configured: str) -> str:
+    """``candidate`` as the base to adopt, or ``""`` when it must not be.
+
+    A response may move this channel to another host of the same operator (the
+    registrable domain of ``configured``) over https. Anything else would send
+    the bot token and every later call to a host the configuration never named,
+    so it is refused and the channel stays on the base it has.
+    """
+    target = (candidate or "").strip().rstrip("/")
+    if not target:
+        return ""
+    parts = urlparse(target)
+    host = (parts.hostname or "").lower()
+    if parts.scheme.lower() != "https" or not host:
+        logger.warning("weixin: refusing a base that is not https ({}); staying on the current base", target)
+        return ""
+    if _registrable_domain(host) != _registrable_domain((urlparse(configured).hostname or "").lower()):
+        logger.warning(
+            "weixin: refusing a base outside the configured operator ({}); staying on the current base", target
+        )
+        return ""
+    return target
+
+
+def _https_redirect_target(host: str, configured: str) -> str:
+    """The https base a ``scaned_but_redirect`` response may move polling to.
+
+    Returns ``""`` for anything unusable, which leaves the caller on the base
+    it already had.
+
+    A bare host is completed to https. A host naming ``http://`` is refused:
+    taking it verbatim let the upstream downgrade this channel to plaintext,
+    and the exchange this poll carries is the one a bot token comes out of.
+    Refused rather than silently upgraded -- coercing it to https would hide a
+    misconfigured or hostile upstream instead of reporting it.
+
+    The host must belong to the configured operator (:func:`_operator_base`):
+    moving polling to another operator's host would send the bot token and every
+    later call there.
+    """
+    host = (host or "").strip()
+    if not host:
+        return ""
+    # A scheme is case-insensitive (RFC 3986): matching only the lowercase
+    # spelling would take ``HTTP://host`` down the bare-host branch and build
+    # ``https://HTTP://host``.
+    lowered = host.lower()
+    if lowered.startswith("http://"):
+        logger.warning("weixin: refusing a plaintext redirect_host ({}); staying on the current base", host)
+        return ""
+    return _operator_base(host if lowered.startswith("https://") else f"https://{host}", configured)
 
 
 class WeixinChannel(ChannelBase):
     """Personal WeChat channel using the iLink HTTP long-poll API."""
 
-    config: WeixinConfig
+    config: Any
     name = "weixin"
     display_name = "WeChat"
-    capabilities = Capabilities(interactive_login=True)  # QR pairing via iLink
+    capabilities = Capabilities(interactive_login=True, file_attachments=True)  # QR pairing via iLink
 
-    def __init__(self, config: WeixinConfig):
+    def __init__(self, config: Any):
         super().__init__(config)
+        # The service can hand back a relocated endpoint (login redirect,
+        # status baseurl); that is runtime state, not config -- the dispensed
+        # config is frozen, and this attribute is what moves.
+        self._base_url: str = config.base_url
         self._client: httpx.AsyncClient | None = None
         self._token: str = ""
         self._updates_buf: str = ""
@@ -57,9 +124,25 @@ class WeixinChannel(ChannelBase):
         self._state_dir: Path | None = None
         self._poll_timeout_s: int = p.DEFAULT_LONG_POLL_TIMEOUT_S
         self._session_pause_until: float = 0.0
+        # The login QR (a scan URL) currently awaiting a scan, exposed so the web
+        # UI can render it instead of the user reading the gateway log. None once
+        # login is confirmed or the flow gives up.
+        self.pending_qr: str | None = None
+        # Rebinding to a different WeChat account, tracked so the page can draw
+        # it. Deliberately not a bare flag: the reader needs to tell "waiting for
+        # a scan" from "the code expired and was reissued" from "we gave up", and
+        # the last two are the states the old flow only wrote to the log.
+        self._rebind: dict[str, object] = {"phase": "idle", "refreshes": 0, "code_at": 0.0, "detail": ""}
+        self._rebind_task: "asyncio.Task | None" = None
         # The lambda resolves _post at call time (don't capture the bound
         # method: tests replace ch._post and the indicator must follow).
         self._typing = TypingIndicator(post=lambda *a, **kw: self._post(*a, **kw))
+
+    @property
+    def connected(self) -> bool:
+        """Whether an auth token is held, as opposed to the channel task merely
+        running (which is true before the login QR is even fetched)."""
+        return bool(self._token)
 
     # ── state persistence ─────────────────────────────────────────────
 
@@ -95,22 +178,23 @@ class WeixinChannel(ChannelBase):
             else {}
         )
         if data.get("base_url"):
-            self.config.base_url = data["base_url"]
+            self._base_url = data["base_url"]
         return bool(self._token)
 
     def _save_state(self) -> None:
         try:
-            (self._dir() / "account.json").write_text(
+            atomic_replace(
+                self._dir() / "account.json",
                 json.dumps(
                     {
                         "token": self._token,
                         "get_updates_buf": self._updates_buf,
                         "context_tokens": self._context_tokens,
                         "typing_tickets": self._typing.snapshot(),
-                        "base_url": self.config.base_url,
+                        "base_url": self._base_url,
                     },
                     ensure_ascii=False,
-                )
+                ),
             )
         except Exception as e:
             # A silent failure here means the auth token never hits disk and
@@ -126,7 +210,7 @@ class WeixinChannel(ChannelBase):
         self, endpoint: str, params: dict | None = None, *, base_url: str | None = None, auth: bool = True
     ) -> dict:
         assert self._client is not None
-        url = f"{(base_url or self.config.base_url).rstrip('/')}/{endpoint}"
+        url = f"{(base_url or self._base_url).rstrip('/')}/{endpoint}"
         resp = await self._client.get(url, params=params, headers=self._headers(auth=auth))
         resp.raise_for_status()
         return resp.json()
@@ -135,9 +219,7 @@ class WeixinChannel(ChannelBase):
         assert self._client is not None
         payload = dict(body or {})
         payload.setdefault("base_info", p.BASE_INFO)
-        resp = await self._client.post(
-            f"{self.config.base_url}/{endpoint}", json=payload, headers=self._headers(auth=auth)
-        )
+        resp = await self._client.post(f"{self._base_url}/{endpoint}", json=payload, headers=self._headers(auth=auth))
         resp.raise_for_status()
         return resp.json()
 
@@ -165,8 +247,9 @@ class WeixinChannel(ChannelBase):
     async def _qr_login(self) -> bool:
         try:
             qrcode_id, scan_url = await self._fetch_qr()
+            self.pending_qr = scan_url
             self._print_qr(scan_url)
-            poll_base = self.config.base_url
+            poll_base = self._base_url
             refreshes = 0
 
             while self._running:
@@ -193,9 +276,10 @@ class WeixinChannel(ChannelBase):
                         logger.error("Login confirmed but no bot_token in response")
                         return False
                     self._token = token
-                    if status_data.get("baseurl"):
-                        self.config.base_url = status_data["baseurl"]
+                    if accepted := _operator_base(status_data.get("baseurl") or "", self.config.base_url):
+                        self._base_url = accepted
                     self._save_state()
+                    self.pending_qr = None
                     logger.info(
                         "login successful (bot_id={} user_id={})",
                         status_data.get("ilink_bot_id", ""),
@@ -204,17 +288,16 @@ class WeixinChannel(ChannelBase):
                     return True
                 if status == "scaned_but_redirect":
                     host = str(status_data.get("redirect_host", "") or "").strip()
-                    if host:
-                        redirected = host if host.startswith(("http://", "https://")) else f"https://{host}"
-                        if redirected != poll_base:
-                            poll_base = redirected
+                    if (redirected := _https_redirect_target(host, self.config.base_url)) and redirected != poll_base:
+                        poll_base = redirected
                 elif status == "expired":
                     refreshes += 1
                     if refreshes > p.MAX_QR_REFRESH_COUNT:
                         logger.warning("QR code expired too many times, giving up")
                         return False
                     qrcode_id, scan_url = await self._fetch_qr()
-                    poll_base = self.config.base_url
+                    self.pending_qr = scan_url
+                    poll_base = self._base_url
                     self._print_qr(scan_url)
                     continue
                 await asyncio.sleep(1)
@@ -236,7 +319,159 @@ class WeixinChannel(ChannelBase):
             return await self._qr_login()
         finally:
             self._running = False
+            self.pending_qr = None
             await self._close_client()
+
+    # ── rebinding a live channel ──────────────────────────────────────
+
+    def rebind_state(self) -> dict:
+        """Snapshot for a client drawing the rebind flow.
+
+        ``code_age_s`` rather than a deadline: the caller polls, so an age
+        survives a clock the two sides do not share. There is no server-side
+        threshold to compare it against -- iLink does not tell us a code's
+        lifetime -- so a client that wants to warn before an expiry picks its own.
+        """
+        code_at = float(self._rebind.get("code_at") or 0.0)
+        return {
+            "phase": str(self._rebind.get("phase") or "idle"),
+            "refreshes": int(self._rebind.get("refreshes") or 0),
+            "max_refreshes": p.MAX_QR_REFRESH_COUNT,
+            "code_age_s": round(max(0.0, time.time() - code_at), 1) if code_at else None,
+            "detail": str(self._rebind.get("detail") or ""),
+        }
+
+    async def begin_rebind(self) -> dict:
+        """Start pairing a different account, keeping the current one until the
+        new scan is confirmed.
+
+        The credential is *not* dropped up front. ``_fetch_qr`` and the status
+        poll are both unauthenticated, so a new code can be obtained and watched
+        while the live token keeps serving messages -- which means a reader who
+        closes the dialog, or never scans, loses nothing. The old flow deleted
+        ``account.json`` first and left the channel dead in exactly that case.
+
+        Refuses rather than races: one rebind at a time, and only on a channel
+        that is actually running (the loop below borrows the live client).
+        """
+        if self._rebind_task is not None and not self._rebind_task.done():
+            return {"started": False, "reason": "already_rebinding", **self.rebind_state()}
+        if not self._running or self._client is None:
+            return {"started": False, "reason": "not_running", **self.rebind_state()}
+        self._rebind = {"phase": "waiting", "refreshes": 0, "code_at": 0.0, "detail": ""}
+        self._rebind_task = asyncio.create_task(self._rebind_loop())
+        return {"started": True, "reason": "", **self.rebind_state()}
+
+    def cancel_rebind(self) -> dict:
+        """Stop waiting for a scan and keep the account that is paired now."""
+        task = self._rebind_task
+        if task is not None and not task.done():
+            task.cancel()
+        self.pending_qr = None
+        phase = str(self._rebind.get("phase") or "idle")
+        # `_rebind_loop` never parks on "expired" -- an expiry goes straight back
+        # to "waiting" with a higher count -- so these are the live phases.
+        if phase in {"waiting", "scanned"}:
+            self._rebind = {**self._rebind, "phase": "cancelled", "detail": ""}
+        return self.rebind_state()
+
+    async def _rebind_loop(self) -> None:
+        """Fetch a code, watch it, and swap the account only once confirmed."""
+        poll_base = self._base_url
+        try:
+            qrcode_id, scan_url = await self._fetch_qr()
+            self.pending_qr = scan_url
+            self._rebind = {**self._rebind, "phase": "waiting", "code_at": time.time()}
+            while self._running:
+                try:
+                    status_data = await self._get(
+                        "ilink/bot/get_qrcode_status",
+                        params={"qrcode": qrcode_id},
+                        base_url=poll_base,
+                        auth=False,
+                    )
+                except Exception as exc:
+                    if retryable_http(exc):
+                        await asyncio.sleep(1)
+                        continue
+                    raise
+                if not isinstance(status_data, dict):
+                    await asyncio.sleep(1)
+                    continue
+                status = status_data.get("status", "")
+                if status == "confirmed":
+                    token = status_data.get("bot_token", "")
+                    if not token:
+                        self._fail_rebind("no_token")
+                        return
+                    self._adopt_account(token, status_data.get("baseurl") or "")
+                    self._rebind = {**self._rebind, "phase": "confirmed", "detail": ""}
+                    self.pending_qr = None
+                    logger.info(
+                        "weixin rebound (bot_id={} user_id={})",
+                        status_data.get("ilink_bot_id", ""),
+                        status_data.get("ilink_user_id", ""),
+                    )
+                    return
+                if status == "scaned_but_redirect":
+                    host = str(status_data.get("redirect_host", "") or "").strip()
+                    if (redirected := _https_redirect_target(host, self.config.base_url)) and redirected != poll_base:
+                        poll_base = redirected
+                    self._rebind = {**self._rebind, "phase": "scanned"}
+                elif status == "expired":
+                    refreshes = int(self._rebind.get("refreshes") or 0) + 1
+                    if refreshes > p.MAX_QR_REFRESH_COUNT:
+                        self._fail_rebind("expired")
+                        return
+                    qrcode_id, scan_url = await self._fetch_qr()
+                    self.pending_qr = scan_url
+                    poll_base = self._base_url
+                    self._rebind = {**self._rebind, "phase": "waiting", "refreshes": refreshes, "code_at": time.time()}
+                    continue
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            self.pending_qr = None
+            raise
+        except Exception:
+            logger.exception("weixin rebind failed")
+            self._fail_rebind("error")
+
+    def _fail_rebind(self, detail: str) -> None:
+        """Give up, saying why, and leave the paired account untouched."""
+        self.pending_qr = None
+        self._rebind = {**self._rebind, "phase": "failed", "detail": detail}
+
+    def _adopt_account(self, token: str, base_url: str) -> None:
+        """Swap in a newly confirmed account and drop what belonged to the old one.
+
+        The token is read per request (``_headers``), so the running long poll
+        picks this up on its next call -- no restart. The cursor, the per-chat
+        context tokens and the typing tickets are all addressed by the *old*
+        account and would be rejected (or replay someone else's history) against
+        the new one, so they go with it.
+
+        One in-flight poll can still be carrying the old token when this runs (a
+        long poll parks for up to ~35s). That request finishes against the old
+        account, and anything it returns lands with no context token, so a reply
+        to it fails once and the chat recovers on its next inbound message. Not
+        worth stopping the loop over: cancelling mid-poll costs every chat the
+        same recovery, not just the ones that spoke inside that window.
+        """
+        self._token = token
+        if accepted := _operator_base(base_url, self.config.base_url):
+            self._base_url = accepted
+        self._updates_buf = ""
+        self._context_tokens = {}
+        self._typing.restore({})
+        self._seen.clear()
+        # The pause is the most account-specific state there is: it is set only
+        # from errcode -14 on the credential being replaced, and it gates both
+        # the poll and every send (`_assert_session_active`). Leaving it would
+        # make the likeliest reason to rebind -- WeChat killed the session --
+        # the one case where the new account receives and sends nothing for the
+        # rest of the hour, while the page says "effective now".
+        self._session_pause_until = 0.0
+        self._save_state()
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
@@ -286,6 +521,11 @@ class WeixinChannel(ChannelBase):
                     await asyncio.sleep(p.RETRY_DELAY_S)
 
     async def stop(self) -> None:
+        # A rebind outliving the channel either wakes to `_running == False` and
+        # leaves `pending_qr` set on a dead adapter, or hits the closed client
+        # and logs a traceback. Two lines here instead of either.
+        if self._rebind_task is not None and not self._rebind_task.done():
+            self._rebind_task.cancel()
         self._running = False
         await self._typing.stop_all()
         await self._close_client()
@@ -317,7 +557,11 @@ class WeixinChannel(ChannelBase):
 
     async def _poll_once(self) -> None:
         if (remaining := self._session_remaining_s()) > 0:
-            await asyncio.sleep(remaining)
+            # Bounded, not slept whole: a rebind confirmed one minute into the
+            # hour clears the pause, and a loop parked inside a 59-minute sleep
+            # would not notice until it woke. The tick costs one comparison a
+            # half-minute against a long poll that already runs ~35s.
+            await asyncio.sleep(min(remaining, _PAUSE_TICK_S))
             return
 
         assert self._client is not None
@@ -428,7 +672,7 @@ class WeixinChannel(ChannelBase):
             quoted.append(ref["title"])
         if ref_item and (rt := (ref_item.get("text_item") or {}).get("text", "")):
             quoted.append(rt)
-        return [f"[引用: {' | '.join(quoted)}]\n{text}" if quoted else text]
+        return [t("[quoted: {items}]\n{text}", items=" | ".join(quoted), text=text) if quoted else text]
 
     @staticmethod
     def _first_quoted_media(items: list[dict]) -> tuple[int, dict] | None:
@@ -580,7 +824,7 @@ class WeixinChannel(ChannelBase):
             await self._send_media_file(chat_id, path, ctx_token)
         except (httpx.TimeoutException, httpx.TransportError):
             logger.opt(exception=True).warning("Network error sending media {}", path)
-            raise  # let ChannelManager retry
+            raise  # let the delivery hub retry
         except httpx.HTTPStatusError as e:
             if e.response is not None and e.response.status_code >= 500:
                 logger.exception("Server error sending media {}", path)

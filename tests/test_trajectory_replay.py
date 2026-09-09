@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.trajectory.replay import (
     RecordedLLMCall,
@@ -577,29 +578,6 @@ async def test_run_replay_drives_the_loop_and_executes_nothing(tmp_path, monkeyp
     assert trace.enabled(), "suppression must not outlive the replay"
 
 
-async def test_run_replay_leaves_no_skill_watcher_threads(tmp_path) -> None:
-    """The loop's ContextBuilder starts a skill file watcher; a replay must
-    stop it, or repeated probes leak daemon threads that crash the process at
-    interpreter shutdown. Measured as a delta: other suites in the same
-    process may hold their own watcher threads."""
-    import threading
-
-    bundle = _make_bundle(
-        tmp_path,
-        llm_calls=[(None, _llm_output(content="done"))],
-        turns=[{"content": "go", "channel": "cli", "chat_id": "direct"}],
-    )
-    before = {t.ident for t in threading.enumerate() if t.name == "SkillFileWatcher"}
-
-    report = await run_replay(bundle, mode="warn")
-
-    assert report.complete
-    leaked = [
-        t for t in threading.enumerate() if t.name == "SkillFileWatcher" and t.is_alive() and t.ident not in before
-    ]
-    assert leaked == [], "a replay must not leave new skill watcher threads running"
-
-
 async def test_run_replay_flags_unconsumed_recording(tmp_path) -> None:
     """A harness that never asks for the rest of the recording diverged too:
     strict halts (exit path), warn records a non-fatal divergence."""
@@ -785,6 +763,10 @@ class _MarkerTool:
     name = "marker"
     description = "leaves a marker file"
     parameters = {"type": "object", "properties": {"note": {"type": "string"}}, "required": ["note"]}
+    # Three members Tool carries in this tree and upstream's stub predates: the
+    # registry reads `channels` when it builds the array, and the loop asks every
+    # call for its metadata owner. Same defaults as the base class.
+    channels = None
 
     def __init__(self, marker: Path):
         self._marker = marker
@@ -805,6 +787,15 @@ class _MarkerTool:
     blocking_interaction = False
     truncation_hint = None
     incomplete_hint = None
+
+    def metadata_owner(self, params):
+        return self
+
+    def take_metadata(self):
+        return None
+
+    def blocking_for(self, params) -> bool:
+        return self.blocking_interaction
 
     async def execute(self, note: str) -> str:
         self._marker.write_text(note, encoding="utf-8")
@@ -833,10 +824,9 @@ async def test_end_to_end_record_save_replay_with_real_tracer(tmp_path, monkeypa
             provider=_ScriptedProvider(),
             workspace=tmp_path / "ws",
             model="stub",
-            max_iterations=5,
-            restrict_to_workspace=True,
+            policy=TurnPolicy(max_iterations=5),
+            tools=ToolWiring(restrict_to_workspace=True),
         )
-        loop.context.skills.stop_file_watcher()
         loop.tools.register(_MarkerTool(marker))
         # Source identity and session key agree, as they do in every real
         # channel turn (the session key defaults to "<channel>:<chat_id>").
@@ -851,7 +841,7 @@ async def test_end_to_end_record_save_replay_with_real_tracer(tmp_path, monkeypa
         assert result is not None and result[0] == "all done"
         assert marker.read_text(encoding="utf-8") == "hi", "recording must have run the real tool"
 
-        attempt_id = next(iter(tstore.iter_spans(traces)))["traceId"]
+        attempt_id = next(iter(tstore.iter_spans(traces)))["attributes"]["attempt.id"]
         bundle = collect_bundle(attempt_id, state_dir=traces)
         marker.unlink()
         spans_before = (traces / "logs" / "audit-spans.log").read_text(encoding="utf-8")
@@ -891,10 +881,9 @@ async def test_end_to_end_replay_after_harness_change_diverges(tmp_path, monkeyp
             provider=_ScriptedProvider(),
             workspace=tmp_path / "ws",
             model="stub",
-            max_iterations=5,
-            restrict_to_workspace=True,
+            policy=TurnPolicy(max_iterations=5),
+            tools=ToolWiring(restrict_to_workspace=True),
         )
-        loop.context.skills.stop_file_watcher()
         loop.tools.register(_MarkerTool(tmp_path / "marker"))
         await loop._process_message(
             TurnRequest(
@@ -904,7 +893,7 @@ async def test_end_to_end_replay_after_harness_change_diverges(tmp_path, monkeyp
             ),
             session_key="cli:e2e-div",
         )
-        attempt_id = next(iter(tstore.iter_spans(traces)))["traceId"]
+        attempt_id = next(iter(tstore.iter_spans(traces)))["attributes"]["attempt.id"]
         bundle = collect_bundle(attempt_id, state_dir=traces)
 
         # Rewrite the recorded turn input so the live request diverges.
@@ -946,10 +935,9 @@ async def test_end_to_end_streamed_recording_replays_through_the_stream_path(tmp
             provider=_ScriptedProvider(),
             workspace=tmp_path / "ws",
             model="stub",
-            max_iterations=5,
-            restrict_to_workspace=True,
+            policy=TurnPolicy(max_iterations=5),
+            tools=ToolWiring(restrict_to_workspace=True),
         )
-        loop.context.skills.stop_file_watcher()
         loop.tools.register(_MarkerTool(marker))
         streamed_tokens: list[str] = []
 
@@ -969,7 +957,7 @@ async def test_end_to_end_streamed_recording_replays_through_the_stream_path(tmp
         recorded_spans = list(tstore.iter_spans(traces))
         assert any(s["attributes"].get("llm.stream") for s in recorded_spans), "recording must be streamed"
 
-        attempt_id = recorded_spans[0]["traceId"]
+        attempt_id = recorded_spans[0]["attributes"]["attempt.id"]
         bundle = collect_bundle(attempt_id, state_dir=traces)
         marker.unlink()
 
@@ -1034,10 +1022,9 @@ async def test_end_to_end_replay_restores_pre_attempt_history(tmp_path, monkeypa
             ),
             workspace=tmp_path / "ws",
             model="stub",
-            max_iterations=5,
-            restrict_to_workspace=True,
+            policy=TurnPolicy(max_iterations=5),
+            tools=ToolWiring(restrict_to_workspace=True),
         )
-        loop.context.skills.stop_file_watcher()
         loop.tools.register(_MarkerTool(marker))
 
         def req(text: str) -> TurnRequest:
@@ -1052,7 +1039,7 @@ async def test_end_to_end_replay_restores_pre_attempt_history(tmp_path, monkeypa
 
         # The second turn is its own single-turn attempt; bundle only it.
         last_span = list(tstore.iter_spans(traces))[-1]
-        bundle = collect_bundle(last_span["traceId"], state_dir=traces)
+        bundle = collect_bundle(last_span["attributes"]["attempt.id"], state_dir=traces)
         assert (bundle / "session.jsonl").is_file()
         marker.unlink()
 
@@ -1099,10 +1086,9 @@ async def test_end_to_end_replay_restores_history_when_first_input_repeats(tmp_p
             ),
             workspace=tmp_path / "ws",
             model="stub",
-            max_iterations=5,
-            restrict_to_workspace=True,
+            policy=TurnPolicy(max_iterations=5),
+            tools=ToolWiring(restrict_to_workspace=True),
         )
-        loop.context.skills.stop_file_watcher()
         loop.tools.register(_MarkerTool(marker))
 
         def req() -> TurnRequest:
@@ -1116,7 +1102,7 @@ async def test_end_to_end_replay_restores_history_when_first_input_repeats(tmp_p
         await loop._process_message(req(), session_key="cli:e2e-rep")
 
         last_span = list(tstore.iter_spans(traces))[-1]
-        bundle = collect_bundle(last_span["traceId"], state_dir=traces)
+        bundle = collect_bundle(last_span["attributes"]["attempt.id"], state_dir=traces)
         marker.unlink()
 
         report = await run_replay(bundle, mode="strict")

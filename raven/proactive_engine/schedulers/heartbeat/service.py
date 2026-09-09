@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine
 from loguru import logger
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.proactive_engine.system_events import SystemEvent, SystemEventQueue
     from raven.proactive_engine.wake import WakeScheduler
-    from raven.providers.base import LLMProvider
 
 _HEARTBEAT_TOOL = [
     {
@@ -64,7 +64,7 @@ class HeartbeatService:
 
     def __init__(
         self,
-        workspace: Path,
+        agent_home: Path,
         provider: LLMProvider,
         model: str,
         on_execute: Callable[[str], Coroutine[Any, Any, str]] | None = None,
@@ -74,7 +74,7 @@ class HeartbeatService:
         wake: WakeScheduler | None = None,
         system_events: SystemEventQueue | None = None,
     ):
-        self.workspace = workspace
+        self.agent_home = agent_home
         self.provider = provider
         self.model = model
         self.on_execute = on_execute
@@ -88,7 +88,7 @@ class HeartbeatService:
 
     @property
     def heartbeat_file(self) -> Path:
-        return self.workspace / "HEARTBEAT.md"
+        return self.agent_home / "HEARTBEAT.md"
 
     def _read_heartbeat_file(self) -> str | None:
         if self.heartbeat_file.exists():

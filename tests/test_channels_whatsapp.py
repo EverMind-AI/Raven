@@ -10,7 +10,7 @@ import pytest
 
 from raven.channels.adapters.whatsapp.bridge import load_or_create_bridge_token
 from raven.channels.adapters.whatsapp.channel import WhatsAppChannel
-from raven.config.schema import WhatsAppConfig
+from tests.conftest import make_channel_config
 
 
 def _make_channel(
@@ -22,7 +22,7 @@ def _make_channel(
         "raven.config.paths.get_runtime_subdir",
         lambda name: tmp_path / name,
     )
-    cfg = WhatsAppConfig(enabled=True, **cfg_overrides)
+    cfg = make_channel_config("whatsapp", enabled=True, **cfg_overrides)
     return WhatsAppChannel(cfg)
 
 
@@ -278,6 +278,30 @@ async def test_status_updates_connected(tmp_path, monkeypatch):
     assert ch._connected is False
 
 
+async def test_qr_message_sets_pending_qr_and_pairing_clears_it(tmp_path, monkeypatch):
+    """The bridge's qr message is what the web UI renders, and pairing has to
+    retract it -- a stale code would keep being served after login."""
+    ch = _make_channel(monkeypatch, tmp_path)
+    assert ch.pending_qr is None
+    assert ch.connected is False
+
+    await ch._handle_bridge_message(json.dumps({"type": "qr", "qr": "2@abc"}))
+    assert ch.pending_qr == "2@abc"
+    # Still unpaired while the code waits to be scanned.
+    assert ch.connected is False
+
+    await ch._handle_bridge_message(json.dumps({"type": "status", "status": "connected"}))
+    assert ch.pending_qr is None
+    assert ch.connected is True
+
+
+async def test_qr_message_accepts_the_code_field(tmp_path, monkeypatch):
+    """Older bridge builds spell the payload `code` rather than `qr`."""
+    ch = _make_channel(monkeypatch, tmp_path)
+    await ch._handle_bridge_message(json.dumps({"type": "qr", "code": "2@xyz"}))
+    assert ch.pending_qr == "2@xyz"
+
+
 async def test_invalid_json_is_ignored(tmp_path, monkeypatch):
     ch = _make_channel(monkeypatch, tmp_path)
     ch.intake.publish = AsyncMock()
@@ -389,3 +413,39 @@ def test_whatsapp_spec_declares_interactive_login_and_is_cheap():
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_the_bridge_reports_a_long_step_through_the_installed_progress(tmp_path, monkeypatch) -> None:
+    """The adapter owns no terminal: it announces npm install and tsc through
+    ``bridge.progress``, which the CLI login replaces with a spinner."""
+    import subprocess
+    from contextlib import contextmanager
+
+    from raven.channels.adapters.whatsapp import bridge
+
+    labels: list[str] = []
+
+    @contextmanager
+    def _record(label: str):
+        labels.append(label)
+        yield
+
+    install_dir = tmp_path / "bridge"
+    (install_dir / "src").mkdir(parents=True)
+    monkeypatch.setattr(bridge, "progress", _record)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: install_dir)
+    monkeypatch.setattr(bridge.shutil, "which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: None)
+
+    bridge.ensure_bridge_dir()
+
+    assert labels and any("npm install" in label for label in labels)
+    assert any("tsc" in label for label in labels)
+
+
+def test_the_default_progress_is_a_log_line_not_a_terminal(caplog) -> None:
+    from raven.channels.adapters.whatsapp import bridge
+
+    assert bridge.progress is bridge._log_progress
+    with bridge.progress("step"):
+        pass

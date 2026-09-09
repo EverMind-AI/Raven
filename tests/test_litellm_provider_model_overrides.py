@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from raven.providers.base import GenerationSettings
+from raven.contracts.llm_provider import GenerationSettings
 from raven.providers.litellm_provider import LiteLLMProvider
 
 
@@ -37,6 +37,34 @@ def _provider(model: str, overrides: dict[str, dict[str, Any]] | None = None) ->
     )
     provider.generation = GenerationSettings(temperature=0.1)
     return provider
+
+
+@pytest.mark.parametrize(
+    ("provider_name", "model", "api_base"),
+    [
+        ("minimax", "minimax/MiniMax-M3", "https://api.minimax.io/v1/"),
+        ("minimax_cn_api", "minimax-cn-api/MiniMax-M3", "https://api.minimaxi.com/v1/"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_minimax_api_base_drops_the_trailing_slash_before_litellm(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_name: str,
+    model: str,
+    api_base: str,
+) -> None:
+    seen = _capture(monkeypatch)
+    provider = LiteLLMProvider(
+        api_key="test-key",
+        api_base=api_base,
+        default_model=model,
+        provider_name=provider_name,
+    )
+
+    await provider.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert provider.api_base == api_base.rstrip("/")
+    assert seen[0]["api_base"] == api_base.rstrip("/")
 
 
 @pytest.mark.asyncio

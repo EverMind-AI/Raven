@@ -5,6 +5,7 @@ iLink connection / WeChat account required."""
 import asyncio
 import base64
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -12,12 +13,12 @@ import pytest
 from raven.channels.adapters.weixin import crypto
 from raven.channels.adapters.weixin import protocol as p
 from raven.channels.adapters.weixin.channel import WeixinChannel
-from raven.config.schema import WeixinConfig
+from tests.conftest import make_channel_config, with_channel_fields
 
 
 def _channel():
-    ch = WeixinChannel(WeixinConfig())
-    ch.config.allow_from = ["*"]
+    ch = WeixinChannel(make_channel_config("weixin"))
+    ch.config = with_channel_fields(ch.config, allow_from=["*"])
     ch.intake.set_submit(AsyncMock())
     return ch
 
@@ -132,7 +133,7 @@ def test_render_text_quoted_text_includes_quote():
         "ref_msg": {"title": "T", "message_item": {"type": p.ITEM_TEXT, "text_item": {"text": "orig"}}},
     }
     out = WeixinChannel._render_text_item(item)[0]
-    assert "引用" in out and "reply" in out and "orig" in out
+    assert "[quoted:" in out and "reply" in out and "orig" in out
 
 
 def test_typed_item():
@@ -242,7 +243,7 @@ def test_process_skips_bot_message():
 
 def test_process_denies_disallowed_sender():
     ch = _channel()
-    ch.config.allow_from = ["only"]
+    ch.config = with_channel_fields(ch.config, allow_from=["only"])
     msg = {
         "message_type": p.MESSAGE_TYPE_USER,
         "from_user_id": "other",
@@ -305,7 +306,7 @@ def test_authenticate_with_config_token_still_loads_state(tmp_path):
     seed._save_state()
 
     ch = _channel()
-    ch.config.token = "cfg-token"
+    ch.config = with_channel_fields(ch.config, token="cfg-token")
     ch._dir = lambda: tmp_path
     assert asyncio.run(ch._authenticate()) is True
     assert ch._token == "cfg-token"  # configured token wins
@@ -315,11 +316,77 @@ def test_authenticate_with_config_token_still_loads_state(tmp_path):
 
 def test_authenticate_falls_back_to_qr(monkeypatch):
     ch = _channel()
-    ch.config.token = ""
+    ch.config = with_channel_fields(ch.config, token="")
     ch._dir = lambda: __import__("pathlib").Path("/nonexistent/raven-test-dir")
     ch._qr_login = AsyncMock(return_value=True)
     assert asyncio.run(ch._authenticate()) is True
     ch._qr_login.assert_awaited_once()
+
+
+def _qr_login_channel(seen: list):
+    """A channel whose QR login is driven by stubs, recording pending_qr each
+    time a code is published so the set-then-clear order is observable."""
+    ch = _channel()
+    ch._running = True
+    ch._save_state = lambda: None
+    ch._print_qr = lambda url: seen.append(ch.pending_qr)
+    return ch
+
+
+def test_qr_login_publishes_the_code_then_clears_it_on_confirm():
+    """pending_qr is what the web UI polls: it has to appear as soon as the code
+    is fetched and be retracted the moment login is confirmed."""
+    seen: list = []
+    ch = _qr_login_channel(seen)
+    ch._fetch_qr = AsyncMock(return_value=("qid-1", "https://scan/1"))
+    ch._get = AsyncMock(return_value={"status": "confirmed", "bot_token": "tok-1"})
+
+    assert asyncio.run(ch._qr_login()) is True
+    assert seen == ["https://scan/1"]  # published while waiting for the scan
+    assert ch.pending_qr is None  # retracted on success
+    assert ch._token == "tok-1"
+    assert ch.connected is True
+
+
+def test_qr_login_republishes_the_code_after_expiry():
+    """An expired code is refetched; the stale one must not keep being served."""
+    seen: list = []
+    ch = _qr_login_channel(seen)
+    ch._fetch_qr = AsyncMock(side_effect=[("qid-1", "https://scan/1"), ("qid-2", "https://scan/2")])
+    ch._get = AsyncMock(side_effect=[{"status": "expired"}, {"status": "confirmed", "bot_token": "t"}])
+
+    assert asyncio.run(ch._qr_login()) is True
+    assert seen == ["https://scan/1", "https://scan/2"]
+    assert ch.pending_qr is None
+
+
+def test_qr_login_clears_the_code_when_it_gives_up():
+    """A failed login must not leave a dead code for the UI to render."""
+    seen: list = []
+    ch = _qr_login_channel(seen)
+    ch._fetch_qr = AsyncMock(return_value=("qid-1", "https://scan/1"))
+    # Confirmed but tokenless is the one failure path that returns rather than raises.
+    ch._get = AsyncMock(return_value={"status": "confirmed", "bot_token": ""})
+
+    assert asyncio.run(ch._qr_login()) is False
+    assert seen == ["https://scan/1"]
+    assert ch.connected is False
+
+
+def test_login_clears_a_pending_code_on_the_way_out():
+    """login()'s finally is the backstop: whatever _qr_login left behind, the
+    channel must not still be advertising a code once the flow is over."""
+    ch = _channel()
+    ch.config = with_channel_fields(ch.config, token="")
+    ch._load_state = lambda: False
+
+    async def _leaves_a_code():
+        ch.pending_qr = "https://scan/stale"
+        return False
+
+    ch._qr_login = _leaves_a_code
+    assert asyncio.run(ch.login()) is False
+    assert ch.pending_qr is None
 
 
 # ── media item rendering (download mocked) ────────────────────────────
@@ -494,3 +561,236 @@ def test_weixin_spec_declares_interactive_login_and_is_cheap():
 def test_download_media_non_image_requires_key():
     # Locator present but no AES key, non-image type -> bail before network.
     assert asyncio.run(_channel()._download_media({"media": {"full_url": "u"}}, "voice")) is None
+
+
+# ── rebinding a live channel to a different account ───────────────────
+#
+# The property these pin is that the paired account survives everything except a
+# confirmed scan. The flow this replaces deleted `account.json` before fetching a
+# code, so a reader who closed the dialog -- or simply never scanned -- came back
+# to a channel that could not receive at all and no longer said why.
+
+
+def _live_channel(tmp_path, *, token="old-token"):
+    """A channel that believes it is running, with an account already paired."""
+    ch = _channel()
+    ch._state_dir = tmp_path
+    ch._token = token
+    ch._updates_buf = "cursor-of-the-old-account"
+    ch._context_tokens = {"user-a": "ctx-a"}
+    ch._running = True
+    ch._client = object()  # begin_rebind only checks that one exists
+    return ch
+
+
+def _qr_statuses(ch, statuses):
+    """Drive `_rebind_loop` off a scripted status sequence, one per poll."""
+    seq = list(statuses)
+    ch._fetch_qr = AsyncMock(side_effect=lambda: ("qid-%d" % len(seq), "https://scan/%d" % len(seq)))
+
+    async def _get(endpoint, params=None, *, base_url=None, auth=True):
+        return seq.pop(0) if seq else {"status": "waiting"}
+
+    ch._get = _get
+    return ch
+
+
+async def test_rebind_keeps_the_paired_account_until_a_scan_is_confirmed(tmp_path):
+    ch = _qr_statuses(_live_channel(tmp_path), [{"status": "waiting"}, {"status": "waiting"}])
+    started = await ch.begin_rebind()
+    assert started["started"] is True
+    await asyncio.sleep(0.05)
+
+    # A code is on offer and the old account is still the one serving messages.
+    assert ch.pending_qr and ch.pending_qr.startswith("https://scan/")
+    assert ch.rebind_state()["phase"] == "waiting"
+    assert ch._token == "old-token"
+    assert ch._updates_buf == "cursor-of-the-old-account"
+    assert not (tmp_path / "account.json").exists(), "nothing may be written before a confirmation"
+    ch.cancel_rebind()
+
+
+async def test_a_confirmed_scan_swaps_the_account_and_drops_the_old_one_s_state(tmp_path):
+    ch = _qr_statuses(
+        _live_channel(tmp_path),
+        [{"status": "confirmed", "bot_token": "new-token", "baseurl": "https://new.weixin.qq.com"}],
+    )
+    await ch.begin_rebind()
+    for _ in range(40):
+        if ch.rebind_state()["phase"] == "confirmed":
+            break
+        await asyncio.sleep(0.02)
+
+    assert ch.rebind_state()["phase"] == "confirmed"
+    assert ch._token == "new-token"
+    assert ch._base_url == "https://new.weixin.qq.com"
+    # Everything addressed by the previous account goes with it: a stale cursor
+    # replays someone else's history, and a stale context token is rejected.
+    assert ch._updates_buf == ""
+    assert ch._context_tokens == {}
+    assert ch.pending_qr is None
+    assert "new-token" in (tmp_path / "account.json").read_text()
+    # No restart: the token is read per request, so the running poll picks it up.
+    assert ch._running is True
+
+
+async def test_giving_up_after_too_many_expiries_leaves_the_account_paired(tmp_path):
+    expired = [{"status": "expired"}] * (p.MAX_QR_REFRESH_COUNT + 1)
+    ch = _qr_statuses(_live_channel(tmp_path), expired)
+    await ch.begin_rebind()
+    for _ in range(60):
+        if ch.rebind_state()["phase"] == "failed":
+            break
+        await asyncio.sleep(0.02)
+
+    state = ch.rebind_state()
+    assert state["phase"] == "failed"
+    assert state["detail"] == "expired"
+    # The count is codes actually reissued, so it stops at the cap: the expiry
+    # that pushes past it ends the flow instead of buying another code.
+    assert state["refreshes"] == p.MAX_QR_REFRESH_COUNT
+    assert ch._token == "old-token", "a code nobody scanned must not cost the account"
+    assert ch.pending_qr is None
+
+
+async def test_a_second_rebind_is_refused_rather_than_racing_the_first(tmp_path):
+    ch = _qr_statuses(_live_channel(tmp_path), [{"status": "waiting"}])
+    assert (await ch.begin_rebind())["started"] is True
+    await asyncio.sleep(0.02)
+    second = await ch.begin_rebind()
+    assert second["started"] is False
+    assert second["reason"] == "already_rebinding"
+    ch.cancel_rebind()
+
+
+async def test_rebind_is_refused_on_a_channel_that_is_not_running(tmp_path):
+    ch = _live_channel(tmp_path)
+    ch._running = False
+    out = await ch.begin_rebind()
+    assert out == {"started": False, "reason": "not_running", **ch.rebind_state()}
+    assert ch.pending_qr is None
+
+
+async def test_cancelling_keeps_the_current_account_and_clears_the_code(tmp_path):
+    ch = _qr_statuses(_live_channel(tmp_path), [{"status": "waiting"}])
+    await ch.begin_rebind()
+    await asyncio.sleep(0.05)
+    assert ch.pending_qr is not None
+
+    state = ch.cancel_rebind()
+    assert state["phase"] == "cancelled"
+    assert ch.pending_qr is None
+    assert ch._token == "old-token"
+    await asyncio.sleep(0.02)  # let the cancellation land
+    assert ch._rebind_task is None or ch._rebind_task.cancelled() or ch._rebind_task.done()
+
+
+async def test_a_rebind_out_of_a_session_pause_starts_receiving_immediately(tmp_path):
+    """The likeliest reason to rebind is that WeChat killed the session.
+
+    `errcode -14` parks the poll for an hour and also makes every send raise
+    (`_assert_session_active`). That pause belongs to the credential being
+    replaced, so a confirmed rebind that left it in place would report "effective
+    now" and then receive and send nothing for the rest of the hour.
+    """
+    ch = _qr_statuses(_live_channel(tmp_path), [{"status": "confirmed", "bot_token": "new-token"}])
+    ch._session_pause_until = time.time() + p.SESSION_PAUSE_DURATION_S
+    assert ch._session_remaining_s() > 3000
+
+    await ch.begin_rebind()
+    for _ in range(40):
+        if ch.rebind_state()["phase"] == "confirmed":
+            break
+        await asyncio.sleep(0.02)
+    assert ch._token == "new-token"
+    assert ch._session_remaining_s() == 0, "the new account inherited the old one's pause"
+    ch._assert_session_active()  # raises if the pause survived
+
+    # And the parked loop actually reaches the wire: _poll_once sleeps the pause
+    # in bounded ticks, so clearing it is not swallowed by a 59-minute sleep.
+    posted: list[str] = []
+
+    async def _post(endpoint, body=None, **kw):
+        posted.append(endpoint)
+        return {"ret": 0, "errcode": 0}
+
+    ch._post = _post
+    ch._client = SimpleNamespace(timeout=None)  # _poll_once sets .timeout before posting
+    await ch._poll_once()
+    assert posted == ["ilink/bot/getupdates"]
+
+
+async def test_a_pause_is_slept_in_bounded_ticks_not_in_one_hour(tmp_path):
+    """Clearing the pause is only half of it: a loop already inside one long
+    sleep would not notice until it woke."""
+    ch = _live_channel(tmp_path)
+    ch._session_pause_until = time.time() + p.SESSION_PAUSE_DURATION_S
+    slept: list[float] = []
+
+    async def _sleep(seconds):
+        slept.append(seconds)
+
+    import raven.channels.adapters.weixin.channel as mod
+
+    real = mod.asyncio.sleep
+    mod.asyncio.sleep = _sleep
+    try:
+        await ch._poll_once()
+    finally:
+        mod.asyncio.sleep = real
+    assert slept and slept[0] <= 60, f"parked for {slept[0]}s; a rebind cannot interrupt that"
+
+
+async def test_stopping_the_channel_cancels_a_rebind_in_flight(tmp_path):
+    ch = _qr_statuses(_live_channel(tmp_path), [{"status": "waiting"}])
+    await ch.begin_rebind()
+    await asyncio.sleep(0.05)
+    task = ch._rebind_task
+    assert task is not None and not task.done()
+
+    ch._typing.stop_all = AsyncMock()
+    ch._close_client = AsyncMock()
+    ch._save_state = lambda: None
+    await ch.stop()
+    await asyncio.sleep(0.02)
+    assert task.cancelled() or task.done(), "a rebind outliving the channel logs a traceback"
+
+
+@pytest.mark.parametrize(
+    "given,expected",
+    [
+        ("", ""),
+        ("   ", ""),
+        ("http://evil.test", ""),
+        ("HTTP://evil.test", ""),
+        ("https://ok.test", ""),
+        ("https://new.weixin.qq.com", "https://new.weixin.qq.com"),
+        ("HTTPS://new.weixin.qq.com", "HTTPS://new.weixin.qq.com"),
+        ("bare.weixin.qq.com", "https://bare.weixin.qq.com"),
+        ("https://weixin.qq.com.evil.test", ""),
+    ],
+)
+def test_a_response_cannot_move_polling_off_the_operator_or_to_plaintext(given: str, expected: str) -> None:
+    """The login exchange this poll carries is what a bot token comes out of: it
+    may move to another host of the configured operator over https and nowhere
+    else. An empty answer leaves the caller on the base it already had."""
+    from raven.channels.adapters.weixin.channel import _https_redirect_target
+
+    assert _https_redirect_target(given, "https://ilinkai.weixin.qq.com") == expected
+
+
+async def test_a_confirmed_scan_does_not_move_polling_to_another_operator(tmp_path):
+    ch = _qr_statuses(
+        _live_channel(tmp_path),
+        [{"status": "confirmed", "bot_token": "new-token", "baseurl": "https://new.example"}],
+    )
+    before = ch._base_url
+    await ch.begin_rebind()
+    for _ in range(40):
+        if ch.rebind_state()["phase"] == "confirmed":
+            break
+        await asyncio.sleep(0.02)
+
+    assert ch.rebind_state()["phase"] == "confirmed"
+    assert ch._token == "new-token"
+    assert ch._base_url == before, "a base outside the configured operator is not adopted"

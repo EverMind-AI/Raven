@@ -16,11 +16,16 @@ the engine (``_uses_default_engine`` is always True), and
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from raven.agent.context import ContextBuilder
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import EngineWiring, SubagentWiring, ToolWiring, TurnPolicy
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.config.raven import (
     ContextConfig,
     HubSourceConfig,
@@ -28,10 +33,17 @@ from raven.config.raven import (
     SkillForgeConfig,
     SkillForgeRouterConfig,
 )
+from raven.config.schema import SubagentsConfig
 from raven.context_engine import ContextAssembler
 from raven.context_engine.factory import build_context_engine
-from raven.context_engine.segments import MemorySegmentBuilder, SkillsSegmentBuilder
+from raven.context_engine.segments import (
+    IdentitySegmentBuilder,
+    MemorySegmentBuilder,
+    SkillsSegmentBuilder,
+)
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
+from raven.contracts.assembled import TokenBudget
+from raven.contracts.context import AssemblyContext
 from raven.memory_engine.skill_forge import (
     EverosSkillSource,
     HubSkillSource,
@@ -103,7 +115,9 @@ def _build_engine(
             hub=HubSourceConfig(endpoint=hub_endpoint),
             **({} if rrf_k is None else {"rrf_k": rrf_k}),
         ),
-        skill_forge_config=skill_forge_config,
+        # Most assertions in this file exercise the push pipeline's wiring;
+        # pull-mode wiring has its own tests below.
+        skill_forge_config=skill_forge_config or SkillForgeConfig(discovery="push"),
     )
     assert isinstance(engine, ContextAssembler)
     return engine
@@ -232,7 +246,7 @@ class TestRewriterGateModelWiring:
         engine = _build_engine(
             tmp_path,
             model="main-model",
-            skill_forge_config=SkillForgeConfig(rewrite_enabled=True, llm_gate_enabled=False),
+            skill_forge_config=SkillForgeConfig(discovery="push", rewrite_enabled=True, llm_gate_enabled=False),
         )
         skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
         assert not hasattr(skills._rewriter, "_model")
@@ -243,7 +257,9 @@ class TestRewriterGateModelWiring:
         engine = _build_engine(
             tmp_path,
             model="main-model",
-            skill_forge_config=SkillForgeConfig(rewrite_enabled=False, llm_gate_enabled=True, llm_gate_model=None),
+            skill_forge_config=SkillForgeConfig(
+                discovery="push", rewrite_enabled=False, llm_gate_enabled=True, llm_gate_model=None
+            ),
         )
         skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
         assert skills._gate._model is None
@@ -253,6 +269,7 @@ class TestRewriterGateModelWiring:
             tmp_path,
             model="main-model",
             skill_forge_config=SkillForgeConfig(
+                discovery="push",
                 rewrite_enabled=False,
                 llm_gate_enabled=True,
                 llm_gate_model="gate-only-model",
@@ -267,18 +284,62 @@ class TestRewriterGateModelWiring:
 # ---------------------------------------------------------------------------
 
 
-def _make_loop(tmp_path: Path, *, backend=None) -> AgentLoop:
+def _make_loop(tmp_path: Path, *, backend=None, agents=None, skill_forge_config=None) -> AgentLoop:
     return AgentLoop(
         provider=_StubProvider(),
         workspace=tmp_path,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        backend=backend,
-        context_config=ContextConfig(),
-        memory_config=MemoryConfig(),
-        skill_forge_router_config=SkillForgeRouterConfig(),
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(
+            backend=backend,
+            context_config=ContextConfig(),
+            memory_config=MemoryConfig(),
+            skill_forge_router_config=SkillForgeRouterConfig(),
+            skill_forge_config=skill_forge_config,
+        ),
+        subagents=SubagentWiring(agents=agents),
     )
+
+
+class TestSubagentRosterReachesTheGate:
+    """The join the segment-builder stubs cannot make: a real agent table, read
+    through the real builder. The roster is collected lazily because the loop
+    builds its context engine before its ``SubagentManager`` exists, so a
+    snapshot taken at wiring time would be empty every run.
+
+    Push discovery, explicitly: pull is the default and builds no skills
+    segment at all, so there is no gate there to hand a roster to."""
+
+    @staticmethod
+    def _push(tmp_path: Path, agents) -> AgentLoop:
+        return _make_loop(tmp_path, agents=agents, skill_forge_config=SkillForgeConfig(discovery="push"))
+
+    def test_a_configured_specialist_reaches_the_gate(self, tmp_path: Path) -> None:
+        agents = SubagentsConfig(
+            agents=[
+                {
+                    "name": "Scribe",
+                    "kind": "cli",
+                    "command": "echo hi",
+                    "description": "turns a source document into a deck",
+                }
+            ]
+        ).agents
+        agent = self._push(tmp_path, agents)
+        skills = next(b for b in agent.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
+        roster = skills._collect_subagent_roster()
+        assert roster is not None
+        assert "Scribe" in roster
+        assert "turns a source document into a deck" in roster
+
+    def test_the_generic_agent_is_not_offered_as_an_overlap(self, tmp_path: Path) -> None:
+        agents = SubagentsConfig(agents=[{"name": "Scribe", "kind": "cli", "command": "echo hi"}]).agents
+        agent = self._push(tmp_path, agents)
+        skills = next(b for b in agent.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
+        roster = skills._collect_subagent_roster() or ""
+        assert "Scribe" in roster
+        assert "no capability bias" not in roster
 
 
 class TestAgentLoopEngineDetection:
@@ -319,9 +380,8 @@ class TestInjectedIdsFromMetadata:
 
 
 # ---------------------------------------------------------------------------
-# SF6: AgentLoop.refresh_context_window must cascade into the Curator's
-# trimmer and the MemoryConsolidator, not just AgentLoop.context_window_tokens
-# -- both are built once at construction and hold a snapshot int.
+# SF6: the window every holder reads must be the bound model's, not a copy
+# taken when the holder was built.
 # ---------------------------------------------------------------------------
 
 
@@ -371,12 +431,14 @@ class TestTheWindowFollowsTheTurnsBinding:
             provider=_StubProvider(),
             workspace=tmp_path,
             model="stub",
-            max_iterations=2,
-            restrict_to_workspace=True,
-            context_window_tokens=8192,
-            context_config=ContextConfig(),
-            memory_config=MemoryConfig(),
-            skill_forge_router_config=SkillForgeRouterConfig(),
+            policy=TurnPolicy(max_iterations=2),
+            tools=ToolWiring(restrict_to_workspace=True),
+            engine=EngineWiring(
+                context_window_tokens=8192,
+                context_config=ContextConfig(),
+                memory_config=MemoryConfig(),
+                skill_forge_router_config=SkillForgeRouterConfig(),
+            ),
         )
         curator = _curator_builder(agent.context_engine)
 
@@ -385,3 +447,172 @@ class TestTheWindowFollowsTheTurnsBinding:
             assert curator.context_window_tokens == 8192
             assert curator.assembler.trimmer.context_window_tokens == 8192
             assert agent.memory_consolidator.context_window_tokens == 8192
+
+
+# ---------------------------------------------------------------------------
+# Pull discovery (the default): no skills segment, scent + router exposed
+# ---------------------------------------------------------------------------
+
+
+def test_pull_default_drops_the_skills_segment_and_wires_scent(tmp_path):
+    engine = _build_engine(tmp_path, skill_forge_config=SkillForgeConfig())
+    assert not any(isinstance(b, SkillsSegmentBuilder) for b in engine._builders)
+    assert engine._scent is not None
+    assert engine.skills_router is not None
+
+
+def test_push_config_restores_the_legacy_pipeline(tmp_path):
+    engine = _build_engine(tmp_path, skill_forge_config=SkillForgeConfig(discovery="push"))
+    assert any(isinstance(b, SkillsSegmentBuilder) for b in engine._builders)
+    assert engine._scent is None
+    assert engine.skills_router is not None
+
+
+# ---------------------------------------------------------------------------
+# Ownership reaching the identity prompt, and the paths it depends on
+# ---------------------------------------------------------------------------
+
+
+def _assembly_ctx() -> AssemblyContext:
+    return AssemblyContext(
+        session_key="s",
+        current_message="hi",
+        media=None,
+        channel=None,
+        chat_id=None,
+        session_messages=[],
+        budget=TokenBudget(100_000, 4_000, 2_000, 1_000, 93_000),
+    )
+
+
+class TestOwnershipReachesTheIdentityPrompt:
+    """The join no stub can make: a real config row, through the real registry,
+    into the assembled prompt -- and a real tool table deciding whether the
+    prohibition it carries is one the model can act on."""
+
+    OWNS = "owns decks. Do not build the deck yourself."
+
+    @pytest.fixture(autouse=True)
+    def _isolated_switches(self, tmp_path: Path, monkeypatch) -> None:
+        """Point the live off-switch read at a file of our own.
+
+        Every case here goes through the real tool table, which reads
+        ``tools.disabledTools`` from whatever config file is current -- so without
+        this they consult the developer's own ``~/.raven/config.json``, and a
+        locally disabled ``spawn`` makes them red on one machine and green in CI.
+        """
+        self._switches = tmp_path / "config.json"
+        self._disable()
+        monkeypatch.setattr("raven.home._current_config_path", self._switches)
+
+    def _disable(self, *names: str) -> None:
+        self._switches.write_text(json.dumps({"tools": {"disabledTools": list(names)}}), encoding="utf-8")
+
+    @staticmethod
+    def _identity(agent: AgentLoop) -> IdentitySegmentBuilder:
+        return next(b for b in agent.context_engine._builders if isinstance(b, IdentitySegmentBuilder))
+
+    async def _text(self, agent: AgentLoop) -> str:
+        return (await self._identity(agent).build(_assembly_ctx())).text
+
+    def _scribe(self, kind: str = "cli") -> list:
+        row = {"name": "Scribe", "kind": kind, "owns": self.OWNS}
+        if kind == "cli":
+            row["command"] = "echo hi"
+        return SubagentsConfig(agents=[row]).agents
+
+    async def test_a_custom_builtin_specialist_gets_its_line(self, tmp_path: Path) -> None:
+        """A built-in row is on the same dispatchable table as an external one, so
+        narrowing one into a specialist has to be declarable the same way."""
+        assert f"`Scribe` {self.OWNS}" in await self._text(_make_loop(tmp_path, agents=self._scribe("builtin")))
+
+    async def test_an_external_specialist_gets_its_line(self, tmp_path: Path) -> None:
+        """Regression guard for the path that already worked, not a proof of the
+        fix: this one is green on either side of it."""
+        assert f"`Scribe` {self.OWNS}" in await self._text(_make_loop(tmp_path, agents=self._scribe()))
+
+    async def test_ownership_on_the_generic_row_claims_nothing(self, tmp_path: Path) -> None:
+        """Paired with a real specialist so the absence is selective: asserting
+        only that the claim is missing would also pass on an install where the
+        whole section failed to render."""
+        agents = SubagentsConfig(
+            agents=[
+                {"name": GENERIC_AGENT, "kind": "builtin", "owns": "owns everything. Do not do anything yourself."},
+                {"name": "Scribe", "kind": "cli", "command": "echo hi", "owns": self.OWNS},
+            ]
+        ).agents
+        text = await self._text(_make_loop(tmp_path, agents=agents))
+        assert f"`Scribe` {self.OWNS}" in text
+        assert "owns everything" not in text
+
+    async def test_withholding_every_dispatch_path_retires_the_prohibition(self, tmp_path: Path) -> None:
+        """Read from the file per turn, so a switch flipped on the settings page
+        takes the section away and putting it back brings it back -- without which
+        the prompt forbids work the turn has no way to hand off."""
+        agent = _make_loop(tmp_path, agents=self._scribe())
+        offered = {d["function"]["name"] for d in agent.tools.get_definitions()}
+        assert {"spawn", "run_subagent_dag"} <= offered
+
+        assert "## Delegation" in await self._text(agent)
+
+        self._disable("spawn", "run_subagent_dag")
+        assert "## Delegation" not in await self._text(agent)
+
+        self._disable()
+        assert "## Delegation" in await self._text(agent)
+
+    async def test_withholding_the_whole_tool_table_retires_it_too(self, tmp_path: Path) -> None:
+        """Naming the two dispatch tools is not the only way to reach zero live
+        paths. Withholding every registered tool reaches it through a successful
+        but empty lookup, which the gate first shipped reporting as both paths
+        live -- so the prohibition survived on a turn offering no tools at all.
+        """
+        agent = _make_loop(tmp_path, agents=self._scribe())
+        every = sorted({d["function"]["name"] for d in agent.tools.get_definitions()})
+        assert {"spawn", "run_subagent_dag"} <= set(every)
+        assert "## Delegation" in await self._text(agent)
+
+        self._disable(*every)
+        assert agent.tools.get_definitions() == []
+        assert "## Delegation" not in await self._text(agent)
+
+    async def test_withholding_one_path_keeps_the_other_named(self, tmp_path: Path) -> None:
+        self._disable("spawn")
+        text = await self._text(_make_loop(tmp_path, agents=self._scribe()))
+        assert f"`Scribe` {self.OWNS}" in text
+        assert "`run_subagent_dag`" in text
+        assert "`spawn`" not in text
+
+
+# ---------------------------------------------------------------------------
+# context.dropSegments
+# ---------------------------------------------------------------------------
+
+
+def _engine_with(tmp_path: Path, config: ContextConfig) -> ContextAssembler:
+    return build_context_engine(
+        workspace=tmp_path,
+        config=config,
+        builder=ContextBuilder(workspace=tmp_path),
+        provider=_StubProvider(),
+        model="stub",
+        context_window_tokens=8192,
+        get_tool_definitions=_stub_get_defs,
+        memory_config=MemoryConfig(),
+        skill_forge_router_config=SkillForgeRouterConfig(hub=HubSourceConfig(endpoint=None)),
+        skill_forge_config=SkillForgeConfig(discovery="push"),
+    )
+
+
+def test_a_product_drops_the_host_segments_it_names(tmp_path: Path) -> None:
+    full = [b.name for b in _engine_with(tmp_path, ContextConfig())._builders]
+    assert full[:2] == ["identity", "bootstrap"] and "memory" in full and "curator" in full
+
+    slim = [b.name for b in _engine_with(tmp_path, ContextConfig(drop_segments=["identity", "memory"]))._builders]
+    assert "identity" not in slim and "memory" not in slim
+    assert slim == [n for n in full if n not in ("identity", "memory")], "order and the rest untouched"
+
+
+def test_an_unknown_segment_name_drops_nothing(tmp_path: Path) -> None:
+    full = [b.name for b in _engine_with(tmp_path, ContextConfig())._builders]
+    assert [b.name for b in _engine_with(tmp_path, ContextConfig(drop_segments=["nope"]))._builders] == full

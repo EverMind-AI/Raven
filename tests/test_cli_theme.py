@@ -163,8 +163,6 @@ def test_dark_questionary_style_byte_identical():
         "disabled": "fg:#585858 italic",
         "validation-toolbar": "fg:#ff5f5f bold",
         "text": "fg:#FFF5EA",
-        "success": "fg:#3fb950",
-        "help": "fg:#9e9e9e",
     }
     got = dict(_theme.build_questionary_style("dark").style_rules)
     assert got == expected
@@ -181,24 +179,14 @@ def test_light_text_is_not_a_light_color():
     assert rules["highlighted"] == "fg:#24201a bold noreverse"
 
 
-@pytest.mark.parametrize(
-    "token", ["accent", "text", "selected", "border", "muted", "error", "disabled", "success", "help"]
-)
+@pytest.mark.parametrize("token", ["accent", "text", "selected", "border", "muted", "error", "disabled"])
 def test_light_body_tokens_pass_wcag_on_white(token):
     assert _wcag_contrast(_theme.PALETTE["light"][token], "#ffffff") >= 4.5
 
 
-@pytest.mark.parametrize("token", ["accent", "text", "selected", "error", "success", "help"])
+@pytest.mark.parametrize("token", ["accent", "text", "selected", "error"])
 def test_dark_body_tokens_pass_wcag_on_black(token):
     assert _wcag_contrast(_theme.PALETTE["dark"][token], "#1e1e1e") >= 4.5
-
-
-@pytest.mark.parametrize("scheme", ["light", "dark"])
-@pytest.mark.parametrize("token", ["success", "help"])
-def test_added_tokens_mapped_in_both_faces(scheme, token):
-    hex_val = _theme.PALETTE[scheme][token]
-    assert dict(_theme.build_questionary_style(scheme).style_rules)[token] == f"fg:{hex_val}"
-    assert str(_theme.build_rich_theme(scheme).styles[token]) == hex_val
 
 
 # --- reduced color depth readability (D1 sentinel) ----------------------------
@@ -226,12 +214,13 @@ def test_rich_theme_defines_all_onboard_tokens():
     import re
     from pathlib import Path
 
-    src = Path(__file__).resolve().parents[1] / "raven" / "cli" / "onboard_commands.py"
-    tree = ast.parse(src.read_text(encoding="utf-8"))
+    cli = Path(__file__).resolve().parents[1] / "raven" / "cli"
     literals: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            literals.append(node.value)
+    for name in ("onboard_commands.py", "_onboard_shared.py"):
+        tree = ast.parse((cli / name).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                literals.append(node.value)
     blob = "\n".join(literals)
     # negative lookbehind skips rich-escaped brackets like ``\[sandbox]``
     tags = set(re.findall(r"(?<!\\)\[/?([a-z]+(?: [a-z]+)?)\]", blob))
@@ -249,7 +238,11 @@ def test_onboard_panels_render_without_missing_style(scheme):
     from rich.table import Table
 
     theme = _theme.build_rich_theme(scheme)
-    console = Console(theme=theme, file=io.StringIO(), force_terminal=True)
+    # color_system pinned: rich caches a resolved Style on its lru_cache, so a
+    # Console left to downgrade to 8-bit here poisons that cache for the
+    # truecolor assertion further down this file. This test only checks that
+    # nothing raises MissingStyle, so the depth is free to pin.
+    console = Console(theme=theme, file=io.StringIO(), force_terminal=True, color_system="truecolor")
     console.print("[accent]x[/accent] [bold][accent]y[/accent][/bold] [heading]z[/heading]")
     console.print(Panel("b", title="[bold][accent]t[/accent][/bold]", border_style="border"))
     console.print(Panel("recap", border_style="#8a6d00"))  # preserved literal
@@ -260,19 +253,7 @@ def test_onboard_panels_render_without_missing_style(scheme):
     console.print(table)  # would raise MissingStyle if 'accent' unresolved
 
 
-_THEME_KEYS = {
-    "accent",
-    "text",
-    "heading",
-    "selected",
-    "border",
-    "muted",
-    "separator",
-    "disabled",
-    "error",
-    "success",
-    "help",
-}
+_THEME_KEYS = {"accent", "text", "heading", "selected", "border", "muted", "separator", "disabled", "error"}
 
 
 def test_no_compound_markup_mixes_theme_key():
@@ -285,9 +266,13 @@ def test_no_compound_markup_mixes_theme_key():
     import re
     from pathlib import Path
 
-    src = Path(__file__).resolve().parents[1] / "raven" / "cli" / "onboard_commands.py"
-    tree = ast.parse(src.read_text(encoding="utf-8"))
-    literals = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    cli = Path(__file__).resolve().parents[1] / "raven" / "cli"
+    literals = [
+        n.value
+        for name in ("onboard_commands.py", "_onboard_shared.py")
+        for n in ast.walk(ast.parse((cli / name).read_text(encoding="utf-8")))
+        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+    ]
     blob = "\n".join(literals)
     bad = set()
     for tag in re.findall(r"(?<!\\)\[/?([a-z][a-z ]*)\]", blob):
@@ -317,7 +302,7 @@ def test_themed_console_self_themes_on_first_print():
     """
     from rich.panel import Panel
 
-    from raven.cli.onboard_commands import _ThemedConsole
+    from raven.cli._onboard_shared import _ThemedConsole
 
     con = _ThemedConsole(file=io.StringIO(), force_terminal=True)
     assert con._themed is False

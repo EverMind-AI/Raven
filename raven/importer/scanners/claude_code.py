@@ -11,6 +11,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.i18n import t_in
 from raven.importer.types import (
     ImportMessage,
     ImportSession,
@@ -27,52 +28,26 @@ _APP_ID = "claude_code"
 
 _SKIP_CONTENT_TYPES = frozenset({"thinking", "redacted_thinking"})
 
-_INTRO_TEMPLATES: dict[str | None, tuple[str, str]] = {
-    "MEMORY.MD": (
-        "以下是项目记忆总览文件 {filename}",
-        "Here is the project memory overview file named {filename}",
-    ),
-    "reference": (
-        "以下是关于 {name} 的项目知识，文件 {filename}",
-        "Here is project knowledge about {name}, file named {filename}",
-    ),
-    "feedback": (
-        "以下是我对 AI 协作的偏好——{name}，文件 {filename}",
-        "Here is my preference for AI collaboration -- {name}, file named {filename}",
-    ),
-    "project": (
-        "以下是关于 {name} 的项目笔记，文件 {filename}",
-        "Here is a project note about {name}, file named {filename}",
-    ),
-    None: (
-        "以下是关于 {name} 的笔记，文件 {filename}",
-        "Here is a note about {name}, file named {filename}",
-    ),
+_INTRO_TEMPLATES: dict[str | None, str] = {
+    "MEMORY.MD": "Here is the project memory overview file named {filename}",
+    "reference": "Here is project knowledge about {name}, file named {filename}",
+    "feedback": "Here is my preference for AI collaboration -- {name}, file named {filename}",
+    "project": "Here is a project note about {name}, file named {filename}",
+    None: "Here is a note about {name}, file named {filename}",
 }
 
-_FILE_END_TEMPLATES = (
-    "{filename} 的内容到此结束。",
-    "That is all the content from {filename}.",
-)
+_FILE_END_TEMPLATES = "That is all the content from {filename}."
 
-_GLOBAL_INTRO = (
-    "这是我在 Claude Code 中设定的全局偏好和规则。",
-    "These are my global preferences and rules set in Claude Code.",
-)
+_GLOBAL_INTRO = "These are my global preferences and rules set in Claude Code."
 
-_SESSION_PREAMBLE = (
-    "这是我在 Claude Code 中 {proj} 项目的记忆文件，共 {count} 个。",
-    "These are my memory files from Claude Code for the {proj} project, {count} files in total.",
-)
+_SESSION_PREAMBLE = "These are my memory files from Claude Code for the {proj} project, {count} files in total."
 
-_SESSION_EPILOGUE = (
-    "以上是 {proj} 项目的全部 {count} 个记忆文件。",
-    "End of all {count} memory files for the {proj} project.",
-)
+_SESSION_EPILOGUE = "End of all {count} memory files for the {proj} project."
 
 
-def _pick(tpl: tuple[str, str], cjk: bool) -> str:
-    return tpl[0] if cjk else tpl[1]
+def _pick(template: str, cjk: bool) -> str:
+    """The template in the language the content is written in: the preamble joins that content."""
+    return t_in("zh" if cjk else "en", template)
 
 
 # ---------------------------------------------------------------------------

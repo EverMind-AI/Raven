@@ -51,7 +51,7 @@ describe('DEFAULT_THEME', () => {
     expect(DEFAULT_THEME.brand.name).toBe('Raven Agent')
     expect(DEFAULT_THEME.brand.icon).toBe('🐦‍⬛')
     expect(DEFAULT_THEME.brand.prompt).toBe('❯')
-    expect(DEFAULT_THEME.brand.tool).toBe('┊')
+    expect(DEFAULT_THEME.brand.tool).toBe('●')
   })
 
   it('has color palette', async () => {
@@ -161,10 +161,27 @@ describe('cursorColorHex (OSC 12 hardware cursor)', () => {
 })
 
 describe('DEFAULT_THEME aliasing', () => {
-  it('defaults to DARK_THEME when nothing signals light', async () => {
+  it('defaults to the dark palette when nothing signals light', async () => {
     const { DEFAULT_THEME, DARK_THEME: DARK } = await importThemeWithCleanEnv()
 
-    expect(DEFAULT_THEME).toBe(DARK)
+    // Every role matches the dark palette except the two block surfaces,
+    // which are derived from the terminal ground (unknown here, so from the
+    // scheme's canonical black).
+    expect(DEFAULT_THEME.brand).toBe(DARK.brand)
+    expect(DEFAULT_THEME.yellow).toBe(DARK.yellow)
+    expect({ ...DEFAULT_THEME.color, detailBg: '', userBg: '' }).toEqual({
+      ...DARK.color,
+      detailBg: '',
+      userBg: ''
+    })
+  })
+
+  it('derives its block surfaces from a hand-exported RAVEN_TUI_BACKGROUND', async () => {
+    const { DEFAULT_THEME, deriveSurfaces } = await importThemeWithEnv({
+      RAVEN_TUI_BACKGROUND: '#f5efe3'
+    })
+
+    expect(DEFAULT_THEME.color.userBg).toBe(deriveSurfaces('light', '#f5efe3').userBg)
   })
 })
 
@@ -278,15 +295,24 @@ describe('applyDetectedBackground (OSC 11 reply)', () => {
 
     const res = applyDetectedBackground('rgb:ffff/ffff/ffff')
 
-    expect(res).toEqual({ changed: true, scheme: 'light' })
+    expect(res).toEqual({ changed: true, scheme: 'light', surfacesChanged: true })
     expect(currentScheme()).toBe('light')
   })
 
   it('parses 8-bit rgb: and #rrggbb dark replies as dark', async () => {
     const { applyDetectedBackground } = await importThemeWithCleanEnv()
 
-    expect(applyDetectedBackground('rgb:1e/1e/2e')).toEqual({ changed: false, scheme: 'dark' })
-    expect(applyDetectedBackground('#1e1e2e')).toEqual({ changed: false, scheme: 'dark' })
+    expect(applyDetectedBackground('rgb:1e/1e/2e')).toEqual({
+      changed: false,
+      scheme: 'dark',
+      surfacesChanged: true
+    })
+    // Same ground re-reported: nothing to re-theme for.
+    expect(applyDetectedBackground('#1e1e2e')).toEqual({
+      changed: false,
+      scheme: 'dark',
+      surfacesChanged: false
+    })
   })
 
   it('caches the measured color into RAVEN_TUI_BACKGROUND', async () => {
@@ -302,7 +328,11 @@ describe('applyDetectedBackground (OSC 11 reply)', () => {
 
     // Bright measured bg, but the explicit dark override wins (precedence is
     // reused from detectLightMode).
-    expect(applyDetectedBackground('rgb:ffff/ffff/ffff')).toEqual({ changed: false, scheme: 'dark' })
+    expect(applyDetectedBackground('rgb:ffff/ffff/ffff')).toEqual({
+      changed: false,
+      scheme: 'dark',
+      surfacesChanged: true
+    })
     expect(currentScheme()).toBe('dark')
   })
 
@@ -311,6 +341,103 @@ describe('applyDetectedBackground (OSC 11 reply)', () => {
 
     expect(applyDetectedBackground('not-a-color')).toBeNull()
     expect(currentScheme()).toBe('dark')
+  })
+})
+
+describe('deriveSurfaces', () => {
+  const channel = (hex: string, i: 0 | 1 | 2) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16)
+  const redMinusBlue = (hex: string) => channel(hex, 0) - channel(hex, 2)
+
+  it('scales a light ground proportionally, so the terminal hue survives', async () => {
+    const { deriveSurfaces } = await importThemeWithCleanEnv()
+
+    const warm = '#f5efe3'
+    const { detailBg, userBg } = deriveSurfaces('light', warm)
+
+    // mix(ground, black, alpha) == ground * (1 - alpha) on every channel.
+    expect(userBg).toBe('#e5dfd4')
+    expect(detailBg).toBe('#ede7dc')
+
+    expect(redMinusBlue(warm)).toBeGreaterThan(0)
+    expect(redMinusBlue(userBg)).toBeGreaterThan(0)
+    expect(redMinusBlue(detailBg)).toBeGreaterThan(0)
+  })
+
+  it('leaves a neutral ground neutral', async () => {
+    const { deriveSurfaces } = await importThemeWithCleanEnv()
+
+    for (const hex of Object.values(deriveSurfaces('light', '#f7f7f7'))) {
+      expect(channel(hex, 0)).toBe(channel(hex, 1))
+      expect(channel(hex, 1)).toBe(channel(hex, 2))
+    }
+  })
+
+  it('gives the tool card half the user block step', async () => {
+    const { deriveSurfaces } = await importThemeWithCleanEnv()
+
+    const light = deriveSurfaces('light', '#ffffff')
+    const dark = deriveSurfaces('dark', '#000000')
+
+    expect(255 - channel(light.userBg, 1)).toBe(17)
+    expect(255 - channel(light.detailBg, 1)).toBe(8)
+    expect(channel(dark.userBg, 1)).toBe(36)
+    expect(channel(dark.detailBg, 1)).toBe(18)
+  })
+
+  it('steps further on dark than on light', async () => {
+    const { deriveSurfaces } = await importThemeWithCleanEnv()
+
+    const lightStep = 255 - channel(deriveSurfaces('light', '#ffffff').userBg, 1)
+    const darkStep = channel(deriveSurfaces('dark', '#000000').userBg, 1)
+
+    expect(darkStep).toBeGreaterThan(lightStep)
+  })
+
+  it('falls back to the canonical ground, which is what the raw palette carries', async () => {
+    const { DARK_THEME, deriveSurfaces, LIGHT_THEME } = await importThemeWithCleanEnv()
+
+    expect(deriveSurfaces('dark', null)).toEqual({
+      detailBg: DARK_THEME.color.detailBg,
+      userBg: DARK_THEME.color.userBg
+    })
+    expect(deriveSurfaces('light', null)).toEqual({
+      detailBg: LIGHT_THEME.color.detailBg,
+      userBg: LIGHT_THEME.color.userBg
+    })
+  })
+})
+
+describe('terminalBackground', () => {
+  it('reads the slot the OSC 11 probe caches into, expanding 3-digit hex', async () => {
+    const { terminalBackground } = await importThemeWithCleanEnv()
+
+    expect(terminalBackground({ RAVEN_TUI_BACKGROUND: '#F5EFE3' })).toBe('#f5efe3')
+    expect(terminalBackground({ RAVEN_TUI_BACKGROUND: 'f5efe3' })).toBe('#f5efe3')
+    expect(terminalBackground({ RAVEN_TUI_BACKGROUND: '#fff' })).toBe('#ffffff')
+  })
+
+  it('returns null on anything it cannot parse', async () => {
+    const { terminalBackground } = await importThemeWithCleanEnv()
+
+    expect(terminalBackground({})).toBeNull()
+    expect(terminalBackground({ RAVEN_TUI_BACKGROUND: '' })).toBeNull()
+    expect(terminalBackground({ RAVEN_TUI_BACKGROUND: 'cream' })).toBeNull()
+    expect(terminalBackground({ RAVEN_TUI_BACKGROUND: '#fffgff' })).toBeNull()
+  })
+})
+
+describe('reduced color tiers keep their curated surfaces', () => {
+  it('does not put a derived hex where only an ANSI value can render', async () => {
+    const { resolveTheme } = await importThemeWithCleanEnv()
+
+    for (const tier of [1, 2] as const) {
+      for (const scheme of ['light', 'dark'] as const) {
+        const { detailBg, userBg } = resolveTheme(scheme, tier).color
+
+        expect(userBg.startsWith('#')).toBe(false)
+        expect(detailBg.startsWith('#')).toBe(false)
+      }
+    }
   })
 })
 
@@ -330,6 +457,25 @@ describe('fromSkin', () => {
     const { DEFAULT_THEME, fromSkin } = await importThemeWithCleanEnv()
 
     expect(fromSkin({ banner_title: '#FF0000' }, {}).color.accent).toBe(DEFAULT_THEME.color.accent)
+  })
+
+  it('lets the block surfaces follow the terminal ground when the skin is silent', async () => {
+    const { deriveSurfaces, fromSkin } = await importThemeWithEnv({ RAVEN_TUI_BACKGROUND: '#f5efe3' })
+
+    const theme = fromSkin({ banner_title: '#FF0000' }, {})
+    const expected = deriveSurfaces('light', '#f5efe3')
+
+    expect(theme.color.userBg).toBe(expected.userBg)
+    expect(theme.color.detailBg).toBe(expected.detailBg)
+  })
+
+  it('lets an explicit skin surface win over the derived one', async () => {
+    const { fromSkin } = await importThemeWithEnv({ RAVEN_TUI_BACKGROUND: '#f5efe3' })
+
+    const theme = fromSkin({ ui_detail_bg: '#123456', ui_user_bg: '#abcdef' }, {})
+
+    expect(theme.color.userBg).toBe('#abcdef')
+    expect(theme.color.detailBg).toBe('#123456')
   })
 
   it('derives completion current background from resolved completion background', async () => {
@@ -447,7 +593,12 @@ describe('resolveTheme', () => {
   })
 
   it('fills a background only where the tier has shades to fill with', async () => {
-    for (const [level, fills] of [['0', false], ['1', false], ['2', true], ['3', true]] as const) {
+    for (const [level, fills] of [
+      ['0', false],
+      ['1', false],
+      ['2', true],
+      ['3', true]
+    ] as const) {
       vi.stubEnv('HERMES_TUI_LEVEL', level)
       vi.resetModules()
 

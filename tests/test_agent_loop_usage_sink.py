@@ -2,7 +2,7 @@
 
 Pins the wire shape that ``turn.send`` relays as ``message.complete.payload.usage``:
 per-turn token counts plus the live context-window gauge (used / max / percent)
-and the estimated cost. Before this, only the token counts were populated, so the
+and the provider-reported cost. Before this, only the token counts were populated, so the
 TUI context bar stayed frozen at 0% and never showed cost.
 """
 
@@ -17,8 +17,9 @@ from pathlib import Path
 import httpx
 import pytest
 
+import raven.agent.loop.turn_path as agent_loop_main
 from raven.agent.loop import AgentLoop
-from raven.agent.loop import main as agent_loop_main
+from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.providers import rates
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding, use_binding
@@ -65,22 +66,22 @@ def workspace():
 
 @pytest.fixture(autouse=True)
 def _reset_openrouter_cache():
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
     yield
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
 
 
 def _make_agent(workspace: Path, provider: LLMProvider, model: str, window: int | None) -> AgentLoop:
     kwargs: dict = {}
     if window is not None:
-        kwargs["context_window_tokens"] = window
+        kwargs["engine"] = EngineWiring(context_window_tokens=window)
     return AgentLoop(
         provider=provider,
         workspace=workspace,
         model=model,
-        max_iterations=2,
-        restrict_to_workspace=True,
         **kwargs,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
 
@@ -104,7 +105,8 @@ async def test_usage_sink_carries_context_gauge_and_cost(workspace):
     assert sink["context_max"] == 40000
     assert sink["context_used"] == 8000
     assert sink["context_percent"] == 20
-    assert "cost_usd" in sink
+    assert sink["cost_usd"] is None
+    assert sink["cost_missing_calls"] == 1
 
 
 def _patch_live_openrouter_window(monkeypatch, window: int) -> None:

@@ -1,4 +1,6 @@
-from raven.channels.outlet import ChannelOutletAdapter
+"""ChannelOutletAdapter as a spine Outlet: text, media fallback, and eaten events."""
+
+from raven.gateway.outlet import ChannelOutletAdapter
 from raven.spine import (
     ChatType,
     MediaOut,
@@ -11,7 +13,7 @@ from raven.spine import (
     ToolEvent,
     ToolPhase,
 )
-from raven.spine.delivery import Outlet
+from raven.spine.delivery import Capabilities, Outlet
 from raven.spine.message import Media
 
 
@@ -22,8 +24,9 @@ def _src(channel="telegram", chat_id="c1") -> Source:
 class _FakeChannel:
     """Records every send — stands in for a real channel's uniform send."""
 
-    def __init__(self, name="telegram") -> None:
+    def __init__(self, name="telegram", *, file_attachments=False) -> None:
         self.name = name
+        self.capabilities = Capabilities(file_attachments=file_attachments)
         self.sent: list[tuple[str, str, list[str] | None]] = []
 
     async def send(self, chat_id: str, content: str, media: list[str] | None = None) -> None:
@@ -47,7 +50,7 @@ async def test_deliver_text_calls_channel_send():
 
 
 async def test_deliver_media_out_sends_local_paths():
-    ch = _FakeChannel()
+    ch = _FakeChannel(file_attachments=True)
     adapter = ChannelOutletAdapter(ch)
     media = (
         Media(path="/tmp/a.png", mime="image/png", kind="image"),
@@ -59,6 +62,19 @@ async def test_deliver_media_out_sends_local_paths():
     assert ch.sent[0][2] == ["/tmp/a.png", "/tmp/b.png"]
 
 
+async def test_deliver_media_out_falls_back_without_attachments():
+    ch = _FakeChannel(file_attachments=False)
+    adapter = ChannelOutletAdapter(ch)
+    media = (Media(path="/tmp/a.png", mime="image/png", kind="image"),)
+    await adapter.deliver(MediaOut(media=media, source=_src()))
+    assert len(ch.sent) == 1
+    chat_id, content, sent_media = ch.sent[0]
+    # A channel that ignores ``media`` in send must not get an empty body --
+    # the message would silently evaporate. It gets the file list note instead.
+    assert sent_media is None
+    assert "a.png" in content and content.strip()
+
+
 async def test_deliver_eats_streaming_and_in_turn_events():
     ch = _FakeChannel()
     adapter = ChannelOutletAdapter(ch)
@@ -68,3 +84,72 @@ async def test_deliver_eats_streaming_and_in_turn_events():
     await adapter.deliver(ToolEvent(phase=ToolPhase.START, tool_call_id="t1", name="grep", source=src))
     await adapter.deliver(Notice(kind=NoticeKind.PROGRESS, detail="working", source=src))
     assert ch.sent == []  # all eaten — a non-streaming channel renders only the final reply
+
+
+async def test_deliver_files_uses_native_channel_attachments():
+    ch = _FakeChannel(file_attachments=True)
+    adapter = ChannelOutletAdapter(ch)
+    event = ToolEvent(
+        phase=ToolPhase.COMPLETE,
+        tool_call_id="t1",
+        name="deliver_files",
+        source=_src(),
+        metadata={
+            "raven_delivery": {
+                "message": "Final files",
+                "files": [{"name": "report.pdf", "path": "/tmp/report.pdf"}],
+            }
+        },
+    )
+
+    await adapter.deliver(event)
+
+    assert ch.sent == [("c1", "Final files", ["/tmp/report.pdf"])]
+
+
+async def test_deliver_files_falls_back_to_a_compact_list_without_attachments():
+    ch = _FakeChannel(file_attachments=False)
+    adapter = ChannelOutletAdapter(ch)
+    event = ToolEvent(
+        phase=ToolPhase.COMPLETE,
+        tool_call_id="t1",
+        name="deliver_files",
+        source=_src(),
+        metadata={
+            "raven_delivery": {
+                "message": "Final files",
+                "files": [{"name": "report.pdf", "path": "/tmp/report.pdf"}],
+            }
+        },
+    )
+
+    await adapter.deliver(event)
+
+    assert ch.sent == [
+        (
+            "c1",
+            "Final files\nFiles ready: report.pdf. This channel cannot attach files; open the same session in Raven UI or TUI.",
+            None,
+        )
+    ]
+
+
+async def test_organ_degraded_notice_reaches_the_channel_as_its_own_line():
+    ch = _FakeChannel()
+    adapter = ChannelOutletAdapter(ch)
+    await adapter.deliver(
+        Notice(
+            kind=NoticeKind.ORGAN_DEGRADED,
+            source=_src("telegram", "c9"),
+            detail="Some capabilities were unavailable this turn (memory).",
+        )
+    )
+    assert ch.sent == [("c9", "Some capabilities were unavailable this turn (memory).", None)]
+
+
+async def test_other_notices_stay_eaten_on_a_channel():
+    ch = _FakeChannel()
+    adapter = ChannelOutletAdapter(ch)
+    await adapter.deliver(Notice(kind=NoticeKind.PROGRESS, source=_src(), detail="thinking"))
+    await adapter.deliver(Notice(kind=NoticeKind.ORGAN_DEGRADED, source=_src()))
+    assert ch.sent == []

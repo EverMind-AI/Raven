@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import (
+    POST_TOOL_NUDGE,
     RecoveryAction,
     RecoveryLimits,
     classify_empty_response,
@@ -25,7 +29,8 @@ from raven.agent.loop.recovery import (
     has_thinking,
     limits_from_defaults,
 )
-from raven.providers.base import LLMProvider, LLMResponse
+from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.litellm_provider import LiteLLMProvider
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 
@@ -41,14 +46,21 @@ def _make_agent(workspace: Path, provider: LLMProvider, limits: RecoveryLimits |
         provider=provider,
         workspace=workspace,
         model="stub",
-        max_iterations=10,
-        restrict_to_workspace=True,
-        empty_recovery=limits,
+        policy=TurnPolicy(max_iterations=10, empty_recovery=limits),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
 
 def _classify(
-    response, visible, *, prev_had_tool_calls=False, nudges_done=0, prefill_retries=0, empty_retries=0, limits=None
+    response,
+    visible,
+    *,
+    prev_had_tool_calls=False,
+    nudges_done=0,
+    prefill_retries=0,
+    empty_retries=0,
+    limits=None,
+    prefill_supported=True,
 ):
     return classify_empty_response(
         response,
@@ -58,6 +70,7 @@ def _classify(
         prefill_retries=prefill_retries,
         empty_retries=empty_retries,
         limits=limits or RecoveryLimits(),
+        prefill_supported=prefill_supported,
     )
 
 
@@ -260,6 +273,155 @@ async def test_thinking_only_recovers_via_prefill(workspace):
 
 
 # --------------------------------------------------------------------------- #
+# loop: reasoning cut at the ceiling -> prefill -> the continuation's head      #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_mid_sentence_head_is_cut_and_an_answer_opening_is_kept():
+    from raven.agent.loop.recovery import cut_reasoning_head
+
+    junk = " Lägg in an token. Let me start researching.\n\n## Answer\nfinal"
+    assert cut_reasoning_head(junk) == "Let me start researching.\n\n## Answer\nfinal"
+    assert cut_reasoning_head("so the answer is\n## Answer\nfinal") == "## Answer\nfinal"
+    # Openings that read as content are left whole: a heading, a list, a sentence.
+    for whole in ("## Answer\nfinal", "- first\n- second", "Yes. It does.", "1. step one\n2. step two"):
+        assert cut_reasoning_head(whole) == whole
+    # A fragment with nothing after it, or one longer than a fragment could be, stays.
+    assert cut_reasoning_head(" trailing thought.") == " trailing thought."
+    assert cut_reasoning_head(" " + "x" * 300 + ". rest") == " " + "x" * 300 + ". rest"
+    assert cut_reasoning_head("") == "" and cut_reasoning_head(None) is None
+    # CJK has no case, so a continuation opening directly on it is left whole; the
+    # CJK stops end a fragment the gate did admit (leading whitespace, or a lowercase
+    # Latin word running into CJK text) instead of letting it run to a Latin period.
+    han_answer = "\u597d\u7684\u3002\u6211\u5f00\u59cb\u7814\u7a76\u3002"
+    assert cut_reasoning_head(han_answer) == han_answer
+    assert cut_reasoning_head(" " + han_answer) == han_answer[3:]
+    assert cut_reasoning_head("so \u7b54\u6848\u662f\u3002\n## \u7b54\u6848") == "## \u7b54\u6848"
+
+
+@pytest.mark.asyncio
+async def test_the_gate_streams_what_the_stored_content_keeps():
+    """The reader must see exactly what the session keeps: deltas are held until
+    the head rule can be decided, then released with the fragment removed."""
+    from raven.agent.loop.recovery import ContinuationGate, cut_reasoning_head
+
+    async def run(deltas: list[str]) -> str:
+        seen: list[str] = []
+
+        async def deliver(text: str) -> None:
+            seen.append(text)
+
+        gate = ContinuationGate(deliver)
+        for d in deltas:
+            await gate(d)
+        await gate.finish()
+        return "".join(seen)
+
+    deltas = [" Lägg in", " an token.", " Let me", " start.\n\n## Answer\nfinal"]
+    assert await run(deltas) == cut_reasoning_head("".join(deltas)) == "Let me start.\n\n## Answer\nfinal"
+    # Nothing is released before the rule can be decided.
+    seen: list[str] = []
+
+    async def deliver(text: str) -> None:
+        seen.append(text)
+
+    gate = ContinuationGate(deliver)
+    await gate(" Lägg in")
+    await gate(" an token.")
+    assert seen == [], "a boundary with nothing after it is not yet decidable"
+    await gate(" Let")
+    assert seen == ["Let"]
+    await gate(" me")
+    assert seen == ["Let", " me"]
+    # A continuation that never reaches a boundary is delivered whole at the end.
+    assert await run([" a fragment with no end"]) == " a fragment with no end"
+    assert await run(["## Answer\n", "final"]) == "## Answer\nfinal"
+
+
+class _CutThinkingThenAnswerProvider(LLMProvider):
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(content="", reasoning_content="let me think about the tok", finish_reason="length")
+        return LLMResponse(
+            content=" Lägg in an token. Let me start researching.\n\n## Answer\nfinal", finish_reason="stop"
+        )
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_after_cut_reasoning_loses_its_mid_thought_head(workspace):
+    """2026-09-08: a 131072-token reasoning run hit the ceiling, the prefill fed
+    it back, and the continuation's first clause reached the reader as the head
+    of the answer."""
+    provider = _CutThinkingThenAnswerProvider()
+    agent = _make_agent(workspace, provider)
+
+    out = await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+    )
+
+    assert out is not None
+    assert out[0] == "Let me start researching.\n\n## Answer\nfinal"
+    session = agent.sessions.get_or_create("s1")
+    stored = [m for m in session.messages if m.get("role") == "assistant"]
+    assert stored and stored[-1]["content"] == "Let me start researching.\n\n## Answer\nfinal"
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_after_complete_reasoning_is_left_whole(workspace):
+    """Reasoning that ended on its own (``stop``) was not cut, so the continuation
+    opens where the model meant it to; the head rule is for the ceiling case."""
+
+    class _Whole(_CutThinkingThenAnswerProvider):
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+            reasoning_effort=None,
+            tool_choice=None,
+        ):
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
+            return LLMResponse(content=" lowercase start. Then the rest.", finish_reason="stop")
+
+    agent = _make_agent(workspace, _Whole())
+    out = await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+    )
+    assert out is not None and out[0] == "lowercase start. Then the rest."
+
+
+# --------------------------------------------------------------------------- #
 # loop: persistently empty is bounded then falls back                          #
 # --------------------------------------------------------------------------- #
 
@@ -413,3 +575,268 @@ def test_a_mismatched_pair_is_not_treated_as_a_block() -> None:
 def test_one_end_namespaced_is_still_one_block() -> None:
     """A backend that stamps only one end still wrote a single block."""
     assert AgentLoop._strip_think("<mm:think>weighing</think>the answer") == "the answer"
+
+
+# --------------------------------------------------------------------------- #
+# the transport verdict must not pre-empt this recovery                        #
+# --------------------------------------------------------------------------- #
+#
+# The loop breaks the turn on `finish_reason == "error"` *before*
+# `classify_empty_response` runs, so anything that reports an empty response as
+# an error takes every mode in this file out of service. The tests above stub
+# `chat` directly and so never reach the provider's response exit, which is
+# where such a verdict is reached -- these go through it on purpose.
+
+
+class _SilentAfterToolProvider(LiteLLMProvider):
+    """Calls a tool, comes back with nothing, and answers once nudged.
+
+    The shape `recovery.py` documents as the common weak-model dud: honest
+    usage, no text. Built through the real `_parse_response` so a verdict at
+    that exit is in the path.
+    """
+
+    def __init__(self) -> None:
+        with (
+            patch("raven.providers.litellm_provider.litellm"),
+            patch.object(LiteLLMProvider, "_setup_env"),
+        ):
+            super().__init__(api_key="sk-test", provider_name="openrouter")
+        self.calls = 0
+        self.nudged = False
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kw):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
+                usage={"prompt_tokens": 900, "total_tokens": 910},
+            )
+        if any(m.get("content") == POST_TOOL_NUDGE for m in messages):
+            self.nudged = True
+            return LLMResponse(content="here are the files", finish_reason="stop")
+        # Empty, and billed truthfully: a model that said nothing, not a
+        # request that never arrived.
+        return self._parse_response(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content=None, tool_calls=None, reasoning_content=None),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=2900, completion_tokens=1, total_tokens=2901),
+            ),
+            sent_chars=12000,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_silent_model_after_a_tool_still_reaches_the_nudge(workspace):
+    """Honest usage means the loop keeps ownership of the silence.
+
+    Reported as an error instead, this turn would end on the spot -- and the
+    error would claim a transport failure, which for this response is simply
+    untrue.
+    """
+    provider = _SilentAfterToolProvider()
+    agent = _make_agent(workspace, provider)
+
+    out = await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="list the files",
+        ),
+        session_key="s1",
+    )
+
+    assert out is not None
+    assert provider.nudged is True, "the nudge never happened; the empty turn was taken as an error"
+    assert out[0] == "here are the files"
+
+
+# --------------------------------------------------------------------------- #
+# unit: providers that reject a trailing assistant message (Anthropic family)  #
+# --------------------------------------------------------------------------- #
+
+
+def test_thinking_only_is_retried_instead_of_prefilled_when_prefill_is_refused():
+    """Anthropic rejects an assistant prefill while thinking is on.
+
+    Live incident (2026-09-01, a dispatched raven-code run, claude via
+    OpenRouter): the thinking-only prefill produced a request the vendor
+    considers invalid; routed through a gateway it neither errored nor
+    answered, so the turn hung until the wall-clock cap. With prefill refused
+    the recovery must pick an action that leaves the transcript ending on a
+    user or tool message -- here, before any tool ran, the plain re-request.
+    """
+    r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
+    assert _classify(r, "", prefill_supported=False) is RecoveryAction.RETRY
+
+
+def test_thinking_only_after_a_tool_is_nudged_when_prefill_is_refused():
+    """After a tool the nudge is the cheaper repair and it too ends on a user
+    message: the synthetic assistant it inserts sits before the nudge."""
+    r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
+    assert _classify(r, "", prefill_supported=False, prev_had_tool_calls=True) is RecoveryAction.NUDGE
+
+
+def test_prefill_refused_retries_once_the_nudge_budget_is_spent():
+    limits = RecoveryLimits()
+    r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
+    action = _classify(
+        r, "", prefill_supported=False, prev_had_tool_calls=True, nudges_done=limits.post_tool_empty_max_nudges
+    )
+    assert action is RecoveryAction.RETRY
+
+
+def test_prefill_refused_completes_once_every_budget_is_spent():
+    limits = RecoveryLimits()
+    r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
+    action = _classify(
+        r,
+        "",
+        prefill_supported=False,
+        prev_had_tool_calls=True,
+        nudges_done=limits.post_tool_empty_max_nudges,
+        empty_retries=limits.empty_content_max_retries,
+    )
+    assert action is RecoveryAction.COMPLETE
+
+
+def test_prefill_refused_never_consumes_the_prefill_budget():
+    """The refusal is decided before the prefill budget is consulted, so a
+    fresh budget changes nothing: PREFILL is never the answer."""
+    r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
+    for retries in range(RecoveryLimits().thinking_prefill_max_retries + 1):
+        assert _classify(r, "", prefill_supported=False, prefill_retries=retries) is not RecoveryAction.PREFILL
+
+
+def test_prefill_refused_never_reaches_a_non_thinking_response():
+    """The guard is scoped to the prefill path; a plain empty turn still retries."""
+    r = LLMResponse(content="", finish_reason="stop")
+    assert _classify(r, "", prefill_supported=False) is RecoveryAction.RETRY
+
+
+def test_prefill_supported_is_the_default_so_other_providers_are_untouched():
+    r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
+    assert _classify(r, "") is RecoveryAction.PREFILL
+    assert _classify(r, "", prefill_supported=True) is RecoveryAction.PREFILL
+
+
+# --------------------------------------------------------------------------- #
+# unit: which providers accept an assistant prefill                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_base_provider_accepts_an_assistant_prefill_by_default():
+    provider = _AlwaysEmptyProvider()
+    assert provider.supports_assistant_prefill("some/model") is True
+    assert provider.supports_assistant_prefill(None) is True
+
+
+def test_litellm_provider_refuses_an_assistant_prefill_for_anthropic_models():
+    """Same judgement that decides whether thinking_blocks go on the wire.
+
+    The illegal request is exactly "trailing assistant message + thinking
+    blocks", so the two must be decided by one rule or they drift apart.
+    """
+    provider = LiteLLMProvider(api_key="test-key", default_model="openai/gpt-4o")
+    assert provider.supports_assistant_prefill("anthropic/claude-opus-5") is False
+    assert provider.supports_assistant_prefill("claude-opus-4-5") is False
+    assert provider.supports_assistant_prefill("openrouter/anthropic/claude-opus-5") is False
+
+
+def test_litellm_provider_accepts_an_assistant_prefill_for_other_models():
+    provider = LiteLLMProvider(api_key="test-key", default_model="openai/gpt-4o")
+    assert provider.supports_assistant_prefill("openai/gpt-4o") is True
+    assert provider.supports_assistant_prefill("deepseek/deepseek-chat") is True
+    assert provider.supports_assistant_prefill(None) is True
+
+
+def test_litellm_provider_answers_for_its_default_model_when_none_is_named():
+    provider = LiteLLMProvider(api_key="test-key", default_model="anthropic/claude-opus-5")
+    assert provider.supports_assistant_prefill() is False
+
+
+def test_delegating_providers_answer_for_the_provider_they_wrap():
+    """LazyProvider / PerModelProvider are the shapes the factory actually
+    builds; answering from the base default would leave the guard dead in
+    production."""
+    from raven.providers.base import GenerationSettings
+    from raven.providers.lazy import LazyProvider
+    from raven.providers.per_model_provider import PerModelProvider
+
+    inner = LiteLLMProvider(api_key="test-key", default_model="anthropic/claude-opus-5")
+    lazy = LazyProvider(factory=lambda: inner, default_model="anthropic/claude-opus-5", generation=GenerationSettings())
+    assert lazy.supports_assistant_prefill("anthropic/claude-opus-5") is False
+    assert lazy.supports_assistant_prefill("openai/gpt-4o") is True
+
+    routed = PerModelProvider(models=[], fallback=inner)
+    assert routed.supports_assistant_prefill("anthropic/claude-opus-5") is False
+    assert routed.supports_assistant_prefill("openai/gpt-4o") is True
+
+
+# --------------------------------------------------------------------------- #
+# loop: no request may end on an assistant message when prefill is refused     #
+# --------------------------------------------------------------------------- #
+
+
+class _PrefillRefusingThinkingProvider(LLMProvider):
+    """Thinking-only once, then an answer; refuses assistant prefills."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+        self.last_roles: list[str] = []
+
+    def supports_assistant_prefill(self, model: str | None = None) -> bool:
+        return False
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        self.calls += 1
+        self.last_roles.append(str(messages[-1].get("role")))
+        if self.calls == 1:
+            return LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
+        return LLMResponse(content="real answer", finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "anthropic/claude-opus-5"
+
+
+@pytest.mark.asyncio
+async def test_no_request_ends_on_an_assistant_message_when_prefill_is_refused(workspace):
+    """Protocol invariant, not just a classification: whatever the recovery
+    picks, the transcript handed to a prefill-refusing provider must never end
+    with an assistant turn, and the turn must still recover its answer."""
+    provider = _PrefillRefusingThinkingProvider()
+    agent = _make_agent(workspace, provider)
+
+    out = await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+    )
+
+    assert out is not None
+    assert out[0] == "real answer"
+    assert provider.calls == 2
+    assert "assistant" not in provider.last_roles, f"a prefill went to the provider: {provider.last_roles}"

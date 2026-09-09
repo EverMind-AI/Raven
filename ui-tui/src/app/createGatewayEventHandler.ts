@@ -78,13 +78,17 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
       const label = top.length ? top.join(' · ') : `${subagents.length} subagents`
 
-      await rpc('spawn_tree.save', {
-        finished_at: Date.now() / 1000,
-        label: label.slice(0, 120),
-        session_id: sessionId ?? 'default',
-        started_at: startedAt ? startedAt / 1000 : null,
-        subagents
-      })
+      await rpc(
+        'spawn_tree.save',
+        {
+          finished_at: Date.now() / 1000,
+          label: label.slice(0, 120),
+          session_id: sessionId ?? 'default',
+          started_at: startedAt ? startedAt / 1000 : null,
+          subagents
+        },
+        { quiet: true }
+      )
     } catch {
       // Persistence is best-effort; in-memory history is the authoritative
       // same-session source.  A write failure doesn't block the turn.
@@ -103,7 +107,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
     }
 
     lastDelegationFetchAt = now
-    rpc<DelegationStatusResponse>('delegation.status', {})
+    rpc<DelegationStatusResponse>('delegation.status', {}, { quiet: true })
       .then(r => applyDelegationStatus(r))
       .catch(() => {})
   }
@@ -160,7 +164,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
       if (STARTUP_IMAGE) {
         try {
-          await rpc('image.attach', { path: STARTUP_IMAGE, session_id: sid })
+          await rpc('image.attach', { path: STARTUP_IMAGE, session_id: sid }, { quiet: true })
         } catch (e) {
           sys(`startup image attach failed: ${rpcErrorMessage(e)}`)
         }
@@ -182,7 +186,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       applySkinTheme(skin)
     }
 
-    rpc<CommandsCatalogResponse>('commands.catalog', {})
+    rpc<CommandsCatalogResponse>('commands.catalog', {}, { quiet: true })
       .then(r => {
         if (!r?.pairs) {
           return
@@ -531,6 +535,18 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         setStatus('waiting for input…')
 
         return
+      case 'clarify.closed': {
+        const clarify = getOverlayState().clarify
+
+        // Id-matched for the reason `approval.closed` is: the backend fail-safes
+        // a superseded question to its default, and that close can land after
+        // the next question's request has already replaced the overlay.
+        if (clarify?.requestId === String(ev.payload.request_id ?? '')) {
+          patchOverlayState({ clarify: null })
+        }
+
+        return
+      }
       case 'approval.request': {
         const description = String(ev.payload.description ?? 'dangerous command')
 

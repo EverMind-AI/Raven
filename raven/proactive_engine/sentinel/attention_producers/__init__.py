@@ -9,9 +9,10 @@ and splices all bodies in a single write.
 
 Splitting one section = one class means:
 
-- P4-B (stance log, currently-focused-on) and P4-C (LLM forecast +
-  behavior patterns) plug in by adding new producers — no edits to
-  AttentionUpdater or the existing producers.
+- a new section (StanceLogProducer, CurrentlyFocusedProducer,
+  Predicted3DProducer, the daily analysis behind the behaviour patterns)
+  plugs in by adding a producer -- no edits to AttentionUpdater or the
+  existing producers.
 - Cooldown / feature-flag logic lives next to the section's content
   rendering, not bolted on the orchestrator.
 - Tests target one producer at a time without dragging the whole

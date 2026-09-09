@@ -11,6 +11,7 @@ import asyncio
 import json
 import shutil
 from collections import OrderedDict
+from typing import Any
 
 from loguru import logger
 
@@ -20,7 +21,6 @@ from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities
 from raven.channels.errors import transient_network
 from raven.channels.media import safe_name
-from raven.config.schema import WhatsAppConfig
 
 _MAX_PROCESSED_IDS = 1000
 
@@ -28,18 +28,26 @@ _MAX_PROCESSED_IDS = 1000
 class WhatsAppChannel(ChannelBase):
     """WhatsApp channel backed by a local Node.js bridge over WebSocket."""
 
-    config: WhatsAppConfig
+    config: Any
     name = "whatsapp"
     display_name = "WhatsApp"
     capabilities = Capabilities(interactive_login=True)  # QR pairing via the bridge
 
-    def __init__(self, config: WhatsAppConfig):
+    def __init__(self, config: Any):
         super().__init__(config)
         self._ws = None
         self._connected = False
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
         self._lid_to_phone: dict[str, str] = {}
         self._bridge_token: str | None = None
+        # Login QR (when the bridge emits one) exposed for the web UI to render.
+        self.pending_qr: str | None = None
+
+    @property
+    def connected(self) -> bool:
+        """Whether the bridge reports a paired session, as opposed to the
+        channel task merely running (which is true before the QR is scanned)."""
+        return self._connected
 
     def _effective_bridge_token(self) -> str:
         """Resolve the bridge token, minting a local secret on first use."""
@@ -121,7 +129,7 @@ class WhatsAppChannel(ChannelBase):
             await self._ws.send(json.dumps({"type": "send", "to": chat_id, "text": text}, ensure_ascii=False))
         except Exception as e:
             if transient_network(e):
-                raise  # ws drop: let manager._send_with_retry back off and retry
+                raise  # ws drop: let the delivery hub back off and retry
             logger.error("Error sending WhatsApp message: {}", e)
 
     # ── inbound ───────────────────────────────────────────────────────
@@ -141,10 +149,12 @@ class WhatsAppChannel(ChannelBase):
             logger.info("WhatsApp status: {}", status)
             if status == "connected":
                 self._connected = True
+                self.pending_qr = None
             elif status == "disconnected":
                 self._connected = False
         elif msg_type == "qr":
-            logger.info("Scan QR code in the bridge terminal to connect WhatsApp")
+            self.pending_qr = data.get("qr") or data.get("code")
+            logger.info("Scan the QR code (shown in the web UI or the bridge terminal) to connect WhatsApp")
         elif msg_type == "error":
             logger.error("WhatsApp bridge error: {}", data.get("error"))
 

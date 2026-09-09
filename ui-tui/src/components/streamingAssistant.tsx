@@ -9,10 +9,12 @@ import { memo } from 'react'
 import type { AppLayoutProgressProps } from '../app/interfaces.js'
 import type { DetailsMode, Msg, SectionVisibility } from '../types.js'
 
+import { $directChat, viewKeyOf } from '../app/directChatStore.js'
 import { toggleTodoCollapsed, useTurnSelector } from '../app/turnStore.js'
 import { $uiState } from '../app/uiStore.js'
 import { appendToolShelfMessage } from '../lib/liveProgress.js'
-import { EpisodeView } from './episodeView.js'
+import { DagPanel } from './dagPanel.js'
+import { EpisodeView, turnFoldScope } from './episodeView.js'
 import { MessageLine } from './messageLine.js'
 import { TodoPanel } from './todoPanel.js'
 
@@ -33,22 +35,65 @@ export const StreamingAssistant = memo(function StreamingAssistant({
   const streaming = useTurnSelector(state => state.streaming)
   const activeTools = useTurnSelector(state => state.tools)
   const episodes = useTurnSelector(state => state.episodes)
+  const foldId = useTurnSelector(state => state.foldId)
+  const notice = useTurnSelector(state => state.notice)
+  const directChat = useStore($directChat)
   const showStreamingArea = Boolean(streaming)
 
-  if (!progress.showProgressArea && !showStreamingArea && !activeTools.length && !episodes.length) {
+  // Everything this draws is the MAIN conversation's live turn: a direct turn
+  // never fills `$turnState` (see chatStream's dispatchDirect). In a direct
+  // view this layer belongs to a conversation that is not on screen, and
+  // rendering it leaked the main turn's reasoning and streaming answer into
+  // every instance's chat.
+  if (directChat.active !== null) {
     return null
   }
+
+  if (!progress.showProgressArea && !showStreamingArea && !activeTools.length && !episodes.length && !notice) {
+    return null
+  }
+
+  // Drawn as the plain system row the turn will commit, so the line does not
+  // move or change shape when the turn lands -- only the row above it settles.
+  const noticeRow = notice ? (
+    <MessageLine
+      cols={cols}
+      compact={compact}
+      detailsMode={detailsMode}
+      detailsModeCommandOverride={detailsModeCommandOverride}
+      msg={{ role: 'system', text: notice }}
+      sections={sections}
+      t={ui.theme}
+    />
+  ) : null
 
   // Episodes mode: one live, drilldown view of the running turn instead of the
   // flat segment/tool/stream stack.
   if (ui.transcript === 'episodes') {
     return (
-      <EpisodeView cols={cols} compact={compact} episodes={episodes} live t={ui.theme} text={streaming || undefined} />
+      <>
+        <EpisodeView
+          cols={cols}
+          compact={compact}
+          episodes={episodes}
+          live
+          // The scope this turn's own history row will read (`EpisodeMessage`),
+          // named here rather than defaulted, so a call the reader opened while
+          // it ran is still open once the turn lands.
+          scope={turnFoldScope(viewKeyOf(directChat.active), foldId)}
+          t={ui.theme}
+          text={streaming || undefined}
+        />
+
+        {noticeRow}
+      </>
     )
   }
 
   return (
     <>
+      <LiveDagPanels cols={cols} />
+
       {groupedSegments(streamSegments).map((msg, i) => (
         <MessageLine
           cols={cols}
@@ -103,6 +148,26 @@ export const StreamingAssistant = memo(function StreamingAssistant({
           t={ui.theme}
         />
       )}
+
+      {noticeRow}
+    </>
+  )
+})
+
+/** The turn's in-flight DAG graphs.
+ *
+ * Only the legacy transcript needs this: the episodes view renders each graph in
+ * the tool row it belongs to (see `episodeView`), and drawing them here as well
+ * would show every graph twice. */
+export const LiveDagPanels = memo(function LiveDagPanels({ cols }: { cols?: number }) {
+  const ui = useStore($uiState)
+  const dagRuns = useTurnSelector(state => state.dagRuns)
+
+  return (
+    <>
+      {dagRuns.map(run => (
+        <DagPanel key={run.runId} run={run} t={ui.theme} width={cols ? Math.max(24, cols - 4) : undefined} />
+      ))}
     </>
   )
 })
@@ -111,6 +176,14 @@ export const LiveTodoPanel = memo(function LiveTodoPanel() {
   const ui = useStore($uiState)
   const todos = useTurnSelector(state => state.todos)
   const collapsed = useTurnSelector(state => state.todoCollapsed)
+  const directChat = useStore($directChat)
+
+  // Same view guard as StreamingAssistant: the todos are the main turn's, and
+  // the row index this panel rides is a main-history index that can collide
+  // with an instance row's in a direct view.
+  if (directChat.active !== null) {
+    return null
+  }
 
   return <TodoPanel collapsed={collapsed} onToggle={toggleTodoCollapsed} t={ui.theme} todos={todos} />
 })

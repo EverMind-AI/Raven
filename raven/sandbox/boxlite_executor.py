@@ -7,12 +7,9 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from raven.sandbox.interfaces import ExecResult, SandboxExecutor, SandboxInitError
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +28,10 @@ class BoxliteExecutor(SandboxExecutor):
     surface before the agent loop begins.
 
     BoxOptions.volumes expects List[Tuple[str, str, str]]; lists are coerced to
-    tuples at construction time. BoxOptions.env expects List[Tuple[str, str]];
-    exec-level env dicts are converted to tuples before being passed to Box.exec().
-    Box.exec() does not accept cwd or timeout parameters (SimpleBox-only kwargs);
-    cwd is injected via the shell command and timeout via asyncio.wait_for().
+    tuples at construction time; exec-level env dicts are converted to tuples
+    before ``Box.exec()`` sees them. ``Box.exec()`` takes neither cwd nor
+    timeout: the cwd is injected through the shell command and the timeout is
+    enforced with ``asyncio.wait_for()``.
     """
 
     WORKSPACE_MOUNT = "/workspace"
@@ -237,8 +234,7 @@ class BoxliteExecutor(SandboxExecutor):
                 {"host": str(self._workspace), "guest": self.WORKSPACE_MOUNT, "readonly": False},
                 *[{"host": e[0], "guest": e[1], "readonly": e[2] == "ro"} for e in self._extra_volumes],
             ]
-            # boxlite 0.8.2: network is a string field; allow_net is a separate list field
-            # (NetworkSpec does not exist in this version)
+            # network is a string field and allow_net a separate list field.
             extra_kwargs: dict = {}
             if self._allow_net is False:
                 extra_kwargs["network"] = "none"
@@ -352,6 +348,22 @@ class BoxliteExecutor(SandboxExecutor):
                 stderr=f"Command timed out after {effective_timeout}s",
                 exit_code=-1,
             )
+        except asyncio.CancelledError:
+            # A cancelled turn must not leave the command running in the VM.
+            # ``CancelledError`` derives from ``BaseException``, so neither
+            # ``ExecTool.execute``'s nor ``ToolRegistry.execute``'s
+            # ``except Exception`` sees it and nothing upstream cleans up.
+            #
+            # Awaiting here is fine for a single cancellation, which is what
+            # ``turn.cancel`` sends. A caller that cancels twice interrupts this
+            # await and the VM-side command outlives it until ``stop()`` tears
+            # the box down.
+            if execution is not None:
+                try:
+                    await execution.kill()
+                except Exception:
+                    pass
+            raise
 
     # ------------------------------------------------------------------
     # Process spawning (MCP stdio servers)
@@ -472,14 +484,24 @@ class BoxliteExecutor(SandboxExecutor):
         return read_recv, write_send
 
     def _translate_cwd(self, cwd: str | None) -> str:
-        """Map host workspace path → VM /workspace/... path."""
+        """Map a host path to its VM mount path.
+
+        Checks the primary workspace mount first, then each extra volume, so
+        a cwd under a second mounted root (e.g. agent home, mounted separately
+        when it isn't already covered by the workspace mount) also translates
+        instead of silently landing at /workspace.
+        """
         if cwd is None:
             return self.WORKSPACE_MOUNT
         host_path = Path(cwd).resolve()
-        try:
-            rel = host_path.relative_to(self._workspace.resolve())
+        roots = [(self._workspace, self.WORKSPACE_MOUNT)]
+        roots.extend((Path(host), guest) for host, guest, _mode in self._extra_volumes)
+        for host_root, guest_root in roots:
+            try:
+                rel = host_path.relative_to(host_root.resolve())
+            except ValueError:
+                continue
             rel_str = str(rel)
-            return self.WORKSPACE_MOUNT if rel_str == "." else f"{self.WORKSPACE_MOUNT}/{rel_str}"
-        except ValueError:
-            logger.warning("cwd '%s' is outside workspace; falling back to /workspace", cwd)
-            return self.WORKSPACE_MOUNT
+            return guest_root if rel_str == "." else f"{guest_root}/{rel_str}"
+        logger.warning("cwd '%s' is outside every mounted volume; falling back to /workspace", cwd)
+        return self.WORKSPACE_MOUNT

@@ -188,7 +188,7 @@ def _make_service(
     interval_s: int = 60,
 ) -> HeartbeatService:
     return HeartbeatService(
-        workspace=workspace,
+        agent_home=workspace,
         provider=provider,  # type: ignore[arg-type]
         model="test-model",
         on_execute=on_execute,
@@ -360,7 +360,7 @@ def _spine_submit(outcomes: list):
                 if isinstance(outcome, Exception):
                     raise outcome
                 readback[req.conversation] = outcome
-                return None
+                return object()  # a completed turn resolves with its outcome; None means it was cut
 
         return _Handle()
 
@@ -368,7 +368,7 @@ def _spine_submit(outcomes: list):
 
 
 async def test_cron_completion_enqueues_event_and_wakes():
-    from raven.cli._cron_handler import make_on_cron_job
+    from raven.core.cron_stack import make_on_cron_job
 
     agent = MagicMock()
     hub = MagicMock()
@@ -393,7 +393,7 @@ async def test_cron_completion_enqueues_event_and_wakes():
 
 
 async def test_cron_failure_enqueues_failure_event_and_reraises():
-    from raven.cli._cron_handler import make_on_cron_job
+    from raven.core.cron_stack import make_on_cron_job
 
     agent = MagicMock()
     hub = MagicMock()
@@ -422,7 +422,7 @@ async def test_cron_recovery_drops_stale_failure_event():
     """A successful retry discards the job's pending :fail event — a
     recovered flake must not drive a user-facing follow-up. The reverse
     (success pending, then failure) keeps both: the failure is news."""
-    from raven.cli._cron_handler import make_on_cron_job
+    from raven.core.cron_stack import make_on_cron_job
 
     agent = MagicMock()
     hub = MagicMock()
@@ -443,7 +443,7 @@ async def test_cron_recovery_drops_stale_failure_event():
 
 
 async def test_cron_failure_after_success_keeps_both_events():
-    from raven.cli._cron_handler import make_on_cron_job
+    from raven.core.cron_stack import make_on_cron_job
 
     agent = MagicMock()
     hub = MagicMock()
@@ -464,7 +464,7 @@ async def test_cron_failure_after_success_keeps_both_events():
 async def test_cron_event_emit_is_best_effort():
     """A broken queue must not fail a successful run, and on the failure
     path it must not mask the original cron error."""
-    from raven.cli._cron_handler import make_on_cron_job
+    from raven.core.cron_stack import make_on_cron_job
 
     agent = MagicMock()
     hub = MagicMock()
@@ -482,7 +482,7 @@ async def test_cron_event_emit_is_best_effort():
 
 
 async def test_cron_without_wake_wiring_unchanged():
-    from raven.cli._cron_handler import make_on_cron_job
+    from raven.core.cron_stack import make_on_cron_job
 
     agent = MagicMock()
     hub = MagicMock()
@@ -520,7 +520,7 @@ def _make_missed_job(job_id: str = "job_missed", *, minutes_late: int = 6):
 
 
 async def test_missed_foreign_enqueues_one_event_and_wakes():
-    from raven.cli._cron_handler import make_on_missed_foreign
+    from raven.core.cron_stack import make_on_missed_foreign
 
     queue = SystemEventQueue()
     wake = WakeScheduler(coalesce_s=0.01)
@@ -550,7 +550,7 @@ async def test_missed_foreign_not_reenqueued_after_heartbeat_consumed():
     """After the heartbeat acks the event, later wake passes must not
     re-notify (in-process notified set — the second dedup layer, past the
     queue's context_key replacement)."""
-    from raven.cli._cron_handler import make_on_missed_foreign
+    from raven.core.cron_stack import make_on_missed_foreign
 
     queue = SystemEventQueue()
     wake = WakeScheduler(coalesce_s=0.01)
@@ -565,7 +565,7 @@ async def test_missed_foreign_not_reenqueued_after_heartbeat_consumed():
 
 
 async def test_missed_foreign_emit_failure_retried_next_pass():
-    from raven.cli._cron_handler import make_on_missed_foreign
+    from raven.core.cron_stack import make_on_missed_foreign
 
     queue = MagicMock()
     queue.enqueue.side_effect = [ValueError("queue broken"), None]
@@ -587,7 +587,7 @@ async def test_missed_foreign_end_to_end_service_start(tmp_path: Path):
     import json
     import time as _time
 
-    from raven.cli._cron_handler import make_on_missed_foreign
+    from raven.core.cron_stack import make_on_missed_foreign
     from raven.proactive_engine.schedulers.cron.service import CronService
 
     store_path = tmp_path / "jobs.json"

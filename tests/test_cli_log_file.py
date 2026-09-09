@@ -43,6 +43,7 @@ def tmp_logs(tmp_path: Path, monkeypatch):
         from loguru import logger
 
         logger.remove()
+        logger.configure(patcher=None)
         root.handlers = saved_handlers
         root.filters = saved_filters
         root.level = saved_level
@@ -163,6 +164,37 @@ def test_file_sink_does_not_dump_local_variable_values(tmp_logs: Path) -> None:
     assert "SECRET-TOKEN-9z9z9z" not in content
 
 
+def test_terminal_sink_does_not_dump_local_variable_values(tmp_logs: Path, capsys) -> None:
+    """The mirror of the test above, for the sink two lines below it in the source.
+
+    The file sink was configured ``backtrace=False, diagnose=False`` and said why;
+    the stderr sink beside it took loguru's defaults, which are both ``True``.
+    Measured before the fix: a token bound in the failing frame appeared six times
+    across twenty-seven lines of stderr.
+
+    stderr matters more here rather than less. ``raven acp`` runs as an editor's
+    subprocess and the editor displays that stream, so a traceback annotated with
+    every local's value is rendered into somebody's UI rather than into a file
+    only they can read.
+    """
+    from loguru import logger
+
+    redirect_loguru_to_file("gateway.log", terminal_level="ERROR")
+    api_token = "SECRET-TOKEN-8y8y8y"
+    try:
+        raise RuntimeError(api_token[:0] or "boom")
+    except RuntimeError:
+        logger.exception("processing failed")
+
+    err = capsys.readouterr().err
+    assert "processing failed" in err, "the record itself must still reach the terminal"
+    assert "SECRET-TOKEN-8y8y8y" not in err
+    # A frame-by-frame annotated traceback is also just noise on a protocol
+    # channel's neighbour; the interpreter's own excepthook still prints the
+    # plain one, so nothing diagnosable is lost.
+    assert err.count("\n") < 20, f"the terminal traceback should be compact, got:\n{err}"
+
+
 # ---------------------------------------------------------------------------
 # Root-logger TTY StreamHandler stripping
 # ---------------------------------------------------------------------------
@@ -203,74 +235,70 @@ def test_strip_tty_stream_handlers_keeps_root_non_tty_handler(tmp_logs: Path) ->
 
 
 # ---------------------------------------------------------------------------
-# redirect_terminal_fds_to_file — fd-level stdout/stderr capture
+# Credentials must not reach the persisted file
 # ---------------------------------------------------------------------------
 
 
-def test_redirect_terminal_fds_captures_print_and_raw_fd_write(tmp_path, capfd) -> None:
-    """Inside redirect_terminal_fds_to_file, both print() (flushed to the real fd)
-    and os.write(1, ...) must land in the target file, not the terminal.
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?engine=google&q=cats&api_key=SECRET-VALUE-1",
+        "?api_key=SECRET-VALUE-1&engine=google",
+        "?api_key=SECRET-VALUE-1",
+        "?apiKey=SECRET-VALUE-1&q=cats",
+        "?q=cats&token=SECRET-VALUE-1",
+    ],
+)
+def test_a_url_borne_credential_never_reaches_the_file(tmp_logs: Path, query: str) -> None:
+    """Driven through real httpx rather than a hand-written line: the record
+    that leaks is httpx's own success-path INFO, so its wording is what the
+    pattern has to match, and only httpx can say what that wording is.
 
-    This proves the context manager captures the structlog PrintLogger path
-    (which does print(message, file=None) writing to the live fd 1) AND raw fd writes.
-    We run under capfd.disabled() so pytest is not fighting for the fds during
-    the redirect — the fd-level dup2 takes exclusive effect.
+    The level is set here rather than inherited: importing litellm anywhere in
+    the process raises the ``httpx`` logger to WARNING as an import side
+    effect, which would leave every assertion below vacuously true.
     """
-    import os
+    import asyncio
 
-    from raven.cli._log_file import redirect_terminal_fds_to_file
+    import httpx
 
-    target = tmp_path / "capture.log"
+    httpx_logger = logging.getLogger("httpx")
+    saved_level = httpx_logger.level
+    log_path = redirect_loguru_to_file("gateway.log", file_level="INFO", terminal_level=None)
 
-    with capfd.disabled():
-        with redirect_terminal_fds_to_file(target):
-            # Real print() through sys.stdout — this is the structlog PrintLogger path.
-            print("print-leak-line", flush=True)
-            # Raw fd write — exercises the os.write path directly.
-            os.write(1, b"raw-fd-write\n")
+    async def _get() -> None:
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+        async with httpx.AsyncClient(transport=transport) as client:
+            await client.get(f"https://vendor.test/search{query}")
 
-    content = target.read_bytes()
-    assert b"print-leak-line" in content, "print() output must land in the redirect file (structlog PrintLogger path)"
-    assert b"raw-fd-write" in content, "os.write(1, ...) during redirect must land in the file"
+    try:
+        httpx_logger.setLevel(logging.INFO)
+        asyncio.run(_get())
+        text = _flush_and_read(log_path)
+    finally:
+        httpx_logger.setLevel(saved_level)
 
-
-def test_redirect_terminal_fds_restores_fd1_after_exit(tmp_path, capfd) -> None:
-    """After the context manager exits, fd1 must be restored to the original
-    target (e.g. the original stdout) — writes after exit must NOT go to the
-    redirect file."""
-    import os
-
-    from raven.cli._log_file import redirect_terminal_fds_to_file
-
-    target = tmp_path / "capture.log"
-    marker_after = b"marker-after-restore\n"
-
-    with capfd.disabled():
-        with redirect_terminal_fds_to_file(target):
-            pass
-        # After exit: write a marker — it should NOT appear in the file.
-        os.write(1, marker_after)
-
-    content = target.read_bytes() if target.exists() else b""
-    assert marker_after not in content, "writes after CM exit must not go to the redirect file"
+    assert "HTTP Request" in text, "the httpx record itself must still be persisted"
+    assert "SECRET-VALUE-1" not in text
+    assert "<redacted>" in text
 
 
-def test_redirect_terminal_fds_restores_on_exception(tmp_path, capfd) -> None:
-    """fd1/fd2 must be restored even when an exception is raised inside the CM."""
-    import os
+def test_redaction_keeps_the_rest_of_the_url(tmp_logs: Path) -> None:
+    from loguru import logger
 
-    from raven.cli._log_file import redirect_terminal_fds_to_file
+    log_path = redirect_loguru_to_file("gateway.log", file_level="INFO", terminal_level=None)
+    logger.error("WebFetch error for {}: {}", "https://vendor.test/v1?q=cats&api_key=SECRET-VALUE-2", "boom")
 
-    target = tmp_path / "capture.log"
-    marker_after = b"marker-after-exception\n"
+    text = _flush_and_read(log_path)
+    assert "SECRET-VALUE-2" not in text
+    assert "https://vendor.test/v1?q=cats&api_key=<redacted>" in text
+    assert "boom" in text
 
-    with capfd.disabled():
-        try:
-            with redirect_terminal_fds_to_file(target):
-                raise RuntimeError("boom inside CM")
-        except RuntimeError:
-            pass
-        os.write(1, marker_after)
 
-    content = target.read_bytes() if target.exists() else b""
-    assert marker_after not in content, "fd1 must be restored on exception so writes land back on real stdout"
+def test_a_line_carrying_no_credential_is_untouched(tmp_logs: Path) -> None:
+    from loguru import logger
+
+    log_path = redirect_loguru_to_file("gateway.log", file_level="INFO", terminal_level=None)
+    logger.info("channel=whatsapp status=ready keys=3")
+
+    assert "channel=whatsapp status=ready keys=3" in _flush_and_read(log_path)

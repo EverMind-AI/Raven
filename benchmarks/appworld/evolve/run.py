@@ -2,7 +2,7 @@
 
 Everything generic (round loop, focused-Fisher gate, per-parent frozen baseline,
 edit-then-commit apply, termination, journal/resume) comes from
-``raven.evolver.orchestrator``; only the AppWorld brain is wired here:
+``evolver.orchestrator``; only the AppWorld brain is wired here:
 
 - diagnose_fn = W1-W7 judge over the parent's failing trajectories
 - design_fn   = bash-editor producing candidate file edits off the parent commit
@@ -43,16 +43,16 @@ from benchmarks.appworld.evolve.trajectories import (
     build_passing_ids_source,
     render_candidate_failure,
 )
-from raven.evolver.orchestrator.config import Budget, OrchestratorConfig
-from raven.evolver.orchestrator.gates.policy import make_frozen_baseline
-from raven.evolver.orchestrator.gates.strategies import (
+from evolver.orchestrator.config import Budget, OrchestratorConfig
+from evolver.orchestrator.gates.policy import make_frozen_baseline
+from evolver.orchestrator.gates.strategies import (
     FocusedFisherGate,
     confirm_job_name,
 )
-from raven.evolver.orchestrator.loop import EvolutionOrchestrator
-from raven.evolver.orchestrator.nodes.taxonomy import resolve_taxonomy
-from raven.evolver.orchestrator.production import build_evolution_orchestrator
-from raven.evolver.tree.node import HarnessNode
+from evolver.orchestrator.loop import EvolutionOrchestrator
+from evolver.orchestrator.nodes.taxonomy import resolve_taxonomy
+from evolver.orchestrator.production import build_evolution_orchestrator
+from evolver.tree.node import HarnessNode
 
 
 def build_appworld_orchestrator(
@@ -115,7 +115,7 @@ def build_appworld_orchestrator(
         # Fail fast at build time: agentic analysis only runs on Claude models
         # via a present, logged-in claude CLI — never mid-run, never on other
         # drivers (their arms use mapreduce).
-        from raven.evolver.orchestrator.providers.claude_agentic import (
+        from evolver.orchestrator.providers.claude_agentic import (
             require_claude_for_agentic,
         )
 
@@ -251,7 +251,7 @@ def build_appworld_orchestrator(
 
     def baseline_of():
         if baseline_mode == "same_session":
-            from raven.evolver.orchestrator.gates.policy import (
+            from evolver.orchestrator.gates.policy import (
                 SameSessionPairedBaseline,
             )
 
@@ -267,7 +267,7 @@ def build_appworld_orchestrator(
 
     # Gate-b read-back: which train tasks a beacon-carrying candidate actually
     # fired on, unioned over its confirm out-dir + infra-rerun ladder siblings.
-    from raven.evolver.activation.ledger import read_fired_tasks
+    from evolver.activation.ledger import read_fired_tasks
 
     def fired_source_of(node: HarnessNode, task_ids: list[str]):
         dirs = aw_adapter.ladder_out_dirs(runs_root / confirm_job_name(node.node_id))
@@ -275,7 +275,7 @@ def build_appworld_orchestrator(
 
     preflight_fn = None
     if zero_hit_preflight:
-        from raven.evolver.orchestrator.production import make_zero_hit_preflight
+        from evolver.orchestrator.production import make_zero_hit_preflight
 
         preflight_fn = make_zero_hit_preflight(trajectory_source)
 
@@ -317,11 +317,11 @@ def build_appworld_sealed_runner(
     checked out and ``batch.py`` runs against it), invoked with ``split="test"``
     and the infra rerun ladder, so test is scored exactly like train. Never
     called during evolution — feed the journal records to
-    :func:`raven.evolver.orchestrator.sealed.runner.unseal_retention` after the
+    :func:`evolver.orchestrator.sealed.runner.unseal_retention` after the
     loop finishes.
     """
-    from raven.evolver.orchestrator.scoring import eval_with_infra_rerun
-    from raven.evolver.orchestrator.sealed.runner import SealedTestRunner
+    from evolver.orchestrator.scoring import eval_with_infra_rerun
+    from evolver.orchestrator.sealed.runner import SealedTestRunner
 
     raw = make_appworld_eval_fn(aw_cfg, repo_root)
 

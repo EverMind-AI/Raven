@@ -1,0 +1,120 @@
+"""The reviewer's reasoning-effort knob, and the sentinel trap it must not step on.
+
+``chat_with_retry`` distinguishes an ABSENT ``reasoning_effort`` (resolved to the
+provider's generation default) from an explicit ``None`` (parameter suppressed).
+Every measured arm ran the absent form, so the knob's unset state has to keep the
+call byte-identical - which means the wiring may only pass the parameter when the
+knob is set. These tests pin the call shape on both sides of that line; get it
+wrong and no test that checks verdicts would notice, because the reviewer answers
+either way.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+PLUGIN_DIR = REPO / "agents" / "raven-research" / "plugins" / "research-flow"
+sys.path.insert(0, str(PLUGIN_DIR))
+
+from research_flow.gates.verify import DraftReviewerGate  # noqa: E402
+
+from raven.contracts.loop_hooks import AgentHookContext  # noqa: E402
+
+
+class _Reviewer:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def chat_with_retry(self, **kwargs):
+        self.calls.append(kwargs)
+
+        class _R:
+            content = '{"pass": true, "unsupported_claims": [], "issues": []}'
+            finish_reason = "stop"
+
+        return _R()
+
+
+def _review(gate: DraftReviewerGate) -> None:
+    class _Response:
+        has_tool_calls = False
+        content = "The answer is 42. Source: https://example.com"
+
+    ctx = AgentHookContext(
+        session_key="t",
+        iteration=3,
+        messages=[
+            {"role": "user", "content": "what is the answer?"},
+            {"role": "tool", "name": "web_fetch", "content": '{"content": "42"}'},
+        ],
+        response=_Response(),
+        metadata={},
+    )
+    asyncio.run(gate.after_iteration(ctx))
+
+
+def test_unset_effort_keeps_the_parameter_out_of_the_call():
+    reviewer = _Reviewer()
+    _review(DraftReviewerGate(reviewer))
+
+    assert len(reviewer.calls) == 1
+    assert "reasoning_effort" not in reviewer.calls[0]
+
+
+def test_a_configured_effort_reaches_the_reviewer_call():
+    reviewer = _Reviewer()
+    _review(DraftReviewerGate(reviewer, reasoning_effort="low"))
+
+    assert reviewer.calls[0]["reasoning_effort"] == "low"
+
+
+def test_the_transport_deadline_knob_is_kept_but_never_sent():
+    """``attemptHttpTimeoutSeconds`` stays on the model for twin parity and reaches the
+    gate, but the call never carries ``timeout``: the trunk provider protocol has no
+    such argument, and passing it raised TypeError inside the call so every review
+    failed open the moment the knob was set - the sufficiency judge's own defect."""
+    reviewer = _Reviewer()
+    _review(DraftReviewerGate(reviewer, attempt_timeout_seconds=40.0))
+    assert "timeout" not in reviewer.calls[0]
+
+    reviewer = _Reviewer()
+    gate = DraftReviewerGate(reviewer, attempt_timeout_seconds=40.0, attempt_http_timeout_seconds=35.0)
+    _review(gate)
+    assert "timeout" not in reviewer.calls[0]
+    assert gate._attempt_http_timeout_seconds == 35.0
+
+
+def test_the_knob_travels_from_config_to_the_gate(tmp_path):
+    from research_flow.config import FlowConfig
+    from research_flow.flow import ToolHandles, build_chain
+    from research_flow.state import SessionStore
+
+    class _Stub:
+        async def chat_with_retry(self, **kwargs):  # pragma: no cover
+            raise AssertionError("no provider call expected")
+
+    def _build(config):
+        return build_chain(
+            config,
+            _Stub(),
+            max_iterations=40,
+            context_window_tokens=65_536,
+            tools=ToolHandles(),
+            store=SessionStore(tmp_path),
+        )
+
+    config = FlowConfig(enabled=True)
+    config.verify.reasoning_effort = "low"
+    config.verify.attempt_http_timeout_seconds = 35.0
+    chain = _build(config)
+    gate = next(o for o in chain if isinstance(o, DraftReviewerGate))
+    assert gate._reasoning_effort == "low"
+    assert gate._attempt_http_timeout_seconds == 35.0
+
+    chain = _build(FlowConfig(enabled=True))
+    gate = next(o for o in chain if isinstance(o, DraftReviewerGate))
+    assert gate._reasoning_effort is None
+    assert gate._attempt_http_timeout_seconds is None

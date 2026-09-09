@@ -5,6 +5,7 @@ from enum import StrEnum
 from typing import Any
 
 from raven.spine.message import Media, Source
+from raven.spine.turn import Origin
 
 
 @dataclass(frozen=True)
@@ -21,8 +22,14 @@ class NoticeKind(StrEnum):
 
     PROGRESS = "progress"
     TOOL_HINT = "tool_hint"
-    INJECTED = "injected"
-    DELIVERY_FAILED = "delivery_failed"
+    # An optional organ failed this turn and the turn proceeded without it;
+    # outlets should render the detail so the user knows the answer was
+    # produced degraded (e.g. without long-term memory).
+    ORGAN_DEGRADED = "organ_degraded"
+    # The runtime ended the turn on a safety decision. Unlike the kinds above,
+    # this one replaces the answer rather than accompanying it, so an outlet
+    # that renders nothing else should still render this.
+    ACTION_BLOCKED = "action_blocked"
 
 
 class ToolPhase(StrEnum):
@@ -34,12 +41,34 @@ class ToolPhase(StrEnum):
 
 # Lifecycle events — emitted by the worker, never by a runner.
 
+# ``turn_id`` is the second correlation axis alongside ``conversation_id``: the
+# lane is WHERE a turn ran, this is WHICH turn ran. A consumer keyed only on the
+# lane stamps a turn's end with whatever a per-lane slot last held, which is a
+# different turn whenever the runtime submits one of its own onto a busy lane.
+
 
 @dataclass(frozen=True)
 class TurnStarted:
-    """Marker that a turn began."""
+    """Marker that a turn began.
 
+    ``origin`` is the request's, so a consumer can tell a turn the runtime
+    opened from one a person sent -- the RPC spine turns the former into a
+    ``turn.started`` boundary (the runtime's ``message.start`` is suppressed
+    for it, see raven/rpc/spine.py), and the latter into nothing here, because
+    ``turn.send`` owns that event.
+
+    ``delegated`` is the delivery identity when this turn IS a delegated
+    result re-entering the conversation (the shape ``subagent.delivered`` used
+    to carry, plus the injected text): the boundary is the moment the result
+    is actually visible, so that moment is where the row belongs -- not at
+    submission, when the result is still queued behind its parent.
+    """
+
+    origin: Origin | None = None
+    delegated: dict[str, str] | None = None
+    content: str | None = None
     conversation_id: str | None = None
+    turn_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,6 +76,7 @@ class TurnFailed:
     error: str
     cancelled: bool
     conversation_id: str | None = None
+    turn_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -55,6 +85,7 @@ class TurnEnded:
     latency_ms: float
     explicit_reply: bool
     conversation_id: str | None = None
+    turn_id: str = ""
 
 
 # Deliverable events — emitted by the runner, routed to outlets.
@@ -70,15 +101,36 @@ class ToolEvent:
     display: str | None = None
     result_preview: str = ""
     truncated: bool = False
+    # COMPLETE only, and the verdict the emit site can actually give: derived
+    # from the registry's own failure convention (the model-facing text of a
+    # failed tool starts with "Error"), which is the same rule the retry hint
+    # uses. Defaulted true so an outlet that predates the field keeps drawing
+    # every row as it drew it before.
+    ok: bool = True
     source: Source | None = None
     conversation_id: str | None = None
+    # START only: the tool is a blocking interaction, so it has no automatic
+    # deadline and may emit nothing for as long as it runs. An outlet whose
+    # client clocks the stream must suspend that clock while it is in flight.
+    blocking: bool = False
+    # COMPLETE only: opt-in structured payload from Tool.take_metadata (e.g. a
+    # deliver_files manifest). Outlets that do not understand a key ignore it.
+    metadata: dict[str, Any] | None = None
+    # COMPLETE only: unified diff of what the call changed on disk, when the
+    # tool could produce one (see ToolResult.diff). For an outlet that renders
+    # the change; never shown to the model.
+    diff: str | None = None
+    # COMPLETE only, and beside ``diff`` rather than instead of it: the same
+    # change as ``{path, after, before}`` for an outlet that draws its own diff
+    # and therefore needs the contents, not a rendering of them. Carried as a
+    # plain mapping so ``spine`` stays free of the tools package.
+    file_change: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class Text:
     content: str
     source: Source | None = None
-    reply_to: str | None = None
     conversation_id: str | None = None
 
 

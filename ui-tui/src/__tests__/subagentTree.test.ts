@@ -379,6 +379,8 @@ describe('formatSummary', () => {
 describe('fmtDuration', () => {
   it('formats under a minute as plain seconds', () => {
     expect(fmtDuration(0)).toBe('0s')
+    expect(fmtDuration(119.6)).toBe('2m')
+    expect(fmtDuration(59.6)).toBe('1m')
     expect(fmtDuration(42)).toBe('42s')
     expect(fmtDuration(59.4)).toBe('59s')
   })

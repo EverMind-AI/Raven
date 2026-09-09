@@ -19,8 +19,18 @@ from raven.cli import doctor_commands
 from raven.cli.commands import app
 from raven.config.loader import save_config, set_config_path
 from raven.config.schema import Config
+from tests._everos_presence import everos_plugin_absent, everos_plugin_broken
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def isolated_raven_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`doctor` now inspects the installation on every run, which reads -- and
+    can clear -- the upgrade marker in the agent home. Left unisolated, this
+    file would report on, and tidy up after, a real upgrade in flight."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "agent-home"))
+    return tmp_path / "agent-home"
 
 
 @pytest.fixture
@@ -41,7 +51,7 @@ def no_memory_server(monkeypatch: pytest.MonkeyPatch):
     machine whose embedding provider is broken would fail the healthy-exit-0
     case. Tests that care about capabilities install their own answer.
     """
-    from raven.plugin.memory.everos import _health
+    from raven_everos import health as _health
 
     monkeypatch.setattr(
         _health,
@@ -110,7 +120,7 @@ def test_doctor_unresolved_routing_exit1(tmp_config: Path) -> None:
 
 def test_doctor_shows_gateway_running(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A held instance lock surfaces as ``running (pid …)`` in the Gateway section."""
-    from raven.cli import _gateway_lock
+    from raven.gateway import lock as _gateway_lock
 
     monkeypatch.setattr(
         _gateway_lock,
@@ -125,7 +135,7 @@ def test_doctor_shows_gateway_running(healthy_config: Path, monkeypatch: pytest.
 
 
 def test_doctor_shows_gateway_not_running(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven.cli import _gateway_lock
+    from raven.gateway import lock as _gateway_lock
 
     monkeypatch.setattr(_gateway_lock, "read_status", lambda now: None)
     r = runner.invoke(app, ["doctor"])
@@ -212,7 +222,7 @@ def test_doctor_json_with_probe_structure(healthy_config: Path, monkeypatch: pyt
 
 def _capabilities(no_memory_server, **caps: bool) -> None:
     """Make the memory probe answer as a reachable server with `caps`."""
-    from raven.plugin.memory.everos import _health
+    from raven_everos import health as _health
 
     no_memory_server.setattr(
         _health,
@@ -234,7 +244,7 @@ def test_the_probe_follows_the_configured_address(healthy_config: Path, no_memor
     """
     import json as _json
 
-    from raven.plugin.memory.everos import _health
+    from raven_everos import health as _health
 
     raw = _json.loads(healthy_config.read_text())
     raw.setdefault("plugins", {}).setdefault("config", {})["everos-memory"] = {"base_url": "http://localhost:29999"}
@@ -422,7 +432,11 @@ def _run_doctor_subprocess(home: Path) -> tuple[str, int]:
     import subprocess
     import sys
 
-    env = {**os.environ, "HOME": str(home), "COLUMNS": "250"}
+    # RAVEN_HOME is dropped rather than passed through: the point of this helper
+    # is a sandbox HOME, and an inherited RAVEN_HOME (the isolation fixture sets
+    # one) would out-rank it and send the subprocess to a different config.
+    env = {k: v for k, v in os.environ.items() if k != "RAVEN_HOME"}
+    env.update({"HOME": str(home), "COLUMNS": "250"})
     r = subprocess.run(
         [sys.executable, "-m", "raven", "doctor"],
         stdin=subprocess.DEVNULL,
@@ -522,7 +536,10 @@ def test_memory_retrieval_reaches_the_json_output(tmp_path: Path) -> None:
     import subprocess
     import sys
 
-    env = {**os.environ, "HOME": str(home), "COLUMNS": "250"}
+    # Same reason as _run_doctor_subprocess: a sandbox HOME only decides where
+    # the config is read from while no RAVEN_HOME out-ranks it.
+    env = {k: v for k, v in os.environ.items() if k != "RAVEN_HOME"}
+    env.update({"HOME": str(home), "COLUMNS": "250"})
     r = subprocess.run(
         [sys.executable, "-m", "raven", "doctor", "--json"],
         stdin=subprocess.DEVNULL,
@@ -560,7 +577,7 @@ class TestDoctorDoesNotInventASelfManagedRoot:
             "raven.config.update_everos.everos_role_configured",
             lambda _s: pytest.fail("read the local toml for a root raven does not own"),
         )
-        from raven.plugin.memory.everos import _health
+        from raven_everos import health as _health
 
         monkeypatch.setattr(
             _health,
@@ -616,7 +633,7 @@ class TestASelfManagedServerCanStillBeBroken:
     @staticmethod
     def _info(monkeypatch, caps: dict):
         from raven.cli import doctor_commands as dc
-        from raven.plugin.memory.everos import _health
+        from raven_everos import health as _health
 
         monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
         monkeypatch.setattr(
@@ -664,6 +681,70 @@ class TestASelfManagedServerCanStillBeBroken:
 
         assert "rerank" not in info.configured
         assert "rerank" not in info.unbuilt
+
+
+class TestTheInstallationSection:
+    """An upgrade killed part way through leaves an installation that answers
+    some questions and not others. Every later verdict in this report is then a
+    verdict about the wrong thing, so this one is checked first and, when it
+    fails, it is the only one printed."""
+
+    def _fault(self, monkeypatch: pytest.MonkeyPatch, reason: str, detail: str, missing: list[str]) -> None:
+        from raven.updates import install_guard as _install_guard
+
+        monkeypatch.setattr(_install_guard, "inspect_install", lambda: _install_guard.InstallFault(reason, detail))
+        monkeypatch.setattr(_install_guard, "missing_pieces", lambda: missing)
+
+    def test_a_sound_installation_is_not_mentioned(self, healthy_config: Path) -> None:
+        r = runner.invoke(app, ["doctor"])
+        assert r.exit_code == 0, r.stdout
+        assert "Installation" not in r.stdout
+
+    def test_a_half_written_installation_fails_the_check(
+        self, healthy_config: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._fault(
+            monkeypatch,
+            "incomplete",
+            "this installation is missing the packaged page (raven/ui/dist)",
+            ["the packaged page (raven/ui/dist)"],
+        )
+        r = runner.invoke(app, ["doctor"])
+
+        assert r.exit_code == 1, r.stdout
+        assert "incomplete" in r.stdout
+        assert "install.sh" in r.stdout
+
+    def test_it_outranks_a_config_that_also_looks_wrong(
+        self, tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no config at all, the report would normally stop at "not
+        configured" -- which is the wrong thing to send a reader to fix."""
+        self._fault(monkeypatch, "incomplete", "this installation is missing its own package metadata", ["x"])
+        r = runner.invoke(app, ["doctor"])
+
+        assert r.exit_code == 1, r.stdout
+        assert "incomplete" in r.stdout
+        assert "raven onboard" not in r.stdout
+
+    def test_a_running_upgrade_is_a_note_not_a_failure(
+        self, healthy_config: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing is broken yet; the rest of the report is still worth reading."""
+        self._fault(monkeypatch, "upgrading", "an upgrade to 9.9.9 is replacing this installation", [])
+        r = runner.invoke(app, ["doctor"])
+
+        assert r.exit_code == 0, r.stdout
+        assert "9.9.9" in r.stdout
+        assert "anthropic" in r.stdout.lower()
+
+    def test_the_verdict_reaches_the_json_output(self, healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._fault(monkeypatch, "incomplete", "this installation is missing the packaged page", ["the page"])
+        r = runner.invoke(app, ["doctor", "--json"])
+
+        payload = json.loads(r.stdout[r.stdout.index("{") :])
+        assert payload["install"]["complete"] is False
+        assert payload["install"]["missing"] == ["the page"]
 
 
 # ── raven doctor --fix ──────────────────────────────────────────────────
@@ -945,7 +1026,7 @@ def test_doctor_lists_a_capability_that_is_not_configured(healthy_config: Path) 
     assert "Tool capabilities" in result.stdout
     assert "web_search" in result.stdout
     assert "serper.dev" in result.stdout, "a deployer cannot act without being told where to go"
-    assert "tools.web.search.apiKey" in result.stdout
+    assert "tools.web.providers.serper.apiKey" in result.stdout
 
 
 def test_doctor_says_a_paid_capability_bills_before_it_is_switched_on(healthy_config: Path) -> None:
@@ -1038,7 +1119,7 @@ def test_a_config_path_is_never_split_across_lines(healthy_config: Path) -> None
     is why each fact is printed on its own line rather than in a sentence."""
     result = runner.invoke(app, ["doctor"])
 
-    for path in ("tools.web.search.apiKey", "tools.media.image.model", "SERPER_API_KEY"):
+    for path in ("tools.web.providers.serper.apiKey", "tools.media.image.model", "SERPER_API_KEY"):
         assert path in result.stdout, f"{path} was broken across a line wrap"
 
 
@@ -1121,3 +1202,36 @@ def test_the_json_row_reports_the_two_states_independently(
 
     assert row["configured"] is configured
     assert row["disabled"] is disabled
+
+
+class TestDoctorWithoutTheMemoryPlugin:
+    """The backend ships as its own distribution, and this install lacks it.
+
+    ``memory.backend`` still defaults to ``everos``, so the report has to say
+    what is missing instead of dying on the import: doctor is the command a
+    person runs precisely when something is wrong.
+    """
+
+    def test_the_report_names_the_distribution_and_fails(self, healthy_config: Path) -> None:
+        with everos_plugin_absent():
+            r = runner.invoke(app, ["doctor"])
+
+        assert r.exit_code == 2, r.stdout
+        assert "everos-memory" in r.stdout
+        assert "memory.backend" in r.stdout
+
+    def test_the_json_report_carries_it_as_a_field(self, healthy_config: Path) -> None:
+        with everos_plugin_absent():
+            r = runner.invoke(app, ["doctor", "--json"])
+
+        payload = json.loads(r.stdout)
+        assert payload["memory"]["plugin_missing"] is True
+        assert payload["memory"]["configured"] == []
+
+    def test_an_installed_but_broken_plugin_is_not_called_absent(self) -> None:
+        """A plugin whose own import fails is a bug to fix, not a degrade to
+        report -- swallowing it would hide the fault behind an install hint."""
+        from raven.cli import doctor_commands as dc
+
+        with everos_plugin_broken(), pytest.raises(ImportError):
+            dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))

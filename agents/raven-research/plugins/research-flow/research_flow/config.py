@@ -1,0 +1,665 @@
+"""FlowConfig: the research flow's knobs, ported from the fork's ``DRFlow*Config`` models.
+
+Same sub-model shapes as the fork's ``raven/config/raven.py``, and the same fields and
+defaults except where this twin has moved past the vendored record: that retired checkout
+was kept at upstream ``a903a424`` while the twin takes upstream's later changes directly, and every
+such lead is named in ``TWIN_LEADS`` (``tests/test_agents_research_flow_parity.py``), which
+fails on any difference it does not name. What changed otherwise is only the trunk seam
+the config arrives through.
+The slice reaches the plugin as a plain dict with camelCase keys exactly as the product
+writes them in ``config.json`` (``plugins.config["research-flow"]``), so every model here
+accepts both camelCase and snake_case (``alias_generator=to_camel`` +
+``populate_by_name``) and ignores unknown keys instead of forbidding them - the slice
+also carries plugin-only keys (``search.apiKey``, ``fetch.apiKey``, ``proxy``,
+``stateRoot``) that the flow models do not own.
+
+Four of the fork's fields are deliberately absent: ``toolsAllowlist``,
+``minimalContext``, ``truncationWrapup`` and ``reactiveClamp`` were consumed by
+the fork's LOOP, and no seam here reaches them. See ``_RETIRED_KEYS`` for who
+owns each surface now and why they are not merely accepted and ignored.
+
+Three fields are this product's own and the fork has no twin for them: ``evidenceFloor``,
+the per-mode evidence demand that makes ``max`` a different stop rule (see
+``gates/evidence_floor.py``); ``sufficiency.judgeListing``, the pre-page judgement that
+lets a settled question ship on search snippets; and ``plainFirst``, the first-reply
+experiment that withholds the web tools until the model has answered or asked for
+research (``gates/plain_first.py``). The parity test names all three, so a fourth has to
+be declared there too rather than slipping in beside them.
+
+``with_overlay`` is the per-mode entry point: a session mode's ``drFlow`` diff
+(camelCase, arbitrary depth) is deep-merged over the base dict and the result
+re-validated, so a mode changes exactly the knobs it names and nothing else.
+"""
+
+from __future__ import annotations
+
+from typing import Any, ClassVar, Literal
+
+from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.alias_generators import to_camel
+
+
+class _Base(BaseModel):
+    """Accepts both camelCase and snake_case keys; unknown keys are ignored."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="ignore",
+    )
+
+
+class SearchSaturationConfig(_Base):
+    """Stop or deepen a turn whose searches have stopped returning new documents."""
+
+    enabled: bool = False
+    identity: Literal["url", "docid"] = "url"
+    k: int = 10
+    on_saturate: Literal["widen", "paginate", "stop"] = "paginate"
+    max_pages: int = 2
+
+
+class SearchConfig(_Base):
+    """Search-result shaping: strip everything that lets the model answer from
+    the SERP without opening a page."""
+
+    include_answer_box: bool = False
+    include_knowledge_graph: bool = False
+    include_snippets: bool = True
+    snippet_dedup_by_docid: bool = True
+    cross_query_dedup: bool = False
+    search_depth: int = 20
+    rendered_width: int = 5
+    repeat_notice: bool = True
+    saturation: SearchSaturationConfig = Field(default_factory=SearchSaturationConfig)
+
+
+class DigestConfig(_Base):
+    """Targeted extraction for web_fetch: long pages distilled to the request."""
+
+    enabled: bool = True
+    model: str | None = None
+    threshold_chars: int = 8000
+    timeout_seconds: float = 120.0
+    verbatim_head_chars: int = 800
+
+
+class VerifyConfig(_Base):
+    """End-of-turn draft review gate (independent context, fail-open)."""
+
+    enabled: bool = True
+    model: str | None = None
+    timeout_seconds: float = 360.0
+    attempt_timeout_seconds: float = 120.0
+    attempt_http_timeout_seconds: float | None = None
+    reasoning_effort: str | None = None
+    max_revisions: int = 1
+    review_final_draft: bool = False
+    max_tokens: int = 8192
+    constraint_rubric: bool = True
+    strict_reject_only: bool = True
+    fail_open_on_elided_evidence: bool = True
+    evidence_round: bool = False
+    evidence_round_searches: int = 6
+    evidence_round_depth: int = 50
+
+
+class BudgetNoteConfig(_Base):
+    """Budget visibility for the model: a budget line appended to tool results."""
+
+    enabled: bool = True
+    warn_ratio: float = 0.8
+
+
+class ForceFinalizeConfig(_Base):
+    """Forced-termination backstop: nudge an answerless terminal, then salvage."""
+
+    enabled: bool = True
+    max_nudges: int = 1
+    model: str | None = None
+    timeout_seconds: float = 240.0
+    attempt_timeout_seconds: float = 240.0
+    max_tokens: int = 8192
+    reasoning_effort: str | None = "low"
+    evidence_items: int = 8
+    evidence_item_chars: int = 2000
+    reasoning_excerpt_chars: int = 8000
+
+
+class SpinBreakerConfig(_Base):
+    """Restart-language circuit breaker on the iteration phases."""
+
+    enabled: bool = True
+    phrase_hits: int = 2
+    min_budget_ratio: float = 0.5
+    min_entity_overlap: int = 2
+    max_triggers: int = 1
+
+
+class FetchFloorConfig(_Base):
+    """Search-without-fetch pathology guard: an in-history nudge to open pages."""
+
+    enabled: bool = True
+    min_searches: int = 5
+    max_notes: int = 2
+
+
+class FetchGateConfig(_Base):
+    """Search-without-fetch guard at the action-space layer: withhold web_search."""
+
+    enabled: bool = False
+    k: int = 15
+    release_after_failed_fetches: int = 2
+    release_after_closed_iterations: int = 2
+    """Iterations spent closed without a page opened before search comes back for
+    the rest of the turn. Counts iterations, not attempts, so it advances when the
+    model's reaction to the closed schema is to stop fetching - upstream's dr@3.6
+    batch stranded two runs with the attempt-counting valve above at zero."""
+
+
+class EvidenceFloorConfig(_Base):
+    """Evidence demanded before a draft may ship: bounced back to research until it is met.
+
+    This product's own gate, absent from the fork. Off by default and switched on by one
+    mode: it is what makes ``max`` a different stop rule from ``high`` rather than a longer
+    budget, because it is evaluated on every draft instead of waiting on a reviewer's
+    rejection or a dry search streak.
+    """
+
+    enabled: bool = False
+    min_pages: int = 18
+    min_domains: int = 8
+    max_rollbacks: int = 2
+
+
+class PlainFirstConfig(_Base):
+    """First reply without web tools: answer from general knowledge or ask for research.
+
+    Product-only; the class default is off, the product's base slice turns it on and
+    only the max overlay turns it back off. The web tools are withheld for the first model
+    call of a session's first research turn, and of any later turn the conversation
+    gate classes as a new common-knowledge topic; the model either answers or calls
+    ``request_research``. A plain answer is then put to an independent judge
+    (``judge``) that decides two things at once: whether the question is settled general
+    knowledge, and whether the draft is sound. Anything else, and any judge failure,
+    sends the turn into research with the draft kept as a hypothesis.
+
+    ``judge`` may not be switched off while ``enabled`` is on: without it a plain draft
+    ships through ``accepted_unjudged``, the one path that checks nothing.
+    """
+
+    enabled: bool = False
+    judge: bool = True
+    judge_model: str | None = None
+    judge_timeout_seconds: float = 90.0
+    judge_max_tokens: int = 8192
+    # ``None`` leaves the provider's generation default, for backends that reject
+    # the parameter. At the default effort the judge ran 20-500s per call on a
+    # reasoning model; ``low`` keeps the verdicts and cuts the tail.
+    judge_reasoning_effort: str | None = "low"
+
+    @model_validator(mode="after")
+    def _the_judge_stays_on(self) -> "PlainFirstConfig":
+        if self.enabled and not self.judge:
+            raise ValueError("plainFirst.judge cannot be false while plainFirst.enabled is true")
+        return self
+
+    # What the evidence reviewer does with an accepted plain answer. The judge has
+    # already checked the draft's soundness alongside the question's class, and the
+    # reviewer's own rubric is claims against evidence there is none of, so ``skip``
+    # ships the judged draft; ``full`` consults the reviewer anyway. Any draft written
+    # after research is reviewed in full regardless.
+    review: Literal["skip", "full"] = "skip"
+
+
+class SufficiencyConfig(_Base):
+    """First-round sufficiency gate: judge retrieved evidence, note when it answers."""
+
+    enabled: bool = False
+    model: str | None = None
+    min_searches: int = 1
+    min_fetches: int = 1
+    # Product-only (the fork has no such field): also ask the judge once on the first
+    # search listing, before any page is opened. A release there lets a settled
+    # question ship on snippets; an insufficient verdict there leaves the page-floor
+    # judgement above exactly as it was.
+    judge_listing: bool = False
+    timeout_seconds: float = 60.0
+    attempt_timeout_seconds: float = 30.0
+    max_tokens: int = 2048
+    reasoning_effort: str | None = "low"
+    evidence_items: int = 4
+    evidence_item_chars: int = 2000
+
+
+class FinalShapeConfig(_Base):
+    """Terminal-answer shaping: make the turn's ending an observable."""
+
+    record: bool = True
+    require_marker: bool = True
+    report_structure: bool = True
+    report_format_override: bool = True
+    report_depth: bool = False
+    report_reminder: bool = True
+    report_bounce: bool = False
+    process_appendix: bool = True
+
+
+class ConversationConfig(_Base):
+    """Multi-turn behaviour: the per-turn research decision and the memo."""
+
+    enabled: bool = False
+    gate: Literal["always", "agentic"] = "agentic"
+    gate_model: str | None = None
+    gate_max_tokens: int = 1024
+    gate_reasoning_effort: str | None = "low"
+    gate_timeout_seconds: float = 20.0
+    gate_history_messages: int = 6
+    gate_history_chars: int = 4000
+    research_memo: bool = True
+    memo_max_chars: int = 2000
+    memo_max_sources: int = 12
+    memo_max_queries: int = 12
+    memo_max_opened: int = 200
+    identity_scope: Literal["turn", "topic"] = "turn"
+
+
+class AskUserConfig(_Base):
+    """Turn-boundary user interaction: one clarify round, optionally with an outline.
+
+    Resolved against ``conversation.enabled`` at assembly: without a second turn
+    the handoff has nowhere to land.
+    """
+
+    enabled: bool = False
+    mode: Literal["when_needed", "first_turn"] = "first_turn"
+    delivery: Literal["handoff", "tool"] = "handoff"
+    outline: bool = True
+    max_rounds: int = 1
+    first_iteration_only: bool = True
+    brief_requires_answer_check: bool = True
+    reply_overlap_threshold: float = 0.05
+    max_questions: int = 3
+    max_outline_items: int = 5
+    prompt_clause: bool = True
+    brief: bool = False
+
+
+# Two rejection classes, both denylists (an invented label passes). First the
+# base label of a superseded build: suffixed variants are legitimate - they name
+# a profile, not a semantics - so only the base is checked here.
+SUPERSEDED_VERSIONS: tuple[str, ...] = (
+    "dr@1",
+    "dr@1.0",
+    "dr@1.1",
+    "dr@1.2",
+    "dr@1.3",
+    "dr@1.4",
+    "dr@1.5",
+    "dr@1.6",
+    "dr@1.7",
+    "dr@1.8",
+    "dr@1.9",
+    "dr@2.0",
+    "dr@2.1",
+    "dr@2.2",
+    "dr@2.3",
+    "dr@2.4",
+    "dr@2.5",
+    "dr@2.6",
+    "dr@2.7",
+    "dr@2.8",
+    "dr@2.9",
+    "dr@3.0",
+    "dr@3.1",
+    "dr@3.2",
+    "dr@3.3",
+    "dr@3.4",
+    # dr@3.5 and dr@3.6 retired together upstream (ea19b948, 2026-09-06): the
+    # first batch was stopped mid-flight, the second closed the fetchGate ablation.
+    # The retired fork record stopped at dr@3.5 and lacks both.
+    "dr@3.5",
+    "dr@3.6",
+)
+
+# Second, a whole profile label whose distribution moved while its base rung
+# did not - the one case the base match cannot see. Retired label -> successor,
+# so the refusal says where to go. Carries every live entry of the vendored
+# record's ``_SUPERSEDED_PROFILES`` (an entry whose base this build has retired
+# is dead and may be dropped) and may add its own at newer rungs: the record
+# stays at dr@3.5 while this twin tracks upstream, and
+# ``test_the_twins_retired_labels_are_the_forks`` holds the superset.
+SUPERSEDED_PROFILES: dict[str, str] = {
+    # 2026-09-02: the identity gained the derive-and-recommend reply rules and
+    # search snippets turned on. Same base rung, different distribution.
+    # 2026-09-07: moved from dr@3.5 to dr@3.7 with the base rung (the record's
+    # dr@3.5 entry is dead here, since that base is refused first), so the
+    # profile stays refused after an operator bumps only the number.
+    "dr@3.7-filetools-askuser": "dr@3.7-filetools-askuser-derive",
+}
+
+
+#: Profile labels THIS product retired by diverging from the fork, successor named.
+#:
+#: Separate from ``SUPERSEDED_PROFILES`` above, which carries the vendored record's
+#: retirements (``test_the_twins_retired_labels_are_the_forks``: the twin may retire more,
+#: never less): both loaders read the same twin config, so a label one of them refuses and
+#: the other accepts is a config that loads on one launcher and not the other. This table
+#: is the other case - a label the
+#: fork must go on accepting because the fork's own distribution did not change, while
+#: this product's did and the label no longer describes what it runs.
+#:
+#: Without it the mechanism has a hole exactly where it is needed: a config still stamped
+#: with the old suffix loads clean here and runs the new distribution under the old name,
+#: which is the mislabelling the whole-profile check exists to prevent.
+PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
+    # 2026-09-05: the deep report clause and the reviewer rubric gained the
+    # numeric-discipline rule. Same base rung, different distribution, and the fork has
+    # neither, so it keeps the label this one leaves behind.
+    "dr@3.5-filetools-askuser-derive": "dr@3.5-filetools-askuser-derive-numeric",
+    # 2026-09-07: the deep report clause gained the identifier rule, and the appendix's
+    # grounding check folds arXiv and forge addresses before it accuses a citation. The
+    # clause is what every shipped run renders - ``finalShape.reportDepth`` is on in
+    # ``config.json`` - so the model input moved and the label has to move with it, or two
+    # distributions answer to one published name and no result can be attributed.
+    "dr@3.5-filetools-askuser-derive-numeric": "dr@3.5-filetools-askuser-derive-numeric-cite",
+    # 2026-09-07: the deep report clause gained the ranking-order and column rules. Same
+    # reason as the two rows above - the clause is what every shipped run renders - and the
+    # shipped-prompt digest test is what caught the omission before review this time.
+    "dr@3.5-filetools-askuser-derive-numeric-cite": "dr@3.5-filetools-askuser-derive-numeric-cite-rank",
+    # 2026-09-07: the base rung moved to dr@3.7 (the fork retired dr@3.5 and dr@3.6),
+    # and the shipped fetchGate gained its second release valve at the class default,
+    # so the same suffix rides the new rung. The base table refuses the old label
+    # first; this entry is what lets the chain end on a label that loads.
+    "dr@3.5-filetools-askuser-derive-numeric-cite-rank": "dr@3.7-filetools-askuser-derive-numeric-cite-rank",
+    # The fork's live profile at the new rung is not this product's: the deep report
+    # clause and the reviewer rubric carry the numeric, identifier and ranking rules here.
+    "dr@3.7-filetools-askuser-derive": "dr@3.7-filetools-askuser-derive-numeric-cite-rank",
+    # 2026-09-07: the three modes stopped being three sizes of one budget and became
+    # three stop rules -- medium keeps the sufficiency release and answers settled general
+    # knowledge without a research round (plainFirst); max drops both, high drops the
+    # sufficiency release, and both terminate on the reviewer, max on an evidence floor
+    # before it. A medium report that cites nothing is now a possible output of the
+    # label, so the label moves; the fork runs none of it.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain",
+    # 2026-09-08: high keeps the plain-first door too, and the model's reasoning effort
+    # follows the tier (medium at medium, high and max at high) instead of every tier
+    # running at high. A high report that cites nothing is now a possible output of the
+    # label, and every default-tier run reasons at a lower effort, so the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high",
+    # The interim label this branch's 2026-09-07 batches ran under before it rebased onto
+    # the cite-rank clause and the dr@3.7 rung; never shipped, retired so those bench
+    # configs still load.
+    "dr@3.5-filetools-askuser-derive-numeric-tiers-plain": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain",
+}
+
+
+# Knobs the fork's LOOP consumed, which no seam here reaches. They are kept OFF
+# the model rather than accepted and ignored: a field that validates reads as
+# live, and ``toolsAllowlist`` reads as the tool fence -- it was the fence in the
+# fork (``_apply_dr_tools_allowlist`` unregistered everything else) and the fence
+# here is ``tools.disabledTools``, one config level up and owned by the trunk.
+# Named with their owner so a ported fork slice is told where the knob went
+# instead of being silently disarmed.
+_RETIRED_KEYS: dict[str, tuple[str, str]] = {
+    "toolsAllowlist": ("tools_allowlist", "tools.disabledTools, applied by the trunk's registry"),
+    "minimalContext": ("minimal_context", "context.dropSegments, applied by the trunk's context engine"),
+    "truncationWrapup": ("truncation_wrapup", "nothing - the loop's generation path has no hook seam"),
+    "reactiveClamp": ("reactive_clamp", "nothing - the loop's generation path has no hook seam"),
+}
+
+
+def _warn_retired(raw: dict[str, Any]) -> None:
+    for camel, (snake, owner) in _RETIRED_KEYS.items():
+        if camel in raw or snake in raw:
+            logger.warning(
+                "research-flow: drFlow.{} is no longer read by this flow; that surface is {}",
+                camel,
+                owner,
+            )
+
+
+#: Slice keys the plugin's tools read raw and FlowConfig deliberately does
+#: not model (see the module docstring): wiring, not knobs.
+_PASSTHROUGH_KEYS = {
+    "stateRoot",
+    "state_root",
+    "proxy",
+    "fetch",
+    "search.apiKey",
+    "search.api_key",
+    "search.provider",
+    "fetch.apiKey",
+    "fetch.api_key",
+    "fetch.provider",
+}
+
+
+def _warn_unknown(raw: dict[str, Any], model: type[BaseModel], prefix: str = "") -> None:
+    """Unknown keys in the BASE slice stay ignored but never silent.
+
+    A typo'd knob (``maxIterationz``, ``finalShape.reportStructur``) that
+    validates clean is a config that lies to its operator. Same manner as the
+    trunk's admission door: a warning naming the keys, never a refusal --
+    ``extra="ignore"`` still governs what the models keep. The wiring keys the
+    tools read raw stay silent, and the retired knobs keep their own, more
+    specific message. A mode overlay is held to a stricter door, see
+    :meth:`FlowConfig.with_overlay`.
+    """
+    unknown = unknown_keys(raw, model, prefix)
+    if unknown:
+        logger.warning(
+            "research-flow: config keys {} are not knobs this flow reads; ignoring them",
+            ", ".join(unknown),
+        )
+
+
+def unknown_keys(raw: dict[str, Any], model: type[BaseModel], prefix: str = "") -> list[str]:
+    """Dotted paths in ``raw`` that no field of ``model`` (or its nested models) reads."""
+    retired = set(_RETIRED_KEYS) | {snake for snake, _owner in _RETIRED_KEYS.values()}
+    unknown: list[str] = []
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            continue
+        dotted = f"{prefix}{key}"
+        field = None
+        for name, f in model.model_fields.items():
+            if key == name or key == f.alias:
+                field = f
+                break
+        if field is None:
+            if dotted in _PASSTHROUGH_KEYS or key in retired:
+                continue
+            unknown.append(dotted)
+            continue
+        ann = field.annotation
+        if isinstance(value, dict) and isinstance(ann, type) and issubclass(ann, BaseModel):
+            unknown.extend(unknown_keys(value, ann, prefix=f"{dotted}."))
+    return sorted(unknown)
+
+
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Overlay wins; dicts merge recursively; every other value replaces.
+
+    An explicit ``null`` in the overlay replaces too (a mode may reset
+    ``maxIterations`` to the agent default with ``"maxIterations": null``).
+    """
+    merged = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+class FlowConfig(_Base):
+    """The research flow: observers, prompt texts, tool shaping and budgets.
+
+    ``version`` names the flow semantics a batch ran under; the validator
+    rejects a superseded base label on an enabled flow, exactly as the fork did.
+    """
+
+    enabled: bool = False
+    version: str = "dr@3.7"
+    max_iterations: int | None = None
+    context_window_tokens: int | None = None
+    think_closing_tag_required: bool = True
+    prompt_section_override: str | None = None
+    identity_override: str | None = None
+    measured_guidance: bool = True
+    fetch_max_chars: int = 14_000
+    search: SearchConfig = Field(default_factory=SearchConfig)
+    digest: DigestConfig = Field(default_factory=DigestConfig)
+    verify: VerifyConfig = Field(default_factory=VerifyConfig)
+    budget_note: BudgetNoteConfig = Field(default_factory=BudgetNoteConfig)
+    force_finalize: ForceFinalizeConfig = Field(default_factory=ForceFinalizeConfig)
+    spin_breaker: SpinBreakerConfig = Field(default_factory=SpinBreakerConfig)
+    fetch_floor: FetchFloorConfig = Field(default_factory=FetchFloorConfig)
+    fetch_gate: FetchGateConfig = Field(default_factory=FetchGateConfig)
+    sufficiency: SufficiencyConfig = Field(default_factory=SufficiencyConfig)
+    evidence_floor: EvidenceFloorConfig = Field(default_factory=EvidenceFloorConfig)
+    plain_first: PlainFirstConfig = Field(default_factory=PlainFirstConfig)
+    final_shape: FinalShapeConfig = Field(default_factory=FinalShapeConfig)
+    conversation: ConversationConfig = Field(default_factory=ConversationConfig)
+    ask_user: AskUserConfig = Field(default_factory=AskUserConfig)
+
+    _SUPERSEDED_VERSIONS: ClassVar[tuple[str, ...]] = SUPERSEDED_VERSIONS
+    _SUPERSEDED_PROFILES: ClassVar[dict[str, str]] = SUPERSEDED_PROFILES
+    _PRODUCT_SUPERSEDED_PROFILES: ClassVar[dict[str, str]] = PRODUCT_SUPERSEDED_PROFILES
+
+    @classmethod
+    def _resolve_successor(cls, version: str) -> str | None:
+        """The label to move to, followed to the end of the chain.
+
+        Two tables retire labels here, and a successor named by one can be retired by the
+        other: the fork's table sends ``-askuser`` to ``-derive``, and this product's
+        sends ``-derive`` on to ``-numeric``. Naming the first hop would tell an operator
+        to move to a label that also refuses to load, which is a worse answer than the one
+        they started with. Cycle-guarded, so a table that ever points back at itself
+        stops rather than hangs.
+        """
+        seen = {version}
+        current = version
+        while True:
+            nxt = cls._SUPERSEDED_PROFILES.get(current) or cls._PRODUCT_SUPERSEDED_PROFILES.get(current)
+            if nxt is None or nxt in seen:
+                break
+            seen.add(nxt)
+            current = nxt
+        return None if current == version else current
+
+    @model_validator(mode="after")
+    def _version_matches_build(self) -> "FlowConfig":
+        """Reject a superseded label on this build, by profile or by base.
+
+        Two profile tables, checked the same way: the one mirrored from the fork, and this
+        product's own retirements. A label lands in the second when this product diverged
+        and the fork did not, which is a state the mirrored table cannot hold because it
+        has to keep matching a fork that still runs that label correctly.
+
+        The profile table matches the whole string and names the successor. The
+        base table matches the base label only: suffixes name a profile, not a
+        semantics, so ``dr@3.5-futurex`` passes while a superseded base label -
+        suffixed or not - is refused. The current label comes from the field
+        default, never a literal, so a bump has one place to land.
+        """
+        successor = self._resolve_successor(self.version)
+        if self.enabled and successor is not None:
+            raise ValueError(
+                f"drFlow.version={self.version!r} is a superseded profile label on this "
+                f"build; set drFlow.version to {successor!r}"
+            )
+        base = self.version.split("-", 1)[0]
+        if self.enabled and base in self._SUPERSEDED_VERSIONS:
+            current = type(self).model_fields["version"].default
+            raise ValueError(
+                f"drFlow.version={self.version!r} predates this build's flow "
+                f"semantics (base label {base!r}); set drFlow.version to {current!r} "
+                "or later, keeping any profile suffix"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _plain_first_needs_the_conversation_frame(self) -> "FlowConfig":
+        """Refuse ``plainFirst`` on while ``conversation`` is off.
+
+        The gate fires only on a turn the frame has marked first or plain, and the frame
+        that marks them (``TurnFrame``) returns before doing so when the conversation
+        surface is off. The pair would build a gate, write its ``installed`` row, and never
+        produce an outcome - a silence an operator cannot tell from a gate that never
+        fired. Caught here, the way ``plainFirst.judge`` is.
+        """
+        if self.enabled and self.plain_first.enabled and not self.conversation.enabled:
+            raise ValueError(
+                "plainFirst.enabled requires conversation.enabled: the frame that marks a first turn is off"
+            )
+        if self.enabled and self.plain_first.enabled and self.evidence_floor.enabled:
+            # An accepted plain answer rests on zero pages, and the floor is consulted
+            # on every draft the plain-first gate lets stand: together they would
+            # bounce every plain answer twice and release it, so no plain answer
+            # could ship. One is the baseline's door, the other is max's floor.
+            raise ValueError(
+                "plainFirst.enabled and evidenceFloor.enabled cannot both be true: the floor would bounce every plain answer"
+            )
+        return self
+
+    @property
+    def ask_user_on(self) -> bool:
+        """The clarify round, resolved the way the fork's assembly resolved it:
+        a handoff needs a next turn to land in, and only the conversation
+        surface has one."""
+        return self.ask_user.enabled and self.conversation.enabled
+
+    @classmethod
+    def from_slice(cls, d: dict[str, Any] | None) -> "FlowConfig":
+        """Validate the plugin's config slice as the product wrote it."""
+        raw = d or {}
+        _warn_retired(raw)
+        _warn_unknown(raw, cls)
+        return cls.model_validate(raw)
+
+    def with_overlay(self, overlay: dict[str, Any] | None) -> "FlowConfig":
+        """This config with a mode's ``drFlow`` diff deep-merged over it.
+
+        The merge happens on the dict form and the result is re-validated, so an
+        overlay is held to the same schema as the base slice -- and to a stricter
+        door: an unknown key raises instead of warning. The base slice tolerates
+        one because it also carries the wiring keys the tools read raw; an overlay
+        carries knobs and nothing else, so a key the flow does not read can only
+        be a typo, and a typo that merges clean runs the base value under a mode
+        label that promises otherwise. The vendored twin refuses the same way at
+        startup (``acp/modes.py``, ``extra="forbid"``).
+        """
+        if not overlay:
+            return self
+        _warn_retired(overlay)
+        unknown = unknown_keys(overlay, type(self))
+        if unknown:
+            raise ValueError(f"mode overlay names drFlow key(s) this flow does not read: {', '.join(unknown)}")
+        base = self.model_dump(by_alias=True)
+        return type(self).model_validate(_deep_merge(base, overlay))
+
+
+__all__ = [
+    "SUPERSEDED_PROFILES",
+    "SUPERSEDED_VERSIONS",
+    "unknown_keys",
+    "AskUserConfig",
+    "BudgetNoteConfig",
+    "ConversationConfig",
+    "DigestConfig",
+    "EvidenceFloorConfig",
+    "FetchFloorConfig",
+    "FetchGateConfig",
+    "FinalShapeConfig",
+    "FlowConfig",
+    "ForceFinalizeConfig",
+    "PlainFirstConfig",
+    "SearchConfig",
+    "SearchSaturationConfig",
+    "SpinBreakerConfig",
+    "SufficiencyConfig",
+    "VerifyConfig",
+]

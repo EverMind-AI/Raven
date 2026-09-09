@@ -20,7 +20,7 @@ def test_cron_delivered_event_pydantic_validates() -> None:
     """``CronDeliveredEvent`` SHALL be a member of the ``TurnEvent``
     discriminated union with payload {job_id, name, text, fired_at}.
     """
-    from raven.tui_rpc.models import CronDeliveredEvent
+    from raven.rpc.models import CronDeliveredEvent
 
     event = CronDeliveredEvent(
         type="cron.delivered",
@@ -44,7 +44,7 @@ def test_cron_delivered_event_in_turn_event_union() -> None:
     """
     from pydantic import TypeAdapter
 
-    from raven.tui_rpc.models import CronDeliveredEvent, TurnEvent
+    from raven.rpc.models import CronDeliveredEvent, TurnEvent
 
     adapter = TypeAdapter(TurnEvent)
     parsed = adapter.validate_python(
@@ -78,11 +78,11 @@ def emitter_spy() -> MagicMock:
 
 
 async def test_fanout_cron_delivered_single_session(emitter_spy: MagicMock) -> None:
-    """``_fanout_cron_delivered`` SHALL emit a ``cron.delivered`` event with the
+    """``fanout_cron_delivered`` SHALL emit a ``cron.delivered`` event with the
     full {job_id, name, text, fired_at} payload to the active session."""
-    from raven.cli.tui_commands import _fanout_cron_delivered
+    from raven.rpc.cron_events import fanout_cron_delivered
 
-    await _fanout_cron_delivered(
+    await fanout_cron_delivered(
         emitter_spy,
         job_id="j1",
         name="hydrate",
@@ -106,10 +106,10 @@ async def test_fanout_cron_delivered_single_session(emitter_spy: MagicMock) -> N
 async def test_fanout_cron_delivered_multi_session(emitter_spy: MagicMock) -> None:
     """Each active session_key SHALL receive the cron.delivered event (fan-out,
     because the cron:<job_id> conversation matches no user subscription)."""
-    from raven.cli.tui_commands import _fanout_cron_delivered
+    from raven.rpc.cron_events import fanout_cron_delivered
 
     emitter_spy._by_session = {"sess_a": [object()], "sess_b": [object()]}
-    await _fanout_cron_delivered(emitter_spy, job_id="j3", name="test", text="multi", fired_at="2026-06-04T12:00:00Z")
+    await fanout_cron_delivered(emitter_spy, job_id="j3", name="test", text="multi", fired_at="2026-06-04T12:00:00Z")
 
     assert emitter_spy.emit.await_count == 2
     keys_called = {c.args[0] for c in emitter_spy.emit.await_args_list}
@@ -118,31 +118,31 @@ async def test_fanout_cron_delivered_multi_session(emitter_spy: MagicMock) -> No
 
 async def test_fanout_cron_delivered_no_active_sessions() -> None:
     """No active session subscribers -> a silent no-op (no emit, no exception)."""
-    from raven.cli.tui_commands import _fanout_cron_delivered
+    from raven.rpc.cron_events import fanout_cron_delivered
 
     emitter = MagicMock()
     emitter._by_session = {}
     emitter.emit = AsyncMock()
-    await _fanout_cron_delivered(emitter, job_id="j", name="n", text="t", fired_at="f")
+    await fanout_cron_delivered(emitter, job_id="j", name="n", text="t", fired_at="f")
     emitter.emit.assert_not_awaited()
 
 
 async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> None:
-    """``_build_cron_callback_spine`` SHALL run the base callback (the spine
+    """``build_cron_callback_spine`` SHALL run the base callback (the spine
     submit + read-back) and fan its reply out as cron.delivered with the job's
     metadata; a job whose turn produced no reply SHALL NOT fan out."""
     from types import SimpleNamespace
 
-    from raven.cli.tui_commands import _build_cron_callback_spine
+    from raven.rpc.cron_events import build_cron_callback_spine
 
     replies = {"j7": "reminder body", "j8": None}
 
     async def base_on_cron(job):
         return replies[job.id]  # the read-back reply
 
-    wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy)
+    wrapped = build_cron_callback_spine(base_on_cron, emitter_spy)
 
-    job = SimpleNamespace(id="j7", name="standup")
+    job = SimpleNamespace(id="j7", name="standup", payload=SimpleNamespace(channel=None))
     await wrapped(job)
 
     emitter_spy.emit.assert_awaited_once()
@@ -155,8 +155,38 @@ async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> Non
 
     # No reply read back: base runs (side-effects) but nothing is fanned out.
     emitter_spy.emit.reset_mock()
-    silent = SimpleNamespace(id="j8", name="silent")
+    silent = SimpleNamespace(id="j8", name="silent", payload=SimpleNamespace(channel=None))
     await wrapped(silent)
+    emitter_spy.emit.assert_not_awaited()
+
+
+async def test_cron_callback_spine_fans_out_only_tui_jobs(emitter_spy: MagicMock) -> None:
+    """On the gateway (default_channel is an IM/web surface) the fan-out SHALL
+    follow the job's resolved channel: a tui job echoes to the page sessions, a
+    channel-addressed job is already delivered by the hub on its own channel
+    and SHALL NOT be echoed a second time."""
+    from types import SimpleNamespace
+
+    from raven.rpc.cron_events import build_cron_callback_spine
+
+    async def base_on_cron(job):
+        return "reminder body"
+
+    wrapped = build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="cli")
+
+    tui_job = SimpleNamespace(id="j1", name="page", payload=SimpleNamespace(channel="tui"))
+    await wrapped(tui_job)
+    emitter_spy.emit.assert_awaited_once()
+
+    emitter_spy.emit.reset_mock()
+    feishu_job = SimpleNamespace(id="j2", name="im", payload=SimpleNamespace(channel="feishu"))
+    assert await wrapped(feishu_job) == "reminder body"  # delivery itself untouched
+    emitter_spy.emit.assert_not_awaited()
+
+    # No channel on the payload resolves to the host's default -- not tui on
+    # the gateway, so no fan-out there either.
+    unaddressed = SimpleNamespace(id="j3", name="plain", payload=SimpleNamespace(channel=None))
+    await wrapped(unaddressed)
     emitter_spy.emit.assert_not_awaited()
 
 
@@ -168,7 +198,7 @@ async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> Non
 def test_cron_missed_event_pydantic_validates() -> None:
     """``CronMissedEvent`` SHALL be a member of the ``TurnEvent`` discriminated
     union with payload {count, items: [{name, scheduled_at, message}]}."""
-    from raven.tui_rpc.models import CronMissedEvent
+    from raven.rpc.models import CronMissedEvent
 
     event = CronMissedEvent(
         type="cron.missed",
@@ -190,7 +220,7 @@ def test_cron_missed_event_pydantic_validates() -> None:
 def test_cron_missed_event_in_turn_event_union() -> None:
     from pydantic import TypeAdapter
 
-    from raven.tui_rpc.models import CronMissedEvent, TurnEvent
+    from raven.rpc.models import CronMissedEvent, TurnEvent
 
     adapter = TypeAdapter(TurnEvent)
     parsed = adapter.validate_python(
@@ -212,11 +242,11 @@ def _drop(name: str, message: str, at_ms: int):
 
 
 async def test_fanout_cron_missed_active_session(emitter_spy: MagicMock) -> None:
-    """With an attached session, ``_fanout_cron_missed`` SHALL emit one
+    """With an attached session, ``fanout_cron_missed`` SHALL emit one
     cron.missed event carrying every drop, scheduled_at as ISO-8601 UTC."""
-    from raven.cli.tui_commands import _fanout_cron_missed
+    from raven.rpc.cron_events import fanout_cron_missed
 
-    await _fanout_cron_missed(
+    await fanout_cron_missed(
         emitter_spy,
         drops=[
             _drop("hydrate", "记得喝水", 1_749_031_380_000),
@@ -238,13 +268,13 @@ async def test_fanout_cron_missed_no_session_queues_startup_event() -> None:
     """With no subscription yet (server bring-up precedes turn.subscribe), the
     event SHALL be queued on the emitter for the first registration instead of
     being dropped like the cron.delivered no-subscriber no-op."""
-    from raven.cli.tui_commands import _fanout_cron_missed
+    from raven.rpc.cron_events import fanout_cron_missed
 
     emitter = MagicMock()
     emitter._by_session = {}
     emitter.emit = AsyncMock()
 
-    await _fanout_cron_missed(emitter, drops=[_drop("meds", "吃药", 1_749_024_000_000)])
+    await fanout_cron_missed(emitter, drops=[_drop("meds", "吃药", 1_749_024_000_000)])
 
     emitter.emit.assert_not_awaited()
     emitter.queue_startup_event.assert_called_once()
@@ -256,3 +286,164 @@ async def test_fanout_cron_missed_no_session_queues_startup_event() -> None:
         "scheduled_at": "2025-06-04T08:00:00+00:00",
         "message": "吃药",
     }
+
+
+def test_every_host_that_starts_cron_surfaces_the_startup_drops() -> None:
+    """A reminder dropped at startup has to be told to whoever is listening.
+
+    Discovered rather than listed: any file that starts a cron service is held to
+    the property. The earlier version of this test named two files and passed
+    while a third host violated it, which is the kind of green that reads as
+    covered when it is not.
+
+    ``EXEMPT`` is the honest half. ``gateway_commands.py`` starts a cron service
+    partitioned over the enabled IM channels, so a past-due WhatsApp one-shot
+    lands in *its* drops and nothing surfaces them -- it wires
+    ``on_missed_foreign``, which is the opposite set (``list_missed_foreign_oneshots``
+    skips every job the runner owns). Whether a host with no attached client
+    should surface them at all is a design question, so it is written down here
+    rather than silently passing.
+
+    Structural on purpose, and worth being clear about the limit: this asserts
+    the call is present after ``start()``, not that it runs. It would pass with
+    the block under ``if False`` or with the guard inverted. The behaviour of
+    ``fanout_cron_missed`` itself is covered above; what this catches is a new
+    serve path that forgets to call it, which is the regression that already
+    happened once.
+    """
+    from pathlib import Path
+
+    # host -> why it does not surface its own drops
+    EXEMPT = {
+        "cli/gateway_commands.py": (
+            "cron is partitioned over the enabled IM channels here and the host has "
+            "no attached client; it surfaces other partitions' misses via "
+            "on_missed_foreign instead. Its own drops are an open design question."
+        ),
+    }
+
+    root = Path(__file__).resolve().parents[1] / "raven"
+    starters = []
+    for path in sorted(root.rglob("*.py")):
+        src = path.read_text(encoding="utf-8")
+        marker = next(
+            (m for m in ("await agent_loop.cron_service.start()", "await cron.start()") if m in src),
+            None,
+        )
+        if marker is None:
+            continue
+        starters.append((path.relative_to(root).as_posix(), src, marker))
+
+    assert starters, "no cron start site found -- the markers this test greps for have moved"
+
+    for rel, src, marker in starters:
+        if rel in EXEMPT:
+            continue
+        tail = src[src.index(marker) :]
+        assert "last_startup_drops" in tail, f"{rel} starts cron without reading last_startup_drops"
+        assert "fanout_cron_missed" in tail, f"{rel} reads the drops without fanning them out"
+
+    stale = sorted(set(EXEMPT) - {rel for rel, _, _ in starters})
+    assert not stale, f"EXEMPT names a file that no longer starts cron: {stale}"
+
+
+async def test_a_wake_addressed_to_an_instance_is_not_fanned_out(emitter_spy: MagicMock) -> None:
+    """Same "already delivered" rule the IM gate exists for, one lane over.
+
+    A wake naming a sub-agent instance runs as a direct turn on that instance's
+    lane, and that lane *does* have a subscriber -- the pane the operator is
+    looking at. Its reply is on screen before this wrapper ever sees it, so
+    fanning it out would print the round twice: once as the instance answering,
+    once as a reminder about it.
+    """
+    from types import SimpleNamespace
+
+    from raven.rpc.cron_events import build_cron_callback_spine
+
+    async def base_on_cron(job):
+        return "round 2: submitted 60 kN"
+
+    wrapped = build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="tui")
+
+    to_instance = SimpleNamespace(
+        id="j1",
+        name="ops:beam-limit-load:r2",
+        payload=SimpleNamespace(channel="tui", direct_agent="Raven-Oncall", direct_handle="inst-7"),
+    )
+    assert await wrapped(to_instance) == "round 2: submitted 60 kN"  # delivery itself untouched
+    emitter_spy.emit.assert_not_awaited()
+
+    # Half a target is no target: an ordinary tui reminder still fans out, which
+    # is the only way this instance pane has of showing a plain reminder at all.
+    emitter_spy.emit.reset_mock()
+    plain = SimpleNamespace(
+        id="j2", name="hydrate", payload=SimpleNamespace(channel="tui", direct_agent="Raven-Oncall", direct_handle=None)
+    )
+    await wrapped(plain)
+    emitter_spy.emit.assert_awaited_once()
+
+
+async def test_a_wake_to_an_instance_binds_its_addressee_for_the_wire(emitter_spy: MagicMock) -> None:
+    """The client demultiplexes on ``target``; an untagged frame is the main agent's.
+
+    ``turn.send`` binds a typed message's addressee into ``direct_targets`` and the
+    outlet/sink read it back to stamp every event of that turn. A wake dispatched
+    from cron never went through ``turn.send``, so nothing bound it -- and the
+    round's reply reached the client with no ``target`` on it, which the TUI reads
+    as the main conversation's.
+
+    Measured 2026-08-26 on the live run: four rounds ran, the instance log grew to
+    match, and the pane showed none of them.
+    """
+    from types import SimpleNamespace
+
+    from raven.rpc.cron_events import build_cron_callback_spine
+
+    seen: dict[str, dict[str, str]] = {}
+
+    async def base_on_cron(job):
+        # Read inside the turn: the binding has to be in place before the events
+        # are emitted, not after the callback returns.
+        assert seen == {
+            "tui:20260826_102911_ff4d5f#Raven-Oncall/raven-oncall-ca43bc": {
+                "agent": "Raven-Oncall",
+                "handle": "raven-oncall-ca43bc",
+            }
+        }, seen
+        return "round 2: submitted 85 kN"
+
+    wrapped = build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="tui", direct_targets=seen)
+
+    job = SimpleNamespace(
+        id="j1",
+        name="ops:beam-limit-load:r2",
+        payload=SimpleNamespace(
+            channel="tui",
+            to="20260826_102911_ff4d5f",
+            direct_agent="Raven-Oncall",
+            direct_handle="raven-oncall-ca43bc",
+        ),
+    )
+    assert await wrapped(job) == "round 2: submitted 85 kN"
+
+
+async def test_an_ordinary_reminder_binds_nothing(emitter_spy: MagicMock) -> None:
+    """A stale binding would tag the main agent's next stream as a sub-agent's."""
+    from types import SimpleNamespace
+
+    from raven.rpc.cron_events import build_cron_callback_spine
+
+    seen: dict[str, dict[str, str]] = {}
+
+    async def base_on_cron(job):
+        assert seen == {}
+        return "记得喝水"
+
+    wrapped = build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="tui", direct_targets=seen)
+    job = SimpleNamespace(
+        id="j2",
+        name="hydrate",
+        payload=SimpleNamespace(channel="tui", to="default", direct_agent=None, direct_handle=None),
+    )
+    await wrapped(job)
+    assert seen == {}

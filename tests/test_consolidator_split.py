@@ -11,7 +11,7 @@ Two-stage consolidation:
 
 Tests cover:
 
-1. Pure-Python helpers (``_parse_episode_line``, ``_splice_h2_section``,
+1. Pure-Python helpers (``parse_episode_line``, ``_splice_h2_section``,
    ``count_tags``, ``hot_tags``).
 2. ``annotate`` end-to-end on a case_06-shaped conversation, asserting
    the episode-format invariants survive in the new path (timestamp +
@@ -32,8 +32,8 @@ import pytest
 
 from raven.memory_engine.consolidate.consolidator import (
     MemoryStore,
-    _parse_episode_line,
     _splice_h2_section,
+    parse_episode_line,
 )
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
@@ -89,18 +89,18 @@ class _FakeProvider(LLMProvider):
 
 class TestParseEpisodeLine:
     def test_extracts_timestamp_summary_and_tags(self):
-        ts, summary, tags = _parse_episode_line("[2026-05-07 09:30] User raised Project A perf #project-a #perf")
+        ts, summary, tags = parse_episode_line("[2026-05-07 09:30] User raised Project A perf #project-a #perf")
         assert ts == "2026-05-07 09:30"
         assert tags == ["project-a", "perf"]
         assert "#" not in summary
         assert "User raised Project A perf" in summary
 
     def test_rejects_lines_without_timestamp(self):
-        assert _parse_episode_line("no timestamp here") is None
-        assert _parse_episode_line("") is None
+        assert parse_episode_line("no timestamp here") is None
+        assert parse_episode_line("") is None
 
     def test_empty_tags_is_empty_list(self):
-        ts, summary, tags = _parse_episode_line("[2026-05-07 09:30] event with no tags at all")
+        ts, summary, tags = parse_episode_line("[2026-05-07 09:30] event with no tags at all")
         assert tags == []
         assert summary == "event with no tags at all"
 

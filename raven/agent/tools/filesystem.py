@@ -2,36 +2,139 @@
 
 import difflib
 import mimetypes
+import re
 from pathlib import Path
 from typing import Any
 
-from raven.agent.tools.base import Tool, ToolResult
-from raven.utils.helpers import detect_image_mime
+from raven.agent import workdir
+from raven.contracts.tool import FileChange, Tool, ToolResult
+from raven.utils.images import detect_image_mime
+
+_DIFF_MAX_LINES = 400
 
 
-def _resolve_path(path: str, workspace: Path | None = None, allowed_dir: Path | None = None) -> Path:
-    """Resolve path against workspace (if relative) and enforce directory restriction."""
+def _unified(before: str, after: str, name: str) -> str | None:
+    """Unified diff of one write, or None when there is nothing useful to show.
+
+    A UI cannot reconstruct this later: by the time the call is reported, the
+    content it replaced is already overwritten. A rewrite too large to render is
+    dropped whole rather than truncated -- half a diff reads as a smaller change
+    than the one that happened.
+    """
+    if before == after:
+        return None
+    out = list(
+        difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile=name,
+            tofile=name,
+            lineterm="",
+        )
+    )
+    if not out or len(out) > _DIFF_MAX_LINES:
+        return None
+    return "\n".join(out)
+
+
+def resolve_path(
+    path: str,
+    workspace: Path | None = None,
+    allowed_dirs: tuple[Path, ...] = (),
+) -> Path:
+    """Resolve path against workspace (if relative) and enforce the allowed roots."""
     p = Path(path).expanduser()
     if not p.is_absolute() and workspace:
         p = workspace / p
     resolved = p.resolve()
-    if allowed_dir:
-        try:
-            resolved.relative_to(allowed_dir.resolve())
-        except ValueError:
-            raise PermissionError(f"Path {path} is outside allowed directory {allowed_dir}")
+    if allowed_dirs:
+        for allowed in allowed_dirs:
+            try:
+                resolved.relative_to(Path(allowed).resolve())
+                return resolved
+            except ValueError:
+                continue
+        roots = ", ".join(str(d) for d in allowed_dirs)
+        raise PermissionError(f"Path {path} is outside allowed directories {roots}")
     return resolved
+
+
+def _with_current_root(allowed_dirs: tuple[Path, ...], bound: Path | None) -> tuple[Path, ...]:
+    """Add the turn's *live* working-directory binding to the fence, when the fence is on.
+
+    Tools are constructed once for the loop's whole lifetime, before any turn's
+    working directory exists, so ``allowed_dirs`` can only ever carry the static
+    roots (agent home). The per-turn root reaches the fence here, at resolve
+    time, the same way ``ExecTool`` folds its per-call ``cwd`` into its roots.
+
+    ``bound`` must be the raw result of ``workdir.current()`` (or ``None`` for
+    a tool that does not follow the ambient binding at all) -- never a value
+    that already fell back to the tool's own ``workspace``. Folding in that
+    fallback would silently widen the fence to a root the operator never put
+    in ``allowed_dirs``. An empty ``allowed_dirs`` must stay empty regardless
+    -- that is the "fence disabled" signal ``resolve_path`` checks for.
+    """
+    if not allowed_dirs or bound is None:
+        return allowed_dirs
+    return (bound, *allowed_dirs)
+
+
+_URL_SCHEME_RE = re.compile(r"^(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*)://")
+_HOST_LIKE_RE = re.compile(r"^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/")
+
+
+def _missing(path: str) -> str:
+    """The refusal for a path that is not there, naming the tool that can reach it.
+
+    A URL resolves to a path that cannot exist, and "File not found" describes the
+    wrong problem: the file is not missing, the argument belongs to another tool.
+    Reported as a missing file it reads as a misspelling, so the caller tries the
+    same URL again with the workspace prefixed, percent-decoded, a directory up --
+    none of which can work, and the search that produced the URL stalls there.
+
+    Only the message changes: this answers inside the branch that has already found
+    nothing on disk, so a path that does resolve never reaches it.
+    """
+    raw = path.strip()
+    if match := _URL_SCHEME_RE.match(raw):
+        if match.group("scheme").lower() == "file":
+            return f"Error: {path} is a file:// URL; read_file takes a plain path -- try {raw[7:] or '/'}"
+        return (
+            f"Error: {path} is a URL, not a path on this machine. read_file only reads the "
+            "filesystem; fetch it with web_fetch, which returns the page as text."
+        )
+    if _HOST_LIKE_RE.match(raw):
+        return (
+            f"Error: File not found: {path} -- which reads as a URL rather than a path. "
+            "If it is one, fetch it with web_fetch; read_file only reads the filesystem."
+        )
+    return f"Error: File not found: {path}"
 
 
 class _FsTool(Tool):
     """Shared base for filesystem tools — common init and path resolution."""
 
-    def __init__(self, workspace: Path | None = None, allowed_dir: Path | None = None):
+    def __init__(
+        self,
+        workspace: Path | None = None,
+        allowed_dirs: tuple[Path, ...] = (),
+        *,
+        follow_binding: bool = True,
+    ):
         self._workspace = workspace
-        self._allowed_dir = allowed_dir
+        self._allowed_dirs = allowed_dirs
+        # A sub-agent run is a background asyncio task that can outlive the turn
+        # that spawned it, since SubagentManager.spawn captures the workspace at
+        # spawn time; its tools must fence on the directory captured for that
+        # run, not on whatever the ambient ContextVar happens to hold when the
+        # task finally executes. The main loop's tools keep following the live
+        # binding as normal.
+        self._follow_binding = follow_binding
 
     def _resolve(self, path: str) -> Path:
-        return _resolve_path(path, self._workspace, self._allowed_dir)
+        bound = workdir.current() if self._follow_binding else None
+        current_root = bound or self._workspace
+        return resolve_path(path, current_root, _with_current_root(self._allowed_dirs, bound))
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +209,7 @@ class ReadFileTool(_FsTool):
         try:
             fp = self._resolve(path)
             if not fp.exists():
-                return f"Error: File not found: {path}"
+                return _missing(path)
             if not fp.is_file():
                 return f"Error: Not a file: {path}"
 
@@ -237,13 +340,44 @@ class WriteFileTool(_FsTool):
             return "Error: write_file with mode=append needs content; refusing to append nothing."
         try:
             fp = self._resolve(path)
+            # Read before writing: a whole-file write carries no record of what
+            # it replaced, so a panel handed only the arguments draws every line
+            # of an overwrite as an addition.
+            before = ""
+            # Three states, not two, and the third is why this is a separate
+            # flag: absent, present and readable, present and not decodable as
+            # text. Only the first is a new file, and reporting the third as one
+            # would tell a client every line is an addition to a file that was
+            # already there.
+            previous: str | None = None
+            if fp.is_file():
+                try:
+                    before = previous = fp.read_text(encoding="utf-8")
+                except (UnicodeDecodeError, OSError):
+                    before = ""
+                    previous = None
+                    unreadable = True
+                else:
+                    unreadable = False
+            else:
+                unreadable = False
             fp.parent.mkdir(parents=True, exist_ok=True)
             if mode == "append":
                 with fp.open("a", encoding="utf-8") as handle:
                     handle.write(content)
                 return f"Successfully appended {len(content)} bytes to {fp}"
             fp.write_text(content, encoding="utf-8")
-            return f"Successfully wrote {len(content)} bytes to {fp}"
+            return ToolResult(
+                f"Successfully wrote {len(content)} bytes to {fp}",
+                diff=_unified(before, content, str(fp)),
+                # Beside the rendered diff, not instead of it: the unified form is
+                # what a text surface shows, and this is what a surface with its
+                # own diff view needs. Both come from strings already in hand, so
+                # neither costs a second read. Withheld entirely for a file that
+                # existed and could not be read, because there is no ``before``
+                # to give and every way of faking one misinforms the reader.
+                file_change=None if unreadable else FileChange(path=str(fp), after=content, before=previous),
+            )
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -344,7 +478,18 @@ class EditFileTool(_FsTool):
                 new_content = new_content.replace("\n", "\r\n")
 
             fp.write_bytes(new_content.encode("utf-8"))
-            return f"Successfully edited {fp}"
+            normalised = new_content.replace("\r\n", "\n")
+            return ToolResult(
+                f"Successfully edited {fp}",
+                # Compared line-for-line rather than passing the two snippets:
+                # `replace_all` can change several places at once, and the
+                # arguments alone do not say where.
+                diff=_unified(content, normalised, str(fp)),
+                # The whole file both ways. An edit's arguments carry only the
+                # replaced fragment, so a surface handed those would render a
+                # fragment as though it were the file.
+                file_change=FileChange(path=str(fp), after=normalised, before=content),
+            )
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:

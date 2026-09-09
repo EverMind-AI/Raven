@@ -62,9 +62,7 @@ def isolated_config_state(tmp_path: Path, monkeypatch):
     fake_home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: fake_home)
 
-    import raven.config.loader as loader
-
-    monkeypatch.setattr(loader, "_current_config_path", None)
+    monkeypatch.setattr("raven.home._current_config_path", None)
 
     return fake_home
 
@@ -212,13 +210,13 @@ def test_cli_subcommand_loads_extension_blocks_from_custom_config(
             "--config",
             str(custom_cfg),
             "--workspace",
-            str(tmp_path / "ws"),
+            str(tmp_path / "chanwork"),
             "--message",
             "test",
             "--no-logs",
         ]
     else:
-        cmd = ["gateway", "--config", str(custom_cfg), "--workspace", str(tmp_path / "ws"), "--port", "0"]
+        cmd = ["gateway", "--config", str(custom_cfg), "--workspace", str(tmp_path / "chanwork"), "--port", "0"]
     result = runner.invoke(app, cmd, catch_exceptions=True)
 
     # 5. Verify

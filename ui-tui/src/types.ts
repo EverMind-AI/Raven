@@ -3,6 +3,9 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import type { DagRunState } from './domain/dagRun.js'
+import type { SpawnRunState } from './domain/spawnRun.js'
+
 export interface ActiveTool {
   context?: string
   id: string
@@ -22,6 +25,9 @@ export interface ActivityItem {
   tone: 'error' | 'info' | 'warn'
 }
 
+/** Where a live delegated run's transcript can be read back from, while it runs. */
+export type SubagentLiveRef = { callId?: string; kind: 'spawn' } | { kind: 'dag'; nodeId: string; runId: string }
+
 export interface SubagentProgress {
   apiCalls?: number
   costUsd?: number
@@ -32,8 +38,11 @@ export interface SubagentProgress {
   goal: string
   id: string
   index: number
+  /** The sub-agent instance whose conversation this run is a turn of; absent for a stateless run. */
+  instance?: { agent: string; handle: string }
   inputTokens?: number
   iteration?: number
+  liveRef?: SubagentLiveRef
   model?: string
   notes: string[]
   outputTail?: SubagentOutputEntry[]
@@ -137,7 +146,21 @@ export interface EpisodeTool {
   id: string
   name: string
   summary: string
+  // The model's own one-line description of what a call is for, when the
+  // transport sends one -- claude-agent-acp puts Claude's Bash `description`
+  // in the call's arguments. Preferred over a derived label because it names
+  // the intent rather than the programs; absent for every transport that sends
+  // none, so a row without one is unaffected.
+  intent?: string
   resultPreview?: string
+  // A run_subagent_dag call's graph, pinned here when the run reported one. The
+  // live store is cleared at turn end and the tool result is clamped to 200
+  // chars, so this is what keeps the graph in the transcript.
+  dag?: DagRunState
+  // A spawn call's run, pinned here from its subagent.status frames -- or, on
+  // resume, rebuilt from the row's spawn_task_id. Same survival story as `dag`:
+  // the live store is turn-scoped and the result text is one line.
+  spawn?: SpawnRunState
   diff?: string
   added?: number
   removed?: number
@@ -158,6 +181,10 @@ export interface Episode {
   startedAt?: number
   reasoning?: string
   narration?: string
+  // What the person said mid-turn (a steer). An episode carrying one has no
+  // tools and no prose of its own: it marks where in the turn the words landed.
+  steer?: string
+  steerAtMs?: number
   tools: EpisodeTool[]
   durationMs?: number
   // Wall time spent before this step's first tool (≈ the model's thinking
@@ -167,7 +194,8 @@ export interface Episode {
 
 export interface Msg {
   info?: SessionInfo
-  kind?: 'diff' | 'episodes' | 'intro' | 'panel' | 'slash' | 'trail'
+  kind?: 'artifacts' | 'diff' | 'episodes' | 'intro' | 'panel' | 'slash' | 'trail'
+  artifacts?: TurnArtifacts
   panelData?: PanelData
   role: Role
   text: string
@@ -176,9 +204,30 @@ export interface Msg {
   toolTokens?: number
   tools?: string[]
   episodes?: Episode[]
+  /**
+   * The identity of the turn this message was folded from, where it was folded
+   * from one. Stable while that turn is still running and the runtime keeps
+   * handing over a fresh object for it, which is what a fold has to be keyed on
+   * to outlive the row under it.
+   */
+  foldId?: string
   todos?: TodoItem[]
   todoIncomplete?: boolean
   todoCollapsedByDefault?: boolean
+}
+
+export interface TurnArtifactFile {
+  change?: 'edit' | 'new'
+  ext: string
+  missing?: boolean
+  name: string
+  size?: number
+  title?: string
+}
+
+export interface TurnArtifacts {
+  changes: TurnArtifactFile[]
+  deliveries: TurnArtifactFile[]
 }
 
 export type Role = 'assistant' | 'system' | 'tool' | 'user'
@@ -217,6 +266,9 @@ export interface SessionInfo {
   service_tier?: string
   skills: Record<string, string[]>
   system_prompt?: string
+  // The resumed session's name. Absent on a fresh one, which has nothing to
+  // name yet, so the panel simply has no line for it.
+  title?: string | null
   tools: Record<string, string[]>
   update_available?: boolean | null
   update_command?: string
@@ -231,7 +283,8 @@ export interface Usage {
   context_percent?: number
   context_used?: number
   cost_status?: string
-  cost_usd?: number
+  cost_usd?: number | null
+  cost_missing_calls?: number
   input: number
   output: number
   reasoning?: number

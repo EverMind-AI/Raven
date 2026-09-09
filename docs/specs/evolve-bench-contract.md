@@ -1,12 +1,12 @@
 # Adding a benchmark: the evolution plugin contract
 
-The unified entry `python -m raven.evolver run --config <yaml>` runs the SOP
+The unified entry `python -m evolver run --config <yaml>` runs the SOP
 self-evolution loop on any registered benchmark (methodology:
 [`self-evolution-loop-sop.md`](self-evolution-loop-sop.md); implementation
 mapping: [`self-evolution-loop-raven-mapping.md`](self-evolution-loop-raven-mapping.md)).
 This document answers: what do you build to make *your* benchmark evolvable?
 Reference implementation: `benchmarks/appworld/evolve/entry.py`
-(built-in scorer line). User-facing docs live in `raven/evolver/README.md`.
+(built-in scorer line). User-facing docs live in `evolver/README.md`.
 
 ## What you bring (bench side)
 
@@ -32,7 +32,7 @@ run, same-regime rule) and the loop's driver/design/verdict models (the yaml
 In your package (e.g. `benchmarks/<name>/evolve/entry.py`):
 
 ```python
-from raven.evolver.launch.contract import BenchBundle, LaunchContext, validate_whitelist
+from evolver.launch.contract import BenchBundle, LaunchContext, validate_whitelist
 
 def build(ctx: LaunchContext) -> BenchBundle:
     spec = ctx.spec            # bench/repo_root/base_sha/work_dir/funnel/bench_config
@@ -54,7 +54,7 @@ def build(ctx: LaunchContext) -> BenchBundle:
     )
 ```
 
-Register it: `raven.evolver.launch.registry.BENCHES["<name>"] = "your.module:build"`.
+Register it: `evolver.launch.registry.BENCHES["<name>"] = "your.module:build"`.
 
 Framework pieces you reuse instead of rewriting:
 

@@ -1,7 +1,6 @@
 """Tests for the feishu adapter package — inbound content extraction
-(content.py), outbound format detection/rendering (cards.py), group
-mention gating, and reconnect backoff supervision. Pure surface; no lark
-SDK / live connection."""
+(content.py), outbound format detection/rendering (cards.py), and group
+mention gating. Pure surface; no lark SDK / live connection."""
 
 import asyncio
 from types import SimpleNamespace
@@ -10,8 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 pytest.importorskip("lark_oapi")
-
-from lark_oapi.ws.exception import ClientException
 
 from raven.channels.adapters.feishu import cards, content
 from raven.channels.adapters.feishu.channel import FeishuChannel
@@ -292,69 +289,21 @@ def test_stop_blocks_zombie_inbound(monkeypatch):
     ch._loop = MagicMock()
     ch._loop.is_running.return_value = True
     calls = []
-    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", lambda *a, **k: calls.append(a))
+
+    def _capture(coro, loop):
+        # The bridge builds the coroutine before handing it over, so a fake that
+        # only records it leaves it unawaited -- a RuntimeWarning, and a suite
+        # where the next unawaited coroutine is one warning among several.
+        calls.append((coro, loop))
+        coro.close()
+
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _capture)
     ch._running = True
     ch._on_message_sync(MagicMock())
     assert len(calls) == 1
     ch._running = False
     ch._on_message_sync(MagicMock())
     assert len(calls) == 1  # zombie delivery dropped
-
-
-# ── reconnect supervision (exponential backoff) ───────────────────────
-
-
-def _run_supervised_with_failures(ch, exc, count):
-    """Drive _run_ws_supervised with start() always raising, recording the
-    backoff delays, and stopping after `count` failures."""
-    ch._ws_client = MagicMock()
-    ch._ws_client.start.side_effect = exc
-    ch._running = True
-    delays = []
-
-    def fake_sleep(seconds):
-        delays.append(seconds)
-        if len(delays) >= count:
-            ch._running = False
-
-    ch._sleep_interruptibly = fake_sleep
-    ch._run_ws_supervised()
-    return delays
-
-
-def test_reconnect_backoff_grows_and_caps():
-    delays = _run_supervised_with_failures(_channel(), RuntimeError("down"), count=9)
-    assert delays == [5.0, 10.0, 20.0, 40.0, 80.0, 160.0, 300.0, 300.0, 300.0]
-
-
-def test_reconnect_permanent_client_exception_also_backs_off():
-    """ClientException (bad credentials / conn limit) escapes start() and
-    must not be retried on the old fixed 5s hammer loop."""
-    delays = _run_supervised_with_failures(_channel(), ClientException(99991663, "invalid app_secret"), count=3)
-    assert delays == [5.0, 10.0, 20.0]
-
-
-def test_reconnect_backoff_never_overflows_beyond_cap():
-    """Sustained failure must not overflow the backoff math: once the cap
-    is reached the delay stays flat and the supervisor keeps running."""
-    delays = _run_supervised_with_failures(_channel(), ClientException(99991440, "conn limit"), count=2000)
-    assert delays[:7] == [5.0, 10.0, 20.0, 40.0, 80.0, 160.0, 300.0]
-    assert delays[7:] == [300.0] * (len(delays) - 7)
-    assert len(delays) == 2000
-
-
-def test_backoff_sleep_cut_short_by_stop(monkeypatch):
-    ch = _channel()
-    ch._running = True
-    slept = []
-
-    def fake_sleep(seconds):
-        slept.append(seconds)
-        ch._running = False
-
-    monkeypatch.setattr("raven.channels.adapters.feishu.channel.time.sleep", fake_sleep)
-    ch._sleep_interruptibly(300.0)
-    assert slept == [1.0]  # one 1s slice, then stop() ends the backoff early
 
 
 # ── contract conformance ───────────────────────────────────────────────

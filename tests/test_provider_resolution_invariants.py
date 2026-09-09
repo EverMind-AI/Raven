@@ -97,6 +97,11 @@ def test_the_prefix_litellm_is_actually_sent_resolves_somewhere(spec: ProviderSp
         ("vllm/llama3", "hosted_vllm"),
         ("ollama_chat/qwen", "ollama_chat"),
         ("ollama/qwen", "ollama_chat"),
+        ("lm_studio/qwen", "lm_studio"),
+        ("lm-studio/qwen", "lm_studio"),
+        ("lmstudio/qwen", "lm_studio"),
+        ("minimax-cn-api/MiniMax-M3", "minimax_cn_api"),
+        ("nvidia-nim/nvidia/nemotron-3-super-120b-a12b", "nvidia_nim"),
         ("zhipu/glm-4.6", "zai"),
         ("zai/glm-4.6", "zai"),
         ("openai/gpt-4o", "openai"),
@@ -583,6 +588,7 @@ def test_a_metadata_prefix_is_declared_only_where_it_differs_from_routing() -> N
     declared = {spec.name: spec.metadata_prefix for spec in PROVIDERS if spec.metadata_prefix is not None}
     assert declared == {
         "openai_codex": "chatgpt",
+        "minimax_cn_api": "minimax",
         "minimax_global": "minimax",
         "minimax_cn": "minimax",
     }
@@ -700,7 +706,7 @@ def test_a_lazy_provider_answers_with_its_inner_s_wire_id() -> None:
     providers/truncation.py) -- both signals miss and the cut call is
     dispatched.
     """
-    from raven.providers.base import GenerationSettings
+    from raven.contracts.llm_provider import GenerationSettings
     from raven.providers.lazy import LazyProvider
     from raven.providers.litellm_provider import LiteLLMProvider
 
@@ -743,7 +749,7 @@ def test_no_surface_writes_the_default_model_without_naming_its_provider():
     Scanned rather than asserted per call site, because the next writer is the
     one nobody thought of -- and **both spellings count**. An earlier version
     looked only for ``set_default_model`` and was therefore blind to
-    ``tui_rpc/methods/config.py``, which writes the same field through
+    ``rpc/methods/config.py``, which writes the same field through
     ``_set_nested`` and happens to be correct.
     """
     import ast
@@ -777,6 +783,13 @@ def test_no_surface_writes_the_default_model_without_naming_its_provider():
             if name == "set_default_model":
                 if not any(kw.arg == "provider" for kw in node.keywords):
                     offenders.append(f"{path.relative_to(root.parent)}:{node.lineno} (set_default_model)")
+                continue
+
+            if name in {"get", "_get_nested", "get_nested"}:
+                # A read of the key is not a write of it. LiveConfig.get in
+                # provider_stack reads the default model as the router's live
+                # fallback; flagging it would demand a provider write in a file
+                # that writes nothing.
                 continue
 
             targets = [a.value for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]

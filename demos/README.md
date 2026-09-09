@@ -10,6 +10,7 @@ on private EverMind infrastructure.
 | Demo | What it shows |
 |------|---------------|
 | [skill_retrieval/](skill_retrieval/) | An agent reads a SKILL.md, follows it, and generates an image via Nano Banana on OpenRouter. |
+| [oncall_heat2d/](oncall_heat2d/) | The full on-call dispatch chain on a bare laptop: raven registers your machine and runs a watched campaign against a numpy heat-equation case. |
 
 ## Layout convention
 

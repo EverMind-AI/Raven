@@ -1,7 +1,7 @@
 """``raven doctor`` — health check (static + optional --probe).
 
 Default mode is zero-network, millisecond-fast. ``--probe`` sends one
-chat exchange via :func:`raven.cli._helpers.send_probe`.
+chat exchange via :func:`raven.core.provider_stack.send_probe`.
 
 Exit codes:
   0  — all green (and probe ok if requested)
@@ -21,7 +21,9 @@ import typer
 from rich.console import Console
 
 from raven import __logo__
-from raven.cli._helpers import print_probe_troubleshooting, send_probe
+from raven.cli._helpers import print_probe_troubleshooting
+from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
+from raven.core.provider_stack import send_probe
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -73,6 +75,10 @@ class MemoryInfo:
     whose embedding provider failed to build still answers 200 and degrades to
     keyword-only search, so the two can disagree, and that disagreement is the
     fault worth reporting.
+
+    ``plugin_missing`` is the case where neither can be filled in at all: the
+    backend the config names ships as its own distribution, and this install
+    does not have it.
     """
 
     backend: Optional[str] = None
@@ -84,11 +90,16 @@ class MemoryInfo:
     configured: list[str] = field(default_factory=list)
     capabilities: dict[str, bool] = field(default_factory=dict)
     retrieval: Optional[str] = None
+    plugin_missing: bool = False
 
     @property
     def unbuilt(self) -> list[str]:
         """Roles the user configured that the server could not build."""
-        from raven.plugin.memory.everos._health import capability_available
+        # Nothing configured has nothing to be unbuilt, and this is the shape a
+        # plugin-less install reports -- so the answer must not need the plugin.
+        if not self.configured:
+            return []
+        from raven_everos.health import capability_available
 
         return [s for s in self.configured if capability_available(self.capabilities, s) is False]
 
@@ -101,13 +112,31 @@ class MemoryInfo:
         semantically, and that is a worse memory rather than no memory. Only this
         list decides the exit code.
         """
-        from raven.plugin.memory.everos._health import REQUIRED_SECTIONS
+        unbuilt = self.unbuilt
+        if not unbuilt:
+            return []
+        from raven_everos.health import REQUIRED_SECTIONS
 
-        return [s for s in self.unbuilt if s in REQUIRED_SECTIONS]
+        return [s for s in unbuilt if s in REQUIRED_SECTIONS]
 
 
 @dataclass
-class ProbeResult:
+class InstallInfo:
+    """Whether the environment Raven is running out of was fully written.
+
+    First section of the report, and the only one that can invalidate the rest:
+    an interrupted ``uv tool install`` leaves an installation that answers some
+    questions correctly and others not at all, and every later diagnosis of it
+    is a diagnosis of the wrong thing."""
+
+    complete: bool = True
+    upgrade_in_flight: bool = False
+    missing: list[str] = field(default_factory=list)
+    detail: Optional[str] = None
+
+
+@dataclass
+class LlmProbeResult:
     ok: bool
     text: Optional[str] = None
     tokens: Optional[int] = None
@@ -183,16 +212,21 @@ class ToolsInfo:
 class DoctorReport:
     version: int = 1
     config_loaded: bool = False
+    install: Optional[InstallInfo] = None
     paths: Optional[PathsInfo] = None
     routing: Optional[RoutingInfo] = None
     features: Optional[FeaturesInfo] = None
     gateway: Optional[GatewayInfo] = None
     memory: Optional[MemoryInfo] = None
     tools: Optional[ToolsInfo] = None
-    probe: Optional[ProbeResult] = None
+    probe: Optional[LlmProbeResult] = None
     config_health: Optional[ConfigHealth] = None
 
     def exit_code(self) -> int:
+        # Ahead of every config verdict: on a half-written installation those
+        # verdicts describe whichever half survived.
+        if self.install is not None and not self.install.complete:
+            return 1
         if self.paths is None or not self.paths.config_exists:
             return 1
         if not self.paths.config_valid:
@@ -204,10 +238,22 @@ class DoctorReport:
         if self.probe is not None and not self.probe.ok:
             return 2
         # A role the user configured that the server could not build is a real
-        # fault, not a warning: recall silently returns nothing.
-        if self.memory is not None and self.memory.broken:
+        # fault, not a warning: recall silently returns nothing. A backend whose
+        # plugin is not installed is the same fault one step earlier.
+        if self.memory is not None and (self.memory.plugin_missing or self.memory.broken):
             return 2
         return 0
+
+
+def _gather_install() -> InstallInfo:
+    from raven.updates.install_guard import inspect_install, missing_pieces
+
+    fault = inspect_install()
+    if fault is None:
+        return InstallInfo()
+    if fault.reason == "upgrading":
+        return InstallInfo(upgrade_in_flight=True, detail=fault.detail)
+    return InstallInfo(complete=False, missing=missing_pieces(), detail=fault.detail)
 
 
 def _routes_anywhere(provider: str) -> bool:
@@ -341,6 +387,7 @@ def _gather_tools(config: "Config") -> ToolsInfo:
         has_credential,
         is_configured,
         is_disabled,
+        resolve,
     )
 
     return ToolsInfo(
@@ -360,7 +407,7 @@ def _gather_tools(config: "Config") -> ToolsInfo:
                 obtain_from=cap.obtain_from,
                 cost_note=cap.cost_note,
             )
-            for cap in CAPABILITIES
+            for cap in (resolve(c, config) for c in CAPABILITIES)
         ]
     )
 
@@ -374,7 +421,7 @@ def _gather_static_checks() -> DoctorReport:
         config_path=str(config_path),
         config_exists=config_path.exists(),
     )
-    report = DoctorReport(paths=paths)
+    report = DoctorReport(paths=paths, install=_gather_install())
 
     if not paths.config_exists:
         return report
@@ -419,17 +466,14 @@ def _gather_static_checks() -> DoctorReport:
         context_window_tokens=defaults.context_window_tokens,
     )
 
-    enabled: list[str] = []
-    for name, value in config.channels.__dict__.items():
-        if getattr(value, "enabled", False):
-            enabled.append(name)
+    enabled = sorted(config.channels.enabled_channel_names())
 
     try:
         skill_forge_on = bool(config.skill_forge.enabled)
     except Exception:
         skill_forge_on = False
 
-    from raven.channels.manager import missing_dependency_channels
+    from raven.gateway.manager import missing_dependency_channels
 
     report.features = FeaturesInfo(
         channels_enabled=enabled,
@@ -439,7 +483,7 @@ def _gather_static_checks() -> DoctorReport:
 
     report.tools = _gather_tools(config)
 
-    from raven.cli._gateway_lock import read_status
+    from raven.gateway.lock import read_status
 
     info = read_status(now=time.time())
     if info is None:
@@ -461,18 +505,19 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     info = MemoryInfo(backend=backend)
     if backend != "everos":
         return info
+    if not everos_plugin_installed():
+        info.plugin_missing = True
+        return info
     from raven.config.update_everos import everos_owned, everos_role_configured, everos_root
-    from raven.plugin.memory.everos._health import (
+    from raven_everos.health import (
         DEGRADING_SECTIONS,
         REQUIRED_SECTIONS,
         configured_base_url,
         probe_capabilities,
     )
 
-    # Which memories, and whose. Neither was reachable from any command before:
-    # the wizard printed the path once while converging and nothing showed it
-    # again, so "where are my memories" had no answer short of reading
-    # config.json by hand. This is the place that question gets asked.
+    # Which memories, and whose: this is where "where are my memories" is
+    # answered, without reading config.json by hand.
     info.owned = everos_owned()
     info.address = configured_base_url(config)
     report = probe_capabilities(configured_base_url(config))
@@ -509,13 +554,13 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     return info
 
 
-def _run_llm_probe(timeout_s: int) -> ProbeResult:
-    """Wrap :func:`send_probe` so failures become a structured ProbeResult."""
+def _run_llm_probe(timeout_s: int) -> LlmProbeResult:
+    """Wrap :func:`send_probe` so failures become a structured LlmProbeResult."""
     try:
         text, tokens, elapsed = send_probe(timeout_s=timeout_s)
-        return ProbeResult(ok=True, text=text, tokens=tokens, elapsed_s=elapsed)
+        return LlmProbeResult(ok=True, text=text, tokens=tokens, elapsed_s=elapsed)
     except Exception as exc:
-        return ProbeResult(ok=False, error=str(exc) or exc.__class__.__name__)
+        return LlmProbeResult(ok=False, error=str(exc) or exc.__class__.__name__)
 
 
 def _render_memory_capabilities(memory: MemoryInfo) -> None:
@@ -524,10 +569,13 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
     "Server running" and "server can recall" stopped being the same statement in
     everos 1.2.1, so they are printed as separate lines rather than one tick.
     """
-    from raven.plugin.memory.everos._health import capability_available
-
     if memory.backend != "everos":
         return
+    if memory.plugin_missing:
+        console.print(f"  Plugin:     [red]✗ {everos_plugin_missing_note()}[/red]")
+        return
+    from raven_everos.health import capability_available
+
     if memory.root:
         console.print(f"  Memories:   {memory.root}")
     if not memory.owned:
@@ -547,7 +595,7 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
         if memory.configured:
             console.print(f"  Configured: {', '.join(memory.configured)}")
         return
-    from raven.plugin.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
+    from raven_everos.health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
 
     for section in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS):
         label = f"  {section + ':':<12}"
@@ -667,13 +715,27 @@ def _degradation_note(section: str) -> str:
 
 
 def _server_log_hint() -> str:
-    from raven.plugin.memory.everos._server import server_log_path
+    from raven_everos.server import server_log_path
 
     return str(server_log_path())
 
 
 def _render_human_output(report: DoctorReport) -> None:
     console.print(f"\n{__logo__} Raven Doctor\n")
+
+    install = report.install
+    if install is not None and not install.complete:
+        console.print("[bold]Installation[/bold]")
+        console.print(f"  [red]✗ incomplete[/red] — {install.detail}")
+        console.print(
+            "  An upgrade was interrupted before it finished writing this environment.\n"
+            "  Repair it with:\n"
+            "    [cyan]curl -fsSL https://raven.evermind.ai/install.sh | sh[/cyan]"
+        )
+        return
+    if install is not None and install.upgrade_in_flight:
+        console.print("[bold]Installation[/bold]")
+        console.print(f"  [yellow]⚠ {install.detail}[/yellow]  [dim]wait for it to finish[/dim]\n")
 
     paths = report.paths
     assert paths is not None  # _gather_static_checks always populates this
@@ -724,10 +786,10 @@ def _render_human_output(report: DoctorReport) -> None:
         else:
             console.print("  Channels:    [dim]none enabled[/dim]")
         if features.channels_missing_deps:
-            from raven.channels.manager import _missing_dep_hint
+            from raven.gateway.manager import missing_dep_hint
 
             names = ", ".join(features.channels_missing_deps)
-            console.print(f"               [yellow]⚠ SDK missing: {names}[/yellow]  [dim]{_missing_dep_hint()}[/dim]")
+            console.print(f"               [yellow]⚠ SDK missing: {names}[/yellow]  [dim]{missing_dep_hint()}[/dim]")
         sf_label = "enabled" if features.skill_forge_enabled else "[dim]disabled[/dim]"
         console.print(f"  Skill forge: {sf_label}")
 

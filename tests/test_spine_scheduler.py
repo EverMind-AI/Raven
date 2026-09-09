@@ -1,3 +1,5 @@
+"""The spine Scheduler's submit surface: outcomes, loop affinity, and conversation ids."""
+
 import asyncio
 
 import pytest
@@ -162,7 +164,7 @@ async def test_handle_cancel_running_turn():
     sched = _scheduler(runner)
     handle = sched.submit(_req())
     await runner.started.wait()
-    handle.cancel()
+    await handle.cancel()
     assert await asyncio.wait_for(handle.result(), timeout=1.0) is None
 
 
@@ -172,7 +174,7 @@ async def test_handle_cancel_queued_turn_without_running_it():
     first = sched.submit(_req(channel="tg", chat_id="1"))
     await runner.started.wait()
     queued = sched.submit(_req(channel="tg", chat_id="1"))  # same lane, queued behind first
-    queued.cancel()
+    await queued.cancel()
     assert await asyncio.wait_for(queued.result(), timeout=1.0) is None  # resolved, never ran
     assert not first._fut.done()  # surgical: cancelling the queued turn leaves the running one alone
 
@@ -181,7 +183,7 @@ async def test_handle_cancel_is_idempotent_after_completion():
     sched = _scheduler(SuccessRunner())
     handle = sched.submit(_req())
     await handle.result()
-    handle.cancel()  # already terminal -> no-op, no raise
+    await handle.cancel()  # already terminal -> no-op, no raise
 
 
 # --- lane reaper (idle recycling + recycle/submit atomicity) ---
@@ -226,7 +228,7 @@ async def test_cancel_on_a_reaped_lanes_handle_is_a_noop():
     lane = sched._lanes["tg:1"]
     sched._sweep(now=lane._idle_since + _DEFAULT_IDLE_TTL + 1)  # reap the lane
     assert "tg:1" not in sched._lanes
-    handle.cancel()  # the handle still references the reaped lane -> no-op, no raise
+    await handle.cancel()  # the handle still references the reaped lane -> no-op, no raise
     assert handle._fut.done()
 
 
@@ -415,7 +417,7 @@ async def test_cancel_on_a_merged_inject_is_noop_and_host_survives():
     inject = sched.submit(_req(channel="tg", chat_id="1", busy=BusyPolicy.INJECT, text="inject"))
     drain_gate.set()
     await runner.drained.wait()
-    inject.cancel()  # already merged (chained), host still running -> no-op, must not kill host
+    await inject.cancel()  # already merged (chained), host still running -> no-op, must not kill host
     finish_gate.set()
     assert await asyncio.wait_for(host.result(), timeout=1.0) == outcome  # host survived
     assert await asyncio.wait_for(inject.result(), timeout=1.0) == outcome  # chained outcome
@@ -459,7 +461,7 @@ async def test_cancel_on_a_mailboxed_inject_removes_it_before_merge():
     host = sched.submit(_req(channel="tg", chat_id="1", text="host"))
     await runner.started.wait()
     inject = sched.submit(_req(channel="tg", chat_id="1", busy=BusyPolicy.INJECT, text="inject"))
-    inject.cancel()  # still in the mailbox -> self-cancel (removed, resolved cancelled)
+    await inject.cancel()  # still in the mailbox -> self-cancel (removed, resolved cancelled)
     assert await asyncio.wait_for(inject.result(), timeout=1.0) is None
     assert len(sched._lanes["tg:1"]._inject_mailbox) == 0
     gate.set()
@@ -643,3 +645,64 @@ async def test_inject_fallback_re_enqueue_also_triggers_the_depth_warning(monkey
         logger.remove(sink_id)
     assert any("depth" in line and "3" in line for line in lines)  # fallback drove the warning
     await sched.shutdown(grace=0.01)
+
+
+def _turn_entry_strays(package_root):
+    """Every call of ``run_turn`` / ``_run_turn`` outside the sanctioned
+    entries, as ``file:line`` strays. The roster is the point: a turn enters
+    through ``Scheduler.submit``, which drives the loop through one of the
+    three spine adapters -- any other caller starts a turn the scheduler
+    cannot order, cancel, or swap around, and the retry test below already
+    names that bypass as the hole nobody watched.
+    """
+    import ast
+
+    allowed_run_turn = {
+        "raven/agent/spine_runner.py",
+        "raven/rpc/spine.py",
+        "raven/gateway/spine.py",
+    }
+    allowed_private = {
+        "raven/spine/scheduler.py",
+        "raven/agent/loop/main.py",
+        "raven/agent/loop/turn_path.py",
+    }
+    strays = []
+    for p in sorted(package_root.rglob("*.py")):
+        if "__pycache__" in p.parts:
+            continue
+        rel = p.relative_to(package_root.parent).as_posix()
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr == "run_turn" and rel not in allowed_run_turn:
+                strays.append(f"{rel}:{node.lineno} calls run_turn outside the spine adapters")
+            if node.func.attr == "_run_turn" and rel not in allowed_private:
+                strays.append(f"{rel}:{node.lineno} calls _run_turn outside its own class")
+    return strays
+
+
+def test_every_turn_enters_through_submit():
+    """The static half of the ordering promise. tests/ excluded on purpose --
+    a test drives turns directly by design; production code never may."""
+    from pathlib import Path
+
+    strays = _turn_entry_strays(Path(__file__).resolve().parents[1] / "raven")
+    assert strays == [], (
+        "a turn must enter through Scheduler.submit; a new runner adapter joins "
+        "the roster in _turn_entry_strays in the same change:\n" + "\n".join(strays)
+    )
+
+
+def test_the_turn_entry_guard_bites(tmp_path):
+    """Mutation audit, built in: a stray caller in a synthetic tree turns the
+    checker red, so a green real-tree run means looked-and-found-nothing."""
+    pkg = tmp_path / "raven"
+    pkg.mkdir()
+    (pkg / "sneaky.py").write_text(
+        "async def go(loop, req):\n    await loop.run_turn(req)\n    await loop._run_turn(req)\n",
+        encoding="utf-8",
+    )
+    strays = _turn_entry_strays(pkg)
+    assert len(strays) == 2, strays

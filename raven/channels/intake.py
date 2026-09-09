@@ -96,8 +96,8 @@ class Intake:
                 ),
                 text=content,
                 media=[Media(path=p, mime="application/octet-stream", kind="file") for p in (media or [])],
-                # session_key_override -> conversation: run_turn's cid is
-                # `conversation or channel:chat_id`.
+                # The session key becomes the turn's conversation; the cid a
+                # turn runs under is `conversation or channel:chat_id`.
                 conversation=session_key,
             )
         )

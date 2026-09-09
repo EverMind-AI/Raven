@@ -1,0 +1,32 @@
+# code-flow: Raven-Code's coding conduct as a plugin over the kernel's general seams.
+#
+# Config slice (plugins.config["code-flow"]): enabled -- the product gate.
+# Absent or false means no surface is cast (the D6 shape); the launcher
+# (agents/raven-code/run.py render_config) flips it on for its own renders.
+#
+# config_schema stays empty on purpose: admission with an empty declaration is
+# verbatim pass-through, and the slice is validated by the plugin's own
+# FlowConfig (code_flow/config.py), which owns the slice shape.
+
+[plugin]
+id = "code-flow"
+version = "0.2.0"
+display_name = "Code Flow"
+enabled_by_default = true
+
+# The turn-frame hook (paper: raven/contracts/loop_hooks.py): the flow's one
+# loop seat. It books each session into the process ledger, tells a session
+# about the others mid-turn in its directory, and clears the mark at the send.
+# The registry serves hook names sorted, so the axis order is part of the
+# class, not the manifest.
+
+[[plugin.contributes.hooks]]
+name = "code_flow"
+factory = "code_flow.flow:make_flow_hook"
+
+# Forget-on-deletion (paper: raven/contracts/session_events.py): a deleted
+# session leaves the ledger, so it is never counted as a neighbour again.
+
+[[plugin.contributes.session_observers]]
+name = "session_forget"
+factory = "code_flow.flow:make_session_observer"

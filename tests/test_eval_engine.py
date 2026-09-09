@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from raven.agent.hook.base import AgentHookContext
+from raven.contracts.loop_hooks import AgentHookContext
 from raven.eval_engine import (
     AfterIterationHook,
     BeforeIterationHook,
@@ -359,7 +359,7 @@ class TestEvalEngineOrchestrator:
         assert isinstance(hooks[1], ToolAuditHook)
         # When no MemoryEngine is wired, the after-iteration slot is a noop.
         # We just assert that *some* AgentHook subclass occupies it.
-        from raven.agent.hook.base import AgentHook
+        from raven.contracts.loop_hooks import AgentHook
 
         assert isinstance(hooks[2], AgentHook)
 

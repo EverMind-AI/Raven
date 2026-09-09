@@ -194,7 +194,7 @@ def vision_verdict(
 
     # Imported inside the call: rates reaches back into this package's
     # registry, so a module-level import here would close the loop.
-    from raven.providers.rates import openrouter_input_modalities, rates_offline_active, warm_catalog_in_background
+    from raven.providers.rates import openrouter_input_modalities, warm_catalog_in_background
 
     try:
         mods = openrouter_input_modalities(model)
@@ -204,10 +204,7 @@ def vision_verdict(
         logger.debug("vision_verdict: catalog lookup failed for {}: {}", model, e)
         return None
     if mods is None:
-        # An offline context (a trajectory replay, say) must not start the
-        # background catalog fetch; the caller keeps today's unknown verdict.
-        if not rates_offline_active():
-            warm_catalog_in_background()
+        warm_catalog_in_background()
         return None
     return "image" in mods
 
@@ -224,7 +221,7 @@ def supports_vision(
     telling the model to read it another way.
 
     Answered from the gateway catalog Raven already fetches and caches for
-    pricing (:func:`raven.providers.rates.openrouter_input_modalities`), which
+    token rates (:func:`raven.providers.rates.openrouter_input_modalities`), which
     publishes ``input_modalities`` for every model it lists. That completeness is
     the reason it is the source rather than LiteLLM's price table: the table
     states ``supports_vision`` on under a third of its rows, and reading the
@@ -243,7 +240,7 @@ def supports_vision(
 
     The catalog is read from cache only, never fetched here, so on a cold install
     the first answers are the optimistic default while a background warm fills
-    it. The pricing path cannot be left to do that warming -- it reaches this
+    it. The rates ladder cannot be left to do that warming -- it reaches this
     catalog only for models LiteLLM's static table misses, which excludes every
     model Raven ships a default for.
 
@@ -323,10 +320,8 @@ _WIRE_OVERRIDES: tuple[tuple[str, str, dict[str, Any]], ...] = (
 def wire_overrides(provider: str | None, model: str | None) -> dict[str, Any]:
     """Extras to send in the request body for this provider and model.
 
-    Lived as an ``if provider_name == ... and ... in model`` inside the factory,
-    because a fact about one model family behind one gateway had nowhere else to
-    go. Declared here it sits with the other per-model facts, and a second one
-    does not mean a second branch in provider construction.
+    Declared in ``_WIRE_OVERRIDES`` beside the other per-model facts, so a
+    second one does not mean a second branch in provider construction.
     """
     from raven.providers.registry import normalize_provider_name
 

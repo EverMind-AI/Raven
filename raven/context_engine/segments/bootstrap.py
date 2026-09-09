@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
+from raven.contracts.context import AssemblyContext, Segment
 
 
 class BootstrapSegmentBuilder:
     name = "bootstrap"
     order = 2
     needs_prefix = False
+    # The bootstrap files as they are on disk, read the same way each turn.
+    stable = True
 
     def __init__(self, workspace: Path, bootstrap_files: list[str] | None = None) -> None:
         self._workspace = workspace

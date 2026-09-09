@@ -38,7 +38,8 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.tools.base import Tool
+from raven.agent.loop.bundles import EngineWiring, HostWiring, TurnPolicy
+from raven.contracts.tool import Tool
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.token_wise.cache_optimizer import CacheOptimizer
 from raven.token_wise.registry import StrategyRegistry
@@ -49,7 +50,7 @@ pytestmark = pytest.mark.real_llm
 
 KEY_FILE = Path(__file__).resolve().parent.parent.parent / "raven" / "key.env"
 REPORT_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "raven" / "token_wise" / "EXPERIMENT_REPORT_HERMES_VS_RAVEN.md"
+    Path(__file__).resolve().parent.parent.parent / "reports" / "token_wise" / "EXPERIMENT_REPORT_HERMES_VS_RAVEN.md"
 )
 MODEL = "anthropic/claude-sonnet-4-5"
 COST_GUARD_USD = 2.00
@@ -319,11 +320,10 @@ async def _run_variant(
         provider=provider,
         workspace=workspace,
         model=MODEL,
-        max_iterations=max_iterations,
-        context_window_tokens=200_000,
         mcp_servers={},
-        channels_config=None,
-        strategies=StrategyRegistry(strategies),
+        policy=TurnPolicy(max_iterations=max_iterations),
+        engine=EngineWiring(context_window_tokens=200_000, strategies=StrategyRegistry(strategies)),
+        host=HostWiring(channels_config=None),
     )
 
     # Configure tools
@@ -355,7 +355,9 @@ async def _run_variant(
                         cache_read=snap.cache_read_tokens,
                         cache_write=snap.cache_write_tokens,
                         completion=snap.output_tokens,
-                        cost_usd=snap.estimated_cost_usd,
+                        cost_usd=snap.cost_usd
+                        if snap.cost_usd is not None
+                        else pytest.skip("Provider did not report cost"),
                     )
                 )
             cost_so_far[f"{scenario_tag}:{variant_name}"] = result.total_cost

@@ -1,0 +1,85 @@
+{
+  "language": "zh",
+  "agents": {
+    "defaults": {
+      "contextWindowTokens": 262144,
+      "maxToolIterations": 150,
+      "llmCallTimeout": 1800,
+      "compaction": {
+        "enabled": true,
+        "triggerRatio": 0.8,
+        "reservedTokens": 8192,
+        "preserveRecentTokens": 52429
+      }
+    }
+  },
+  "tools": {
+    "restrictToWorkspace": false,
+    "sandbox": {
+      "backend": "none"
+    },
+    "exec": {
+      "timeout": 600
+    },
+    "media": {
+      "outputSubdir": "generated"
+    },
+    "disabledTools": [
+      "ask_user",
+      "create_playbook",
+      "cron",
+      "deep_research",
+      "deliver_files",
+      "find_skill",
+      "hub",
+      "load_playbook",
+      "message",
+      "plugin",
+      "run_subagent_dag",
+      "spawn",
+      "text_to_speech",
+      "tool_call",
+      "tool_search",
+      "video_generate"
+    ]
+  },
+  "context": {
+    "curator_model": ""
+  },
+  "memory": {
+    "backend": "everos",
+    "userId": "raven-design",
+    "agentId": "raven-design",
+    "memoryTopK": 5
+  },
+  "plugins": {
+    "config": {
+      "everos-memory": {
+        "base_url": "http://localhost:18791"
+      },
+      "design-engine": {
+        "enabled": true,
+        "visualDomainSelector": {
+          "enabled": true,
+          "preferredMax": 2,
+          "alternativesMax": 3,
+          "maxTokens": 8192
+        },
+        "render": {
+          "enabled": true,
+          "restrictToWorkspace": false,
+          "backend": "direct",
+          "defaultPreviewCount": 6,
+          "maxPreviewCount": 12,
+          "timeoutSeconds": 240,
+          "rasterDpi": 300,
+          "maxSidePixels": 16384
+        }
+      }
+    }
+  },
+  "gateway": {
+    "userPool": 0,
+    "systemPool": 0
+  }
+}

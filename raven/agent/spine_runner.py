@@ -2,9 +2,9 @@
 ``AgentLoop.run_turn``. It lives on the agent side because it holds the loop;
 spine never imports the agent.
 
-``stream`` is the canon Q2-D assembly switch: a streaming outlet (TUI) passes
-True so the reply streams as StreamDelta and dissolves; a non-streaming outlet
-(REPL) passes False so the reply is one Text.
+``stream`` is the reply-assembly switch: a streaming outlet (TUI) wires it True
+so the reply goes out as StreamDelta and dissolves with no trailing Text; a
+non-streaming outlet (REPL) wires it False so the reply is one Text.
 
 ``inline_tool_stream`` lets a long tool (deep_research) stream its output inline
 and return a compact receipt; on for local interactive surfaces (CLI/TUI), off

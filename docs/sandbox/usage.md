@@ -319,7 +319,7 @@ print(output)
 await executor.stop()
 ```
 
-When a `BoxliteExecutor` is injected, the regex deny-list (`rm -rf`, fork bombs, etc.) is **skipped** — the microVM provides real kernel-level isolation, making host-side pattern matching redundant. The deny-list remains active for `DirectExecutor` as a best-effort guard. `restrict_to_workspace` path-boundary checks are enforced **regardless** of the executor — even when sandboxed, commands referencing paths outside the workspace are blocked and logged.
+Command safety classification does **not** relax inside the sandbox. The permission gate at the tool-registry door applies the same builtin deny-list, catastrophic-delete checks and approval families to sandboxed and direct execution alike, because Boxlite mounts the real workspace read-write at `/workspace`: a catastrophic delete inside the guest erases host data through that mount. `ExecTool` itself carries no deny list any more — refusing dangerous commands is the gate's job, decided before dispatch; what stays in the tool is its own integrity boundary (the operator's allowlist and the workspace fence). `restrict_to_workspace` path-boundary checks are enforced **regardless** of the executor — even when sandboxed, commands referencing paths outside the workspace are blocked and logged.
 
 ---
 

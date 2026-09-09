@@ -29,10 +29,10 @@ from nio.exceptions import EncryptionError
 
 from raven.channels.adapters.matrix import content
 from raven.channels.base import ChannelBase
+from raven.channels.contract import Capabilities
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_data_dir, get_media_dir
-from raven.config.schema import MatrixConfig
-from raven.utils.helpers import safe_filename
+from raven.utils.paths import safe_filename
 
 TYPING_NOTICE_TIMEOUT_MS = 30_000
 # Keep below the notice timeout so the indicator never expires mid-processing.
@@ -72,7 +72,9 @@ def _bridge_nio_logging() -> None:
 class MatrixChannel(ChannelBase):
     """Matrix (Element) channel driven by matrix-nio long-poll sync."""
 
-    config: MatrixConfig
+    capabilities = Capabilities(file_attachments=True)
+
+    config: Any
     name = "matrix"
     display_name = "Matrix"
 

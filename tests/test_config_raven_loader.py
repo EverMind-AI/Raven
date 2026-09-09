@@ -105,9 +105,9 @@ def test_only_specified_block_overrides(stub_config_path: Path) -> None:
     assert cfg.sentinel == sentinel_default
 
 
-def test_mass_library_db_path_round_trips(stub_config_path: Path) -> None:
-    """The string lands in skill_forge.mass_library_db verbatim — used
-    by ``SkillService.__init__`` to attach the mass-pool SQLite file."""
+def test_legacy_mass_library_db_is_dropped_by_the_version_floor(stub_config_path: Path) -> None:
+    """The retired leaf leaves the data before the schema sees it, so an old
+    file still loads and the rest of its block is kept."""
     _write_config(
         stub_config_path,
         {
@@ -118,7 +118,8 @@ def test_mass_library_db_path_round_trips(stub_config_path: Path) -> None:
         },
     )
     cfg = ec_module.load_raven_config()
-    assert cfg.skill_forge.mass_library_db == "/tmp/some/path/skills.db"
+    assert cfg.skill_forge.enabled is True
+    assert not hasattr(cfg.skill_forge, "mass_library_db")
 
 
 def test_invalid_json_falls_through(stub_config_path: Path) -> None:

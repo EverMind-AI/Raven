@@ -3,7 +3,7 @@
 Split out of ``onboard_commands`` because that module had grown past 5000
 lines; this file owns channel selection, credential prompting, scancode
 login, and channel management end to end. Shared wizard UI state
-(``console``, ``_t``, ``_BACK``, ``_QMARK``, questionary helpers, ...) still
+(``console``, ``_BACK``, ``_QMARK``, questionary helpers, ...) still
 lives in ``onboard_commands`` -- this module reaches it via the ``oc`` module
 reference (not a value import) so that test monkeypatches on
 ``onboard_commands`` attributes keep working whichever module a caller
@@ -16,7 +16,8 @@ from typing import Any, Optional
 
 import typer
 
-from raven.cli import onboard_commands as oc
+from raven.cli import _onboard_shared as oc
+from raven.i18n import t
 
 
 def _enabled_channels() -> list[str]:
@@ -54,49 +55,18 @@ _CHANNEL_ORDER = (
 
 # Where to obtain each channel's credentials — shown (dim) before the field
 # prompts so the user knows where to fetch the token / keys.
-_CHANNEL_CRED_HELP: dict[str, tuple[str, str]] = {
-    "telegram": (
-        "Create a bot with @BotFather in Telegram (send /newbot) — it replies with the token.",
-        "在 Telegram 里找 @BotFather 发 /newbot 创建机器人,它会回复 token。",
-    ),
-    "discord": (
-        "Discord Developer Portal → your app → Bot → Reset Token to copy it.",
-        "Discord 开发者门户 → 你的应用 → Bot → Reset Token 复制。",
-    ),
-    "slack": (
-        "api.slack.com/apps → OAuth & Permissions gives bot_token (xoxb-…); "
-        "Basic Information → App-Level Tokens gives app_token (xapp-…).",
-        "api.slack.com/apps → OAuth & Permissions 拿 bot_token(xoxb-…);"
-        "Basic Information → App-Level Tokens 拿 app_token(xapp-…)。",
-    ),
-    "feishu": (
-        "Feishu / Lark Open Platform → your app → Credentials for App ID & App Secret.",
-        "飞书开放平台 → 你的应用 → 凭证与基础信息 拿 App ID / App Secret。",
-    ),
-    "wecom": (
-        "WeCom admin console → your bot / app for its ID and secret.",
-        "企业微信管理后台 → 机器人 / 应用 拿 ID 和 secret。",
-    ),
-    "dingtalk": (
-        "DingTalk Open Platform → your app for Client ID & Client Secret.",
-        "钉钉开放平台 → 你的应用 拿 Client ID / Client Secret。",
-    ),
-    "qq": (
-        "QQ Open Platform → your bot for App ID & secret.",
-        "QQ 开放平台 → 你的机器人 拿 App ID 和 secret。",
-    ),
-    "email": (
-        "Use your mail provider's IMAP / SMTP settings; for Gmail / Outlook create an app password.",
-        "用你邮箱服务商的 IMAP / SMTP 设置;Gmail / Outlook 需创建应用专用密码。",
-    ),
-    "matrix": (
-        "From your Matrix account: an access token and your full user id (@you:server).",
-        "从你的 Matrix 账号获取 access token 和完整用户 id(@you:server)。",
-    ),
-    "mochat": (
-        "Get the claw token and agent user id from your Mochat workspace.",
-        "从你的 Mochat 工作区获取 claw token 和 agent user id。",
-    ),
+_CHANNEL_CRED_HELP: dict[str, str] = {
+    "telegram": "Create a bot with @BotFather in Telegram (send /newbot) — it replies with the token.",
+    "discord": "Discord Developer Portal → your app → Bot → Reset Token to copy it.",
+    "slack": "api.slack.com/apps → OAuth & Permissions gives bot_token (xoxb-…); "
+    "Basic Information → App-Level Tokens gives app_token (xapp-…).",
+    "feishu": "Feishu / Lark Open Platform → your app → Credentials for App ID & App Secret.",
+    "wecom": "WeCom admin console → your bot / app for its ID and secret.",
+    "dingtalk": "DingTalk Open Platform → your app for Client ID & Client Secret.",
+    "qq": "QQ Open Platform → your bot for App ID & secret.",
+    "email": "Use your mail provider's IMAP / SMTP settings; for Gmail / Outlook create an app password.",
+    "matrix": "From your Matrix account: an access token and your full user id (@you:server).",
+    "mochat": "Get the claw token and agent user id from your Mochat workspace.",
 }
 
 
@@ -114,9 +84,16 @@ def _select_channel() -> Optional[str]:
 
     names = _ordered_channel_names()
     choices = [questionary.Choice(n, value=n) for n in names]
-    choices.append(questionary.Choice(oc._t("Back", "返回"), value=oc._BACK))
-    picked = questionary.select(oc._t("Channel:", "渠道:"), choices=choices, style=RAVEN_STYLE, qmark=oc._QMARK).ask()
+    choices.append(questionary.Choice(t("Back"), value=oc._BACK))
+    picked = questionary.select(t("Channel:"), choices=choices, style=RAVEN_STYLE, qmark=oc._QMARK).ask()
     return picked
+
+
+# Channel fields this step must not treat as credentials. They are empty by
+# default like a credential is, but each has a working default resolved
+# elsewhere, so asking for them here would put an unexplained prompt ahead of
+# the tokens the user actually came to enter.
+_NON_CREDENTIAL_CHANNEL_FIELDS = frozenset({"enabled", "workspace"})
 
 
 def _prompt_channel_fields(channel: str) -> Any:
@@ -136,37 +113,24 @@ def _prompt_channel_fields(channel: str) -> Any:
     promptable = [
         (path, spec)
         for path, spec in specs.items()
-        if path != "enabled" and spec.get("type", "") == "str" and spec.get("default") in ("", None)
+        if path not in _NON_CREDENTIAL_CHANNEL_FIELDS
+        and spec.get("type", "") == "str"
+        and spec.get("default") in ("", None)
     ]
     if promptable:
         names = ", ".join(path for path, _ in promptable)
-        oc.console.print(
-            oc._t(
-                f"  [dim]Configuring {channel} — fill in:[/dim] {names}",
-                f"  [dim]正在配置 {channel} — 请填写:[/dim] {names}",
-            )
-        )
+        oc.console.print(t("  [dim]Configuring {channel} — fill in:[/dim] {names}", channel=channel, names=names))
         help_text = _CHANNEL_CRED_HELP.get(channel)
         if help_text:
-            oc.console.print(
-                oc._t(
-                    f"  [dim]Where to get it: {help_text[0]}[/dim]",
-                    f"  [dim]去哪拿:{help_text[1]}[/dim]",
-                )
-            )
+            oc.console.print(t("  [dim]Where to get it: {help}[/dim]", help=t(help_text)))
     else:
-        oc.console.print(
-            oc._t(
-                f"  [dim]{channel} needs no credentials; enabling.[/dim]",
-                f"  [dim]{channel} 无需填写凭证,正在启用。[/dim]",
-            )
-        )
+        oc.console.print(t("  [dim]{channel} needs no credentials; enabling.[/dim]", channel=channel))
 
     fields: dict[str, Any] = {}
     for idx, (path, spec) in enumerate(promptable):
         required = bool(spec.get("required"))
         description = spec.get("description", "")
-        opt_tag = "" if required else oc._t(" (optional)", " (可选)")
+        opt_tag = "" if required else t(" (optional)")
         prompt_label = f"{path}{opt_tag}" + (f" — {description}" if description else "") + ":"
         # First field's empty submit rewinds to the channel picker; a later
         # optional field's empty submit skips it; a later required field re-prompts
@@ -192,9 +156,7 @@ def _prompt_channel_fields(channel: str) -> Any:
             if allow_back:
                 return oc._BACK  # first field empty → back to the channel picker
             if required:
-                oc.console.print(
-                    oc._t(f"  [yellow]{path} is required.[/yellow]", f"  [yellow]{path} 为必填项。[/yellow]")
-                )
+                oc.console.print(t("  [yellow]{path} is required.[/yellow]", path=path))
                 continue  # re-prompt instead of enabling a channel missing a credential
             break  # optional field: empty submit skips it
     return fields
@@ -212,7 +174,7 @@ def _enable_channel(channel: str, fields: dict[str, Any]) -> None:
         oc.console.print(f"  [red]✗[/red] {exc}")
         raise typer.Exit(1)
     except ValidationError as exc:
-        oc.console.print(oc._t(f"  [red]✗ Validation failed:[/red]\n{exc}", f"  [red]✗ 校验失败:[/red]\n{exc}"))
+        oc.console.print(t("  [red]✗ Validation failed:[/red]\n{exc}", exc=exc))
         raise typer.Exit(1)
 
 
@@ -253,16 +215,15 @@ def _handle_missing_node(channel: str, *, non_interactive: bool) -> str:
     intentionally absent — there's no bridge to render a QR without Node.
     """
     oc.console.print(
-        oc._t(
-            f"  [yellow]✗ Node.js / npm not found (the {channel} bridge needs it). "
-            "Install Node.js, then retry.[/yellow]",
-            f"  [yellow]✗ 未找到 Node.js / npm({channel} 的桥接需要它)。请先安装 Node.js,再重试。[/yellow]",
+        t(
+            "  [yellow]✗ Node.js / npm not found (the {channel} bridge needs it). Install Node.js, then retry.[/yellow]",
+            channel=channel,
         )
     )
     choice = oc._failure_choice(
         [
-            (oc._t("Retry after install", "安装后重试"), "retry"),
-            (oc._t("Skip", "跳过"), "skip"),
+            (t("Retry after install"), "retry"),
+            (t("Skip"), "skip"),
         ],
         non_interactive=non_interactive,
     )
@@ -293,7 +254,7 @@ def _scancode_login(channel: str, *, non_interactive: bool = False) -> None:
     spec = specs.get(channel)
     if spec is None:
         disable_channel(channel)
-        oc.console.print(oc._t(f"  [red]✗ Unknown channel: {channel}[/red]", f"  [red]✗ 未知渠道:{channel}[/red]"))
+        oc.console.print(t("  [red]✗ Unknown channel: {channel}[/red]", channel=channel))
         return
 
     # Enabled above so the factory can read the config section during login. ANY
@@ -310,9 +271,9 @@ def _scancode_login(channel: str, *, non_interactive: bool = False) -> None:
                 if _handle_missing_node(channel, non_interactive=non_interactive) == "retry":
                     continue
                 oc.console.print(
-                    oc._t(
-                        f"  [dim]Skipped {channel}; install Node.js then run raven channels login {channel}.[/dim]",
-                        f"  [dim]已跳过 {channel};装好 Node.js 后运行 raven channels login {channel}。[/dim]",
+                    t(
+                        "  [dim]Skipped {channel}; install Node.js then run raven channels login {channel}.[/dim]",
+                        channel=channel,
                     )
                 )
                 return
@@ -321,35 +282,21 @@ def _scancode_login(channel: str, *, non_interactive: bool = False) -> None:
 
             channel_cfg = getattr(load_config().channels, channel, None)
             if channel_cfg is None:
-                oc.console.print(
-                    oc._t(
-                        f"  [red]✗ No config section for channel: {channel}[/red]",
-                        f"  [red]✗ 渠道 {channel} 没有配置段。[/red]",
-                    )
-                )
+                oc.console.print(t("  [red]✗ No config section for channel: {channel}[/red]", channel=channel))
                 return
-            adapter = spec.factory(channel_cfg)
+            from raven.config.admission import dispense_channel_config
+
+            # Through the same admission door the gateway uses: the raw
+            # section carries only socket fields since the central cargo
+            # classes retired, and the factory expects the dispensed view.
+            adapter = spec.factory(dispense_channel_config(spec, channel_cfg, channel=channel))
             if channel == "whatsapp":
-                oc.console.print(
-                    oc._t(
-                        "  [dim]Building the WhatsApp bridge — the first run can take 30–120s…[/dim]",
-                        "  [dim]正在构建 WhatsApp 桥接,首次约需 30–120 秒…[/dim]",
-                    )
-                )
+                oc.console.print(t("  [dim]Building the WhatsApp bridge — the first run can take 30–120s…[/dim]"))
+            oc.console.print(t("  [dim]Starting {a0} QR login…[/dim]", a0=spec.display_name))
             oc.console.print(
-                oc._t(
-                    f"  [dim]Starting {spec.display_name} QR login…[/dim]",
-                    f"  [dim]正在启动 {spec.display_name} 扫码登录…[/dim]",
-                )
-            )
-            oc.console.print(
-                oc._t(
-                    f"  [dim]A login link / QR code will appear below — scan it with "
-                    f"{spec.display_name} (or open the link on a phone signed in to "
-                    f"{spec.display_name}) to connect. This waits until you finish.[/dim]",
-                    f"  [dim]下方会出现登录链接 / 二维码 — 用 {spec.display_name} 扫码"
-                    f"(或在已登录 {spec.display_name} 的手机上打开该链接)即可接入;"
-                    f"这里会一直等到你完成。[/dim]",
+                t(
+                    "  [dim]A login link / QR code will appear below — scan it with {a0} (or open the link on a phone signed in to {a0}) to connect. This waits until you finish.[/dim]",
+                    a0=spec.display_name,
                 )
             )
             from loguru import logger as _wiz_logger
@@ -363,37 +310,27 @@ def _scancode_login(channel: str, *, non_interactive: bool = False) -> None:
                 _wiz_logger.enable(_login_log_scope)
                 ok = asyncio.run(adapter.login(force=True))
             except Exception as exc:
-                oc.console.print(
-                    oc._t(
-                        f"  [yellow]✗ Login failed: {exc}[/yellow]",
-                        f"  [yellow]✗ 登录失败:{exc}[/yellow]",
-                    )
-                )
+                oc.console.print(t("  [yellow]✗ Login failed: {exc}[/yellow]", exc=exc))
                 ok = False
             finally:
                 _wiz_logger.disable(_login_log_scope)
             if ok:
-                oc.console.print(
-                    oc._t(
-                        f"  [green]✓ Logged in; {channel} connected.[/green]",
-                        f"  [green]✓ 已登录;{channel} 已接入。[/green]",
-                    )
-                )
+                oc.console.print(t("  [green]✓ Logged in; {channel} connected.[/green]", channel=channel))
                 logged_in = True
                 return
             choice = oc._failure_choice(
                 [
-                    (oc._t("Retry", "重试"), "retry"),
-                    (oc._t("Skip this channel", "跳过此渠道"), "skip"),
+                    (t("Retry"), "retry"),
+                    (t("Skip this channel"), "skip"),
                 ],
                 non_interactive=non_interactive,
             )
             if choice == "retry":
                 continue
             oc.console.print(
-                oc._t(
-                    f"  [dim]{channel} not connected — finish later with raven channels login {channel}.[/dim]",
-                    f"  [dim]{channel} 未接入 — 之后用 raven channels login {channel} 完成。[/dim]",
+                t(
+                    "  [dim]{channel} not connected — finish later with raven channels login {channel}.[/dim]",
+                    channel=channel,
                 )
             )
             return
@@ -418,7 +355,7 @@ def _add_one_channel(*, non_interactive: bool = False) -> None:
         if fields is oc._BACK:
             continue  # backed out of the first field — re-pick a channel
         _enable_channel(channel, fields)
-        oc.console.print(oc._t(f"  [green]✓ {channel} enabled.[/green]", f"  [green]✓ {channel} 已启用。[/green]"))
+        oc.console.print(t("  [green]✓ {channel} enabled.[/green]", channel=channel))
         return
 
 
@@ -433,9 +370,9 @@ def _manage_existing_channels() -> None:
         if not enabled:
             return
         choices = [questionary.Choice(n, value=n) for n in enabled]
-        choices.append(questionary.Choice(oc._t("Back", "返回"), value=oc._BACK))
+        choices.append(questionary.Choice(t("Back"), value=oc._BACK))
         target = questionary.select(
-            oc._t("Pick a channel to manage:", "选择要管理的渠道:"),
+            t("Pick a channel to manage:"),
             choices=choices,
             style=RAVEN_STYLE,
             qmark=oc._QMARK,
@@ -443,11 +380,11 @@ def _manage_existing_channels() -> None:
         if target is None or target is oc._BACK:
             return
         action = questionary.select(
-            oc._t(f"What would you like to do with {target}?", f"对 {target} 想做什么?"),
+            t("What would you like to do with {target}?", target=target),
             choices=[
-                questionary.Choice(oc._t("Edit config (re-enter fields)", "编辑配置(重填字段)"), value="edit"),
-                questionary.Choice(oc._t("Disable (keep credentials)", "停用(保留凭证)"), value="disable"),
-                questionary.Choice(oc._t("Back", "返回"), value=oc._BACK),
+                questionary.Choice(t("Edit config (re-enter fields)"), value="edit"),
+                questionary.Choice(t("Disable (keep credentials)"), value="disable"),
+                questionary.Choice(t("Back"), value=oc._BACK),
             ],
             style=RAVEN_STYLE,
             qmark=oc._QMARK,
@@ -460,19 +397,13 @@ def _manage_existing_channels() -> None:
                 continue  # backed out — return to the manage menu
             if fields:
                 set_channel_fields(target, fields)
-            oc.console.print(
-                oc._t(
-                    f"  [green]✓ {target} config updated.[/green]",
-                    f"  [green]✓ {target} 配置已更新。[/green]",
-                )
-            )
+            oc.console.print(t("  [green]✓ {target} config updated.[/green]", target=target))
         elif action == "disable":
             disable_channel(target)
             oc.console.print(
-                oc._t(
-                    f"  [green]✓ Disabled {target} (credentials kept; re-enable later "
-                    f"with raven channels enable {target}).[/green]",
-                    f"  [green]✓ 已停用 {target}(凭证保留;之后用 raven channels enable {target} 重新启用)。[/green]",
+                t(
+                    "  [green]✓ Disabled {target} (credentials kept; re-enable later with raven channels enable {target}).[/green]",
+                    target=target,
                 )
             )
 
@@ -481,19 +412,11 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
     """Step 3 — optionally enable chat channel(s)."""
     oc._step_header(
         3,
-        oc._t(
-            "(Optional) Connect a messaging app so you can chat with Raven there",
-            "(可选)接入即时通讯软件,直接在里面和 Raven 聊天",
-        ),
+        t("(Optional) Connect a messaging app so you can chat with Raven there"),
     )
 
     if skip:
-        oc.console.print(
-            oc._t(
-                "  [dim]Skipped via --skip-channel.[/dim]",
-                "  [dim]已通过 --skip-channel 跳过。[/dim]",
-            )
-        )
+        oc.console.print(t("  [dim]Skipped via --skip-channel.[/dim]"))
         return None
 
     if non_interactive:
@@ -505,12 +428,7 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
                 "after onboard finishes."
             )
             raise typer.Exit(2)
-        oc.console.print(
-            oc._t(
-                "  [dim]Skipped (non-interactive, --channel not given).[/dim]",
-                "  [dim]已跳过(非交互且未提供 --channel)。[/dim]",
-            )
-        )
+        oc.console.print(t("  [dim]Skipped (non-interactive, --channel not given).[/dim]"))
         return None
 
     questionary = oc._require_questionary()
@@ -522,29 +440,21 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
         else:
             fields = _prompt_channel_fields(channel)
             if fields is oc._BACK:
-                oc.console.print(oc._t("  [dim]Skipped.[/dim]", "  [dim]已跳过。[/dim]"))
+                oc.console.print(t("  [dim]Skipped.[/dim]"))
                 return None
             _enable_channel(channel, fields)
-            oc.console.print(
-                oc._t(
-                    f"  [green]✓ {channel} enabled.[/green]",
-                    f"  [green]✓ {channel} 已启用。[/green]",
-                )
-            )
+            oc.console.print(t("  [green]✓ {channel} enabled.[/green]", channel=channel))
         return None
 
     while True:
         enabled = _enabled_channels()
         if not enabled:
             action = questionary.select(
-                oc._t("Connect a chat channel?", "接入一个聊天渠道吗?"),
+                t("Connect a chat channel?"),
                 choices=[
-                    questionary.Choice(oc._t("Add a channel", "新增一个渠道"), value="add"),
+                    questionary.Choice(t("Add a channel"), value="add"),
                     questionary.Choice(
-                        oc._t(
-                            "Skip (add later with raven channels enable)",
-                            "跳过(之后用 raven channels enable 添加)",
-                        ),
+                        t("Skip (add later with raven channels enable)"),
                         value="skip",
                     ),
                 ],
@@ -554,20 +464,17 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
             if action is None:
                 raise typer.Exit(1)
             if action == "skip":
-                oc.console.print(oc._t("  [dim]Skipped.[/dim]", "  [dim]已跳过。[/dim]"))
+                oc.console.print(t("  [dim]Skipped.[/dim]"))
                 return None
             _add_one_channel(non_interactive=non_interactive)
             continue
 
         action = questionary.select(
-            oc._t(
-                f"Chat channel already connected: {', '.join(enabled)}. What would you like to do?",
-                f"聊天渠道已接入:{', '.join(enabled)}。想做什么?",
-            ),
+            t("Chat channel already connected: {a0}. What would you like to do?", a0=", ".join(enabled)),
             choices=[
-                questionary.Choice(oc._t("Done, next step", "完成,下一步"), value="done"),
-                questionary.Choice(oc._t("Add a channel", "新增一个渠道"), value="add"),
-                questionary.Choice(oc._t("Edit / remove a channel", "编辑 / 移除渠道"), value="edit"),
+                questionary.Choice(t("Done, next step"), value="done"),
+                questionary.Choice(t("Add a channel"), value="add"),
+                questionary.Choice(t("Edit / remove a channel"), value="edit"),
             ],
             style=RAVEN_STYLE,
             qmark=oc._QMARK,

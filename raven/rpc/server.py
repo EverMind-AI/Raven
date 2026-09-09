@@ -1,0 +1,263 @@
+"""asyncio JSON-RPC 2.0 server loop over a full-duplex socket.
+
+Topology: the parent listens on a TCP-loopback socket; the Node child connects,
+sends an auth token line, then exchanges newline-JSON frames over the same
+connection. ``RpcServer`` is given the accepted socket *object* and wires it via
+``loop.connect_accepted_socket`` (cross-platform: selector + proactor loops).
+`RpcServer` owns the read pump (one line-delimited JSON frame per iteration),
+dispatches concurrently via `asyncio.create_task` so a long-running streaming
+subscription doesn't block other RPC calls, and serializes writes with an
+`asyncio.Lock` so concurrent dispatch tasks can't interleave bytes on the wire.
+
+Frame size limit: 1 MiB. Larger frames trigger immediate
+shutdown of the connection.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import socket
+from typing import TYPE_CHECKING
+
+from loguru import logger
+
+if TYPE_CHECKING:
+    from raven.rpc.dispatcher import Dispatcher
+
+
+MAX_FRAME_BYTES = 1 * 1024 * 1024  # 1 MiB
+
+
+class RpcServer:
+    """Read JSON-RPC frames from the connected socket, write responses back on it.
+
+    Args:
+        dispatcher: a `Dispatcher` instance with all handlers registered.
+        sock: the accepted connection; the server owns it and closes it on `stop()`.
+        auth_token: the per-boot secret the client must present first; None skips the check.
+    """
+
+    def __init__(
+        self,
+        dispatcher: "Dispatcher",
+        *,
+        sock: "socket.socket",
+        auth_token: str | None = None,
+    ) -> None:
+        self._dispatcher = dispatcher
+        # Cross-platform production transport: a single connected TCP-loopback
+        # socket passed as an object (no os.dup of a socket fd, which is not
+        # supported on Windows). When set it takes precedence over the fd pair.
+        self._sock = sock
+        # Optional shared-secret line the peer MUST send first. TCP loopback is
+        # reachable by any local process (unlike an AF_UNIX file guarded by
+        # 0600 perms), so the token restores the "only our spawned child can
+        # talk to us" trust boundary. None disables the check (pipe/test paths).
+        self._auth_token = auth_token
+
+        self._write_transport: asyncio.WriteTransport | None = None
+        # Set on the socket paths only, purely for its ``drain()`` -- writes
+        # still go through the transport. The pipe fallback wires a bare
+        # ``BaseProtocol``, which carries no flow control to wait on.
+        self._writer: asyncio.StreamWriter | None = None
+        self._write_lock = asyncio.Lock()
+        self._pending: set[asyncio.Task] = set()
+        self._stopped = asyncio.Event()
+        self._started = asyncio.Event()
+
+    @property
+    def started(self) -> asyncio.Event:
+        """Set once the read pump has attached to the FD; useful for tests."""
+        return self._started
+
+    # ----- write side -------------------------------------------------------
+
+    async def send_frame(self, frame: dict) -> None:
+        """Serialize and write a single JSON frame + newline to the socket.
+
+        All writes (responses + notifications) MUST go through this method so
+        the lock serializes them.
+
+        Then wait for the transport's buffer to come back under its high-water
+        mark. A client whose event loop has stalled -- mid-render on a long
+        turn, say -- stops reading, and without this wait the emitter keeps
+        handing frames to a buffer nobody drains: the backlog grows here and
+        then lands on the client all at once, which is what turns a slow client
+        into a stuck one. Waiting outside the lock so a slow peer blocks the
+        producers rather than the ordering of what has already been written.
+        """
+        if self._write_transport is None:
+            raise RuntimeError("RpcServer.send_frame called before serve_forever()")
+        data = (json.dumps(frame, ensure_ascii=False) + "\n").encode("utf-8")
+        async with self._write_lock:
+            self._write_transport.write(data)
+        await self._drain()
+
+    async def _drain(self) -> None:
+        """Block while the peer is behind. No-op without flow control."""
+        writer = self._writer
+        if writer is None:
+            return
+        try:
+            await writer.drain()
+        except (ConnectionError, OSError):
+            # The peer is gone. ``send_frame`` has never reported that -- a
+            # write to a closed transport is a silent no-op -- and the read
+            # pump owns noticing it, so stay quiet here too.
+            pass
+
+    # ----- main loop --------------------------------------------------------
+
+    async def serve_forever(self) -> None:
+        """Run the read/dispatch/write pump until EOF or `stop()`."""
+        loop = asyncio.get_running_loop()
+
+        reader = asyncio.StreamReader(limit=MAX_FRAME_BYTES)
+        reader_protocol = asyncio.StreamReaderProtocol(reader)
+
+        # The production transport in
+        # ``tui_commands.run_subprocess_with_rpc`` dups the same accepted unix
+        # socket fd into ``request_fd`` and ``notify_fd``. CPython's
+        # ``connect_write_pipe`` builds a ``_UnixWritePipeTransport`` whose
+        # ``__init__`` registers a reader callback on the WRITE fd to detect
+        # "peer closed the pipe" (read-end EOF) — this works for real pipes
+        # but is fatal for a bidirectional SOCK_STREAM socket: any inbound
+        # byte (e.g. ``system.hello``) makes the reader callback fire,
+        # ``_close()`` runs, and every subsequent ``send_frame`` becomes a
+        # silent no-op. After 5 such drops asyncio also logs ``"pipe closed
+        # by peer or os.write(pipe, data) raised exception."`` — which is the
+        # exact symptom seen during ``/cha`` slash autocomplete.
+        #
+        # Use ``connect_accepted_socket`` (full-duplex selector transport) on
+        # the same fd instead. The transport's ``.write()`` works without
+        # the spurious peer-close detection. We keep the pipe-based path as a
+        # fallback for tests/CI that wire bare ``os.pipe()`` pairs.
+        self._sock.setblocking(False)
+        transport, _ = await loop.connect_accepted_socket(lambda: reader_protocol, self._sock)
+        self._write_transport = transport
+        self._writer = asyncio.StreamWriter(transport, reader_protocol, reader, loop)
+
+        self._started.set()
+        logger.info("rpc: RpcServer started (pid={}, fd={})", os.getpid(), self._sock.fileno())
+
+        # Trust-boundary gate for the TCP-loopback transport: the peer must send
+        # the shared secret as the very first newline-terminated line before any
+        # JSON-RPC frame. Only our spawned Node child knows it (passed via env),
+        # so a rogue local process that connects to the port is rejected here
+        # before any dispatch. Disabled (None) for the pipe/test paths.
+        if self._auth_token is not None:
+            try:
+                first = await asyncio.wait_for(reader.readuntil(b"\n"), timeout=10.0)
+            except (asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+                logger.error("rpc: auth token not received; closing connection")
+                self._stopped.set()
+                return
+            if first.rstrip(b"\n") != self._auth_token.encode("utf-8"):
+                logger.error("rpc: auth token mismatch; closing connection")
+                self._stopped.set()
+                return
+
+        # One RpcServer serves one client connection, but it shares process-wide
+        # handler state with any other dispatcher in the process (a gateway also
+        # hosting the page). Binding a connection scope here keeps this client's
+        # declared surface on this connection's dispatch tasks only.
+        from raven.rpc import connection
+
+        conn_token = connection.bind_connection()
+        try:
+            while not self._stopped.is_set():
+                try:
+                    line = await reader.readuntil(b"\n")
+                except asyncio.IncompleteReadError as exc:
+                    # EOF — peer closed. Drain whatever partial bytes we have.
+                    if exc.partial:
+                        logger.warning(
+                            "rpc: incomplete final frame ({} bytes); dropping",
+                            len(exc.partial),
+                        )
+                    break
+                except asyncio.LimitOverrunError:
+                    logger.error(
+                        "rpc: frame exceeds {} bytes; closing connection",
+                        MAX_FRAME_BYTES,
+                    )
+                    break
+
+                if len(line) > MAX_FRAME_BYTES:
+                    logger.error("rpc: frame {} bytes > {} cap; closing", len(line), MAX_FRAME_BYTES)
+                    break
+
+                # Spawn the dispatch as an independent task so streaming /
+                # slow handlers don't block subsequent reads.
+                task = asyncio.create_task(self._handle_frame(line))
+                self._pending.add(task)
+                task.add_done_callback(self._pending.discard)
+        finally:
+            connection.unbind_connection(conn_token)
+            await self._shutdown()
+
+    async def _handle_frame(self, raw: bytes) -> None:
+        try:
+            try:
+                frame = json.loads(raw.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                # JSON-RPC §-32700 parse_error response (id unknown → null).
+                resp = {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32700,
+                        "message": "parse_error",
+                        "data": {"reason": str(exc)},
+                    },
+                }
+                await self.send_frame(resp)
+                return
+
+            response = await self._dispatcher.dispatch(frame)
+
+            # If the original frame omitted `id` (a notification per JSON-RPC
+            # 2.0), suppress the response — but dispatcher already echoed
+            # whatever it received as id, so we only suppress when id was
+            # explicitly absent in the inbound frame.
+            if isinstance(frame, dict) and "id" not in frame:
+                return
+            await self.send_frame(response)
+        except Exception:
+            # Last-resort guard so a single buggy handler can't kill the pump.
+            logger.exception("rpc: _handle_frame failed")
+
+    async def _shutdown(self) -> None:
+        # Cancel any in-flight dispatch tasks.
+        for task in list(self._pending):
+            if not task.done():
+                task.cancel()
+        if self._pending:
+            await asyncio.gather(*self._pending, return_exceptions=True)
+        self._pending.clear()
+
+        if self._write_transport is not None:
+            try:
+                self._write_transport.close()
+            except Exception:
+                logger.exception("rpc: error closing write transport")
+            self._write_transport = None
+
+        # Dropped with the transport it wraps: send_frame checks the transport
+        # first and raises, but a drain already awaiting must not outlive it.
+        self._writer = None
+
+        self._stopped.set()
+        logger.info("rpc: RpcServer stopped (pid={})", os.getpid())
+
+    async def stop(self) -> None:
+        """Signal the read loop to exit and wait for cleanup."""
+        self._stopped.set()
+        # We can't easily interrupt `readuntil`, but closing the write side
+        # plus setting `_stopped` will cause the next iteration after EOF to
+        # bail. Caller typically just cancels the serve_forever task.
+
+
+__all__ = ["RpcServer", "MAX_FRAME_BYTES"]

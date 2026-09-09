@@ -41,6 +41,20 @@ def test_agent_help_works() -> None:
     assert "--markdown" in r.stdout
 
 
+def test_home_flag_moves_agent_home(tmp_config: Path, tmp_path: Path):
+    from raven.core.config_stack import load_runtime_config
+
+    config = load_runtime_config(None, home=str(tmp_path / "elsewhere"))
+    assert config.agents.defaults.workspace == str(tmp_path / "elsewhere")
+
+
+def test_agent_help_documents_both_directories():
+    r = runner.invoke(app, ["agent", "--help"])
+    assert r.exit_code == 0
+    assert "--home" in r.output
+    assert "Working directory" in r.output
+
+
 def test_agent_help_omits_removed_skill_extract_flags() -> None:
     """The inert skill-extraction flags stay removed: the mechanism their
     help text described was replaced by the MemoryBackend plugin, so the
@@ -103,7 +117,7 @@ def test_agent_help_shows_resume_flag() -> None:
 
 
 def _invoke_agent_capturing_session(
-    monkeypatch: pytest.MonkeyPatch, workspace: Path, extra_args: list[str]
+    monkeypatch: pytest.MonkeyPatch, home: Path, extra_args: list[str]
 ) -> tuple[object, dict[str, str]]:
     """Run ``agent -m`` with the provider and AgentLoop stubbed out, capturing
     the session_id that reaches the spine turn (req.conversation is the session
@@ -123,6 +137,9 @@ def _invoke_agent_capturing_session(
     class _StubSubagents:
         def set_submit(self, _submit) -> None:
             pass
+
+        def get_running_count(self) -> int:
+            return 0
 
     class _StubAgentLoop:
         def __init__(self, **kwargs):
@@ -153,14 +170,14 @@ def _invoke_agent_capturing_session(
     # (bundled) everos backend / plugin tools inside the CliRunner (the
     # embedded everos runtime is heavy and not under test here).
     monkeypatch.setattr(
-        "raven.cli.agent_commands.maybe_build_memory_backend",
+        "raven.core.plugin_stack.maybe_build_memory_backend",
         lambda *a, **k: None,
     )
     monkeypatch.setattr(
-        "raven.cli.agent_commands.build_plugin_tools",
+        "raven.core.plugin_stack.build_plugin_tools",
         lambda *a, **k: [],
     )
-    r = runner.invoke(app, ["agent", "-m", "hi", "-w", str(workspace), *extra_args])
+    r = runner.invoke(app, ["agent", "-m", "hi", "--home", str(home), *extra_args])
     return r, captured
 
 
@@ -168,7 +185,7 @@ def test_agent_default_mints_fresh_session(tmp_config: Path, tmp_path: Path, mon
     """Bare ``agent -m`` mints a fresh ``cli:{chat_id}`` per invocation."""
     import re
 
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     ws.mkdir()
 
     r1, cap1 = _invoke_agent_capturing_session(monkeypatch, ws, [])
@@ -188,7 +205,7 @@ def test_agent_continue_binds_most_recent_cli_session(
     """``-c`` binds the agent to the most-recent persisted cli session."""
     from raven.session.manager import SessionManager
 
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     ws.mkdir()
     mgr = SessionManager(ws)
     seeded = "20990101_000000_aaaaaa"
@@ -205,7 +222,7 @@ def test_agent_resume_binds_resolved_session(tmp_config: Path, tmp_path: Path, m
     """``--resume <prefix>`` resolves and binds that cli session."""
     from raven.session.manager import SessionManager
 
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     ws.mkdir()
     mgr = SessionManager(ws)
     seeded = "20990101_000000_bbbbbb"
@@ -220,7 +237,7 @@ def test_agent_resume_binds_resolved_session(tmp_config: Path, tmp_path: Path, m
 
 def test_agent_session_key_passthrough(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--session <key>`` passes a full key through unchanged (any channel)."""
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     ws.mkdir()
 
     r, captured = _invoke_agent_capturing_session(monkeypatch, ws, ["--session", "feishu:ou_xyz"])
@@ -235,7 +252,7 @@ def test_agent_bare_session_resolves_cross_channel(
     channel — it must NOT be mis-routed to a colon-less/malformed key."""
     from raven.session.manager import SessionManager
 
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     ws.mkdir()
     mgr = SessionManager(ws)
     cid = "20990101_000000_cccccc"
@@ -253,7 +270,7 @@ def test_agent_unknown_bare_session_falls_back_to_cli(
 ) -> None:
     """``--session <bare id>`` with no matching session falls back to a proper
     ``cli:<id>`` key — never a colon-less/malformed path."""
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     ws.mkdir()
     cid = "20990101_000000_dddddd"
 
@@ -284,13 +301,47 @@ def test_agent_continue_without_prior_session_starts_fresh(
     """``-c`` with no stored cli session prints a notice and mints fresh."""
     import re
 
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     ws.mkdir()
 
     r, captured = _invoke_agent_capturing_session(monkeypatch, ws, ["-c"])
     assert r.exit_code == 0, r.stdout
     assert re.fullmatch(r"cli:\d{8}_\d{6}_[0-9a-f]{6}", captured["session_id"])
     assert "no previous cli session" in r.stdout
+
+
+@pytest.mark.asyncio
+async def test_wait_for_background_work_covers_subagent_follow_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One-shot teardown waits for a sub-agent and its submitted follow-up."""
+    from raven.cli import agent_commands
+
+    state = {"subagent_running": True, "follow_up_running": False}
+    sleeps: list[float] = []
+
+    class _Subagents:
+        def get_running_count(self) -> int:
+            return int(state["subagent_running"])
+
+    class _Scheduler:
+        def has_inflight(self, conversation: str) -> bool:
+            return conversation == "cli:direct" and state["follow_up_running"]
+
+    async def _sleep(delay: float) -> None:
+        sleeps.append(delay)
+        if delay == 1.0 and state["subagent_running"]:
+            state["subagent_running"] = False
+            state["follow_up_running"] = True
+        elif delay == 1.0:
+            state["follow_up_running"] = False
+        elif delay == 2.0:
+            state["follow_up_running"] = False
+
+    monkeypatch.setattr(agent_commands.asyncio, "sleep", _sleep)
+    from types import SimpleNamespace
+
+    await agent_commands._wait_for_background_work(SimpleNamespace(subagents=_Subagents()), _Scheduler(), "cli:session")
+
+    assert sleeps == [1.0, 1.0, 2.0]
 
 
 # ============================================================================
@@ -306,7 +357,7 @@ def test_agent_message_mode_constructs_no_cron_service(
     cli-bound job it created would have nothing to fire it."""
     import raven.proactive_engine.schedulers.cron.service as cron_mod
 
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     ws.mkdir()
     constructed: list[object] = []
     orig_init = cron_mod.CronService.__init__
@@ -421,6 +472,9 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
         def set_submit(self, _submit) -> None:
             pass
 
+        def get_running_count(self) -> int:
+            return 0
+
     class _AuthFailAgentLoop:
         def __init__(self, **kwargs):
             self.channels_config = kwargs.get("channels_config")
@@ -450,8 +504,8 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
     monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _AuthFailAgentLoop)
-    monkeypatch.setattr("raven.cli.agent_commands.maybe_build_memory_backend", lambda *a, **k: None)
-    monkeypatch.setattr("raven.cli.agent_commands.build_plugin_tools", lambda *a, **k: [])
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda *a, **k: None)
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_tools", lambda *a, **k: [])
 
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -571,7 +625,7 @@ def test_print_llm_error_non_auth_categories_get_apt_hint_not_key_guidance(
 
 
 def test_workspace_sync_prints_single_summary(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-    from raven.utils.helpers import sync_workspace_templates
+    from raven.utils.workspace import sync_workspace_templates
 
     ws = tmp_path / "workspace"
     added = sync_workspace_templates(ws)
@@ -600,7 +654,7 @@ def test_workspace_sync_debug_detail_lifts_with_raven_logging(tmp_path: Path) ->
     per-file detail. Freezes the behavior the helpers comment relies on."""
     from loguru import logger
 
-    from raven.utils.helpers import sync_workspace_templates
+    from raven.utils.workspace import sync_workspace_templates
 
     records: list[str] = []
     sink_id = logger.add(lambda m: records.append(str(m)), level="DEBUG")
@@ -619,8 +673,8 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
 
     from raven.config.loader import save_config
     from raven.config.schema import Config
+    from raven.contracts.token_strategy import UsageSnapshot
     from raven.spine import Text, TurnOutcome, Usage
-    from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.registry import StrategyRegistry
 
     cfg = Config()
@@ -632,6 +686,9 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
     class _StubSubagents:
         def set_submit(self, _submit) -> None:
             pass
+
+        def get_running_count(self) -> int:
+            return 0
 
     class _StubAgentLoop:
         def __init__(self, **kwargs):
@@ -649,7 +706,7 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
                     model="stub-model",
                     input_tokens=1200,
                     output_tokens=340,
-                    estimated_cost_usd=0.004,
+                    cost_usd=0.004,
                     session_key=req.conversation,
                 ),
             )
@@ -665,8 +722,8 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
     monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
-    monkeypatch.setattr("raven.cli.agent_commands.maybe_build_memory_backend", lambda *a, **k: None)
-    monkeypatch.setattr("raven.cli.agent_commands.build_plugin_tools", lambda *a, **k: [])
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda *a, **k: None)
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_tools", lambda *a, **k: [])
     return runner.invoke(app, ["agent", "-m", "hi", "-w", str(tmp_path / "ws")])
 
 

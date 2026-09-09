@@ -5,16 +5,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from raven.memory_engine.consolidate.consolidator import _parse_episode_line
+from raven.memory_engine import parse_episode_line
 from raven.proactive_engine.sentinel.attention_producers._base import (
+    WEEKDAY,
     AttentionProducer,
 )
 
 if TYPE_CHECKING:
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
-
-
-_WEEKDAY = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    from raven.memory_engine import MemoryStore
 
 
 class ProjectRhythmProducer(AttentionProducer):
@@ -43,7 +41,7 @@ class ProjectRhythmProducer(AttentionProducer):
         cutoff = now - timedelta(days=self._since_days)
         buckets: dict[str, list[tuple[datetime, int, int]]] = {}
         for line in history_file.read_text(encoding="utf-8").splitlines():
-            parsed = _parse_episode_line(line)
+            parsed = parse_episode_line(line)
             if not parsed:
                 continue
             ts, _, tags = parsed
@@ -83,7 +81,7 @@ class ProjectRhythmProducer(AttentionProducer):
             band_count = sum(hour_counts.get(best_band_start + i, 0) for i in range(3))
             band_str = f"{best_band_start:02d}:00-{best_band_start + 3:02d}:00 ({band_count})"
             project_name = tag[len("project-") :]
-            lines.append(f"- **{project_name}** ({count} ep): peak {_WEEKDAY[dom_wd]}, hours {band_str}")
+            lines.append(f"- **{project_name}** ({count} ep): peak {WEEKDAY[dom_wd]}, hours {band_str}")
         return "\n".join(lines)
 
 

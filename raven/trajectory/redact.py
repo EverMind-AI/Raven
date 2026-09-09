@@ -132,15 +132,6 @@ _CANDIDATE = re.compile(r"[A-Za-z0-9_\-+=]{20,}")
 # (<seq>-<traceId>-<session>-<label>-<hash>.json), and every bundle references
 # them — flagging those would put false positives in every report preview.
 _TRACING_ID = re.compile(r"(?:trace|span|att)-[0-9a-f]{6,}")
-# Provider-generated tool-call ids (``call_`` + alphanumerics) hit the entropy
-# bar in every trajectory that carries a tool call — same nature as the
-# tracing-id exemption above. Anchored full match: a credential merely
-# containing ``call_`` does not qualify.
-_CALL_ID = re.compile(r"^call_[A-Za-z0-9]+$")
-# Fixed field names of provider usage blocks: they clear the entropy bar in
-# every trajectory with a model call. Exact literals only — any variation
-# still flags.
-_BENIGN_LITERALS = frozenset({"completion_tokens_details", "prompt_tokens_details"})
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _PURE_DIGITS = re.compile(r"^[0-9]+$")
@@ -178,20 +169,12 @@ class KnownSecret:
 
 @dataclass
 class ResidualFinding:
-    """One suspicious token that survived redaction (layer 3 reports, never rewrites).
-
-    ``token`` and ``occurrences`` live in memory only, for the review flow to
-    adjudicate by value and render context; :meth:`RedactionReport.metadata`
-    never serializes them — the plaintext and full source lines must not land
-    in ``redaction.json``.
-    """
+    """One suspicious token that survived redaction (layer 3 reports, never rewrites)."""
 
     category: str
     sample: str
     file: str
     count: int = 1
-    token: str = ""
-    occurrences: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -307,7 +290,30 @@ def _walk_model(model: BaseModel, label: str) -> Iterator[KnownSecret]:
         else:
             yield from _walk_value(value, sub)
     # Extra sections (e.g. providers Raven has no spec for) are plain dicts.
-    yield from _walk_value(model.model_extra or {}, label)
+    extra = model.model_extra or {}
+    if extra and type(model).__name__ == "ChannelsConfig":
+        # Channel sections live in extras since the central classes retired;
+        # their declared spelling is snake_case, so labels (and the name
+        # heuristics' input) use it rather than the file's camelCase.
+        extra = _normalized_channel_extras(extra)
+    yield from _walk_value(extra, label)
+
+
+def _normalized_channel_extras(extra: dict) -> dict:
+    from raven.channels.registry import discover_specs
+    from raven.config.admission import normalize_slice_keys
+
+    specs = discover_specs()
+    out: dict = {}
+    for name, section in extra.items():
+        if hasattr(section, "model_dump"):
+            section = section.model_dump()
+        schema = getattr(specs.get(name), "config_schema", None) or {}
+        if isinstance(section, dict) and schema:
+            out[name] = normalize_slice_keys(schema, section)
+        else:
+            out[name] = section
+    return out
 
 
 def _walk_raw(value: Any, label: str) -> Iterator[KnownSecret]:
@@ -400,7 +406,7 @@ def collect_known_secrets(
 
     for path in paths:
         try:
-            _add(_walk_model(load_config(path), "config"))
+            _add(config_secrets(load_config(path)))
         except Exception:
             complete = False
         if path.exists():
@@ -430,10 +436,8 @@ def _variants(value: str) -> set[str]:
 
 def _apply_exact(text: str, secrets: list[KnownSecret], counts: dict[str, int]) -> str:
     # One pass over the text with all variants as an alternation, longest
-    # first (re picks the first alternative at a position, so longest-first
-    # gives longest-match). Sequential str.replace re-scanned its own output:
-    # a short value (a 1-char junk env key, say "k") then shredded the "k"
-    # inside placeholders inserted for earlier, longer secrets.
+    # first (re picks the first alternative at a position), so a placeholder
+    # inserted for one secret is never re-scanned for another.
     variants: dict[str, tuple[str, bool]] = {}
     for secret in secrets:
         for variant in _variants(secret.value):
@@ -487,9 +491,9 @@ def scan_residuals(root: Path) -> list[ResidualFinding]:
     Reports long tokens whose Shannon entropy clears a charset-aware bar
     (:func:`_flag_threshold`) — pure hex and letter-only tokens included,
     since real credentials take both shapes. Skipped as benign: tracing ids
-    (by prefix), provider tool-call ids (``call_…``), UUIDs, date-stamped
-    names, and digit-only tokens (ids and quantities; a 10-symbol alphabet
-    cannot clear any meaningful entropy bar). Deduped by token value.
+    (by prefix), UUIDs, date-stamped names, and digit-only tokens (ids and
+    quantities; a 10-symbol alphabet cannot clear any meaningful entropy
+    bar). Deduped by token value.
     """
     findings: dict[str, ResidualFinding] = {}
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
@@ -498,14 +502,12 @@ def scan_residuals(root: Path) -> list[ResidualFinding]:
         except (OSError, UnicodeDecodeError):
             continue
         rel = str(path.relative_to(root))
-        for line_no, line in enumerate(text.splitlines(), 1):
+        for line in text.splitlines():
             for match in _CANDIDATE.finditer(line):
                 token = match.group(0)
                 if "REDACTED" in token:
                     continue
-                if _TRACING_ID.search(token) or _CALL_ID.match(token) or _UUID.match(token) or _DATE.search(token):
-                    continue
-                if token in _BENIGN_LITERALS:
+                if _TRACING_ID.search(token) or _UUID.match(token) or _DATE.search(token):
                     continue
                 if _PURE_DIGITS.match(token):
                     continue
@@ -513,25 +515,13 @@ def scan_residuals(root: Path) -> list[ResidualFinding]:
                     continue
                 if _entropy(token) < _flag_threshold(token):
                     continue
-                occurrence = {
-                    "file": rel,
-                    "line_no": line_no,
-                    "line": line,
-                    "start": match.start(),
-                    "end": match.end(),
-                }
                 known = findings.get(token)
                 if known:
                     known.count += 1
-                    known.occurrences.append(occurrence)
                     continue
                 category = "jwt-like" if token.startswith("eyJ") else "high-entropy"
                 findings[token] = ResidualFinding(
-                    category=category,
-                    sample=_sample(line, match.start(), match.end()),
-                    file=rel,
-                    token=token,
-                    occurrences=[occurrence],
+                    category=category, sample=_sample(line, match.start(), match.end()), file=rel
                 )
     return list(findings.values())
 

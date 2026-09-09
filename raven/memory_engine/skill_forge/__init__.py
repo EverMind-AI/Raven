@@ -1,19 +1,18 @@
 """SkillForgeRouter machinery — multi-source skill retrieval + RRF fusion.
 
-SR-1 lands the type contract and the first concrete source
-(:class:`LocalSkillSource`) plus the rendering helper
-(:class:`LocalSkillCatalog`). SR-2 adds the router + weighted RRF;
-SR-3/SR-4 add Mass + Everos sources. The package is intentionally
-scoped narrow — every public symbol here is consumed by
-:class:`DefaultContextEngine` (lands in CE-1) and not by anything else.
+The package holds :class:`LocalSkillCatalog` (the local pool and its
+rendering), the three sources :class:`LocalSkillSource`,
+:class:`EverosSkillSource` and :class:`HubSkillSource`, the
+:class:`SkillForgeRouter` that fans out over them with weighted RRF
+(``rrf_merge_weighted``), the :class:`LLMGateFilter` and
+:class:`QueryRewriter` downstream of the fusion, and ``resolve_refs``.
+Its consumer is the context engine's skills segment.
 
-Key design point repeated for newcomers reading top-down: the
-:class:`SkillSource` Protocol is **host-internal**. Per the
-project-wide design decision, sources are hardcoded (Local + Mass +
-Everos) and not a public plugin contribution point. Third-party
-extension of skill retrieval happens via :class:`MemoryBackend`
-(``backend.recall(agent_id=...)``) — the EverosSkillSource
-re-emits those hits as :class:`RouterHit` records.
+The :class:`ForgeSkillSource` Protocol is **host-internal**: the sources are
+hardcoded, not a plugin contribution point. Third-party extension of skill
+retrieval happens through :class:`MemoryBackend`
+(``backend.recall(agent_id=...)``) — the EverosSkillSource re-emits those
+hits as :class:`RouterHit` records.
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ from raven.memory_engine.skill_forge.rewriter import (
     RewriteResult,
 )
 from raven.memory_engine.skill_forge.router import SkillForgeRouter
-from raven.memory_engine.skill_forge.types import RouterHit, SkillSource
+from raven.memory_engine.skill_forge.types import ForgeSkillSource, RouterHit
 
 __all__ = [
     "EverosSkillSource",
@@ -43,7 +42,7 @@ __all__ = [
     "RewriteResult",
     "RouterHit",
     "SkillForgeRouter",
-    "SkillSource",
+    "ForgeSkillSource",
     "resolve_refs",
     "rrf_merge_weighted",
 ]

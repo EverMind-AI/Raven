@@ -12,7 +12,6 @@ from raven.spine.events import (
     Notice,
     NoticeKind,
     Reasoning,
-    RunnerEvent,
     StreamDelta,
     Text,
     ToolEvent,
@@ -25,8 +24,8 @@ from raven.spine.events import (
 )
 from raven.spine.message import ChatType, Media, Source
 from raven.spine.runner import Emit, TurnOutcome, TurnRunner
-from raven.spine.scheduler import OriginPools, Scheduler, TurnHandle
-from raven.spine.turn import BusyPolicy, Origin, TurnRequest
+from raven.spine.scheduler import OriginPools, Scheduler, TurnHandle, conversation_id
+from raven.spine.turn import BusyPolicy, Origin, TurnRequest, direct_lane, session_of
 
 __all__ = [
     "BusyPolicy",
@@ -41,7 +40,6 @@ __all__ = [
     "Origin",
     "OriginPools",
     "Reasoning",
-    "RunnerEvent",
     "Scheduler",
     "Source",
     "StreamDelta",
@@ -54,7 +52,10 @@ __all__ = [
     "TurnHandle",
     "TurnOutcome",
     "TurnRequest",
+    "direct_lane",
+    "session_of",
     "TurnRunner",
     "TurnStarted",
+    "conversation_id",
     "Usage",
 ]

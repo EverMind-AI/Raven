@@ -265,6 +265,76 @@ function Test-RavenSource([string]$Dir) {
     return (Test-Path $pyproject) -and (Select-String -Path $pyproject -Pattern '^name = "raven"' -Quiet)
 }
 
+# ui-tui\dist\entry.js (the TUI bundle) and ui\dist\index.html (the page
+# `raven web` serves) are both gitignored build artifacts. A release wheel
+# carries them; an editable install of a checkout gets neither, so without this
+# a clone install has no TUI and no page. Both must exist before first run.
+function Build-WebAssets([string]$ScriptDir, [string]$NodePath, [string]$UvPath) {
+    $needTui = -not (Test-Path (Join-Path $ScriptDir "ui-tui\dist\entry.js"))
+    $needPage = -not (Test-Path (Join-Path $ScriptDir "ui-web\dist\index.html"))
+    if (-not ($needTui -or $needPage)) { return }
+
+    # One probe for both builds. npm ships alongside node, but verify it
+    # explicitly before relying on it.
+    Add-ProcessPath (Split-Path $NodePath -Parent)
+    $npm = Get-Command npm -ErrorAction SilentlyContinue
+    if (-not $npm) {
+        if ($needTui) { Write-Warn "Found node but not npm; skipping TUI bundle build" }
+        if ($needPage) { Write-Warn "Found node but not npm; skipping served-page build; raven web will not start" }
+        return
+    }
+
+    if ($needTui) {
+        Write-Info "Building TUI bundle (ui-tui/dist/entry.js)..."
+        Push-Location (Join-Path $ScriptDir "ui-tui")
+        # Fatal, and each exit code read back for the same reason the page below
+        # reads its own: $ErrorActionPreference does not cover native commands,
+        # so an unchecked npm failure returns here, runs the next npm anyway, and
+        # the install goes on to report success with no bundle -- leaving bare
+        # `raven`, which opens the TUI, unusable. install.sh aborts here under
+        # `set -e`; this is the same abort, and `Fail` raises a terminating error
+        # rather than exiting the process, so `irm | iex` does not close the
+        # caller's shell and Pop-Location still runs.
+        try {
+            & $npm.Source ci
+            if ($LASTEXITCODE -ne 0) { Fail "TUI bundle build failed: npm ci exited $LASTEXITCODE" }
+            & $npm.Source run build
+            if ($LASTEXITCODE -ne 0) { Fail "TUI bundle build failed: npm run build exited $LASTEXITCODE" }
+        } finally {
+            Pop-Location
+        }
+    }
+
+    if ($needPage) {
+        Write-Info "Building served page (ui-web/dist/index.html)..."
+        # Warned rather than propagated, unlike the bundle above: bare `raven`
+        # opens the TUI, so a machine that cannot build the page still gets the
+        # surface this script exists to deliver. Each exit code is read back
+        # because $ErrorActionPreference does not cover native commands, so a
+        # failed npm ci would otherwise run on into the page assembler.
+        try {
+            Push-Location (Join-Path $ScriptDir "ui-web")
+            try {
+                & $npm.Source ci
+                if ($LASTEXITCODE -ne 0) { throw "npm ci exited $LASTEXITCODE" }
+                & $npm.Source run build
+                if ($LASTEXITCODE -ne 0) { throw "npm run build exited $LASTEXITCODE" }
+            } finally {
+                Pop-Location
+            }
+            # Vite emits ui-web/.modern/modern.iife.js, then ui-web/build.py inlines
+            # with the page sources and the shared i18n catalogue. Python comes
+            # from uv, already a hard requirement here, rather than from a bare
+            # `python` -- on Windows that name is usually the Microsoft Store
+            # stub, which opens the Store instead of running the script.
+            & $UvPath run --no-project python (Join-Path $ScriptDir "ui-web\build.py")
+            if ($LASTEXITCODE -ne 0) { throw "ui-web/build.py exited $LASTEXITCODE" }
+        } catch {
+            Write-Warn "The served page did not build ($_); raven web will not start"
+        }
+    }
+}
+
 function Install-Raven([string]$UvPath, [string]$NodePath) {
     # $PSScriptRoot is set only when this script runs as a file. Piped through
     # `irm ... | iex` it is empty, and falling back to the current directory
@@ -282,27 +352,10 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
     }
     if ($scriptDir) {
         Write-Info "Detected local Raven source checkout; installing editable: $scriptDir"
-        $entry = Join-Path $scriptDir "ui-tui\dist\entry.js"
-        if (-not (Test-Path $entry)) {
-            $nodeDir = Split-Path $NodePath -Parent
-            Add-ProcessPath $nodeDir
-            $npm = Get-Command npm -ErrorAction SilentlyContinue
-            if ($npm) {
-                Write-Info "Building TUI bundle (ui-tui/dist/entry.js)..."
-                Push-Location (Join-Path $scriptDir "ui-tui")
-                try {
-                    & $npm.Source ci
-                    & $npm.Source run build
-                } finally {
-                    Pop-Location
-                }
-            } else {
-                Write-Warn "Found node but not npm; skipping TUI bundle build"
-            }
-        }
+        Build-WebAssets $scriptDir $NodePath $UvPath
         # Pin to the locked dependency set so an install matches what we test.
         $constraints = Join-Path ([IO.Path]::GetTempPath()) ("raven-constraints-" + [guid]::NewGuid().ToString("N") + ".txt")
-        & $UvPath export --directory "$scriptDir" --frozen --all-extras --no-hashes --no-emit-project -o "$constraints"
+        & $UvPath export --directory "$scriptDir" --frozen --all-extras --no-hashes --no-emit-workspace -o "$constraints"
         # Install all channel adapters by default; fall back to base raven if
         # the umbrella extra fails to build on this platform, so one broken
         # channel SDK cannot block the whole install.

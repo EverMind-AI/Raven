@@ -100,6 +100,15 @@
       "vllm/zz-probe-1": "hosted_vllm/zz-probe-1",
       "zz-probe-1": "hosted_vllm/zz-probe-1"
     },
+    "lm_studio": {
+      "lm-studio/zz-probe-1": "lm_studio/zz-probe-1",
+      "lm_studio/vendorx/zz-probe-1": "lm_studio/vendorx/zz-probe-1",
+      "lm_studio/zz-probe-1": "lm_studio/zz-probe-1",
+      "lmstudio-probe": "lm_studio/lmstudio-probe",
+      "lmstudio/zz-probe-1": "lm_studio/zz-probe-1",
+      "vendorx/zz-probe-1": "lm_studio/vendorx/zz-probe-1",
+      "zz-probe-1": "lm_studio/zz-probe-1"
+    },
     "minimax": {
       "minimax-probe": "minimax/minimax-probe",
       "minimax/vendorx/zz-probe-1": "minimax/vendorx/zz-probe-1",
@@ -118,6 +127,17 @@
       "vendorx/zz-probe-1": "vendorx/zz-probe-1",
       "zz-probe-1": "zz-probe-1"
     },
+    "minimax_cn_api": {
+      "minimax-cn-api-probe": "minimax/minimax-cn-api-probe",
+      "minimax-cn-api/MiniMax-M3": "minimax/MiniMax-M3",
+      "minimax-cn-api/zz-probe-1": "minimax/zz-probe-1",
+      "minimax/zz-probe-1": "minimax/zz-probe-1",
+      "minimax_cn_api/vendorx/zz-probe-1": "minimax/vendorx/zz-probe-1",
+      "minimax_cn_api/zz-probe-1": "minimax/zz-probe-1",
+      "openrouter/zz-probe-1": "openrouter/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
     "minimax_global": {
       "anthropic/zz-probe-1": "anthropic/zz-probe-1",
       "minimax-global-probe": "minimax/minimax-global-probe",
@@ -133,6 +153,15 @@
       "moonshot/vendorx/zz-probe-1": "moonshot/vendorx/zz-probe-1",
       "moonshot/zz-probe-1": "moonshot/zz-probe-1",
       "openrouter/zz-probe-1": "openrouter/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
+    "nvidia_nim": {
+      "nvidia-nim/nvidia/nemotron-3-super-120b-a12b": "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+      "nvidia-nim/zz-probe-1": "nvidia_nim/zz-probe-1",
+      "nvidia-probe": "nvidia_nim/nvidia-probe",
+      "nvidia_nim/vendorx/zz-probe-1": "nvidia_nim/vendorx/zz-probe-1",
+      "nvidia_nim/zz-probe-1": "nvidia_nim/zz-probe-1",
       "vendorx/zz-probe-1": "vendorx/zz-probe-1",
       "zz-probe-1": "zz-probe-1"
     },
@@ -163,7 +192,7 @@
     },
     "openrouter": {
       "openrouter-probe": "openrouter/openrouter-probe",
-      "openrouter/anthropic/claude-sonnet-4-5": "openrouter/anthropic/claude-sonnet-4-5",
+      "openrouter/anthropic/claude-sonnet-5": "openrouter/anthropic/claude-sonnet-5",
       "openrouter/vendorx/zz-probe-1": "openrouter/vendorx/zz-probe-1",
       "openrouter/zz-probe-1": "openrouter/zz-probe-1",
       "vendorx/zz-probe-1": "openrouter/vendorx/zz-probe-1",

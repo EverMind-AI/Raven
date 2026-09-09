@@ -171,11 +171,32 @@ export function composerPromptWidth(promptText: string) {
   return Math.max(1, stringWidth(promptText)) + COMPOSER_PROMPT_GAP_WIDTH
 }
 
+// One cell of left inset for every mark the transcript puts in its margin --
+// the reply glyph, an activity row's outcome marker, the spinner. Hard against
+// the terminal's left edge those read as cropped rather than as a margin, and
+// the composer already sits a cell in (ComposerPane's paddingX). A two-cell
+// gutter cannot carry both the inset and the gap that keeps the mark off its own
+// text, so the gutter is what grows.
+//
+// Spent here rather than at each row on purpose: every column in the transcript
+// is measured from this one number, so the reply dot, the activity marker and
+// the user slab's first character cannot land on different columns, and
+// transcriptBodyWidth plus estimatedMsgHeight follow without being told. The
+// slab's rule is the one mark that stays at column 0 -- it is the edge of a
+// filled band, not something sitting in the margin.
+export const TRANSCRIPT_GUTTER_INSET = 1
+
 // Both gutters derive from their glyph's display width plus the same gap, so a
 // user line and an assistant line start their text in the same column (a
-// hardcoded non-user width silently drifted one cell off the `❯` gutter).
-export function transcriptGutterWidth(role: Role, userPrompt: string, toolGlyph = '┊') {
-  return composerPromptWidth(role === 'user' ? userPrompt : toolGlyph)
+// hardcoded non-user width silently drifted one cell off the prompt gutter).
+//
+// The default must stay the same glyph as `ThemeBrand.tool` (theme.ts), which is
+// what the transcript actually draws: every caller here omits the argument, and
+// a default that disagreed with the theme would size the gutter for a glyph
+// nobody renders. The `transcript reply gutter` tests in messages.test.ts pin
+// the two together.
+export function transcriptGutterWidth(role: Role, userPrompt: string, toolGlyph = '●') {
+  return composerPromptWidth(role === 'user' ? userPrompt : toolGlyph) + TRANSCRIPT_GUTTER_INSET
 }
 
 export function transcriptBodyWidth(totalCols: number, role: Role, userPrompt: string, toolGlyph?: string) {

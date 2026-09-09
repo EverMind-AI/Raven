@@ -13,15 +13,16 @@ import json
 import random
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import websockets
 from loguru import logger
 
 from raven.channels.base import ChannelBase
+from raven.channels.contract import Capabilities
 from raven.channels.media import save_media_bytes
-from raven.config.schema import DiscordConfig
-from raven.utils.helpers import split_message
+from raven.utils.messages import split_message
 
 _API_BASE = "https://discord.com/api/v10"
 _MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -43,14 +44,40 @@ _FATAL_CLOSE_CODES = {4004, 4010, 4011, 4012, 4013, 4014}
 _NEW_SESSION_CLOSE_CODES = {4007, 4009}
 
 
+def _registrable_domain(host: str) -> str:
+    labels = [part for part in host.lower().strip(".").split(".") if part]
+    return ".".join(labels[-2:])
+
+
+def _accepted_resume_url(candidate: object, configured: str) -> str | None:
+    """The resume gateway a READY payload names, or None when it must not be used.
+
+    The first frame on the resumed socket carries the bot token, so the socket
+    may only go to a ``wss`` host of the operator the configured gateway names;
+    a payload naming anything else falls back to the configured gateway.
+    """
+    url = str(candidate or "").strip()
+    if not url:
+        return None
+    parts = urlparse(url)
+    host = (parts.hostname or "").lower()
+    anchor = (urlparse(configured).hostname or "").lower()
+    if parts.scheme.lower() != "wss" or not host or _registrable_domain(host) != _registrable_domain(anchor):
+        logger.warning("Discord READY named a resume gateway outside the configured operator ({}); ignoring it", url)
+        return None
+    return url
+
+
 class DiscordChannel(ChannelBase):
     """Discord channel over the Gateway WebSocket."""
 
-    config: DiscordConfig
+    capabilities = Capabilities(file_attachments=True)
+
+    config: Any
     name = "discord"
     display_name = "Discord"
 
-    def __init__(self, config: DiscordConfig):
+    def __init__(self, config: Any):
         super().__init__(config)
         self._ws: Any = None
         self._http: httpx.AsyncClient | None = None
@@ -138,7 +165,7 @@ class DiscordChannel(ChannelBase):
             elif op == _OP_DISPATCH and event == "READY":
                 self._bot_user_id = (payload.get("user") or {}).get("id")
                 self._session_id = payload.get("session_id")
-                self._resume_url = payload.get("resume_gateway_url")
+                self._resume_url = _accepted_resume_url(payload.get("resume_gateway_url"), self.config.gateway_url)
                 logger.info("Discord gateway READY (bot user {})", self._bot_user_id)
             elif op == _OP_DISPATCH and event == "RESUMED":
                 logger.info("Discord gateway RESUMED (missed events replayed)")
@@ -265,8 +292,15 @@ class DiscordChannel(ChannelBase):
             return self._Attachment(f"[attachment: {filename}]")
         if size and size > _MAX_ATTACHMENT_BYTES:
             return self._Attachment(f"[attachment: {filename} - too large]")
+        # The URL arrives inside the vendor's MESSAGE_CREATE payload, so it is
+        # a name the message chose, not one we did -- the same reason qq and
+        # dingtalk route their media reads through the egress guard.
+        from raven.security.network import guarded_fetch
+
         try:
-            resp = await self._http.get(url)
+            resp = await guarded_fetch(self._http, url, what="Discord attachment")
+            if resp is None:
+                return self._Attachment(f"[attachment: {filename} - blocked]")
             resp.raise_for_status()
             path = save_media_bytes("discord", resp.content, filename)
             return self._Attachment(f"[attachment: {path}]", str(path))

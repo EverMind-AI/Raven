@@ -3,7 +3,7 @@
 This module is the ONLY write path for provider configuration. All entry
 points (CLI commands, future wizard, future REPL slash) must call
 functions defined here. Direct ``load_config`` / ``save_config`` on the
-providers section is forbidden -- see plan rule.
+providers section is forbidden.
 
 OAuth providers have a separate auth path via
 ``provider_commands._LOGIN_HANDLERS`` and keep their credentials in files under
@@ -32,15 +32,16 @@ from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import ProviderConfig, ProviderEndpoint, ProvidersConfig
 from raven.providers.endpoints import provider_endpoints
 from raven.providers.registry import (
-    CRED_LOCAL,
+    SHAPE_LOCAL,
     ProviderSpec,
+    auth_shape,
     canonical_provider_name,
-    credential_kind,
     endpoints_unsupported_reason,
     find_by_name,
     names_same_provider,
     normalize_provider_name,
 )
+from raven.utils.atomic_io import atomic_update
 
 
 def _overlay(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -58,14 +59,6 @@ def _overlay(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
-
-
-def _write_atomic(path: Path, data: dict[str, Any]) -> None:
-    """Atomic write: temp-file then os.replace. Preserves indent=2, UTF-8."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def _unwrap_optional(annotation: Any) -> Any:
@@ -479,7 +472,7 @@ def _redact_nested_model(instance: BaseModel) -> BaseModel:
 
 #: Copilot's credentials are two files LiteLLM owns, not one: the device-flow
 #: access token and the short-lived API key it is exchanged for.
-_COPILOT_TOKEN_FILES = ("access-token", "api-key.json")
+COPILOT_TOKEN_FILES = ("access-token", "api-key.json")
 
 
 def _oauth_token_path(provider_name: str) -> Path:
@@ -496,7 +489,7 @@ def _oauth_token_path(provider_name: str) -> Path:
     return credential_files(provider_name)[0]
 
 
-def _copilot_token_dir() -> Path:
+def copilot_token_dir() -> Path:
     """The directory LiteLLM's Copilot authenticator reads and writes.
 
     ``import_litellm`` points ``GITHUB_COPILOT_TOKEN_DIR`` at Raven's own
@@ -509,7 +502,7 @@ def _copilot_token_dir() -> Path:
     return Path(token_dir).expanduser() if token_dir else get_oauth_dir() / "github_copilot"
 
 
-def _oauth_credentials_present(provider_name: str) -> bool:
+def oauth_credentials_present(provider_name: str) -> bool:
     """Are this provider's credentials on disk and readable as credentials?
 
     A file at the right path is not evidence: a truncated write passes
@@ -624,8 +617,7 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
         api_key_list = list(getattr(instance, "api_key_list", []) or [])
         endpoints = list(getattr(instance, "endpoints", []) or [])
 
-        # One rule for every gate: this used to accept a Gemini section holding
-        # only `api_key_list` that routing then skipped and startup refused.
+        # One rule for every gate: credential_status decides.
         from raven.providers.auth import credential_status
 
         configured = credential_status(fname, instance, spec=spec, include_external=True).ok
@@ -753,38 +745,41 @@ def set_provider_fields(
             )
 
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    raw_section = _raw_section(data, name)
 
-    try:
-        current = cls.model_validate(raw_section)
-    except ValidationError:
-        current = cls()
+    def _apply(_text: str | None) -> tuple[str, dict[str, Any]]:
+        data = read_raw_or_raise(path)
+        raw_section = _raw_section(data, name)
 
-    working = current.model_dump()
+        try:
+            current = cls.model_validate(raw_section)
+        except ValidationError:
+            current = cls()
 
-    prev: dict[str, Any] = {}
-    for path_key, raw_val in fields.items():
-        leaf_cls, leaf_field = _walk_nested_path(cls, path_key)
-        leaf_info = leaf_cls.model_fields[leaf_field]
-        coerced = _coerce_value(raw_val, leaf_info.annotation)
-        if path_key == "models" and isinstance(coerced, list):
-            # The third way a model id gets written down, and the one that used
-            # to skip the contract: `provider set --models x` stored a bare id
-            # while the picker and the wizard stored a qualified one. Identity
-            # still matched, so nothing broke -- which is exactly how the two
-            # spellings coexisted last time, until a delete silently matched
-            # neither.
-            from raven.providers.wire import stored_model_id
+        working = current.model_dump()
 
-            coerced = [stored_model_id(name, str(m)) for m in coerced]
-        prev[path_key] = _set_nested(path_key, coerced, working)
+        prev: dict[str, Any] = {}
+        for path_key, raw_val in fields.items():
+            leaf_cls, leaf_field = _walk_nested_path(cls, path_key)
+            leaf_info = leaf_cls.model_fields[leaf_field]
+            coerced = _coerce_value(raw_val, leaf_info.annotation)
+            if path_key == "models" and isinstance(coerced, list):
+                # The third way a model id gets written down, and the one that used
+                # to skip the contract: `provider set --models x` stored a bare id
+                # while the picker and the wizard stored a qualified one. Identity
+                # still matched, so nothing broke -- which is exactly how the two
+                # spellings coexisted last time, until a delete silently matched
+                # neither.
+                from raven.providers.wire import stored_model_id
 
-    validated = cls.model_validate(working)
+                coerced = [stored_model_id(name, str(m)) for m in coerced]
+            prev[path_key] = _set_nested(path_key, coerced, working)
 
-    _write_raw_section(data, name, validated.model_dump(by_alias=True))
-    _write_atomic(path, data)
-    return prev
+        validated = cls.model_validate(working)
+
+        _write_raw_section(data, name, validated.model_dump(by_alias=True))
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    return atomic_update(path, _apply)
 
 
 def serves_default_model(name: str, *, config_path: Path | None = None) -> bool:
@@ -834,9 +829,13 @@ def reset_provider(
     spec = _provider_spec(name)
 
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    _write_raw_section(data, name, cls().model_dump(by_alias=True))
-    _write_atomic(path, data)
+
+    def _apply(_text: str | None) -> tuple[str, None]:
+        data = read_raw_or_raise(path)
+        _write_raw_section(data, name, cls().model_dump(by_alias=True))
+        return json.dumps(data, indent=2, ensure_ascii=False), None
+
+    atomic_update(path, _apply)
 
     if spec and spec.is_oauth:
         try:
@@ -881,19 +880,23 @@ def add_provider_model(
 
     name = canonical_provider_name(name)
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    cls, models = _load_provider_models(name, data)
-    # By identity, not by string: the same model written two ways used to land
-    # in the list twice, and neither entry could then be removed by the other's
-    # spelling.
-    if merge_key(name, model) not in {merge_key(name, m) for m in models}:
-        models.append(model)
-        section = _raw_section(data, name)
-        section["models"] = models
-        validated = cls.model_validate(section)
-        _write_raw_section(data, name, validated.model_dump(by_alias=True))
-        _write_atomic(path, data)
-    return models
+
+    def _apply(_text: str | None) -> tuple[str | None, list[str]]:
+        data = read_raw_or_raise(path)
+        cls, models = _load_provider_models(name, data)
+        # By identity, not by string: the same model written two ways used to land
+        # in the list twice, and neither entry could then be removed by the other's
+        # spelling.
+        if merge_key(name, model) not in {merge_key(name, m) for m in models}:
+            models.append(model)
+            section = _raw_section(data, name)
+            section["models"] = models
+            validated = cls.model_validate(section)
+            _write_raw_section(data, name, validated.model_dump(by_alias=True))
+            return json.dumps(data, indent=2, ensure_ascii=False), models
+        return None, models
+
+    return atomic_update(path, _apply)
 
 
 def remove_provider_model(
@@ -910,19 +913,23 @@ def remove_provider_model(
 
     name = canonical_provider_name(name)
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    cls, models = _load_provider_models(name, data)
-    # Whatever spelling the caller holds removes every spelling of that model:
-    # the write paths used to disagree, so a list could hold one model twice.
-    target = merge_key(name, model)
-    if target in {merge_key(name, m) for m in models}:
-        models = [m for m in models if merge_key(name, m) != target]
-        section = _raw_section(data, name)
-        section["models"] = models
-        validated = cls.model_validate(section)
-        _write_raw_section(data, name, validated.model_dump(by_alias=True))
-        _write_atomic(path, data)
-    return models
+
+    def _apply(_text: str | None) -> tuple[str | None, list[str]]:
+        data = read_raw_or_raise(path)
+        cls, models = _load_provider_models(name, data)
+        # Whatever spelling the caller holds removes every spelling of that model:
+        # the write paths used to disagree, so a list could hold one model twice.
+        target = merge_key(name, model)
+        if target in {merge_key(name, m) for m in models}:
+            remaining = [m for m in models if merge_key(name, m) != target]
+            section = _raw_section(data, name)
+            section["models"] = remaining
+            validated = cls.model_validate(section)
+            _write_raw_section(data, name, validated.model_dump(by_alias=True))
+            return json.dumps(data, indent=2, ensure_ascii=False), remaining
+        return None, models
+
+    return atomic_update(path, _apply)
 
 
 def _load_provider_endpoints(name: str, data: dict[str, Any]) -> tuple[type, list[ProviderEndpoint]]:
@@ -962,7 +969,7 @@ def add_provider_endpoint(
     ``make_provider`` applies at build time, applied here before the write
     rather than left for that later failure to catch. Also RuntimeError for an
     empty ``api_key`` on a provider whose credential shape needs one --
-    derived from the registry (``credential_kind``), not a hardcoded vendor
+    derived from the registry (``auth_shape``), not a hardcoded vendor
     list, so a local/keyless deployment (``hosted_vllm``, ``ollama_chat``, ...)
     keeps writing a keyless endpoint while every key-based provider gets the
     same rejection the CLI and the TUI picker both need.
@@ -971,25 +978,28 @@ def add_provider_endpoint(
     reason = endpoints_unsupported_reason(name)
     if reason:
         raise RuntimeError(reason)
-    if not api_key and credential_kind(name) != CRED_LOCAL:
+    if not api_key and auth_shape(name) != SHAPE_LOCAL:
         raise RuntimeError(
             f"{name} needs an api_key -- only a local, keyless deployment can add an endpoint without one"
         )
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    cls, endpoints = _load_provider_endpoints(name, data)
 
-    new_endpoint = ProviderEndpoint(label=label, api_key=api_key, api_base=api_base, extra_headers=extra_headers)
-    updated = [new_endpoint if ep.label == label else ep for ep in endpoints]
-    if not any(ep.label == label for ep in endpoints):
-        updated.append(new_endpoint)
+    def _apply(_text: str | None) -> tuple[str, list[ProviderEndpoint]]:
+        data = read_raw_or_raise(path)
+        cls, endpoints = _load_provider_endpoints(name, data)
 
-    section = _raw_section(data, name)
-    section["endpoints"] = [ep.model_dump(by_alias=True) for ep in updated]
-    validated = cls.model_validate(section)
-    _write_raw_section(data, name, validated.model_dump(by_alias=True))
-    _write_atomic(path, data)
-    return updated
+        new_endpoint = ProviderEndpoint(label=label, api_key=api_key, api_base=api_base, extra_headers=extra_headers)
+        updated = [new_endpoint if ep.label == label else ep for ep in endpoints]
+        if not any(ep.label == label for ep in endpoints):
+            updated.append(new_endpoint)
+
+        section = _raw_section(data, name)
+        section["endpoints"] = [ep.model_dump(by_alias=True) for ep in updated]
+        validated = cls.model_validate(section)
+        _write_raw_section(data, name, validated.model_dump(by_alias=True))
+        return json.dumps(data, indent=2, ensure_ascii=False), updated
+
+    return atomic_update(path, _apply)
 
 
 def remove_provider_endpoint(
@@ -1004,17 +1014,21 @@ def remove_provider_endpoint(
     """
     name = canonical_provider_name(name)
     path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    cls, endpoints = _load_provider_endpoints(name, data)
 
-    remaining = [ep for ep in endpoints if ep.label != label]
-    if len(remaining) != len(endpoints):
+    def _apply(_text: str | None) -> tuple[str | None, list[ProviderEndpoint]]:
+        data = read_raw_or_raise(path)
+        cls, endpoints = _load_provider_endpoints(name, data)
+
+        remaining = [ep for ep in endpoints if ep.label != label]
+        if len(remaining) == len(endpoints):
+            return None, remaining
         section = _raw_section(data, name)
         section["endpoints"] = [ep.model_dump(by_alias=True) for ep in remaining]
         validated = cls.model_validate(section)
         _write_raw_section(data, name, validated.model_dump(by_alias=True))
-        _write_atomic(path, data)
-    return remaining
+        return json.dumps(data, indent=2, ensure_ascii=False), remaining
+
+    return atomic_update(path, _apply)
 
 
 def list_provider_endpoints(name: str, *, config_path: Path | None = None) -> list[dict[str, Any]]:
@@ -1269,12 +1283,12 @@ def _litellm_api_base(spec: Any) -> str:
         # flow, never a models ping, so there is nothing here for it either way.
         return ""
 
-    from raven.providers.rates import _may_prompt
+    from raven.providers.rates import may_prompt
     from raven.providers.wire import stored_model_id, wire_model
 
     # Asked of the stored form, not the wire form, for the same reason.
     stored = stored_model_id(spec.name, "probe-model")
-    if _may_prompt(stored):
+    if may_prompt(stored):
         # Resolving one of these resolves its credentials on the way, and with no
         # token file that prints a device code and blocks. One answer to "can this
         # be handed to LiteLLM" for every caller -- see providers.rates.
@@ -1366,7 +1380,7 @@ def _probe_copilot_seat(*, timeout_s: float, transport: httpx.BaseTransport | No
     backend an editor is asking, so one header would report a working seat as a
     bad credential. Both come from the driver rather than from a guess here.
     """
-    if not _oauth_credentials_present("github_copilot"):
+    if not oauth_credentials_present("github_copilot"):
         return {
             "ok": False,
             "status": "oauth_token_missing",
@@ -1540,4 +1554,7 @@ __all__ = [
     "remove_provider_endpoint",
     "list_provider_endpoints",
     "test_provider",
+    "oauth_credentials_present",
+    "copilot_token_dir",
+    "COPILOT_TOKEN_FILES",
 ]

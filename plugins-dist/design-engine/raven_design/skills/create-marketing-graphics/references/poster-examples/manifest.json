@@ -1,0 +1,187 @@
+{
+ "created": "2026-09-02",
+ "rule": "真实平面稿、2025–26、每图≤2例；实拍不收",
+ "images": {
+  "event-goldenhorse": {
+   "files": [
+    "gh62-1.jpg",
+    "gh62-2.jpg"
+   ],
+   "title": "金馬62 台北金馬影展主視覺「最好的時光」Still / Crash · 2025-07",
+   "tags": "用途：活动 · 载体：单张 · 视觉：摄影 + 塗鴉 + 書法叠层"
+  },
+  "event-wuzhen": {
+   "files": [
+    "wuzhen-1.jpg",
+    "wuzhen-2.jpg"
+   ],
+   "title": "第十二届乌镇戏剧节「扶摇」主视觉 + 特邀剧目系列海报模板 · 2025-08",
+   "tags": "用途：活动 · 载体：主视觉 + 系列模板 · 视觉：书法（英文方块字）/ 满版剧照"
+  },
+  "promo-tmall": {
+   "files": [
+    "tmall-1.jpg",
+    "tmall-2.jpg"
+   ],
+   "title": "2025 天猫双11 猫头联合海报「一个猫头，两种选择」· 2025-10",
+   "tags": "用途：促销 · 载体：横版系列（14 张之 2）· 视觉：品牌各自的摄影或插画装进同一容器"
+  },
+  "promo-luckin-duolingo": {
+   "files": [
+    "luckin1-1.jpg",
+    "luckin1-2.jpg"
+   ],
+   "title": "瑞幸 × 多邻国「世纪婚礼」：悬念剪影海报 → 绿沙沙拿铁上新 KV · 2025-07",
+   "tags": "用途：促销 · 载体：9:16 悬念稿 + 3:4 产品 KV · 视觉：剪影 / 产品摄影 + IP"
+  },
+  "brand-boss": {
+   "files": [
+    "boss-1.jpg"
+   ],
+   "title": "BOSS 直聘「打开 BOSS 直聘」地铁系列文案海报 · 2025-02",
+   "tags": "用途：品牌 campaign · 载体：地铁灯箱横版系列 · 视觉：排版 + 扁平插画"
+  },
+  "brand-meituan": {
+   "files": [
+    "meituan-1.jpg",
+    "meituan-2.jpg"
+   ],
+   "title": "美团 × 《人物》618「路很宽，一起跑」纪实海报 · 2025-06",
+   "tags": "用途：品牌 campaign（态度）· 载体：9:16 + 1:1 两尺寸 · 视觉：纪实摄影"
+  },
+  "series-taobao": {
+   "files": [
+    "taobao-1.jpg",
+    "taobao-2.jpg"
+   ],
+   "title": "淘宝双12 2025「淘出___」100 张品牌联合海报 · 2025-12",
+   "tags": "用途：品牌 campaign × 促销 · 载体：9:16 系列（100 张）· 视觉：3D 吉祥物 + 场景"
+  },
+  "series-fis": {
+   "files": [
+    "fis-1.jpg",
+    "fis-2.jpg"
+   ],
+   "title": "FIS 2025 · Festival Internacional de Solos（里斯本）海报系列 · 2025-11",
+   "tags": "用途：活动 · 载体：单张 × 8 张系列 · 视觉：排版主导 + 复印机噪点"
+  },
+  "multisize-converging": {
+   "files": [
+    "fiu1-1.jpg",
+    "fiu1-2.jpg"
+   ],
+   "title": "Converging Elements @ Backshop（柏林群展）海报 + Instagram 版 · 2025-02",
+   "tags": "用途：活动 · 载体：海报 + 1080 方图 · 视觉：排版主导（打字机层）+ 一张小图"
+  },
+  "series-hippocampus": {
+   "files": [
+    "fiu3-1.jpg",
+    "fiu3-2.jpg"
+   ],
+   "title": "ELDERS Collectief「Hippocampus」群展海报 + 放映夜传单 · 2025-09",
+   "tags": "用途：活动 · 载体：海报 + 传单 · 视觉：自造字形拼贴 / 纯文字"
+  },
+  "promo-luckin-linedog": {
+   "files": [
+    "luckin2-1.jpg",
+    "luckin2-2.jpg"
+   ],
+   "title": "瑞幸 × 线条小狗 春日联名系列（小白梨回归 / 情人节）· 2025-02",
+   "tags": "用途：促销 · 载体：9:16 系列 · 视觉：扁平 IP 插画 + 产品摄影"
+  }
+ },
+ "anatomy": {
+  "bases": [
+   "wuzhen-2.jpg",
+   "boss-1.jpg"
+  ]
+ },
+ "source_manifest": "skill-design/precedent-library/marketing-graphics/gap-benchmarks-2025/manifest.json",
+ "domains": {
+  "domain-event": {
+   "title": "用途：活动 · 四例（用户 Freepik 精选集）",
+   "items": [
+    [
+     "col1_04_976x976.png",
+     "Open Air Music Festival · 摄影满版"
+    ],
+    [
+     "col3_05_976x976.png",
+     "Sounds of Blues · 笔触图形"
+    ],
+    [
+     "col3_06_976x1176.png",
+     "TechWave 2025 · 抽象线性波"
+    ],
+    [
+     "col3_12_976x976.png",
+     "Let's Party · 扁平插画"
+    ]
+   ]
+  },
+  "domain-promo": {
+   "title": "用途：促销 · 四例（用户 Freepik 精选集）",
+   "items": [
+    [
+     "col2_01_976x976.png",
+     "Navratri Sale 50% OFF · 渐变团"
+    ],
+    [
+     "col2_05_976x1325.png",
+     "Luxury Home for Sale · 房产斜切面板"
+    ],
+    [
+     "col2_07_976x976.png",
+     "Online Shopping Best Sale · 抠图人物"
+    ],
+    [
+     "col3_08_976x976.png",
+     "Cyber Monday · 深底流体"
+    ]
+   ]
+  },
+  "domain-travel": {
+   "title": "用途：旅游目的地 · 四例（用户 Freepik 精选集）",
+   "items": [
+    [
+     "col1_01_976x976.png",
+     "City Tour Japan · 白框照片"
+    ],
+    [
+     "col2_06_976x1351.png",
+     "Let's Travel the World · 圆形拼贴 + 价格卡"
+    ],
+    [
+     "col2_08_976x976.png",
+     "It's Time for Hiking · 满版雪景"
+    ],
+    [
+     "col2_10_976x976.png",
+     "Travel Together · 扁平矢量插画"
+    ]
+   ]
+  },
+  "domain-brand": {
+   "title": "用途：品牌 campaign 与倡导 · 四例（用户集 1 + 真实成品 3）",
+   "items": [
+    [
+     "col2_12_976x976.png",
+     "Stay Connected With Us · 企业科技（Freepik）"
+    ],
+    [
+     "boss-1.jpg",
+     "BOSS 直聘 地铁系列（2025）"
+    ],
+    [
+     "meituan-1.jpg",
+     "美团 × 人物「路很宽，一起跑」（2025）"
+    ],
+    [
+     "taobao-1.jpg",
+     "淘宝双12「淘出___」100 张之一（2025）"
+    ]
+   ]
+  }
+ },
+ "user_set": "posters.zip（Freepik 预览 976 px，用户 2026-09-02 提供）→ skill-design/precedent-library/marketing-graphics/user-posters/"
+}

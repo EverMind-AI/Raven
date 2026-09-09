@@ -67,13 +67,27 @@ interface SkillsReloadResponse {
   output?: string
 }
 
+interface SubagentsAddResponse {
+  added?: boolean
+  name?: string
+}
+
+interface SubagentsToggleResponse {
+  enabled?: boolean
+}
+
+interface SubagentsTestResponse {
+  detail?: string
+  ok?: boolean
+}
+
 export const opsCommands: SlashCommand[] = [
   {
     help: 'open the tracing dashboard (LLM/tool/memory spans)',
     name: 'tracing',
     run: (_arg, ctx) => {
       ctx.gateway
-        .rpc<SlashExecResponse>('slash.exec', { command: 'tracing', session_id: ctx.sid })
+        .rpc<SlashExecResponse>('slash.exec', { command: 'tracing', session_id: ctx.sid }, { quiet: true })
         .then(
           ctx.guarded<SlashExecResponse>(r => {
             const body = r?.output || 'tracing dashboard'
@@ -89,7 +103,7 @@ export const opsCommands: SlashCommand[] = [
     supported: false,
     run: (_arg, ctx) => {
       ctx.gateway
-        .rpc<ProcessStopResponse>('process.stop', {})
+        .rpc<ProcessStopResponse>('process.stop', {}, { quiet: true })
         .then(
           ctx.guarded<ProcessStopResponse>(r => {
             const killed = Number(r.killed ?? 0)
@@ -103,23 +117,21 @@ export const opsCommands: SlashCommand[] = [
 
   {
     aliases: ['reload_mcp'],
-    help: 'reload MCP servers in the live session (warns about prompt cache invalidation)',
+    help: 'reload MCP servers in the live session (asks first; /reload-mcp now skips)',
     name: 'reload-mcp',
     supported: false,
     run: (arg, ctx) => {
-      // Parse arg: `now` / `always` skip the confirmation gate.
-      // `always` additionally persists approvals.mcp_reload_confirm=false.
+      // `now` skips the confirmation gate, for this call only. There is no
+      // "and stop asking": nothing persists such a preference, and the
+      // `always` this used to accept printed a promise the server never kept.
       const a = (arg || '').trim().toLowerCase()
 
-      const params: { session_id: string | null; confirm?: boolean; always?: boolean } = {
+      const params: { session_id: string | null; confirm?: boolean } = {
         session_id: ctx.sid
       }
 
       if (a === 'now' || a === 'approve' || a === 'once' || a === 'yes') {
         params.confirm = true
-      } else if (a === 'always') {
-        params.confirm = true
-        params.always = true
       }
 
       ctx.gateway
@@ -133,16 +145,16 @@ export const opsCommands: SlashCommand[] = [
             }
 
             if (r.status === 'reloaded') {
-              ctx.transcript.sys(
-                params.always
-                  ? 'MCP servers reloaded · future /reload-mcp will run without confirmation'
-                  : 'MCP servers reloaded'
-              )
+              ctx.transcript.sys(r.message || 'MCP servers reloaded')
 
               return
             }
 
-            ctx.transcript.sys('reload complete')
+            // `noop` carries the only account of why nothing happened -- the
+            // config would not parse, no agent is running, or it already
+            // matches. Falling through to a fixed line reported an unreadable
+            // config file as a completed reload.
+            ctx.transcript.sys(r.message || 'nothing to reload')
           })
         )
         .catch(ctx.guardedErr)
@@ -155,7 +167,7 @@ export const opsCommands: SlashCommand[] = [
     supported: false,
     run: (_arg, ctx) => {
       ctx.gateway
-        .rpc<ReloadEnvResponse>('reload.env', {})
+        .rpc<ReloadEnvResponse>('reload.env', {}, { quiet: true })
         .then(
           ctx.guarded<ReloadEnvResponse>(r => {
             const n = Number(r.updated ?? 0)
@@ -627,7 +639,7 @@ export const opsCommands: SlashCommand[] = [
 
         sys(`installing ${query}…`)
 
-        rpc<SkillsInstallResponse>('skills.manage', { action: 'install', query })
+        rpc<SkillsInstallResponse>('skills.manage', { action: 'install', query }, { quiet: true })
           .then(
             ctx.guarded<SkillsInstallResponse>(r =>
               sys(r.installed ? `installed ${r.name ?? query}` : 'install failed')
@@ -687,6 +699,84 @@ export const opsCommands: SlashCommand[] = [
       }
 
       runViaSlashWorker()
+    }
+  },
+
+  {
+    help: 'configure third-party sub-agents (presets, enable/disable, test)',
+    name: 'subagents',
+    run: (arg, ctx) => {
+      const text = arg.trim()
+
+      if (!text) {
+        return patchOverlayState({ subagentsHub: true })
+      }
+
+      // Only the first token is the subcommand: an agent name may contain
+      // spaces, so the remainder is taken verbatim as the name. The
+      // subcommand itself is matched case-insensitively, but the name is
+      // never lowercased -- agent names are case-sensitive.
+      const [rawSub, ...rest] = text.split(/\s+/)
+      const sub = rawSub?.toLowerCase()
+      const name = rest.join(' ').trim()
+      const { rpc } = ctx.gateway
+      const { sys } = ctx.transcript
+
+      switch (sub) {
+        case 'add': {
+          const [preset, ...nameParts] = rest
+
+          if (!preset) {
+            return sys('usage: /subagents add <preset> [name]')
+          }
+
+          const chosen = nameParts.join(' ').trim()
+
+          rpc<SubagentsAddResponse>('subagents.add', chosen ? { name: chosen, preset } : { preset }, { quiet: true })
+            .then(
+              ctx.guarded<SubagentsAddResponse>(r =>
+                sys(r.added ? `added subagent: ${r.name ?? chosen ?? preset}` : 'add failed')
+              )
+            )
+            .catch(ctx.guardedErr)
+
+          return
+        }
+
+        case 'off':
+        case 'on': {
+          if (!name) {
+            return sys(`usage: /subagents ${sub} <name>`)
+          }
+
+          const enabled = sub === 'on'
+
+          rpc<SubagentsToggleResponse>('subagents.toggle', { enabled, name }, { quiet: true })
+            .then(ctx.guarded<SubagentsToggleResponse>(r => sys(`${name}: ${r.enabled ? 'enabled' : 'disabled'}`)))
+            .catch(ctx.guardedErr)
+
+          return
+        }
+
+        case 'test': {
+          if (!name) {
+            return sys('usage: /subagents test <name>')
+          }
+
+          rpc<SubagentsTestResponse>('subagents.test', { name, source: 'config' }, { quiet: true })
+            .then(
+              ctx.guarded<SubagentsTestResponse>(r =>
+                sys(`${name}: ${r.ok ? 'test ok' : 'test failed'}${r.detail ? ` · ${r.detail}` : ''}`)
+              )
+            )
+            .catch(ctx.guardedErr)
+
+          return
+        }
+
+        default:
+          return sys('usage: /subagents [add <preset> [name] | on <name> | off <name> | test <name>]')
+      }
     }
   },
 

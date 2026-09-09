@@ -21,8 +21,9 @@ from pathlib import Path
 
 import pytest
 
-import raven.agent.loop.main as agent_main
+import raven.agent.loop.organ_glue as agent_main
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding
 
@@ -47,8 +48,8 @@ def _loop(workspace: Path, *, window: int, ceiling: int, monkeypatch) -> AgentLo
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     # The window is the binding's, so the fixture sets it where it lives
     # rather than on the loop -- which no longer has one of its own.
@@ -64,7 +65,22 @@ def test_a_ceiling_as_large_as_the_window_still_leaves_room_for_history(workspac
     budget = _loop(workspace, window=200_000, ceiling=64_000, monkeypatch=monkeypatch)._make_token_budget()
 
     assert budget.reserved_output == 64_000, "what the reply may actually use"
-    assert budget.available_history > 130_000
+    # Two bounds, because two different things were being guarded through one
+    # number and the tighter of them rode on where the repo is checked out.
+    #
+    # `available_history` is the docstring's subject: the measured 0 that
+    # started this, history squeezed to nothing by an honest-but-huge ceiling.
+    # A loose bound is the right shape for it -- `reserved_system` embeds the
+    # workspace path, so this figure moves with the length of a temp directory:
+    # measured 129_090 / 129_060 / 129_035 at path lengths 22 / 62 / 121.
+    assert budget.available_history > 128_000, "an honest ceiling must not squeeze history toward zero"
+    # `reserved_tools` is what the old 129_000 bound was really watching, and it
+    # is invariant across those same three paths: 5773 tokens, paid on every
+    # turn of every conversation. Asserted directly so a grown tool description
+    # trips it for that reason rather than because a worktree sits deeper than
+    # the one this was measured on. Trim somewhere before raising it, and say
+    # what was traded.
+    assert budget.reserved_tools < 6_000, f"tool surface grew: {budget.reserved_tools} tokens reserved"
 
 
 def test_an_honest_but_large_ceiling_does_not_eat_the_window(workspace, monkeypatch) -> None:
@@ -77,7 +93,11 @@ def test_an_honest_but_large_ceiling_does_not_eat_the_window(workspace, monkeypa
     budget = _loop(workspace, window=202_800, ceiling=131_000, monkeypatch=monkeypatch)._make_token_budget()
 
     assert budget.reserved_output == 131_000, "the model really can emit this much"
-    assert budget.available_history > 65_000
+    # 60_000 rather than 65_000: the system prompt embeds the workspace path,
+    # so the measured figure rides a few dozen tokens with tmp-path length.
+    # The bound guards history keeping most of the leftover window, not an
+    # exact split, so it stands clear of the boundary instead of on it.
+    assert budget.available_history > 60_000
 
 
 def test_a_ceiling_below_the_share_is_reserved_in_full(workspace, monkeypatch) -> None:

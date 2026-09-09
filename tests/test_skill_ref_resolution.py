@@ -16,7 +16,7 @@ from raven.memory_engine.skill_local.types import SkillMeta
 
 @pytest.fixture
 def svc(tmp_path: Path) -> LocalSkillCatalog:
-    workspace = tmp_path / "ws"
+    workspace = tmp_path / "chanwork"
     workspace.mkdir()
     builtin = tmp_path / "builtin"
     builtin.mkdir()
@@ -134,14 +134,6 @@ def test_dir_header_present_for_pathset(svc, skill_dir):
     out = render(svc, skill_dir, "see references/GUIDE.md")
     assert f"**Skill directory**: `{skill_dir}`" in out
     assert "resolve under this directory" in out
-
-
-def test_dir_header_absent_for_db_only(svc, skill_dir):
-    meta = SkillMeta(
-        id=0, name="d", description="", path=Path("sqlite://t/d"), content="see references/GUIDE.md", source="t"
-    )
-    out = svc.load_skills_for_context([meta], max_inject=1)
-    assert "Skill directory" not in out
 
 
 def test_dir_header_absent_when_dir_missing(svc, tmp_path):

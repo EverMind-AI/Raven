@@ -7,10 +7,12 @@ arithmetic on top of it stays with the module that does the arithmetic.
 
 from __future__ import annotations
 
+import importlib.machinery
 import json
 import os
 import sys
 import time
+import types
 
 import httpx
 import pytest
@@ -19,7 +21,7 @@ from raven.providers import model_catalog_cache, rates
 from raven.providers.base import send_max_tokens
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.rates import (
-    _FALLBACK_PRICING,
+    _FALLBACK_RATES,
     resolve_context_window,
     token_rates,
 )
@@ -37,9 +39,9 @@ _REAL_FETCH = rates._fetch_openrouter_models
 
 @pytest.fixture(autouse=True)
 def _reset_catalog_state():
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
     yield
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
 
 
 @pytest.fixture
@@ -315,8 +317,8 @@ def test_the_hijacked_model_reports_neither_a_price_nor_a_window(monkeypatch):
 
 
 def test_the_manual_table_answers_a_model_too_new_for_the_others():
-    model = next(iter(_FALLBACK_PRICING))
-    p_rate, c_rate = _FALLBACK_PRICING[model]
+    model = next(iter(_FALLBACK_RATES))
+    p_rate, c_rate = _FALLBACK_RATES[model]
 
     assert _rate_cost(model, 1000, 500) == pytest.approx(1000 * p_rate + 500 * c_rate, rel=0.01)
 
@@ -549,14 +551,14 @@ def test_one_place_decides_whether_a_model_can_be_handed_to_litellm():
 
     source = (pathlib.Path(__file__).resolve().parents[1] / "raven" / "providers" / "rates.py").read_text()
     tree = ast.parse(source)
-    owner = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_may_prompt")
+    owner = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "may_prompt")
     allowed = range(owner.lineno, (owner.end_lineno or owner.lineno) + 1)
     offenders = [
         f"line {i}: {line.strip()}"
         for i, line in enumerate(source.splitlines(), 1)
         if "authenticator.py" in line and i not in allowed
     ]
-    assert not offenders, "ask _may_prompt instead:\n" + "\n".join(offenders)
+    assert not offenders, "ask may_prompt instead:\n" + "\n".join(offenders)
 
 
 # --- Field reading and id candidates ---
@@ -580,14 +582,14 @@ def test_which_drivers_can_prompt_is_read_from_the_installed_litellm():
     the hang back for the vendor it missed. The driver ships ``authenticator.py``
     or it does not.
     """
-    from raven.providers.rates import _may_prompt
+    from raven.providers.rates import may_prompt
 
-    assert _may_prompt("github_copilot/gpt-4.1")
-    assert _may_prompt("openrouter/github_copilot/gpt-4.1"), "any segment counts"
-    assert _may_prompt("chatgpt/gpt-5.1")
-    assert _may_prompt("gigachat/GigaChat-2-Max")
+    assert may_prompt("github_copilot/gpt-4.1")
+    assert may_prompt("openrouter/github_copilot/gpt-4.1"), "any segment counts"
+    assert may_prompt("chatgpt/gpt-5.1")
+    assert may_prompt("gigachat/GigaChat-2-Max")
     for safe in ("openai/gpt-4o", "anthropic/claude-sonnet-4-5", "deepseek/deepseek-v4-pro", "gpt-4o"):
-        assert not _may_prompt(safe), safe
+        assert not may_prompt(safe), safe
 
 
 def test_a_model_reached_by_region_or_subscription_is_looked_up_as_the_vendor_files_it():
@@ -668,6 +670,45 @@ def test_try_litellm_context_window_allow_import_false_skips_the_import_when_abs
     assert called["n"] == 0
 
 
+def test_try_litellm_context_window_allow_import_false_skips_a_half_imported_litellm(monkeypatch):
+    """Presence in ``sys.modules`` is not readiness.
+
+    CPython publishes the key when the import starts, so during the seconds
+    ``LazyProvider``'s prewarm thread spends inside ``litellm/__init__`` a
+    membership test says yes. Importing on the back of that answer blocks on
+    the module import lock until prewarm is done -- the whole stall the flag
+    refuses, taken anyway and invisibly.
+    """
+    half_imported = types.ModuleType("litellm")
+    half_imported.__spec__ = importlib.machinery.ModuleSpec("litellm", loader=None)
+    half_imported.__spec__._initializing = True
+    monkeypatch.setitem(sys.modules, "litellm", half_imported)
+    called = {"n": 0}
+
+    def _spy():
+        called["n"] += 1
+        raise AssertionError("import_litellm called for a half-imported litellm")
+
+    monkeypatch.setattr("raven.providers.litellm_setup.import_litellm", _spy)
+
+    assert rates._try_litellm_context_window("openai-codex/gpt-5.3-codex", allow_import=False) is None
+    assert rates._try_litellm_max_output("openai-codex/gpt-5.3-codex", allow_import=False) is None
+    assert called["n"] == 0
+
+
+def test_litellm_ready_is_false_while_the_module_body_is_still_running(monkeypatch):
+    half_imported = types.ModuleType("litellm")
+    half_imported.__spec__ = importlib.machinery.ModuleSpec("litellm", loader=None)
+    half_imported.__spec__._initializing = True
+    monkeypatch.setitem(sys.modules, "litellm", half_imported)
+
+    assert rates._litellm_ready() is False
+
+    half_imported.__spec__._initializing = False
+
+    assert rates._litellm_ready() is True
+
+
 def test_try_litellm_context_window_allow_import_false_still_answers_once_imported():
     """Once LiteLLM is already imported the gate is free, and the answer must
     not differ from the ``allow_import=True`` (default) path."""
@@ -717,7 +758,7 @@ def disk_cache(tmp_path, monkeypatch):
     """Point the OpenRouter disk cache at a temp file; never touch real ~/.raven."""
     path = tmp_path / "model-catalog.json"
     monkeypatch.setattr(model_catalog_cache, "_CACHE_PATH", path, raising=False)
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
     monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
     return path
 
@@ -932,6 +973,18 @@ def _patch_table(monkeypatch, table: dict, *, info=_litellm_miss):
     monkeypatch.setattr(litellm, "get_model_info", info)
 
 
+def test_a_claude_model_the_catalogue_does_not_know_falls_back_to_the_claude_ceiling(monkeypatch):
+    """Anthropic requires max_tokens on every request, so the Anthropic transport
+    carries whatever this answers. 16384 is a guess for OpenAI-compatible servers
+    that clamp; a claude model cut at 16384 loses the rest of the file. The
+    smallest ceiling among the current claude models is what an unknown one gets."""
+    _patch_table(monkeypatch, {})
+
+    assert rates.resolve_max_output_tokens("anthropic/claude-opus-5") == rates.CLAUDE_MAX_OUTPUT_TOKENS == 64000
+    assert rates.resolve_max_output_tokens("openrouter/anthropic/claude-sonnet-5", allow_fetch=False) == 64000
+    assert rates.resolve_max_output_tokens("probe/unknown") == rates.DEFAULT_MAX_OUTPUT_TOKENS
+
+
 def test_a_row_filing_its_window_as_the_ceiling_is_not_trusted(monkeypatch):
     """Measured on the pinned LiteLLM: 984 of 3040 rows carry
     ``max_output_tokens >= max_input_tokens``, and one of them is the id this
@@ -1050,54 +1103,3 @@ def test_dotted_variants_are_a_fallback_not_a_rewrite():
     # Only digit-to-digit boundaries count: the hyphen in "x-1" joins a letter
     # to a digit and is left alone.
     assert rates._dotted_version_variants("x-1-2-3") == ["x-1.2-3", "x-1-2.3", "x-1.2.3"]
-
-
-# ── offline context (rates_offline) ────────────────────────────────────
-
-
-def test_offline_context_blocks_warm_and_lookups(monkeypatch):
-    """Inside rates_offline(): no warm thread, no fetch, no rate ladder."""
-    import threading
-
-    called = threading.Event()
-    monkeypatch.setattr(rates, "_fetch_openrouter_models", lambda **_k: called.set() or {})
-    monkeypatch.setattr(rates, "_WARM_AT", 0.0)
-    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
-
-    with rates.rates_offline():
-        rates.warm_catalog_in_background()
-        assert rates.token_rates("openrouter/openai/gpt-4o-mini") is None
-
-    assert not called.wait(0.3)
-
-
-def test_offline_context_does_not_leak(monkeypatch):
-    """After the context exits, a normal turn's warm still fires its thread."""
-    import threading
-
-    called = threading.Event()
-    monkeypatch.setattr(rates, "_fetch_openrouter_models", lambda **_k: called.set() or {})
-    monkeypatch.setattr(rates, "_WARM_AT", 0.0)
-    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
-
-    with rates.rates_offline():
-        rates.warm_catalog_in_background()
-
-    rates.warm_catalog_in_background()
-    assert called.wait(5), "the warm thread should run normally outside the offline context"
-
-
-def test_offline_fetch_entry_is_cache_only(monkeypatch):
-    """Even a direct fetch call inside the context answers from cache only."""
-    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
-    rates._OPENROUTER_CACHE.update({"m": {"pricing": {}}})
-
-    def _boom(*_a, **_k):
-        raise AssertionError("network fetch attempted inside rates_offline()")
-
-    monkeypatch.setattr(rates.model_catalog_cache, "load", lambda: None)
-    monkeypatch.setattr(rates.httpx, "get", _boom, raising=False)
-    with rates.rates_offline():
-        # The real implementation (conftest's autouse guard stubs the name).
-        table = _REAL_FETCH()
-    assert table == {"m": {"pricing": {}}}

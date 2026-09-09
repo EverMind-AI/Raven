@@ -1,0 +1,85 @@
+{
+  "language": "en",
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-sonnet-5",
+      "provider": "ppt",
+      "contextWindowTokens": 1000000,
+      "llmCallTimeout": 600,
+      "maxToolIterations": 600,
+      "maxConcurrentSubagents": 2,
+      "reasoningEffort": "medium",
+      "modelOverrides": {
+        "grok": {
+          "extra_body": {
+            "provider": {
+              "only": [
+                "xAI"
+              ],
+              "allow_fallbacks": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "providers": {
+    "ppt": {
+      "apiBase": "https://openrouter.ai/api/v1",
+      "models": [
+        "anthropic/claude-sonnet-5"
+      ]
+    }
+  },
+  "tools": {
+    "restrictToWorkspace": false,
+    "exec": {
+      "denyPatterns": [
+        "\\bdel\\s+/[fq]\\b",
+        "\\brmdir\\s+/s\\b",
+        "(?:^|[;&|]\\s*)format\\b",
+        "\\b(mkfs|diskpart)\\b",
+        "\\bdd\\s+if=",
+        ">\\s*/dev/sd",
+        ":\\(\\)\\s*\\{.*\\};\\s*:"
+      ]
+    },
+    "sandbox": {
+      "backend": "none"
+    },
+    "web": {
+      "search": {
+        "maxResults": 10
+      }
+    },
+    "disabledTools": [
+      "image_generate",
+      "text_to_speech",
+      "video_generate",
+      "deep_research"
+    ],
+    "ppt": {
+      "enabled": true,
+      "profile": "script_author",
+      "composerModel": "",
+      "renderDpi": 144,
+      "renderConcurrency": 2
+    }
+  },
+  "context": {
+    "curator_model": ""
+  },
+  "memory": {
+    "backend": "everos",
+    "userId": "raven-ppt",
+    "agentId": "raven-ppt",
+    "memoryTopK": 5
+  },
+  "plugins": {
+    "config": {
+      "everos-memory": {
+        "base_url": "http://localhost:18791"
+      }
+    }
+  }
+}

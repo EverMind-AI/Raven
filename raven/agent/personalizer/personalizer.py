@@ -15,11 +15,12 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from raven.tracing import semconv, trace
+from raven.observability import semconv
+from raven.tracing import trace
 
 if TYPE_CHECKING:
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
+    from raven.memory_engine import MemoryStore
 
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
@@ -379,14 +380,14 @@ class Personalizer:
             return fallback
 
     def _append_to_memory_section(self, section: str, facts: list[str]) -> None:
-        """Append new facts under the given section header in MEMORY.md.
+        """Append new facts under the given section header in user.md.
 
         - If the section already exists: inserts lines right after the header.
         - If the section is missing: appends a new section at the end of the file.
 
-        Read-modify-write is fcntl-locked via ``MemoryStore.locked()`` so
-        concurrent writers (MemoryConsolidator, SentinelMemoryWriter) on
-        another process don't clobber the update.
+        Read-modify-write holds ``MemoryStore.locked()`` so concurrent writers
+        (MemoryConsolidator, SentinelMemoryWriter) in another process cannot
+        clobber the update.
         """
         header = f"## {section}"
         fact_lines = "\n".join(f"- {f}" for f in facts)
@@ -397,6 +398,5 @@ class Personalizer:
                 # Insert under the existing section header, keeping the content after it
                 updated = current.replace(header, f"{header}\n{fact_lines}", 1)
             else:
-                # Create a new section at the end of the file
                 updated = current.rstrip() + f"\n\n{header}\n{fact_lines}\n"
             self.memory.write_long_term(updated)

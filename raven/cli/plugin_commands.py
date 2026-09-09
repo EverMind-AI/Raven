@@ -32,6 +32,56 @@ from raven.cli._helpers import load_runtime_config
 
 console = Console()
 
+plugin_app = typer.Typer(help="Manage installed plugins (MCP auth, etc.)")
+
+
+@plugin_app.command("auth")
+def plugin_auth(
+    server: str = typer.Argument(..., help="MCP server name from tools.mcp_servers"),
+    config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config file"),
+) -> None:
+    """Run (or refresh) the browser OAuth flow for an MCP server.
+
+    Connects once with a throwaway registry: the flow opens your browser,
+    tokens land under ~/.raven/credentials/mcp/, and any running gateway
+    picks them up on its next connect.
+    """
+    import asyncio
+
+    from raven.config.loader import load_config
+
+    load_runtime_config(config_path)
+    cfg = load_config().tools.mcp_servers.get(server)
+    if cfg is None:
+        console.print(f"[red]no MCP server named '{server}' in tools.mcp_servers[/red]")
+        raise typer.Exit(1)
+    if not cfg.enabled:
+        console.print(f"[red]server '{server}' is disabled; set tools.mcp_servers.{server}.enabled first[/red]")
+        raise typer.Exit(1)
+    if cfg.auth != "oauth":
+        console.print(
+            f"[red]server '{server}' has auth='{cfg.auth}'; set tools.mcp_servers.{server}.auth to 'oauth' first[/red]"
+        )
+        raise typer.Exit(1)
+
+    async def _run() -> dict:
+        from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.manager import MCPConnectionManager
+
+        mgr = MCPConnectionManager(ToolRegistry())
+        try:
+            return await mgr.connect(server, cfg)
+        finally:
+            await mgr.aclose()
+
+    console.print(f"authorizing '{server}' — your browser will open…")
+    snap = asyncio.run(_run())
+    if snap["state"] == "connected":
+        console.print(f"[green]authorized[/green] — {snap['tool_count']} tools available, tokens saved")
+    else:
+        console.print(f"[red]authorization failed[/red] ({snap['state']}): {snap.get('error') or 'unknown error'}")
+        raise typer.Exit(1)
+
 
 def register(app: typer.Typer) -> None:
     """Attach the ``plugins`` command to ``app``."""
@@ -54,19 +104,15 @@ def register(app: typer.Typer) -> None:
         """List installed plugins + the active memory backend."""
         # Import lazily so ``raven --help`` doesn't pay for plugin
         # discovery on every invocation.
-        from raven.cli._plugin_stack import plugin_discovery_sources
-        from raven.plugin import (
-            PluginDiscovery,
-            PluginRegistry,
-        )
+        from raven.core.plugin_stack import discover_plugins
+        from raven.plugins import PluginRegistry
 
         ec_config = _load_ec_config(config_path)
 
         # Discover separately from activation so the table can show
         # both shadowed (lower-priority) plugins AND disabled ones,
-        # not just the live set. Same four sources the live boot scans.
-        discovery = PluginDiscovery(**plugin_discovery_sources())
-        discovered = discovery.discover()
+        # not just the live set. Same sources the live boot scans.
+        discovered = discover_plugins(ec_config)
 
         registry = PluginRegistry()
         disabled = frozenset(ec_config.plugins.disabled)
@@ -103,9 +149,9 @@ def _render_plugin_table(
 
     if not discovered:
         console.print(
-            "[yellow]No plugins discovered.[/yellow] The everos backend "
-            "ships bundled — run [bold]uv sync[/bold] — or drop a manifest "
-            "under [bold]~/.raven/plugin/[/bold].",
+            "[yellow]No plugins discovered.[/yellow] The everos backend is "
+            "its own distribution — install [bold]everos-memory[/bold] — "
+            "or drop a manifest under [bold]~/.raven/plugins/[/bold].",
         )
         return
 
@@ -151,14 +197,14 @@ def _render_plugin_table(
 
 
 def _source_label(source) -> str:
-    """Friendly label for a :class:`Source` enum value."""
-    from raven.plugin import Source
+    """Friendly label for a :class:`ManifestOrigin` enum value."""
+    from raven.plugins import ManifestOrigin
 
     return {
-        Source.ENTRY_POINTS: "entry_points",
-        Source.PROJECT: "project",
-        Source.USER: "user",
-        Source.BUNDLED: "bundled",
+        ManifestOrigin.ENTRY_POINTS: "entry_points",
+        ManifestOrigin.PROJECT: "project",
+        ManifestOrigin.USER: "user",
+        ManifestOrigin.BUNDLED: "bundled",
     }.get(source, str(source))
 
 

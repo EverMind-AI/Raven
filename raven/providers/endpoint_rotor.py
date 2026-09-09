@@ -31,7 +31,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.providers.base import ErrorClassification, GenerationSettings, LLMProvider, LLMResponse, StreamDelta
+from raven.providers.base import ChatDelta, ErrorClassification, GenerationSettings, LLMProvider, LLMResponse
 from raven.providers.endpoints import ResolvedEndpoint
 
 #: Seconds a failed endpoint sits out before it is tried again, doubling per
@@ -287,7 +287,7 @@ class EndpointRotorProvider(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[StreamDelta]:
+    ) -> AsyncIterator[ChatDelta]:
         """Open-stream endpoint rotation -- see the module docstring for why
         rotation stops the moment a real delta has been yielded.
 
@@ -297,7 +297,7 @@ class EndpointRotorProvider(LLMProvider):
         exit discipline for the underlying HTTP stream.
         """
         order = self._healthy_order()
-        last_failure: Exception | StreamDelta | None = None
+        last_failure: Exception | ChatDelta | None = None
         for i in order:
             inner = self._inners[i]
             async with aclosing(inner.chat_stream(messages, tools, model=model, **kwargs)) as agen:
@@ -315,9 +315,9 @@ class EndpointRotorProvider(LLMProvider):
                     continue
 
                 if first.finish_reason == "error":
-                    # The fallback path 34099d8 added surfaces a failed open as
-                    # a terminal error delta rather than an exception; judged
-                    # the same way as one.
+                    # LLMProvider.chat_stream's non-streaming fallback surfaces
+                    # a failed open as a terminal error delta rather than an
+                    # exception; judged the same way as one.
                     classification = first.error_classification or self.classify_error(content=first.content)
                     if _rotates(classification):
                         self._mark_failure(i)
@@ -354,6 +354,37 @@ class EndpointRotorProvider(LLMProvider):
         which id a request goes out under is a property of the wire, and every
         endpoint under one rotor shares it."""
         return self._inners[0].wire_model_id(model)
+
+    def supports_prompt_caching(self, model: str) -> bool:
+        """Delegates to the first endpoint's inner, same reasoning as ``can_serve``:
+        whether the wire can carry the field is a property of the section every
+        inner was built from, not of the endpoint that happens to answer."""
+        return self._inners[0].supports_prompt_caching(model)
+
+    def supports_assistant_prefill(self, model: str | None = None) -> bool:
+        """Delegates to the first endpoint's inner, like ``supports_prompt_caching``:
+        the vendor rule is a property of the section every inner was built from."""
+        return self._inners[0].supports_assistant_prefill(model)
+
+    @property
+    def disable_auto_cache_control(self) -> bool:
+        return getattr(self, "_disable_auto_cache_control", False)
+
+    @disable_auto_cache_control.setter
+    def disable_auto_cache_control(self, value: bool) -> None:
+        """Push it down to every inner, exactly as ``generation`` is pushed.
+
+        The agent loop assigns this on the provider the running turn's binding
+        resolved, once it knows CacheOptimizer is placing the breakpoints (a
+        session switched mid-conversation sends through a pool-built provider
+        no construction site ever saw). Landing it on the rotor
+        alone leaves every inner -- the objects that actually build requests --
+        still marking a system block of their own, which spends a breakpoint the
+        operator's ``maxCacheBreakpoints`` did not budget for.
+        """
+        self._disable_auto_cache_control = value
+        for inner in getattr(self, "_inners", []):
+            inner.disable_auto_cache_control = value
 
     @property
     def model_overrides(self) -> dict[str, dict[str, Any]]:

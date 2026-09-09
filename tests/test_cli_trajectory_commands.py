@@ -21,10 +21,7 @@ def _write_log(path, spans):
 
 
 def _span(trace_id, *, attempt_id=None, session_key=None, name="session.turn", attrs=None):
-    """Span in the current format; pass ``attempt_id`` for a legacy-format span."""
-    attributes = {"session.key": session_key}
-    if attempt_id is not None:
-        attributes["attempt.id"] = attempt_id
+    attributes = {"attempt.id": attempt_id or trace_id, "session.key": session_key}
     if attrs:
         attributes.update(attrs)
     return {
@@ -55,23 +52,8 @@ def test_group_registered_on_app() -> None:
     assert "trajectories" in r.stdout
 
 
-def test_bare_invocation_without_tty_exits_2(state) -> None:
-    """The browser needs a terminal; CliRunner provides none."""
-    r = runner.invoke(trajectory_app, [])
-    assert r.exit_code == 2
-    assert "Non-interactive" in r.stdout
-
-
-def test_subcommands_unaffected_by_tty_gate(state) -> None:
-    """The callback must pass subcommands through before the TTY check."""
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
-    r = runner.invoke(trajectory_app, ["list"])
-    assert r.exit_code == 0
-    assert "trace-1" in r.stdout
-
-
 def test_subcommand_help() -> None:
-    for cmd in ("save", "report", "replay", "minimize", "verdict", "pin", "unpin", "merge", "split", "list"):
+    for cmd in ("save", "report", "replay", "minimize", "verdict", "pin", "unpin", "list"):
         r = runner.invoke(trajectory_app, [cmd, "--help"])
         assert r.exit_code == 0, cmd
 
@@ -125,19 +107,17 @@ def test_save_by_turn_trace_id_bundles_whole_attempt(state) -> None:
     _write_log(
         state / "logs" / "audit-spans.log",
         [
-            _span("trace-1", session_key="cli:a"),
-            _span("trace-2", session_key="cli:a", name="tool.call"),
+            _span("trace-1", attempt_id="att-x", session_key="cli:a"),
+            _span("trace-2", attempt_id="att-x", session_key="cli:a", name="tool.call"),
         ],
     )
-    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
 
     r = runner.invoke(trajectory_app, ["save", "trace-1"])
 
     assert r.exit_code == 0
-    assert (state / "bundles" / aid / "manifest.json").exists()
-    norm = " ".join(r.stdout.split())
-    assert aid in norm and "whole attempt" in norm
-    assert "spans: 2" in norm
+    assert (state / "bundles" / "att-x" / "manifest.json").exists()
+    assert "att-x" in r.stdout and "whole attempt" in r.stdout
+    assert "spans: 2" in r.stdout
 
 
 def test_save_unknown_id_errors(state) -> None:
@@ -170,7 +150,7 @@ def report_config(tmp_path, monkeypatch):
     """Point config loading at a throwaway file so no test reads the user's real config."""
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"providers": {"anthropic": {"apiKey": _FAKE_CFG_KEY}}}), encoding="utf-8")
-    monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
     return cfg
 
 
@@ -307,12 +287,12 @@ def test_report_unknown_id_errors(state, report_config) -> None:
 
 
 def test_verdict_records_user_source(state) -> None:
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", attempt_id="att-1")])
 
-    r = runner.invoke(trajectory_app, ["verdict", "trace-1", "--status", "fail", "--why", "wrong answer"])
+    r = runner.invoke(trajectory_app, ["verdict", "att-1", "--status", "fail", "--why", "wrong answer"])
 
     assert r.exit_code == 0
-    got = tverdict.read_verdicts(state, attempt_id="trace-1")
+    got = tverdict.read_verdicts(state, attempt_id="att-1")
     assert len(got) == 1
     assert got[0].status == "fail" and got[0].source == "user" and got[0].why == "wrong answer"
 
@@ -323,17 +303,16 @@ def test_verdict_by_turn_trace_id_lands_on_attempt(state) -> None:
     _write_log(
         state / "logs" / "audit-spans.log",
         [
-            _span("trace-1", session_key="cli:a"),
-            _span("trace-2", session_key="cli:a", name="tool.call"),
+            _span("trace-1", attempt_id="att-x"),
+            _span("trace-2", attempt_id="att-x", name="tool.call"),
         ],
     )
-    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
 
     r = runner.invoke(trajectory_app, ["verdict", "trace-1", "--status", "fail"])
 
     assert r.exit_code == 0
-    assert aid in " ".join(r.stdout.split())
-    got = tverdict.read_verdicts(state, attempt_id=aid)
+    assert "att-x" in r.stdout
+    got = tverdict.read_verdicts(state, attempt_id="att-x")
     assert len(got) == 1 and got[0].status == "fail"
     assert tverdict.read_verdicts(state, attempt_id="trace-1") == []
 
@@ -355,43 +334,19 @@ def test_verdict_rejects_bad_status(state) -> None:
 
 
 def test_pin_unpin_roundtrip(state) -> None:
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", attempt_id="att-1")])
 
-    r = runner.invoke(trajectory_app, ["pin", "trace-1", "--reason", "bug #42"])
+    r = runner.invoke(trajectory_app, ["pin", "att-1", "--reason", "bug #42"])
     assert r.exit_code == 0
-    assert tstore.pins(state)["trace-1"]["reason"] == "bug #42"
+    assert tstore.pins(state)["att-1"]["reason"] == "bug #42"
 
-    r = runner.invoke(trajectory_app, ["unpin", "trace-1"])
+    r = runner.invoke(trajectory_app, ["unpin", "att-1"])
     assert r.exit_code == 0
     assert tstore.pins(state) == {}
 
-    r = runner.invoke(trajectory_app, ["unpin", "trace-1"])
+    r = runner.invoke(trajectory_app, ["unpin", "att-1"])
     assert r.exit_code == 0
     assert "not pinned" in r.stdout
-
-
-def test_pin_command_uses_locked_pin_attempt(state, monkeypatch) -> None:
-    """Guard: the CLI must pin through the attempts-lock-aware pin_attempt —
-    a lock-free resolve + literal pin() can land on an id a concurrent split
-    just deleted, leaving a dangling pin that protects nothing."""
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
-    calls = []
-
-    def record(id_, *, reason="", state_dir=None):
-        calls.append((id_, reason))
-        return "att-1"
-
-    def forbid(id_, *, reason="", state_dir=None):
-        raise AssertionError("the pin command must not call the literal pin() directly")
-
-    monkeypatch.setattr(tstore, "pin_attempt", record)
-    monkeypatch.setattr(tstore, "pin", forbid)
-
-    r = runner.invoke(trajectory_app, ["pin", "trace-1", "--reason", "keep"])
-
-    assert r.exit_code == 0
-    assert calls == [("trace-1", "keep")]
-    assert "att-1" in r.stdout
 
 
 def test_pin_unpin_resolve_turn_trace_id(state) -> None:
@@ -399,15 +354,14 @@ def test_pin_unpin_resolve_turn_trace_id(state) -> None:
     _write_log(
         state / "logs" / "audit-spans.log",
         [
-            _span("trace-1", session_key="cli:a"),
-            _span("trace-2", session_key="cli:a", name="tool.call"),
+            _span("trace-1", attempt_id="att-x"),
+            _span("trace-2", attempt_id="att-x", name="tool.call"),
         ],
     )
-    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
 
     r = runner.invoke(trajectory_app, ["pin", "trace-1"])
     assert r.exit_code == 0
-    assert set(tstore.pins(state)) == {aid}
+    assert set(tstore.pins(state)) == {"att-x"}
 
     r = runner.invoke(trajectory_app, ["unpin", "trace-2"])
     assert r.exit_code == 0
@@ -431,215 +385,10 @@ def test_unpin_clears_stale_literal_pin(state) -> None:
     assert tstore.pins(state) == {}
 
 
-def test_unpin_clears_definition_aliases_and_members(state) -> None:
-    """Unpin on a definition drops every pin protecting the attempt: the
-    definition id, absorbed aliases, and member-level pins."""
-    _write_log(
-        state / "logs" / "audit-spans.log",
-        [
-            _span("trace-1", session_key="cli:a"),
-            _span("trace-2", session_key="cli:a"),
-            _span("trace-3", session_key="cli:a"),
-        ],
-    )
-    tstore.pin("trace-1", reason="member", state_dir=state)
-    d1 = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
-    d2 = tstore.merge_attempts([d1, "trace-3"], state_dir=state)
-    tstore.pin("trace-2", reason="manual", state_dir=state)
-    assert tstore.pins(state)
-
-    r = runner.invoke(trajectory_app, ["unpin", d2])
-
-    assert r.exit_code == 0
-    assert tstore.pins(state) == {}
-
-
-# ── merge / split ─────────────────────────────────────────────────────
-
-
-def test_merge_creates_definition(state) -> None:
-    _write_log(
-        state / "logs" / "audit-spans.log",
-        [_span("trace-1", session_key="cli:a"), _span("trace-2", session_key="cli:a")],
-    )
-
-    r = runner.invoke(trajectory_app, ["merge", "trace-1", "trace-2"])
-
-    assert r.exit_code == 0
-    (aid,) = tstore.definitions(state)
-    assert aid.startswith("att-")
-    assert aid in " ".join(r.stdout.split())
-    assert sorted(tstore.definitions(state)[aid]["traces"]) == ["trace-1", "trace-2"]
-
-
-def test_merge_save_list_split_roundtrip(state) -> None:
-    """The whole flow: merge -> save by member id -> one list row -> split ->
-    two list rows again."""
-    _write_log(
-        state / "logs" / "audit-spans.log",
-        [
-            _span("trace-1", session_key="cli:a"),
-            _span("trace-2", session_key="cli:a", name="tool.call"),
-        ],
-    )
-
-    r = runner.invoke(trajectory_app, ["merge", "trace-1", "trace-2"])
-    assert r.exit_code == 0
-    (aid,) = tstore.definitions(state)
-
-    r = runner.invoke(trajectory_app, ["save", "trace-2"])
-    assert r.exit_code == 0
-    assert (state / "bundles" / aid / "manifest.json").exists()
-    assert "whole attempt" in " ".join(r.stdout.split())
-
-    # A wide terminal keeps the minted id in one table cell line (the default
-    # 80 columns folds it mid-id, breaking substring assertions).
-    r = runner.invoke(trajectory_app, ["list"], env={"COLUMNS": "200"})
-    assert r.exit_code == 0
-    squash = "".join(r.stdout.split())
-    assert squash.count(aid) == 1
-    assert "trace-1" not in squash and "trace-2" not in squash
-
-    r = runner.invoke(trajectory_app, ["split", aid])
-    assert r.exit_code == 0
-
-    r = runner.invoke(trajectory_app, ["list"], env={"COLUMNS": "200"})
-    assert r.exit_code == 0
-    squash = "".join(r.stdout.split())
-    assert "trace-1" in squash and "trace-2" in squash
-    assert aid not in squash
-
-
-def test_merge_legacy_attempt_expands_whole_group(state) -> None:
-    """A legacy id input pulls its whole span-attribute group in as members,
-    and the canonical legacy id survives as an alias."""
-    _write_log(
-        state / "logs" / "audit-spans.log",
-        [
-            _span("trace-1", attempt_id="att-old", session_key="cli:a"),
-            _span("trace-2", attempt_id="att-old", session_key="cli:a", name="tool.call"),
-            _span("trace-3", session_key="cli:a"),
-        ],
-    )
-
-    r = runner.invoke(trajectory_app, ["merge", "att-old", "trace-3"])
-
-    assert r.exit_code == 0
-    (aid,) = tstore.definitions(state)
-    entry = tstore.definitions(state)[aid]
-    assert sorted(entry["traces"]) == ["trace-1", "trace-2", "trace-3"]
-    assert "att-old" in entry["aliases"]
-
-
-def test_merge_rejects_unknown_id(state) -> None:
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
-    r = runner.invoke(trajectory_app, ["merge", "trace-1", "no-such-id"])
-    assert r.exit_code == 1
-    assert "unknown id" in " ".join(r.stdout.split())
-    assert tstore.definitions(state) == {}
-
-
-def test_merge_rejects_cross_session(state) -> None:
-    _write_log(
-        state / "logs" / "audit-spans.log",
-        [_span("trace-1", session_key="cli:a"), _span("trace-2", session_key="cli:b")],
-    )
-    r = runner.invoke(trajectory_app, ["merge", "trace-1", "trace-2"])
-    assert r.exit_code == 1
-    assert tstore.definitions(state) == {}
-
-
-def test_merge_rejects_single_group(state) -> None:
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
-    r = runner.invoke(trajectory_app, ["merge", "trace-1", "trace-1"])
-    assert r.exit_code == 1
-    assert tstore.definitions(state) == {}
-
-
-def test_split_pure_legacy_exits_1(state) -> None:
-    _write_log(
-        state / "logs" / "audit-spans.log",
-        [
-            _span("trace-1", attempt_id="att-old"),
-            _span("trace-2", attempt_id="att-old", name="tool.call"),
-        ],
-    )
-    r = runner.invoke(trajectory_app, ["split", "att-old"])
-    assert r.exit_code == 1
-    assert "only merged attempts can be split" in " ".join(r.stdout.split())
-
-
-def test_split_unknown_id_exits_1(state) -> None:
-    r = runner.invoke(trajectory_app, ["split", "no-such-id"])
-    assert r.exit_code == 1
-    assert "only merged attempts can be split" in " ".join(r.stdout.split())
-
-
-def test_split_reports_traces_not_attempts(state) -> None:
-    """A definition holding a multi-trace legacy group restores fewer attempts
-    than traces, so the output counts member traces, never attempts."""
-    _write_log(
-        state / "logs" / "audit-spans.log",
-        [
-            _span("trace-1", attempt_id="att-old", session_key="cli:a"),
-            _span("trace-2", attempt_id="att-old", session_key="cli:a", name="tool.call"),
-            _span("trace-3", session_key="cli:a"),
-        ],
-    )
-    aid = tstore.merge_attempts(["att-old", "trace-3"], state_dir=state)
-
-    r = runner.invoke(trajectory_app, ["split", aid])
-
-    assert r.exit_code == 0
-    norm = " ".join(r.stdout.split())
-    assert "3 member trace" in norm
-    assert "3 attempts" not in norm and "per-turn" not in norm
-
-    r = runner.invoke(trajectory_app, ["list"])
-    squash = "".join(r.stdout.split())
-    assert "att-old" in squash and "trace-3" in squash
-    assert aid not in squash
-    assert "trace-1" not in squash and "trace-2" not in squash
-
-
-def test_split_by_member_id_does_not_claim_removed_input(state) -> None:
-    """split addressed by a member id (or alias) must not present that input
-    as the deleted definition."""
-    _write_log(
-        state / "logs" / "audit-spans.log",
-        [
-            _span("trace-1", session_key="cli:a"),
-            _span("trace-2", session_key="cli:a"),
-            _span("trace-3", session_key="cli:a"),
-        ],
-    )
-    tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
-
-    r = runner.invoke(trajectory_app, ["split", "trace-1"])
-
-    assert r.exit_code == 0
-    norm = " ".join(r.stdout.split())
-    assert "addressed by trace-1" in norm
-    assert "Removed definition" not in norm
-    assert tstore.definitions(state) == {}
-
-    d1 = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
-    tstore.merge_attempts([d1, "trace-3"], state_dir=state)
-
-    r = runner.invoke(trajectory_app, ["split", d1])
-
-    assert r.exit_code == 0
-    norm = " ".join(r.stdout.split())
-    assert f"addressed by {d1}" in norm
-    assert "Removed definition" not in norm
-    assert tstore.definitions(state) == {}
-
-
 # ── list ──────────────────────────────────────────────────────────────
 
 
-def test_list_legacy_logs_still_group(state) -> None:
-    """Pre-definition logs (span-level attempt.id) keep aggregating by it."""
+def test_list_aggregates_attempts(state) -> None:
     _write_log(
         state / "logs" / "audit-spans.log",
         [
@@ -662,7 +411,7 @@ def test_list_session_filter(state) -> None:
     _write_log(
         state / "logs" / "audit-spans.log",
         [
-            _span("trace-1", session_key="cli:a"),
+            _span("trace-1", attempt_id="att-x", session_key="cli:a"),
             _span("trace-3", session_key="cli:b"),
         ],
     )
@@ -671,237 +420,13 @@ def test_list_session_filter(state) -> None:
 
     assert r.exit_code == 0
     assert "trace-3" in r.stdout
-    assert "trace-1" not in r.stdout
-
-
-def test_list_folds_definition_members_single_row(state) -> None:
-    """Definition ownership outranks a member's legacy attempt.id — a merged
-    legacy member must not surface as a second row."""
-    _write_log(
-        state / "logs" / "audit-spans.log",
-        [
-            _span("trace-1", attempt_id="att-old", session_key="cli:a"),
-            _span("trace-2", session_key="cli:a"),
-        ],
-    )
-    aid = tstore.merge_attempts(["att-old", "trace-2"], state_dir=state)
-
-    r = runner.invoke(trajectory_app, ["list"], env={"COLUMNS": "200"})
-
-    assert r.exit_code == 0
-    squash = "".join(r.stdout.split())
-    assert aid in squash
-    assert "att-old" not in squash
-    assert "trace-1" not in squash and "trace-2" not in squash
-
-
-def test_list_merged_attempt_shows_verdict_via_alias(state) -> None:
-    """A verdict recorded under an absorbed definition id (now an alias) stays
-    visible on the current definition's row; a later verdict wins."""
-    _write_log(
-        state / "logs" / "audit-spans.log",
-        [
-            _span("trace-1", session_key="cli:a"),
-            _span("trace-2", session_key="cli:a"),
-            _span("trace-3", session_key="cli:a"),
-        ],
-    )
-    d1 = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
-    tverdict.record_verdict(d1, "fail", source="user", state_dir=state)
-    d2 = tstore.merge_attempts([d1, "trace-3"], state_dir=state)
-    assert d1 in tstore.definitions(state)[d2]["aliases"]
-
-    r = runner.invoke(trajectory_app, ["list"], env={"COLUMNS": "200"})
-    assert r.exit_code == 0
-    assert d2 in "".join(r.stdout.split())
-    assert "fail" in r.stdout
-
-    tverdict.record_verdict(d2, "pass", source="user", state_dir=state)
-    r = runner.invoke(trajectory_app, ["list"], env={"COLUMNS": "200"})
-    assert r.exit_code == 0
-    assert "pass" in r.stdout and "fail" not in r.stdout
-
-
-def test_list_tolerates_malformed_verdict_lines(state) -> None:
-    """A shape-complete verdict line with a list attempt_id must not break the
-    verdict column for the healthy rows."""
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
-    tverdict.record_verdict("trace-1", "pass", source="user", state_dir=state)
-    with (state / "verdicts.jsonl").open("a", encoding="utf-8") as f:
-        f.write(json.dumps({"attempt_id": ["bad"], "status": "fail", "source": "user", "ts": "now"}) + "\n")
-
-    r = runner.invoke(trajectory_app, ["list"])
-
-    assert r.exit_code == 0
-    assert "pass" in r.stdout
+    assert "att-x" not in r.stdout
 
 
 def test_list_empty(state) -> None:
     r = runner.invoke(trajectory_app, ["list"])
     assert r.exit_code == 0
     assert "No attempts found" in r.stdout
-
-
-# ── markup safety ─────────────────────────────────────────────────────
-
-
-def test_list_renders_markup_legacy_id_literally(state) -> None:
-    """A legal legacy id may contain Rich markup; the table cell must show it
-    literally instead of crashing markup parsing."""
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", attempt_id="x[/red]y")])
-
-    r = runner.invoke(trajectory_app, ["list"])
-
-    assert r.exit_code == 0
-    assert "x[/red]y" in "".join(r.stdout.split())
-
-
-def test_list_empty_markup_session_is_safe(state) -> None:
-    """The no-matches notice echoes the --session filter, which is user input."""
-    r = runner.invoke(trajectory_app, ["list", "--session", "x[/dim]y"])
-
-    assert r.exit_code == 0
-    assert "x[/dim]y" in "".join(r.stdout.split())
-    assert "No attempts found" in r.stdout
-
-
-def test_list_tolerates_malformed_span_attributes(state) -> None:
-    """JSON-legal records with non-string ids, keys, or timestamps degrade
-    per-field instead of killing the whole listing."""
-    spans = [
-        _span("trace-1", session_key="cli:a"),
-        _span("trace-int"),
-        _span("trace-list"),
-        _span("trace-badkey"),
-        _span("trace-badtime", session_key="cli:a"),
-    ]
-    spans[1]["attributes"]["attempt.id"] = 123
-    spans[2]["attributes"]["attempt.id"] = ["not", "hashable"]
-    spans[3]["attributes"]["session.key"] = 123
-    spans[4]["startTime"] = 123
-    spans.append({"schemaVersion": "audit.span.v1", "traceId": 456, "name": "session.turn", "attributes": {}})
-    spans.append({"schemaVersion": "audit.span.v1", "traceId": "trace-attrs-list", "attributes": ["bad"]})
-    spans.append({"schemaVersion": "audit.span.v1", "traceId": "trace-attrs-str", "attributes": "bad"})
-    _write_log(state / "logs" / "audit-spans.log", spans)
-
-    r = runner.invoke(trajectory_app, ["list"], env={"COLUMNS": "200"})
-
-    assert r.exit_code == 0
-    squash = "".join(r.stdout.split())
-    assert "trace-1" in squash
-    # Non-string attempt.id falls back to the trace id; the rest degrade to "-".
-    assert "trace-int" in squash and "trace-list" in squash
-    assert "trace-badkey" in squash and "trace-badtime" in squash
-    # A truthy non-object attributes container degrades to no attributes.
-    assert "trace-attrs-list" in squash and "trace-attrs-str" in squash
-
-    # The session filter walks the same records inside iter_spans; a defective
-    # container must not shadow the matching rows there either.
-    r = runner.invoke(trajectory_app, ["list", "--session", "cli:a"], env={"COLUMNS": "200"})
-
-    assert r.exit_code == 0
-    squash = "".join(r.stdout.split())
-    assert "trace-1" in squash and "trace-badtime" in squash
-    assert "trace-attrs-list" not in squash and "trace-attrs-str" not in squash
-
-
-def test_markup_legacy_id_success_paths_are_safe(state) -> None:
-    legacy = "x[/red]y"
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", attempt_id=legacy)])
-
-    r = runner.invoke(trajectory_app, ["verdict", "trace-1", "--status", "fail"])
-    assert r.exit_code == 0
-    assert legacy in "".join(r.stdout.split())
-
-    r = runner.invoke(trajectory_app, ["pin", "trace-1"])
-    assert r.exit_code == 0
-    assert legacy in "".join(r.stdout.split())
-    assert legacy in tstore.pins(state)
-
-    r = runner.invoke(trajectory_app, ["unpin", legacy])
-    assert r.exit_code == 0
-    assert legacy in "".join(r.stdout.split())
-    assert tstore.pins(state) == {}
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["merge", "x[/red]y", "trace-1"],
-        ["split", "x[/red]y"],
-        ["save", "x[/red]y"],
-        ["replay", "x[/red]y"],
-        ["minimize", "x[/red]y"],
-    ],
-    ids=["merge", "split", "save", "replay", "minimize"],
-)
-def test_markup_unknown_target_error_paths_are_safe(state, argv) -> None:
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
-
-    r = runner.invoke(trajectory_app, argv)
-
-    assert r.exit_code == 1
-    assert "x[/red]y" in "".join(r.stdout.split())
-
-
-def test_minimize_markup_manifest_id_error_is_safe(state, tmp_path) -> None:
-    """A markup-bearing manifest attempt_id (it contains '/') is refused as a
-    default cassette directory name, with the id echoed literally."""
-    bundle = tmp_path / "b"
-    bundle.mkdir()
-    (bundle / "manifest.json").write_text(json.dumps({"format_version": 1, "attempt_id": "x[/red]y"}), encoding="utf-8")
-
-    r = runner.invoke(trajectory_app, ["minimize", str(bundle)])
-
-    assert r.exit_code == 1
-    assert "x[/red]y" in "".join(r.stdout.split())
-
-
-@pytest.mark.parametrize("bad_id", [123, ["a", "b"]], ids=["int", "list"])
-def test_minimize_non_string_manifest_id_fails_controlled(state, tmp_path, bad_id) -> None:
-    """A JSON-legal manifest whose attempt_id is not a string falls back to the
-    bundle directory name instead of blowing up the default-path join."""
-    bundle = tmp_path / "b"
-    bundle.mkdir()
-    (bundle / "manifest.json").write_text(json.dumps({"format_version": 1, "attempt_id": bad_id}), encoding="utf-8")
-
-    r = runner.invoke(trajectory_app, ["minimize", str(bundle)])
-
-    # The empty bundle is still rejected, but through the controlled error
-    # path (typer.Exit), never an uncaught TypeError from the path join.
-    assert r.exit_code == 1
-    assert isinstance(r.exception, SystemExit)
-
-
-@pytest.mark.parametrize(
-    "content", ['["not", "an", "object"]', '"just a string"', "{not json"], ids=["list", "string", "broken"]
-)
-def test_minimize_invalid_manifest_fails_controlled(state, tmp_path, content) -> None:
-    """A manifest that is not a JSON object (or not JSON at all) is refused
-    with a readable error instead of an AttributeError/JSONDecodeError."""
-    bundle = tmp_path / "b"
-    bundle.mkdir()
-    (bundle / "manifest.json").write_text(content, encoding="utf-8")
-
-    r = runner.invoke(trajectory_app, ["minimize", str(bundle)])
-
-    assert r.exit_code == 1
-    assert isinstance(r.exception, SystemExit)
-    assert "not a valid bundle manifest" in " ".join(r.stdout.split())
-
-
-def test_minimize_non_utf8_manifest_fails_controlled(state, tmp_path) -> None:
-    """Invalid UTF-8 in the manifest raises before JSON parsing; it must reach
-    the same controlled error path as broken JSON."""
-    bundle = tmp_path / "b"
-    bundle.mkdir()
-    (bundle / "manifest.json").write_bytes(b'\xff\xfe{"attempt_id": 1}')
-
-    r = runner.invoke(trajectory_app, ["minimize", str(bundle)])
-
-    assert r.exit_code == 1
-    assert isinstance(r.exception, SystemExit)
-    assert "not a valid bundle manifest" in " ".join(r.stdout.split())
 
 
 # ── replay ────────────────────────────────────────────────────────────
@@ -1063,563 +588,3 @@ def test_minimize_rejects_unreplayable_bundle(state, tmp_path) -> None:
 
     assert r.exit_code == 1
     assert "not fully replayable" in r.stdout
-
-
-# ── report-bug (the scriptable bug report entry) ───────────────────────
-
-# Assembled at runtime: the detect-private-key pre-commit hook scans source
-# bytes for the marker substring and cannot tell this fake fixture apart.
-_PEM = "-----BEGIN PRIVATE " + "KEY-----\nMIIabcdef\n-----END PRIVATE " + "KEY-----"
-_ENTROPY_TOKEN = "aB3xK9mQ7pL2vR8sT4wZ6yN1"
-
-
-@pytest.fixture
-def _no_machine_secrets(monkeypatch):
-    from raven.trajectory import bugreport as breport
-
-    monkeypatch.setattr(breport, "collect_known_secrets", lambda _p: ([], True))
-
-
-def _simple_log(state, attrs=None):
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a", attrs=attrs)])
-
-
-def _staging_entries(state):
-    from raven.trajectory import bugreport as breport
-
-    staging = breport.bugreports_root(state) / breport.STAGING_DIR
-    return list(staging.iterdir()) if staging.is_dir() else []
-
-
-def test_report_bug_happy_path_with_yes(state, _no_machine_secrets):
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state)
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
-
-    assert r.exit_code == 0, r.output
-    assert "ready (local_ready)" in r.output
-    assert "Not uploaded" in r.output
-    assert "the attempt was pinned" in r.output
-    ((_dir, record),) = breport.list_reports(state)
-    assert record["problem"]["description"] == "it broke"
-    assert _staging_entries(state) == []
-
-
-def test_report_bug_requires_description(state, _no_machine_secrets):
-    _simple_log(state)
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "--yes"])
-    assert r.exit_code != 0
-
-
-def test_report_bug_non_tty_without_yes_fails_before_side_effects(state, _no_machine_secrets):
-    from raven.trajectory import bugreport as breport
-    from raven.trajectory import store as tstore_module
-
-    _simple_log(state)
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke"])
-
-    assert r.exit_code == 1
-    assert "nothing was collected or pinned" in r.output
-    assert breport.list_reports(state) == []
-    assert not (breport.bugreports_root(state) / breport.STAGING_DIR).exists()
-    assert tstore_module.pins(state) == {}
-
-
-def test_report_bug_suspected_without_flags_lists_items_and_both_flags(state, _no_machine_secrets):
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
-
-    assert r.exit_code == 1
-    assert "1 item(s) require your decision" in r.output
-    assert "Paths are relative to the trajectory snapshot inside the package." in r.output
-    assert "Suspected: high-entropy token" in r.output
-    assert f"Token: {_ENTROPY_TOKEN}" in r.output
-    assert "Seen at:" in r.output
-    assert "the span log — spans.jsonl:1" in r.output
-    assert "--keep-findings or --redact-findings" in r.output
-    assert "--accept-risk" in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
-
-
-def _inner_spans_text(record, tmp_path):
-    import tarfile as _tarfile
-
-    with _tarfile.open(record["package"]["path"]) as tar:
-        inner = tar.extractfile(f"{record['report_id']}/trajectory/trace-1.tar.gz").read()
-    inner_tar = tmp_path / "inner.tar.gz"
-    inner_tar.write_bytes(inner)
-    extract_dir = tmp_path / "inner"
-    with _tarfile.open(inner_tar) as tar:
-        tar.extractall(extract_dir, filter="data")
-    return (extract_dir / "trace-1" / "spans.jsonl").read_text(encoding="utf-8")
-
-
-def test_report_bug_keep_findings_with_accept_risk_ships_kept(state, _no_machine_secrets, tmp_path):
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
-    r = runner.invoke(
-        trajectory_app,
-        ["report-bug", "trace-1", "-d", "it broke", "--yes", "--keep-findings", "--accept-risk"],
-    )
-
-    assert r.exit_code == 0, r.output
-    ((_dir, record),) = breport.list_reports(state)
-    assert record["redaction"]["classification"] == "needs_review"
-    assert record["status"] == "local_ready"
-    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["kept"]
-    assert _ENTROPY_TOKEN not in json.dumps(record["redaction"]["user_decisions"])
-    assert _ENTROPY_TOKEN in _inner_spans_text(record, tmp_path)
-
-
-def test_report_bug_redact_findings_with_accept_risk_ships_scrubbed(state, _no_machine_secrets, tmp_path):
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
-    r = runner.invoke(
-        trajectory_app,
-        ["report-bug", "trace-1", "-d", "it broke", "--yes", "--redact-findings", "--accept-risk"],
-    )
-
-    assert r.exit_code == 0, r.output
-    ((_dir, record),) = breport.list_reports(state)
-    assert record["status"] == "local_ready"
-    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["redacted"]
-    assert _ENTROPY_TOKEN not in json.dumps(record)
-    spans = _inner_spans_text(record, tmp_path)
-    assert _ENTROPY_TOKEN not in spans
-    assert "[REDACTED:user-confirmed]" in spans
-
-
-def test_report_bug_flags_are_mutually_exclusive(state, _no_machine_secrets):
-    from raven.trajectory import bugreport as breport
-    from raven.trajectory import store as tstore_module
-
-    _simple_log(state)
-    r = runner.invoke(
-        trajectory_app,
-        ["report-bug", "trace-1", "-d", "x", "--yes", "--keep-findings", "--redact-findings"],
-    )
-
-    assert r.exit_code == 1
-    assert "mutually exclusive" in r.output
-    assert breport.list_reports(state) == []
-    assert not (breport.bugreports_root(state) / breport.STAGING_DIR).exists()
-    assert tstore_module.pins(state) == {}
-
-
-@pytest.mark.parametrize("flag", ["--keep-findings", "--redact-findings"])
-def test_report_bug_flag_without_accept_risk_fails_before_application(state, _no_machine_secrets, flag):
-    """The missing-flag failure must precede any decision application: the
-    original context is listed intact and nothing was replaced or frozen."""
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", flag])
-
-    assert r.exit_code == 1
-    assert "Suspected: high-entropy token" in r.output
-    assert _ENTROPY_TOKEN in r.output
-    assert "--accept-risk" in r.output
-    assert "--keep-findings or --redact-findings" not in r.output
-    assert "[REDACTED:user-confirmed]" not in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
-
-
-def test_report_bug_accept_risk_without_keep_or_redact_lists_that_flag(state, _no_machine_secrets):
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
-
-    assert r.exit_code == 1
-    assert "--keep-findings or --redact-findings" in r.output
-    assert "Pass: --keep-findings or --redact-findings (--yes does not imply them)." in r.output
-    assert breport.list_reports(state) == []
-
-
-def test_report_bug_both_kinds_ship_with_full_flags(state, _no_machine_secrets):
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN} and {_PEM}"})
-    r = runner.invoke(
-        trajectory_app,
-        ["report-bug", "trace-1", "-d", "x", "--yes", "--redact-findings", "--accept-risk"],
-    )
-
-    assert r.exit_code == 0, r.output
-    ((_dir, record),) = breport.list_reports(state)
-    actions = sorted(entry["action"] for entry in record["redaction"]["user_decisions"])
-    assert actions == ["acknowledged", "redacted"]
-    assert record["redaction"]["security_notices"] != []
-
-
-def test_report_bug_policy_only_review_needs_accept_risk(state, _no_machine_secrets, monkeypatch):
-    from raven.trajectory import bugreport as breport
-
-    monkeypatch.setenv("RAVEN_BUGREPORT_REQUIRE_REVIEW", "1")
-    _simple_log(state)
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes"])
-    assert r.exit_code == 1
-    assert "organization policy requires manual review" in r.output
-    assert breport.list_reports(state) == []
-
-    r2 = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
-    assert r2.exit_code == 0, r2.output
-    ((_dir, record),) = breport.list_reports(state)
-    assert record["redaction"]["classification"] == "needs_review"
-    assert record["redaction"]["user_decisions"] == []
-
-
-def test_report_bug_tty_full_flags_skip_all_prompts(state, _no_machine_secrets, monkeypatch):
-    """On a TTY, flags pre-decide their kinds: with everything covered plus
-    --yes, no questionary prompt may appear at all."""
-    import raven.cli.trajectory_browse as tbrowse
-    from raven.cli import trajectory_commands as tcmd
-    from raven.trajectory import bugreport as breport
-
-    def _no_prompts():
-        raise AssertionError("questionary must not be used when flags cover every item")
-
-    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
-    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
-    monkeypatch.setattr(tbrowse, "_require_questionary", _no_prompts)
-
-    r = runner.invoke(
-        trajectory_app,
-        ["report-bug", "trace-1", "-d", "x", "--yes", "--keep-findings", "--accept-risk"],
-    )
-
-    assert r.exit_code == 0, r.output
-    ((_dir, record),) = breport.list_reports(state)
-    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["kept"]
-
-
-def test_report_bug_tty_flags_without_accept_risk_still_confirm_risk(state, _no_machine_secrets, monkeypatch):
-    """--keep-findings covers the items, but the risk consent still gates the
-    ship on a TTY when --accept-risk was not given; declining keeps nothing."""
-    import raven.cli.trajectory_browse as tbrowse
-    from raven.cli import trajectory_commands as tcmd
-    from raven.trajectory import bugreport as breport
-
-    def _no_prompts():
-        raise AssertionError("no per-item prompt is expected: the flag covers every item")
-
-    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
-    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
-    monkeypatch.setattr(tbrowse, "_require_questionary", _no_prompts)
-    confirms: list[str] = []
-
-    def _reject(message, *_a, **_k):
-        confirms.append(message)
-        return False
-
-    monkeypatch.setattr(tcmd.typer, "confirm", _reject)
-
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--keep-findings"])
-
-    assert r.exit_code == 1
-    assert confirms == ["Ship the package with the risks listed above?"]
-    assert "Cancelled — no bug report was created." in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
-
-
-def test_report_bug_private_key_ships_with_accept_risk(state, _no_machine_secrets):
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state, attrs={"llm.output": _PEM})
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes", "--accept-risk"])
-
-    assert r.exit_code == 0, r.output
-    ((_dir, record),) = breport.list_reports(state)
-    assert record["status"] == "local_ready"
-    assert record["redaction"]["security_notices"] == [
-        "the original trajectory contained 1 private key block(s), replaced before export"
-    ]
-    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["acknowledged"]
-    assert _PEM not in json.dumps(record)
-
-
-def test_report_bug_rejects_bogus_severity(state, _no_machine_secrets):
-    _simple_log(state)
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--severity", "urgent", "--yes"])
-    assert r.exit_code == 1
-    assert "--severity must be one of" in r.output
-
-
-def test_report_bug_traversal_id_fails_cleanly(state, _no_machine_secrets):
-    _simple_log(state)
-    r = runner.invoke(trajectory_app, ["report-bug", "../escape", "-d", "x", "--yes"])
-    assert r.exit_code == 1
-    assert "Could not prepare the trajectory snapshot" in r.output
-
-
-def test_report_bug_freeze_failure_cleans_staging(state, _no_machine_secrets, monkeypatch):
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state)
-
-    def _boom(*_a, **_k):
-        raise breport.PreparationError("disk full")
-
-    monkeypatch.setattr(breport, "freeze_export", _boom)
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes"])
-
-    assert r.exit_code == 1
-    assert "Could not prepare the trajectory snapshot: disk full" in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
-
-
-def test_report_bug_stale_at_confirmation_cleans_staging(state, _no_machine_secrets, monkeypatch):
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state)
-
-    def _stale(*_a, **_k):
-        raise breport.StaleAttemptError("changed")
-
-    monkeypatch.setattr(breport, "confirm_and_package", _stale)
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes"])
-
-    assert r.exit_code == 1
-    assert "The attempt changed" in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
-
-
-def test_report_bug_blank_description_fails_before_side_effects(state, _no_machine_secrets):
-    from raven.trajectory import bugreport as breport
-    from raven.trajectory import store as tstore_module
-
-    _simple_log(state)
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "   ", "--yes"])
-
-    assert r.exit_code == 1
-    assert "--description must not be blank" in r.output
-    assert breport.list_reports(state) == []
-    assert not (breport.bugreports_root(state) / breport.STAGING_DIR).exists()
-    assert tstore_module.pins(state) == {}
-
-
-def test_report_bug_private_key_in_description_requires_accept_risk(state, _no_machine_secrets):
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state)
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", f"look: {_PEM}", "--yes"])
-
-    assert r.exit_code == 1
-    assert "Confirmed sensitive: private key block (already replaced)" in r.output
-    assert "Pass: --accept-risk (--yes does not imply them)." in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
-
-
-def test_report_bug_private_key_in_trajectory_requires_accept_risk(state, _no_machine_secrets):
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state, attrs={"llm.output": _PEM})
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes"])
-
-    assert r.exit_code == 1
-    assert "Confirmed sensitive: private key block (already replaced)" in r.output
-    assert "Pass: --accept-risk (--yes does not imply them)." in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
-
-
-def test_report_bug_tty_confirmation_shows_canonical_summary(state, _no_machine_secrets, monkeypatch):
-    """The TTY confirmation must display every shipped field; rejecting keeps nothing."""
-    from raven.cli import trajectory_commands as tcmd
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state)
-    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
-    monkeypatch.setattr(tcmd.typer, "confirm", lambda *_a, **_k: False)
-
-    r = runner.invoke(
-        trajectory_app,
-        [
-            "report-bug",
-            "trace-1",
-            "-d",
-            "wrong language",
-            "--expected",
-            "a reply in Chinese",
-            "--actual",
-            "the reply was in English",
-            "--severity",
-            "medium",
-            "--steps",
-            "ask anything in Chinese",
-            "--reporter",
-            "forrest",
-        ],
-    )
-
-    assert r.exit_code == 1
-    for needle in (
-        "Bug report summary",
-        "Attempt:",
-        "member trace(s)",
-        "wrong language",
-        "a reply in Chinese",
-        "the reply was in English",
-        "medium",
-        "ask anything in Chinese",
-        "forrest (included in the package)",
-        "Completeness:",
-        "NOT anonymized",
-    ):
-        assert needle in r.output, needle
-    assert "Cancelled — no bug report was created." in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
-
-
-def test_report_bug_summary_shows_session_and_trajectory_context(state, _no_machine_secrets, monkeypatch):
-    from raven.cli import trajectory_commands as tcmd
-
-    _simple_log(state)
-    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
-    monkeypatch.setattr(tcmd.typer, "confirm", lambda *_a, **_k: False)
-
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "context check"])
-
-    assert r.exit_code == 1
-    assert "Session:" in r.output and "cli:a" in r.output
-    assert "last activity" in r.output
-    assert "Trajectory:" in r.output and "span(s)" in r.output
-    assert "session record" in r.output
-
-
-class _FakeReviewQuestionary:
-    """Minimal questionary stand-in: every select resolves via the factory.
-
-    No ``application`` attribute, so ``_inject_bindings`` leaves it untouched
-    and the real ``_ask`` / ``_ask_action`` conversion logic runs.
-    """
-
-    class Choice:
-        def __init__(self, title, value=None):
-            self.title = title
-            self.value = value if value is not None else title
-
-    def __init__(self, result_factory):
-        self._factory = result_factory
-
-    def select(self, *_a, **_k):
-        factory = self._factory
-        return type("_Ask", (), {"unsafe_ask": staticmethod(factory)})()
-
-    def text(self, *_a, **_k):
-        factory = self._factory
-        return type("_Ask", (), {"unsafe_ask": staticmethod(factory)})()
-
-
-def _tty_review_setup(state, monkeypatch, attrs):
-    from raven.cli import trajectory_commands as tcmd
-
-    _simple_log(state, attrs=attrs)
-    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
-
-
-def test_report_bug_tty_escape_during_review_cancels(state, _no_machine_secrets, monkeypatch):
-    import raven.cli.trajectory_browse as tbrowse
-    from raven.trajectory import bugreport as breport
-
-    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
-    monkeypatch.setattr(tbrowse, "_require_questionary", lambda: _FakeReviewQuestionary(lambda: tbrowse._BACK))
-
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
-
-    assert r.exit_code == 1
-    assert "Cancelled — no bug report was created." in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
-
-
-def test_report_bug_tty_ctrl_c_during_review_cancels(state, _no_machine_secrets, monkeypatch):
-    import raven.cli.trajectory_browse as tbrowse
-    from raven.trajectory import bugreport as breport
-
-    def _interrupt():
-        raise KeyboardInterrupt
-
-    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
-    monkeypatch.setattr(tbrowse, "_require_questionary", lambda: _FakeReviewQuestionary(_interrupt))
-
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
-
-    assert r.exit_code == 1
-    assert "Cancelled — no bug report was created." in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
-
-
-def test_report_bug_tty_conflict_then_cancel(state, _no_machine_secrets, monkeypatch):
-    import raven.cli.trajectory_browse as tbrowse
-    from raven.trajectory import bugreport as breport
-
-    inner = "Hj5tR8uE3iO7pA1sD4fGk9lZ"
-    outer = inner + "W6xC2v"
-    _tty_review_setup(state, monkeypatch, {"llm.output": f"a {inner} b {outer}"})
-    answers = iter(["k", "r", "c"])
-    monkeypatch.setattr(tbrowse, "_require_questionary", lambda: _FakeReviewQuestionary(lambda: next(answers)))
-
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
-
-    assert r.exit_code == 1
-    assert "must share one decision" in r.output
-    assert "Cancelled — no bug report was created." in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
-
-
-def test_report_bug_summary_shows_semantic_decisions(state, _no_machine_secrets, monkeypatch):
-    """The confirmation summary lists every decision with its semantic source."""
-    from raven.cli import trajectory_commands as tcmd
-    from raven.trajectory import bugreport as breport
-
-    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
-
-    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--keep-findings", "--accept-risk"])
-    assert r.exit_code == 0, r.output
-    assert "residual scan flagged" in r.output
-    assert "decision(s) complete" in r.output
-    assert "the span log" in r.output
-    assert _ENTROPY_TOKEN not in r.output
-
-    # TTY path: the interactive decider is stubbed to keep-all; declining the
-    # single risk confirmation must leave nothing behind.
-    import raven.cli.trajectory_browse as tbrowse
-    from raven.trajectory import review as treview
-
-    def _keep_all(_questionary, _style):
-        def _decide(items, _reasons):
-            return [treview.ReviewDecision(item.id, treview.ACTION_KEPT) for item in items]
-
-        return _decide
-
-    monkeypatch.setattr(tbrowse, "make_review_decider", _keep_all)
-    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
-    confirms: list[str] = []
-
-    def _reject(message, *_a, **_k):
-        confirms.append(message)
-        return False
-
-    monkeypatch.setattr(tcmd.typer, "confirm", _reject)
-    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
-    r2 = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
-    assert r2.exit_code == 1
-    assert "the span log" in r2.output
-    assert confirms == ["Ship the package with the risks listed above?"]
-    assert len(breport.list_reports(state)) == 1  # only the first run's report
-    assert _staging_entries(state) == []

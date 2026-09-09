@@ -6,12 +6,14 @@ All tests run without boxlite installed and without KVM/Hypervisor access.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
+from raven.config.paths import get_data_dir, get_sandbox_dir
 from raven.sandbox import (
     DirectExecutor,
     ExecResult,
@@ -221,9 +223,146 @@ class TestDirectExecutor:
 
     async def test_exec_timeout(self):
         e = DirectExecutor()
-        result = await e.exec("sleep 10", timeout=1)
+        result = await e.exec("sleep 10", timeout=0.1)
         assert result.exit_code == -1
         assert "Timed" in result.stderr
+
+    async def test_cancel_kills_the_whole_process_group(self, tmp_path):
+        """A cancelled exec must leave nothing of the command running.
+
+        The assertion is on a *grandchild*, which is the only thing that tells
+        the fix apart from what it replaced: ``sh -c "sleep 30 & wait"`` runs the
+        sleep as a child of the shell, so killing the shell alone leaves the
+        sleep running, holding the pipes and the workspace. Only ``killpg``
+        reaches it.
+        """
+        pid_file = tmp_path / "grandchild.pid"
+        e = DirectExecutor()
+        command = f"sleep 30 & echo $! > {pid_file}; wait"
+        task = asyncio.create_task(e.exec(command, timeout=60))
+
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+        else:
+            task.cancel()
+            pytest.fail("the command never reported its grandchild pid")
+
+        grandchild = int(pid_file.read_text().strip())
+        os.kill(grandchild, 0)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            try:
+                os.kill(grandchild, 0)
+            except ProcessLookupError:
+                break
+        else:
+            os.kill(grandchild, 9)
+            pytest.fail(f"grandchild {grandchild} survived the cancel")
+
+    async def test_kill_falls_back_to_process_kill_without_killpg(self, monkeypatch):
+        """Windows has no killpg and no SIGKILL, and ignores start_new_session.
+
+        The fallback keeps the reach this had before the group kill was added,
+        rather than raising AttributeError on every timeout and cancellation.
+        """
+        monkeypatch.delattr(os, "killpg", raising=False)
+        process = MagicMock()
+
+        DirectExecutor._kill_process_group(process, 1234)
+
+        process.kill.assert_called_once_with()
+
+    async def test_the_windows_fallback_tolerates_a_process_already_reaped(self, monkeypatch):
+        """On win32 ``Process.kill()`` itself raises once the process is gone.
+
+        ``BaseSubprocessTransport._check_proc`` raises ``ProcessLookupError``
+        after ``_proc`` is cleared, and it is cleared by the same callback that
+        wakes ``wait()`` -- so a cancellation arriving one loop iteration after
+        the process finished hits exactly that. Unguarded, the error would leave
+        this frame in place of the ``CancelledError``, and the caller's
+        ``except Exception`` would report a failed tool call for a turn that was
+        cancelled.
+
+        The previous case uses a ``MagicMock``, whose ``kill()`` never raises,
+        so this shape was the one the fallback was not covered for.
+        """
+        monkeypatch.delattr(os, "killpg", raising=False)
+        process = MagicMock()
+        process.kill.side_effect = ProcessLookupError
+
+        DirectExecutor._kill_process_group(process, 1234)
+
+        process.kill.assert_called_once_with()
+
+    async def test_kill_tolerates_a_group_that_is_already_gone(self, monkeypatch):
+        """The group can exit between the cancellation and the signal.
+
+        That race is the normal ending of a short command, not a failure, so it
+        must not turn into an exception on the way out of a cancelled turn.
+        """
+
+        def _gone(pgid, sig):
+            raise ProcessLookupError
+
+        monkeypatch.setattr(os, "killpg", _gone)
+
+        DirectExecutor._kill_process_group(MagicMock(), 1234)
+
+    async def test_a_second_cancellation_does_not_mask_the_first(self, monkeypatch):
+        """A repeat cancel interrupts the reap; the kill has already landed.
+
+        Driven with a process whose ``wait()`` never returns, so the reap is
+        still in flight when the second cancellation arrives -- the same shape a
+        shutdown path that cancels twice produces, without waiting out the 5s
+        guard for real.
+        """
+        killed: list[int] = []
+        process = MagicMock()
+        process.pid = 4321
+        process.returncode = None
+
+        async def _never(*a, **kw):
+            await asyncio.Event().wait()
+
+        process.communicate = _never
+        process.wait = _never
+
+        async def _fake_spawn(*a, **kw):
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_spawn)
+        monkeypatch.setattr(os, "killpg", lambda pgid, sig: killed.append(pgid))
+
+        task = asyncio.create_task(DirectExecutor().exec("cmd", timeout=60))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert killed == [4321], "the group must be signalled before the reap is abandoned"
+
+    async def test_cancel_propagates_rather_than_being_swallowed(self):
+        """The kill must not turn a cancellation into a normal return.
+
+        ``ToolRegistry.execute`` distinguishes "the turn was cancelled" from
+        "the tool answered" only by the exception, so swallowing it here would
+        report a fabricated result for work that never finished.
+        """
+        e = DirectExecutor()
+        task = asyncio.create_task(e.exec("sleep 30", timeout=60))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
     async def test_exec_env(self):
         e = DirectExecutor()
@@ -262,6 +401,25 @@ class TestDirectExecutor:
 # ---------------------------------------------------------------------------
 
 
+def _gated_registry(executor, tmp_path, *, extra_deny_patterns=None, extra_deny_source=None):
+    """The dispatch path a real deploy runs: the permission gate at the registry
+    door, in full mode so only the unconditional rulings decide."""
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.agent.tools.shell import ExecTool
+    from raven.config.schema import PermissionsConfig
+    from raven.permissions.builtin import BuiltinRulings
+    from raven.permissions.gate import PermissionGate
+
+    gate = PermissionGate(
+        config_source=lambda: PermissionsConfig(mode="full"),
+        builtin=BuiltinRulings(extra_deny_patterns=extra_deny_patterns, extra_deny_source=extra_deny_source),
+        allow_ask=False,
+    )
+    registry = ToolRegistry(permission_gate=gate)
+    registry.register(ExecTool(executor=executor, working_dir=str(tmp_path)))
+    return registry
+
+
 class TestExecToolWithMockExecutor:
     async def test_sandboxed_skips_deny_list(self, tmp_path):
         """Deny-list guard is skipped for sandboxed executors."""
@@ -288,14 +446,84 @@ class TestExecToolWithMockExecutor:
         assert "blocked" in result.model_text
         assert len(executor.calls) == 0
 
-    async def test_non_sandboxed_deny_list_runs(self, tmp_path):
-        """Non-sandboxed executor: deny-list guard is applied."""
+    async def test_workspace_restriction_allows_null_device_redirection(self, tmp_path):
+        """`2>/dev/null` names a device, not a workspace escape. Blocking it
+        turned every quiet read-only probe (`fc-list ... 2>/dev/null`) into a
+        terminal safety refusal that ended headless runs."""
         from raven.agent.tools.shell import ExecTool
 
-        executor = DirectMockExecutor()
-        tool = ExecTool(executor=executor, working_dir=str(tmp_path))
-        result = await tool.execute("rm -rf /important")
+        executor = MockExecutor()
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            restrict_to_workspace=True,
+        )
+        result = await tool.execute("fc-list :lang=zh 2>/dev/null | head -5", working_dir=str(tmp_path))
+        assert "blocked" not in result
+        assert len(executor.calls) == 1
+
+    async def test_workspace_restriction_still_blocks_real_paths_beside_a_device(self, tmp_path):
+        """The device exemption must not open the door for the path next to it."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = MockExecutor()
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            restrict_to_workspace=True,
+        )
+        result = await tool.execute("cat /etc/passwd 2>/dev/null", working_dir=str(tmp_path))
         assert "blocked" in result.model_text
+        assert len(executor.calls) == 0
+
+    async def test_workspace_restriction_catches_a_path_glued_to_an_equals(self, tmp_path):
+        """--file=/etc/passwd names an outside path with no space before it."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = MockExecutor()
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            restrict_to_workspace=True,
+        )
+        result = await tool.execute("tool --file=/etc/passwd", working_dir=str(tmp_path))
+        assert "blocked" in result.model_text
+        assert len(executor.calls) == 0
+
+    async def test_workspace_restriction_catches_a_path_after_a_stdin_redirect(self, tmp_path):
+        """wc -l </etc/passwd reads the file as surely as cat /etc/passwd does."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = MockExecutor()
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            restrict_to_workspace=True,
+        )
+        result = await tool.execute("wc -l </etc/passwd", working_dir=str(tmp_path))
+        assert "blocked" in result.model_text
+        assert len(executor.calls) == 0
+
+    async def test_a_device_glued_to_an_equals_is_still_exempt(self, tmp_path):
+        """The new boundaries must not revoke the device exemption."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = MockExecutor()
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            restrict_to_workspace=True,
+        )
+        result = await tool.execute("tool --log=/dev/null", working_dir=str(tmp_path))
+        assert "blocked" not in result
+        assert len(executor.calls) == 1
+
+    async def test_non_sandboxed_deny_list_runs(self, tmp_path):
+        """Non-sandboxed executor: the gate's deny rulings are applied."""
+        executor = DirectMockExecutor()
+        registry = _gated_registry(executor, tmp_path)
+        result = await registry.execute("exec", {"command": "rm -rf /"})
+        assert "blocked" in str(result)
         assert len(executor.calls) == 0
 
     # Host GUI automation (osascript / `open -a|-b`) is NOT a product default —
@@ -306,21 +534,17 @@ class TestExecToolWithMockExecutor:
     async def test_extra_deny_patterns_block_host_gui_automation(self, tmp_path):
         """With extra_deny_patterns set, osascript / `open -a|-b` are blocked
         (non-sandboxed path), while opening a file and benign commands run."""
-        from raven.agent.tools.shell import ExecTool
 
         async def run(cmd):
-            return await ExecTool(
-                executor=DirectMockExecutor(),
-                working_dir=str(tmp_path),
-                extra_deny_patterns=self._GUI_DENY,
-            ).execute(cmd)
+            registry = _gated_registry(DirectMockExecutor(), tmp_path, extra_deny_patterns=self._GUI_DENY)
+            return str(await registry.execute("exec", {"command": cmd}))
 
         for cmd in (
             "osascript -e 'tell application \"Music\" to play'",
             "open -a Music",
             "open -b com.apple.Music",
         ):
-            assert "blocked" in (await run(cmd)).model_text, f"should block: {cmd}"
+            assert "blocked" in await run(cmd), f"should block: {cmd}"
 
         for cmd in ("open notes.txt", "echo hi", "ls -la"):
             assert "blocked" not in await run(cmd), f"should allow: {cmd}"
@@ -328,7 +552,7 @@ class TestExecToolWithMockExecutor:
         # Known accepted collateral: the security-broad ``\bosascript\b`` also
         # trips when 'osascript' is a mere argument. Pinned so a future narrowing
         # to command-position is a deliberate change, not an accident.
-        assert "blocked" in (await run("grep osascript /var/log/system.log")).model_text
+        assert "blocked" in await run("grep osascript /var/log/system.log")
 
     async def test_gui_automation_not_blocked_by_product_default(self, tmp_path):
         """Product default (no extra_deny_patterns): osascript is NOT blocked —
@@ -339,6 +563,47 @@ class TestExecToolWithMockExecutor:
         result = await ExecTool(executor=executor, working_dir=str(tmp_path)).execute("osascript -e x")
         assert "blocked" not in result
         assert len(executor.calls) == 1
+
+    async def test_a_live_deny_edit_binds_the_very_next_call(self, tmp_path):
+        """Tightening a permission must not wait for the next turn, let alone the
+        next process: the pattern list is re-read before each classification.
+        Loosening rides the same read -- the list is the operator's own choice in
+        both directions. The list lives on the gate's builtin rulings, so the
+        edit binds every dispatch path, delegated shells included."""
+        extras: dict[str, list[str] | None] = {"value": []}
+        executor = DirectMockExecutor()
+        registry = _gated_registry(executor, tmp_path, extra_deny_source=lambda: extras["value"])
+        assert "blocked" not in await registry.execute("exec", {"command": "osascript -e x"})
+
+        extras["value"] = [r"\bosascript\b"]
+        assert "blocked" in str(await registry.execute("exec", {"command": "osascript -e x"}))
+
+        extras["value"] = []
+        assert "blocked" not in await registry.execute("exec", {"command": "osascript -e x"})
+
+    async def test_a_bad_live_pattern_rejects_the_edit_not_the_policy(self, tmp_path):
+        extras: dict[str, list[str] | None] = {"value": [r"\bosascript\b"]}
+        registry = _gated_registry(DirectMockExecutor(), tmp_path, extra_deny_source=lambda: extras["value"])
+        assert "blocked" in str(await registry.execute("exec", {"command": "osascript -e x"}))
+
+        extras["value"] = [r"\bosascript\b", r"([unclosed"]
+        assert "blocked" in str(await registry.execute("exec", {"command": "osascript -e x"})), (
+            "a pattern that does not compile must keep the current set, not disarm it"
+        )
+
+    async def test_a_live_deny_edit_reaches_a_registered_approval_matcher_policy(self, tmp_path):
+        """The deny list is swapped on the policy in place, so the approval
+        families a surface registered survive the edit."""
+        from raven.contracts.permissions import Deny
+        from raven.permissions.builtin import BuiltinRulings
+
+        extras: dict[str, list[str] | None] = {"value": []}
+        builtin = BuiltinRulings(extra_deny_source=lambda: extras["value"])
+        builtin._policy.register_approval_matcher("push_command", lambda cmd: cmd.startswith("git push"))
+
+        extras["value"] = [r"\bosascript\b"]
+        assert isinstance(builtin.ruling("exec", {"command": "osascript -e x"}), Deny)
+        assert builtin._policy.approval_reason("git push origin main") == "push_command"
 
     async def test_path_append_sandboxed_injects_export(self, tmp_path):
         """path_append with sandboxed executor: wraps command with export PATH."""
@@ -416,6 +681,42 @@ class TestBoxliteTranslateCwd:
         result = e._translate_cwd("/completely/outside")
         assert result == "/workspace"
 
+    def test_extra_volume_root_translates_to_its_own_guest_path(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        home = tmp_path / "home"
+        home.mkdir()
+        e = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=workspace,
+            extra_volumes=[[str(home), "/agent-home", "rw"]],
+        )
+        assert e._translate_cwd(str(home)) == "/agent-home"
+
+    def test_extra_volume_subdir_translates_correctly(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        home = tmp_path / "home"
+        (home / "skills").mkdir(parents=True)
+        e = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=workspace,
+            extra_volumes=[[str(home), "/agent-home", "rw"]],
+        )
+        assert e._translate_cwd(str(home / "skills")) == "/agent-home/skills"
+
+    def test_path_outside_every_volume_falls_back_to_workspace(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        home = tmp_path / "home"
+        home.mkdir()
+        e = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=workspace,
+            extra_volumes=[[str(home), "/agent-home", "rw"]],
+        )
+        assert e._translate_cwd("/completely/outside") == "/workspace"
+
 
 # ---------------------------------------------------------------------------
 # BoxliteExecutor._collect
@@ -477,7 +778,7 @@ def _make_mock_execution(stdout_lines=None, stderr_lines=None):
 class TestBoxliteExecTimeout:
     async def test_timeout_kills_and_returns_minus_one(self, tmp_path):
         """exec() times out: execution.kill() is called, exit_code=-1 returned."""
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=1)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=0.05)
 
         mock_box = MagicMock()
         execution = _make_mock_execution()
@@ -489,13 +790,13 @@ class TestBoxliteExecTimeout:
         mock_box.exec = _slow_exec
         executor._box = mock_box
 
-        result = await executor.exec("sleep 10", timeout=1)
+        result = await executor.exec("sleep 10", timeout=0.05)
         assert result.exit_code == -1
         assert "timed out" in result.stderr.lower()
 
     async def test_exec_timeout_execution_kill_called(self, tmp_path):
         """When execution handle is obtained before timeout, kill() must be called."""
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=1)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=0.05)
 
         execution = _make_mock_execution()
         execution.stdout.return_value = _infinite_stream()
@@ -511,9 +812,68 @@ class TestBoxliteExecTimeout:
         mock_box.exec = AsyncMock(return_value=execution)
         executor._box = mock_box
 
-        result = await executor.exec("cmd", timeout=1)
+        result = await executor.exec("cmd", timeout=0.05)
         assert result.exit_code == -1
         execution.kill.assert_awaited_once()
+
+
+class TestBoxliteExecCancel:
+    @staticmethod
+    def _wedged_executor(tmp_path):
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=60)
+        execution = _make_mock_execution()
+        execution.stdout.return_value = _infinite_stream()
+        execution.stderr.return_value = _infinite_stream()
+
+        async def _slow_wait():
+            await asyncio.sleep(30)
+            return MagicMock(exit_code=0)
+
+        execution.wait = AsyncMock(side_effect=_slow_wait)
+        mock_box = MagicMock()
+        mock_box.exec = AsyncMock(return_value=execution)
+        executor._box = mock_box
+        return executor, execution
+
+    async def test_cancel_kills_the_vm_side_execution(self, tmp_path):
+        """A cancelled turn must stop the command inside the VM, not just drop it."""
+        executor, execution = self._wedged_executor(tmp_path)
+
+        task = asyncio.create_task(executor.exec("cmd", timeout=60))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        execution.kill.assert_awaited_once()
+
+    async def test_cancel_tolerates_a_failing_kill(self, tmp_path):
+        """A kill that fails must not replace the cancellation with its own error.
+
+        The VM can already be gone by the time the turn is cancelled; reporting
+        that as the reason the turn ended would be wrong twice over.
+        """
+        executor, execution = self._wedged_executor(tmp_path)
+        execution.kill = AsyncMock(side_effect=RuntimeError("box is gone"))
+
+        task = asyncio.create_task(executor.exec("cmd", timeout=60))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        execution.kill.assert_awaited_once()
+
+    async def test_cancel_still_raises_after_the_kill(self, tmp_path):
+        """The cleanup must not convert a cancellation into a returned result."""
+        executor, _ = self._wedged_executor(tmp_path)
+
+        task = asyncio.create_task(executor.exec("cmd", timeout=60))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
 
 
 async def _infinite_stream():
@@ -538,7 +898,7 @@ class TestBoxliteVerifyTimeout:
         mock_box = MagicMock()
         mock_box.exec = AsyncMock(return_value=execution)
 
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, verify_timeout=1)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, verify_timeout=0.05)
         with pytest.raises(SandboxInitError, match="timed out"):
             await executor._verify(mock_box)
         execution.kill.assert_awaited_once()
@@ -700,7 +1060,7 @@ class TestBoxliteStartFailureCleanup:
             image="ubuntu:22.04",
             workspace=tmp_path,
             owned_ids=owned,
-            verify_timeout=1,
+            verify_timeout=0.05,
         )
 
         mock_box = MagicMock()
@@ -937,7 +1297,13 @@ class TestAgentLoopExecutorLifecycle:
         )
 
     async def test_run_turn_closes_executor_on_unexpected_error(self, tmp_path, mock_provider):
-        """run_turn() closes the executor when _connect_mcp raises a non-SandboxInitError."""
+        """run_turn() closes the executor when the turn body raises.
+
+        The trigger used to be ``_connect_mcp`` raising inside the turn. The turn
+        no longer awaits that connect -- it hands it to ``prewarm_mcp`` and moves
+        on -- so a connect failure cannot fail a turn any more, and the turn body
+        is what this invariant has to be driven through.
+        """
         from raven.agent.loop import AgentLoop
 
         stopped = []
@@ -949,13 +1315,13 @@ class TestAgentLoopExecutorLifecycle:
             async def stop(self) -> None:
                 stopped.append(True)
 
-        loop = AgentLoop(provider=mock_provider, workspace=tmp_path, mcp_servers={"svc": object()})
+        loop = AgentLoop(provider=mock_provider, workspace=tmp_path)
         loop._executor = TrackingExecutor()
 
-        async def _failing_connect_mcp():
+        async def _failing_process(*_a, **_kw):
             raise RuntimeError("unexpected network error")
 
-        loop._connect_mcp = _failing_connect_mcp
+        loop._process_message = _failing_process
 
         async def _emit(_ev):
             pass
@@ -973,8 +1339,8 @@ class TestAgentLoopExecutorLifecycle:
 
         stopped = []
 
-        class StartedThenFailsMCP(SandboxExecutor):
-            """Starts fine, but triggers SandboxInitError via _connect_mcp path."""
+        class StartedThenFails(SandboxExecutor):
+            """Assigned already, so the close path has something to stop."""
 
             async def exec(self, *a, **kw) -> ExecResult:
                 raise NotImplementedError
@@ -982,18 +1348,18 @@ class TestAgentLoopExecutorLifecycle:
             async def stop(self) -> None:
                 stopped.append(True)
 
-        loop = AgentLoop(
-            provider=mock_provider,
-            workspace=tmp_path,
-            mcp_servers={"svc": object()},  # non-empty so _connect_mcp is attempted
-        )
-        loop._executor = StartedThenFailsMCP()
+        loop = AgentLoop(provider=mock_provider, workspace=tmp_path)
+        loop._executor = StartedThenFails()
 
-        # Patch _connect_mcp to raise SandboxInitError after executor starts
-        async def _failing_connect_mcp():
+        # Raised from the turn body. The MCP connect used to be the trigger and
+        # no longer can be -- the turn hands that off to ``prewarm_mcp`` without
+        # awaiting it. It has to be raised after ``_start_executor`` has run for
+        # real, because the close path drains ``_executor_stack``, which is what
+        # that start registers the executor into.
+        async def _failing_process(*_a, **_kw):
             raise SandboxInitError("test: MCP sandbox guard fired")
 
-        loop._connect_mcp = _failing_connect_mcp
+        loop._process_message = _failing_process
 
         async def _emit(_ev):
             pass
@@ -1004,17 +1370,17 @@ class TestAgentLoopExecutorLifecycle:
 
 
 # ---------------------------------------------------------------------------
-# connect_mcp_servers sandbox guard
+# Connecting one MCP server: sandbox guard and transport behaviour
 # ---------------------------------------------------------------------------
 
 
-class TestConnectMcpSandboxGuard:
+class TestConnectOneMcpServer:
     async def test_stdio_sandboxed_no_spawning_raises(self):
         """Sandboxed executor without process-spawning raises SandboxInitError for stdio."""
         from contextlib import AsyncExitStack
 
-        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_server
 
         executor = MockExecutor()  # is_sandboxed=True, supports_process_spawning=False
         cfg = MagicMock()
@@ -1022,22 +1388,22 @@ class TestConnectMcpSandboxGuard:
         cfg.command = "mcp-server"
         cfg.args = []
         with pytest.raises(SandboxInitError, match="stdio transport"):
-            await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=executor)
+            await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=executor)
 
-    async def test_stdio_no_executor_does_not_raise(self, monkeypatch):
+    async def test_stdio_no_executor_reaches_the_transport(self, monkeypatch):
         """executor=None falls through to the normal stdio path (no guard triggered)."""
         from contextlib import AsyncExitStack
 
         import mcp.client.stdio
 
-        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_server
 
         reached = []
 
         def fake_stdio_client(params):
             reached.append(params.command)
-            raise RuntimeError("stdio_client reached — expected in test")
+            raise RuntimeError("stdio_client reached -- expected in test")
 
         monkeypatch.setattr(mcp.client.stdio, "stdio_client", fake_stdio_client)
 
@@ -1047,79 +1413,12 @@ class TestConnectMcpSandboxGuard:
         cfg.args = []
         cfg.env = None
         cfg.tool_timeout = 30
-        # Guard should NOT raise; the transport error is caught per-server and logged.
-        await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=None)
+        # The guard must not fire. What surfaces instead is the fake transport's
+        # own error, and reaching it is the proof.
+        with pytest.raises(RuntimeError, match="stdio_client reached"):
+            await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=None)
 
         assert reached == ["mcp-server"]
-
-    async def test_streamable_failure_does_not_cancel_following_server(self, monkeypatch):
-        """A transport task failure is isolated to the server being initialized."""
-        from contextlib import AsyncExitStack, asynccontextmanager
-        from types import SimpleNamespace
-
-        import anyio
-        import mcp
-        import mcp.client.streamable_http
-
-        from raven.agent.tools.mcp import connect_mcp_servers
-        from raven.agent.tools.registry import ToolRegistry
-
-        attempted = []
-
-        @asynccontextmanager
-        async def fake_streamable_http_client(url, http_client):
-            attempted.append(url)
-            if url == "https://bad.example/mcp":
-                async with anyio.create_task_group() as group:
-
-                    async def fail_transport():
-                        await anyio.sleep(0)
-                        raise RuntimeError("transport failed")
-
-                    group.start_soon(fail_transport)
-                    yield url, object(), None
-            else:
-                yield url, object(), None
-
-        class FakeSession:
-            def __init__(self, read, write):
-                self.read = read
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, exc_type, exc, traceback):
-                return False
-
-            async def initialize(self):
-                if self.read == "https://bad.example/mcp":
-                    await asyncio.Event().wait()
-
-            async def list_tools(self):
-                return SimpleNamespace(tools=[])
-
-        monkeypatch.setattr(mcp, "ClientSession", FakeSession)
-        monkeypatch.setattr(
-            mcp.client.streamable_http,
-            "streamable_http_client",
-            fake_streamable_http_client,
-        )
-
-        def config(url):
-            return SimpleNamespace(type="streamableHttp", url=url, headers=None, tool_timeout=30)
-
-        async with AsyncExitStack() as stack:
-            await connect_mcp_servers(
-                {
-                    "bad": config("https://bad.example/mcp"),
-                    "good": config("https://good.example/mcp"),
-                },
-                ToolRegistry(),
-                stack,
-            )
-
-        assert attempted == ["https://bad.example/mcp", "https://good.example/mcp"]
-        assert asyncio.current_task().cancelling() == 0
 
     async def test_streamable_external_cancellation_propagates(self, monkeypatch):
         """Cancellation of Raven's connection task is not treated as a server failure."""
@@ -1129,8 +1428,8 @@ class TestConnectMcpSandboxGuard:
         import mcp
         import mcp.client.streamable_http
 
-        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_server
 
         entered = asyncio.Event()
 
@@ -1165,7 +1464,7 @@ class TestConnectMcpSandboxGuard:
             headers=None,
             tool_timeout=30,
         )
-        task = asyncio.create_task(connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack()))
+        task = asyncio.create_task(connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack()))
         await entered.wait()
         task.cancel()
 
@@ -1181,8 +1480,8 @@ class TestConnectMcpSandboxGuard:
         import mcp
         import mcp.client.sse
 
-        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_server
 
         clients = []
 
@@ -1218,7 +1517,7 @@ class TestConnectMcpSandboxGuard:
                 return False
 
             async def initialize(self):
-                pass
+                return SimpleNamespace(capabilities=SimpleNamespace(tools=object()))
 
             async def list_tools(self):
                 return SimpleNamespace(tools=[])
@@ -1234,24 +1533,27 @@ class TestConnectMcpSandboxGuard:
             tool_timeout=30,
         )
         async with AsyncExitStack() as stack:
-            await connect_mcp_servers({"svc": cfg}, ToolRegistry(), stack)
+            await connect_mcp_server("svc", cfg, ToolRegistry(), stack)
 
-        assert clients == [
-            {
-                "headers": {"X-Config": "config", "X-Shared": "sdk", "X-SDK": "sdk"},
-                "follow_redirects": True,
-                "timeout": "timeout",
-                "auth": "auth",
-            }
-        ]
+        assert len(clients) == 1
+        assert clients[0]["headers"] == {"X-Config": "config", "X-Shared": "sdk", "X-SDK": "sdk"}
+        assert clients[0]["timeout"] == "timeout"
+        assert clients[0]["auth"] == "auth"
+        # Not merely the default: httpx applies client-level headers to every
+        # hop of a redirect chain and scrubs only Authorization when the origin
+        # changes, so a server answering 302 could read a custom header meant
+        # for it alone -- and cfg.headers is where the plugin market renders the
+        # user's secret. The refusal to follow is the reason the merge above is
+        # safe to do at client level at all.
+        assert clients[0]["follow_redirects"] is False
 
-    async def test_unknown_transport_is_skipped(self, monkeypatch):
-        """An unknown transport does not attempt to open an MCP connection."""
+    async def test_unknown_transport_never_opens_a_connection(self, monkeypatch):
+        """An unknown transport is refused before any MCP connection is attempted."""
         from contextlib import AsyncExitStack
         from types import SimpleNamespace
 
-        from raven.agent.tools import mcp as mcp_tools
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp import client as mcp_tools
 
         attempted = False
 
@@ -1263,16 +1565,17 @@ class TestConnectMcpSandboxGuard:
         monkeypatch.setattr(mcp_tools, "_mcp_server_connection", fake_connection)
         cfg = SimpleNamespace(type="websocket", command=None, url="wss://example.test/mcp")
 
-        await mcp_tools.connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack())
+        with pytest.raises(mcp_tools.MCPConfigError, match="unknown transport"):
+            await mcp_tools.connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack())
 
         assert attempted is False
 
-    async def test_stdio_sandboxed_with_spawning_does_not_raise(self):
+    async def test_stdio_sandboxed_with_spawning_skips_the_guard(self):
         """Sandboxed executor that supports spawning does not trigger the guard."""
         from contextlib import AsyncExitStack
 
-        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_server
 
         class SpawningExecutor(MockExecutor):
             @property
@@ -1280,7 +1583,7 @@ class TestConnectMcpSandboxGuard:
                 return True
 
             async def start_process(self, command, args, env=None):
-                raise RuntimeError("start_process called — expected in test")
+                raise RuntimeError("start_process called -- expected in test")
 
         cfg = MagicMock()
         cfg.type = "stdio"
@@ -1288,55 +1591,10 @@ class TestConnectMcpSandboxGuard:
         cfg.args = []
         cfg.env = None
         cfg.tool_timeout = 30
-        # Guard should NOT raise; error comes from start_process stub instead.
-        try:
-            await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=SpawningExecutor())
-        except SandboxInitError:
-            pytest.fail("SandboxInitError should not be raised when spawning is supported")
-
-    async def test_sandbox_guard_on_second_server_partial_registration(self):
-        """SandboxInitError on server 2 aborts after server 1 was already processed.
-
-        Verifies: the guard raises (not swallowed), even after prior servers connected.
-        """
-        from contextlib import AsyncExitStack
-
-        from raven.agent.tools.mcp import connect_mcp_servers
-        from raven.agent.tools.registry import ToolRegistry
-
-        executor = MockExecutor()  # is_sandboxed=True, supports_process_spawning=False
-
-        cfg_http = MagicMock()
-        cfg_http.type = "streamableHttp"
-        cfg_http.url = "http://example.com/mcp"
-        cfg_http.command = None
-        cfg_http.headers = None
-
-        cfg_stdio = MagicMock()
-        cfg_stdio.type = "stdio"
-        cfg_stdio.command = "mcp-server"
-        cfg_stdio.args = []
-
-        # Server 1 is HTTP (no guard) — mock the transport so no real network request is
-        # made. anyio's cancel scopes inside streamable_http_client break when a real HTTP
-        # request fails in a pytest-asyncio test context; mocking avoids that.
-        # Server 2 is stdio (guard fires). SandboxInitError must propagate, not be swallowed.
-        from contextlib import asynccontextmanager
-        from unittest.mock import patch
-
-        @asynccontextmanager
-        async def _failing_http(*args, **kwargs):
-            raise ConnectionError("mock: no network in tests")
-            yield  # make it a generator
-
-        with patch("mcp.client.streamable_http.streamable_http_client", _failing_http):
-            with pytest.raises(SandboxInitError, match="stdio transport"):
-                await connect_mcp_servers(
-                    {"http_svc": cfg_http, "stdio_svc": cfg_stdio},
-                    ToolRegistry(),
-                    AsyncExitStack(),
-                    executor=executor,
-                )
+        # Reaching start_process is the proof: the guard raises SandboxInitError
+        # before any transport is opened, so its message would surface instead.
+        with pytest.raises(RuntimeError, match="start_process called"):
+            await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=SpawningExecutor())
 
 
 # ---------------------------------------------------------------------------
@@ -1377,7 +1635,7 @@ class TestSubagentSandboxLifecycle:
 
         original = subagent_mod.build_executor
 
-        def _patched_build(cfg, workspace, owned_ids=None):
+        def _patched_build(cfg, workspace, owned_ids=None, extra_volumes=()):
             return TrackingExecutor()
 
         subagent_mod.build_executor = _patched_build
@@ -1437,6 +1695,43 @@ class TestSubagentSandboxLifecycle:
         assert req.source.sender_id == "subagent"
         assert req.conversation == "weixin:u1"
         assert handle.result_awaited is False  # fire-and-forget
+        # The identity a reader needs after a reload. Without it the stored
+        # entry is an ordinary user message and a reloaded transcript draws the
+        # re-injection as a question the user asked, fence markers and all.
+        assert req.delegated == {"kind": "spawn", "label": "label", "status": "ok"}
+
+    async def test_announce_dag_result_marks_the_turn_and_the_event_alike(self, mock_provider, tmp_path):
+        """A graph's announce is the other injection shape -- the whole content is
+        the fence, with none of a spawn's framing -- and it has to carry the same
+        identity on the request AND on the event. A client watching live reads it
+        from the event; a client replaying the session reads it off the stored
+        entry, and the two must agree."""
+        from raven.agent.subagent import SubagentManager
+
+        captured: dict = {}
+        events: list[tuple[str, dict]] = []
+        manager = SubagentManager(provider=mock_provider, workspace=tmp_path)
+        manager.set_submit(lambda req: captured.__setitem__("req", req))
+
+        async def _sink(conversation, event):
+            events.append((conversation, event))
+
+        manager.set_delivery_sink(_sink)
+
+        origin = {"channel": "tui", "chat_id": "direct", "session_key": "tui:default"}
+        await manager.announce_dag_result("run-7", "3 completed, 0 failed", origin)
+        await asyncio.sleep(0)  # the sink is a fire-and-forget task
+
+        mark = {"kind": "dag", "label": "run-7", "status": "ok", "run_id": "run-7"}
+        assert captured["req"].delegated == mark
+        assert events and events[0][0] == "tui:default"
+        payload = events[0][1]["payload"]
+        assert {k: payload[k] for k in mark} == mark
+        # The event carries the text that was injected, verbatim -- the same
+        # string the stored entry holds, so both readers strip one fence.
+        assert payload["content"] == captured["req"].text
+        assert payload["content"].startswith("[BEGIN UNTRUSTED subagent #")
+        assert "3 completed, 0 failed" in payload["content"]
 
 
 def test_build_executor_warns_when_backend_none(monkeypatch, tmp_path):
@@ -1454,3 +1749,30 @@ def test_build_executor_warns_when_backend_none(monkeypatch, tmp_path):
     finally:
         logger.remove(sink)
     assert any("no isolation" in m for m in msgs)
+
+
+def test_a_backend_gets_its_own_home_under_the_data_dir() -> None:
+    """boxlite keeps its db, images and layers here rather than in ~/.boxlite,
+    so the directory has to exist by the time the backend is handed the path."""
+    home = get_sandbox_dir("boxlite")
+
+    assert home == get_data_dir() / "sandbox" / "boxlite"
+    assert home.is_dir()
+    assert get_sandbox_dir("other") == home.parent / "other"
+
+
+def test_instance_identity_survives_into_the_child(monkeypatch):
+    """RAVEN_HOME / RAVEN_CONNECTIONS name which install a `raven ...` child
+    resolves its config and registry against -- paths, not secrets. Measured
+    2026-08-31 on a cold start: with them stripped, a `raven ops connection add`
+    run from a tool call wrote the row into the default home, and the machine
+    the owner had just registered stayed invisible to this instance."""
+    from raven.sandbox.direct_executor import _baseline_env
+
+    monkeypatch.setenv("RAVEN_HOME", "/tmp/some-instance")
+    monkeypatch.setenv("RAVEN_CONNECTIONS", "/tmp/some-instance/connections.json")
+    monkeypatch.setenv("ONCALL_API_KEY", "sk-secret-must-not-pass")
+    env = _baseline_env()
+    assert env["RAVEN_HOME"] == "/tmp/some-instance"
+    assert env["RAVEN_CONNECTIONS"] == "/tmp/some-instance/connections.json"
+    assert "ONCALL_API_KEY" not in env, "the allowlist stays a list of paths, never keys"

@@ -1,7 +1,7 @@
 """ask_user tool — pause the turn to ask the user a question and await the reply.
 
 Blocking interaction: the registry does NOT wrap this in a timeout (the
-QuestionBroker manages its own fail-safe). On execute the tool hands the turn's
+injected responder manages its own fail-safe). On execute the tool hands the turn's
 conversation_id and the prompt to the broker, which emits a ``clarify.request``
 notification and blocks until an inbound answer arrives (or the broker's
 fail-safe default fires). The returned answer is rendered as a natural-language
@@ -11,15 +11,149 @@ A batch shares one deadline rather than one per question, and a call whose
 shape would waste the user's time -- a single-option question, a repeated
 question, more questions than the cap -- is rejected before anything is
 rendered, with a message that steers the next attempt.
+
+``execute`` is serialized against an ACP-relayed sub-agent's own ``ask_user``
+round trip via ``question_lock`` (shared with ``raven.acp_client.ask_user`` /
+``elicitor``): both routes reach the same broker slot for one conversation_id,
+and without the same lock the later of the two forces the earlier one's pending
+future to its default -- indistinguishable, downstream, from a genuine timeout.
+``ask_direct`` deliberately does not take it: the relayed routes call it while
+already holding that lock across their whole exchange, and the lock is not
+re-entrant, so taking it here again would wait the whole budget out and answer
+empty on every relayed question. Its callers own the serialization.
 """
 
 import asyncio
+import json
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
-from raven.agent.tools.base import Tool, ToolResult
-from raven.tui_rpc.question_broker import DEFAULT_TIMEOUT_S, QuestionBroker
+from raven.acp_client.asker import held_question
+from raven.contracts.asking import QuestionResponder
+from raven.contracts.tool import Tool, ToolResult
+
+# Last-resort wait for one whole call when the responder exposes no
+# ``default_timeout_s`` of its own. The broker machinery ships the same value;
+# duplicated rather than imported so this module names no concrete machine.
+DEFAULT_TIMEOUT_S = 600.0
+
+
+# How many times an argument may be JSON-decoded before it is treated as text.
+_MAX_JSON_LAYERS = 3
+
+
+def _normalize_questions(raw: Any) -> list[dict[str, Any]]:
+    """Coerce the model's ``questions`` argument into the documented shape.
+
+    Models routinely emit an array-typed argument as a JSON *string*, and a
+    string is iterable, so every ``entry.get(...)`` below would raise
+    ``AttributeError`` on a character. That escapes as far as the scheduler and
+    kills the whole turn, leaving the user with no reply at all -- so parse what
+    was plainly meant and drop what cannot be read, rather than trusting the
+    declared schema.
+    """
+    raw = _loads(raw)
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    entries = [q for q in raw if isinstance(q, dict)]
+    if entries:
+        return entries
+    # Nothing object-shaped in the list at all: the model wrote its questions as
+    # plain strings. Dropping them returned "requires at least one question" for
+    # a question that was perfectly clear, which loses the round for the same
+    # kind of formatting quirk this function exists to absorb. Only when no
+    # entry is an object, so a mixed list still means "the objects are the
+    # questions and the loose string is noise".
+    return [{"question": q} for q in raw if isinstance(q, str) and q.strip()]
+
+
+def _normalize_options(raw: Any) -> list[str]:
+    """Coerce one entry's ``options`` into a list of strings.
+
+    Same declared shape as ``questions`` and the same habit of arriving as a
+    JSON string, so it needs the same treatment: iterating a string yields
+    characters, and here that reaches the user as one suggested answer per
+    letter instead of one per option. A string that is not JSON is one option,
+    not its letters.
+    """
+    if isinstance(raw, str):
+        parsed = _loads(raw)
+        raw = parsed if parsed is not raw else [raw]
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return [_option_text(raw)]
+    return [_option_text(o) for o in raw]
+
+
+_OPTION_TEXT_KEYS = ("option", "label", "text", "value", "title", "name")
+
+
+def _option_text(option: Any) -> str:
+    """One option as the words the user picks, whatever shape the model wrote it in.
+
+    The schema says strings; live runs wrote objects instead -- ``{"option": "dark",
+    "description": "...", "recommended": true}``, and ``{"description": "...",
+    "recommended": false}`` with no name at all -- and ``str()`` put each dict's repr
+    on the user's screen as the thing to click. The option is the text under the
+    first key that names the answer, with its description after a dash so nothing
+    the model said is lost; an object that carries only a description is that
+    description. A flag on it is read by `_flagged`.
+    """
+    if not isinstance(option, dict):
+        return str(option)
+    text = next(
+        (option[k].strip() for k in _OPTION_TEXT_KEYS if isinstance(option.get(k), str) and option[k].strip()), ""
+    )
+    detail = option.get("description")
+    detail = detail.strip() if isinstance(detail, str) and detail.strip() else ""
+    if text and detail:
+        return f"{text} -- {detail}"
+    return text or detail or str(option)
+
+
+def _flagged(raw: Any) -> int | None:
+    """The index of the option the model flagged ``recommended`` on the option itself, or None."""
+    if isinstance(raw, str):
+        raw = _loads(raw)
+    if not isinstance(raw, list):
+        return None
+    for index, option in enumerate(raw):
+        if isinstance(option, dict) and option.get("recommended") is True:
+            return index
+    return None
+
+
+def _loads(raw: Any) -> Any:
+    """``json.loads`` for a string, unchanged for anything else, never raising.
+
+    The exception list is the point. ``json.loads`` answers deeply nested input
+    with ``RecursionError``, which is not a ``ValueError``, so catching only
+    ``TypeError``/``ValueError`` let that one escape by exactly the route this
+    module exists to close: out of ``display_call``, which only labels a
+    transcript row, and on to the scheduler, killing the turn.
+
+    Unwraps repeatedly because the encoding is sometimes applied twice -- a
+    JSON string holding a JSON string holding the array -- and one pass leaves
+    that as an unusable string. Bounded rather than looped to exhaustion: past
+    a couple of layers this is no longer a quirk to absorb, and the bound is
+    what keeps a crafted argument from spending the turn on unwrapping.
+    """
+    for _ in range(_MAX_JSON_LAYERS):
+        if not isinstance(raw, str):
+            return raw
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, RecursionError):
+            return raw
+        if parsed is raw:
+            return raw
+        raw = parsed
+    return raw
+
 
 MAX_QUESTIONS = 4
 """Cap on one call. Each question is its own round-trip, so an uncapped
@@ -67,7 +201,7 @@ def _prepare(entries: list[dict[str, Any]]) -> tuple[list["_Question"], str]:
         seen.add(question)
         # A repeated label is a typo with one obvious reading, so drop it; a
         # repeated question would prompt the same human twice, so reject that.
-        submitted = [str(option) for option in entry.get("options") or []]
+        submitted = _normalize_options(entry.get("options"))
         options = _dedup(submitted)
         if len(options) == 1:
             return [], (
@@ -100,7 +234,7 @@ class AskUserTool(Tool):
     """Ask the user a question mid-turn and wait for their answer.
 
     Wiring: the layer that builds the per-turn tool set must inject a
-    :class:`QuestionBroker` (constructor or :meth:`set_broker`) and the turn's
+    :class:`QuestionResponder` (constructor or :meth:`set_broker`) and the turn's
     conversation_id via :meth:`set_context` — the same conversation_id the
     scheduler derives (``req.conversation or f"{channel}:{chat_id}"``).
     """
@@ -109,7 +243,7 @@ class AskUserTool(Tool):
 
     def __init__(
         self,
-        broker: QuestionBroker | None = None,
+        broker: QuestionResponder | None = None,
         conversation_id: str = "",
         timeout_s: float | None = None,
     ) -> None:
@@ -125,13 +259,57 @@ class AskUserTool(Tool):
         # failure in the path of the RPC server coming up.
         self._timeout_s = timeout_s
 
-    def set_broker(self, broker: QuestionBroker | None) -> None:
-        """Set the QuestionBroker. ``None`` disables the round-trip."""
+    def set_broker(self, broker: QuestionResponder | None) -> None:
+        """Set the question responder. ``None`` disables the round-trip."""
         self._broker = broker
 
     def set_context(self, conversation_id: str) -> None:
         """Set the current turn's conversation_id (the broker key, turn-local)."""
         self._cid.set(conversation_id)
+
+    async def ask_direct(
+        self,
+        prompt: str,
+        choices: list[str] | None,
+        conversation_id: str,
+        timeout_s: float | None = None,
+        *,
+        index: int = 0,
+        total: int = 1,
+        batch: list[dict[str, str]] | None = None,
+    ) -> str | None:
+        """One host-side question outside a model tool call.
+
+        For host machinery that must confirm with the user before the model
+        is even involved, or on behalf of something that has no tool registry
+        to look in. Three callers: the graph-level confirm gate, which
+        ``AgentLoop._confirm_graph`` puts in front of a whole DAG -- asked
+        before the run is billed, so a refusal costs nothing -- the loop's
+        ``direct_ask`` grant, through which a plugin tool gate asks from
+        inside a tool call, and the turn's `Asker`, through which an ACP
+        sub-agent's own question reaches the user.
+        Returns ``None`` when the round-trip is structurally unavailable (no
+        broker, no conversation) -- the caller decides what that means -- and
+        otherwise the user's answer, which is ``""`` on timeout or
+        cancellation (the broker never raises).
+
+        Takes no ``question_lock``: the `Asker` route holds it already, across
+        a whole form or round trip, and the lock is not re-entrant. A caller
+        that is not under it serializes itself with ``held_question`` (the
+        confirm gate and the ``direct_ask`` grant do) so it cannot evict a
+        relayed sub-agent's pending question from the broker slot.
+        """
+        if not self._broker or not conversation_id:
+            return None
+        return await self._broker.await_question(
+            conversation_id,
+            prompt=prompt,
+            choices=_normalize_options(choices),
+            timeout_s=timeout_s,
+            index=index,
+            total=total,
+            batch=batch,
+        )
 
     @property
     def name(self) -> str:
@@ -202,11 +380,49 @@ class AskUserTool(Tool):
             "required": ["questions"],
         }
 
+    def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Normalize before the registry validates, not after it dispatches.
+
+        ``ToolRegistry.execute`` casts, then validates against the declared
+        schema, and returns the error without ever calling ``execute``
+        (``registry.py:80-85``). ``questions`` is declared ``array`` of
+        ``object`` and ``options`` ``array``, so precisely the shapes worth
+        absorbing -- the array arriving as a JSON string, an entry that is a
+        plain string, ``options`` as a JSON string -- are rejected one step
+        before the coercion that would have handled them. Normalizing in
+        ``execute`` therefore looked right and never ran on anything.
+
+        This hook is where the registry expects the adjustment, so the schema
+        stays honest about what the model should send while a near miss still
+        reaches the user. Runs before the registry's schema cast so it can coerce
+        the leaves this exposes -- a non-string ``question``, options that are
+        not strings -- exactly as it does for a well-formed call.
+        """
+        params = dict(params)
+        if "questions" in params:
+            entries = []
+            for entry in _normalize_questions(params["questions"]):
+                entry = dict(entry)
+                if "options" in entry:
+                    # A flag written on an option is the recommendation when the
+                    # model stated no index; read before the options become text.
+                    if entry.get("recommended") is None and (flagged := _flagged(entry["options"])) is not None:
+                        entry["recommended"] = flagged
+                    entry["options"] = _normalize_options(entry["options"])
+                entries.append(entry)
+            params["questions"] = entries
+        return params
+
     def display_call(self, args: dict[str, Any]) -> str | None:
         """Show the question itself, not the raw arguments blob. A batch keeps
         every question visible (joined) so the row still says what was asked;
-        the UI elides whatever does not fit."""
-        questions = [str(q.get("question", "")).strip() for q in args.get("questions") or []]
+        the UI elides whatever does not fit.
+
+        Keeps its own normalization: this is handed the raw
+        ``tool_call.arguments`` at ``loop/main.py`` with no cast or validation
+        in between, which is the path that took the whole turn down."""
+        entries = _normalize_questions(args.get("questions"))
+        questions = [str(q.get("question", "")).strip() for q in entries]
         questions = [q for q in questions if q]
         if not questions:
             return None
@@ -214,16 +430,17 @@ class AskUserTool(Tool):
             return questions[0]
         return " | ".join(questions)
 
-    async def execute(self, questions: list[dict[str, Any]], **kwargs: Any) -> "str | ToolResult":
+    async def execute(self, questions: Any, **kwargs: Any) -> "str | ToolResult":
         cid = self._cid.get()
         if not self._broker:
             return "Error: ask_user not configured (no question broker)"
         if not cid:
             return "Error: ask_user has no conversation context"
-        if not questions:
+        entries = _normalize_questions(questions)
+        if not entries:
             return "Error: ask_user requires at least one question"
 
-        prepared, rejection = _prepare(questions)
+        prepared, rejection = _prepare(entries)
         if rejection:
             return rejection
         if not prepared:
@@ -242,34 +459,41 @@ class AskUserTool(Tool):
         # batch shows which answer belongs to which question. The UI renders each
         # line as its own row.
         picks: list[str] = []
-        for index, item in enumerate(prepared):
-            remaining = deadline - loop.time()
-            # A spent budget stops the batch rather than opening a fresh wait on
-            # every question that is left.
-            answer = (
-                await self._broker.await_question(
-                    cid,
-                    prompt=item.question,
-                    choices=item.options,
-                    timeout_s=remaining,
-                    header=item.header,
-                    recommended=item.recommended,
-                    index=index,
-                    total=len(prepared),
-                    batch=batch,
+        # Held for the whole batch, not per question, so a multi-question call
+        # is never interleaved with an ACP-relayed sub-agent's own question on
+        # the same conversation_id -- see the module docstring. The wait for it
+        # spends this call's own budget, not a budget of its own: a lock still
+        # busy at the deadline leaves ``remaining`` at zero, and every question
+        # in the batch answers empty without ever reaching the broker.
+        async with held_question(cid, budget):
+            for index, item in enumerate(prepared):
+                remaining = deadline - loop.time()
+                # A spent budget stops the batch rather than opening a fresh wait on
+                # every question that is left.
+                answer = (
+                    await self._broker.await_question(
+                        cid,
+                        prompt=item.question,
+                        choices=item.options,
+                        timeout_s=remaining,
+                        header=item.header,
+                        recommended=item.recommended,
+                        index=index,
+                        total=len(prepared),
+                        batch=batch,
+                    )
+                    if remaining > 0
+                    else ""
                 )
-                if remaining > 0
-                else ""
-            )
-            if answer:
-                told.append(f'User answered: "{item.question}" -> "{answer}".')
-                picks.append(f"{item.question} -> {answer}" if len(prepared) > 1 else str(answer))
-            else:
-                # Naming the option the model recommended is what lets it carry on
-                # the way it intended; without it the only signal is "no answer".
-                hint = f' recommended option was "{item.recommended}";' if item.recommended else ""
-                told.append(f'For "{item.question}": (user did not answer;{hint} proceed with best judgment).')
-                picks.append(f"{item.question} -> (no answer)" if len(prepared) > 1 else "(no answer)")
+                if answer:
+                    told.append(f'User answered: "{item.question}" -> "{answer}".')
+                    picks.append(f"{item.question} -> {answer}" if len(prepared) > 1 else str(answer))
+                else:
+                    # Naming the option the model recommended is what lets it carry on
+                    # the way it intended; without it the only signal is "no answer".
+                    hint = f' recommended option was "{item.recommended}";' if item.recommended else ""
+                    told.append(f'For "{item.question}": (user did not answer;{hint} proceed with best judgment).')
+                    picks.append(f"{item.question} -> (no answer)" if len(prepared) > 1 else "(no answer)")
 
         return ToolResult(
             model_text=" ".join(told) + " Continue.",

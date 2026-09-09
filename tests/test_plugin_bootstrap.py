@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.plugin import (
+from raven.plugins import (
     PluginConflictError,
     PluginNotFoundError,
     PluginRegistry,
@@ -143,7 +143,7 @@ class TestEndToEnd:
         )
         assert registry.activated_ids() == ["everos-memory"]
 
-        ws = tmp_path / "ws"
+        ws = tmp_path / "chanwork"
         ws.mkdir()
         backend = registry.build_memory_backend(
             "everos",
