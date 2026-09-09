@@ -1,0 +1,73 @@
+{
+  "providers": {
+    "custom": {
+      "apiBase": "https://openrouter.ai/api/v1",
+      "models": [
+        "anthropic/claude-opus-5"
+      ]
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-opus-5",
+      "provider": "custom",
+      "reasoningEffort": "high",
+      "temperature": 1.0,
+      "maxTokens": 32768,
+      "contextWindowTokens": 400000,
+      "maxToolIterations": 150,
+      "llmCallTimeout": 1800
+    }
+  },
+  "tools": {
+    "restrictToWorkspace": false,
+    "sandbox": {
+      "backend": "none"
+    },
+    "exec": {
+      "timeout": 600,
+      "maxTimeout": 1200
+    },
+    "web": {
+      "search": {
+        "maxResults": 5
+      }
+    },
+    "disabledTools": [
+      "spawn",
+      "message",
+      "read_skill",
+      "use_skill",
+      "hub",
+      "tool_search",
+      "tool_call",
+      "deep_research",
+      "image_generate",
+      "text_to_speech",
+      "video_generate"
+    ]
+  },
+  "memory": {
+    "backend": null,
+    "userId": "raven-code",
+    "agentId": "raven-code",
+    "memoryTopK": 5
+  },
+  "plugins": {
+    "config": {
+      "everos-memory": {
+        "user_id": "raven-code",
+        "agent_id": "raven-code",
+        "mode": "http",
+        "base_url": "http://localhost:18791"
+      }
+    },
+    "disabled": [
+      "everos-memory"
+    ]
+  },
+  "skillForge": {
+    "rewriteEnabled": false,
+    "llmGateEnabled": false
+  }
+}

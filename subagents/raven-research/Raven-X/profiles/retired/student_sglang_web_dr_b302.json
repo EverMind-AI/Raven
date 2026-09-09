@@ -1,0 +1,83 @@
+{
+  "providers": {
+    "custom": {
+      "apiKey": "EMPTY",
+      "apiBase": "http://WORKER3_IP:30000/v1"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "student",
+      "provider": "custom",
+      "temperature": 0.7,
+      "reasoningEffort": "high",
+      "maxToolIterations": 150,
+      "maxTokens": 16384,
+      "contextWindowTokens": 65536,
+      "requestTimeoutSeconds": 1800
+    }
+  },
+  "memory": {
+    "backend": null
+  },
+  "drFlow": {
+    "enabled": true,
+    "version": "dr@2.9",
+    "forceFinalize": {
+      "enabled": true
+    },
+    "spinBreaker": {
+      "enabled": true
+    },
+    "fetchFloor": {
+      "enabled": true
+    },
+    "verify": {
+      "constraintRubric": true,
+      "strictRejectOnly": true
+    },
+    "digest": {
+      "verbatimHeadChars": 800
+    },
+    "toolsAllowlist": [
+      "web_search",
+      "web_fetch"
+    ],
+    "finalShape": {
+      "record": true,
+      "requireMarker": false,
+      "reportStructure": false,
+      "processAppendix": false
+    },
+    "search": {
+      "includeSnippets": true,
+      "snippetDedupByDocid": true
+    }
+  },
+  "tools": {
+    "disabledTools": [
+      "exec",
+      "spawn",
+      "message",
+      "ask_user",
+      "cron",
+      "read_file",
+      "write_file",
+      "edit_file",
+      "find",
+      "grep",
+      "list_dir",
+      "read_skill",
+      "use_skill",
+      "tool_search",
+      "tool_call",
+      "image_generate",
+      "text_to_speech",
+      "video_generate",
+      "understand_media"
+    ],
+    "web": {
+      "benchmarkContainment": false
+    }
+  }
+}

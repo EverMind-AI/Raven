@@ -27,8 +27,8 @@ Hatchling applies no ``include`` / ``exclude`` config to a force-included path:
 ``.git``, the caches) and nothing else. What sits next to the source in a
 working copy is each product's ``.env`` — written by the onboarding wizard and
 holding a real provider key. Reading the list from git instead is safe by
-construction — the same rule the retired vendored-fork gate applied for the
-same reason.
+construction, and is the same rule ``scripts/check_vendored_subagents.py``
+applies to the frozen fork tree for the same reason.
 """
 
 from __future__ import annotations
@@ -42,14 +42,14 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 PRODUCTS_ROOT = "agents"
 
-# RAVEN_WHEEL_SLIM=1 builds the headless cloud wheel: no agent products and
-# no prebuilt UI bundles. The economics that once made this dramatic are gone
-# with the vendored forks (the old full wheel was ~106 MiB, ~94% of it fork
-# snapshots); what remains is still worth skipping for a provisioner that only
-# runs `raven acp` inside a sandbox: the UI bundles and the ~3 MiB product
-# tree are assets nothing there ever opens. Products on such installs come
-# from a source checkout (or not at all); `raven tui` / `raven serve` fall
-# back to their source-checkout resolvers, which headless installs never call.
+# RAVEN_WHEEL_SLIM=1 builds the headless cloud wheel: no vendored sub-agent
+# tree and no prebuilt UI bundles. The full wheel is ~106 MiB compressed and
+# ~94% of it is the sub-agent snapshots (raven-ppt alone carries 74 MiB of
+# .pptx templates); a provisioner that only runs `raven acp` inside a sandbox
+# pays that on every upload for assets nothing there ever opens. The slim
+# wheel is ~5 MiB. Sub-agents on such installs come from their own
+# distribution channel (or not at all); `raven tui` / `raven serve` fall back
+# to their source-checkout resolvers, which headless installs never call.
 
 
 def _slim_build() -> bool:
@@ -91,7 +91,9 @@ class CustomBuildHook(BuildHookInterface):
         if version == "editable":
             return
         if _slim_build():
-            self.app.display_info("RAVEN_WHEEL_SLIM: building without the TUI and web bundles.")
+            self.app.display_info(
+                "RAVEN_WHEEL_SLIM: building without the TUI and web bundles."
+            )
             return
 
         dist = Path(self.root) / "ui-tui" / "dist"
@@ -154,7 +156,9 @@ class CustomBuildHook(BuildHookInterface):
         if version == "editable":
             return
         if _slim_build():
-            self.app.display_info("RAVEN_WHEEL_SLIM: building without the vendored sub-agents.")
+            self.app.display_info(
+                "RAVEN_WHEEL_SLIM: building without the vendored sub-agents."
+            )
             return
 
         root = Path(self.root)

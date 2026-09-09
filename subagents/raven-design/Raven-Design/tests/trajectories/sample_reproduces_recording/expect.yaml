@@ -1,0 +1,10 @@
+# Sample regression case (see raven/trajectory/regression.py).
+#
+# Shape 1 of a regression assertion: the live harness must reproduce this
+# recording exactly. A tool-calling turn recorded with a scripted provider;
+# any change to message assembly or tool dispatch shows up as a divergence.
+mode: strict
+divergence: null
+checks:
+  - {call: tool, index: 0, op: name_equals, value: marker}
+  - {call: tool, index: 0, op: params_equal, value: {note: hi}}

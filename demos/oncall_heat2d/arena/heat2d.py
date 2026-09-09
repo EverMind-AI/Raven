@@ -38,7 +38,7 @@ u = np.sin(math.pi * X) * np.sin(math.pi * Y)
 started = time.time()
 c = alpha * dt / (dx * dx)
 for step in range(nsteps):
-    lap = u[:-2, 1:-1] + u[2:, 1:-1] + u[1:-1, :-2] + u[1:-1, 2:] - 4.0 * u[1:-1, 1:-1]
+    lap = (u[:-2, 1:-1] + u[2:, 1:-1] + u[1:-1, :-2] + u[1:-1, 2:] - 4.0 * u[1:-1, 1:-1])
     u[1:-1, 1:-1] += c * lap
 wall = time.time() - started
 

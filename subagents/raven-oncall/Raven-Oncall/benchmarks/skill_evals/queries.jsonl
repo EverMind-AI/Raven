@@ -1,0 +1,50 @@
+{"id": "q001", "query": "generate PDF report with python", "expected_category": "DOC", "must_contain_any": ["pdf", "reportlab"], "notes": "anthropics__pdf 应 top-1"}
+{"id": "q002", "query": "create PowerPoint presentation programmatically", "expected_category": "DOC", "must_contain_any": ["pptx", "powerpoint", "python-pptx"], "notes": ""}
+{"id": "q003", "query": "convert docx to markdown", "expected_category": "DOC", "must_contain_any": ["docx", "markdown", "python-docx"], "notes": ""}
+{"id": "q004", "query": "manipulate excel spreadsheets", "expected_category": "DOC", "must_contain_any": ["xlsx", "openpyxl", "excel", "spreadsheet"], "notes": ""}
+{"id": "q005", "query": "react custom hooks for state management", "expected_category": "FRONTEND", "must_contain_any": ["react", "hook"], "notes": ""}
+{"id": "q006", "query": "build a landing page with tailwind", "expected_category": "FRONTEND", "must_contain_any": ["landing", "tailwind", "next"], "notes": ""}
+{"id": "q007", "query": "tRPC end-to-end type safe API", "expected_category": "BACKEND", "must_contain_any": ["trpc", "api"], "notes": ""}
+{"id": "q008", "query": "MCP server builder for claude", "expected_category": "BACKEND", "must_contain_any": ["mcp"], "notes": ""}
+{"id": "q009", "query": "database schema design and indexing", "expected_category": "BACKEND", "must_contain_any": ["database", "schema", "index"], "notes": ""}
+{"id": "q010", "query": "package kubernetes application with helm", "expected_category": "DEVOPS", "must_contain_any": ["helm", "kubernetes", "k8s"], "notes": ""}
+{"id": "q011", "query": "docker compose for local development", "expected_category": "DEVOPS", "must_contain_any": ["docker", "container", "compose"], "notes": ""}
+{"id": "q012", "query": "terraform AWS infrastructure", "expected_category": "DEVOPS", "must_contain_any": ["terraform", "aws", "infrastructure"], "notes": ""}
+{"id": "q013", "query": "end to end browser tests with playwright", "expected_category": "TESTING", "must_contain_any": ["playwright", "e2e", "browser", "test"], "notes": ""}
+{"id": "q014", "query": "fuzz testing c binaries for memory bugs", "expected_category": "TESTING", "must_contain_any": ["fuzz", "afl", "memory"], "notes": ""}
+{"id": "q015", "query": "unit test python code with pytest", "expected_category": "TESTING", "must_contain_any": ["pytest", "unit", "test"], "notes": ""}
+{"id": "q016", "query": "SQL query optimization and analytics", "expected_category": "DATA", "must_contain_any": ["sql", "query", "analytics"], "notes": ""}
+{"id": "q017", "query": "pandas dataframe manipulation", "expected_category": "DATA", "must_contain_any": ["pandas", "dataframe"], "notes": ""}
+{"id": "q018", "query": "interactive data visualization with plotly", "expected_category": "DATA", "must_contain_any": ["plotly", "visualization", "chart"], "notes": ""}
+{"id": "q019", "query": "generate image with stability ai", "expected_category": "CONTENT", "must_contain_any": ["stability", "image", "stable diffusion"], "notes": ""}
+{"id": "q020", "query": "write a professional blog post", "expected_category": "CONTENT", "must_contain_any": ["blog", "writing", "article"], "notes": ""}
+{"id": "q021", "query": "transcribe audio to text markdown", "expected_category": "AUTOMATION", "must_contain_any": ["audio", "transcrib"], "notes": "也可接受 CONTENT"}
+{"id": "q022", "query": "scrape websites with beautifulsoup", "expected_category": "SEARCH", "must_contain_any": ["scrape", "scraping", "beautifulsoup"], "notes": ""}
+{"id": "q023", "query": "deep research with multi agent", "expected_category": "SEARCH", "must_contain_any": ["research", "deep", "multi-agent"], "notes": ""}
+{"id": "q024", "query": "semantic retrieval with vector embeddings", "expected_category": "SEARCH", "must_contain_any": ["retrieval", "vector", "semantic", "embedding"], "notes": ""}
+{"id": "q025", "query": "audit AWS security configuration", "expected_category": "SECURITY", "must_contain_any": ["aws", "security", "audit"], "notes": ""}
+{"id": "q026", "query": "detect supply chain typosquatting attack", "expected_category": "SECURITY", "must_contain_any": ["supply chain", "typosquatting", "dependency"], "notes": ""}
+{"id": "q027", "query": "just in time access provisioning", "expected_category": "SECURITY", "must_contain_any": ["jit", "just-in-time", "access", "privilege"], "notes": ""}
+{"id": "q028", "query": "OWASP top 10 vulnerability scanning", "expected_category": "SECURITY", "must_contain_any": ["owasp", "vulnerab", "scan"], "notes": ""}
+{"id": "q029", "query": "orchestrate multiple claude agents", "expected_category": "AUTOMATION", "must_contain_any": ["orchestrat", "agent", "multi"], "notes": ""}
+{"id": "q030", "query": "youtube video summarizer", "expected_category": "AUTOMATION", "must_contain_any": ["youtube", "video", "summar"], "notes": ""}
+{"id": "q031", "query": "GitHub PR automation workflow", "expected_category": "AUTOMATION", "must_contain_any": ["github", "pr", "pull", "pull-request"], "notes": ""}
+{"id": "q032", "query": "legal contract review and drafting", "expected_category": "DOMAIN", "must_contain_any": ["legal", "contract", "law"], "notes": ""}
+{"id": "q033", "query": "medical clinical SOAP notes", "expected_category": "DOMAIN", "must_contain_any": ["medical", "clinical", "soap", "patient"], "notes": ""}
+{"id": "q034", "query": "tax return and bookkeeping", "expected_category": "DOMAIN", "must_contain_any": ["tax", "account", "bookkeep"], "notes": ""}
+{"id": "q035", "query": "Brazilian real estate auction (leilao)", "expected_category": "DOMAIN", "must_contain_any": ["leilao", "leiloeiro", "imovel", "imoveis"], "notes": "葡语 DOMAIN"}
+{"id": "q036", "query": "HIPAA healthcare compliance checklist", "expected_category": "DOMAIN", "must_contain_any": ["hipaa", "health", "complian"], "notes": ""}
+{"id": "q037", "query": "Unreal Engine C++ blueprint performance", "expected_category": "GAMEDEV", "must_contain_any": ["unreal", "unity", "c++"], "notes": ""}
+{"id": "q038", "query": "Godot GDScript game scripting patterns", "expected_category": "GAMEDEV", "must_contain_any": ["godot", "gdscript"], "notes": ""}
+{"id": "q039", "query": "shader programming for 2D rendering", "expected_category": "GAMEDEV", "must_contain_any": ["shader", "render", "makepad"], "notes": ""}
+{"id": "q040", "query": "molecular biology protein database UniProt", "expected_category": "SCIENCE", "must_contain_any": ["uniprot", "protein", "biology", "molecular"], "notes": ""}
+{"id": "q041", "query": "quantum computing circuit simulation", "expected_category": "SCIENCE", "must_contain_any": ["quantum", "cirq", "qiskit"], "notes": ""}
+{"id": "q042", "query": "single cell RNA sequencing analysis", "expected_category": "SCIENCE", "must_contain_any": ["scanpy", "rna", "single-cell"], "notes": ""}
+{"id": "q043", "query": "create a new agent skill from scratch", "expected_category": "META", "must_contain_any": ["skill-creator", "skill", "creator"], "notes": ""}
+{"id": "q044", "query": "evaluate agent benchmarks and quality", "expected_category": "META", "must_contain_any": ["eval", "benchmark"], "notes": ""}
+{"id": "q045", "query": "code review and refactoring best practices", "expected_category": "CODING", "must_contain_any": ["refactor", "review", "craft", "clean"], "notes": ""}
+{"id": "q046", "query": "senior architect design patterns", "expected_category": "CODING", "must_contain_any": ["architect", "design", "pattern"], "notes": ""}
+{"id": "q047", "query": "senior fullstack developer toolkit", "expected_category": "CODING", "must_contain_any": ["fullstack", "stack"], "notes": ""}
+{"id": "q048", "query": "HTML canvas interactive artifact", "expected_category": "FRONTEND", "must_contain_any": ["canvas", "artifact", "html"], "notes": ""}
+{"id": "q049", "query": "ffmpeg video editing pipeline", "expected_category": "CONTENT", "must_contain_any": ["ffmpeg", "video", "edit"], "notes": ""}
+{"id": "q050", "query": "content creator brand voice analysis", "expected_category": "CONTENT", "must_contain_any": ["brand", "voice", "content"], "notes": ""}

@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """Host-side launcher for the Raven-Oncall ACP server -- the B side.
 
-The retired vendored Raven-Oncall carried a whole fork checkout; this
-product carries none. It renders its config and execs the
+The vendored Raven-Oncall (subagents/raven-oncall) carries a whole fork
+checkout; this product carries none. It renders its config and execs the
 installed raven's own ``raven acp``, so every turn runs through the same
 assembly door (build_runtime) as the host's TUI and gateway. The machinery
 of rendering lives in the launcher library
@@ -225,7 +225,7 @@ def render_config(source: Path) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Serve Raven-Oncall over ACP on stdio.")
     # The roster row's command carries --acp, kept byte-identical to the
-    # fork-era row; ACP is this launcher's only hosting, so the flag selects
+    # vendored row; ACP is this launcher's only hosting, so the flag selects
     # nothing.
     parser.add_argument("--acp", action="store_true", help="serve ACP on stdio (the only hosting)")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))

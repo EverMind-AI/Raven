@@ -29,7 +29,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 RUN_PY = REPO / "agents" / "raven-code" / "run.py"
-FORK = REPO / "tests" / "fixtures" / "vendored_fork" / "raven-code"
+FORK = REPO / "subagents" / "raven-code"
 FORK_TEMPLATE = FORK / "Raven-main" / "raven" / "templates" / "TOOLS.md"
 
 

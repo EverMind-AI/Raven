@@ -28,6 +28,7 @@ from raven_ppt import plugin as plugin_module  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 ENGINE_HOME = REPO / "plugins-dist" / "ppt-engine"
+FORK = REPO / "subagents" / "raven-ppt" / "Raven-PPT"
 
 ENABLED = {"enabled": True, "profile": "script_author"}
 

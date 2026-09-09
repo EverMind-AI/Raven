@@ -4,29 +4,6 @@ All notable changes to Raven are documented here.
 
 ## Unreleased
 
-### Removed
-
-- **The vendored subagents tree.** The five product forks under `subagents/`
-  leave the repository: the products live under `agents/` as thin launchers on
-  the installed raven, a wheel carries that tree and copies it out to the raven
-  home on first use, and the design/ppt engines ship as their own wheels. A
-  stored roster row written against the old tree migrates on load (config
-  floor six): paths re-aim at `agents/`, a fork-venv interpreter becomes the
-  running one, and a fork-era row that cannot be re-aimed is left as written
-  with a notice to re-run onboarding. The forks' record stays reachable as byte
-  snapshots under `tests/fixtures/vendored_fork/` and as full trees in git
-  history; leftover copies under `<raven home>/subagents` can be deleted.
-  The research product reclaims the fork's display name: registered
-  `Raven-Research-NG` rows rename to `Raven-Research` on load (config floor
-  seven); if a fork-era row still holds the name, an advisory repeats until
-  that row is removed and the rename completes on a later load. The machine
-  id `raven-research-ng` (state root, ACP home, everos identity, the
-  `RESEARCH_NG_*` variables) is unchanged. References stored during the
-  unreleased pilot window (instance bindings, direct chats under the
-  transition name) are deliberately not carried: no shipped artifact knows
-  that name, and addressing one answers with the explicit not-configured
-  refusal.
-
 ### Added
 
 - The research agent's three modes are three stop rules rather than three sizes
@@ -361,8 +338,7 @@ All notable changes to Raven are documented here.
 
 - A top-level `agents/` directory holds product definitions built on the
   installed runtime, A/B-able against the frozen vendored `subagents/`. The
-  first product, Raven-Research (transition name Raven-Research-NG), rebuilds
-  the vendored research agent's
+  first product, Raven-Research-NG, rebuilds the vendored research agent's
   whole flow as a plugin (`agents/raven-research/plugins/research-flow`) on
   public seams alone; the sixth import-linter contract keeps the runtime from
   importing the products back.

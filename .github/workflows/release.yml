@@ -89,11 +89,11 @@ jobs:
           # The only ui-tui/ entry must be the bundle — no TS source, no stray files.
           ui = [n for n in names if "ui-tui/" in n]
           assert ui == ["raven/ui-tui/dist/entry.js"], f"unexpected ui-tui entries: {ui}"
-          # The agent-product tree degrades the other way: an sdist-derived wheel
-          # has no folders at all, and onboarding step 5 reports an empty
-          # installation rather than failing.
+          # The sub-agent tree degrades the other way: an sdist-derived wheel has
+          # no folders at all, and onboarding step 5 reports an empty installation
+          # rather than failing.
           agents = [n for n in names if n.endswith("/subagent.json")]
-          assert agents, "agent products missing from wheel"
+          assert agents, "vendored sub-agents missing from wheel"
           # The tree is enumerated from git precisely so a built working copy's
           # filled-in .env cannot ride along. Asserted at the publish boundary too.
           leaked = [

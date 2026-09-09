@@ -1076,6 +1076,8 @@ class AcpAgentBackend:
                 # the pool answered a second binding by closing the first binding's
                 # connection -- mid-turn, if one was running. Kept separate, each
                 # binding gets a connection of its own and the two coexist.
+                from raven.token_wise import usage_context
+
                 binding: dict[str, str] = {}
                 if model:
                     binding["RAVEN_PARENT_MODEL"] = model
@@ -1163,6 +1165,7 @@ class AcpAgentBackend:
                             "session/prompt",
                             {
                                 "sessionId": session_id,
+                                "_meta": {"raven.usage": usage_context.delegation(skey)},
                                 # The attachments ride as resource links beside the
                                 # text, the block an editor sends for an @-mentioned
                                 # file; see raven.agent.subagent.attachments.

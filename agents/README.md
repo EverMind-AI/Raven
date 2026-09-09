@@ -19,18 +19,8 @@ What one product directory carries:
   the trunk's `reasoningEffort` knob; the rest of an overlay is the product's
   own hooks' to read.
 - `subagent.json` -- the roster row template `install.py` registers through
-  `raven.config.update_subagents` (the same pinned surface the retired
-  vendored installers used). The inverse is the uninstall story -- delete the
-  roster row with the interpreter that serves raven:
-
-  ```bash
-  # Unquoted on purpose: the shebang may be an `env` line, which is two words.
-  $(sed -n '1s/^#!//p' "$(command -v raven)") -c \
-    'from raven.config.update_subagents import remove_third_party_subagent as rm; print(rm("raven-code"))'
-  ```
-
-  The folder itself can stay -- an unregistered folder is inert. A live raven
-  holds the roster it read at startup; restart it afterwards.
+  `raven.config.update_subagents` (the same pinned surface the vendored
+  installers use).
 - `plugins/<id>/` -- the product's own harness as raven plugins: hooks on the
   loop's six phases, replacement tools under the built-in names, its own
   config slice under `plugins.config["<id>"]`. `run.py` names the directory
@@ -94,10 +84,8 @@ Product notes:
 
 Ground rules:
 
-- The A side of the comparison is the retired vendored tree: byte snapshots
-  of its record live under `tests/fixtures/vendored_fork/`, and the full trees
-  remain in git history (the commit that removed `subagents/` is the anchor).
-  Nothing here may re-grow a dependency on that tree.
+- `subagents/` is frozen and is the A side of the comparison; nothing here
+  may import from it or modify it.
 - The runtime never imports this directory -- enforced by the import-linter
   contract "the runtime does not import the agents pilots".
 - In the wheel as data, never as code: `hatch_build.py` maps the tracked

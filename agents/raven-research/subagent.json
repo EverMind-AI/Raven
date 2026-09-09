@@ -1,7 +1,7 @@
 {
-  "name": "Raven-Research",
+  "name": "Raven-Research-NG",
   "kind": "acp",
-  "description": "A research agent that answers a question by searching and reading the live web, then commits a sourced report. Built on installed raven (successor to the retired vendored fork). IMPORTANT: Only ask this agent to generate a research report.",
+  "description": "A research agent that answers a question by searching and reading the live web, then commits a sourced report. Built on installed raven (the B side of the vendored Raven-Research). IMPORTANT: Only ask this agent to generate a research report.",
   "owns": "owns research: anything needing the live web read and a sourced write-up. Do not research it yourself.",
   "enabled": true,
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py",

@@ -2,13 +2,13 @@
 
 The unit tests prove the discovery row and the config rendering separately;
 this proves the chain a real dispatch walks -- the discovered command spawning
-`run.py`, the exec into the installed raven's own `raven acp`, and a
+`run.py`, the exec into the vendored checkout's own `raven acp`, and a
 handshake whose answers are the ones the host's capability verify stands on
 (`loadSession`, `sessionCapabilities.resume`). No LLM is dialled: `initialize`
 and `session/new` never prompt.
 
-The launcher execs the interpreter that runs this test, so the only
-requirement is the dev environment itself.
+Skips where the vendored venv is unbuilt, which is every fresh clone until
+``subagents/install.sh`` runs.
 """
 
 from __future__ import annotations
@@ -24,31 +24,25 @@ import pytest
 pytestmark = pytest.mark.integration
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_FOLDER = _REPO_ROOT / "agents" / "raven-research"
+_FOLDER = _REPO_ROOT / "subagents" / "raven-research"
+_VENV_RAVEN = _FOLDER / "Raven-X" / ".venv" / "bin" / "raven"
 
 _TIMEOUT = 180.0
 
 
+@pytest.mark.skipif(not os.access(_VENV_RAVEN, os.X_OK), reason="vendored Raven-X venv is not built")
 def test_launcher_serves_acp_with_the_capabilities_the_host_verifies(tmp_path: Path) -> None:
     state = tmp_path / "state"
-    # The session cwd must not contain the agent home (the workdir guard
-    # refuses that layout), so the two live in sibling directories.
-    workdir = tmp_path / "ws"
-    workdir.mkdir()
     env = {
         **os.environ,
         # A dummy key satisfies the launcher's required-secret gate; neither
         # request below reaches a provider.
         "RESEARCH_API_KEY": "dummy-never-dialled",
-        "RESEARCH_SERPER_API_KEY": "dummy-never-dialled",
-        "RESEARCH_NG_STATE_ROOT": str(state),
-        # Sandbox the subprocess's raven home: the launcher derives the
-        # product workspace from it, and a test must not write the real one.
-        "RAVEN_HOME": str(tmp_path / "home"),
+        "RESEARCH_STATE_ROOT": str(state),
     }
     requests = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1, "clientCapabilities": {}}},
-        {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": str(workdir), "mcpServers": []}},
+        {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": str(tmp_path), "mcpServers": []}},
     ]
     payload = b"".join((json.dumps(r) + "\n").encode("utf-8") for r in requests)
 
@@ -67,10 +61,7 @@ def test_launcher_serves_acp_with_the_capabilities_the_host_verifies(tmp_path: P
     by_id = {f["id"]: f for f in frames if "id" in f and "method" not in f}
 
     init = by_id[1]["result"]
-    # The fork announced itself as raven-x-research; the product serves on the
-    # installed raven, whose ACP identity is its own name. Adjudicated as a
-    # trunk-additive difference in the D7 transport-parity ledger.
-    assert init["agentInfo"]["name"] == "raven"
+    assert init["agentInfo"]["name"] == "raven-x-research"
     assert init["agentCapabilities"]["loadSession"] is True
     assert "resume" in init["agentCapabilities"]["sessionCapabilities"]
 
@@ -78,18 +69,15 @@ def test_launcher_serves_acp_with_the_capabilities_the_host_verifies(tmp_path: P
 
     # The rendered config landed under the state root with the secrets in it
     # and the workspace pinned there -- not in the published config.json.
-    # The config-floor watermark sidecar (.migrations.json) lands beside the
-    # render and matches the same glob; the render itself is the one file left.
-    rendered = [f for f in state.glob(".config.rendered.*.json") if not f.name.endswith(".migrations.json")]
+    rendered = list(state.glob(".config.rendered.*.json"))
     assert len(rendered) == 1
     data = json.loads(rendered[0].read_text(encoding="utf-8"))
-    assert data["providers"]["openrouter"]["apiKey"] == "dummy-never-dialled"
-    workspace = data["agents"]["defaults"]["workspace"]
-    assert workspace.startswith(str(tmp_path / "home")), workspace
-    assert "raven-research-ng" in workspace, workspace
+    assert data["providers"]["custom"]["apiKey"] == "dummy-never-dialled"
+    assert data["agents"]["defaults"]["workspace"] == str(state / "workspace")
     assert "dummy-never-dialled" not in (_FOLDER / "config.json").read_text(encoding="utf-8")
 
 
+@pytest.mark.skipif(not os.access(_VENV_RAVEN, os.X_OK), reason="vendored Raven-X venv is not built")
 async def test_the_startup_backfill_measures_statefulness_by_itself(tmp_path: Path, monkeypatch) -> None:
     """The picker-visibility chain, end to end: a fresh host holds no capability
     snapshot, so the acp row reads stateless and the ``/new-instance`` picker
@@ -113,11 +101,7 @@ async def test_the_startup_backfill_measures_statefulness_by_itself(tmp_path: Pa
     manifest = json.loads((_FOLDER / "subagent.json").read_text(encoding="utf-8"))
     for field in ("command", "cwd"):
         manifest[field] = manifest[field].replace("{SUBAGENT_DIR}", str(_FOLDER)).replace("{PYTHON}", sys.executable)
-    manifest["env"] = {
-        "RESEARCH_API_KEY": "dummy-never-dialled",
-        "RESEARCH_SERPER_API_KEY": "dummy-never-dialled",
-        "RESEARCH_NG_STATE_ROOT": str(tmp_path / "state"),
-    }
+    manifest["env"] = {"RESEARCH_API_KEY": "dummy-never-dialled", "RESEARCH_STATE_ROOT": str(tmp_path / "state")}
     cfg = ThirdPartyAcpSubagentConfig.model_validate(manifest)
     assert agent_meta(cfg).stateful is False, "no snapshot yet, so the picker would hide the row"
 

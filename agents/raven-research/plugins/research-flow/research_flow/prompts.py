@@ -1,9 +1,8 @@
 """Prompt text of the research flow, and its assembly into identity + contract.
 
-Every model-facing constant below is copied byte-for-byte from the retired
-fork's flow module (``dr.py``); the fork's frozen measurement record
-(``tests/fixtures/vendored_fork/research_parity_probe.json``) is the oracle
-the port test compares against. ``render_identity_and_contract`` reproduces
+Every model-facing constant below is copied byte-for-byte from the frozen fork
+(``subagents/raven-research/Raven-X/raven/agent/flow/dr.py``); the fork is the
+oracle a port test compares against. ``render_identity_and_contract`` reproduces
 the fork's ``DRModeSegmentBuilder`` text assembly exactly - the identity with
 the measured-guidance block spliced at its anchor, then the contract with the
 optional clauses numbered on from the five core rules - but returns the two

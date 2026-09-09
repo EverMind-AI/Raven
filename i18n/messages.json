@@ -4659,6 +4659,7 @@
       "en": "Tool calls",
       "zh": "工具调用"
     },
+    "gui.set.usg.all_tasks": {"en": "All tasks", "zh": "全部任务"},
     "gui.set.usg.window": {
       "en": "last {d} days",
       "zh": "近 {d} 天"

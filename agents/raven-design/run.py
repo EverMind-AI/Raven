@@ -211,8 +211,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Serve Raven-Design over ACP on stdio.")
     # ACP is this launcher's only hosting, so the flag selects nothing; the
     # fork's per-turn CLI round-trip (transcript scraping, task preamble, the
-    # git-changes reply appendix) stayed with the retired fork wrapper it
-    # belonged to, per the verdict's D3 lane ruling.
+    # git-changes reply appendix) stays with the vendored wrapper it belongs
+    # to, per the verdict's D3 lane ruling.
     parser.add_argument("--acp", action="store_true", help="serve ACP on stdio (the only hosting)")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     args = parser.parse_args()

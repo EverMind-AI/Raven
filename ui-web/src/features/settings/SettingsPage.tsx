@@ -553,6 +553,10 @@ function UsagePage({ s }: { s: SettingsState }): JSX.Element {
   }
   return (
     <>
+      <select aria-label="Task usage" value={s.usageSession} onChange={event => store.usageSelect(event.target.value)}>
+        <option value="">{t('gui.set.usg.all_tasks')}</option>
+        {(u.sessions || []).map(key => <option key={key} value={key}>{u.session_titles?.[key] || key}</option>)}
+      </select>
       <Scard title={`${t('gui.set.usg.llm')} · ${t('gui.set.usg.window', { d: u.days })}`}>
         <StatTiles
           rows={[

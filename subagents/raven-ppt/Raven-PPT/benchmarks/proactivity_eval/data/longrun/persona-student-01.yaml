@@ -1,0 +1,72 @@
+id: student-01
+role: 研一学生（计算机，做 NLP 方向）
+persona_name: 小鹿
+timezone: Asia/Shanghai
+language: zh-CN
+anchor_date: "2026-05-01"
+wake_hours: [9, 26]      # 26 表示夜猫子，延到第二天 2:00
+communication_style: |
+  口语化、emoji 多（😭 🥲 💻 📚 🧠 😴）。
+  学术话题变严肃：paper / baseline / ablation 等英文词不翻。
+  偶尔"摆烂宣言"但 24h 内会 bounce back。
+
+weekly_rhythm:
+  mon_fri: |
+    10:00 起床蹭食堂早餐（已过时间常吃代餐）。
+    10:30-12:00 实验室组会 / 读 paper。
+    14:00-18:00 实验 / 跑 baseline / 写代码。
+    19:00 晚饭 + 和室友打游戏 1h。
+    20:00-23:30 paper 实验继续。
+    00:00-02:00 "躺在床上继续看实验 log" 的模糊时间。
+  weekend: |
+    周六睡到 14:00，下午图书馆"装模作样"看书。
+    周日白天娱乐，晚上突击 + 焦虑。
+
+goals:
+  - "5/12 组会汇报：ablation study 结果 + 下一步计划"
+  - "5/20 投 NeurIPS workshop rolling review (4-pager)"
+  - "5/25 老板周会前整理好这月实验记录"
+  - "5/30 健身房办卡（立 flag 第 3 次）"
+  - "5/28 师妹硕士答辩帮忙 rehearse"
+
+quirks:
+  - "deadline 前 3 天进入'亢奋兼崩溃'模式，连发 5-10 条求安慰"
+  - "读到好 paper 会 deep dive 3 小时然后说'完了我今天又没做实验'"
+  - "组会被老板问住会来吐槽 '心态崩了'"
+  - "对 GPU 资源敏感，一周见一次'又跑不动 batch 32' 的抱怨"
+  - "偶尔问 AI'我是不是不适合读博'然后自我纠正"
+
+# Per-persona DND windows. v4 dismiss timing:
+# - 5/3 21:30 (Sun late evening), 5/22 15:00 (Fri lab time per weekly_rhythm).
+# 30min trailing buffer dampens the "Planner fires immediately when DND lifts" effect.
+policy_overrides:
+  do_not_disturb_windows:
+    - {start_hour: 14, end_hour: 18, start_minute: 0, end_minute: 30, weekdays: [0,1,2,3,4], why: "lab + experiment + buffer"}
+    - {start_hour: 10, end_hour: 12, start_minute: 0, end_minute: 30, weekdays: [0,1,2,3,4], why: "group meeting + paper reading + buffer"}
+
+initial_memory_md: |
+  # Long-term Memory
+
+  ## User Information
+  - 姓名: 小鹿
+  - 身份: 研一，NLP 方向（做 instruction tuning 相关）
+  - 导师: 周老师（严格但护犊子）
+  - 组会: 每周一 10:30
+
+  ## Preferences
+  - 回复带 emoji，多点共鸣少点说教
+  - paper 讨论时技术细节别省
+
+  ## Project Context
+  - 当前主项目: instruction tuning + pref alignment ablation
+  - 5/12 组会 ablation 结果分享
+  - 5/20 NeurIPS workshop rolling deadline
+
+  ## Proactivity Preferences
+  - quiet_hours: 02:30-09:00
+  - 组会前 2h（周一 8:30-10:30）勿扰
+
+  ## Important Notes
+  - 5/28 师妹答辩帮忙 rehearse
+  - GPU 资源紧张期一直在
+  - 健身房 flag 第 3 次（前两次没成）

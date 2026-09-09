@@ -1,0 +1,60 @@
+[plugin]
+id                 = "data-agent"
+version            = "0.1.0"
+display_name       = "Data Agent (L1 evidence layer)"
+raven              = ">=0.1"
+bundled            = true
+# Off by default: the generic agent should not grow four SQL tools until a
+# workspace opts in with a plugins.config['data-agent'].sources block.
+enabled_by_default = false
+
+# One kernel-owned DuckDB query plane shared by every tool: four read-only
+# evidence tools plus a stateful python tool running in the same kernel
+# process (variables persist, `con` is the shared connection). Sources come
+# from plugins.config['data-agent'].sources (see docs/specs/data-agent-design.md
+# section 4.1); kernel_python optionally picks the kernel interpreter. The
+# semantic_map extraction operator is added in a later slice.
+
+[[plugin.contributes.tools]]
+name    = "sql"
+factory = "raven.plugin.data_agent.tools:make_sql_tool"
+
+[[plugin.contributes.tools]]
+name    = "python"
+factory = "raven.plugin.data_agent.tools:make_python_tool"
+
+[[plugin.contributes.tools]]
+name    = "profile"
+factory = "raven.plugin.data_agent.tools:make_profile_tool"
+
+[[plugin.contributes.tools]]
+name    = "distinct_values"
+factory = "raven.plugin.data_agent.tools:make_distinct_values_tool"
+
+[[plugin.contributes.tools]]
+name    = "verify_join"
+factory = "raven.plugin.data_agent.tools:make_verify_join_tool"
+
+[[plugin.contributes.tools]]
+name    = "semantic_map"
+factory = "raven.plugin.data_agent.semantic_map:make_semantic_map_tool"
+
+[[plugin.contributes.tools]]
+name    = "resolve_entities"
+factory = "raven.plugin.data_agent.entity_resolution:make_resolve_entities_tool"
+
+[[plugin.contributes.tools]]
+name    = "bootstrap_classifier"
+factory = "raven.plugin.data_agent.bootstrap_classifier:make_bootstrap_classifier_tool"
+
+[[plugin.contributes.tools]]
+name    = "grain_check"
+factory = "raven.plugin.data_agent.grain_check:make_grain_check_tool"
+
+[[plugin.contributes.tools]]
+name    = "submit_answer"
+factory = "raven.plugin.data_agent.deliver:make_submit_answer_tool"
+
+[[plugin.contributes.tools]]
+name    = "survey_sources"
+factory = "raven.plugin.data_agent.survey:make_survey_sources_tool"

@@ -218,7 +218,7 @@ def _prune_shadowing_rows(
     a user edits a vendored agent, so nothing is deleted unasked: the rows
     are listed, a disabled row is flagged (removing it would re-enable the
     agent), and a decline keeps everything. The full list is backed up
-    first (the same fail-safe as the retired vendored installer's ``--prune-stale``): a
+    first (the same fail-safe as ``subagents/install.sh --prune-stale``): a
     backup that cannot be written stops the prune.
     """
     path = config_path or get_config_path()

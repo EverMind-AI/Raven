@@ -244,12 +244,14 @@ target-version = "py312"
 # package and wants its imports in another block than `raven`'s.
 src = [".", "plugins-dist/everos-memory", "plugins-dist/ppt-engine", "plugins-dist/design-engine"]
 extend-exclude = [
-    # Byte snapshots of the retired vendored fork: the records the parity
-    # guards compare against. Reformatting a record destroys its fidelity.
-    "tests/fixtures/vendored_fork/**",
     "benchmarks/**/data",
     "benchmarks/**/results",
     "benchmarks/**/output",
+    # The vendored sub-agent builds. Not adopted the way agentscope below was:
+    # each is a separate upstream project replaced wholesale on the next zip,
+    # so a lint fix made here cannot survive and reports nobody can act on are
+    # the only thing linting them would produce.
+    "subagents/**",
 ]
 
 [tool.ruff.lint]
