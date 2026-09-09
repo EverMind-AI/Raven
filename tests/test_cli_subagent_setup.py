@@ -25,8 +25,14 @@ def _folder(
     manifest_model: str | None = None,
     display: str | None = None,
     api_base: str = "https://gw.example/api/v1",
+    own_llm: bool = True,
 ) -> Path:
-    """Build one plausible product folder under ``root``."""
+    """Build one plausible product folder under ``root``.
+
+    ``own_llm=False`` shapes the folder the way raven-design ships: no
+    ``recommendedLlm`` in the manifest and no model or provider in its
+    profile, because it runs on the host's LLM.
+    """
     folder = root / name
     folder.mkdir(parents=True)
     manifest: dict[str, Any] = {
@@ -35,20 +41,19 @@ def _folder(
         "description": f"{name} does things",
         "command": "{PYTHON} {SUBAGENT_DIR}/run.py --acp",
         "cwd": "{SUBAGENT_DIR}",
-        "recommendedLlm": {"model": manifest_model or model, "apiBase": api_base},
     }
+    if own_llm:
+        manifest["recommendedLlm"] = {"model": manifest_model or model, "apiBase": api_base}
     if engine is not None:
         manifest["engine"] = engine
     (folder / "subagent.json").write_text(json.dumps(manifest), encoding="utf-8")
-    (folder / "config.json").write_text(
-        json.dumps(
-            {
-                "providers": {"custom": {"apiBase": api_base}},
-                "agents": {"defaults": {"provider": "custom", "model": model}},
-            }
-        ),
-        encoding="utf-8",
-    )
+    profile: dict[str, Any] = {"agents": {"defaults": {}}}
+    if own_llm:
+        profile = {
+            "providers": {"custom": {"apiBase": api_base}},
+            "agents": {"defaults": {"provider": "custom", "model": model}},
+        }
+    (folder / "config.json").write_text(json.dumps(profile), encoding="utf-8")
     (folder / ".env.example").write_text(
         f"{subagent_setup._env_var(name)}=\nOTHER=keep\n",
         encoding="utf-8",
@@ -609,6 +614,47 @@ def test_configure_falls_back_to_this_ravens_llm_on_a_bad_key(tmp_path: Path, mo
     )
     assert subagent_setup.configure_subagents(warnings=[]) == 1
     assert not (tmp_path / "raven-code" / ".env").exists()
+
+
+def test_a_folder_without_a_model_of_its_own_is_ready_on_this_ravens_key_and_takes_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """raven-design runs on the host's LLM and its launcher never reads
+    DESIGN_API_KEY, yet the wizard still recommended a model it cannot run and
+    wrote the key. No model of its own means no prompt, no key, ready when
+    this raven has a key to lend."""
+    _folder(tmp_path, "raven-design", own_llm=False)
+    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
+    monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "sk-host")
+    monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
+    scripted = _ScriptedSelect([])
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    assert subagent_setup.configure_subagents(warnings=[]) == 1
+    assert scripted.asked == []
+    assert not (tmp_path / "raven-design" / ".env").exists()
+
+
+def test_a_folder_without_a_model_of_its_own_is_not_ready_without_a_host_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no host key the launcher exits at start; the wizard used to take a
+    key of its own here and print the tick anyway."""
+    _folder(tmp_path, "raven-design", own_llm=False)
+    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
+    monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
+    monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: False)
+    scripted = _ScriptedSelect([])
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    console = _RecordingConsole()
+    monkeypatch.setattr(onboard_commands, "console", console)
+    assert subagent_setup.configure_subagents(warnings=[]) == 0
+    assert scripted.asked == []
+    assert not (tmp_path / "raven-design" / ".env").exists()
+    assert any("Not ready" in line for line in console.lines)
 
 
 def test_the_recommended_model_leads_the_menu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
