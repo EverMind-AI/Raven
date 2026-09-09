@@ -51,7 +51,7 @@ from pathlib import Path
 from raven.agent import workdir
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.utils.workspace import sync_workspace_templates
-from raven_ppt.plugin import materials
+from raven_ppt.plugin import ledger, materials
 from raven_ppt.services.publish.deliver import last_refusal, published_digests, published_original
 
 MATERIALS_DIRNAME = "materials"
@@ -225,6 +225,35 @@ class PptEngineHook(AgentHook):
             self._books[key] = books
         return books
 
+    def _ledger_after_compaction(self, ctx: AgentHookContext, root: Path) -> HookDecision:
+        """Once per compaction, put the deck ledger under the host's summary.
+
+        The host's summary is written for code work and paraphrases the user;
+        a deck's requirements are the user's own words and its state is on
+        disk (:mod:`raven_ppt.plugin.ledger`). The note rides ``append_note``,
+        so it lands on the last message before the next call, and the marker
+        it carries is how the next iteration knows this summary is answered.
+        """
+        messages = ctx.messages or []
+        index = ledger.summary_index(messages)
+        if index is None:
+            return HookDecision()
+        digest = ledger.summary_digest(messages, index)
+        if ledger.ledger_stands_for(messages, digest):
+            return HookDecision()
+        try:
+            note = ledger.deck_ledger(root, ctx.session_history, digest)
+        except Exception as exc:  # the ledger is help, never a reason to stop a turn
+            logger.warning("deck ledger not written after compaction: %s", exc)
+            return HookDecision()
+        return HookDecision(append_note=note, notes=["deck ledger appended under the compaction summary"])
+
+    @staticmethod
+    def _journal_window(root: Path, ctx: AgentHookContext) -> None:
+        """Write the user's words the running turn has put in the window so far."""
+        messages = ctx.messages or []
+        ledger.journal(root, messages=messages[ctx.turn_base :] if messages else None, window=messages or None)
+
     def _own_folder(self, bound: Path, session_key: str) -> Path:
         """Point the turn at this session's own deck folder, and say where that is.
 
@@ -256,19 +285,24 @@ class PptEngineHook(AgentHook):
         ``ppt_build`` that found no brief, and set out to rebuild the deck from
         nothing. The first iteration is where every turn passes.
         """
-        if ctx.iteration not in (0, 1):
-            return HookDecision()
         bound = workdir.current()
         if bound is None:
             return HookDecision()
-        root = self._own_folder(Path(bound), ctx.session_key)
-        if ctx.metadata is not None:
-            # What the inbound phase would have taken, so a deck this turn publishes is
-            # still told apart from an earlier turn's and announced.
-            ctx.metadata.setdefault(_METADATA_KEY, {}).setdefault(
-                "deck_mtimes_before", materials.deck_mtimes(root / OUT_DIRNAME)
-            )
-        return HookDecision()
+        root = Path(bound)
+        if ctx.iteration in (0, 1):
+            root = self._own_folder(root, ctx.session_key)
+            if ctx.metadata is not None:
+                # What the inbound phase would have taken, so a deck this turn publishes is
+                # still told apart from an earlier turn's and announced.
+                ctx.metadata.setdefault(_METADATA_KEY, {}).setdefault(
+                    "deck_mtimes_before", materials.deck_mtimes(root / OUT_DIRNAME)
+                )
+        # Every iteration, the first included: a first call that overflowed is
+        # summarised and retried as iteration 1 with the summary already in the
+        # window. The turn's ask_user answers are journaled at after_iteration,
+        # because the host compacts at the top of an iteration before this fires.
+        self._journal_window(root, ctx)
+        return self._ledger_after_compaction(ctx, root)
 
     async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
         if not self._seeded:
@@ -290,6 +324,10 @@ class PptEngineHook(AgentHook):
         if bound is None or not text or not text.strip():
             return HookDecision()
         root = self._own_folder(Path(bound), ctx.session_key)
+        # The user's own words, before the staging block is written over the
+        # model's view of them: the session record files this turn only after
+        # it ends, and a turn long enough to compact needs them before that.
+        ledger.journal(root, inbound=text)
         staged, taken = self._bookkeeping(root)
         try:
             declared = materials.inputs_from_prompt(text)
@@ -318,6 +356,13 @@ class PptEngineHook(AgentHook):
         the reply, the iteration is rolled back and the model is told to continue.
         Bounded to `UNFINISHED_NUDGES` per turn, under the loop's own rollback cap.
         """
+        bound = workdir.current()
+        if bound is not None:
+            # The tool results of this iteration are in the window now, the ask_user
+            # answer among them, and the next iteration compacts before any other
+            # phase of this hook fires: an answer not journaled here can be
+            # summarised out of the window unseen.
+            self._journal_window(Path(bound), ctx)
         response = ctx.response
         if response is None or getattr(response, "tool_calls", None):
             return HookDecision()
@@ -325,7 +370,6 @@ class PptEngineHook(AgentHook):
         if not text:
             # Nothing said at all is the empty-recovery's case, not this one.
             return HookDecision()
-        bound = workdir.current()
         meta = (ctx.metadata or {}).get(_METADATA_KEY) if ctx.metadata is not None else None
         if bound is None or not meta or "deck_mtimes_before" not in meta:
             return HookDecision()

@@ -1,16 +1,17 @@
 """Unit tests for the grep and find search tools.
 
-Tests exercise both the ripgrep-backed path (when rg is on PATH) and the
-pure-Python fallback (forced by patching shutil.which to return None).
+Tests exercise both the bundled ripgrep path and the pure-Python fallback
+(forced by disabling binary resolution).
 """
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from raven.agent.tools import file_search
 from raven.agent.tools.file_search import FindTool, GrepTool
 
 
@@ -75,7 +76,7 @@ async def test_grep_invalid_regex(tree: Path):
 
 
 async def test_grep_python_fallback(tree: Path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _: None)
+    monkeypatch.setattr(file_search, "_resolve_rg", lambda: None)
     tool = GrepTool(workspace=tree, allowed_dirs=(tree,))
     out = await tool.execute(pattern=r"def hello")
     assert "app.py" in out
@@ -84,14 +85,14 @@ async def test_grep_python_fallback(tree: Path, monkeypatch):
 
 async def test_grep_fallback_skips_binary(tree: Path, monkeypatch):
     (tree / "blob.bin").write_bytes(b"def hello\x00\x01binary")
-    monkeypatch.setattr(shutil, "which", lambda _: None)
+    monkeypatch.setattr(file_search, "_resolve_rg", lambda: None)
     tool = GrepTool(workspace=tree, allowed_dirs=(tree,))
     out = await tool.execute(pattern="hello")
     assert "blob.bin" not in out
 
 
 async def test_grep_context(tree: Path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _: None)  # deterministic format
+    monkeypatch.setattr(file_search, "_resolve_rg", lambda: None)  # deterministic format
     tool = GrepTool(workspace=tree, allowed_dirs=(tree,))
     out = await tool.execute(pattern="return 'world'", context=1)
     assert "def hello" in out  # context line above the match
@@ -103,6 +104,35 @@ async def test_grep_outside_allowed_dir(tmp_path: Path):
     tool = GrepTool(workspace=workspace, allowed_dirs=(workspace,))
     out = await tool.execute(pattern="x", path="/etc")
     assert "Error" in out
+
+
+async def test_grep_uses_bundled_rg_without_path(tree: Path, monkeypatch):
+    monkeypatch.setenv("PATH", "")
+
+    def unexpected_fallback(*args, **kwargs):
+        pytest.fail("The installed rg must work without its scripts directory on PATH")
+
+    tool = GrepTool(workspace=tree, allowed_dirs=(tree,))
+    monkeypatch.setattr(tool, "_run_python", unexpected_fallback)
+    out = await tool.execute(pattern="def hello")
+    assert "src/app.py:2:def hello():" in out
+    assert "node_modules" not in out
+    assert await tool.execute(pattern="zzz_nonexistent") == "No matches found."
+
+
+@pytest.mark.parametrize("system_rg", ["/system/rg", None])
+def test_rg_resolution_without_bundled_binary(tmp_path, monkeypatch, system_rg):
+    monkeypatch.setattr(file_search, "sysconfig", SimpleNamespace(get_path=lambda _: str(tmp_path)))
+    monkeypatch.setattr(file_search.shutil, "which", lambda _: system_rg)
+    assert file_search._resolve_rg() == system_rg
+
+
+@pytest.mark.parametrize("output_mode", ["content", "files_with_matches", "count"])
+async def test_grep_completed_fallback_no_match(tree: Path, monkeypatch, output_mode):
+    monkeypatch.setattr(file_search, "_resolve_rg", lambda: None)
+    tool = GrepTool(workspace=tree, allowed_dirs=(tree,))
+    out = await tool.execute(pattern="zzz_nonexistent", output_mode=output_mode)
+    assert out == "No matches found."
 
 
 # ── find ────────────────────────────────────────────────────────────────

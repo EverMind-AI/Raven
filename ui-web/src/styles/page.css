@@ -2753,9 +2753,12 @@ textarea:focus, textarea:focus-visible,
   max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line-soft);
   background: var(--surface);
 }
-/* The response carries `Content-Security-Policy: sandbox`, so the frame already
-   has an opaque origin; the attribute repeats it for the same reason a lock has
-   two turns, and withholding allow-scripts keeps an artifact from running. */
+/* The response carries `Content-Security-Policy: sandbox`, so every framed file
+   already has an opaque origin. An HTML frame adds the empty sandbox attribute
+   on top, the second turn of the lock, so a report the agent wrote is readable
+   without running its scripts. A PDF frame carries no attribute at all: Chromium
+   refuses its PDF viewer inside any sandboxed frame, so for a PDF the header is
+   the whole isolation. */
 .fview iframe { width: 100%; height: min(72vh, 720px); border: 0; background: var(--paper); display: block; }
 .fview .csvw { overflow-x: auto; padding: 12px 14px 26px; }
 .fview table.csvt { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }

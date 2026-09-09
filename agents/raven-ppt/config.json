@@ -19,6 +19,18 @@
               "allow_fallbacks": false
             }
           }
+        },
+        "glm-5.3-flash": {
+          "extra_body": {
+            "provider": {
+              "order": [
+                "Z.AI",
+                "DeepInfra",
+                "Novita"
+              ],
+              "allow_fallbacks": false
+            }
+          }
         }
       },
       "llmErrorRetryDelays": [
@@ -31,7 +43,11 @@
         300,
         300
       ],
-      "llmRetryAfterOutput": true
+      "llmRetryAfterOutput": true,
+      "compaction": {
+        "enabled": true,
+        "triggerRatio": 0.85
+      }
     }
   },
   "providers": {
