@@ -981,6 +981,9 @@ it('shows unknown tokens for an image model that only reports money', async () =
   const output = screen.getByText('gui.set.usg.out').closest('.stat')!
   expect(input.querySelector('.v')!.textContent).toBe('gui.set.usg.unknown')
   expect(output.querySelector('.v')!.textContent).toBe('gui.set.usg.unknown')
+  // The tile's own missing-data note, not the per-model row's: deleting the
+  // element left every test green until this line.
+  expect(input.querySelector('.note')!.textContent).toContain('gui.set.usg.cache_missing')
   expect(screen.getAllByText(/\$0.2000/).length).toBeGreaterThan(0)
   expect(screen.queryByText(/· 0 tok/)).toBeNull()
 })
