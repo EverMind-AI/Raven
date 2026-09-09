@@ -43,6 +43,9 @@ Case metadata (YAML, ``case.yaml`` next to ``expect.yaml``)::
     re_record: when the baseline may be re-recorded
     risk: low                                       # optional: low|medium|high
     created_from: att-20260101-abcdef               # optional: source bundle id
+    reviewed_residuals:                             # optional: findings a human
+      - sha256: <64-hex digest of the full token>   # inspected and vouches benign
+        note: identifier-shaped prose, not a credential
 
 The four leading fields are required and must be non-blank — the scaffold
 writes them empty on purpose, so a case cannot pass validation until a human
@@ -58,6 +61,7 @@ lists *every* subdirectory of the cases root, so a directory missing its
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -77,7 +81,8 @@ MAX_FILE_BYTES = 256 * 1024
 MAX_CASE_BYTES = 1024 * 1024
 
 _TOP_KEYS = {"mode", "divergence", "checks"}
-_CASE_KEYS = {"issue", "owner", "why", "re_record", "risk", "created_from"}
+_CASE_KEYS = {"issue", "owner", "why", "re_record", "risk", "created_from", "reviewed_residuals"}
+_REVIEWED_KEYS = {"sha256", "note"}
 _CASE_REQUIRED = ("issue", "owner", "why", "re_record")
 _RISK_LEVELS = ("low", "medium", "high")
 _DIVERGENCE_KEYS = {"kind", "index", "field"}
@@ -173,15 +178,28 @@ def _parse_check(where: str, pos: int, data: Any) -> Check:
     return Check(call=call, index=index, op=op, value=data["value"])
 
 
-def load_expectation(path: Path) -> RegressionExpectation:
-    """Parse and validate one ``expect.yaml``; raises ``ValueError`` on any
-    unknown key or malformed field, naming the file and the problem."""
-    path = Path(path)
+def _load_yaml_mapping(path: Path, what: str) -> dict[str, Any]:
+    """``path`` parsed as a YAML mapping; a YAML syntax error raises the same
+    file-naming ``ValueError`` malformed fields do, so callers collecting
+    problems need exactly one exception type for expected parse failures."""
     where = str(path)
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{where}: cannot be parsed as YAML: {exc}") from exc
     if data is None:
         data = {}
-    _require(isinstance(data, dict), where, f"expectation must be a mapping, got {type(data).__name__}")
+    _require(isinstance(data, dict), where, f"{what} must be a mapping, got {type(data).__name__}")
+    return data
+
+
+def load_expectation(path: Path) -> RegressionExpectation:
+    """Parse and validate one ``expect.yaml``; raises ``ValueError`` on any
+    unknown key, malformed field, or YAML syntax error, naming the file and
+    the problem."""
+    path = Path(path)
+    where = str(path)
+    data = _load_yaml_mapping(path, "expectation")
     unknown = set(data) - _TOP_KEYS
     _require(not unknown, where, f"unknown key(s) {sorted(unknown)}; allowed: {sorted(_TOP_KEYS)}")
     mode = data.get("mode", "strict")
@@ -287,10 +305,19 @@ async def run_regression_case(case_dir: Path) -> tuple[ReplayReport, list[str]]:
 
 
 @dataclass(frozen=True)
+class ReviewedResidual:
+    """One residual-scan finding a human reviewed and vouched benign: the
+    sha256 of the full token (never the token itself) plus the reason."""
+
+    sha256: str
+    note: str
+
+
+@dataclass(frozen=True)
 class CaseMetadata:
     """The parsed ``case.yaml`` of one regression case — the human contract:
     who answers for the case, what bug it guards, when re-recording the
-    baseline is legitimate."""
+    baseline is legitimate, and which residual findings were reviewed."""
 
     issue: str
     owner: str
@@ -298,18 +325,36 @@ class CaseMetadata:
     re_record: str
     risk: str | None = None
     created_from: str | None = None
+    reviewed_residuals: tuple[ReviewedResidual, ...] = ()
+
+
+def _parse_reviewed_residual(where: str, pos: int, data: Any) -> ReviewedResidual:
+    where = f"{where}: reviewed_residuals[{pos}]"
+    _require(isinstance(data, dict), where, f"must be a mapping, got {type(data).__name__}")
+    unknown = set(data) - _REVIEWED_KEYS
+    _require(not unknown, where, f"unknown key(s) {sorted(unknown)}; allowed: {sorted(_REVIEWED_KEYS)}")
+    digest = data.get("sha256")
+    _require(
+        isinstance(digest, str) and len(digest) == 64 and all(c in "0123456789abcdef" for c in digest.lower()),
+        where,
+        f"sha256 must be the 64-hex digest of the full token, got {digest!r}",
+    )
+    note = data.get("note")
+    _require(
+        isinstance(note, str) and note.strip() != "",
+        where,
+        "note is required and must say why the token is benign",
+    )
+    return ReviewedResidual(sha256=digest.lower(), note=note)
 
 
 def load_case_metadata(path: Path) -> CaseMetadata:
     """Parse and validate one ``case.yaml``; raises ``ValueError`` on any
-    unknown key, malformed field, or blank required field, naming the file
-    and the problem."""
+    unknown key, malformed field, blank required field, or YAML syntax
+    error, naming the file and the problem."""
     path = Path(path)
     where = str(path)
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if data is None:
-        data = {}
-    _require(isinstance(data, dict), where, f"case metadata must be a mapping, got {type(data).__name__}")
+    data = _load_yaml_mapping(path, "case metadata")
     unknown = set(data) - _CASE_KEYS
     _require(not unknown, where, f"unknown key(s) {sorted(unknown)}; allowed: {sorted(_CASE_KEYS)}")
     for key in _CASE_REQUIRED:
@@ -327,6 +372,13 @@ def load_case_metadata(path: Path) -> CaseMetadata:
         where,
         f"created_from must be a non-blank string, got {created_from!r}",
     )
+    raw_reviewed = data.get("reviewed_residuals") or []
+    _require(
+        isinstance(raw_reviewed, list),
+        where,
+        f"reviewed_residuals must be a list, got {type(raw_reviewed).__name__}",
+    )
+    reviewed = tuple(_parse_reviewed_residual(where, pos, entry) for pos, entry in enumerate(raw_reviewed))
     return CaseMetadata(
         issue=data["issue"],
         owner=data["owner"],
@@ -334,6 +386,7 @@ def load_case_metadata(path: Path) -> CaseMetadata:
         re_record=data["re_record"],
         risk=risk,
         created_from=created_from,
+        reviewed_residuals=reviewed,
     )
 
 
@@ -358,8 +411,8 @@ def validate_case(case_dir: Path) -> list[str]:
     (a referenced artifact must exist, parse, and carry a usable payload —
     valid JSON alone proves nothing), that every committed file is scannable
     (the residual scan silently skips unreadable/non-UTF-8 files, so zero
-    findings on such a file would vouch for nothing), that the residual scan
-    reports nothing beyond the baseline reviewed at case creation
+    findings on such a file would vouch for nothing), that every residual
+    finding carries an explicit human review entry in ``case.yaml``
     (:func:`_residual_problems`), and the size budget. Never replays; the
     pytest suite does that.
     """
@@ -374,15 +427,20 @@ def validate_case(case_dir: Path) -> list[str]:
             load_expectation(expect_path)
         except ValueError as exc:
             problems.append(str(exc))
+        except OSError as exc:
+            problems.append(f"{expect_path} cannot be read: {exc}")
     else:
         problems.append(f"{EXPECTATION_FILE} is missing")
 
+    metadata: CaseMetadata | None = None
     case_path = case_dir / CASE_FILE
     if case_path.is_file():
         try:
-            load_case_metadata(case_path)
+            metadata = load_case_metadata(case_path)
         except ValueError as exc:
             problems.append(str(exc))
+        except OSError as exc:
+            problems.append(f"{case_path} cannot be read: {exc}")
     else:
         problems.append(f"{CASE_FILE} is missing")
 
@@ -393,48 +451,42 @@ def validate_case(case_dir: Path) -> list[str]:
         problems.append(f"{CASSETTE_DIR}/ directory is missing")
 
     problems.extend(_scannability_problems(case_dir))
-    problems.extend(_residual_problems(case_dir))
+    problems.extend(_residual_problems(case_dir, metadata))
     problems.extend(_size_problems(case_dir))
     return problems
 
 
-def _residual_problems(case_dir: Path) -> list[str]:
-    """Residual findings not covered by the ``redaction.json`` baseline.
+def _residual_problems(case_dir: Path, metadata: CaseMetadata | None) -> list[str]:
+    """Residual findings without an explicit human review entry.
 
     The scanner reports false positives on legitimate prose (identifier-shaped
-    tokens in tool descriptions), so absolute zero findings would fail every
-    honestly-built case. The gate instead holds the case to the state a human
-    reviewed at creation time: every current finding must match a baseline
-    entry recorded by minimize in ``redaction.json`` by category and masked
-    sample. A token new to the case has no baseline sample and fails. Matching
-    is not by file: a reviewed token legitimately recurs across artifacts and
-    in ``expect.yaml`` check values, and the scanner reports one finding per
-    token with the sample taken from its first occurrence. Findings inside
-    ``redaction.json`` itself are self-referential noise (it stores masked
-    samples and stat keys) and are ignored."""
-    baseline = _residual_baseline(case_dir / CASSETTE_DIR / "redaction.json")
+    tokens in tool descriptions, ``redaction.json``'s own stat keys), so
+    absolute zero findings would fail every honestly-built case. The gate for
+    each finding is the ``reviewed_residuals`` list in ``case.yaml``: a human
+    inspects the token, vouches for it by full-token sha256 with a note, and
+    that entry goes through git review like the rest of the case. Nothing is
+    exempted automatically — a machine-produced report proves a scan ran, not
+    that a person approved what it found — and the digest covers the whole
+    token, so a different token sharing the visible prefix/suffix of a masked
+    sample cannot ride along. A missing or unparseable ``case.yaml`` means an
+    empty review list: every finding fails."""
+    reviewed = {entry.sha256 for entry in metadata.reviewed_residuals} if metadata else set()
     problems: list[str] = []
     for finding in scan_residuals(case_dir):
-        if finding.file == f"{CASSETTE_DIR}/redaction.json":
+        digest = hashlib.sha256(finding.token.encode("utf-8")).hexdigest()
+        if digest in reviewed:
             continue
-        if (finding.category, finding.sample) in baseline:
+        if finding.token.lower() in reviewed:
+            # The finding is a listed digest itself: the 64-hex review entries
+            # in case.yaml are high-entropy tokens to the scanner. A digest
+            # literal carries no secret — it is the review record.
             continue
         problems.append(
-            f"residual scan flagged a {finding.category} token in {finding.file}"
-            " not covered by the redaction.json baseline reviewed at case creation"
+            f"residual scan flagged a {finding.category} token in {finding.file} with no"
+            f" reviewed_residuals entry in {CASE_FILE}; if a human inspects it and finds it"
+            f" benign, record sha256 {digest} with a note"
         )
     return problems
-
-
-def _residual_baseline(redaction_path: Path) -> set[tuple[str, str]]:
-    try:
-        data = json.loads(redaction_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return set()
-    findings = data.get("residual_findings") if isinstance(data, dict) else None
-    if not isinstance(findings, list):
-        return set()
-    return {(str(entry.get("category")), str(entry.get("sample"))) for entry in findings if isinstance(entry, dict)}
 
 
 def _cassette_problems(cassette_dir: Path) -> list[str]:
@@ -451,28 +503,36 @@ def _cassette_problems(cassette_dir: Path) -> list[str]:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             problems.append(f"cassette/manifest.json cannot be parsed: {exc}")
-            manifest = None
-        if manifest is not None and not isinstance(manifest, dict):
-            problems.append("cassette/manifest.json must hold a JSON object")
-        elif manifest is not None:
-            if "format_version" not in manifest:
-                problems.append("cassette/manifest.json has no format_version")
-            if not isinstance(manifest.get("minimized"), dict):
-                problems.append(
-                    "cassette/manifest.json has no minimized block"
-                    " (cassettes come from trajectory minimize, not from copying a raw bundle)"
-                )
+        else:
+            # A parsed non-object (null included) is its own failure, distinct
+            # from a parse error — it must not skip the content checks.
+            if not isinstance(manifest, dict):
+                problems.append("cassette/manifest.json must hold a JSON object")
+            else:
+                if "format_version" not in manifest:
+                    problems.append("cassette/manifest.json has no format_version")
+                if not isinstance(manifest.get("minimized"), dict):
+                    problems.append(
+                        "cassette/manifest.json has no minimized block"
+                        " (cassettes come from trajectory minimize, not from copying a raw bundle)"
+                    )
     else:
         problems.append("cassette/manifest.json is missing")
 
+    structural: list[str] = []
     if spans_path.is_file():
-        problems.extend(_span_problems(cassette_dir, spans_path))
+        structural, references = _span_problems(cassette_dir, spans_path)
+        problems.extend(structural)
+        problems.extend(references)
     else:
         problems.append("cassette/spans.jsonl is missing")
 
     # Semantic completeness on top of the static checks: load the recording
-    # the way replay does and hold it to the minimize gate's contract.
-    if manifest_path.is_file() and spans_path.is_file():
+    # the way replay does and hold it to the minimize gate's contract. Gated
+    # on structurally sound spans — load_recording assumes well-formed span
+    # records (a non-mapping attributes value would crash it), and the
+    # structural problems above already fail the case.
+    if manifest_path.is_file() and spans_path.is_file() and not structural:
         try:
             recording = load_recording(cassette_dir)
         except (OSError, ValueError) as exc:
@@ -482,30 +542,40 @@ def _cassette_problems(cassette_dir: Path) -> list[str]:
     return problems
 
 
-def _span_problems(cassette_dir: Path, spans_path: Path) -> list[str]:
-    problems: list[str] = []
+def _span_problems(cassette_dir: Path, spans_path: Path) -> tuple[list[str], list[str]]:
+    """Static span checks: (structural problems, artifact reference problems).
+
+    Structural problems mean the span records themselves are malformed and
+    the caller must not feed the file to ``load_recording``; reference
+    problems leave the structure sound (replay tolerates a missing payload,
+    the semantic pass reports it)."""
+    structural: list[str] = []
+    references: list[str] = []
     try:
         lines = spans_path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError) as exc:
-        return [f"cassette/spans.jsonl cannot be read: {exc}"]
+        return [f"cassette/spans.jsonl cannot be read: {exc}"], []
     for line_no, line in enumerate(lines, 1):
         if not line.strip():
             continue
         try:
             span = json.loads(line)
         except json.JSONDecodeError:
-            problems.append(f"cassette/spans.jsonl line {line_no} is not valid JSON")
+            structural.append(f"cassette/spans.jsonl line {line_no} is not valid JSON")
             continue
         if not isinstance(span, dict):
-            problems.append(f"cassette/spans.jsonl line {line_no} is not a JSON object")
+            structural.append(f"cassette/spans.jsonl line {line_no} is not a JSON object")
             continue
         attrs = span.get("attributes")
+        if attrs is None:
+            continue
         if not isinstance(attrs, dict):
+            structural.append(f"cassette/spans.jsonl line {line_no}: attributes must be a mapping")
             continue
         for key, ref in attrs.items():
             if isinstance(key, str) and key.endswith(".artifact_path"):
-                problems.extend(_artifact_ref_problems(cassette_dir, line_no, key, ref))
-    return problems
+                references.extend(_artifact_ref_problems(cassette_dir, line_no, key, ref))
+    return structural, references
 
 
 def _artifact_ref_problems(cassette_dir: Path, line_no: int, key: str, ref: Any) -> list[str]:

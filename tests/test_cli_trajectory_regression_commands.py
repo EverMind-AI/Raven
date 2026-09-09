@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -70,6 +71,27 @@ def test_validate_all_passing_cases_exit_0(tmp_path) -> None:
 
     assert r.exit_code == 0, r.output
     assert "2 case(s), 0 problem(s)" in r.stdout
+
+
+def test_validate_all_survives_malformed_cases_and_still_checks_the_rest(tmp_path) -> None:
+    """A case with broken YAML or malformed span records must be reported as
+    problems, not raise and cut the --all sweep short."""
+    bad_yaml = _case_copy(tmp_path, "a_bad_yaml")
+    (bad_yaml / "case.yaml").write_text("issue: [\n", encoding="utf-8")
+    bad_spans = _case_copy(tmp_path, "b_bad_spans")
+    spans_path = bad_spans / "cassette" / "spans.jsonl"
+    spans = [json.loads(x) for x in spans_path.read_text(encoding="utf-8").splitlines()]
+    spans[0]["attributes"] = ["not", "a", "mapping"]
+    spans_path.write_text("".join(json.dumps(s) + "\n" for s in spans), encoding="utf-8")
+    _case_copy(tmp_path, "c_good")
+
+    r = runner.invoke(trajectory_app, ["regression", "validate", "--all", "--root", str(tmp_path)])
+
+    assert r.exit_code == 1
+    assert "cannot be parsed as YAML" in r.stdout
+    assert "attributes must be a mapping" in r.stdout
+    assert "c_good" in r.stdout
+    assert "3 case(s)" in r.stdout
 
 
 def test_validate_all_missing_root_exits_1(tmp_path) -> None:
