@@ -97,7 +97,7 @@ def test_help_swallows_keys_until_any_key_returns():
 
 def test_help_content_lists_new_keys_in_aligned_columns():
     viewer = pviewer._PreviewViewer(_static_lines(), "Preview #1")
-    viewer._app = SimpleNamespace(output=_SizedOutput())
+    viewer._app = SimpleNamespace(output=_SizedOutput(columns=70, rows=20))
     viewer._state = pviewer._STATE_HELP
     text = "".join(fragment for _style, fragment in viewer._content_fragments())
     for token in ("collapse / expand", "filter by label", "this help", "back to the attempt list", "Ctrl+C"):
@@ -193,7 +193,7 @@ def test_resize_recomputes_width_and_clamps_offset():
 
 def test_status_bar_states():
     viewer = pviewer._PreviewViewer(_static_lines(20), "Preview #1")
-    viewer._app = SimpleNamespace(output=_SizedOutput(rows=6))
+    viewer._app = SimpleNamespace(output=_SizedOutput(columns=100, rows=6))
 
     def status():
         return "".join(fragment for _style, fragment in viewer._status_fragments())
@@ -209,6 +209,30 @@ def test_status_bar_states():
     assert all(style == "fg:#808080" for style, _text in styled)  # muted bar
     text = status()
     assert "collapsed" in text and "filter: llm" in text
+
+
+def test_status_bar_narrow_keeps_hint_and_range():
+    viewer = pviewer._PreviewViewer(_static_lines(30), "Preview #1")
+    viewer._app = SimpleNamespace(output=_SizedOutput(columns=40, rows=10))
+    viewer._collapse = True
+    viewer._filter = "llm"
+    text = "".join(fragment for _style, fragment in viewer._status_fragments())
+    assert pviewer._cwidth(text) <= 40
+    assert "h for help" in text
+    assert "1-9/30" in text
+    assert "…" in text  # a variable field was clipped, not the essentials
+
+    # Wide CJK filter: budgeting is by display width, not len().
+    viewer._filter = "中文过滤中文过滤中文过滤"
+    text = "".join(fragment for _style, fragment in viewer._status_fragments())
+    assert pviewer._cwidth(text) <= 40
+    assert "h for help" in text and "1-9/30" in text
+
+    # Degenerate width: the bar never overflows, the range survives longest.
+    viewer._app = SimpleNamespace(output=_SizedOutput(columns=12, rows=10))
+    text = "".join(fragment for _style, fragment in viewer._status_fragments())
+    assert pviewer._cwidth(text) <= 12
+    assert "1-9/30" in text
 
 
 # ── rich -> prompt_toolkit fragments ──────────────────────────────────
@@ -232,3 +256,116 @@ def test_line_fragments_cover_line_styles_and_spans():
 
     joined = "".join(t for _s, t in pviewer._line_fragments(spans))
     assert joined == "Tool output: body"  # no characters lost or repeated
+
+
+# ── real rendered screen ──────────────────────────────────────────────
+
+
+def _screen_rows(screen):
+    # Screen.width stays 0 under DummyOutput; read each row's real extent.
+    rows = []
+    height = max(screen.height, max(screen.data_buffer.keys(), default=-1) + 1)
+    for y in range(height):
+        row = screen.data_buffer[y]
+        row_width = max(row.keys(), default=-1) + 1
+        rows.append("".join(row[x].char for x in range(row_width)).rstrip())
+    return rows
+
+
+def _last_frame(frames):
+    for frame in reversed(frames):
+        if any(row for row in frame):
+            return frame
+    raise AssertionError("no rendered frame with content")
+
+
+def _run_capture(keys, make_lines, output):
+    """Run the viewer collecting every really-rendered frame (row lists)."""
+    viewer = pviewer._PreviewViewer(make_lines, "Preview #1")
+    frames = []
+    with create_pipe_input() as pipe:
+        app = viewer._build_app(input=pipe, output=output)
+        viewer._app = app
+
+        def _snap(rendering_app):
+            screen = rendering_app.renderer.last_rendered_screen
+            if screen is not None:
+                frames.append(_screen_rows(screen))
+
+        app.after_render += _snap
+        pipe.send_text(keys)
+        result = app.run()
+    return viewer, result, frames
+
+
+def test_rendered_status_bar_survives_collapse_and_filter_on_narrow_screen():
+    output = _SizedOutput(columns=40, rows=10)
+    viewer, result, frames = _run_capture("s%llm\r\x03", _static_lines(30, text="LLM line"), output)
+    assert result == pviewer._RESULT_CANCELLED
+    assert viewer._collapse and viewer._filter == "llm"
+    bars = [frame[-1] for frame in frames]
+    assert all(pviewer._cwidth(bar) <= 40 for bar in bars)
+    final = _last_frame(frames)[-1]
+    assert "h for help" in final
+    assert "/30" in final and "1-9" in final
+
+
+def test_rendered_status_bar_with_long_and_cjk_filters():
+    long_needle = "a-very-long-filter-string-typed-by-hand-that-keeps-going"
+    viewer, _result, frames = _run_capture(
+        f"%{long_needle}\r\x03", _static_lines(30), _SizedOutput(columns=80, rows=10)
+    )
+    bar = _last_frame(frames)[-1]
+    assert pviewer._cwidth(bar) <= 80
+    assert "h for help" in bar and "/30" in bar
+
+    viewer, _result, frames = _run_capture("%中文过滤\r\x03", _static_lines(30), _SizedOutput(columns=40, rows=10))
+    bar = _last_frame(frames)[-1]
+    assert pviewer._cwidth(bar) <= 40
+    assert "h for help" in bar and "/30" in bar
+    assert viewer._filter == "中文过滤"
+
+
+def _render_frame(viewer, output, state=None, help_offset=0):
+    """One synchronous real render (layout -> screen) of the given state."""
+    from prompt_toolkit.application.current import set_app
+
+    with create_pipe_input() as pipe:
+        app = viewer._build_app(input=pipe, output=output)
+        viewer._app = app
+        if state is not None:
+            viewer._state = state
+            viewer._help_offset = help_offset
+        with set_app(app):
+            app.renderer.render(app, app.layout)
+        return _screen_rows(app.renderer.last_rendered_screen)
+
+
+def test_rendered_help_is_fully_reachable_on_small_screens():
+    output = _SizedOutput(columns=40, rows=10)
+    viewer = pviewer._PreviewViewer(_static_lines(30), "Preview #1")
+    first_page = "\n".join(_render_frame(viewer, output, state=pviewer._STATE_HELP))
+    assert "Preview keys" in first_page
+    assert "Ctrl+C" not in first_page  # the tail starts off-screen ...
+
+    bottom = "\n".join(_render_frame(viewer, output, state=pviewer._STATE_HELP, help_offset=999))
+    assert "Ctrl+C" in bottom  # ... and scrolling reaches it
+    assert all(pviewer._cwidth(row) <= 40 for row in bottom.split("\n"))
+
+    # The scroll keys really move the help page (states drive the render above).
+    scrolled, _result = _run("h  \x03", _static_lines(30), output=_SizedOutput(columns=40, rows=10))
+    assert scrolled._state == pviewer._STATE_HELP
+    assert scrolled._help_offset > 0
+
+    # Long descriptions wrap at narrow widths instead of clipping: the full
+    # sentence is reachable across the wrapped help lines.
+    joined = "".join(viewer._help_lines(40))
+    assert "collapse / expand long contents" in joined
+
+
+def test_help_scrolling_preserves_preview_position():
+    output = _SizedOutput(columns=40, rows=10)
+    viewer, result = _run("jjh  xq", _static_lines(30), output=output)
+    assert result == pviewer._RESULT_DONE
+    assert viewer._offset == 2  # the preview position survived the help visit
+    assert viewer._state == pviewer._STATE_VIEW

@@ -66,10 +66,50 @@ _HELP_LINES = (
     "  q / Esc          back to the attempt list",
     "  Ctrl+C           quit the browser",
     "",
-    "press any key to go back",
+    "scroll keys page this help; any other key goes back",
 )
 
 _NO_MATCH_LINE = "(no items match the filter)"
+_HELP_HINT = "h for help"
+
+
+def _cwidth(text: str) -> int:
+    from prompt_toolkit.utils import get_cwidth
+
+    return get_cwidth(text)
+
+
+def _clip_cells(text: str, cells: int) -> str:
+    """Truncate by display width (an ellipsis replaces the overflow)."""
+    if cells <= 0:
+        return ""
+    if _cwidth(text) <= cells:
+        return text
+    out: list[str] = []
+    used = 0
+    for ch in text:
+        w = _cwidth(ch)
+        if used + w > cells - 1:
+            break
+        out.append(ch)
+        used += w
+    return "".join(out) + "…"
+
+
+def _wrap_cells(text: str, width: int) -> list[str]:
+    """Hard-wrap one line by display width (help text is short and plain)."""
+    lines: list[str] = []
+    current: list[str] = []
+    used = 0
+    for ch in text:
+        w = _cwidth(ch)
+        if current and used + w > width:
+            lines.append("".join(current))
+            current, used = [], 0
+        current.append(ch)
+        used += w
+    lines.append("".join(current))
+    return lines
 
 
 class LinesProvider(Protocol):
@@ -116,6 +156,7 @@ class _PreviewViewer:
         self._collapse = False
         self._filter: str | None = None
         self._offset = 0
+        self._help_offset = 0
         self._state = _STATE_VIEW
         self._cache: dict[tuple[bool, str | None, int], list[Text]] = {}
         self._app: Any = None
@@ -140,19 +181,44 @@ class _PreviewViewer:
             self._cache[key] = cached
         return cached
 
-    def _clamp(self, total: int, height: int) -> None:
-        self._offset = max(0, min(self._offset, total - height))
+    def _help_lines(self, width: int) -> list[str]:
+        wrapped: list[str] = []
+        for line in _HELP_LINES:
+            wrapped.extend(_wrap_cells(line, max(width, 2)))
+        return wrapped
+
+    def _in_help(self) -> bool:
+        return self._state == _STATE_HELP
+
+    def _total(self, width: int) -> int:
+        return len(self._help_lines(width)) if self._in_help() else len(self._lines(width))
+
+    def _get_offset(self) -> int:
+        return self._help_offset if self._in_help() else self._offset
+
+    def _set_offset(self, value: int) -> None:
+        if self._in_help():
+            self._help_offset = value
+        else:
+            self._offset = value
+
+    def _clamp_active(self) -> None:
+        width, height = self._size()
+        total = self._total(width)
+        self._set_offset(max(0, min(self._get_offset(), total - height)))
 
     # -- content -------------------------------------------------------
 
     def _content_fragments(self) -> list[tuple[str, str]]:
-        if self._state == _STATE_HELP:
-            return [("", "\n".join(_HELP_LINES))]
         width, height = self._size()
+        self._clamp_active()
+        offset = self._get_offset()
+        if self._in_help():
+            page = self._help_lines(width)[offset : offset + height]
+            return [("", "\n".join(page))]
         lines = self._lines(width)
-        self._clamp(len(lines), height)
         fragments: list[tuple[str, str]] = []
-        for line in lines[self._offset : self._offset + height]:
+        for line in lines[offset : offset + height]:
             fragments.extend(_line_fragments(line))
             fragments.append(("", "\n"))
         if fragments:
@@ -160,44 +226,65 @@ class _PreviewViewer:
         return fragments
 
     def _status_fragments(self) -> list[tuple[str, str]]:
+        """The bottom bar, laid out by display width for the real terminal.
+
+        The scroll range and the help hint always survive; the variable
+        fields (title, filter, collapsed) shrink first — the first one that
+        does not fit whole is clipped and the rest are dropped. On a terminal
+        too narrow even for the hint, the hint compacts to ``h`` and finally
+        the whole bar clips rather than overflowing."""
         width, height = self._size()
-        total = len(self._lines(width))
-        self._clamp(total, height)
-        first = min(self._offset + 1, total)
-        last = min(self._offset + height, total)
-        left = [self._title]
-        if self._filter:
-            left.append(f"filter: {self._filter}")
-        if self._collapse:
-            left.append("collapsed")
-        left.append("h for help")
-        left_text = " · ".join(left)
-        right_text = f"{first}-{last}/{total}"
-        gap = max(width - len(left_text) - len(right_text) - 1, 1)
-        return [("fg:#808080", left_text + " " * gap + right_text)]
+        self._clamp_active()
+        total = self._total(width)
+        offset = self._get_offset()
+        first = min(offset + 1, total)
+        last = min(offset + height, total)
+        right = f"{first}-{last}/{total}"
+        if self._in_help():
+            variable = [self._title, "help"]
+        else:
+            variable = [self._title]
+            if self._filter:
+                variable.append(f"filter: {self._filter}")
+            if self._collapse:
+                variable.append("collapsed")
+        available = width - _cwidth(right) - 1
+        hint = _HELP_HINT if _cwidth(_HELP_HINT) <= available else ("h" if available >= 1 else "")
+        budget = available - _cwidth(hint) - (3 if hint else 0)
+        kept: list[str] = []
+        for part in variable:
+            need = _cwidth(part) + (3 if kept else 0)
+            if need <= budget:
+                kept.append(part)
+                budget -= need
+                continue
+            clipped = _clip_cells(part, budget - (3 if kept else 0))
+            if clipped:
+                kept.append(clipped)
+            break
+        left_text = " · ".join([*kept, hint] if hint else kept)
+        gap = max(width - _cwidth(left_text) - _cwidth(right), 1)
+        bar = left_text + " " * gap + right
+        return [("fg:#808080", _clip_cells(bar, width) if _cwidth(bar) > width else bar)]
 
     # -- state changes -------------------------------------------------
 
-    def _rescale(self) -> None:
-        width, height = self._size()
-        self._clamp(len(self._lines(width)), height)
-
     def _move(self, lines: int) -> None:
-        self._offset += lines
-        self._rescale()
+        self._set_offset(self._get_offset() + lines)
+        self._clamp_active()
 
     def _page(self, direction: int) -> None:
         _width, height = self._size()
-        self._offset += direction * max(height - 1, 1)
-        self._rescale()
+        self._set_offset(self._get_offset() + direction * max(height - 1, 1))
+        self._clamp_active()
 
     def _to_end(self) -> None:
         width, height = self._size()
-        self._offset = max(0, len(self._lines(width)) - height)
+        self._set_offset(max(0, self._total(width) - height))
 
     def _toggle_collapse(self) -> None:
         self._collapse = not self._collapse
-        self._rescale()
+        self._clamp_active()
 
     def _apply_filter(self, needle: str) -> None:
         # Typed (or pasted) input is untrusted like everything else on this
@@ -242,27 +329,28 @@ class _PreviewViewer:
 
         kb = KeyBindings()
 
-        def _bind_view(*keys: Any):
+        def _bind(condition: Any, *keys: Any):
             def decorate(handler):
                 for key in keys:
-                    kb.add(key, filter=in_view)(handler)
+                    kb.add(key, filter=condition)(handler)
                 return handler
 
             return decorate
 
-        @_bind_view("q", "escape")
+        @_bind(in_view, "q", "escape")
         def _quit(event: Any) -> None:
             event.app.exit(result=_RESULT_DONE)
 
-        @_bind_view("h")
+        @_bind(in_view, "h")
         def _help(event: Any) -> None:
+            self._help_offset = 0
             self._state = _STATE_HELP
 
-        @_bind_view("s")
+        @_bind(in_view, "s")
         def _collapse(event: Any) -> None:
             self._toggle_collapse()
 
-        @_bind_view("%")
+        @_bind(in_view, "%")
         def _filter(event: Any) -> None:
             # The input starts empty: pressing Enter with nothing typed is
             # the documented way to clear the current filter.
@@ -270,30 +358,10 @@ class _PreviewViewer:
             self._state = _STATE_FILTER
             event.app.layout.focus(filter_control)
 
-        @_bind_view("up", "k")
-        def _up(event: Any) -> None:
-            self._move(-1)
-
-        @_bind_view("down", "j")
-        def _down(event: Any) -> None:
-            self._move(1)
-
-        @_bind_view("pageup", "b")
-        def _pageup(event: Any) -> None:
-            self._page(-1)
-
-        @_bind_view("pagedown", " ", "f")
-        def _pagedown(event: Any) -> None:
-            self._page(1)
-
-        @_bind_view("g", "home")
-        def _top(event: Any) -> None:
-            self._offset = 0
-
-        @_bind_view("G", "end")
-        def _bottom(event: Any) -> None:
-            self._to_end()
-
+        # Any-key-returns is registered before the scroll keys: a later
+        # registration wins in prompt_toolkit, so in help the scroll keys
+        # page the help text while every other key drops back to the preview
+        # (its own scroll position untouched).
         @kb.add(Keys.Any, filter=in_help)
         def _leave_help(event: Any) -> None:
             self._state = _STATE_VIEW
@@ -301,6 +369,32 @@ class _PreviewViewer:
         @kb.add("escape", filter=in_help, eager=True)
         def _leave_help_esc(event: Any) -> None:
             self._state = _STATE_VIEW
+
+        scrolling = in_view | in_help
+
+        @_bind(scrolling, "up", "k")
+        def _up(event: Any) -> None:
+            self._move(-1)
+
+        @_bind(scrolling, "down", "j")
+        def _down(event: Any) -> None:
+            self._move(1)
+
+        @_bind(scrolling, "pageup", "b")
+        def _pageup(event: Any) -> None:
+            self._page(-1)
+
+        @_bind(scrolling, "pagedown", " ", "f")
+        def _pagedown(event: Any) -> None:
+            self._page(1)
+
+        @_bind(scrolling, "g", "home")
+        def _top(event: Any) -> None:
+            self._set_offset(0)
+
+        @_bind(scrolling, "G", "end")
+        def _bottom(event: Any) -> None:
+            self._to_end()
 
         @kb.add("enter", filter=in_filter)
         def _apply(event: Any) -> None:
