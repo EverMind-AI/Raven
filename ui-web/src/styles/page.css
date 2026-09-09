@@ -3128,6 +3128,32 @@ details[open] summary { margin-bottom: 8px; }
 .pmperm .row { display: flex; gap: 9px; align-items: baseline; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
 .pmperm .pmdot { background: var(--gold); position: relative; top: -2px; }
 .pmdesc { font-size: 12.5px; color: var(--muted); line-height: 1.7; white-space: pre-wrap; }
+
+/* A card fact the reader owns. Unpressed it is the text itself and nothing else
+   -- no box, no pencil, no second colour: the card's job is to be read, and a
+   control drawn around every editable line is five things to look at again. The
+   hover tint is the whole of the affordance, and the title says what it does. */
+.xaedit {
+  font: inherit; color: inherit; text-align: left; width: 100%;
+  background: none; border: 0; border-radius: 6px; padding: 1px 5px; margin: -1px -5px;
+  cursor: text; white-space: pre-wrap;
+}
+.xaedit:hover { background: var(--surface); }
+.xaedit .none { color: var(--faint); }
+/* Once pressed it is a field, and looks like one: the reader is typing and needs
+   to see where the text ends. */
+.xaedit.on {
+  background: var(--ink); border: 1px solid var(--line); cursor: text;
+  padding: 1px 5px; resize: vertical; outline: none;
+}
+.xaedit.on:focus { border-color: var(--line-strong, var(--line)); }
+
+/* The pictures a generate call produced, in the card the call opens. The shelf's
+   own `.pic` chrome, so a generated image and a delivered one are the same
+   object to look at -- they are the same file, one of them handed over. */
+.gshots { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.gshots .pic.shot img { cursor: zoom-in; max-height: 260px; width: auto; }
+.gshots.set .pic.shot img { max-height: 160px; }
 .pmtool {
   font-family: var(--mono); font-size: 11px; color: var(--muted);
   background: var(--surface); border-radius: 7px; padding: 5px 10px; margin-bottom: 4px;

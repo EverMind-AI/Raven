@@ -1708,9 +1708,13 @@ direct-chat activity: per instance, a UTC time span and the paths of each turn's
 `prompt.md` and `out.md`, inside `subagents/direct/<agent>/<handle>/<call_id>/` beside the
 Subagent history. Activity, not only chats - a User-Created Instance is reported in its own
 right, and one with no turns yet names no path, because the record directories are made per
-turn. Carries no transcript text. Accumulated per session by `DirectChatHandoff`
-and taken-and-cleared on the next turn that has no `direct_target`, so a segment is reported
-exactly once. Every byte in it is raven-minted - agent names from config, handles from the
+turn. An instance answering a direct turn at take time is reported as running, with the
+time it began answering (the handle lock held, not the moment the turn queued), read from
+the manager's live view (`live_direct_turns`) because its
+record lands only when the turn ends; that line recurs on every take while the turn runs.
+Carries no transcript text. Accumulated per session by `DirectChatHandoff`
+and taken-and-cleared on the next turn that has no `direct_target`, so a landed segment is
+reported exactly once. Every byte in it is raven-minted - agent names from config, handles from the
 registry (minted, never typed), call ids from `make_call_id` - which is why it is prepended
 unwrapped; a field echoing a sub-agent's own reply would break that.
 _Avoid_: "handoff summary" - it is deliberately not a summary; nothing in it is generated.

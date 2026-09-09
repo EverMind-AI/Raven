@@ -263,6 +263,10 @@ class SubagentManager:
         # completes, and cancel_by_instance must reach every one of them, not
         # just whichever spawn happened to overwrite the slot last.
         self._instance_tasks: dict[tuple[str, str, str], set[str]] = {}
+        # When each direct chat in flight began answering (handle lock held),
+        # by instance -- what ``live_direct_turns`` answers from. Keyed the way
+        # ``_hold_instance_slot`` keys, so both index one turn the same way.
+        self._direct_live: dict[tuple[str, str, str], int] = {}
         self._gate = asyncio.Semaphore(max_concurrent)
         # Kept alongside the gate because a Semaphore does not expose the value
         # it was built with, and the TUI's spawn HUD needs the cap to render a
@@ -921,6 +925,11 @@ class SubagentManager:
 
         record = DirectChatRecord.open(session_dir, agent=agent, handle=handle, task_id=task_id, task=recorded)
         async with self._hold_instance_slot(session_key, agent, handle), hold_handle(session_key, agent, handle):
+            # Stamped here and not on the slot: the slot is taken before the
+            # handle lock, and a chat queued behind another holder of the handle
+            # is not answering yet. What live_direct_turns reports as "answering
+            # since" is the moment the lock was held.
+            self._direct_live[(session_key or "default", agent, handle)] = int(time.time() * 1000)
             await _write_spawn_status(session_key, agent, handle, "running")
             kwargs: dict[str, Any] = {}
             if state is not None:
@@ -1029,10 +1038,24 @@ class SubagentManager:
             yield
         finally:
             self._running_tasks.pop(task_id, None)
+            # Written by chat() once the handle lock is held; absent when the
+            # turn never got that far.
+            self._direct_live.pop(key, None)
             if (ids := self._instance_tasks.get(key)) is not None:
                 ids.discard(task_id)
                 if not ids:
                     del self._instance_tasks[key]
+
+    def live_direct_turns(self, session_key: str) -> list[tuple[str, str, int]]:
+        """``(agent, handle, started_at_ms)`` for each direct chat of this session
+        answering now.
+
+        Read by the direct-chat handoff: its own records are appended as turns
+        land, so a turn still running is invisible to it, and a five-minute
+        direct chat was reported to the main agent as an instance with no turns
+        yet -- which it then dispatched to (2026-09-08).
+        """
+        return [(a, h, at) for (s, a, h), at in self._direct_live.items() if s == (session_key or "default")]
 
     def agent_modes(self, agent: str) -> tuple[Any, ...]:
         """The operating profiles ``agent`` offers, as its probe measured them.
@@ -1394,14 +1417,12 @@ class SubagentManager:
         # filename prefix in the shared node root now, so the directory names
         # the namespace rather than the call.
         call_id = record.node_id
-        with activity.collecting(
-            live_key=call_id, instance=(session_key or "", agent or "", handle), prompt=task
-        ) as did:
+        # Indexed by instance only once the handle lock is held, below: a spawn
+        # queued behind a direct chat to the same instance is not that
+        # instance's turn yet, and registering it here took the slot from the
+        # turn that was (see ``activity.collecting``).
+        with activity.collecting(live_key=call_id, prompt=task) as did:
             try:
-                await _write_spawn_status(session_key, agent, handle, "running")
-                self._emit_status(
-                    origin, task_id, task_summary, "running", call_id=call_id, started_at=int(time.time() * 1000)
-                )
                 backend = self._resolve_backend(agent)
                 # The same message list a direct chat to this handle would carry.
                 # Without it an agent the roster advertises as stateful started every
@@ -1427,22 +1448,31 @@ class SubagentManager:
                 # now that a graph can name one) did not, which is what made the
                 # loss reachable without any playbook involved.
                 async with hold_handle(session_key or "", agent, handle):
+                    # ``running`` only now: until the lock is held the run is
+                    # still the ``pending`` spawn() reported, and a status
+                    # written earlier re-labelled an instance mid-answer with a
+                    # turn it had not started (2026-09-08).
+                    await _write_spawn_status(session_key, agent, handle, "running")
+                    self._emit_status(
+                        origin, task_id, task_summary, "running", call_id=call_id, started_at=int(time.time() * 1000)
+                    )
                     state_kwargs: dict[str, Any] = (
                         {"history": state.load(), "on_messages": state.save} if state is not None else {}
                     )
-                    final_result = await backend.run(
-                        task,
-                        task_id=task_id,
-                        workspace=effective_workspace,
-                        executor=executor,
-                        session_key=session_key,
-                        instance=origin.get("instance"),
-                        provider=provider,
-                        model=model,
-                        mode=self.resolve_mode(session_key, agent, origin.get("instance")),
-                        **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),
-                        **state_kwargs,
-                    )
+                    with activity.watching_instance(did, (session_key or "", agent or "", handle)):
+                        final_result = await backend.run(
+                            task,
+                            task_id=task_id,
+                            workspace=effective_workspace,
+                            executor=executor,
+                            session_key=session_key,
+                            instance=origin.get("instance"),
+                            provider=provider,
+                            model=model,
+                            mode=self.resolve_mode(session_key, agent, origin.get("instance")),
+                            **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),
+                            **state_kwargs,
+                        )
                 await _write_spawn_status(session_key, agent, handle, "completed")
                 self._emit_status(
                     origin, task_id, task_summary, "completed", call_id=call_id, ended_at=int(time.time() * 1000)

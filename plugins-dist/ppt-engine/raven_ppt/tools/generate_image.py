@@ -20,8 +20,8 @@ if TYPE_CHECKING:
     from raven.config.schema import MediaToolConfig
 
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-_OPENROUTER_MODEL = "openai/gpt-image-2"
-_COMPATIBLE_MODEL = "gpt-image-2"
+_OPENROUTER_MODEL = "openai/gpt-image-2.5-sunburst"
+_COMPATIBLE_MODEL = "gpt-image-2.5-sunburst"
 # How many pictures are asked for at once when a call carries several.
 _CONCURRENCY = 4
 
@@ -70,8 +70,28 @@ class PptGenerateImageTool(Tool):
         proxy: str | None = None,
     ) -> None:
         self.workspace = workspace
-        self.config = config
+        self._section = config
         self.proxy = proxy
+
+    @property
+    def config(self) -> "MediaToolConfig | None":
+        """The section as the host has it now, not as assembly saw it.
+
+        ``SessionTool`` keeps this tool for the life of the process, so a
+        boot-time snapshot serves a rotated key and a changed model until the
+        product restarts. A section carrying ``selectionConfig`` is a
+        host-owned selection, and the trunk's own media tools re-read one per
+        call through their callable source; this is the same resolution, and
+        it is deliberately the trunk's rather than a second policy -- a
+        section that leaves the host file answers "no key", which is how a
+        selection is revoked without a restart.
+        """
+        section = self._section
+        if not getattr(section, "selection_config", ""):
+            return section
+        from raven.config.live import resolve_media_selection
+
+        return resolve_media_selection(section, "image")
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -235,13 +255,22 @@ class PptGenerateImageTool(Tool):
     async def _one(self, deck: Project, spec: dict[str, Any]) -> dict[str, Any]:
         """Generate one picture into the deck's sources; the figure id is filled in after ingest."""
         prompt = str(spec.get("prompt") or "")
-        quality = str(spec.get("quality") or "high")
+        config = self.config
+        if "quality" in getattr(config, "model_fields_set", set()):
+            # The host's own setting outranks an omitted-or-supplied call
+            # argument, the shared media tool's precedence. Empty is a real
+            # answer there and means the provider's default, so it travels as
+            # no `quality` field at all rather than as an empty string.
+            quality = str(config.quality or "")
+        else:
+            quality = str(spec.get("quality") or "high")
         aspect_ratio = str(spec.get("aspect_ratio") or "16:9")
         transparent = bool(spec.get("transparent"))
         if transparent:
-            # The providers reached here take no `background` parameter (OpenRouter's
-            # gpt-image-2 answers "Accepted: auto, opaque", and asked in words it paints a
-            # checkerboard), so a cut-out is asked for on a green screen and keyed.
+            # The providers reached here take no `background` parameter (OpenRouter
+            # answers "Accepted: auto, opaque" for gpt-image-2.5-sunburst and
+            # gpt-image-2 alike, and asked in words the model paints a checkerboard),
+            # so a cut-out is asked for on a green screen and keyed.
             prompt = f"{prompt.rstrip()}\n\n{_CUT_OUT_PROMPT}"
         digest = hashlib.sha256(f"{self.model}\x00{quality}\x00{aspect_ratio}\x00{prompt}".encode("utf-8")).hexdigest()[
             :12
@@ -254,10 +283,11 @@ class PptGenerateImageTool(Tool):
             "model": self.model,
             "prompt": prompt,
             "n": 1,
-            "quality": quality,
             "aspect_ratio": aspect_ratio,
             "output_format": "png",
         }
+        if quality:
+            body["quality"] = quality
         try:
             response = await self._generate(body)
             payload = _image_bytes(response)

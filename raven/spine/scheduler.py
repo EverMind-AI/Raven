@@ -20,6 +20,23 @@ from raven.spine.events import RunnerEvent, TurnEnded, TurnEvent, TurnFailed, Tu
 from raven.spine.runner import Emit, TurnOutcome, TurnRunner
 from raven.spine.turn import BusyPolicy, Origin, TurnRequest
 
+
+def conversation_id(req: TurnRequest) -> str:
+    """The lane key a request runs on: its explicit conversation, else
+    ``<channel>:<chat_id>``.
+
+    One definition, because two things decide by it -- the scheduler picks the
+    lane, and the gateway's submit router picks the spine (a page session's key
+    starts with the page prefix). The scheduler is channel-agnostic: a channel
+    that keys by a thread or topic (a sub-conversation within a chat) formats
+    that key itself and passes it as the explicit conversation; only the
+    neutral default is derived here, knowing nothing channel-specific.
+    """
+    if req.conversation is not None:
+        return req.conversation
+    return f"{req.source.channel}:{req.source.chat_id}"
+
+
 EventSink = Callable[[TurnEvent], Awaitable[None]]
 
 # Tuple form (not the union) so a type checker can't flag the guard below as
@@ -602,13 +619,7 @@ class Scheduler:
         return BusyPolicy.APPEND
 
     def _conversation_id(self, req: TurnRequest) -> str:
-        if req.conversation is not None:
-            return req.conversation
-        # The scheduler is channel-agnostic: a channel that keys by a thread or
-        # topic (a sub-conversation within a chat) formats that key itself and
-        # passes it as the explicit conversation above. Here we only derive the
-        # neutral default, knowing nothing channel-specific.
-        return f"{req.source.channel}:{req.source.chat_id}"
+        return conversation_id(req)
 
     def _sweep(self, now: float) -> int:
         """Reap lanes idle (worker drained and gone) past _DEFAULT_IDLE_TTL; return

@@ -182,7 +182,12 @@ describe('approval round-trip', () => {
     expect(approvalRemainingSeconds(999, 1_000)).toBe(0)
   })
 
-  it('auto-denies and removes the visible choice at the runtime deadline', async () => {
+  it('answers nothing at the visible deadline, because a lapse is not a refusal', async () => {
+    /* It used to send `deny` here, and that was the one place a lapse became a
+       refusal. The runtime's hard ceiling sits a few seconds past this deadline
+       so that it can be the party that decides; answering first took the
+       decision away from it and told the model the user had said no. The
+       overlay is cleared by the runtime's own `approval.closed`. */
     vi.useFakeTimers()
     vi.setSystemTime(1_000)
     const onChoice = vi.fn()
@@ -202,7 +207,10 @@ describe('approval round-trip', () => {
 
     try {
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(onChoice).toHaveBeenCalledWith('deny', '', 'approval-a')
+      expect(onChoice).not.toHaveBeenCalled()
+      // And well past it: the prompt stays put rather than answering late.
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(onChoice).not.toHaveBeenCalled()
     } finally {
       rendered.unmount()
       vi.useRealTimers()
@@ -256,11 +264,17 @@ describe('an answer names the request that produced it', () => {
     vi.useRealTimers()
   })
 
-  it('carries the rendered prompt\'s id, so a queued expiry cannot answer its replacement', () => {
-    // The countdown is armed against the request on screen. If a second request
-    // takes the slot before that callback runs -- a sub-agent asking a second
-    // after the spawn that created it was allowed -- an answer with no id would
-    // refuse the new one, which nobody was shown.
+  it('cannot answer a replacement request, because the countdown answers nothing', () => {
+    // The hazard this pinned: the countdown was armed against the request on
+    // screen, and if a second one took the slot before the callback ran -- a
+    // sub-agent asking a second after the spawn that created it was allowed --
+    // the expiry refused the new one, which nobody had been shown. Carrying the
+    // rendered prompt's id was the guard against that.
+    //
+    // The expiry no longer answers at all, so there is no callback to mis-target
+    // and no id for it to carry. The runtime's own ceiling decides, and it knows
+    // which request it is deciding about. Kept as the case that says so: a
+    // countdown that starts answering again brings the whole hazard back.
     const answered: Array<[string, string | undefined]> = []
     const req = {
       approvalId: 'a-1',
@@ -281,6 +295,6 @@ describe('an answer names the request that produced it', () => {
     vi.advanceTimersByTime(31_000)
     app.unmount()
 
-    expect(answered).toEqual([['deny', 'a-1']])
+    expect(answered).toEqual([])
   })
 })

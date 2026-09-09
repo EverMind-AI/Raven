@@ -437,3 +437,66 @@ async def test_the_codex_sse_watchdog_runs_on_the_stream_idle_budget_not_the_cal
     await provider.chat([{"role": "user", "content": "hi"}])
 
     assert seen and seen[0]["timeout"] == 600 and seen[0]["idle_timeout"] == 7
+
+
+def test_a_replayed_assistant_message_carries_its_annotations() -> None:
+    """`annotations` is required on a `ResponseOutputTextParam`.
+
+    It is the reply's own field, not a request one, so an assistant message
+    being replayed has none to carry -- and the empty list is what says so.
+
+    Every request that carries earlier non-empty assistant text has this shape,
+    which is more than the case that found it: the second Iteration of a Turn
+    whose first one said something before calling a tool, and equally the first
+    Iteration of every Turn after the first in a conversation. A post-tool
+    Iteration is only affected when that assistant response included text; the
+    fixture below has no tool result in it at all.
+
+    Without the field the gateway refuses the request:
+
+        HTTP 400: 3 validation errors for ValidatorIterator
+        0.ResponseOutputTextParam.annotations
+          Field required [type=missing, input_value={'type': 'output_text', …
+
+    Measured on a live `raven serve` against a local vLLM. The loop spends its
+    three retries on it and then hands the reader the validation error as the
+    answer.
+    """
+    from raven.providers.openai_codex_provider import _convert_messages
+
+    _system, items = _convert_messages(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "let me look"},
+        ]
+    )
+
+    said = next(i for i in items if i.get("role") == "assistant")
+    part = said["content"][0]
+    assert part["type"] == "output_text"
+    assert part["annotations"] == []
+
+
+def test_every_replayed_assistant_message_carries_them_not_only_the_first() -> None:
+    """The trigger is the shape, not the position.
+
+    A conversation with several assistant messages replays all of them, and one
+    of them missing the field is one request refused -- so the property has to
+    hold per message, not for the fixture's only one. An assistant message with
+    no text produces no `output_text` part at all and is not a case.
+    """
+    from raven.providers.openai_codex_provider import _convert_messages
+
+    _system, items = _convert_messages(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "first"},
+            {"role": "user", "content": "again"},
+            {"role": "assistant", "content": "second"},
+            {"role": "assistant", "content": "", "tool_calls": []},
+        ]
+    )
+
+    parts = [c for i in items if i.get("role") == "assistant" for c in i.get("content", [])]
+    assert [p["text"] for p in parts] == ["first", "second"]
+    assert all(p["annotations"] == [] for p in parts)

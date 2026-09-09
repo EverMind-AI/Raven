@@ -675,6 +675,16 @@ def register(app: typer.Typer) -> None:
                     # spines (a tui cron job's reply, a subagent announce whose
                     # conversation lives on the page) to the page.
                     gw_hub.register(page_mount.outlet)
+                    # A runtime turn into a page session -- a sub-agent's result
+                    # relay, a deep-research delivery -- runs on the page spine,
+                    # on the lane the page's own turns to that session use, so
+                    # the two never run at once. Everything else stays on the
+                    # gateway spine, whose hub reaches the IM channels.
+                    from raven.gateway.submit_router import route_submit
+
+                    routed_submit = route_submit(page=page_mount.submit, channel=pro_submit)
+                    agent.subagents.set_submit(routed_submit)
+                    agent.set_deep_research_submit(routed_submit)
                     # Only now is this process a tui surface, so only now may it
                     # claim tui cron jobs. Deciding the partition here rather
                     # than from gateway.page.enabled is what keeps a gateway
