@@ -21,11 +21,6 @@
     "exec": {
       "timeout": 600
     },
-    "web": {
-      "search": {
-        "maxResults": 5
-      }
-    },
     "media": {
       "outputSubdir": "generated"
     },
