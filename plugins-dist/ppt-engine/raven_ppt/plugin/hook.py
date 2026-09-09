@@ -208,6 +208,8 @@ def _session_dirname(session_key: str) -> str:
 class PptEngineHook(AgentHook):
     """Material staging in, deck verification out, per turn."""
 
+    rolls_back_iterations = True
+
     def __init__(self, home: Path | None = None, *, deck_per_session: bool = True) -> None:
         self._home = home
         self._deck_per_session = deck_per_session

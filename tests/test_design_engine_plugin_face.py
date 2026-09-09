@@ -20,7 +20,8 @@ import pytest
 from raven.agent import workdir
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
-from raven.contracts.llm_provider import LLMResponse
+from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+from raven.contracts.loop_hooks import AgentHookContext
 from raven.spine import ChatType, Origin, Source, TurnRequest
 from raven_design.plugin import (
     make_hook,
@@ -360,6 +361,48 @@ async def test_completion_notice_rides_after_send(tmp_path):
         decision = await hook.after_send(SimpleNamespace(outbound_content="all wrapped"))
         assert decision.modified_content is None
     assert completion_notice(manager, str(tmp_path)) is None
+
+
+@pytest.mark.asyncio
+async def test_stale_ledger_sends_the_turn_back_once(tmp_path):
+    """A reply ending the turn on an unfinished ledger is still a draft.
+
+    The notice travels with the reply, and on a dispatch there is no next turn
+    to act on it -- the caller's judge reads it as work not done. So the turn
+    goes back once and the agent settles its own record; whatever the second
+    answer says then stands, because an item still open after that is a fact
+    the judge should see.
+    """
+    manager = TaskStateManager(tmp_path / "ts")
+    hook = DesignEngineHook(EngineConfig.from_slice(SHIPPED_SLICE), None, manager)
+
+    def iteration(response: LLMResponse, meta: dict) -> AgentHookContext:
+        return AgentHookContext(session_key="s1", iteration=1, messages=[], response=response, metadata=meta)
+
+    ending = LLMResponse(content="delivered", finish_reason="stop")
+    with workdir.bind(tmp_path):
+        key = str(tmp_path)
+        manager.apply(
+            key,
+            [{"operation": "initialize", "state": {"goal": "Ship it", "items": [{"title": "Draft"}]}}],
+        )
+        turn: dict = {}
+        first = await hook.after_iteration(iteration(ending, turn))
+        assert first.rollback is True
+        assert "[Task State] This task is not complete" in first.rollback_inject[0]["content"]
+
+        assert (await hook.after_iteration(iteration(ending, turn))).rollback is False, "once per turn"
+
+        mid = LLMResponse(
+            content="reading the brief",
+            tool_calls=[ToolCallRequest(id="1", name="read_file", arguments={})],
+            finish_reason="tool_calls",
+        )
+        assert (await hook.after_iteration(iteration(mid, {}))).rollback is False, "a tool call is not the turn ending"
+
+        manager.apply(key, [{"operation": "complete", "item_number": 1}])
+        settled = await hook.after_iteration(iteration(ending, {}))
+        assert settled.rollback is False, "a settled ledger has nothing to reconcile"
 
 
 # --- the parameterized history pin (replaces the A/B no-pollution axis) ----------
