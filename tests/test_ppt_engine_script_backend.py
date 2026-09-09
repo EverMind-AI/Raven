@@ -172,6 +172,29 @@ async def test_a_helper_the_author_edited_is_restored_on_the_next_build(project:
 
 
 @pytest.mark.asyncio
+async def test_a_restored_helper_is_named_in_the_build_note(project: Project) -> None:
+    """The restore above is right, and it was also silent.
+
+    A run wrote its own themes.json so a theme name of its own would resolve,
+    the next build put the engine's file back, and the run then read that file
+    127 times over an hour trying to find where its edit had gone -- every read
+    succeeding, so nothing counted it as failure. The restore stands; what
+    changes is that the build says it happened.
+    """
+    helpers = HelperSources(theme="THEMES = {'a': 1}\n")
+    provision(project, helpers)
+    (project.build_dir / "ppt_theme.py").write_text("THEMES = {'mine': 2}\n", encoding="utf-8")
+
+    outcome = await run_script(project, DECK, helpers=helpers, timeout_s=120.0)
+    assert outcome.ok, outcome.stderr
+    assert "ppt_theme.py" in (outcome.note or ""), "the build names the helper it put back"
+    assert (project.build_dir / "ppt_theme.py").read_text() == "THEMES = {'a': 1}\n"
+
+    again = await run_script(project, DECK, helpers=helpers, timeout_s=120.0)
+    assert "ppt_theme.py" not in (again.note or ""), "and says nothing when nothing was edited"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("submission", [" ", "\n", "# use existing build.py"])
 async def test_a_submission_with_no_program_runs_what_is_there(project: Project, submission: str) -> None:
     """Both halves matter, and each cost a run.

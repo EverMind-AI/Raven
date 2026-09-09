@@ -63,6 +63,8 @@ from raven.agent.loop._shared import (
     json,
     logger,
     loop_break_nudge,
+    no_progress_key,
+    no_progress_nudge,
     replace,
     resolve_context_window,
     resolve_max_output_tokens,
@@ -746,6 +748,12 @@ class TurnPathMixin:
         loop_fail_key: tuple[str, str] | None = None
         loop_fail_streak = 0
         loop_nudges = 0
+        # No-progress loop break: how many times each exact call has already
+        # given the same exact answer this turn, which keys have been nudged
+        # for, and which one is waiting to be.
+        no_progress_seen: dict[str, int] = {}
+        no_progress_fired: set[str] = set()
+        no_progress_hit: tuple[str, str, int] | None = None
         # Empty-response recovery state, local to the turn — the AgentLoop is a
         # long-lived singleton shared across sessions, so per-instance counters
         # would leak across turns; resetting here gives clean per-turn budgets.
@@ -1435,6 +1443,18 @@ class TurnPathMixin:
                             loop_fail_key, loop_fail_streak = failure_key, 1
                     else:
                         loop_fail_key, loop_fail_streak = None, 0
+                    # Counted for every call, failures included: a call failing
+                    # identically is stuck too, and the branch above just has an
+                    # earlier threshold for that shape.
+                    # The routed blocks, not the raw ones: what the model receives is
+                    # what decides whether this call answered anything new.
+                    progress_key = no_progress_key(
+                        tool_call.name, tool_call.arguments, model_text, blocks or attach_blocks
+                    )
+                    repeats = no_progress_seen.get(progress_key, 0) + 1
+                    no_progress_seen[progress_key] = repeats
+                    if repeats >= self._NO_PROGRESS_THRESHOLD and progress_key not in no_progress_fired:
+                        no_progress_hit = (progress_key, tool_call.name, repeats)
 
                 if continuation is Continuation.ABORT_TURN:
                     # A normal tool result starts another model iteration. That
@@ -1487,6 +1507,21 @@ class TurnPathMixin:
                         )
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
+                # And the other stuck shape: the call works, and keeps saying the
+                # same thing. Second, because the failure nudge is the more
+                # specific advice and reaches its threshold first.
+                elif (
+                    no_progress_hit is not None
+                    and len(no_progress_fired) < self._NO_PROGRESS_MAX
+                    and messages
+                    and messages[-1].get("role") == "tool"
+                ):
+                    fired_key, fired_tool, fired_repeats = no_progress_hit
+                    no_progress_fired.add(fired_key)
+                    no_progress_hit = None
+                    messages[-1]["content"] = (
+                        str(messages[-1].get("content", "")) + "\n\n" + no_progress_nudge(fired_tool, fired_repeats)
+                    )
                 # After the nudge above, which needs the last message to still be
                 # the tool result it appends to. Also after the blocked-call
                 # branch, which ends the turn in runtime code -- there is no

@@ -1387,10 +1387,7 @@ the mode reads it), `deny` is refused. Resolved from the user's
 `permissions.tools` node -- a tool name to a tier, or for `exec` a table of
 command prefix patterns where specific matches resolve strictest-wins and `*`
 is the fallback -- with read-only tools defaulting to allow and everything
-else, unknown tools included, to ask. One tool defaults to allow without being
-a read: `deliver_files`, whose recipient is the user themself and which is the
-only route a finished file has to them, so asking there loses the file rather
-than guarding it. A user rule still outranks the default in both directions.
+else, unknown tools included, to ask.
 
 **Templates** (`templates/`):
 Packaged data assets, zero Python: read as package data (`utils/workspace.py`)

@@ -133,6 +133,15 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
 
     _LOOP_BREAK_MAX = 2
 
+    # No-progress loop break: nudge after one exact call has given one exact
+    # answer this many times in a turn. Higher than the failure threshold on
+    # purpose -- repeating a call that works is ordinary (a poll waiting on a
+    # condition, a re-read after an edit), and only an answer that never moves
+    # is the stuck case. Same per-turn cap, for the same reason.
+    _NO_PROGRESS_THRESHOLD = 8
+
+    _NO_PROGRESS_MAX = 2
+
     # Hook rollbacks per turn: a gate that keeps bouncing a draft must not be
     # able to spin the loop forever. Past the cap the decision degrades to
     # pass-through and the refusal is counted, so the books never read a

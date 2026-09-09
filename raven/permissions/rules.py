@@ -4,9 +4,7 @@ The user's ``permissions.tools`` node maps a tool name to a tier, or -- for
 ``exec`` -- to a table of command patterns each mapping to a tier. Several
 matching rules resolve to the strictest (deny > ask > allow), never to the one
 written last. A call no rule speaks about falls to the tool's default tier:
-read-only tools run, everything else asks -- with one exception, and
-``DEFAULT_ALLOW_TOOLS`` says why it is there: ``deliver_files`` hands the user
-a file they asked for, which is not a read and is not an effect they approve.
+read-only tools run, everything else asks.
 
 Exec pattern matching is prefix-by-token on the raw command, deliberately
 without wrapper stripping: ``git *`` must not allow ``sudo git push``. A
@@ -28,12 +26,8 @@ from raven.contracts.permissions import Tier
 
 _STRICTNESS = {Tier.DENY: 2, Tier.ASK: 1, Tier.ALLOW: 0}
 
-# Tools whose worst case is reading what the agent may already read, plus
-# deliver_files: its recipient is the user themself, and it is the only route a
-# finished artifact has to them. Asking there cost the work rather than guarding
-# it -- the request expires while the agent waits, and the reply that follows
-# hands over a path instead, which reaches nobody. Everything absent from this
-# set defaults to asking, unknown (MCP) tools included.
+# Tools whose worst case is reading what the agent may already read. Everything
+# absent from this set defaults to asking, unknown (MCP) tools included.
 DEFAULT_ALLOW_TOOLS: frozenset[str] = frozenset(
     {
         "read_file",
@@ -45,7 +39,6 @@ DEFAULT_ALLOW_TOOLS: frozenset[str] = frozenset(
         "tool_call",
         "web_search",
         "web_fetch",
-        "deliver_files",
         "message",
         "ask_user",
         "read_skill",

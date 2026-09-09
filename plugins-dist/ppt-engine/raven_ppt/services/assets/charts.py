@@ -59,7 +59,7 @@ _CHART_MODULE = '''"""Charts drawn from rectangles, hairlines and labels.
     from ppt_layout import page
     from ppt_theme import THEMES
 
-    T = THEMES[next(iter(THEMES))]        # one entry, and it is the template's
+    T = THEMES[next(iter(THEMES))]        # or by name -- ppt_theme says which
     frame = page()
     column(slide, frame.body, T, [("East", 185), ("South", 142), ("North", 128)],
            accent="East", unit="M")
