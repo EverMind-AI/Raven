@@ -174,10 +174,13 @@ def sandbox_for(path: Path) -> str:
     Every response is sandboxed, which is what gives it an opaque origin and so
     keeps an artifact away from the page's cookie and RPC socket. PDFs get
     ``allow-scripts`` on top, because the browser's own PDF viewer is script-
-    driven and renders a blank frame without it -- the origin stays opaque
-    either way, since ``allow-same-origin`` is never granted. HTML and SVG stay
-    script-free: a report the agent wrote is readable without running code, and
-    not running it is the safer default.
+    driven and renders a blank document without it -- the origin stays opaque
+    either way, since ``allow-same-origin`` is never granted. This header is
+    honoured by the viewer in a tab and in a frame alike; what the viewer
+    refuses is a frame that carries the ``sandbox`` *attribute*, which is why
+    the page frames a PDF without one. HTML and SVG stay script-free: a report
+    the agent wrote is readable without running code, and not running it is
+    the safer default.
     """
     if path.suffix.lower() == ".pdf":
         return "sandbox allow-scripts"

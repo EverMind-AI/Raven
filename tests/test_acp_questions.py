@@ -21,14 +21,7 @@ import pytest
 from raven.acp.capabilities import ClientCapabilities
 from raven.acp.outbound import OutboundRequests
 from raven.acp.protocol import CANCEL_REQUEST_METHOD
-from raven.acp.questions import (
-    ANSWER_FIELD,
-    CLARIFY_CLOSED_METHOD,
-    CLARIFY_METHOD,
-    CUSTOM_FIELD,
-    MAX_CHOICES,
-    AcpQuestions,
-)
+from raven.acp.questions import ANSWER_FIELD, CLARIFY_CLOSED_METHOD, CLARIFY_METHOD, MAX_CHOICES, AcpQuestions
 from raven.acp.updates import AcpSession, UpdateTranslator
 from tests.acp_schema import validate_def, validate_outbound
 
@@ -115,15 +108,6 @@ class TestTheElicitationRoute:
         assert request["mode"] == "form"
         assert request["sessionId"] == "acp:s1"
         assert request["requestedSchema"]["properties"][ANSWER_FIELD]["enum"] == ["postgres", "sqlite"]
-        # The box beside the choices, for an answer they did not list; neither is
-        # required, because a required enum can never hold an answer off the list.
-        assert request["requestedSchema"]["properties"][CUSTOM_FIELD]["type"] == "string"
-        assert "enum" not in request["requestedSchema"]["properties"][CUSTOM_FIELD]
-        # The box says which question it is for; the client folds on that, never on the name.
-        assert request["requestedSchema"]["properties"][CUSTOM_FIELD]["_meta"] == {
-            "raven": {"customAnswerFor": ANSWER_FIELD}
-        }
-        assert request["requestedSchema"]["required"] == []
         assert broker.answers == [("q1", "postgres")]
         validate_def("CreateElicitationRequest", request)
         validate_outbound(client.asked("elicitation/create"))
@@ -139,10 +123,8 @@ class TestTheElicitationRoute:
         questions.handle(CLARIFY_METHOD, _clarify(choices=[]))
         await _settle(questions)
 
-        schema = client.asked("elicitation/create")["params"]["requestedSchema"]
-        assert "enum" not in schema["properties"][ANSWER_FIELD]
-        assert CUSTOM_FIELD not in schema["properties"], "no choices, so nothing for a box beside them to be other than"
-        assert schema["required"] == [ANSWER_FIELD]
+        field = client.asked("elicitation/create")["params"]["requestedSchema"]["properties"][ANSWER_FIELD]
+        assert "enum" not in field
         assert broker.answers == [("q1", "call it raven")]
 
     @pytest.mark.parametrize("action", ["decline", "cancel"])
@@ -203,38 +185,11 @@ class TestTheElicitationRoute:
 
         assert broker.answers == [("q1", "7")]
 
-    async def test_a_typed_answer_arrives_through_the_box_beside_the_choices(self):
-        """A person who types an answer of their own did so because none of the
-        choices fit, and that answer is the one the tool asked for. A live run
-        typed "light background, and call the cover ..." to a two-choice question and
-        was asked the same question three times, then the agent was told the user
-        had not answered."""
-        _, broker, questions = _rig(
-            lambda f: {"result": {"action": "accept", "content": {CUSTOM_FIELD: " mysql, the one we already run "}}},
-            capabilities=FORM,
-        )
-
-        questions.handle(CLARIFY_METHOD, _clarify())
-        await _settle(questions)
-
-        assert broker.answers == [("q1", "mysql, the one we already run")]
-
-    async def test_a_typed_answer_written_into_the_enum_property_is_taken_as_typed(self):
-        """A client that put the free text into the enum property rather than the
-        box: the pair declared such an answer welcome, so it is not refused."""
+    async def test_an_answer_outside_the_offered_choices_is_refused(self):
+        """A client that answered a multiple-choice question with something not
+        on the list gave an answer that cannot be acted on."""
         _, broker, questions = _rig(
             lambda f: {"result": {"action": "accept", "content": {ANSWER_FIELD: "mysql"}}},
-            capabilities=FORM,
-        )
-
-        questions.handle(CLARIFY_METHOD, _clarify())
-        await _settle(questions)
-
-        assert broker.answers == [("q1", "mysql")]
-
-    async def test_an_accepted_form_with_neither_property_answers_nothing(self):
-        _, broker, questions = _rig(
-            lambda f: {"result": {"action": "accept", "content": {}}},
             capabilities=FORM,
         )
 

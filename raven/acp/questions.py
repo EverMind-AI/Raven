@@ -44,15 +44,8 @@ from raven.acp.outbound import OutboundRequests
 from raven.acp.updates import UpdateTranslator
 
 # The field name the elicitation form asks for and the answer is read back from.
-# One question, because ``ask_user`` asks one thing; with choices, a second
-# property beside it, ``<answer>_custom``, is the box for an answer the choices
-# did not list -- the convention raven's own client folds into the question, so a
-# person who types their own answer has it carried here rather than being asked
-# the same question again until the form gives up. Only one of the two comes back.
+# One field, because ``ask_user`` asks one thing.
 ANSWER_FIELD = "answer"
-CUSTOM_FIELD = f"{ANSWER_FIELD}_custom"
-# The key under the property's `_meta.raven` that names the question the box is for.
-CUSTOM_FOR_META = "customAnswerFor"
 
 # The notification the runtime emits when ``ask_user`` fires.
 CLARIFY_METHOD = "clarify.request"
@@ -248,29 +241,19 @@ class AcpQuestions:
         only one that can carry an answer nobody listed in advance.
         """
         field: dict[str, Any] = {"type": "string", "description": "Your answer"}
-        properties: dict[str, Any] = {ANSWER_FIELD: field}
-        required = [ANSWER_FIELD]
         if choices:
             field["enum"] = choices
-            # Neither is required: the person fills one or the other, and a
-            # required enum can never be satisfied by an answer off the list.
-            properties[CUSTOM_FIELD] = {
-                "type": "string",
-                "description": "Your own answer, when none of the options fits",
-                # Said, not implied by the name: the client folds this box into the
-                # question only when the property declares which question it is for,
-                # so a form from anyone else that happens to hold a `_custom` field
-                # keeps that field as the separate question it is.
-                "_meta": {"raven": {CUSTOM_FOR_META: ANSWER_FIELD}},
-            }
-            required = []
         result = await self._outbound.call(
             "elicitation/create",
             {
                 "message": redact.redact(question),
                 "mode": "form",
                 "sessionId": session_id,
-                "requestedSchema": {"type": "object", "properties": properties, "required": required},
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {ANSWER_FIELD: field},
+                    "required": [ANSWER_FIELD],
+                },
             },
             timeout=self._timeout_s,
         )
@@ -283,12 +266,10 @@ class AcpQuestions:
         a person is allowed to dismiss a question. ``None`` then flows out as the
         tool's default.
 
-        With choices, the answer is read from the enum property or from the
-        free-text box beside it, whichever the client filled: a person who typed
-        an answer of their own did so because none of the choices fit, and that
-        answer is the one the tool asked for. The content is typed loosely by the
-        schema (a string, a number, a bool, a list) and is believed only as a
-        usable value.
+        A value outside the enum is refused rather than passed through. The
+        content is typed loosely by the schema (a string, a number, a bool, a
+        list), and a client that answered a multiple-choice question with
+        something not on the list is a client whose answer cannot be acted on.
         """
         if not isinstance(result, dict) or result.get("action") != "accept":
             return None
@@ -296,10 +277,6 @@ class AcpQuestions:
         if not isinstance(content, dict):
             return None
         value = content.get(ANSWER_FIELD)
-        if choices and not (isinstance(value, str) and value in choices):
-            typed = content.get(CUSTOM_FIELD)
-            if isinstance(typed, str) and typed.strip():
-                return typed.strip()
         if isinstance(value, bool) or value is None:
             return None
         if isinstance(value, (int, float)):
@@ -309,9 +286,8 @@ class AcpQuestions:
         if not isinstance(value, str) or not value:
             return None
         if choices and value not in choices:
-            # A client that wrote the typed answer into the enum property rather
-            # than the box beside it: the pair declared such an answer welcome.
-            logger.debug("acp: the elicitation answer was not one of the offered choices; taken as typed")
+            logger.warning("acp: the elicitation answer was not one of the offered choices")
+            return None
         return value
 
     async def _via_permission(self, session_id: str, question: str, choices: list[str]) -> str | None:

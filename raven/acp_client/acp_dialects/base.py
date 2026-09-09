@@ -320,84 +320,8 @@ class AcpDialect:
         return bool(_dict(update.get("rawInput"))) or bool(_first_location(update))
 
     def pair_fields(self, fields: list[Any]) -> list[Any]:
-        """Merge properties an agent emits as one question.
-
-        The spec pairs nothing, and this dialect stands in for every agent nobody
-        has measured, so it pairs nothing on a guess: a property named
-        ``<question>_custom`` may be a notes field of its own, and folding it away
-        would drop an answer the form asked for. The one pairing it reads is the
-        one stated on the property itself -- ``_meta.raven.customAnswerFor``
-        naming the question -- which raven's own ACP server writes beside every
-        ``ask_user`` with choices, so a person who types an answer of their own
-        has it carried to the agent instead of being asked again until the form
-        gives up.
-        """
-        return fold_pairs(fields, paired_by_marker(fields))
+        """Merge properties an adapter emits as one question. The spec pairs none."""
+        return fields
 
 
-RAVEN_CUSTOM_FOR = "customAnswerFor"
-"""The key under a property's ``_meta.raven`` naming the question it is the free-text box for."""
-
-
-def paired_by_marker(fields: list[Any]) -> list[tuple[str, str]]:
-    """(question, free-text sibling) for every property that declares its question."""
-    by_name = {f.name: f for f in fields}
-    pairs: list[tuple[str, str]] = []
-    for f in fields:
-        named = _dict(_dict(f.meta).get("raven")).get(RAVEN_CUSTOM_FOR)
-        if isinstance(named, str) and named in by_name and named != f.name:
-            pairs.append((named, f.name))
-    return pairs
-
-
-def paired_by_name(fields: list[Any]) -> list[tuple[str, str]]:
-    """(question, free-text sibling) for every ``<name>_custom`` property present.
-
-    A measured convention, not a spec one: only a dialect that has seen its agent
-    write the pair this way (Claude Code does) may pair on the name.
-    """
-    by_name = {f.name: f for f in fields}
-    return [(f.name, f"{f.name}_custom") for f in fields if f"{f.name}_custom" in by_name]
-
-
-def fold_pairs(fields: list[Any], pairs: list[tuple[str, str]]) -> list[Any]:
-    """Fold each free-text sibling into its question and drop it from the list.
-
-    Every fold is decided before the list is rebuilt. Deciding one while walking
-    the properties in order cannot see a sibling written ahead of its own
-    question, and that one survives as a question of its own -- the same thing
-    asked twice, with the free-text box as a bare prompt. A property takes part
-    in at most one pairing, on either side; a sibling that is not a plain
-    optional string, or a question without options, is left as it is.
-    """
-    by_name = {f.name: f for f in fields}
-    folded: set[str] = set()
-    paired: set[str] = set()
-    for question_name, custom_name in pairs:
-        question, custom = by_name.get(question_name), by_name.get(custom_name)
-        if question is None or custom is None:
-            continue
-        if question_name in paired or custom_name in paired:
-            continue
-        if not question.options or custom.type != "string" or custom.options:
-            continue
-        if custom.required:
-            # Folding keeps only the survivor's `required`, so a demanded sibling
-            # would go missing from an accepted form. Asking twice is the lesser
-            # cost of the two.
-            continue
-        question.custom_name = custom.name
-        paired.update((question_name, custom.name))
-        folded.add(custom.name)
-    return [f for f in fields if f.name not in folded]
-
-
-__all__ = [
-    "AcpDialect",
-    "ToolCall",
-    "DialectResult",
-    "content_texts",
-    "fold_pairs",
-    "paired_by_marker",
-    "paired_by_name",
-]
+__all__ = ["AcpDialect", "ToolCall", "DialectResult", "content_texts"]

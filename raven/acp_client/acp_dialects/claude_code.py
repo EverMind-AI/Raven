@@ -27,14 +27,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from raven.acp_client.acp_dialects.base import (
-    AcpDialect,
-    DialectResult,
-    _dict,
-    content_texts,
-    fold_pairs,
-    paired_by_name,
-)
+from raven.acp_client.acp_dialects.base import AcpDialect, DialectResult, _dict, content_texts
 
 # A fence the adapter added, not one the tool's own output contained: it wraps
 # the whole payload, so an inner fence (a result that really is markdown) never
@@ -97,8 +90,32 @@ class ClaudeCodeDialect(AcpDialect):
         saying it is not a pair, which is worth more than the guess.
         """
         by_name = {f.name: f for f in fields}
-        marked = [(q, f.name) for f in fields if (q := _custom_answer_for(f)) and q in by_name]
-        return fold_pairs(fields, marked or paired_by_name(fields))
+        marked = [(q, f) for f in fields if (q := _custom_answer_for(f)) and q in by_name]
+        pairs = marked or [(f.name, by_name[f"{f.name}_custom"]) for f in fields if f"{f.name}_custom" in by_name]
+
+        # Every fold is decided before the list is rebuilt. Deciding one while
+        # walking the properties in order cannot see a sibling written ahead of
+        # its own question, and that one survives as a question of its own --
+        # the same thing asked twice, with the free-text box as a bare prompt.
+        folded: set[str] = set()
+        paired: set[str] = set()
+        for question_name, custom in pairs:
+            question = by_name[question_name]
+            # A property takes part in at most one pairing, on either side, so no
+            # fold can drop a property another fold still points at.
+            if question_name in paired or custom.name in paired:
+                continue
+            if not question.options or custom.type != "string" or custom.options:
+                continue
+            if custom.required:
+                # Folding keeps only the survivor's `required`, so a demanded
+                # sibling would go missing from an accepted form. Asking twice
+                # is the lesser cost of the two.
+                continue
+            question.custom_name = custom.name
+            paired.update((question_name, custom.name))
+            folded.add(custom.name)
+        return [f for f in fields if f.name not in folded]
 
 
 __all__ = ["ClaudeCodeDialect"]

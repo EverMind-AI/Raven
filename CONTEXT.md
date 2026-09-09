@@ -1972,10 +1972,7 @@ still tell which tool actually ran. Selected from `agentInfo.name` in the
 connection's own `initialize` result rather than from config, so a renamed agent and two
 entries pointing at one adapter both resolve. An adapter with no file of its own gets the
 spec-only base class, which reads nothing the protocol does not require - so an unmeasured
-adapter works without one. Its one reading beyond the spec is raven's own marker on an
-elicitation property, `_meta.raven.customAnswerFor`, which raven's ACP server writes on the
-free-text box beside a multiple-choice `ask_user`; a `<name>_custom` property without it is
-the separate question it looks like. Result unwrapping is the genuinely per-adapter part:
+adapter works without one. Result unwrapping is the genuinely per-adapter part:
 claude-agent-acp sends its output twice, plain in `rawOutput` and markdown-fenced in
 `content`, while codex-acp sends no `content` at all and reports a failed command only
 through `exit_code` inside `rawOutput`.

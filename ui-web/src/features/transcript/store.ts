@@ -1240,36 +1240,9 @@ export function newStep(lane: Lane): StepHandle {
 const stepSolid = (s: StepData): boolean =>
   s.calls.length > 0 || (s.thinkShown && s.hasThink) || !!s.say.trim()
 
-/* Every fold this lane opened by itself, shut. The reader's own are left
-   alone: `toggleFold` clears `auto`, so a fold they have touched is no longer
-   one of these. */
-function shutAutoFolds(lane: Lane, except: FoldData | null): void {
-  lane.segs.forEach((s) => {
-    if (s.kind !== 'fold' || s === except || !s.auto) return
-    s.auto = false
-    s.open = false
-    bump(lane, s)
-  })
-}
-
 /* Once the answer has landed, everything that led to it collapses behind one
-   line. A turn gets ONE fold: work landing after an early fold joins it.
- *
- * `live` is the turn the reader just watched, and its fold opens. Shut, it
- * took a sequence they had been reading -- five rows, each naming what the
- * step did -- and replaced it with the word "steps", at the one moment they
- * were most likely to want it. Nothing on the row said five things were under
- * it, so there was not even a reason to click.
- *
- * One at a time, and the previous one shuts as the next opens, because the
- * weight is what a SESSION accumulates: a forty-turn session built 7361 nodes
- * and 6400 of them sat in shut fold bodies. One open fold is the turn on
- * screen, not a session's worth.
- *
- * Replay opens at most one too -- see :func:`openLastFold`, which is the same
- * rule reached from the other entry point -- so "shut unless the reader is
- * looking at it" is the whole of it, whichever way the turn arrived. */
-export function collapse(lane: Lane, time?: string | null, live = false): void {
+   line. A turn gets ONE fold: work landing after an early fold joins it. */
+export function collapse(lane: Lane, time?: string | null): void {
   const segs = lane.segs
   const loose: StepData[] = []
   let fold: FoldData | null = null
@@ -1299,10 +1272,7 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
     return
   }
   if (!loose.some(stepSolid)) return
-  const f: FoldData = {
-    v: 0, id: nextId(), kind: 'fold', time: time || null, open: live, auto: live, steps: [],
-  }
-  if (live) shutAutoFolds(lane, f)
+  const f: FoldData = { v: 0, id: nextId(), kind: 'fold', time: time || null, open: false, steps: [] }
   segs.splice(firstAt, 0, f)
   loose.forEach((s) => {
     const i = segs.indexOf(s)
@@ -1310,33 +1280,6 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
     f.steps.push(s)
   })
   bumpList(lane)
-}
-
-/* The fold over the turn a replayed conversation ends on, opened.
- *
- * Same reason as the live one -- the reader is looking at the bottom of the
- * conversation and that is the turn they came back for -- and the same limit:
- * ONE body built, not a session's worth, so the weight the shut default is for
- * is still not there.
- *
- * Only when the last turn is the one that fold belongs to. The scan stops at a
- * question or a delivery exactly as `collapse`'s does, because it is asking the
- * same thing from the other end: a conversation whose final turn answered with
- * no work of its own has its last fold one turn further back, and opening that
- * would open a turn the reader did not return to.
- *
- * Marked `auto`, so the reader's first question shuts it like any other -- it
- * is the runtime's, not theirs, until they touch it. */
-export function openLastFold(lane: Lane): void {
-  for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
-    const s = lane.segs[i] as Seg
-    if (s.kind === 'ask' || s.kind === 'sdlv') return
-    if (s.kind !== 'fold') continue
-    s.open = true
-    s.auto = true
-    bump(lane, s)
-    return
-  }
 }
 
 const isSilent = (s: StepData): boolean =>
@@ -1459,8 +1402,7 @@ export function finishTurn(lane: Lane, st: StepHandle | null, steps: StepData[],
      step's prose, which is what makes it the tail of the retry run it belongs
      to. */
   foldThoughts(lane, steps)
-  /* The one live caller, and the only fold that opens. */
-  collapse(lane, time, true)
+  collapse(lane, time)
 }
 
 /* Whether this turn put anything on the stage: an answer, a fold, or a step
@@ -1519,9 +1461,6 @@ export function toggleDagFull(lane: Lane, c: CallData): void {
 }
 
 export function toggleFold(lane: Lane, f: FoldData): void {
-  /* The reader has taken this one over. Whatever they leave it at is where it
-     stays: the next turn shuts only the folds nobody has touched. */
-  f.auto = false
   f.open = !f.open
   bump(lane, f)
 }

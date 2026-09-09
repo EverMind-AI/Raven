@@ -567,50 +567,6 @@ async def test_a_form_kept_waiting_for_the_conversation_declines(monkeypatch) ->
     assert await holder == {"action": "accept", "content": {"b": "x"}}
 
 
-async def test_a_typed_answer_to_a_raven_question_lands_in_its_custom_box_first_time() -> None:
-    """The shape raven's own ACP server sends for an ask_user with choices, read by
-    the default dialect: the person types an answer the choices did not list, it is
-    accepted into the box beside them on the first ask, and nothing is asked twice.
-    Measured live before this: the same question put up three times in one second,
-    then the agent told the user had not answered."""
-    from raven.acp_client.acp_dialects.base import AcpDialect
-    from raven.acp_client.asker import start_ask_turn
-    from raven.acp_client.elicitor import Elicitor
-
-    asked: list[str] = []
-
-    class Tool:
-        async def ask(self, prompt, choices, conversation_id, **_):
-            asked.append(prompt)
-            return "a light ground, and call the cover Night Market Lights"
-
-    start_ask_turn(Tool(), conversation_id="tui:c1")
-    got = await Elicitor("Raven-PPT", "3-ppt", dialect=AcpDialect()).elicit(
-        {
-            "sessionId": "s",
-            "mode": "form",
-            "message": "Dark or light background for the cover?",
-            "requestedSchema": {
-                "type": "object",
-                "properties": {
-                    "answer": {"type": "string", "description": "Your answer", "enum": ["dark", "light"]},
-                    "answer_custom": {
-                        "type": "string",
-                        "description": "Your own answer, when none of the options fits",
-                        "_meta": {"raven": {"customAnswerFor": "answer"}},
-                    },
-                },
-                "required": [],
-            },
-        }
-    )
-    assert got == {
-        "action": "accept",
-        "content": {"answer_custom": "a light ground, and call the cover Night Market Lights"},
-    }
-    assert len(asked) == 1
-
-
 def _paired_schema(kind: str) -> dict:
     return {
         "type": "object",
