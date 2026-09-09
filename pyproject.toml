@@ -65,7 +65,6 @@ dependencies = [
     # memory in it; named directly for the same reason numpy above is, so
     # retrieval keeps working if that chain ever changes.
     "lancedb>=0.33,<1.0",
-    "ripgrep-bin>=15.2.0,<16.0.0",
 ]
 
 [project.optional-dependencies]

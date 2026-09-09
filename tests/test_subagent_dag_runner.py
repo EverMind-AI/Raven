@@ -5278,6 +5278,369 @@ async def test_a_continued_node_runs_again_and_can_then_pass(tmp_path):
     assert len(seen) == 3
 
 
+async def test_a_continued_node_runs_again_while_a_sibling_is_still_running(tmp_path):
+    """A continue takes effect without waiting for an unrelated node to finish.
+
+    Both nodes are dispatched in one scheduling round, and only the continued
+    node's second attempt releases the sibling. A scheduler that applies the
+    decision once the round has drained deadlocks on that: the round is waiting
+    for `slow`, and `slow` is waiting for the continuation.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    release = asyncio.Event()
+    desk = AdjudicationDesk()
+    attempts = {"quick": 0}
+
+    class _Quick:
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None):
+            attempts["quick"] += 1
+            if attempts["quick"] > 1:
+                release.set()
+            return f"quick {attempts['quick']}"
+
+    class _Slow:
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None):
+            await release.wait()
+            return "slow"
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "continue", "finish it")
+
+    async def _judge(*, node, **_):
+        return Verdict(accomplished=node.id != "quick" or attempts["quick"] > 1)
+
+    (tmp_path / "wd").mkdir()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "two independent nodes",
+            "nodes": [
+                {"id": "quick", "subagent": "q", "node_summary": "suspends once", "prompt_template": "do quick"},
+                {"id": "slow", "subagent": "s", "node_summary": "runs throughout", "prompt_template": "do slow"},
+            ],
+        }
+    )
+    result = await asyncio.wait_for(
+        run_dag(
+            spec,
+            resolve=_by_name({"q": _Quick(), "s": _Slow()}),
+            backend=LocalFileBackend(),
+            workdir=str(tmp_path / "wd"),
+            run_root=str(tmp_path / "runs"),
+            nodes_root=str(tmp_path / "nodes"),
+            history_root=str(tmp_path),
+            desk=desk,
+            judge_node=_judge,
+            announce_exception=_announce,
+            origin=_TEST_ORIGIN,
+            adjudication_timeout_s=5,
+        ),
+        timeout=15,
+    )
+    assert attempts["quick"] == 2
+    assert result.summary["completed"] == 2
+
+
+async def test_a_carried_group_queued_for_a_slot_is_not_dispatched_twice(tmp_path):
+    """`pending` means two things once a round can end early.
+
+    `_run_node` sets `running` inside the concurrency gate, deliberately, so a node
+    still queued for a slot reads `pending`. A soft wake hands that queued group task
+    on, and a ready set recomputed from status alone then sees its node as work
+    nobody has taken -- dispatching the same node a second time while the first task
+    is still carried.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    class _Gate:
+        """Lets the first acquirer through and parks every later one until released."""
+
+        def __init__(self) -> None:
+            self.entered = 0
+            self.open = asyncio.Event()
+
+        async def __aenter__(self):
+            self.entered += 1
+            if self.entered > 1:
+                await self.open.wait()
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    gate = _Gate()
+    desk = AdjudicationDesk()
+    calls: list[str] = []
+
+    class _Backend:
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None):
+            calls.append(task_id.rsplit(":", 1)[-1] if ":" in task_id else task_id)
+            return "out"
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "continue", "carry on")
+
+    async def _judge(*, node, **_):
+        return Verdict(accomplished=node.id != "a" or calls.count("a") > 1)
+
+    async def _release_once_the_gate_has_a_queue() -> None:
+        # Three acquirers means the continued node has been re-dispatched while the
+        # sibling is still parked -- the state this test is about.
+        for _ in range(2000):
+            if gate.entered >= 3:
+                break
+            await asyncio.sleep(0.005)
+        gate.open.set()
+
+    (tmp_path / "wd").mkdir()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "two independent nodes behind one slot",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "suspends once", "prompt_template": "do a"},
+                {"id": "b", "subagent": "x", "node_summary": "queued for a slot", "prompt_template": "do b"},
+            ],
+        }
+    )
+    driver = asyncio.create_task(_release_once_the_gate_has_a_queue())
+    try:
+        result = await asyncio.wait_for(
+            run_dag(
+                spec,
+                resolve=lambda node: _Backend(),
+                backend=LocalFileBackend(),
+                workdir=str(tmp_path / "wd"),
+                run_root=str(tmp_path / "runs"),
+                nodes_root=str(tmp_path / "nodes"),
+                history_root=str(tmp_path),
+                desk=desk,
+                judge_node=_judge,
+                announce_exception=_announce,
+                origin=_TEST_ORIGIN,
+                adjudication_timeout_s=10,
+                semaphore=gate,
+            ),
+            timeout=30,
+        )
+    finally:
+        gate.open.set()
+        await driver
+
+    assert calls.count("b") == 1, f"the queued sibling ran more than once: {calls}"
+    assert result.summary["completed"] == 2
+
+
+async def _park_the_loop_with_a_carried_task(tmp_path, desk, gate, announced, extra=None):
+    """Drive a run to the one state where `carried` is owned by `run_dag` alone.
+
+    `late` suspends unanswered and `a` suspends with a continue, so the round ends on
+    the resume and hands `b` -- still parked in the gate, never started -- to the next
+    round. The loop then reaches `_await_adjudications`, which blocks until every node
+    open at entry has an answer, so it stays there holding the carried task outside any
+    `_run_ready_groups` call. That is the window both reap calls exist for.
+    """
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    class _Backend:
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None):
+            if task_id == "a":
+                # Ordering, not delay: `late` has to be the suspension that goes
+                # unanswered, so the continue that ends the round comes second.
+                await announced["late"].wait()
+            return "out"
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        if node_id == "a":
+            desk.resolve(node_id, "continue", "carry on")
+        announced[node_id].set()
+
+    async def _judge(*, node, **_):
+        return Verdict(accomplished=node.id == "b")
+
+    (tmp_path / "wd").mkdir()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "one continued, one unanswered, one queued",
+            "nodes": [
+                {"id": "late", "subagent": "x", "node_summary": "suspends unanswered", "prompt_template": "do late"},
+                {"id": "a", "subagent": "x", "node_summary": "suspends continued", "prompt_template": "do a"},
+                {"id": "b", "subagent": "x", "node_summary": "queued for the slot", "prompt_template": "do b"},
+            ],
+        }
+    )
+    run = asyncio.ensure_future(
+        run_dag(
+            spec,
+            resolve=lambda node: _Backend(),
+            backend=LocalFileBackend(),
+            workdir=str(tmp_path / "wd"),
+            run_root=str(tmp_path / "runs"),
+            nodes_root=str(tmp_path / "nodes"),
+            history_root=str(tmp_path),
+            desk=desk,
+            judge_node=_judge,
+            announce_exception=_announce,
+            origin=_TEST_ORIGIN,
+            adjudication_timeout_s=30,
+            semaphore=gate,
+            **(extra or {}),
+        )
+    )
+    # Once `a` is announced the resume is set, so the round returns; from there to
+    # `_await_adjudications` the loop runs without another suspension point, so the
+    # next place it can be found is inside that wait. The mutation check in this
+    # file's history is what proves it: with either reap deleted, both tests redden.
+    for _ in range(3000):
+        if run.done():
+            break
+        if announced["a"].is_set() and gate.entered >= 3:
+            for _ in range(10):
+                await asyncio.sleep(0)
+            return run
+        await asyncio.sleep(0.005)
+    run.cancel()
+    raise AssertionError("the run never parked with a carried task")
+
+
+class _AdmitThenPark:
+    """Admits `admit` acquirers and parks every later one, recording cancellations.
+
+    Not a semaphore: a parked acquirer is never released by an exit, so the node
+    behind it stays `pending` and never enters `_run_node`'s body -- which is the
+    state a carried task has to be in for these tests.
+    """
+
+    def __init__(self, admit: int = 2) -> None:
+        self.admit = admit
+        self.entered = 0
+        self.cancelled = 0
+        self.open = asyncio.Event()
+
+    async def __aenter__(self):
+        self.entered += 1
+        if self.entered > self.admit:
+            try:
+                await self.open.wait()
+            except asyncio.CancelledError:
+                self.cancelled += 1
+                raise
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+
+async def test_an_outer_cancellation_reaps_a_handed_on_task(tmp_path):
+    """The sibling of `test_run_dag_cancel_skips_unfinished_and_reaps_in_flight_task`.
+
+    That test proves a cancelled run reaps the task in flight *inside* the round. A
+    carried task is the one in-flight task it cannot see, because it lives outside the
+    round `_run_ready_groups` reaps -- which is why the cancellation handler has to reap
+    it itself. Cancelling the run's own task is the `/stop` path, where `cancel` is never
+    set and `_finalize` never runs.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    gate = _AdmitThenPark()
+    announced = {n: asyncio.Event() for n in ("late", "a", "b")}
+    run = await _park_the_loop_with_a_carried_task(tmp_path, desk, gate, announced)
+    try:
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
+        assert gate.cancelled == 1, "the handed-on task outlived the run that owned it"
+    finally:
+        gate.open.set()
+
+
+async def test_a_replan_reaps_a_handed_on_task_before_it_records_them_cancelled(tmp_path):
+    """`_apply_replan` writes `cancelled` for every running node; the reap is what makes
+    that true. A replan answered while the loop is parked reaches the replan exit with
+    the carried task held by `run_dag` alone, so nothing else can cancel it.
+    """
+    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    gate = _AdmitThenPark()
+    announced = {n: asyncio.Event() for n in ("late", "a", "b")}
+    run = await _park_the_loop_with_a_carried_task(tmp_path, desk, gate, announced)
+    try:
+        desk.resolve("late", REPLAN, "regroup", plan=_replan_plan(from_node="late"))
+        result = await asyncio.wait_for(run, timeout=30)
+        assert gate.cancelled == 1, "the handed-on task survived the replan that superseded it"
+        assert result.replanned_into == "run-new"
+    finally:
+        gate.open.set()
+
+
+async def test_a_resume_hands_back_what_is_still_running_instead_of_cancelling_it():
+    """The whole difference between the two soft signals, at the seam itself.
+
+    `interrupt` means stop these nodes; `resume` means stop waiting for them.
+    A resume that cancelled instead would kill an unrelated sibling every time a
+    node was continued, and one that reaped would make the caller wait for it.
+    """
+    from raven.agent.subagent.dag_runner import _run_ready_groups
+
+    resume = asyncio.Event()
+    let_finish = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def _slow():
+        try:
+            await let_finish.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return "slow"
+
+    async def _fast():
+        resume.set()
+        return "fast"
+
+    handed_on = await _run_ready_groups([_slow(), _fast()], None, resume=resume)
+
+    assert len(handed_on) == 1, "the finished task is not handed on, only the running one"
+    assert not cancelled.is_set(), "a resume must not cancel what it hands back"
+
+    # And what came back goes straight into the next round, which awaits it.
+    let_finish.set()
+    assert await _run_ready_groups((), None, carried=handed_on) == set()
+    assert not cancelled.is_set()
+
+
+async def test_reap_carried_cancels_and_awaits_handed_on_nodes():
+    """The two loop exits that end a run with tasks still handed on share this.
+
+    A round that hands its unfinished tasks back has not reaped them, so the
+    replan exit and the cancellation handler owe them one: an uncancelled group
+    task outlives the run, holding a semaphore slot and a sub-agent process that
+    nothing will collect.
+    """
+    from raven.agent.subagent.dag_runner import _reap_carried
+
+    cancelled = asyncio.Event()
+
+    async def _never_finishes():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    task = asyncio.ensure_future(_never_finishes())
+    await asyncio.sleep(0)
+
+    await _reap_carried({task})
+
+    assert cancelled.is_set()
+    assert task.done()
+    await _reap_carried(())
+
+
 async def test_the_continuation_limit_fails_the_node(tmp_path):
     from raven.agent.subagent.dag_adjudication import AdjudicationDesk
     from raven.agent.subagent.dag_verdict import Verdict
