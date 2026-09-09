@@ -691,18 +691,6 @@ class AcpMethods:
             ) from exc
         try:
             try:
-                if sessions is not None:
-                    meta = params.get("_meta")
-                    owner = meta.get("raven.usage") if isinstance(meta, dict) else None
-                    if isinstance(owner, dict):
-                        owner = {
-                            k: v
-                            for k, v in owner.items()
-                            if k in {"root_session_key", "telemetry_dir"} and isinstance(v, str) and v
-                        }
-                        stored = sessions.get_or_create(session.session_key)
-                        stored.metadata["usage_owner"] = owner
-                        sessions.save(stored)
                 self._apply_mode(session)
                 # channel and chat_id are the pair that rebuilds this session key
                 # (``<channel>:<chat_id>``). Tools record them as the turn's live

@@ -2216,11 +2216,3 @@ Agent home via `sync_workspace_templates()`; gated at startup by `ensure_configu
 The identity files concatenated into every prompt — `soul.md` + `agent.md` + `TOOLS.md` —
 rendered by the Context Builder / bootstrap segment.
 _Avoid_: lumping `user.md` in — the user profile enters via the `# Memory` segment, not bootstrap.
-
-### Usage attribution
-
-`UsageSnapshot.session_key` identifies the session that made a model or image call.
-`root_session_key` identifies the owning top-level session; ACP prompts carry it in `_meta.raven.usage` with the shared usage-log directory.
-The receiving session persists this ownership and binds it for each turn;
-connection-pool bindings remain independent of task identity. A missing owner remains unassigned and is
-included only in global usage totals. Each call is persisted once, with both keys.

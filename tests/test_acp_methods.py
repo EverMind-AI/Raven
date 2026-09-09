@@ -1770,20 +1770,3 @@ class TestPromptMeta:
         response = await self._prompt(rig, session_id, turn_runs)
 
         assert response["result"] == {"stopReason": "end_turn"}
-
-
-async def test_prompt_usage_owner_is_persisted_per_session(rig):
-    await rig.handshake()
-    first, second = await rig.new_session(), await rig.new_session()
-    for sid, root in ((first, "task-a"), (second, "task-b"), (first, None)):
-        params = {"sessionId": sid, "prompt": [{"type": "text", "text": "hi"}]}
-        if root:
-            params["_meta"] = {"raven.usage": {"root_session_key": root, "telemetry_dir": "/tmp/usage"}}
-        task = asyncio.create_task(rig.call("session/prompt", params))
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        rig.translator.settle_turn(sid, "end_turn")
-        assert (await task)["result"]["stopReason"] == "end_turn"
-    for sid, root in ((first, "task-a"), (second, "task-b")):
-        session = rig.engine.sessions.get_or_create(sid)
-        assert session.metadata["usage_owner"] == {"root_session_key": root, "telemetry_dir": "/tmp/usage"}

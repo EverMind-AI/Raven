@@ -4224,16 +4224,6 @@
             "type": "integer",
             "description": "Window to scan; 30 by default, capped at 90."
           }
-        },
-        {
-          "name": "session_key",
-          "required": false,
-          "schema": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
         }
       ],
       "result": {
@@ -4249,24 +4239,6 @@
             },
             "tools": {
               "$ref": "#/components/schemas/ToolUsage"
-            },
-            "session_key": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "sessions": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "session_titles": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
             }
           },
           "required": [

@@ -747,9 +747,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
             "legacy_cost_calls": 0,
         }
 
-    selected_session = params.get("session_key") or None
-    sessions: set[str] = set()
-    member_sessions: set[str] = {selected_session} if selected_session else set()
     models: dict[str, dict[str, Any]] = {}
     total = empty_totals()
     # The same resolution the writer uses (usage_tracker._default_telemetry_dir):
@@ -774,15 +771,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                 continue
             if not isinstance(row, dict):
                 continue
-            if row.get("_type") == "tool_call":
-                continue
-            root = row.get("root_session_key") or row.get("session_key")
-            if isinstance(root, str) and root:
-                sessions.add(root)
-            if selected_session and root != selected_session:
-                continue
-            if isinstance(row.get("session_key"), str):
-                member_sessions.add(row["session_key"])
             name = str(row.get("model") or "?")
             acc = models.setdefault(name, {"model": name, **empty_totals()})
             cost = reported_cost(row.get("cost_usd")) if row.get("schema_version") == 2 else None
@@ -802,31 +790,9 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                     else:
                         target[key] = (target[key] or 0) + value
 
-    session_titles: dict[str, str] = {}
     tools: dict[str, int] = {}
     tool_total = 0
-    telemetry_tool_ids: set[str] = set()
     try:
-        for i in range(days):
-            p = tel_dir / f"usage-{(today - timedelta(days=i)).isoformat()}.jsonl"
-            if not p.is_file():
-                continue
-            try:
-                for line in p.read_text(encoding="utf-8").splitlines():
-                    row = json.loads(line)
-                    if row.get("_type") != "tool_call":
-                        continue
-                    root = row.get("root_session_key") or row.get("session_key")
-                    if selected_session and root != selected_session:
-                        continue
-                    name = row.get("name")
-                    if isinstance(row.get("tool_call_id"), str):
-                        telemetry_tool_ids.add(row["tool_call_id"])
-                    if isinstance(name, str):
-                        tools[name] = tools.get(name, 0) + 1
-                        tool_total += 1
-            except Exception:
-                continue
         sess_root = Path(load_config().workspace_path) / "sessions"
         cutoff = (datetime.now() - timedelta(days=days)).timestamp()
         for p in sess_root.glob("*/*.jsonl"):
@@ -835,21 +801,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                     continue
                 lines = p.read_text(encoding="utf-8").splitlines()
             except Exception:
-                continue
-            metadata = None
-            for line in lines:
-                try:
-                    entry = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(entry, dict) and entry.get("_type") == "metadata":
-                    metadata = entry
-            if metadata:
-                key = metadata.get("key")
-                title = (metadata.get("metadata") or {}).get("title")
-                if isinstance(key, str) and isinstance(title, str):
-                    session_titles[key] = title
-            if selected_session and (not metadata or metadata.get("key") not in member_sessions):
                 continue
             for line in lines:
                 try:
@@ -862,9 +813,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                     if not isinstance(tc, dict):
                         continue
                     name = tc.get("name") or (tc.get("function") or {}).get("name")
-                    call_id = tc.get("id")
-                    if isinstance(call_id, str) and call_id in telemetry_tool_ids:
-                        continue
                     if name:
                         tools[str(name)] = tools.get(str(name), 0) + 1
                         tool_total += 1
@@ -873,9 +821,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
 
     return {
         "days": days,
-        "session_key": selected_session,
-        "sessions": sorted(sessions),
-        "session_titles": session_titles,
         "llm": {
             "total": total,
             "models": sorted(models.values(), key=lambda m: -(m["cost_usd"] or 0)),
