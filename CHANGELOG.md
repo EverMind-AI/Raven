@@ -4,6 +4,21 @@ All notable changes to Raven are documented here.
 
 ## Unreleased
 
+### Changed
+
+- The Raven-PPT launcher sizes the run's context window from the endpoint
+  that will serve the model instead of a shipped number capped by the host
+  catalog: OpenRouter is asked for the providers serving the model and the
+  smallest window among those the request may reach wins (an `only` list or
+  an `order` with fallbacks off fences the request; an `order` with fallbacks
+  on does not, so every serving endpoint counts), a vLLM-style server answers
+  with its `max_model_len`. The shipped glm-5.3-flash row now fences the run
+  to Z.AI, DeepInfra and Novita (`allow_fallbacks: false`), sized at their
+  1,048,576 and never routed to the 262,144-token fp8 host; a call finding all
+  three unavailable fails over the retry ladder instead of to that host. When the endpoint does not answer, LiteLLM's table
+  and then the host catalog are asked, but a catalog may only lower the number
+  in `config.json`, never raise it. `PPT_CONTEXT_WINDOW` pins it by hand.
+
 ### Removed
 
 - **The vendored subagents tree.** The five product forks under `subagents/`

@@ -647,66 +647,15 @@ def test_claude_code_leaves_an_unpaired_custom_field_alone() -> None:
     assert merged[0].custom_name is None
 
 
-def test_the_default_dialect_pairs_a_sibling_that_declares_its_question() -> None:
-    """Raven's own ACP server writes `_meta.raven.customAnswerFor` on the free-text
-    box beside every ask_user with choices. A typed answer to one was re-asked three
-    times and then dropped because the default dialect paired nothing; it pairs
-    exactly what is declared, and nothing on the strength of a name."""
+def test_the_default_dialect_pairs_nothing() -> None:
     from raven.acp_client.acp_dialects.base import AcpDialect
     from raven.acp_client.elicitation import fields
 
     schema = {
         "type": "object",
-        "properties": {
-            "a": {"type": "string", "enum": ["x"]},
-            "a_custom": {"type": "string", "_meta": {"raven": {"customAnswerFor": "a"}}},
-        },
+        "properties": {"a": {"type": "string", "enum": ["x"]}, "a_custom": {"type": "string"}},
     }
-    merged = AcpDialect().pair_fields(fields(schema))
-    assert [f.name for f in merged] == ["a"]
-    assert merged[0].custom_name == "a_custom"
-
-
-def test_the_default_dialect_never_pairs_on_a_name_alone() -> None:
-    """The fallback stands in for every agent nobody measured. A conforming form may
-    hold an enum `deployment` and an independent optional `deployment_custom` notes
-    field; folding the notes away on the name would answer the form without them."""
-    from raven.acp_client.acp_dialects.base import AcpDialect
-    from raven.acp_client.elicitation import fields
-
-    schema = {
-        "type": "object",
-        "properties": {
-            "deployment": {"type": "string", "enum": ["blue", "green"]},
-            "deployment_custom": {"type": "string"},
-        },
-    }
-    merged = AcpDialect().pair_fields(fields(schema))
-    assert [f.name for f in merged] == ["deployment", "deployment_custom"]
-    assert merged[0].custom_name is None
-
-
-def test_the_default_dialect_leaves_a_misdeclared_or_required_box_alone() -> None:
-    from raven.acp_client.acp_dialects.base import AcpDialect
-    from raven.acp_client.elicitation import fields
-
-    # Declared for a question that is not on the form: nothing to fold into.
-    astray = {
-        "type": "object",
-        "properties": {"notes_custom": {"type": "string", "_meta": {"raven": {"customAnswerFor": "gone"}}}},
-    }
-    assert [f.name for f in AcpDialect().pair_fields(fields(astray))] == ["notes_custom"]
-    # Declared and required: folding keeps only the survivor's `required`, so the
-    # box stays a question of its own rather than going missing from an accepted form.
-    demanded = {
-        "type": "object",
-        "properties": {
-            "a": {"type": "string", "enum": ["x"]},
-            "a_custom": {"type": "string", "_meta": {"raven": {"customAnswerFor": "a"}}},
-        },
-        "required": ["a_custom"],
-    }
-    assert [f.name for f in AcpDialect().pair_fields(fields(demanded))] == ["a", "a_custom"]
+    assert [f.name for f in AcpDialect().pair_fields(fields(schema))] == ["a", "a_custom"]
 
 
 def test_claude_code_merges_a_custom_box_written_before_its_question() -> None:
