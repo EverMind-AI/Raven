@@ -243,6 +243,119 @@ export function hasDtl(c: CallData): boolean {
   return true
 }
 
+/* The media tools whose result is a file rather than a sentence. Named rather
+   than sniffed: any tool may answer with JSON that happens to carry `paths`,
+   and turning that into a gallery on a guess is how a card starts lying about
+   what a call did. */
+const MEDIA_TOOLS = new Set(['image_generate', 'ppt_generate_image'])
+
+/* What a media call produced, read once.
+
+   The card printed the tool's JSON object: a reader who asked for a picture got
+   a sentence about one, with an absolute path in it they could not open.
+
+   Two contracts, because the two tools have two. `image_generate` says
+   `{"success": true, "paths": [...]}`. The ppt engine's `_return.done` says
+   `{"ok": true, …}` and spreads a single picture's fields into the body, so one
+   image is `{"ok": true, "path": …}` and a batch is
+   `{"ok": true, "results": [{"path": …}]}`. Naming a tool without reading its
+   shape is how the second one went on printing raw JSON while looking
+   supported.
+
+   Verdict first, and each tool's own: `success` for one, `ok` for the other. A
+   result carrying files without claiming they are good is one to read, not one
+   to hang on a wall.
+
+   `saysMore` is whether the pictures are the whole of it. A ppt batch is
+   `ok: true` as a whole while individual entries carry their own `error`, and
+   the engine puts the tally and what to do next in `next_step` -- so a mixed
+   batch has a picture to show AND something to read, and a gallery that
+   replaced the text threw the second half away. The suppressing case is the
+   narrow one, deliberately: anything not provably just pictures keeps its text,
+   so an unanticipated field shows up as the JSON the reader used to get rather
+   than as information silently gone. Wrong in this direction is noisy; wrong in
+   the other is lossy.
+
+   One parse, so the two answers cannot disagree about what the result said, and
+   so neither has a branch the other has already ruled out. Anything that is not
+   a shape returns null and falls through to the plain rendering that has always
+   been there -- including an `error` object, where what went wrong is the whole
+   of what a reader needs and is already words. */
+interface MediaResult {
+  paths: string[]
+  saysMore: boolean
+}
+
+function mediaResult(res: string): MediaResult | null {
+  let seen: unknown
+  try {
+    seen = JSON.parse(String(res || ''))
+  } catch {
+    return null
+  }
+  if (!seen || typeof seen !== 'object') return null
+  const bag = seen as {
+    error?: unknown
+    next_step?: unknown
+    ok?: unknown
+    path?: unknown
+    paths?: unknown
+    results?: unknown
+    success?: unknown
+  }
+  const found: unknown[] = []
+  if (bag.success === true && Array.isArray(bag.paths)) found.push(...bag.paths)
+  if (bag.ok === true) {
+    found.push(bag.path)
+    if (Array.isArray(bag.results)) {
+      for (const item of bag.results) {
+        if (item && typeof item === 'object') found.push((item as { path?: unknown }).path)
+      }
+    }
+  }
+  const paths = found.filter((p): p is string => typeof p === 'string' && !!p)
+  if (!paths.length) return null
+  const failedItem =
+    Array.isArray(bag.results) &&
+    bag.results.some((i) => !!(i && typeof i === 'object' && (i as { error?: unknown }).error))
+  return { paths, saysMore: !!bag.error || !!bag.next_step || failedItem }
+}
+
+/* One generated image, with the skeleton the delivery shelf's shots use: the
+   file arrives over `/file`, so the box holds its place while it does or the
+   card jumps when it lands. A file that cannot be fetched falls back to its
+   name rather than to a broken-image glyph. */
+function GeneratedShot({ path }: { path: string }): ReactElement {
+  const [ready, setReady] = useState(false)
+  const [gone, setGone] = useState(false)
+  const src = fileURL(path)
+  const name = path.split('/').pop() || path
+  if (gone) {
+    return (
+      <span className="pic doc">
+        <span className="amini">
+          <span className="raw">{name}</span>
+        </span>
+      </span>
+    )
+  }
+  return (
+    <span className={'pic shot' + (ready ? '' : ' skel')}>
+      <img
+        alt={name}
+        decoding="async"
+        loading="lazy"
+        onClick={() => lightbox.open(src, name)}
+        onError={() => setGone(true)}
+        onLoad={() => setReady(true)}
+        src={src}
+        title={t('gui.img.open', { name })}
+      />
+      {ready ? null : <span className="sk" />}
+    </span>
+  )
+}
+
 function Dtl({ c, open }: { c: CallData; open: boolean }): ReactElement | null {
   const body: ReactNode[] = []
   let head: ReactNode = null
@@ -275,6 +388,20 @@ function Dtl({ c, open }: { c: CallData; open: boolean }): ReactElement | null {
         </div>,
       )
     }
+  } else if (MEDIA_TOOLS.has(c.name) && mediaResult(c.res)) {
+    /* The prompt stays the head -- it is what the reader asked for, and the one
+       thing the picture cannot say. What the object said instead of the picture
+       is gone: the picture is the result. */
+    const made = mediaResult(c.res) as MediaResult
+    head = <DtlHead name={store.shortArg(c.label, 120) || t('gui.dtl.plain')} copyText={made.paths.join('\n')} />
+    body.push(
+      <div key="shots" className={'gshots' + (made.paths.length > 1 ? ' set' : '')}>
+        {made.paths.map((path) => <GeneratedShot key={path} path={path} />)}
+      </div>,
+    )
+    /* Below the pictures, not instead of them: a batch where one entry failed
+       has both, and the reader needs both. */
+    if (made.saysMore) body.push(dtlPre(c.res, 'out'))
   } else if (c.name === 'web_fetch') {
     const url = String(c.args.url || '')
     head = <DtlHead name={url || t('gui.dtl.plain')} copyText={url || c.res} />
