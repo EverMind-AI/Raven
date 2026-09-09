@@ -161,24 +161,6 @@ def project(tmp_path: Path) -> Project:
     return deck
 
 
-@pytest.mark.asyncio
-async def test_a_restored_helper_is_named_on_a_failed_build(project: Project) -> None:
-    """The livelock this note exists for was nine failed builds in a row.
-
-    `run_script` carries the restore note out of every post-provision exit, and
-    the tool then read `outcome.note` only after its success return -- so the one
-    case that mattered, a helper restored and the script then dying, stayed as
-    silent as before. Driven through `ppt_build` because that is the surface the
-    author reads.
-    """
-    outcome = BuildOutcome(ok=False, stderr="Traceback (most recent call last): ...", note="themes.json restored")
-    body = _body(await _tool(project, StageResult(ok=False, data={"outcome": outcome})).execute(project="tarvis"))
-
-    assert body["ok"] is False
-    assert "themes.json" in (body.get("note") or ""), "a failed build does not name the helper it put back"
-
-
-@pytest.mark.asyncio
 async def test_a_deck_with_no_outline_is_refused(tmp_path: Path) -> None:
     """The second thing that stops the front of the route being skipped. Without one,
     what a page said got decided while its geometry was being typed."""

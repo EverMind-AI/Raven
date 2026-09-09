@@ -63,34 +63,16 @@ _EXPORTED_THEME_FIELDS = (
     "font_family",
 )
 
-# What the theme module says about itself, per route. The data differs -- a
-# template's single palette, or the ten reviewed themes -- so the instruction that
-# travels with it has to differ too. It did not: narrowed to the template's
-# guarantee, one text told every author that naming a theme raises, which on the
-# catalog route is how an author picks one.
-_ACCESS_SLOT = "@@ACCESS@@"
-_NOTE_SLOT = "@@NOTE@@"
-
-_SINGLE_ACCESS = "[next(iter(THEMES))]      # one entry, and it is the template's"
-_CATALOG_ACCESS = '["ink-graphite"]          # one of THEME_NAMES, kept for every page'
-
-_SINGLE_NOTE = """A deck is built inside a template, and the build writes that template's palette in
-here as the single entry -- named after the template's own file. So take it by
-iteration; a theme id typed into `THEMES[...]` is a KeyError."""
-
-_CATALOG_NOTE = """This deck has no template, so `THEMES` holds the ten reviewed themes keyed by name
-and `THEME_NAMES` lists them. Pick one by name and keep that one for every page. A
-deck built inside a template gets one entry here instead -- the template's own
-palette -- and there it is taken by iteration."""
-
 _THEME_MODULE = '''"""The deck's palette and faces, as plain data.
 
     from ppt_theme import THEMES, rgb
-    T = THEMES@@ACCESS@@
+    T = THEMES[next(iter(THEMES))]      # one entry, and it is the template's
     INK, ACCENT, FONT = rgb(T["foreground"]), rgb(T["accent"]), T["font_family"]
     HAN = T["cjk_font_family"]          # the CJK companion for this theme
 
-@@NOTE@@
+A deck is built inside a template, and the build writes that template's palette in
+here as the single entry -- named after the template's own file. So take it by
+iteration; a theme id typed into `THEMES[...]` is a KeyError.
 
 Every colour is a #RRGGBB string. `chart_series` is the ordered list a chart paints
 its series from, six of them off a template that declares six accents and whatever
@@ -1069,17 +1051,9 @@ def theme_catalog_json() -> str:
     return json.dumps(theme_catalog(), indent=1)
 
 
-def theme_module_source(*, single_theme: bool = False) -> str:
-    """Source of the `ppt_theme` module a build script imports.
-
-    ``single_theme`` is the template route, where the build has narrowed
-    ``themes.json`` to the template's own palette; the default is the catalog the
-    author chooses from. The flag picks the instruction to ship with the data, so
-    the module never tells an author the opposite of what its own file holds.
-    """
-    return _THEME_MODULE.replace(_ACCESS_SLOT, _SINGLE_ACCESS if single_theme else _CATALOG_ACCESS).replace(
-        _NOTE_SLOT, _SINGLE_NOTE if single_theme else _CATALOG_NOTE
-    )
+def theme_module_source() -> str:
+    """Source of the `ppt_theme` module a build script imports."""
+    return _THEME_MODULE
 
 
 def icon_catalog_json() -> str:

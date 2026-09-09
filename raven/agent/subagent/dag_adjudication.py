@@ -104,7 +104,6 @@ class AdjudicationDesk:
         self._waiting: dict[str, asyncio.Event] = {}
         self._answers: dict[str, Adjudication] = {}
         self.replanned = asyncio.Event()
-        self.continued = asyncio.Event()
         self._plan: ReplanPlan | None = None
 
     def open(self, node_id: str) -> asyncio.Event:
@@ -138,13 +137,6 @@ class AdjudicationDesk:
         in flight be interrupted rather than drained -- but only once the answer
         is recorded, so an answer nobody was waiting for cannot tear down a run
         it was never going to reach.
-
-        A continue fires ``continued`` for the same reason and to the opposite
-        effect on the round's other nodes: the round ends early so this node can
-        be dispatched again, and whatever is still running is handed to the next
-        round rather than cancelled. Without it the re-dispatch waits out every
-        sibling of the round it was suspended from -- nodes it does not depend on
-        and cannot be helped by, for an unbounded time.
         """
         event = self._waiting.get(node_id)
         if event is None:
@@ -153,8 +145,6 @@ class AdjudicationDesk:
         if decision == REPLAN:
             self._plan = plan
             self.replanned.set()
-        elif decision == CONTINUE:
-            self.continued.set()
         event.set()
         return True
 

@@ -37,7 +37,7 @@ _LAYOUT_MODULE = '''"""The page grid: regions, divisions, the type ramp, and wha
 
     from ppt_layout import page, GUTTER, BODY_PT, plane, write, text_size
 
-    T = THEMES[next(iter(THEMES))]        # or by name -- ppt_theme says which
+    T = THEMES[next(iter(THEMES))]        # from ppt_theme: one entry, the template's
     FONT, HAN = T["font_family"], T["cjk_font_family"]
     frame = page()                        # kicker / title / body / footer
     left, right = frame.body.split_left(0.58)

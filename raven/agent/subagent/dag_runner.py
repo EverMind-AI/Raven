@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -433,16 +433,6 @@ async def run_dag(
     # nodes -- `_RECORD_TASKS` is process-global and reachable by no
     # cancellation path at all.
     record_tasks: set[asyncio.Task] = set()
-    # Node tasks a `resume` handed back, owned here until the next round awaits
-    # them. Built before the `try` for the same reason `status` is: the
-    # cancellation handler reaps them and has to be able to see them.
-    carried: set[asyncio.Future] = set()
-    # Which node ids each carried task is already running. `_run_node` sets
-    # `running` inside the concurrency gate on purpose, so a node queued for a
-    # slot still reads `pending` -- indistinguishable, from status alone, from a
-    # node nobody has taken. A ready set recomputed while a task is carried would
-    # dispatch it a second time.
-    owned: dict[asyncio.Future, tuple[str, ...]] = {}
 
     deps: dict[str, list[str]] = {nid: graph_deps(node, by_id) for nid, node in by_id.items()}
     dependents: dict[str, list[str]] = {nid: [] for nid in by_id}
@@ -484,12 +474,6 @@ async def run_dag(
             if cancel is not None and cancel.is_set():
                 _mark_stopped(status)
             if desk is not None and desk.replanned.is_set():
-                # A replan cancels in-flight work, and nodes an earlier `resume`
-                # handed on sit outside the round that would have done it -- this
-                # is the one loop exit that can be reached while any are running.
-                # Before `_apply_replan`, so the `cancelled` it records is true.
-                await _reap_carried(carried)
-                carried = set()
                 plan = desk.take_plan()
                 if plan is not None:
                     await _apply_replan(
@@ -522,48 +506,27 @@ async def run_dag(
                     {"run_id": store.run_id, "node": nid, "status": st},
                 )
                 await _write_node_status(session_key, store.run_id, nid, by_id[nid].subagent, st)
-            carried_ids = {nid for nids in owned.values() for nid in nids}
-            if desk is not None:
-                # Cleared as the ready set is recomputed rather than once the
-                # round it woke has ended: an answer landing while this pass is
-                # still deciding has to leave the flag set, so that the round
-                # this pass goes on to dispatch wakes on it too.
-                desk.continued.clear()
             ready = [
                 nid
                 for nid, st in status.items()
-                if st == "pending" and nid not in carried_ids and all(status[d] == "completed" for d in deps[nid])
+                if st == "pending" and all(status[d] == "completed" for d in deps[nid])
             ]
             if not ready:
                 suspended = [nid for nid, st in status.items() if st == "exception"]
-                if suspended and desk is not None:
-                    # Every suspended node has already given its slot back, and
-                    # anything still running was handed on rather than awaited,
-                    # so waiting here costs the graph nothing it could be doing.
-                    await _await_adjudications(
-                        desk,
-                        status,
-                        errors,
-                        continuations,
-                        timeout_s=adjudication_timeout_s,
-                        cancel=cancel,
-                        released=released,
-                    )
-                    continue
-                if carried:
-                    # A `resume` ended an earlier round while these were still
-                    # running, and nothing new became dispatchable. This pass is
-                    # then only the wait for them that the round would have done.
-                    carried = await _run_ready_groups(
-                        (),
-                        cancel,
-                        interrupt=desk.replanned if desk is not None else None,
-                        resume=desk.continued if desk is not None else None,
-                        carried=carried,
-                    )
-                    owned = {task: nids for task, nids in owned.items() if task in carried}
-                    continue
-                break
+                if not suspended or desk is None:
+                    break
+                # Nothing else can run and every suspended node has already given
+                # its slot back, so waiting here costs the graph nothing.
+                await _await_adjudications(
+                    desk,
+                    status,
+                    errors,
+                    continuations,
+                    timeout_s=adjudication_timeout_s,
+                    cancel=cancel,
+                    released=released,
+                )
+                continue
             # Nodes sharing a stateful instance run sequentially (id order); independent
             # nodes each form a singleton group and run concurrently under the semaphore.
             groups: dict[str, list[str]] = {}
@@ -571,12 +534,10 @@ async def run_dag(
                 inst = by_id[nid].instance
                 key = inst if inst is not None else f"\x00node\x00{nid}"
                 groups.setdefault(key, []).append(nid)
-            dispatched: dict[asyncio.Future, tuple[str, ...]] = {}
-            for nids in groups.values():
-                group = sorted(nids)
-                task = asyncio.ensure_future(
+            await _run_ready_groups(
+                (
                     _run_group(
-                        group,
+                        sorted(nids),
                         by_id=by_id,
                         node_backends=node_backends,
                         store=store,
@@ -614,17 +575,11 @@ async def run_dag(
                         provider=provider,
                         model=model,
                     )
-                )
-                dispatched[task] = tuple(group)
-            owned.update(dispatched)
-            carried = await _run_ready_groups(
-                list(dispatched),
+                    for nids in groups.values()
+                ),
                 cancel,
                 interrupt=desk.replanned if desk is not None else None,
-                resume=desk.continued if desk is not None else None,
-                carried=carried,
             )
-            owned = {task: nids for task, nids in owned.items() if task in carried}
 
         result = await _finalize(
             spec,
@@ -650,12 +605,6 @@ async def run_dag(
         # `status`, and `read_session_nodes` would report them `running` forever:
         # neither reusable nor readable, for a run that is definitively over --
         # and the two refusals that produces contradict each other.
-        #
-        # Nodes handed on by a `resume` are this handler's to reap: the round
-        # that would have cancelled them returned them instead, so between that
-        # return and the next round's await nothing else owns them. Before
-        # `_mark_stopped`, so what it records as cancelled has been cancelled.
-        await _reap_carried(carried)
         _mark_stopped(status)
         await _record_outcome(store, status, cancelled=True)
         # This run's own memory-record pollers, scheduled for nodes that had
@@ -669,39 +618,8 @@ async def run_dag(
         raise
 
 
-async def _reap_carried(carried: Iterable[asyncio.Future]) -> None:
-    """Cancel and await node tasks a `resume` handed back.
-
-    Their round returned them instead of reaping them, so every path that ends
-    the run without handing them to a further round has to do it here. An
-    uncancelled group task outlives the run that owns it, holding a semaphore
-    slot and a sub-agent process that nothing will ever collect.
-
-    Two call sites are the complete set, which is what makes the absence of a
-    `finally` around the carry safe: between a hand-back and the next round's
-    await the loop reaches only `_emit` and `_write_node_status`, both of which
-    swallow every `Exception` by construction, and `_run_ready_groups` does not
-    propagate a node's own. `CancelledError` is not an `Exception` and does pass
-    through those two -- and lands in the handler that is itself one of the two
-    sites. So no third route out of the loop can leave a carried task behind.
-    """
-    tasks = list(carried)
-    if not tasks:
-        return
-    for task in tasks:
-        if not task.done():
-            task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-
-
-async def _run_ready_groups(
-    coros: Any,
-    cancel: asyncio.Event | None,
-    interrupt: asyncio.Event | None = None,
-    resume: asyncio.Event | None = None,
-    carried: Iterable[asyncio.Future] = (),
-) -> set[asyncio.Future]:
-    """Await one scheduling round's group tasks; return the ones still running.
+async def _run_ready_groups(coros: Any, cancel: asyncio.Event | None, interrupt: asyncio.Event | None = None) -> None:
+    """Await one scheduling round's group tasks.
 
     With no signal to race, this is a plain ``asyncio.gather`` (if that
     gather is itself cancelled from outside, gather cancels every task it is
@@ -710,15 +628,6 @@ async def _run_ready_groups(
     whichever signals are set, so an in-flight node is cancelled the instant
     either one fires, releasing its semaphore slot immediately rather than
     waiting for it to finish on its own.
-
-    ``resume`` is the one signal that does not end the graph's work. It says a
-    decision landed that gives the scheduler something new to dispatch, so this
-    round ends early and every node still running is *returned* rather than
-    cancelled; the caller passes them straight back as ``carried``, which awaits
-    them alongside the next round's own tasks. That is what keeps a re-dispatch
-    from waiting out an unrelated sibling, and it is why the two signals cannot
-    share a parameter: ``interrupt`` means stop these nodes, ``resume`` means
-    stop waiting for them.
 
     The reap -- cancelling every not-yet-done task and awaiting all of them --
     lives in a ``finally`` so it still runs even if the race itself is
@@ -730,42 +639,27 @@ async def _run_ready_groups(
     unsupervised, forever. ``return_exceptions=True`` on the final reap keeps
     a node's own exception (already handled inside ``_run_node``) or a stray
     one from a registry write from escaping and aborting an otherwise
-    cleanly-cancelled run. Handed-on tasks are the sole exception to the reap,
-    and they are only ever unreaped between two rounds: ``run_dag``'s own
-    cancellation handler covers that gap.
+    cleanly-cancelled run.
     """
-    tasks = [asyncio.ensure_future(c) for c in coros] + list(carried)
-    cancel_sig = asyncio.ensure_future(cancel.wait()) if cancel is not None else None
-    interrupt_sig = asyncio.ensure_future(interrupt.wait()) if interrupt is not None else None
-    resume_sig = asyncio.ensure_future(resume.wait()) if resume is not None else None
-    signals = [s for s in (cancel_sig, interrupt_sig, resume_sig) if s is not None]
+    tasks = [asyncio.ensure_future(c) for c in coros]
+    signals = [asyncio.ensure_future(e.wait()) for e in (cancel, interrupt) if e is not None]
     if not signals:
         await asyncio.gather(*tasks)
-        return set()
-    stopping = [s for s in (cancel_sig, interrupt_sig) if s is not None]
-    handed_on: set[asyncio.Future] = set()
+        return
     try:
         pending: set[asyncio.Future] = {*tasks, *signals}
         while True:
             done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            # Draining and stopping are both settled before the soft wake is
-            # read: a round whose nodes have all finished has nothing to hand
-            # on, and one being torn down must reap rather than leak.
-            if any(s in done for s in stopping) or all(t.done() for t in tasks):
-                break
-            if resume_sig is not None and resume_sig in done:
-                handed_on = {t for t in tasks if not t.done()}
+            if any(s in done for s in signals) or all(t.done() for t in tasks):
                 break
     finally:
         for signal in signals:
             if not signal.done():
                 signal.cancel()
-        reaped = [t for t in tasks if t not in handed_on]
-        for task in reaped:
+        for task in tasks:
             if not task.done():
                 task.cancel()
-        await asyncio.gather(*signals, *reaped, return_exceptions=True)
-    return handed_on
+        await asyncio.gather(*signals, *tasks, return_exceptions=True)
 
 
 async def _apply_replan(
@@ -1105,11 +999,9 @@ async def _await_adjudications(
     """Block until every suspended node has an answer, the wait runs out, or one
     answer replans the graph.
 
-    Reached only when nothing else can be dispatched: the report went to the
+    Reached only when nothing else in the graph can run: the report went to the
     main agent the moment the node was suspended, so this wait costs the graph
-    nothing it could otherwise be doing. Nodes a `resume` handed on can still be
-    running through it -- they are already tasks, and awaiting them is not what
-    makes them progress -- and the round dispatched next takes them back.
+    nothing it could otherwise be doing.
 
     Every open node waits against one deadline, all at once rather than one
     after another -- N nodes awaited in series would cost N times `timeout_s`,

@@ -43,11 +43,7 @@
         300,
         300
       ],
-      "llmRetryAfterOutput": true,
-      "compaction": {
-        "enabled": true,
-        "triggerRatio": 0.85
-      }
+      "llmRetryAfterOutput": true
     }
   },
   "providers": {

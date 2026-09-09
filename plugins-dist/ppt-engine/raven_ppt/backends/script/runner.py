@@ -26,7 +26,6 @@ from raven_ppt.backends.script.workspace import (
     deck_path,
     page_failures_path,
     provision,
-    restored_helpers,
     script_path,
     slide_lines_path,
     with_template_helpers,
@@ -246,31 +245,17 @@ async def run_script(
     # remember to pass it would forget on the path that matters -- the design
     # pass rebuilding after an edit.
     template = bound(project)
-    effective = with_template_helpers(helpers, template) if template else helpers
-    # Asked before provisioning, which is what puts them back and so erases the
-    # difference. An author's edit to a helper does not survive a build, and
-    # saying so is the whole point: silence sent one run re-reading its own
-    # reverted file for the rest of its turn.
-    put_back = restored_helpers(project, effective)
-    workdir = provision(project, effective)
+    workdir = provision(project, with_template_helpers(helpers, template) if template else helpers)
     source = script_path(project)
     note = ""
-    if put_back:
-        note = (
-            f"{', '.join(put_back)} restored to the engine's own copy: every helper beside the build script "
-            "is written fresh on each build, so an edit to one does not survive it. What this deck needs "
-            "differently belongs in the build script."
-        )
 
     if script is not None and carries_a_program(script):
         refusal = submission_refusal(script, source)
         if refusal:
-            # note included: provisioning already happened, so a restore this
-            # call performed is only reportable here.
-            return BuildOutcome(ok=False, stderr=refusal, note=note)
+            return BuildOutcome(ok=False, stderr=refusal)
         source.write_text(script, encoding="utf-8")
     elif script is not None and source.is_file():
-        note = (note + " " if note else "") + (
+        note = (
             f"the submitted script held no program, so {source.name} was left as it was and that is what "
             "ran. Omitting script does the same thing; pass one only to replace the program."
         )
@@ -291,7 +276,6 @@ async def run_script(
                     else ""
                 )
             ),
-            note=note,
         )
 
     target = deck_path(project)
@@ -356,7 +340,7 @@ async def run_script(
             f"the build script exceeded {timeout_s:.0f}s and was stopped",
         )
         _discard(staging, lines_map)
-        return BuildOutcome(ok=False, stderr=f"the build script exceeded {timeout_s:.0f}s and was stopped", note=note)
+        return BuildOutcome(ok=False, stderr=f"the build script exceeded {timeout_s:.0f}s and was stopped")
 
     stdout = raw_out.decode("utf-8", "replace")[-MAX_OUTPUT_CHARS:]
     stderr = raw_err.decode("utf-8", "replace")[-MAX_OUTPUT_CHARS:]
