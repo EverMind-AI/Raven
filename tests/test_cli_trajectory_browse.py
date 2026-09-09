@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 
 import pytest
 from rich.console import Console
-from rich.text import Text
 
 from raven.cli import trajectory_browse as tbrowse
 from raven.trajectory import conversation as tconversation
@@ -1531,36 +1529,6 @@ def test_preview_screen_renders_full_conversation(state, monkeypatch):
     assert "fix the bug" in out and "done" in out
 
 
-def _tall_preview(state):
-    spans = [_span("trace-1", session_key="cli:a", span_id="turn")]
-    spans[0]["attributes"]["turn.input_preview"] = "\n".join(f"line {i}" for i in range(40))
-    _write_log(state / "logs" / "audit-spans.log", spans)
-    return _mk_attempt(traces=("trace-1",))
-
-
-def test_preview_screen_pager_success_skips_waiter(state, monkeypatch):
-    buf = _preview_console(monkeypatch)
-    row = _tall_preview(state)
-    monkeypatch.setattr(tbrowse.shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((80, 10)))
-    monkeypatch.setattr(tbrowse, "_pager_command", lambda: [sys.executable, "-c", "import sys; sys.stdin.read()"])
-    assert tbrowse._preview_screen(1, row, state) is False
-    assert "line 5" not in buf.getvalue()  # paged, not printed to the console
-
-
-@pytest.mark.parametrize(
-    "command",
-    [[sys.executable, "-c", "raise SystemExit(1)"], ["raven-test-definitely-missing-pager"]],
-    ids=["exit-1", "missing-command"],
-)
-def test_preview_screen_pager_failure_prints_and_waits(state, monkeypatch, command):
-    buf = _preview_console(monkeypatch)
-    row = _tall_preview(state)
-    monkeypatch.setattr(tbrowse.shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((80, 10)))
-    monkeypatch.setattr(tbrowse, "_pager_command", lambda: command)
-    assert tbrowse._preview_screen(1, row, state) is True
-    assert "line 5" in buf.getvalue()
-
-
 def test_conversation_lines_narrow_separators_respect_width():
     records = [
         _rec("User input", "user", "a", trace_id="tA", turn_span_id="turnA", span_id="a1", seq=0),
@@ -1585,92 +1553,6 @@ def test_conversation_lines_marker_only_narrow_separators_respect_width():
     lines = tbrowse._conversation_lines(records, width)
     assert lines  # separators only, but real lines within the real width
     assert all(tbrowse._cell_width(line.plain) <= width for line in lines)
-
-
-class _FakeStdin:
-    def __init__(self, behavior=None):
-        self.behavior = behavior
-        self.closed = False
-
-    def write(self, data):
-        if self.behavior == "kbint":
-            raise KeyboardInterrupt()
-        if self.behavior == "broken":
-            raise BrokenPipeError()
-
-    def close(self):
-        self.closed = True
-
-
-class _FakeProc:
-    def __init__(self, stdin, wait_results):
-        self.stdin = stdin
-        self._results = list(wait_results)
-        self.terminated = False
-        self.killed = False
-        self.wait_calls = 0
-
-    def wait(self, timeout=None):
-        self.wait_calls += 1
-        result = self._results.pop(0)
-        if result is KeyboardInterrupt:
-            raise KeyboardInterrupt()
-        return result
-
-    def terminate(self):
-        self.terminated = True
-
-    def kill(self):
-        self.killed = True
-
-
-def _fake_pager(monkeypatch, proc):
-    monkeypatch.setattr(tbrowse, "_pager_command", lambda: ["fake-pager"])
-    monkeypatch.setattr(tbrowse.subprocess, "Popen", lambda command, stdin=None: proc)
-
-
-def test_page_lines_broken_pipe_with_clean_exit_counts_as_paged(monkeypatch):
-    proc = _FakeProc(_FakeStdin("broken"), [0])
-    _fake_pager(monkeypatch, proc)
-    assert tbrowse._page_lines([Text("x")], 80) is True
-    assert proc.stdin.closed  # the pipe is released even after an early quit
-    assert proc.wait_calls == 1 and not proc.terminated
-
-
-@pytest.mark.parametrize("point", ["write", "wait"])
-def test_page_lines_keyboard_interrupt_cleans_up_and_cancels(monkeypatch, point):
-    if point == "write":
-        proc = _FakeProc(_FakeStdin("kbint"), [0])
-    else:
-        proc = _FakeProc(_FakeStdin(), [KeyboardInterrupt, 0])
-    _fake_pager(monkeypatch, proc)
-    with pytest.raises(tbrowse._CancelledError):
-        tbrowse._page_lines([Text("x")], 80)
-    assert proc.stdin.closed
-    assert proc.terminated
-    assert proc.wait_calls >= 1
-
-
-def test_preview_screen_pager_triggered_by_wrapped_separators(state, monkeypatch):
-    buf = _preview_console(monkeypatch)
-    spans = []
-    for i in range(1, 4):
-        span = _span(f"trace-{i}", session_key="cli:a", span_id=f"turn{i}")
-        span["attributes"]["turn.input_preview"] = f"ask {i}"
-        spans.append(span)
-    _write_log(state / "logs" / "audit-spans.log", spans)
-    row = _mk_attempt(traces=("trace-1", "trace-2", "trace-3"))
-    monkeypatch.setattr(tbrowse.shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((20, 8)))
-    monkeypatch.setattr(tbrowse, "_pager_command", lambda: [sys.executable, "-c", "import sys; sys.stdin.read()"])
-    # Wrapped separators and notes count as real display lines: the narrow
-    # rendering is strictly taller than the wide one and feeds the threshold.
-    records = tbrowse.tconversation.attempt_conversation(row.traces, state)
-    wide = tbrowse._conversation_lines(records, 200)
-    narrow = tbrowse._conversation_lines(records, 20)
-    assert len(narrow) > len(wide)
-    assert all(tbrowse._cell_width(line.plain) <= 20 for line in narrow)
-    assert tbrowse._preview_screen(1, row, state) is False
-    assert "ask 1" not in buf.getvalue()
 
 
 def test_wrap_display_breaks_at_spaces_not_mid_word():
@@ -1708,21 +1590,6 @@ def test_conversation_lines_meta_not_deduped_across_traces():
     assert sum(1 for plain in plains if plain.strip() == f"({meta})") == 2
 
 
-def test_preview_screen_pager_threshold_boundary(state, monkeypatch):
-    _preview_console(monkeypatch)
-    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
-    row = _mk_attempt(traces=("trace-1",))
-    monkeypatch.setattr(tbrowse.shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((80, 10)))
-    paged = []
-    monkeypatch.setattr(tbrowse, "_page_lines", lambda lines, width: paged.append(len(lines)) or True)
-    monkeypatch.setattr(tbrowse, "_conversation_lines", lambda records, width: [Text("l")] * 8)
-    assert tbrowse._preview_screen(1, row, state) is True
-    assert paged == []  # exactly height - 2 lines: no pager
-    monkeypatch.setattr(tbrowse, "_conversation_lines", lambda records, width: [Text("l")] * 9)
-    assert tbrowse._preview_screen(2, row, state) is False
-    assert paged == [9]  # one line over the threshold: paged
-
-
 def test_conversation_lines_three_trace_interleave_snapshot():
     records = [
         _rec("User input", "user", "a1", trace_id="tA", turn_span_id="tuA", span_id="a1", seq=0),
@@ -1742,26 +1609,114 @@ def test_conversation_lines_three_trace_interleave_snapshot():
     assert seps[4] == "── Turn 1 (continued) ──"
 
 
-def test_space_skips_waiter_after_pager(state, workspace, monkeypatch):
+def test_collapse_folds_by_display_lines():
+    body = "\n".join(f"line {i}" for i in range(6))
+    records = [_rec("Tool output", "tool", body)]
+    expanded = _plain(tbrowse._conversation_lines(records, 80))
+    assert len([p for p in expanded if "line " in p]) == 6
+    folded = _plain(tbrowse._conversation_lines(records, 80, collapse=True))
+    assert len([p for p in folded if "line " in p]) == 5
+    assert folded[-1].strip() == "… (+1 more lines, s to expand)"
+
+    exactly_five = [_rec("Tool output", "tool", "\n".join(f"l{i}" for i in range(5)))]
+    assert _plain(tbrowse._conversation_lines(exactly_five, 80, collapse=True)) == _plain(
+        tbrowse._conversation_lines(exactly_five, 80)
+    )
+
+
+def test_collapse_threshold_uses_display_lines_not_source_lines():
+    records = [_rec("Tool output", "tool", "abcdef " * 12)]  # one source line
+    wide = tbrowse._conversation_lines(records, 200, collapse=True)
+    assert not any("s to expand" in line.plain for line in wide)
+    narrow = tbrowse._conversation_lines(records, 26, collapse=True)  # wraps past 5 display lines
+    assert any("… (+" in line.plain for line in narrow)  # the ellipsis line itself wraps at this width
+    assert all(tbrowse._cell_width(line.plain) <= 26 for line in narrow)
+
+
+def test_collapse_never_hides_note_lines():
+    body = "\n".join(f"line {i}" for i in range(8))
+    records = [_rec("Tool output", "tool", body, degraded="lost", error="boom", meta="run")]
+    plains = _plain(tbrowse._conversation_lines(records, 80, collapse=True))
+    tail = [p.strip() for p in plains[-3:]]
+    assert tail == ["(! lost)", "[ERROR] boom", "(run)"]
+    assert any("s to expand" in p for p in plains)
+
+
+def test_label_filter_matches_case_insensitively():
+    records = [
+        _rec("LLM input", "llm", "q", span_id="a", seq=0),
+        _rec("LLM output", "llm", "a", span_id="b", seq=1),
+        _rec("Tool output", "tool", "r", span_id="c", seq=2),
+    ]
+    for needle in ("LLM", "llm"):
+        plains = _plain(tbrowse._conversation_lines(records, 80, label_filter=needle))
+        assert [p.split(":")[0] for p in plains] == ["LLM input", "LLM output"]
+    assert tbrowse._conversation_lines(records, 80, label_filter="nothing-matches") == []
+
+
+def test_label_filter_shrinks_label_column_and_stacks_with_collapse():
+    records = [
+        _rec("LLM input", "llm", "\n".join(f"line {i}" for i in range(6)), span_id="a", seq=0),
+        _rec("Personalize classify output", "memory", "x", span_id="b", seq=1),
+    ]
+    filtered = _plain(tbrowse._conversation_lines(records, 80, label_filter="llm", collapse=True))
+    label_col = tbrowse._cell_width("LLM input:") + 1
+    assert filtered[0][:label_col] == tbrowse._cell_pad("LLM input:", label_col)
+    assert filtered[-1].strip() == "… (+1 more lines, s to expand)"
+
+
+def test_label_filter_drops_empty_turn_groups_and_their_separators():
+    records = [
+        _rec("User input", "user", "u", trace_id="tA", turn_span_id="tuA", span_id="a1", seq=0),
+        _rec("Turn", "user", "", trace_id="tB", turn_span_id="tuB", span_id="b0", seq=1),
+        _rec("LLM output", "llm", "x", trace_id="tB", turn_span_id="tuB", span_id="b1", seq=2),
+    ]
+    plains = _plain(tbrowse._conversation_lines(records, 80, label_filter="llm"))
+    assert not any(p.startswith("── Turn") for p in plains)  # single visible group
+    assert [p.split(":")[0] for p in plains] == ["LLM output"]
+
+    both = _plain(tbrowse._conversation_lines(records, 80, label_filter="u"))
+    # "u" matches both User input and LLM output, so both groups stay visible.
+    assert len([p for p in both if p.startswith("── Turn")]) == 2
+
+
+def test_preview_screen_opens_viewer_on_tty(state, monkeypatch):
+    _preview_console(monkeypatch)
+    _write_log(
+        state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a", attrs={"turn.input_preview": "hi"})]
+    )
+    row = _mk_attempt(traces=("trace-1",))
+    seen = {}
+
+    def fake_view(make_lines, *, title, **kw):
+        seen["title"] = title
+        seen["lines"] = make_lines(False, None, 80)
+        return False
+
+    monkeypatch.setattr(tbrowse, "_viewer_available", lambda: True)
+    monkeypatch.setattr(tbrowse.pviewer, "view_lines", fake_view)
+    assert tbrowse._preview_screen(3, row, state) is False
+    assert seen["title"] == "Preview #3"
+    assert any("User input" in line.plain for line in seen["lines"])
+
+
+def test_preview_screen_viewer_cancel_raises_browser_cancel(state, monkeypatch):
+    _preview_console(monkeypatch)
+    _write_log(
+        state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a", attrs={"turn.input_preview": "hi"})]
+    )
+    row = _mk_attempt(traces=("trace-1",))
+    monkeypatch.setattr(tbrowse, "_viewer_available", lambda: True)
+    monkeypatch.setattr(tbrowse.pviewer, "view_lines", lambda make_lines, *, title, **kw: True)
+    with pytest.raises(tbrowse._CancelledError):
+        tbrowse._preview_screen(1, row, state)
+
+
+def test_space_skips_waiter_after_viewer(state, workspace, monkeypatch):
     _two_turn_log(state)
     monkeypatch.setattr(tbrowse, "_preview_screen", lambda index, row, state_dir=None: False)
     fake = _browse(monkeypatch, [("pick", "session"), ("hit", " ", "#1"), _BACK, _CANCEL], workspace)
     assert "press" not in [k for k, _m, _t in fake.prompts]
-
-
-def test_pager_command_requires_full_tty_and_capable_term(monkeypatch):
-    monkeypatch.setenv("TERM", "xterm-256color")
-    monkeypatch.setattr(tbrowse.sys.stdout, "isatty", lambda: True, raising=False)
-    monkeypatch.setattr(tbrowse.sys.stdin, "isatty", lambda: False, raising=False)
-    assert tbrowse._pager_command() is None
-    monkeypatch.setattr(tbrowse.sys.stdin, "isatty", lambda: True, raising=False)
-    monkeypatch.setenv("TERM", "dumb")
-    assert tbrowse._pager_command() is None
-    monkeypatch.setenv("TERM", "xterm-256color")
-    monkeypatch.setattr(tbrowse.shutil, "which", lambda name: None)
-    assert tbrowse._pager_command() is None
-    monkeypatch.setattr(tbrowse.shutil, "which", lambda name: "/usr/bin/less")
-    assert tbrowse._pager_command() == ["/usr/bin/less", "-R"]
 
 
 @pytest.mark.parametrize(
