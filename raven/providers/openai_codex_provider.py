@@ -217,11 +217,7 @@ def _convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[st
                     {
                         "type": "message",
                         "role": "assistant",
-                        # `annotations` is required on a `ResponseOutputTextParam`
-                        # and is the reply's own field, not a request one: an
-                        # assistant message being replayed has none to carry, so
-                        # the empty list is the shape rather than a placeholder.
-                        "content": [{"type": "output_text", "text": content, "annotations": []}],
+                        "content": [{"type": "output_text", "text": content}],
                         "status": "completed",
                         "id": f"msg_{idx}",
                     }

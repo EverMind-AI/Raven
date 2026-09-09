@@ -3147,13 +3147,6 @@ details[open] summary { margin-bottom: 8px; }
   padding: 1px 5px; resize: vertical; outline: none;
 }
 .xaedit.on:focus { border-color: var(--line-strong, var(--line)); }
-
-/* The pictures a generate call produced, in the card the call opens. The shelf's
-   own `.pic` chrome, so a generated image and a delivered one are the same
-   object to look at -- they are the same file, one of them handed over. */
-.gshots { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
-.gshots .pic.shot img { cursor: zoom-in; max-height: 260px; width: auto; }
-.gshots.set .pic.shot img { max-height: 160px; }
 .pmtool {
   font-family: var(--mono); font-size: 11px; color: var(--muted);
   background: var(--surface); border-radius: 7px; padding: 5px 10px; margin-bottom: 4px;
