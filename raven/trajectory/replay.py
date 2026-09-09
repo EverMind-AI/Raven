@@ -251,6 +251,50 @@ class ReplayReport:
     def complete(self) -> bool:
         return not self.halted
 
+    def to_dict(self, *, manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Stable JSON form of the report (``schema_version`` 1), the shape
+        CI consumers parse. ``manifest`` is embedded verbatim — the caller
+        owns the summary; the report only serializes itself."""
+        return {
+            "schema_version": 1,
+            "bundle": self.bundle_dir.name,
+            "manifest": _jsonable(manifest) if manifest is not None else None,
+            "mode": self.mode,
+            "halted": self.halted,
+            "complete": self.complete,
+            "turns": {"replayed": self.turns_replayed, "recorded": self.turns_recorded},
+            "llm_calls": {
+                "replayed": self.llm_calls_replayed,
+                "recorded": self.llm_calls_recorded,
+                "streamed": self.llm_calls_streamed,
+            },
+            "tool_calls": {"replayed": self.tool_calls_replayed, "recorded": self.tool_calls_recorded},
+            "divergences": [
+                {
+                    "kind": div.kind,
+                    "index": div.index,
+                    "fatal": div.fatal,
+                    "field": div.field,
+                    "detail": div.detail,
+                    "expected": _jsonable(div.expected),
+                    "actual": _jsonable(div.actual),
+                }
+                for div in self.divergences
+            ],
+        }
+
+
+def _jsonable(value: Any) -> Any:
+    """Recursively coerce recorded/live values to JSON-native types; anything
+    else degrades to ``repr`` so ``json.dumps`` never raises on a report."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return repr(value)
+
 
 def _artifact_path(bundle_dir: Path, ref: Any) -> Path | None:
     """Resolve a bundle artifact reference without allowing it to escape."""

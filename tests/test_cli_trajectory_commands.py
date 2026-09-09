@@ -999,6 +999,69 @@ def test_replay_warn_reports_divergence_but_completes(state, tmp_path) -> None:
     assert "Replay ran to the end" in r.stdout
 
 
+def test_replay_json_outputs_only_the_machine_readable_report(state, tmp_path) -> None:
+    bundle = _replay_bundle(tmp_path)
+
+    r = runner.invoke(trajectory_app, ["replay", str(bundle), "--json"])
+
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["manifest"] == {"attempt_id": "att-r", "format_version": 1}
+    assert payload["bundle"] == "att-r"
+    assert payload["mode"] == "warn"
+    assert payload["halted"] is False and payload["complete"] is True
+    assert payload["llm_calls"] == {"replayed": 1, "recorded": 1, "streamed": 0}
+    assert payload["divergences"] == []
+
+
+def test_replay_json_emits_full_report_before_halt_exit_2(state, tmp_path) -> None:
+    bundle = _replay_bundle(
+        tmp_path,
+        recorded_input={"model": "m", "messages": [{"role": "user", "content": "never"}], "tools": []},
+    )
+
+    r = runner.invoke(trajectory_app, ["replay", str(bundle), "--strict", "--json"])
+
+    assert r.exit_code == 2, r.output
+    payload = json.loads(r.stdout)
+    assert payload["halted"] is True
+    assert payload["divergences"], payload
+    assert payload["divergences"][0]["fatal"] is True
+    assert payload["divergences"][0]["kind"] == "llm"
+
+
+def test_replay_json_out_writes_file_and_keeps_stdout_clean(state, tmp_path) -> None:
+    bundle = _replay_bundle(tmp_path)
+    out = tmp_path / "reports" / "replay.json"
+
+    r = runner.invoke(trajectory_app, ["replay", str(bundle), "--json", "--out", str(out)])
+
+    assert r.exit_code == 0, r.output
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert r.stdout.strip() == ""
+
+
+def test_replay_out_without_json_exits_1(state, tmp_path) -> None:
+    bundle = _replay_bundle(tmp_path)
+
+    r = runner.invoke(trajectory_app, ["replay", str(bundle), "--out", str(tmp_path / "x.json")])
+
+    assert r.exit_code == 1
+    assert "--out requires --json" in r.stdout
+
+
+def test_replay_json_manifest_summary_is_null_for_unreadable_manifest(state, tmp_path) -> None:
+    bundle = _replay_bundle(tmp_path)
+    (bundle / "manifest.json").write_text(json.dumps({"attempt_id": {"nested": True}}), encoding="utf-8")
+
+    r = runner.invoke(trajectory_app, ["replay", str(bundle), "--json"])
+
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["manifest"] is None
+
+
 # ── minimize ──────────────────────────────────────────────────────────
 
 _MINIMIZE_INPUT = {

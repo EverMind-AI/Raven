@@ -16,10 +16,12 @@ import pytest
 
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.trajectory.replay import (
+    Divergence,
     RecordedLLMCall,
     RecordedToolCall,
     Recording,
     ReplayProvider,
+    ReplayReport,
     ReplayState,
     ReplayToolRegistry,
     _normalize_text,
@@ -1127,3 +1129,72 @@ async def test_end_to_end_replay_restores_history_when_first_input_repeats(tmp_p
         assert not marker.exists()
     finally:
         _spans._store = None
+
+
+# ── ReplayReport.to_dict ───────────────────────────────────────────────
+
+
+def _report(**overrides) -> ReplayReport:
+    base: dict = dict(
+        bundle_dir=Path("/state/bundles/att-1"),
+        mode="warn",
+        turns_replayed=1,
+        turns_recorded=2,
+        llm_calls_replayed=3,
+        llm_calls_recorded=4,
+        llm_calls_streamed=1,
+        tool_calls_replayed=5,
+        tool_calls_recorded=6,
+        divergences=[],
+        halted=False,
+        replies=["ok"],
+    )
+    base.update(overrides)
+    return ReplayReport(**base)
+
+
+async def test_report_to_dict_shape_and_schema_version() -> None:
+    div = Divergence(kind="llm", index=0, fatal=True, field="messages", detail="count", expected="a", actual="b")
+    payload = _report(divergences=[div], halted=True).to_dict(manifest={"attempt_id": "att-1", "format_version": 1})
+
+    assert payload["schema_version"] == 1
+    assert payload["bundle"] == "att-1"
+    assert payload["manifest"] == {"attempt_id": "att-1", "format_version": 1}
+    assert payload["mode"] == "warn"
+    assert payload["halted"] is True and payload["complete"] is False
+    assert payload["turns"] == {"replayed": 1, "recorded": 2}
+    assert payload["llm_calls"] == {"replayed": 3, "recorded": 4, "streamed": 1}
+    assert payload["tool_calls"] == {"replayed": 5, "recorded": 6}
+    assert payload["divergences"] == [
+        {
+            "kind": "llm",
+            "index": 0,
+            "fatal": True,
+            "field": "messages",
+            "detail": "count",
+            "expected": "a",
+            "actual": "b",
+        }
+    ]
+
+
+async def test_report_to_dict_manifest_defaults_to_null() -> None:
+    assert _report().to_dict()["manifest"] is None
+
+
+async def test_report_to_dict_degrades_non_json_values_to_repr() -> None:
+    div = Divergence(
+        kind="tool",
+        index=1,
+        fatal=False,
+        field="params",
+        detail="mismatch",
+        expected={"path": Path("/x"), "n": 1},
+        actual=[("a", "b")],
+    )
+    payload = _report(divergences=[div]).to_dict()
+
+    json.dumps(payload)
+    entry = payload["divergences"][0]
+    assert entry["expected"] == {"path": repr(Path("/x")), "n": 1}
+    assert entry["actual"] == [["a", "b"]]
