@@ -259,6 +259,19 @@ def test_a_degraded_check_is_reported_without_failing(healthy_config, monkeypatc
     assert "degraded" in result.stdout and "keywords only" in result.stdout
 
 
+def test_a_status_doctor_does_not_know_is_still_printed(healthy_config, monkeypatch) -> None:
+    """The status vocabulary belongs to the paper, not to this renderer's mark
+    table. A backend a version ahead must cost the reader a plain word, not the
+    whole report."""
+    from raven.contracts.memory import BackendHealth, HealthCheck
+
+    _health_backend(monkeypatch, BackendHealth(ready=True, checks=[HealthCheck("llm", "weird", "no idea")]))
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0, result.stdout
+    assert result.exception is None
+    assert "weird" in result.stdout and "no idea" in result.stdout
+
+
 def test_a_backend_without_diagnostics_says_so(healthy_config, monkeypatch) -> None:
     _health_backend(monkeypatch, None)
     result = runner.invoke(app, ["doctor"])

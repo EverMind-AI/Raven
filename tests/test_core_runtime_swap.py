@@ -440,6 +440,7 @@ def test_the_door_roster_guard_bites(tmp_path):
     assert len(strays) == 2 and all("grab.py" in s for s in strays), strays
 
 
+@pytest.mark.asyncio
 async def test_a_backend_whose_stop_raises_does_not_break_the_generation_swap():
     """``stop`` is contract-bound to be logged and ignored, and the swap path
     is the one that had it unwrapped: a plugin raising here would surface out

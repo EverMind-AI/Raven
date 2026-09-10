@@ -2216,6 +2216,22 @@ class TestHealth:
         assert not [c for c in h.checks if c.status == "missing"]
         assert any(c.label == "embedding" and c.status == "degraded" for c in h.checks)
 
+    async def test_an_unbuilt_multimodal_role_is_reported(self, tmp_path, monkeypatch):
+        """Pins the ``multimodal`` -> ``multimodal_llm`` capability key: the
+        section name and the key the server answers with differ, so a report
+        that says the role failed must still reach the ``multimodal`` check."""
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            configured=("llm", "multimodal"),
+            report=CapabilityReport(reachable=True, capabilities={"llm": True, "multimodal_llm": False}),
+        )
+        h = await _backend(tmp_path).health()
+        assert h.ready is True
+        assert not [c for c in h.checks if c.status == "missing"]
+        assert any(c.label == "multimodal" and c.status == "degraded" for c in h.checks)
+
     async def test_a_self_managed_server_reports_only_what_it_says(self, tmp_path, monkeypatch):
         from raven_everos.health import CapabilityReport
 
@@ -2236,6 +2252,7 @@ class TestHealth:
         h = await _backend(tmp_path).health()
         assert h.ready is True
         assert not [c for c in h.checks if c.status == "missing"]
+        assert any(c.label == "capabilities" for c in h.checks)
 
     async def test_a_bad_identity_is_a_config_fault_not_a_server_one(self, tmp_path, monkeypatch):
         self._patch(monkeypatch)

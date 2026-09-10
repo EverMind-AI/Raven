@@ -35,8 +35,12 @@ Failure contract. A session host -- the agent loop, the TUI, the gateway,
 loss of that one call: ``recall`` counts as no hits, ``store`` as not landed,
 ``start`` as no long-term memory for this session, ``feedback`` and ``stop``
 as logged and ignored. The import CLI (``raven import``) is the deliberate
-exception: it lets ``start`` and ``store`` raise, because a bulk import that
-runs against nothing consumes the source list while writing nothing.
+exception: nothing wraps ``start`` or ``stop`` there, so a raise in either ends
+the command, and a ``store`` that raises or returns ``False`` fails that one
+source and leaves it unsubmitted for a retry (see
+``raven/importer/orchestrator.py`` around lines 139 and 205-208) rather than
+passing as not landed -- a bulk import that runs against nothing would consume
+the source list while writing nothing.
 
 A backend that can classify its own failures (a timeout is not a refused
 connection) should catch and act on them, because the host cannot; what it
@@ -143,7 +147,7 @@ class MemoryBackend(Protocol):
     1. :meth:`recall` — called by ``ContextEngine.assemble`` every turn
        (potentially twice: once for user-track memory with ``user_id``,
        once for agent-track skills with ``agent_id`` via
-       :class:`EverosSkillSource`).
+       :class:`BackendSkillSource`).
     2. :meth:`store` — called by AgentLoop after each turn to persist
        the conversation slice.
     3. :meth:`feedback` — called by AgentLoop's after-turn dispatcher
