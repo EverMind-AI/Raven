@@ -21,7 +21,7 @@ from raven_everos.config import recorded_slice
 
 # ponytail: module global; the wizard is one-shot and single-threaded. Thread
 # the parameter if a second concurrent wizard ever exists.
-_UI: OnboardUI = None  # type: ignore[assignment]
+_UI: OnboardUI | None = None
 
 # Sentinel a required EverOS role returns when the user chooses to give up EverOS
 # rather than configure it; ``_step4_memory`` then leaves memory disabled.
@@ -1732,15 +1732,14 @@ def _step4_memory(
     # Verify EverOS server is reachable (auto-starts if needed)
     import asyncio
 
-    from raven.config.raven import load_raven_config
-    from raven_everos.health import configured_base_url
+    from raven_everos.health import base_url_from_slice
     from raven_everos.server import ensure_everos_server
 
     # The configured address, not the default: the memory backend connects to
     # whatever ``plugins.config`` names, so probing 18791 on a setup that moved
     # everos elsewhere reports on a server nobody uses -- and then spawns a
     # second instance that cannot hold the OME lock.
-    base_url = configured_base_url(load_raven_config())
+    base_url = base_url_from_slice(recorded_slice())
 
     # The models were just written; a process already running booted with the
     # old ones and will not re-read them.
@@ -1819,17 +1818,16 @@ def _report_everos_capabilities() -> None:
     Silent on a server too old to report capabilities -- reading that silence as
     "unavailable" would condemn a working install.
     """
-    from raven.config.raven import load_raven_config
     from raven_everos.health import (
         DEGRADING_SECTIONS,
         REQUIRED_SECTIONS,
-        configured_base_url,
+        base_url_from_slice,
         probe_capabilities,
     )
 
     # The configured address, not the default: probing the wrong port reports on
     # a server nobody is using, and reads as "not running".
-    report = probe_capabilities(configured_base_url(load_raven_config()))
+    report = probe_capabilities(base_url_from_slice(recorded_slice()))
     if not report.reports_capabilities:
         return
     configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if _everos_role_configured(s)]
