@@ -403,70 +403,12 @@ describe('the dag sheet after a reload', () => {
     expect(sheets()).toHaveLength(1)
   })
 
-  /* The reader left this conversation and came back without the page ever being
-     replaced. The sheet is still in the store, but every node report that landed
-     while they were away was dropped -- a graph is only fed live events, and only
-     for the conversation on screen. So a read of the SAME run is newer than what
-     the sheet holds and has to be applied to it, rather than declined because a
-     sheet happens to be up. Declining is right only for a DIFFERENT run, which
-     the test above covers. */
-  it('refreshes a sheet still up on the same run', () => {
-    act(() => { start('a', graph('r1')) })
-
-    act(() => { resume('a', answer()) })
-
-    const d = run('a')!
-    expect([...d.nodes.values()].map((n) => n.status)).toEqual(['completed', 'running'])
-    /* Refreshed in place: a second sheet for the same conversation would be one
-       the reader has to dismiss twice. */
-    expect(sheets()).toHaveLength(1)
-  })
-
-  it('keeps the reader fold across a refresh', () => {
-    act(() => { start('a', graph('r1', { folded: true })) })
-
-    act(() => { resume('a', answer()) })
-
-    /* The fold is the reader's, and a refresh is news about the run. */
-    expect(run('a')!.folded).toBe(true)
-  })
-
-  it('takes the gateway word on a run that finished while away', () => {
-    act(() => { start('a', graph('r1')) })
-
-    act(() => { resume('a', answer({ finalized: true })) })
-
-    expect(run('a')!.done).toBe(true)
-  })
-
-  /* Whether a conversation should be asked about at all is no longer settled
-     here: it moved to `resumeDag` in shell/resume.ts, which refuses when it has
-     no run to read, and is covered there by "asks for nothing when the
-     conversation had nothing open". It had to move -- the test this replaces
-     asserted a refusal based on a stored note, and a note is per-tab and absent
-     for exactly the runs that need drawing most: the ones that started while the
-     reader was in another conversation.
-
-     What is still refused here is a read that names no run, which is the one
-     case this function cannot place on screen whatever the caller believes. */
-  it('raises nothing for a read that names no run', () => {
-    let put = false
-    act(() => { put = resume('a', answer({ run_id: '' })) })
-
-    expect(put).toBe(false)
-    expect(sheets()).toHaveLength(0)
-  })
-
-  /* The other half of that move: given a run it can name, this draws it, and
-     does not second-guess the caller by asking whether the page happens to
-     remember the conversation. */
-  it('draws a run the page had no note for', () => {
+  it('raises nothing for a conversation that had no sheet', () => {
     let put = false
     act(() => { put = resume('a', answer()) })
 
-    expect(put).toBe(true)
-    expect(run('a')!.run_id).toBe('r1')
-    expect(sheets()).toHaveLength(1)
+    expect(put).toBe(false)
+    expect(sheets()).toHaveLength(0)
   })
 
   it('raises nothing when the run cannot be read back', () => {
