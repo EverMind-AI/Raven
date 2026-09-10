@@ -21,7 +21,7 @@ PLUGIN_DIR = REPO_ROOT / "plugins-dist" / "everos-memory" / "raven_everos"
 
 _PLUGIN_IMPORT = re.compile(r"^\s*(from|import)\s+raven_everos\b", re.M)
 _HOST_PRIVATE = re.compile(
-    r"^\s*from\s+raven\.(cli|config\.loader)\b(?!.*get_config_path)",
+    r"^\s*from\s+raven\.(cli|config\.loader|config\.raven)\b(?!.*get_config_path)",
     re.M,
 )
 

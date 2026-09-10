@@ -135,6 +135,8 @@ def _recorded_slice() -> dict[str, Any]:
         return {}
     plugins = data.get("plugins") or {}
     slice_ = (plugins.get("config") or {}).get("everos-memory") if isinstance(plugins, dict) else None
+    if not isinstance(slice_, dict) and isinstance(plugins, dict):
+        slice_ = (plugins.get("config") or {}).get("everos")
     return slice_ if isinstance(slice_, dict) else {}
 
 
