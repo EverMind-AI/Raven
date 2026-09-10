@@ -163,29 +163,6 @@ class WiringMixin:
         # keyed Tavily search.
         if search is not None and search is gated.get(WebSearchTool.name) and not search.api_key:
             names.add(WebSearchTool.name)
-        # A contributed tool that declared ``configured()`` at the door answers
-        # for itself on this same lane (the paper is in
-        # raven/contracts/plugin_surface.py): the built-ins above are judged by
-        # identity because their section is the loop's to read, while a plugin's
-        # credential story is its own. Read off the admitted ``ToolSpec``, never
-        # off the live object, and asked per assembly, so a section added or
-        # emptied in Settings surfaces or withdraws the tool on the next turn
-        # without a restart. A declaration that raises is logged and read as
-        # configured: offering a tool that will answer with its own error beats
-        # losing the assembly.
-        for name in self.tools.names():
-            if self.tools.get(name) is gated.get(name):
-                continue
-            spec = self.tools.spec_of(name)
-            if spec is None or spec.configured is None:
-                continue
-            try:
-                offered = bool(spec.configured())
-            except Exception as exc:
-                logger.warning("tool {} could not say whether it is configured: {}", name, exc)
-                continue
-            if not offered:
-                names.add(name)
         return names
 
     def _live_exec_extra_deny(self) -> list[str] | None:
@@ -896,7 +873,6 @@ class WiringMixin:
             wake_scheduler=wake,
             direct_ask=self._direct_ask,
             rebind_workdir=self._rebind_workdir,
-            usage_recorder=self._record_image_usage,
         )
 
     async def _direct_ask(

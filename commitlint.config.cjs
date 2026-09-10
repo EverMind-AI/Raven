@@ -38,7 +38,6 @@ const TOP_LEVEL_TREES = [
   "docs",
   "evolver",
   "plugins-dist",
-  "schemas",
   "scripts",
   "tests",
   "ui-tui",

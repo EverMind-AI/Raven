@@ -2451,254 +2451,6 @@
       "en": "Service address, e.g. http://127.0.0.1:11434",
       "zh": "服务地址，例如 http://127.0.0.1:11434"
     },
-    "gui.model.cap.audio_in": {
-      "en": "Reads audio",
-      "zh": "听音频"
-    },
-    "gui.model.cap.audio_out": {
-      "en": "Makes audio",
-      "zh": "生成音频"
-    },
-    "gui.model.cap.computer_use": {
-      "en": "Computer use",
-      "zh": "操作电脑"
-    },
-    "gui.model.cap.embedding": {
-      "en": "Embeddings",
-      "zh": "向量嵌入"
-    },
-    "gui.model.cap.file_in": {
-      "en": "Takes files",
-      "zh": "读文件"
-    },
-    "gui.model.cap.function_call": {
-      "en": "Tool calls",
-      "zh": "工具调用"
-    },
-    "gui.model.cap.image_in": {
-      "en": "Reads images",
-      "zh": "看图"
-    },
-    "gui.model.cap.image_out": {
-      "en": "Makes images",
-      "zh": "生成图片"
-    },
-    "gui.model.cap.reasoning": {
-      "en": "Reasoning",
-      "zh": "推理"
-    },
-    "gui.model.cap.rerank": {
-      "en": "Reranking",
-      "zh": "重排序"
-    },
-    "gui.model.cap.structured_output": {
-      "en": "Structured output",
-      "zh": "结构化输出"
-    },
-    "gui.model.cap.video_in": {
-      "en": "Reads video",
-      "zh": "看视频"
-    },
-    "gui.model.cap.video_out": {
-      "en": "Makes video",
-      "zh": "生成视频"
-    },
-    "gui.model.context_window": {
-      "en": "{tokens} tokens of context",
-      "zh": "上下文 {tokens} tokens"
-    },
-    "gui.model.modality.audio": {
-      "en": "audio",
-      "zh": "音频"
-    },
-    "gui.model.modality.image": {
-      "en": "image",
-      "zh": "图片"
-    },
-    "gui.model.modality.text": {
-      "en": "text",
-      "zh": "文本"
-    },
-    "gui.model.modality.vector": {
-      "en": "vector",
-      "zh": "向量"
-    },
-    "gui.model.modality.video": {
-      "en": "video",
-      "zh": "视频"
-    },
-    "gui.model.reads": {
-      "en": "Reads {list}",
-      "zh": "输入 {list}"
-    },
-    "gui.model.writes": {
-      "en": "Writes {list}",
-      "zh": "输出 {list}"
-    },
-    "gui.model.api_host": {
-      "en": "API Host",
-      "zh": "API 地址"
-    },
-    "gui.model.api_key": {
-      "en": "API Key",
-      "zh": "API 密钥"
-    },
-    "gui.model.docs": {
-      "en": "Model docs",
-      "zh": "模型文档"
-    },
-    "gui.model.get_key": {
-      "en": "Get API Key",
-      "zh": "获取密钥"
-    },
-    "gui.model.get_list": {
-      "en": "Get model list",
-      "zh": "获取模型列表"
-    },
-    "gui.model.models": {
-      "en": "Models",
-      "zh": "模型"
-    },
-    "gui.model.none_yet": {
-      "en": "No models yet. Add one by id below.",
-      "zh": "还没有模型，可在下方按 id 添加。"
-    },
-    "gui.model.soon": {
-      "en": "Not wired up yet",
-      "zh": "功能尚未接入"
-    },
-    "gui.model.add_group": {
-      "en": "Add the whole group",
-      "zh": "添加整组"
-    },
-    "gui.model.add_manual": {
-      "en": "Add a model by hand",
-      "zh": "手动添加模型"
-    },
-    "gui.model.add_caps": {
-      "en": "Model capabilities",
-      "zh": "模型能力"
-    },
-    "gui.model.add_id": {
-      "en": "Model ID",
-      "zh": "模型 ID"
-    },
-    "gui.model.add_id_ph": {
-      "en": "e.g. gpt-5.5",
-      "zh": "例如 gpt-5.5"
-    },
-    "gui.model.add_in": {
-      "en": "Input modalities",
-      "zh": "输入类型"
-    },
-    "gui.model.add_name": {
-      "en": "Name",
-      "zh": "名称"
-    },
-    "gui.model.add_name_ph": {
-      "en": "Optional, shown instead of the id",
-      "zh": "可选，列表中代替 id 显示"
-    },
-    "gui.model.add_title": {
-      "en": "Add model",
-      "zh": "添加模型"
-    },
-    "gui.model.add_type": {
-      "en": "Model type",
-      "zh": "模型类型"
-    },
-    "gui.model.type.embedding": {
-      "en": "Embedding",
-      "zh": "嵌入"
-    },
-    "gui.model.type.image": {
-      "en": "Image",
-      "zh": "图片"
-    },
-    "gui.model.type.reranker": {
-      "en": "Reranker",
-      "zh": "重排"
-    },
-    "gui.model.type.text": {
-      "en": "Text",
-      "zh": "文本"
-    },
-    "gui.model.cap.tool": {
-      "en": "Tool",
-      "zh": "工具"
-    },
-    "gui.model.in.audio": {
-      "en": "Audio",
-      "zh": "音频"
-    },
-    "gui.model.in.video": {
-      "en": "Video",
-      "zh": "视频"
-    },
-    "gui.model.in.vision": {
-      "en": "Vision",
-      "zh": "视觉"
-    },
-    "gui.key.hide": {
-      "en": "Hide the key",
-      "zh": "隐藏密钥"
-    },
-    "gui.key.show": {
-      "en": "Show the key",
-      "zh": "显示密钥"
-    },
-    "gui.model.add_all": {
-      "en": "Add all ({n})",
-      "zh": "全部添加（{n}）"
-    },
-    "gui.model.catalogue_n": {
-      "en": "{n} shown",
-      "zh": "显示 {n} 个"
-    },
-    "gui.model.catalogue_search": {
-      "en": "Search models...",
-      "zh": "搜索模型…"
-    },
-    "gui.model.catalogue_title": {
-      "en": "{name} models",
-      "zh": "{name} 模型"
-    },
-    "gui.model.fetching": {
-      "en": "Asking the provider...",
-      "zh": "正在向服务商获取…"
-    },
-    "gui.model.kind_all": {
-      "en": "All",
-      "zh": "全部"
-    },
-    "gui.model.no_match": {
-      "en": "No model matches that.",
-      "zh": "没有匹配的模型。"
-    },
-    "gui.model.none_served": {
-      "en": "This provider listed no models.",
-      "zh": "该服务商没有返回任何模型。"
-    },
-    "gui.model.refetch": {
-      "en": "Ask again",
-      "zh": "重新获取"
-    },
-    "gui.model.type.audio": {
-      "en": "Audio",
-      "zh": "音频"
-    },
-    "gui.model.type.video": {
-      "en": "Video",
-      "zh": "视频"
-    },
-    "gui.model.cat_note_err": {
-      "en": "{name} could not be reached ({why}). Showing the bundled catalogue.",
-      "zh": "无法连接 {name}（{why}），以下为内置目录。"
-    },
-    "gui.model.cat_note_key": {
-      "en": "Add an API key to ask {name} for its own list. Showing the bundled catalogue.",
-      "zh": "填入 API 密钥后可向 {name} 获取实时列表，以下为内置目录。"
-    },
     "gui.model.collapse": {
       "en": "Collapse",
       "zh": "收起"
@@ -3134,10 +2886,6 @@
     "gui.picker.no_account": {
       "en": "No model account yet - connect one in settings first",
       "zh": "还没有可用的模型账号，先去设置里连接一个"
-    },
-    "gui.picker.no_models": {
-      "en": "No models added yet. Add some in Settings > Models.",
-      "zh": "还没有添加模型，请在「设置 > 模型」中添加。"
     },
     "gui.picker.no_match": {
       "en": "No matching model",
@@ -4968,6 +4716,22 @@
       "en": "thinking",
       "zh": "思考中"
     },
+    "gui.time.ago_d": {
+      "en": "{n}d ago",
+      "zh": "{n} 天前"
+    },
+    "gui.time.ago_h": {
+      "en": "{n}h ago",
+      "zh": "{n} 小时前"
+    },
+    "gui.time.ago_m": {
+      "en": "{n}m ago",
+      "zh": "{n} 分钟前"
+    },
+    "gui.time.ago_now": {
+      "en": "just now",
+      "zh": "刚刚"
+    },
     "gui.time.dbyest": {
       "en": "2 days ago",
       "zh": "前天"
@@ -5743,6 +5507,38 @@
     "gui.agent.about_none": {
       "en": "No description yet",
       "zh": "还没有说明"
+    },
+    "gui.agent.sec_test": {
+      "en": "Check it works",
+      "zh": "检查是否可用"
+    },
+    "gui.agent.test_do": {
+      "en": "Run a test",
+      "zh": "测试一次"
+    },
+    "gui.agent.test_running": {
+      "en": "Testing...",
+      "zh": "正在测试..."
+    },
+    "gui.agent.test_stop": {
+      "en": "Stop",
+      "zh": "停止"
+    },
+    "gui.agent.test_note": {
+      "en": "Dispatches the agent once for real, which spends its own quota.",
+      "zh": "会真的派它跑一次,消耗它自己的额度。"
+    },
+    "gui.agent.test_ok": {
+      "en": "Worked, {ago}",
+      "zh": "可用,{ago}"
+    },
+    "gui.agent.test_bad": {
+      "en": "Failed, {ago}",
+      "zh": "失败,{ago}"
+    },
+    "gui.agent.test_never": {
+      "en": "Never tested",
+      "zh": "还没测过"
     },
     "gui.pb.back": {
       "en": "Playbooks",

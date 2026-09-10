@@ -1,9 +1,8 @@
-"""Safety policy shared by every Hub skill path, at two strengths.
+"""Install-time safety policy shared by both Hub install paths.
 
-The install strength (:meth:`SkillPolicy.refusal_for_detail`) gates the
-two paths that put a body to work — the ``SkillsSegmentBuilder``
-post-gate hydrate (auto-inject) and the ``use_skill`` tool - before any
-``SkillHubClient.install``:
+The two call sites — the ``SkillsSegmentBuilder`` post-gate hydrate
+(auto-inject) and the ``use_skill`` tool — route every Hub skill through
+one :class:`SkillPolicy` decision before any ``SkillHubClient.install``:
 
 - the ``score_safety`` bar. Catalog search payloads omit the score, so
   the authoritative check runs on the *detail* metadata (already fetched
@@ -18,12 +17,6 @@ post-gate hydrate (auto-inject) and the ``use_skill`` tool - before any
 - the ``skillForge.autoInstall`` consent gate over the bundle download
   itself (``auto`` / ``prompt`` / ``off``), consulted right before an
   install would start.
-
-The read strength (:meth:`SkillPolicy.refusal_for_read`) drops the body
-lint and keeps the rest. ``read_skill`` installs nothing and hands the
-body back wrapped as untrusted data, and the scent menu advertises hub
-skills on the identity checks alone — so linting the read too would
-recommend skills by id that can never be read.
 
 Stdlib-only on purpose: this module ships with the client when the
 package is extracted for reuse outside Raven.
@@ -68,43 +61,24 @@ def refuses_low_safety(score: object, min_safety: float) -> bool:
 
 
 # ``~/.foo`` / ``$HOME/.foo`` / ``/Users/x/.foo`` / ``/home/x/.foo`` —
-# any home dotdir reference in a skill body, with up to two segments
-# under it. Only ``~/.raven`` is ours; everything else is another
-# product's (or the user's private) data.
+# any home dotdir reference in a skill body. Only ``~/.raven`` is ours;
+# everything else is another product's (or the user's private) data.
 _EXTERNAL_HOME_RE = re.compile(
-    r"(?:~|\$HOME|/Users/[A-Za-z0-9_][\w.-]*|/home/[A-Za-z0-9_][\w.-]*)"
-    r"/\.(?P<root>[A-Za-z0-9][\w-]*)"
-    r"(?:/(?P<child>[A-Za-z0-9][\w.-]*))?"
-    r"(?:/(?P<grandchild>[A-Za-z0-9][\w.-]*))?",
+    r"(?:~|\$HOME|/Users/[A-Za-z0-9_][\w.-]*|/home/[A-Za-z0-9_][\w.-]*)/\.(?P<name>[A-Za-z0-9][\w-]*)",
 )
 _ALLOWED_HOME_DOTDIRS = frozenset({"raven"})
-
-# Dotdirs that host other products rather than being one: ``~/.config`` is
-# where everyone's settings live, so the segment naming whose data it is sits
-# one further down. Reporting the root alone refuses a skill for mentioning
-# XDG at all, which is what made a clean skill unreadable.
-_GENERIC_HOME_ROOTS = frozenset({"config", "cache", "local", "share", "state"})
 
 
 def lint_external_paths(text: str | None) -> list[str]:
     """Foreign home-dotdir references found in a skill body, deduped and
-    sorted (e.g. ``["~/.openclaw"]``). Empty list = clean.
-
-    Under a generic root the reported path runs down to the segment that
-    names the owning product (``~/.config/openclaw``), because the root by
-    itself belongs to nobody.
-    """
+    sorted (e.g. ``["~/.openclaw"]``). Empty list = clean."""
     if not text:
         return []
-    found: set[str] = set()
-    for m in _EXTERNAL_HOME_RE.finditer(text):
-        segments = [g for g in m.group("root", "child", "grandchild") if g]
-        owner = 0
-        while owner < len(segments) and segments[owner].casefold() in _GENERIC_HOME_ROOTS:
-            owner += 1
-        if owner == len(segments) or segments[owner].casefold() in _ALLOWED_HOME_DOTDIRS:
-            continue
-        found.add("~/." + "/".join(segments[: owner + 1]))
+    found = {
+        f"~/.{m.group('name')}"
+        for m in _EXTERNAL_HOME_RE.finditer(text)
+        if m.group("name").casefold() not in _ALLOWED_HOME_DOTDIRS
+    }
     return sorted(found)
 
 
@@ -167,13 +141,13 @@ class SkillPolicy:
             return f"skill {name!r}: install declined at the autoInstall prompt"
         return None
 
-    def _refusal_for_identity(
+    def refusal_for_detail(
         self,
         meta: dict[str, Any],
-        extra_identifiers: tuple[str | None, ...],
+        *extra_identifiers: str | None,
     ) -> str | None:
-        """Blocklist then safety bar — the checks that hold at every
-        strength, because they are about the skill rather than its body."""
+        """Refusal reason for a hub skill's detail metadata, or ``None`` to
+        allow. Checks blocklist, then the safety bar, then the body lint."""
         slug = str(next((i for i in (meta.get("slug"), meta.get("name"), *extra_identifiers) if i), "?"))
         if is_blocked(
             self.blocklist,
@@ -186,38 +160,8 @@ class SkillPolicy:
         score = meta.get("score_safety")
         if refuses_low_safety(score, self.min_safety):
             return f"skill {slug!r}: score_safety {score} is below the configured minimum {self.min_safety}"
-        return None
-
-    def refusal_for_read(
-        self,
-        meta: dict[str, Any],
-        *extra_identifiers: str | None,
-    ) -> str | None:
-        """Refusal reason for *reading* a hub skill's body, or ``None``.
-
-        Blocklist and safety bar only. The body lint is deliberately absent:
-        a read installs nothing and returns the text wrapped as untrusted
-        data, and the scent menu advertises hub skills on these same two
-        checks — so refusing a read here would put an id in front of the
-        model that no call can ever resolve. Use
-        :meth:`refusal_for_detail` wherever the body is about to be
-        installed or injected as instructions.
-        """
-        return self._refusal_for_identity(meta, extra_identifiers)
-
-    def refusal_for_detail(
-        self,
-        meta: dict[str, Any],
-        *extra_identifiers: str | None,
-    ) -> str | None:
-        """Refusal reason for a hub skill's detail metadata, or ``None`` to
-        allow. Checks blocklist, then the safety bar, then the body lint."""
-        refusal = self._refusal_for_identity(meta, extra_identifiers)
-        if refusal is not None:
-            return refusal
         flagged = lint_external_paths(meta.get("skill_md"))
         if flagged:
-            slug = str(next((i for i in (meta.get("slug"), meta.get("name"), *extra_identifiers) if i), "?"))
             return f"skill {slug!r} references external home directories: {', '.join(flagged)}"
         return None
 
