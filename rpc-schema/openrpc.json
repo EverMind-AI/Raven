@@ -1172,8 +1172,48 @@
       "errors": []
     },
     {
+      "name": "model.fetch_models",
+      "summary": "What a provider can serve: the bundled catalogue unioned with whatever the vendor names when it can be reached. Each row carries the registry's name and tags, its window, the bucket it filters into, whether this provider's list already has it, and which source it came from. A read -- nothing is written until a row is added.",
+      "params": [
+        {
+          "name": "slug",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ModelFetchModelsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "models",
+            "status"
+          ],
+          "properties": {
+            "models": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/ModelCandidate"
+              }
+            },
+            "status": {
+              "type": "string",
+              "description": "`ok` when the vendor answered, otherwise why it did not (`not_configured`, `unauthorized`, `network_error`, `no_probe_endpoint`, `http_NNN`). The models are the bundled catalogue unioned with whatever the vendor named, so a failure to reach it costs currency, not the list."
+            },
+            "error": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "model.add_model",
-      "summary": "Append a model id to a provider's curated picker list.",
+      "summary": "Append a model id to a provider's curated picker list, with what the caller states about it. The tags are display only and are refused unless every name is in the published vocabulary; they give a model no catalogue carries the icon row every other model has.",
       "params": [
         {
           "name": "slug",
@@ -1187,6 +1227,43 @@
           "required": true,
           "schema": {
             "type": "string"
+          }
+        },
+        {
+          "name": "label",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "capabilities",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "name": "input_modalities",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "name": "output_modalities",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         {
@@ -8803,6 +8880,10 @@
           "homepage": {
             "type": "string"
           },
+          "docs": {
+            "type": "string",
+            "description": "The vendor's own model index. Distinct from `homepage`: the question a settings page asks is which model to put here, and a marketing front page does not answer it."
+          },
           "authenticated": {
             "type": "boolean"
           },
@@ -8826,6 +8907,17 @@
             "items": {
               "type": "string"
             }
+          },
+          "configured_models": {
+            "type": "array",
+            "description": "Only what the provider's config section lists. `models` is the picker's offer -- config plus a curated shortlist plus a catalogue -- so a page managing the list reads this one or it shows models nobody added.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accepts_api_key": {
+            "type": "boolean",
+            "description": "Whether to draw a key field. False for an OAuth flow and for a local deployment reached by address alone; true for the local servers that can be put behind a token, which the registry declares rather than each surface matching on the slug."
           },
           "protocols": {
             "type": "object",
@@ -8859,10 +8951,64 @@
           }
         }
       },
+      "ModelCandidate": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One model a provider reports. `added` is about this provider's configured list, not about the vendor: the same model offered by two gateways is added to each separately.",
+        "required": [
+          "id",
+          "label",
+          "kind",
+          "added"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "The bucket the list filters by: text, image, embedding, reranker, audio or video. Derived from what the model writes -- reading pictures is something a text model does."
+          },
+          "added": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string",
+            "description": "`live` when the vendor named this model just now, `registry` when only the bundled catalogue does. A registry row is not less real: it is how a provider lists at all before a key is entered."
+          },
+          "description": {
+            "type": "string"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "input_modalities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "output_modalities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "context_window": {
+            "type": "integer"
+          }
+        }
+      },
       "ModelLabel": {
         "type": "object",
         "additionalProperties": false,
-        "description": "How a model reads to a person. Absent for a model no catalogue knows -- one released since the bundled snapshot, or served by a local deployment -- in which case the id is all there is to show.",
+        "description": "How a model reads to a person, and what it can do. Absent for a model the registry knows nothing about -- one released since the bundled files, or served by a local deployment -- in which case the id is all there is to show. An empty tag list means nothing is published, not that the model cannot: a surface renders absence as no icon, never as a denial.",
         "required": [
           "label"
         ],
@@ -8872,6 +9018,31 @@
           },
           "description": {
             "type": "string"
+          },
+          "capabilities": {
+            "type": "array",
+            "description": "Closed vocabulary, drawn as icons: function-call, reasoning, structured-output, image-recognition, audio-recognition, video-recognition, file-input, image-generation, audio-generation, video-generation, embedding, rerank, computer-use.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "input_modalities": {
+            "type": "array",
+            "description": "What the model reads: text, image, video, audio, vector.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "output_modalities": {
+            "type": "array",
+            "description": "What the model writes: text, image, video, audio, vector.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "context_window": {
+            "type": "integer",
+            "description": "Tokens the model reads in one request, from the tables that also route rather than from the display registry -- the number shown has to be the number a request is sized with. Absent where no such table names the model."
           }
         }
       },

@@ -27,6 +27,7 @@ REPO = Path(__file__).resolve().parent.parent
 #: only about references that claim a repo-rooted path and can be checked.
 ROOTS = (
     "raven/",
+    "agents/",
     "plugins-dist/",
     "tests/",
     "docs/",
@@ -48,6 +49,7 @@ HISTORY = {"CHANGELOG.md", "AGENTS.md", "CLAUDE.md"}
 def _living_docs() -> list[Path]:
     docs = [p for p in REPO.glob("*.md") if p.name not in HISTORY]
     docs += [p for p in (REPO / "docs").glob("*.md")]
+    docs += [p for p in (REPO / "agents").glob("*.md")]
     docs += [p for p in REPO.glob("raven/**/README.md")]
     docs += [p for p in (REPO / "docs" / "sandbox").glob("*.md")]
     docs += [p for p in REPO.glob("ui-tui/CONTEXT.md")]

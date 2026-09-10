@@ -17,6 +17,8 @@ vi.mock('../../shell/toast', () => ({
 
 const PROVIDERS: Provider[] = [
   { id: 'minimax', name: 'MiniMax (Global)', homepage: 'https://platform.minimax.io/', models: ['minimax-m3', 'minimax-m2'], on: true },
+  /* Everything this one could serve is three models; two were added. The
+     picker offers the two. */
   { id: 'anthropic', name: 'Anthropic', models: ['vendor/claude-opus-5', 'claude-sonnet-5'], on: true },
   { id: 'openai', name: 'OpenAI', models: ['gpt-5.2'], on: false },
   { id: 'empty', name: 'Nothing', models: [], on: true },
@@ -95,7 +97,6 @@ afterEach(() => {
   delete window.DS
   document.body.innerHTML = ''
 })
-
 describe('the model picker', () => {
   it('renders nothing until it is asked for', () => {
     install()
@@ -109,7 +110,10 @@ describe('the model picker', () => {
     openIt()
     expect(rows('provs').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['MiniMax (Global)', 'Anthropic'])
     expect(rows('provs')[0]!.querySelector('.nm')?.firstElementChild?.getAttribute('src')).toBe('assets/providers/minimax.svg')
-    expect(rows('provs')[0]!.querySelector('.provider-link')?.getAttribute('href')).toBe('https://platform.minimax.io/')
+    /* A name, not a link: the row's whole job is to change the column beside
+       it, and an anchor in the middle of it sent the reader out to a marketing
+       page instead of selecting the provider they clicked. */
+    expect(rows('provs')[0]!.querySelector('a')).toBeNull()
     expect(rows('provs')[0]!.lastElementChild?.className).toBe('provider-status on')
   })
 
@@ -384,5 +388,122 @@ describe('the model picker, closing', () => {
     mount()
     expect(() => openIt()).not.toThrow()
     expect(pick()).toBeNull()
+  })
+})
+
+/* This block's own providers. The shared list above is what every assertion
+   before it measures, and hanging a label on one of those rows renames the text
+   half those tests read. */
+const TAGGED: Provider[] = [
+  {
+    id: 'anthropic',
+    name: 'Anthropic',
+    models: ['vendor/claude-opus-5', 'claude-sonnet-5'],
+    on: true,
+    labels: {
+      'vendor/claude-opus-5': {
+        label: 'Claude Opus 5',
+        capabilities: ['reasoning', 'function-call', 'image-recognition'],
+        input_modalities: ['text', 'image'],
+        output_modalities: ['text'],
+        context_window: 1000000,
+      },
+    },
+  },
+]
+
+describe('the capability icons', () => {
+  it('draws one icon per published capability, and a window badge beside them', () => {
+    install({}, TAGGED)
+    mount()
+    openIt()
+    const row = rows('models')[0]!
+    const drawn = [...row.querySelectorAll('.model-tag use')].map((u) => u.getAttribute('href'))
+    expect(drawn).toEqual(['#mtag-reasoning', '#mtag-function-call', '#mtag-image-recognition'])
+    expect(row.querySelector('.model-window')!.textContent).toBe('1M')
+  })
+
+  it('draws nothing for a model the registry knows nothing about', () => {
+    install({}, TAGGED)
+    mount()
+    openIt()
+    /* Absence is "unknown", not "cannot": the second Anthropic row has no
+       label entry at all and must come back with no icons rather than with a
+       row of crossed-out ones. */
+    expect(rows('models')[1]!.querySelector('.model-tags')).toBeNull()
+  })
+
+  it('shows the label where there is one and keeps the id on the title', () => {
+    install({}, TAGGED)
+    mount()
+    openIt()
+    const [named, bare] = rows('models')
+    expect(named!.querySelector('.nm')!.textContent).toBe('Claude Opus 5')
+    expect(named!.getAttribute('title')).toContain('claude-opus-5')
+    expect(bare!.querySelector('.nm')!.textContent).toBe('claude-sonnet-5')
+  })
+
+  it('defines each symbol once for the whole popover', () => {
+    install({}, TAGGED)
+    mount()
+    openIt()
+    /* `use` resolves the first definition of an id, so a second copy would be
+       dead markup repeated on every open. */
+    expect(document.querySelectorAll('.mpick .model-tag-defs').length).toBe(1)
+  })
+})
+
+describe('what the picker offers', () => {
+  it('offers the models that were added, not everything the vendor publishes', () => {
+    /* A provider's `models` is the offer chain -- its own list plus a curated
+       shortlist plus a catalogue -- which is what onboarding needs before
+       anything has been added. Choosing a default is the other case: you pick
+       from the list somebody built in settings. */
+    install({}, [
+      { id: 'anthropic', name: 'Anthropic', on: true, models: ['opus', 'sonnet', 'haiku'], configured: ['opus'] },
+    ])
+    mount()
+    openIt()
+    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['opus'])
+  })
+
+  it('leaves out a provider that has an account but nothing added yet', () => {
+    /* It would otherwise sit in the rail as a column that opens empty. */
+    install({}, [
+      { id: 'anthropic', name: 'Anthropic', on: true, models: ['opus'], configured: [] },
+      { id: 'openai', name: 'OpenAI', on: true, models: ['gpt'], configured: ['gpt'] },
+    ])
+    mount()
+    openIt()
+    expect(rows('provs').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['OpenAI'])
+  })
+
+  it('falls back to the offer for a source that never learned the difference', () => {
+    /* The demo layer and any older source hand back only `models`; emptying
+       their picker would be a worse answer than offering what they have. */
+    install({}, [{ id: 'anthropic', name: 'Anthropic', on: true, models: ['opus'] }])
+    mount()
+    openIt()
+    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['opus'])
+  })
+})
+
+describe('the picker with nothing to offer', () => {
+  it('tells a connected account with no models added where to go', () => {
+    /* Two different dead ends. Saying "no account" to somebody whose keys all
+       work sends them to fix what is not broken. */
+    const h = install({}, [{ id: 'anthropic', name: 'Anthropic', on: true, models: ['opus'], configured: [] }])
+    mount()
+    openIt()
+    expect(pick()).toBeNull()
+    expect(h.toasts).toEqual(['gui.picker.no_models'])
+  })
+
+  it('still says "no account" when nothing is connected at all', () => {
+    const h = install({}, [{ id: 'anthropic', name: 'Anthropic', on: false, models: ['opus'], configured: ['opus'] }])
+    mount()
+    openIt()
+    expect(pick()).toBeNull()
+    expect(h.toasts).toEqual(['gui.picker.no_account'])
   })
 })

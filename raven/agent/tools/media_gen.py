@@ -149,6 +149,16 @@ class _OpenRouterMediaTool(Tool):
             return False
         return bool(config.api_key or config.model)
 
+    def configured(self) -> bool:
+        """Whether this tool's section asks for it right now, read live.
+
+        The withheld axis asks this of a tool that declares it (see
+        ``raven/contracts/plugin_surface.py``); the answer is :meth:`is_configured`
+        on the section the next call would read, so a plugin riding this tool
+        is offered and withdrawn on exactly the terms the built-in is.
+        """
+        return self.is_configured(self._config)
+
     @classmethod
     def has_key(cls, config: "MediaToolConfig | None") -> bool:
         """Whether a credential resolves for this tool.
@@ -262,6 +272,28 @@ _SIZES = {
     "21:9": "1536x658",
 }
 
+# What the OpenAI Images API accepts for the gpt-image family: three frames and
+# "auto". The table above is what OpenRouter's unified route and the other
+# families take as a shape; sent to a gpt-image deployment behind an
+# OpenAI-compatible base, "1536x864" is refused as an invalid size. So a ratio is
+# answered with the nearest frame the family has, and the caller crops to the
+# shape it asked for (the deck tools fit a picture to its box).
+_GPT_IMAGE_LANDSCAPE = "1536x1024"
+_GPT_IMAGE_PORTRAIT = "1024x1536"
+_GPT_IMAGE_SQUARE = "1024x1024"
+
+
+def images_api_size(model_id: str, aspect_ratio: str | None) -> str | None:
+    """The ``size`` an OpenAI-compatible Images API is asked for, or None to leave it."""
+    if not aspect_ratio or aspect_ratio not in _SIZES:
+        return None
+    if "gpt-image" not in model_id.lower():
+        return _SIZES[aspect_ratio]
+    width, height = (int(side) for side in _SIZES[aspect_ratio].split("x"))
+    if width == height:
+        return _GPT_IMAGE_SQUARE
+    return _GPT_IMAGE_LANDSCAPE if width > height else _GPT_IMAGE_PORTRAIT
+
 
 def _image_only_refusal(e: httpx.HTTPStatusError) -> bool:
     """OpenRouter's two spellings of "this model is not a chat model"."""
@@ -339,6 +371,25 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         b64 = base64.b64encode(data).decode("ascii")
         return image_block(f"data:{mime};base64,{b64}")
 
+    def effective_quality(self, requested: str | None, model_id: str | None = None) -> str | None:
+        """The quality a call sends: Settings' where it names one, else the request's.
+
+        ``medium`` when neither says and the model is gpt-image-2, and ``None`` for a
+        family without the knob (only gpt-image takes one). Public because a caller
+        that caches on what it asked for has to key on what was actually sent: the
+        deck's generator keyed on its own default while the host sent Settings' value,
+        so a quality changed in Settings was answered from the old cache.
+        """
+        config = self._config
+        model_id = model_id or self._model(None)
+        if "quality" in getattr(config, "model_fields_set", set()):
+            quality = config.quality
+        elif requested is None:
+            quality = "medium" if model_id.rsplit("/", 1)[-1].lower() == "gpt-image-2" else None
+        else:
+            quality = requested
+        return quality if "gpt-image" in model_id.lower() else None
+
     async def execute(
         self,
         prompt: str,
@@ -354,16 +405,14 @@ class ImageGenerateTool(_OpenRouterMediaTool):
 
         config = self._config
         model_id = getattr(config, "model", "") or model or self.default_model
-        if "quality" in getattr(config, "model_fields_set", set()):
-            quality = config.quality
-        elif quality is None:
-            quality = "medium" if model_id.rsplit("/", 1)[-1].lower() == "gpt-image-2" else None
-        if "gpt-image" not in model_id.lower():
-            quality = None
-        if not any(name in model_id.lower() for name in ("gpt-image", "seedream", "qwen-image", "grok-imagine")):
-            aspect_ratio = None
+        quality = self.effective_quality(quality, model_id)
+        # The Images API takes the frame only from the families known to honour
+        # it; the chat route takes it from any model, as image_config below.
+        frames = any(name in model_id.lower() for name in ("gpt-image", "seedream", "qwen-image", "grok-imagine"))
         if any(name in model_id.lower() for name in _IMAGE_API_MODELS):
-            return await self._via_images_api(model_id, prompt, images, aspect_ratio, quality, output_dir)
+            return await self._via_images_api(
+                model_id, prompt, images, aspect_ratio if frames else None, quality, output_dir
+            )
         if images:
             content: Any = [{"type": "text", "text": prompt}]
             try:
@@ -374,17 +423,23 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         else:
             content = prompt
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": model_id,
             "messages": [{"role": "user", "content": content}],
             "modalities": ["image", "text"],
         }
+        # The chat route's frame knob (OpenRouter's image_config); a chat-routed
+        # model given nothing answers in its own default frame whatever was asked.
+        if aspect_ratio:
+            payload["image_config"] = {"aspect_ratio": aspect_ratio}
 
         try:
             msg = await self._chat(payload)
         except httpx.HTTPStatusError as e:
             if _image_only_refusal(e):
-                return await self._via_images_api(model_id, prompt, images, aspect_ratio, quality, output_dir)
+                return await self._via_images_api(
+                    model_id, prompt, images, aspect_ratio if frames else None, quality, output_dir
+                )
             return self._format_http_error(e)
         except Exception as e:
             logger.error("image_generate error: {}", e)
@@ -475,15 +530,15 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                             mime, data = fetched.headers.get("content-type", "image/png"), fetched.content
                         files.append(("image[]", (f"ref{i}.{mime.rsplit('/', 1)[-1]}", data, mime)))
                     form = {"model": model_id, "prompt": prompt, "n": "1"}
-                    if aspect_ratio in _SIZES:
-                        form["size"] = _SIZES[aspect_ratio]
+                    if size := images_api_size(model_id, aspect_ratio):
+                        form["size"] = size
                     if quality:
                         form["quality"] = quality
                     r = await client.post(f"{self.api_base}/images/edits", headers=headers, data=form, files=files)
                 else:
                     body = {"model": model_id, "prompt": prompt, "n": 1}
-                    if aspect_ratio in _SIZES:
-                        body["size"] = _SIZES[aspect_ratio]
+                    if size := images_api_size(model_id, aspect_ratio):
+                        body["size"] = size
                     if quality:
                         body["quality"] = quality
                     r = await client.post(f"{self.api_base}/images/generations", headers=headers, json=body)

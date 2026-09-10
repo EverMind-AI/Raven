@@ -34,7 +34,7 @@ import sys
 from collections.abc import Callable
 from importlib.util import find_spec
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from raven.plugins import (
     PluginConflictError,
@@ -235,6 +235,43 @@ def maybe_build_memory_backend(
     return backend
 
 
+def _media_config_reader(config: "RavenConfig"):
+    """The grant behind ``ServiceLocator.media_config``: the live file first, the
+    boot config's resolved section when the file names no ``tools.media``.
+
+    The same two lanes the loop's own media tools read (``_live_media_config``
+    in the loop wiring), so a plugin that generates pictures sees the key, base
+    and model the host's ``image_generate`` would see at the same moment.
+    """
+    from raven.config.live import LiveConfig, media_tool_config, resolve_media_selection
+
+    live = LiveConfig()
+    host = _host_config(config)
+
+    def read(kind: str):
+        current = media_tool_config(live, kind)
+        if current is not None:
+            return current
+        effective = getattr(host, "effective_media_config", None)
+        fallback = getattr(effective(), kind, None) if callable(effective) else None
+        return resolve_media_selection(fallback, kind) if fallback is not None else None
+
+    return read
+
+
+def _host_config(config: Any) -> Any:
+    """The config that carries ``tools``: the base ``Config`` itself, or the one a
+    ``RavenConfig`` nests under ``base``.
+
+    Every entrance hands the plugin stack its ``RavenConfig``, and that type has
+    no ``tools`` of its own -- reading it off the extension object answered None
+    for every deployment, so the proxy and the web section never reached a plugin.
+    """
+    if hasattr(config, "tools"):
+        return config
+    return getattr(config, "base", None)
+
+
 def build_plugin_tools(
     workspace: Path,
     config: "RavenConfig",
@@ -261,11 +298,15 @@ def build_plugin_tools(
     names = registry.tool_names()
     if not names:
         return []
+    tools_config = getattr(_host_config(config), "tools", None)
     services = ServiceLocator(
         workspace=workspace,
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
         provider=provider,
+        media_config=_media_config_reader(config),
+        media_proxy=getattr(getattr(tools_config, "media", None), "proxy", None),
+        web_config=lambda: getattr(tools_config, "web", None),
     )
     slices = config.plugins.config
     tools = []

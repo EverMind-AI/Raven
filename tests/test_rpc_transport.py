@@ -527,3 +527,36 @@ async def test_each_ws_connection_keeps_its_own_declared_surface(gateway_client)
     finally:
         await ws_page.close()
         await ws_anon.close()
+
+
+async def test_a_rebuilt_asset_is_not_served_from_a_stale_browser_cache(tmp_path: Path) -> None:
+    """Icons live at one unversioned path each, so a new drawing lands at the
+    URL its predecessor is cached under.
+
+    With no directive a browser guesses a lifetime from the last-modified date
+    and keeps what it has: a provider logo replaced in the bundle went on
+    rendering as the one it replaced. ``no-cache`` is not "do not store" -- the
+    copy is kept and revalidated, so an unchanged file still costs a 304 and no
+    bytes.
+    """
+    static = tmp_path / "dist"
+    (static / "assets" / "providers").mkdir(parents=True)
+    (static / "index.html").write_text("<html>", encoding="utf-8")
+    (static / "assets" / "providers" / "acme.svg").write_text("<svg/>", encoding="utf-8")
+
+    client = TestClient(TestServer(build_app(WsGateway(), static)))
+    await client.start_server()
+    try:
+        asset = await client.get("/assets/providers/acme.svg")
+        assert asset.status == 200
+        assert asset.headers["Cache-Control"] == "no-cache"
+
+        etag = asset.headers.get("ETag")
+        assert etag, "revalidation needs something to revalidate against"
+        again = await client.get("/assets/providers/acme.svg", headers={"If-None-Match": etag})
+        assert again.status == 304, "an unchanged asset must still cost no bytes"
+
+        # The page itself is a different question and keeps whatever it had.
+        assert (await client.get("/")).status == 200
+    finally:
+        await client.close()

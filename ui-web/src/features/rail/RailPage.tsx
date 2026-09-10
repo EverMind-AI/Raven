@@ -125,6 +125,14 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
     >
       <div className={s.naming && !editing ? 't skel' : 't'}>
         {live && !tail ? <span className={'dot ' + live} /> : null}
+        {/* Keyed apart because all three are spans in one slot, which React
+            would otherwise reconcile onto a single node: props get reset, and
+            scroll offset is not a prop but state the browser keeps on the
+            element. The editing box is a scroll container on purpose (a long
+            name scrolls inside itself), so focusing the field scrolls it to
+            the caret -- and the finished title, drawn into that same node,
+            inherited the offset and rendered outside its own box, which under
+            `text-overflow: ellipsis` paints nothing at all. */}
         {editing ? (
           /* The box is the name's width, not the rail's: a two-character title in
              a box eight times its length reads as a form field waiting to be
@@ -139,7 +147,7 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
              combining marks, emoji sequences and CJK come out right without this
              file knowing anything about them. The stylesheet bounds it at the
              row. */
-          <span className="rensize" data-value={draftTitle}>
+          <span key="ren" className="rensize" data-value={draftTitle}>
           <input
             ref={inputRef}
             className="ren"
@@ -171,9 +179,9 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
              stylesheet next to the row's own geometry, which is what keeps it
              from being re-derived per row; only its height stays here, since
              that is the one dimension the surrounding line box does not set. */
-          <span className="sk" style={{ height: '11px' }} aria-label={t('gui.sess.naming')} />
+          <span key="nam" className="sk" style={{ height: '11px' }} aria-label={t('gui.sess.naming')} />
         ) : (
-          <span>{plainTitle(s.title)}</span>
+          <span key="txt">{plainTitle(s.title)}</span>
         )}
       </div>
       {/* The stamp is always rendered -- it is what gives the tail its width.
