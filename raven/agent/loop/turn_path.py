@@ -43,10 +43,10 @@ from raven.agent.loop._shared import (
     _file_change_payload,
     _first_line,
     _image_sources,
-    _inline_image_bytes,
     _runtime_origin,
     _stamp_reasoning_ms,
     _strip_inline_images,
+    _wire_image_bytes,
     _withdrawn_image_note,
     append_hook_note,
     asyncio,
@@ -415,9 +415,10 @@ class TurnPathMixin:
 
         Two modes. Without ``budget``, every image-bearing message but the newest
         ``keep`` loses its pictures: the shape the overflow path and the refusal
-        ladder want. With ``budget`` (decoded bytes), nothing happens while the
-        pictures still live in the transcript fit under it, and the moment they
-        do not, every message but the newest ``keep`` loses its pictures at once.
+        ladder want. With ``budget`` (base64 bytes, the size the pictures have on the
+        wire and what the request body is charged), nothing happens while the pictures
+        still live in the transcript fit under it, and the moment they do not, every
+        message but the newest ``keep`` loses its pictures at once.
         A collapse rather than a slide because each withdrawal is a break in the
         prefix an upstream cache can match: sliding one message out per new batch
         broke the prefix on 16 of 60 calls in one measured run (19 of 41 in the
@@ -455,7 +456,7 @@ class TurnPathMixin:
             and any(is_image_part(p) for p in m["content"])
         ]
         if budget is not None:
-            live = sum(_inline_image_bytes(p) for i in bearing for p in messages[i]["content"])
+            live = sum(_wire_image_bytes(p) for i in bearing for p in messages[i]["content"])
             if live <= budget:
                 return 0, 0
         stale = bearing[:-keep] if keep else bearing

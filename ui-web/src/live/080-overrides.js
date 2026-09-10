@@ -220,7 +220,11 @@ async function openLiveSession(s) {
   // Opening it IS reading it. ``s`` can be a bare {id, title} from the
   // reconnect path, so clear the flag on the row in sessionRows(), not on the arg.
   const row = sess(s.id);
-  if (row && row.status === 'done') row.status = null;
+  /* `ask` clears for the same reason `done` does: opening the conversation is
+     answering the notice. The rack mounts whatever was waiting the moment this
+     conversation is the open one, so the row has done its job and a badge left
+     behind would outlive the sheet it was pointing at. */
+  if (row && (row.status === 'done' || row.status === 'ask')) row.status = null;
   markNewCurrent();
   resetView();
   $('#title').textContent = plainTitle(s.title);
@@ -237,6 +241,14 @@ async function openLiveSession(s) {
        in a single place. Nothing follows the await, so the extra microtask on
        the reuse case changes no ordering. */
     await subscribe(s.id);
+    /* The graph alone, and after the replay above so it reads whatever that put
+       back. A parked turn buffers the events it misses, but only while the turn
+       is BUSY -- and a graph outlives the turn that started it, so every node
+       report after that turn ended was dropped and the sheet is stale. Not the
+       whole of `view.resume`: its desk half replays the reader's opens through
+       the same verbs a click goes through, and every window they had would come
+       back twice. Not awaited, for the reason the resume below is not. */
+    RavenIslands.view.refreshDag(s.id);
     return;
   }
   try {
@@ -261,6 +273,11 @@ async function openLiveSession(s) {
        ring has nowhere to say an estimate, so the writer takes two numbers.
        See shell/ctxchip.ts. */
     setCtx(u.context_used, u.context_max);
+    /* Every graph this conversation started, oldest first, as the gateway
+       stamped them onto the rows that started them. This is the only source
+       that survives a run the reader never saw start: no live event reached
+       this page for it, so nothing was written down -- see shell/resume.ts. */
+    const dagRuns = (r.messages || []).map((m) => m && m.dag_run_id).filter(Boolean);
     if (r.messages && r.messages.length) {
       renderHistory(r.messages);
       /* Rebuild what the panel can from the replay. Stored messages keep the
@@ -283,12 +300,14 @@ async function openLiveSession(s) {
     /* Last, and only on this path. The reader may be arriving here after a
        reload -- or after an upgrade replaced the page under them -- in which
        case the graph they were watching and the windows they had open are
-       recorded but not on screen. The parked path above returns instead: its
-       conversation never left this page, so its sheet and its desk are still in
-       the stores and putting a second copy back would replace them.
+       recorded but not on screen. The parked path above takes the graph half of
+       this and not the desk half: its conversation never left this page, so its
+       windows are still open and replaying them would give the reader each one
+       twice -- but its graph went on running with nobody listening, which is why
+       that path calls `refreshDag` rather than returning outright.
        Not awaited: it reads the run and the panes back from the gateway, and
        the transcript is already up. */
-    RavenIslands.view.resume(s.id);
+    RavenIslands.view.resume(s.id, dagRuns);
   } catch (e) {
     /* Same for the failure: a session the reader has already left must not
        empty their stage, and must not raise a toast about a page nobody is on. */

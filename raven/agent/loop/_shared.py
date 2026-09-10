@@ -447,12 +447,19 @@ def _image_sources(tool_name: str, blocks: list[Any], iteration: int) -> list[di
     return out
 
 
-def _inline_image_bytes(part: Any) -> int:
-    """Decoded size of an inline picture, 0 for anything else (a remote reference has no known size)."""
+def _wire_image_bytes(part: Any) -> int:
+    """What an inline picture costs the request, 0 for anything else (a remote
+    reference has no known size).
+
+    The base64 payload, not the bytes it decodes to. What the budget above it is
+    protecting is the request body, and a data URI travels encoded: counting the
+    decoded side let 11.24MB of pictures pass a 12MB budget while 16.8MB left the
+    process, which the gateway answered with an empty 200 and zero usage five times
+    over on a byte-identical payload.
+    """
     if not is_inline_image(part):
         return 0
-    payload = part["image_url"]["url"].partition(",")[2]
-    return len(payload) * 3 // 4
+    return len(part["image_url"]["url"].partition(",")[2])
 
 
 # The opening words of every reason a withdrawal note can give. The composer starts

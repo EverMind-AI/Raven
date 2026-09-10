@@ -108,11 +108,15 @@ describe('a delegated run redrawn while in flight', () => {
     expect(drawn(lane)).toEqual(['read_file', 'find'])
   })
 
-  it('keeps a fold the reader opened open across polls', () => {
+  it('keeps the fold state the reader chose across polls', () => {
     /* The fold over an in-flight turn lives in the provisional rows, which are
-       redrawn from scratch on every poll -- so a fold opened by the reader was
-       a new, closed object one poll later. The same goes for the rows inside
-       it: a call the reader unfolded closed with it. */
+       redrawn from scratch on every poll -- so the state the reader left it in
+       was a new, default object one poll later. The same goes for the rows
+       inside it: a call the reader unfolded closed again with it.
+
+       Driven from the reader CLOSING it, because a delegated fold is born open
+       (see `collapse`): the runtime's default is not what this is about, and a
+       test that re-opened an open fold would pass without the restore. */
     const lane = store.newLane('agent:one', false)
     const msgs = [
       { role: 'user' as const, text: 'job' },
@@ -122,11 +126,12 @@ describe('a delegated run redrawn while in flight', () => {
     const foldOf = () => lane.segs.find((s) => s.kind === 'fold')
     store.agentPaintLane(lane, { messages: msgs, status: 'run' }, { key: 'run-1' })
     const first = foldOf()
-    expect(first && first.kind === 'fold' && first.open).toBe(false)
+    expect(first && first.kind === 'fold' && first.open).toBe(true)
     if (!first || first.kind !== 'fold') throw new Error('no fold drawn')
     store.toggleFold(lane, first)
-    /* The thought and the call are two rows: the answer between them seals the
-       thought's step, so the tool result opens a step of its own. */
+    /* Thought, narration and call are one row: the narration is a line on the
+       way rather than the turn's answer, so it does not seal the step and the
+       tool result lands in the same one. */
     const callAt = first.steps.findIndex((s) => s.calls.length > 0)
     store.toggleCall(lane, first.steps[callAt]!.calls[0]!)
 
@@ -134,8 +139,103 @@ describe('a delegated run redrawn while in flight', () => {
     const again = foldOf()
     if (!again || again.kind !== 'fold') throw new Error('fold gone')
     expect(again).not.toBe(first)
-    expect(again.open).toBe(true)
+    expect(again.open).toBe(false)
     expect(again.steps[callAt]!.calls[0]!.open).toBe(true)
     expect(drawn(lane)).toEqual(['read_file'])
+  })
+})
+
+/* One instance's conversation reads in the order it happened.
+ *
+ * The renderer lifted the last thing the model said out of the fold and
+ * re-emitted it under the turn's fold. On a settled record that is invisible --
+ * the last thing said IS the last thing that happened -- but a turn whose text
+ * introduced a tool call drew that text BELOW the call, and a running turn is
+ * redrawn from its newest line on every poll, so the line the model had just
+ * written sat under the work that came after it, every two seconds.
+ *
+ * `flow` is the whole surface flattened back into one sequence, which is the
+ * only shape that can state the rule: what the payload said, in the order it
+ * said it. */
+describe('a delegated lane draws the payload in order', () => {
+  interface StepLike { say: string; calls: Array<{ name: string }> }
+  const flow = (lane: ReturnType<typeof store.newLane>): string[] => {
+    const out: string[] = []
+    const step = (st: StepLike): void => {
+      if (st.say) out.push(`say:${st.say}`)
+      st.calls.forEach((c) => out.push(`call:${c.name}`))
+    }
+    lane.segs.forEach((s) => {
+      if (s.kind === 'ask') out.push(`ask:${s.body}`)
+      else if (s.kind === 'answer') out.push(`answer:${s.text}`)
+      else if (s.kind === 'step') step(s)
+      else if (s.kind === 'fold') s.steps.forEach(step)
+    })
+    return out
+  }
+
+  const READ = [
+    { role: 'user' as const, text: 'Q' },
+    { role: 'assistant' as const, text: 'let me look', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+    { role: 'tool' as const, tool_call_id: 'c1', text: 'body' },
+  ]
+
+  it('leaves a narration line above the call it introduced', () => {
+    const lane = store.newLane('agent:order', false)
+    store.agentPaintLane(lane, { messages: READ, status: 'ok' }, { key: 'r1' })
+
+    expect(flow(lane)).toEqual(['ask:Q', 'say:let me look', 'call:read_file'])
+  })
+
+  it('still gives the turn its answer when the model has the last word', () => {
+    /* The other half of the rule: a text nothing follows IS the answer, and
+       keeps the row that says so. */
+    const lane = store.newLane('agent:answer', false)
+    store.agentPaintLane(lane, {
+      messages: [...READ, { role: 'assistant', text: 'FINAL' }],
+      status: 'ok',
+    }, { key: 'r2' })
+
+    expect(flow(lane)).toEqual(['ask:Q', 'say:let me look', 'call:read_file', 'answer:FINAL'])
+    expect(lane.segs.filter((s) => s.kind === 'answer')).toHaveLength(1)
+  })
+
+  it('does not pin a running turn\'s newest line under the work that followed it', () => {
+    const lane = store.newLane('agent:live', false)
+    const upto = (n: number) => ({
+      messages: [
+        ...READ,
+        { role: 'assistant' as const, text: 'now the tests', tool_calls: [{ id: 'c2', name: 'exec', arguments: '{}' }] },
+        { role: 'tool' as const, tool_call_id: 'c2', text: '17 passed' },
+      ].slice(0, n),
+      status: 'run',
+    })
+    store.agentPaintLane(lane, upto(4), { key: 'r3' })
+    store.agentPaintLane(lane, upto(5), { key: 'r3' })
+
+    expect(flow(lane)).toEqual([
+      'ask:Q', 'say:let me look', 'call:read_file', 'say:now the tests', 'call:exec',
+    ])
+  })
+
+  it('opens the fold over a delegated turn', () => {
+    /* This pane IS the sub-agent's work; the steps are what the reader came
+       for, so it is not put behind a click. Every turn's, not only the last --
+       one instance's conversation is meant to be readable at once. */
+    const lane = store.newLane('agent:open', false)
+    store.agentPaintLane(lane, {
+      messages: [
+        ...READ, { role: 'assistant', text: 'FIRST' },
+        { role: 'user', text: 'Q2' },
+        { role: 'assistant', text: 'again', tool_calls: [{ id: 'c9', name: 'exec', arguments: '{}' }] },
+        { role: 'tool', tool_call_id: 'c9', text: 'ok' },
+        { role: 'assistant', text: 'SECOND' },
+      ],
+      status: 'ok',
+    }, { key: 'r4' })
+
+    const folds = lane.segs.filter((s) => s.kind === 'fold')
+    expect(folds).toHaveLength(2)
+    expect(folds.map((f) => f.kind === 'fold' && f.open)).toEqual([true, true])
   })
 })

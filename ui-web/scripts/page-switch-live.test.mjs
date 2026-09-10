@@ -112,7 +112,10 @@ function harness({ rows, deferSubscribe } = {}) {
     wsOnHistory: () => {},
     RavenIslands: {
       workspace: { loadDeliveries: (id) => calls.push(['loadDeliveries', id]) },
-      view: { resume: (id) => calls.push(['viewResume', id]) },
+      view: {
+        resume: (id) => calls.push(['viewResume', id]),
+        refreshDag: (id) => calls.push(['viewRefreshDag', id]),
+      },
     },
   }
   const install = Function(
@@ -260,7 +263,10 @@ describe('the assembled live session switch', () => {
     h.env.subBySession.a = 'sub:a'
     h.env.parkedTurns.set('a', { nodes: [] })
 
-    h.click({ id: 'a', title: 'Alpha' })
+    /* Awaited, where the tests above settle a round trip instead: this path
+       makes none, but it does claim the stream behind an await, and the graph
+       re-read lands on the far side of it. */
+    await h.click({ id: 'a', title: 'Alpha' })
 
     /* The parked path never reads the transcript back -- the streaming copy is
        the DOM it kept -- so it claims the stream it already has rather than
@@ -269,6 +275,13 @@ describe('the assembled live session switch', () => {
     expect(h.env.live.subId).toBe('sub:a')
     expect(h.calls.filter((c) => c[1] === 'turn.subscribe')).toEqual([])
     expect(h.inFlight()).toEqual([])
+    /* The graph half of the replay and not the desk half. A parked turn buffers
+       the events it misses only while it is busy, and a graph outlives the turn
+       that started it, so the sheet on screen is stale and has to be re-read --
+       while the windows never left the page and replaying their opens would give
+       the reader each one twice. */
+    expect(h.calls).toContainEqual(['viewRefreshDag', 'a'])
+    expect(h.calls.filter((c) => c[0] === 'viewResume')).toEqual([])
   })
 
   it('does not put a left conversation\'s windows back when its subscription lands late', async () => {
