@@ -5060,6 +5060,14 @@
       "en": "reading...",
       "zh": "读取中…"
     },
+    "gui.ws.file_rendering": {
+      "en": "rendering as PDF...",
+      "zh": "正在转成 PDF…"
+    },
+    "gui.ws.render_failed": {
+      "en": "This file could not be rendered as a PDF.",
+      "zh": "这个文件没法转成 PDF。"
+    },
     "gui.ws.file_newtab": {
       "en": "Open in a new tab",
       "zh": "在新标签页打开"

@@ -862,14 +862,15 @@ async function openImageSettings() {
 }
 
 describe('image model selection', () => {
-  it('defaults to gpt-image-2 medium and saves one model/quality pair', async () => {
+  it('defaults to sunburst and saves one model/quality pair', async () => {
     const { calls } = install()
     await mount()
     await openImageSettings()
     const picker = screen.getByLabelText('gui.caps.image_model') as HTMLSelectElement
-    expect(picker.value).toBe('1')
-    expect(picker.options).toHaveLength(10)
-    await act(async () => { fireEvent.change(picker, { target: { value: '2' } }) })
+    expect(picker.value).toBe('0')
+    expect(picker.options).toHaveLength(11)
+    expect(Array.from(picker.options).some((option) => option.text.includes('gemini'))).toBe(false)
+    await act(async () => { fireEvent.change(picker, { target: { value: '4' } }) })
     expect(calls).toEqual([['set', {
       key: 'tools.media.image', value: { model: 'openai/gpt-image-2', quality: 'high' },
     }]])
@@ -879,7 +880,7 @@ describe('image model selection', () => {
     const { calls } = install(snap({ raw: { tools: { media: { image: { model: 'openai/gpt-image-2', quality: 'high' } } } } }))
     await mount()
     await openImageSettings()
-    await act(async () => { fireEvent.change(screen.getByLabelText('gui.caps.image_model'), { target: { value: '7' } }) })
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.caps.image_model'), { target: { value: '9' } }) })
     expect(calls).toEqual([['set', {
       key: 'tools.media.image', value: { model: 'x-ai/grok-imagine-image-2.0', quality: '' },
     }]])
@@ -912,9 +913,9 @@ describe('image model selection', () => {
     await mount()
     await openImageSettings()
     const picker = screen.getByLabelText('gui.caps.image_model') as HTMLSelectElement
-    await act(async () => { fireEvent.change(picker, { target: { value: '2' } }) })
+    await act(async () => { fireEvent.change(picker, { target: { value: '4' } }) })
     const current = screen.getByLabelText('gui.caps.image_model') as HTMLSelectElement
-    expect(current.value).toBe('1')
+    expect(current.value).toBe('0')
     expect(current.disabled).toBe(false)
   })
 })
@@ -932,7 +933,9 @@ it('shows the saved image model after the settings snapshot refreshes', async ()
 })
 
 it.each([
-  [{ model: 'openai/gpt-image-2' }, '1'],
+  [{ model: 'openai/gpt-image-2' }, '3'],
+  [{ model: 'openai/gpt-image-2.5-sunburst' }, '0'],
+  [{ model: 'openai/gpt-image-2.5-flare', quality: '' }, '1'],
   [{ model: 'openai/gpt-image-2', quality: '' }, 'custom'],
 ])('preserves absent versus explicitly empty image quality: %j', async (image, selected) => {
   install(snap({ raw: { tools: { media: { image } } } }))
