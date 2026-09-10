@@ -169,7 +169,7 @@ async def test_an_openai_compatible_base_takes_a_size_and_edits_by_multipart(mon
     assert json.loads(await tool.execute("a poster", aspect_ratio="3:4"))["success"]
     generation = seen[0]
     assert generation.url.path == "/v1/images/generations"
-    assert json.loads(generation.content)["size"] == "1152x1536"
+    assert json.loads(generation.content)["size"] == "1024x1536"
 
     ref = tmp_path / "logo.png"
     ref.write_bytes(_PNG)
@@ -178,6 +178,28 @@ async def test_an_openai_compatible_base_takes_a_size_and_edits_by_multipart(mon
     assert edit.url.path == "/v1/images/edits"
     assert edit.headers["content-type"].startswith("multipart/form-data")
     assert b'name="image[]"' in edit.content and _PNG in edit.content and b"gpt-image-2" in edit.content
+
+
+@pytest.mark.parametrize(
+    ("model", "ratio", "size"),
+    [
+        ("gpt-image-2", "16:9", "1536x1024"),
+        ("gpt-image-2", "21:9", "1536x1024"),
+        ("gpt-image-2", "3:4", "1024x1536"),
+        ("gpt-image-2", "9:16", "1024x1536"),
+        ("gpt-image-2", "1:1", "1024x1024"),
+        ("openai/gpt-image-1", "4:3", "1536x1024"),
+        ("bytedance/seedream-4.5", "16:9", "1536x864"),
+        ("qwen/qwen-image-2", "3:4", "1152x1536"),
+        ("gpt-image-2", None, None),
+    ],
+)
+def test_the_images_api_size_is_one_the_model_family_draws(model, ratio, size) -> None:
+    """gpt-image draws three frames and refuses 1536x864 outright; the other
+    families take the pixel table. The deck engine leans on the same mapping."""
+    from raven.agent.tools.media_gen import images_api_size
+
+    assert images_api_size(model, ratio) == size
 
 
 async def test_a_reference_pointing_inward_is_refused_before_anything_is_fetched(monkeypatch, tmp_path) -> None:
@@ -365,6 +387,25 @@ async def test_image_families_route_directly_without_gpt_quality(monkeypatch, tm
         assert body["aspect_ratio"] == "9:16"
     else:
         assert "aspect_ratio" not in body
+
+
+async def test_a_chat_routed_model_is_asked_for_the_frame_through_image_config(monkeypatch, tmp_path):
+    """OpenRouter's chat route takes the frame as ``image_config.aspect_ratio``;
+    a chat-routed model given nothing answers in its own default frame, which
+    for Nano Banana was 1408x768 whatever ratio the caller asked for. No ratio
+    asked, no key sent."""
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        message = {"images": [{"image_url": {"url": "data:image/png;base64," + _B64}}]}
+        return httpx.Response(200, json={"choices": [{"message": message}]})
+
+    tool = _image_tool(monkeypatch, handler, model="google/gemini-3.1-flash-image", workspace=tmp_path)
+    assert json.loads(await tool.execute("a lantern", aspect_ratio="9:16"))["success"]
+    assert seen[-1]["image_config"] == {"aspect_ratio": "9:16"}
+    assert json.loads(await tool.execute("a lantern"))["success"]
+    assert "image_config" not in seen[-1]
 
 
 @pytest.mark.parametrize("chat", [False, True])

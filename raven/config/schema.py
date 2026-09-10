@@ -303,10 +303,22 @@ class ModelOverlay(Base):
     all. What has no knob either is a *price* for an endpoint no catalogue
     prices; such a deployment reports unknown spend rather than borrowing a
     hosted model's rate. Adding one is a separate ask.
+
+    The tags are the same closed vocabulary the registry publishes
+    (`providers/registry_data.py`), and they are read for display only -- the
+    surfaces draw them as icons. Stating one here is how a model no catalogue
+    carries gets an icon row at all; an empty list means nothing was stated,
+    which every surface renders as no icon rather than as a denial. What a
+    request may actually carry is still decided by `capabilities.supports_vision`
+    and `ProviderSpec`, which is why a wrong tag here costs a wrong picture of a
+    model and never a wrong call.
     """
 
     label: str = ""
     description: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+    input_modalities: list[str] = Field(default_factory=list)
+    output_modalities: list[str] = Field(default_factory=list)
 
 
 class ProviderEndpoint(Base):

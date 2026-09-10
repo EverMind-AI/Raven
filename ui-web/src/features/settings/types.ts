@@ -2,15 +2,31 @@ import type { ApiUsageModel, SettingsUsageResult } from '../../rpc/generated'
 
 /* One provider row of the model panel. Each source owns its provider list;
    the live source shares its fetched rows with the composer's model picker. */
+import type { ModelTagFacts } from '../../shell/model-tags'
+
 export interface ProviderRow {
   id: string
   name: string
   homepage?: string
+  /* The vendor's model index. Distinct from `homepage`: the question this page
+     asks is which model to put in the list, and a front page does not answer
+     it. Absent for a provider the registry carries no docs link for. */
+  docs?: string
+  /* The picker's offer: this section's list plus a curated shortlist plus a
+     catalogue. What the settings page manages is `configured` below. */
   models: string[]
+  configured?: string[]
+  /* Name and tags per model id, straight off `model.options`. A model with no
+     entry is one the registry knows nothing about and nobody has described --
+     it lists as its id with no icons. */
+  labels?: Record<string, ModelTagFacts & { label?: string; description?: string }>
   on: boolean
   /* 'api_key' | 'oauth' | 'local' | 'endpoint' */
   kind?: string
   needsBase?: boolean
+  /* Whether the provider takes an API key at all. Absent from a source that
+     predates the field, where every non-local provider took one. */
+  acceptsKey?: boolean
   apiBase?: string
   defaultApiBase?: string
   env?: string
@@ -70,6 +86,26 @@ export interface SettingsSnapshot {
 
 export type ProviderOp = 'save_key' | 'add_model' | 'remove_model' | 'disconnect'
 
+/* One model a provider reports. `added` is about this provider's configured
+   list, not about the vendor: the same model behind two gateways is added to
+   each separately. */
+export interface ModelCandidate extends ModelTagFacts {
+  id: string
+  label: string
+  kind: string
+  added: boolean
+  description?: string
+}
+
+/* `status` is the probe's own vocabulary -- `ok`, or why the vendor did not
+   answer. An empty list with a status is not the same as a provider that
+   genuinely serves nothing, so both travel. */
+export interface ModelCatalogue {
+  models: ModelCandidate[]
+  status: string
+  error?: string | null
+}
+
 /* The DS.settings contract both the fixture source (demo shell) and the rpc
    source (live layer) implement. Writes in the fixture throw { notLive: true },
    which the island renders as the in-row refusal the demo page always spoke;
@@ -87,6 +123,10 @@ export interface SettingsSource {
     borrowFrom?: string): Promise<SettingsSnapshot>
   usage(sessionKey?: string): Promise<UsageStats | null>
   provider(op: ProviderOp, params: Record<string, unknown>): Promise<SettingsSnapshot>
+  /* Ask the provider what it serves right now. Optional because the offline
+     demo has no provider to ask -- absent, the button reports that rather than
+     pretending to fetch. A read: nothing is written until a row is added. */
+  fetchModels?(slug: string): Promise<ModelCatalogue>
   model(): string
   /* The configured default provider, paired with model() above: the default
      badge must move with a cross-provider default pick without reopening the

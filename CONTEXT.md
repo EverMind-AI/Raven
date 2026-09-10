@@ -661,6 +661,16 @@ Row (`providers/catalog.py`).
 _Avoid_: confusing it with what a model can *do*. Whether a request may carry
 `cache_control` blocks is a Prompt Cache Breakpoint question, not a Model Row one.
 
+**Model Tags**:
+What a model can do, as the closed set of names the pickers draw as icons -- capabilities
+plus what it reads and writes (`providers/registry_data.py`, three packaged files).
+Display only, like the Model Row that carries them, and specifically not the answer to
+"may this request carry an image": that is a Prompt Cache Breakpoint's sibling question,
+answered per wire and per model by `capabilities.supports_vision` and `ProviderSpec`.
+An absent tag means the registry publishes nothing, never that the model cannot.
+_Avoid_: reading a context window off them -- the registry deliberately carries none, and
+the window is a Token Rates question because it sizes the next request.
+
 **Model Overlay**:
 What a user states about a model no catalogue carries — a label and a description for a
 self-hosted deployment. Beats the catalogue for the fields it sets.
@@ -1139,9 +1149,10 @@ degrades to the full description catalog for that turn.
 
 **Admission** (`config/admission.py`, `plugins/registry.py:_admit`, `agent/tools/registry.py:admit_tool`):
 The declare-check-dispense pattern at a boundary: the owner declares its authored members
-(a manifest's `config_schema`, a tool's four authored members), the door checks the
-declaration once at entry, and dispenses a frozen result (an admitted config slice, a
-`ToolSpec`) that the machinery reads afterwards. An empty declaration keeps verbatim
+(a manifest's `config_schema`, a tool's four authored members and its optional
+`configured()` availability declaration), the door checks the declaration once at entry,
+and dispenses a frozen result (an admitted config slice, a `ToolSpec`) that the machinery
+reads afterwards. An empty declaration keeps verbatim
 pass-through. Failures name the owner and the key at the door, not deep inside a turn.
 
 **Config-with-cargo** (`channels/contract.py:ChannelSpec.config_schema`, `raven-plugin.toml [plugin.config_schema]`):
