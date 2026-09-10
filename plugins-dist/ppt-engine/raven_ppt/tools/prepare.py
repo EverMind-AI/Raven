@@ -40,7 +40,7 @@ class PptPrepareTool(Tool):
         "Start a deck: pass the user's request through verbatim and this reads it, then gets the project "
         "ready. It locates the materials the request names and ingests them, takes in any file the user "
         "attached, binds a .pptx the request said to build inside, and when no user template is provided selects "
-        "one tagged light template from the bundled defaults. It records the language, audience and "
+        "one of the bundled default templates by its tags. It records the language, audience and "
         "page count the request already states. What it cannot do itself comes back as two lists: "
         "questions to put to the user with ask_user and record with ppt_brief, and material to fetch with "
         "web_search and ppt_fetch. Call it first, and call it again once the material has been fetched."
