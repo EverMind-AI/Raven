@@ -60,66 +60,25 @@ BOOTSTRAP_FILES = [
 RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 
 
-def reply_language() -> str:
-    """The language this process answers in, by name, or empty for the default.
-
-    Read from :func:`raven.i18n.current_language`, the process state the
-    entrance dispenses -- CONTEXT.md seats the language there, and the root CLI
-    callback sets it from ``config.language`` before any subcommand runs. Going
-    back to the file here would be a second reader of a key that already has an
-    owner, and it would answer wrongly in the case the owner exists for: a
-    process serving in Chinese whose config file is momentarily unreadable
-    would quietly start answering in English.
-
-    It also picks up a language changed while the process serves, which the
-    console does through ``i18n.set_language``.
-
-    Empty for English, which is the default and leaves every prompt
-    byte-identical to what it was.
-    """
-    from raven import i18n
-
-    return zh_lexicon.LANGUAGE_NAME if i18n.current_language() == "zh" else ""
-
-
-def dispatch_language_line(task: str) -> str:
-    """``task`` with this process's reply language stated on it, if it has one.
-
-    Lives here, beside the system-prompt line, because the two are one rule
-    said twice. It is applied on the two routes that dispatch a sub-agent --
-    ``spawn`` through the manager and each node of a graph through the dag
-    runner -- and neither module can own it without the other importing it.
-
-    A dispatched task is the only thing every backend receives. A raven-loop
-    sub-agent renders the host's own prompt and so already carries the line; an
-    acp product brings its own prompt and never sees ours, which is how one
-    conversation came to be in Chinese throughout with its sub-agent's
-    narration entirely in English.
-
-    Appended, not prepended: the task's first line is what a reader sees on the
-    card, and it should be the work.
-
-    It names the language outright and says the surrounding text does not
-    decide it. An English instruction appended to an English task is read by a
-    model following "answer in the language of the request" as a request for
-    English, which is the same defect by another road.
-    """
-    name = reply_language()
-    if not name:
-        return task
-    return (
-        f"{task}\n\n[raven] Write your answer in {name}. The conversation this "
-        "task came from is in that language and your answer is read there, "
-        "whatever language this instruction or the task above happens to be in."
-    )
-
-
 def _language_directive() -> str:
-    """The reply-language line for the system prompt."""
-    name = reply_language()
-    if not name:
+    """A reply-language line for the system prompt, driven by ``config.language``.
+
+    Empty for English (default behaviour unchanged); for Chinese it tells the
+    model to answer in Simplified Chinese unless the user writes otherwise.
+    Reads config lazily and never raises — a config problem must not break
+    prompt assembly.
+    """
+    try:
+        from raven.config.loader import load_config
+
+        lang = load_config().language
+    except Exception:
         return ""
-    return f"\nAlways respond in {name}, unless the user explicitly writes in another language.\n"
+    if lang == "zh":
+        return (
+            f"\nAlways respond in {zh_lexicon.LANGUAGE_NAME}, unless the user explicitly writes in another language.\n"
+        )
+    return ""
 
 
 DISPATCH_TOOLS = ("spawn", "run_subagent_dag")

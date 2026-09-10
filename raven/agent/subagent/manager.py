@@ -45,7 +45,6 @@ from raven.agent.subagent_memory import (
     trace_session_id,
 )
 from raven.config.schema import TIER_LADDER, ExecToolConfig
-from raven.context_engine.segments.render import dispatch_language_line
 from raven.contracts.llm_provider import LLMProvider
 from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 from raven.observability import semconv
@@ -797,16 +796,7 @@ class SubagentManager:
             "instance_auto": instance_auto,
             "handle": handle,
             "workspace": effective_workspace,
-            # Defaulted to the task AS ASKED, before anything is appended to it
-            # below. `_announce_result` falls back to `task` when this is
-            # absent, and `task` is no longer the model's wording once the
-            # reply-language line is on it -- so the announcement quoted our
-            # own instruction back at the host on the two sentinel routes,
-            # which are the two callers that pass no `authored_task`
-            # (`sentinel/executor/spawn.py`, `sentinel/executor/action_executor.py`).
-            # Capturing it here makes the invariant hold for every caller
-            # rather than for the one that happened to state it.
-            "authored_task": authored_task or task,
+            "authored_task": authored_task,
             "tool_call_id": tool_call_id,
             # Claimed by the caller before this ran, so the record writes its
             # artifacts under an id a later task can already reference.
@@ -832,19 +822,8 @@ class SubagentManager:
         # below: the argument is new here, and a caller that replaces this method
         # keeps working as long as it is not handed something it never declared.
         extra = {"mcp_grant": mcp_grant} if mcp_grant is not None else {}
-        # The last thing done to the task before it leaves. `origin` already
-        # holds the undecorated wording, so the announcement quotes what was
-        # asked rather than this line as well.
         bg_task = asyncio.create_task(
-            self._run_subagent(
-                task_id,
-                dispatch_language_line(task),
-                display_summary,
-                origin,
-                binding.provider,
-                binding.model,
-                **extra,
-            )
+            self._run_subagent(task_id, task, display_summary, origin, binding.provider, binding.model, **extra)
         )
         self._track(task_id, bg_task, session_key, instance_key)
 

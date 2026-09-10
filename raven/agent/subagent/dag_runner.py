@@ -49,7 +49,6 @@ from raven.agent.subagent_memory import (
     record_memories,
     trace_session_id,
 )
-from raven.context_engine.segments.render import dispatch_language_line
 
 # In-context cap for terminal outputs returned to the main agent; the on-disk
 # .out.md always holds the full text.
@@ -429,6 +428,18 @@ async def run_dag(
     node_ended_at: dict[str, int] = {}
     node_activity: dict[str, dict] = {}
     gate = semaphore if semaphore is not None else asyncio.Semaphore(max_concurrency)
+    # Node ids whose status may still change. `status` reads "completed" from the
+    # moment the backend returns, but the judge has not ruled yet and can turn
+    # that into an exception, so a dependent dispatched inside that window
+    # belongs to a node that may never have accomplished anything -- and would
+    # render its placeholder from the output of a rejected attempt. Emptied per
+    # node as its outcome becomes final, immediately before the wake below.
+    unsettled: set[str] = set()
+    # Fired by every node that reaches a final status, so a round ends on the
+    # first one rather than on its last: a completed node's dependents are
+    # dispatchable the moment its verdict lands, and nothing else wakes the
+    # scheduler between one node landing and the whole round draining.
+    settled = asyncio.Event()
     # This run's own memory-record pollers, so an outer cancellation of this
     # run's task (below) can reap the ones it already scheduled for completed
     # nodes -- `_RECORD_TASKS` is process-global and reachable by no
@@ -524,6 +535,10 @@ async def run_dag(
                 )
                 await _write_node_status(session_key, store.run_id, nid, by_id[nid].subagent, st)
             carried_ids = {nid for nids in owned.values() for nid in nids}
+            # Cleared where the desk's own flag is, and for its reason: a node
+            # settling while this pass is still deciding has to leave the flag
+            # set, so the round this pass goes on to dispatch wakes on it too.
+            settled.clear()
             if desk is not None:
                 # Cleared as the ready set is recomputed rather than once the
                 # round it woke has ended: an answer landing while this pass is
@@ -533,7 +548,9 @@ async def run_dag(
             ready = [
                 nid
                 for nid, st in status.items()
-                if st == "pending" and nid not in carried_ids and all(status[d] == "completed" for d in deps[nid])
+                if st == "pending"
+                and nid not in carried_ids
+                and all(status[d] == "completed" and d not in unsettled for d in deps[nid])
             ]
             if not ready:
                 suspended = [nid for nid, st in status.items() if st == "exception"]
@@ -560,6 +577,7 @@ async def run_dag(
                         cancel,
                         interrupt=desk.replanned if desk is not None else None,
                         resume=desk.continued if desk is not None else None,
+                        settled=settled,
                         carried=carried,
                     )
                     owned = {task: nids for task, nids in owned.items() if task in carried}
@@ -593,6 +611,8 @@ async def run_dag(
                         node_ended_at=node_ended_at,
                         node_activity=node_activity,
                         semaphore=gate,
+                        settled=settled,
+                        unsettled=unsettled,
                         progress_publisher=progress_publisher,
                         state_for=state_for,
                         everos_for=everos_for,
@@ -623,6 +643,7 @@ async def run_dag(
                 cancel,
                 interrupt=desk.replanned if desk is not None else None,
                 resume=desk.continued if desk is not None else None,
+                settled=settled,
                 carried=carried,
             )
             owned = {task: nids for task, nids in owned.items() if task in carried}
@@ -680,8 +701,9 @@ async def _reap_carried(carried: Iterable[asyncio.Future]) -> None:
 
     Two call sites are the complete set, which is what makes the absence of a
     `finally` around the carry safe: between a hand-back and the next round's
-    await the loop reaches only `_emit` and `_write_node_status`, both of which
-    swallow every `Exception` by construction, and `_run_ready_groups` does not
+    await the only calls the loop reaches are `_emit` and `_write_node_status`, both
+    of which swallow every `Exception` by construction (the flag clears and the set
+    membership it reads on the way cannot raise), and `_run_ready_groups` does not
     propagate a node's own. `CancelledError` is not an `Exception` and does pass
     through those two -- and lands in the handler that is itself one of the two
     sites. So no third route out of the loop can leave a carried task behind.
@@ -700,6 +722,7 @@ async def _run_ready_groups(
     cancel: asyncio.Event | None,
     interrupt: asyncio.Event | None = None,
     resume: asyncio.Event | None = None,
+    settled: asyncio.Event | None = None,
     carried: Iterable[asyncio.Future] = (),
 ) -> set[asyncio.Future]:
     """Await one scheduling round's group tasks; return the ones still running.
@@ -721,6 +744,14 @@ async def _run_ready_groups(
     share a parameter: ``interrupt`` means stop these nodes, ``resume`` means
     stop waiting for them.
 
+    ``settled`` is the second soft signal and is handled exactly like ``resume``.
+    It says a node reached its final status for this attempt, so the ready set is
+    worth recomputing: its dependents may be dispatchable now. Without it they
+    wait for every sibling of the round their dependency happened to share, which
+    is the same unbounded wait ``resume`` exists to prevent -- reached here on the
+    path a graph takes when nothing goes wrong at all, rather than through a
+    suspension.
+
     The reap -- cancelling every not-yet-done task and awaiting all of them --
     lives in a ``finally`` so it still runs even if the race itself is
     interrupted by an *outer* cancellation (a tool-call timeout, turn abort,
@@ -739,11 +770,13 @@ async def _run_ready_groups(
     cancel_sig = asyncio.ensure_future(cancel.wait()) if cancel is not None else None
     interrupt_sig = asyncio.ensure_future(interrupt.wait()) if interrupt is not None else None
     resume_sig = asyncio.ensure_future(resume.wait()) if resume is not None else None
-    signals = [s for s in (cancel_sig, interrupt_sig, resume_sig) if s is not None]
+    settled_sig = asyncio.ensure_future(settled.wait()) if settled is not None else None
+    signals = [s for s in (cancel_sig, interrupt_sig, resume_sig, settled_sig) if s is not None]
     if not signals:
         await asyncio.gather(*tasks)
         return set()
     stopping = [s for s in (cancel_sig, interrupt_sig) if s is not None]
+    soft = [s for s in (resume_sig, settled_sig) if s is not None]
     handed_on: set[asyncio.Future] = set()
     try:
         pending: set[asyncio.Future] = {*tasks, *signals}
@@ -754,7 +787,7 @@ async def _run_ready_groups(
             # on, and one being torn down must reap rather than leak.
             if any(s in done for s in stopping) or all(t.done() for t in tasks):
                 break
-            if resume_sig is not None and resume_sig in done:
+            if any(s in done for s in soft):
                 handed_on = {t for t in tasks if not t.done()}
                 break
     finally:
@@ -1276,6 +1309,8 @@ async def _run_group(
     node_ended_at: dict[str, int],
     node_activity: dict[str, dict],
     semaphore: asyncio.Semaphore,
+    settled: asyncio.Event | None = None,
+    unsettled: set[str] | None = None,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
@@ -1300,45 +1335,60 @@ async def _run_group(
 ) -> None:
     """Run one instance-group's nodes sequentially, in id order."""
     for nid in nids:
-        await _run_node(
-            by_id[nid],
-            node_backends[nid],
-            by_id=by_id,
-            store=store,
-            backend=backend,
-            workdir=workdir,
-            roots=roots,
-            sandbox=sandbox,
-            output_paths=output_paths,
-            status=status,
-            errors=errors,
-            prompt_written=prompt_written,
-            node_started_at=node_started_at,
-            node_ended_at=node_ended_at,
-            node_activity=node_activity,
-            semaphore=semaphore,
-            state_for=state_for,
-            everos_for=everos_for,
-            mode_for=mode_for,
-            capabilities=capabilities,
-            progress_publisher=progress_publisher,
-            session_key=session_key,
-            subagents_root=subagents_root,
-            record_tasks=record_tasks,
-            attempts=attempts,
-            continuations=continuations,
-            desk=desk,
-            judge_node=judge_node,
-            announce_exception=announce_exception,
-            max_continuations=max_continuations,
-            origin=origin,
-            dependents=dependents,
-            adjudication_timeout_s=adjudication_timeout_s,
-            control_reachable=control_reachable,
-            control_advert=control_advert,
-            provider=provider,
-            model=model,
-        )
+        # Both halves live here rather than inside `_run_node`, so the `finally`
+        # covers every way it can end -- a raise from the bookkeeping that follows
+        # the verdict, or the cancellation a replan and a stop both deliver.
+        # Leaving a node in `unsettled` blocks its dependents for the life of the
+        # run with nothing to show why, and the wake is what the next round is
+        # waiting on. Per node, not per group: a stateful instance's nodes share
+        # one task, and the first one's dependents must not wait for the last.
+        if unsettled is not None:
+            unsettled.add(nid)
+        try:
+            await _run_node(
+                by_id[nid],
+                node_backends[nid],
+                by_id=by_id,
+                store=store,
+                backend=backend,
+                workdir=workdir,
+                roots=roots,
+                sandbox=sandbox,
+                output_paths=output_paths,
+                status=status,
+                errors=errors,
+                prompt_written=prompt_written,
+                node_started_at=node_started_at,
+                node_ended_at=node_ended_at,
+                node_activity=node_activity,
+                semaphore=semaphore,
+                state_for=state_for,
+                everos_for=everos_for,
+                mode_for=mode_for,
+                capabilities=capabilities,
+                progress_publisher=progress_publisher,
+                session_key=session_key,
+                subagents_root=subagents_root,
+                record_tasks=record_tasks,
+                attempts=attempts,
+                continuations=continuations,
+                desk=desk,
+                judge_node=judge_node,
+                announce_exception=announce_exception,
+                max_continuations=max_continuations,
+                origin=origin,
+                dependents=dependents,
+                adjudication_timeout_s=adjudication_timeout_s,
+                control_reachable=control_reachable,
+                control_advert=control_advert,
+                provider=provider,
+                model=model,
+            )
+        finally:
+            if unsettled is not None:
+                unsettled.discard(nid)
+            if settled is not None:
+                settled.set()
 
 
 async def _write_node_transcript(store: DagRunStore, node_id: str, did: Any, attempt: int = 1) -> None:
@@ -1588,11 +1638,7 @@ async def _run_node(
                     )
                     try:
                         result = await agent_backend.run(
-                            # The graph's own dispatch route: `spawn` goes
-                            # through the manager and never reaches here, so
-                            # the language has to be stated on both or an acp
-                            # node still narrates in English.
-                            dispatch_language_line(prompt),
+                            prompt,
                             task_id=node.id,
                             workspace=Path(workdir),
                             executor=sandbox,
