@@ -59,7 +59,7 @@ packages = ["raven_ppt"]
 # own assets ride the same way: shape/icon data and the DejaVu measuring fonts
 # under services/assets, the deck-authoring skill, the fork's three drifted
 # identity prompts, and -- once fetched against the pinned manifest -- the
-# eight bundled templates.
+# ten bundled templates.
 [tool.hatch.build]
 include = [
     "raven_ppt/**/*.py",

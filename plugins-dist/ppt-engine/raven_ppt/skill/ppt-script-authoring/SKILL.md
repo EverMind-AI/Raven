@@ -155,9 +155,9 @@ by iteration; a theme id typed into `THEMES[...]` is a `KeyError`.
 
 **Only three roles are read off the file** -- the ground, the ink and its first accent.
 `surface`, `accent_soft`, `accent_ink`, `grid` and `muted` are mixed from those three.
-What a file declares is not what its pages paint -- all eight bundled templates
-declare their second background as `#F0F0F0` and none of them paints it -- so say what
-the renders show:
+What a file declares is not what its pages paint -- all ten bundled templates declare
+`#F0F0F0` as their second light colour and none of them paints it -- so say what the
+renders show:
 `ppt_template(project=..., palette={"accent": "#155FFD", "surface": "#DDE8FF"})` holds
 for the deck's whole life and reaches every page through `ppt_theme`.
 
@@ -1689,7 +1689,7 @@ template's own photographs are placeholders to replace.
 are true of.** A picture is a bitmap, so a reference page whose drawings are painted in
 its own template's accents arrives in those accents whatever deck it lands in --
 `pictures={...}` them out. And a page's ink is stated on its runs: a reference page
-labels its cards in white because seven of the eight bundled templates have an accent
+labels its cards in white because nine of the ten bundled templates have an accent
 dark enough for that, so in a deck whose accent is paler the labels have to be set in
 the deck's own ink instead. Everything else -- fills, type, geometry, the filling
 ports -- comes across in this deck's palette; measured over all 252 cross-template

@@ -3503,10 +3503,6 @@
       "en": "Archived {title}",
       "zh": "已归档「{title}」"
     },
-    "gui.sess.asking": {
-      "en": "Waiting on you",
-      "zh": "等你回应"
-    },
     "gui.sess.restore_failed": {
       "en": "Could not restore the session - {detail}",
       "zh": "会话恢复失败 · {detail}"

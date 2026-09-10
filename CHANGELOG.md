@@ -4,6 +4,16 @@ All notable changes to Raven are documented here.
 
 ## Unreleased
 
+### Added
+
+- Two dark templates join the bundled catalogue, cut from user uploads: a
+  near-black circuit-board deck for product launches and a green aurora deck
+  for trend reports. Hidden vendor pages are gone, vendor marks are stripped,
+  and the roles each one lacked are borrowed from the light templates onto its
+  own dark masters. The template-selection prompt no longer refuses a dark
+  style outright: it takes one when the request asks for dark, black, night or
+  a technology register.
+
 ### Changed
 
 - The Raven-PPT launcher sizes the run's context window from the endpoint

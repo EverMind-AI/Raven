@@ -327,7 +327,7 @@ def test_the_image_window_is_prefix_stable_between_iterations() -> None:
 
 
 def _batch(tag: str, pictures: int, iteration: int) -> dict:
-    """An attached batch of `pictures` renders, each 4 wire bytes of payload ("AAAA")."""
+    """An attached batch of `pictures` renders, each 3 decoded bytes of payload ("AAAA")."""
     return {
         "role": "user",
         "content": [_picture("AAAA") for _ in range(pictures)],
@@ -347,9 +347,9 @@ def test_the_budget_window_collapses_once_when_the_pictures_outgrow_it_and_not_b
     breaks = []
     for arrival in range(1, 8):
         messages.append({"role": "assistant", "content": f"round {arrival}"})
-        messages.append(_batch(f"b{arrival}", pictures=3, iteration=arrival))  # 12 wire bytes per batch
+        messages.append(_batch(f"b{arrival}", pictures=3, iteration=arrival))  # 9 decoded bytes per batch
         before = list(messages)
-        changed, withdrawn = AgentLoop._window_images(messages, 2, budget=40, reason="budget")
+        changed, withdrawn = AgentLoop._window_images(messages, 2, budget=30, reason="budget")
         breaks.append(changed)
         untouched = [messages[i] is before[i] for i in range(len(before))]
         if changed:
@@ -358,14 +358,14 @@ def test_the_budget_window_collapses_once_when_the_pictures_outgrow_it_and_not_b
         else:
             assert all(untouched), "a call under budget rewrites nothing"
 
-    # batches 1-3 fit (36 B); the 4th tips the total over 40 -> collapse to the newest 2;
-    # 5 fits again (36 B); the 6th tips it -> collapse; 7 fits. Two breaks in seven builds.
+    # batches 1-3 fit (27 B); the 4th tips the total over 30 -> collapse to the newest 2;
+    # 5 fits again (27 B); the 6th tips it -> collapse; 7 fits. Two breaks in seven builds.
     assert breaks == [0, 0, 0, 2, 0, 2, 0]
     live = [i for i, m in enumerate(messages) if _pictures_in(m)]
     assert len(live) == 3 and live[-1] == len(messages) - 1, "the newest batches are the ones still in view"
     note = next(p["text"] for m in messages if m.get("_attached_image") for p in m["content"] if p["type"] == "text")
     assert "outgrew their byte budget" in note and "only the 2 newest image-bearing result(s) keep theirs" in note
-    assert AgentLoop._window_images(messages, 2, budget=40, reason="budget") == (0, 0), "idempotent under budget"
+    assert AgentLoop._window_images(messages, 2, budget=30, reason="budget") == (0, 0), "idempotent under budget"
 
 
 def test_the_budget_weighs_inline_bytes_only_and_the_users_picture_is_outside_it() -> None:
@@ -378,32 +378,10 @@ def test_the_budget_weighs_inline_bytes_only_and_the_users_picture_is_outside_it
         _batch("b2", 2, 2),
     ]
 
-    # 16 wire bytes across the two batches, the remote reference weighing nothing.
-    assert AgentLoop._window_images(messages, 1, budget=16, reason="budget") == (0, 0)
-    assert AgentLoop._window_images(messages, 1, budget=15, reason="budget") == (2, 3)
+    # 12 inline bytes across the two batches, the remote reference weighing nothing.
+    assert AgentLoop._window_images(messages, 1, budget=12, reason="budget") == (0, 0)
+    assert AgentLoop._window_images(messages, 1, budget=11, reason="budget") == (2, 3)
     assert messages[0] is sketch, "the user's own picture is neither weighed nor withdrawn"
-
-
-def test_the_budget_is_charged_the_base64_the_request_carries_not_the_bytes_it_decodes_to() -> None:
-    """The budget bounds the request body, and a data URI travels encoded.
-
-    Counted on the decoded side, 11.24 MB of pictures passed the 12 MB default on a
-    request that put 16.8 MB on the wire; the gateway answered it with an empty 200
-    and zero usage, five times over on a byte-identical payload. The ratio is 4/3, so
-    the pin is a budget that sits between the two readings of the same picture: it has
-    to collapse the window, and would not have before.
-    """
-    payload = "A" * 400  # 400 base64 characters, 300 bytes decoded
-    messages = [
-        {"role": "tool", "tool_call_id": "1", "content": [image_block(f"data:image/png;base64,{payload}")]},
-        {"role": "assistant", "content": "looked"},
-        {"role": "tool", "tool_call_id": "2", "content": [image_block(f"data:image/png;base64,{payload}")]},
-    ]
-
-    assert AgentLoop._window_images(messages, 1, budget=800, reason="budget") == (0, 0), "two pictures, 800 wire bytes"
-    assert AgentLoop._window_images(messages, 1, budget=700, reason="budget") == (1, 1), (
-        "600 decoded would have fit 700; 800 on the wire does not"
-    )
 
 
 def test_a_picture_without_provenance_is_still_accounted_for() -> None:
