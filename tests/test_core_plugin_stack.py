@@ -420,3 +420,39 @@ def test_build_plugin_tools_stamps_the_contributing_plugin(tmp_path):
     tools = build_plugin_tools(tmp_path, cfg, registry=_Reg(), provider=None)
     assert len(tools) == 1
     assert tools[0].contributed_by == "plug-a"
+
+
+class _OnboardReg:
+    """A registry stand-in contributing one onboard step."""
+
+    def __init__(self, step) -> None:
+        self._step = step
+
+    def onboard_names(self):
+        return ["everos"]
+
+    def activated_ids(self):
+        return []
+
+    def manifest_for(self, plugin_id):
+        return None
+
+    def build_onboard_step(self, name, *, config, services):
+        if isinstance(self._step, Exception):
+            raise self._step
+        return self._step
+
+
+def test_build_onboard_steps_yields_every_activated_step(tmp_path):
+    from raven.core.plugin_stack import build_onboard_steps
+
+    step = object()
+    assert build_onboard_steps(tmp_path, _config(), registry=_OnboardReg(step)) == [("everos", step)]
+
+
+def test_build_onboard_steps_skips_a_raising_factory(tmp_path, caplog):
+    from raven.core.plugin_stack import build_onboard_steps
+
+    with caplog.at_level("WARNING"):
+        assert build_onboard_steps(tmp_path, _config(), registry=_OnboardReg(RuntimeError("boom"))) == []
+    assert "boom" in caplog.text

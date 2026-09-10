@@ -21,12 +21,13 @@ Two principles, both load-bearing:
 from __future__ import annotations
 
 from raven.plugins.bootstrap import assemble_plugin_registry
-from raven.plugins.context import PluginContext, ServiceLocator
+from raven.plugins.context import OnboardStep, OnboardUI, PluginContext, ServiceLocator, StepOutcome
 from raven.plugins.discover import DiscoveredPlugin, ManifestOrigin, PluginDiscovery
 from raven.plugins.manifest import (
     Contributes,
     HookContribution,
     MemoryBackendContribution,
+    OnboardContribution,
     PluginManifest,
     SessionObserverContribution,
     ToolContribution,
@@ -35,6 +36,7 @@ from raven.plugins.manifest import (
 from raven.plugins.registry import (
     HookFactory,
     MemoryBackendFactory,
+    OnboardFactory,
     PluginConflictError,
     PluginError,
     PluginFactoryImportError,
@@ -53,6 +55,10 @@ __all__ = [
     "assemble_plugin_registry",
     "MemoryBackendContribution",
     "MemoryBackendFactory",
+    "OnboardContribution",
+    "OnboardFactory",
+    "OnboardStep",
+    "OnboardUI",
     "PluginConflictError",
     "PluginContext",
     "PluginDiscovery",
@@ -63,6 +69,7 @@ __all__ = [
     "PluginRegistry",
     "ServiceLocator",
     "SessionObserverContribution",
+    "StepOutcome",
     "SessionObserverFactory",
     "ManifestOrigin",
     "ToolContribution",

@@ -70,6 +70,7 @@ def test_the_manifest_kinds_are_ledgered() -> None:
     assert sorted(Contributes.model_fields) == [
         "hooks",
         "memory_backends",
+        "onboard",
         "services",
         "session_observers",
         "tool_gates",

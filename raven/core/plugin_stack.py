@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from raven.config.raven import RavenConfig
     from raven.contracts.llm_provider import LLMProvider
     from raven.contracts.memory import MemoryBackend
+    from raven.contracts.onboard import OnboardStep
     from raven.plugins.discover import DiscoveredPlugin
 
 logger = logging.getLogger(__name__)
@@ -348,6 +349,32 @@ def build_plugin_tools(
     return tools
 
 
+def build_onboard_steps(
+    workspace: Path,
+    config: "RavenConfig",
+    *,
+    registry: PluginRegistry | None = None,
+) -> list[tuple[str, "OnboardStep"]]:
+    """Every activated plugin's onboard screen as ``(name, step)``, in registry order."""
+    if registry is None:
+        registry = build_plugin_registry(config)
+    services = ServiceLocator(
+        workspace=workspace,
+        user_id=config.memory.user_id,
+        agent_id=config.memory.agent_id,
+    )
+    steps = []
+    for name in registry.onboard_names():
+        # An onboard contribution shares its name with the backend it
+        # configures, so the backend slice resolver answers for it too.
+        plugin_slice = _resolve_plugin_config_slice(registry, config, name)
+        try:
+            steps.append((name, registry.build_onboard_step(name, config=plugin_slice, services=services)))
+        except Exception as e:
+            logger.warning("onboard step %r factory raised (%s); skipping it.", name, e)
+    return steps
+
+
 def build_plugin_hooks(
     workspace: Path,
     config: "RavenConfig",
@@ -597,6 +624,7 @@ def _plugin_id_for_backend(
 
 
 __all__ = [
+    "build_onboard_steps",
     "build_plugin_hooks",
     "build_plugin_registry",
     "build_plugin_tools",
