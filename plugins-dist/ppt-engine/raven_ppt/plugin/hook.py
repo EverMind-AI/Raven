@@ -52,7 +52,6 @@ from raven.agent import workdir
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.utils.workspace import sync_workspace_templates
 from raven_ppt.plugin import ledger, materials
-from raven_ppt.services import tier
 from raven_ppt.services.publish.deliver import last_refusal, published_digests, published_original
 
 MATERIALS_DIRNAME = "materials"
@@ -300,11 +299,6 @@ class PptEngineHook(AgentHook):
                 ctx.metadata.setdefault(_METADATA_KEY, {}).setdefault(
                     "deck_mtimes_before", materials.deck_mtimes(root / OUT_DIRNAME)
                 )
-                # The session's tier, for the deck tools that run outside the hook chain:
-                # the mode overlay's deck knobs (services/tier) are written where ppt_build
-                # reads them per call, so a tier switched mid-session takes effect on the
-                # next build.
-                tier.write_mode(root, ctx.metadata.get("mode_overlay"), ctx.metadata.get("mode"))
         # Every iteration, the first included: a first call that overflowed is
         # summarised and retried as iteration 1 with the summary already in the
         # window. The turn's ask_user answers are journaled at after_iteration,

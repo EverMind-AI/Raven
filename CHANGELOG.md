@@ -32,27 +32,6 @@ All notable changes to Raven are documented here.
   the language and style requirements, both `ask_user` answers and the source
   path; the ledger carries them.
 
-- Raven-PPT declares the host's three effort tiers: `medium` runs the author at
-  low reasoning effort and caps a deck at ten whole-deck builds and three
-  readings, `high` (the default) keeps the effort and the caps, `max` is the
-  uncapped run the product shipped with. At the build cap the deck is delivered
-  as it stands and the reply names what would have held it back; at the reading
-  cap the second reader stops. The tier reaches the deck tools through
-  `.deck-mode.json` in the session's deck folder, written by the plugin hook
-  from the session's mode overlay.
-
-### Fixed
-
-- Four kinds of ppt-engine finding that six audited deck runs showed to churn
-  without changing the deck are no longer repeated: findings about a page the
-  runner stood in for (besides the failure itself), `repeated_layout` on
-  adjacent pages the outline gives one prototype or layout, `prototype_kept`
-  after its first report per page, and the whitespace gates when the brief
-  asks for air. The second reader's `type`, `alignment` and `listed` entries
-  stay in the reading's own reply instead of the ledger, a draft shorter than
-  the outline is not held to the outline's claims, and a reading whose quoted
-  headline is not on the page it names is dropped.
-
 ### Removed
 
 - **The vendored subagents tree.** The five product forks under `subagents/`

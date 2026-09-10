@@ -150,18 +150,6 @@ def is_page_render(size: PageSize, pixels: tuple[int, int]) -> bool:
     return any(page_pixels(size, dpi) == pixels for dpi in range(1, MAX_DPI + 1))
 
 
-def words_by_page(pdf: Path) -> dict[int, str]:
-    """The words on each page as one string, 1-based; empty when no rasteriser can read it."""
-    module = pdfium()
-    if module is None or not Path(pdf).is_file():
-        return {}
-    try:
-        found = _pdfium_words(module, Path(pdf))
-    except Exception:  # noqa: BLE001 -- a PDF that will not open answers nothing, not an error
-        return {}
-    return {number: " ".join(box.text for box in boxes) for number, boxes in found.items()}
-
-
 def page_number(png: Path) -> int | None:
     """The 1-based page a rasterised file's name carries, or None when it has none."""
     match = _PDFTOPPM_PAGE.search(Path(png).name)

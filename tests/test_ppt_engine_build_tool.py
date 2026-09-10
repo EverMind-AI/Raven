@@ -70,7 +70,6 @@ class FakeStage:
         self.result = result
         self.calls: list[str | None] = []
         self.drafts: list[bool] = []
-        self.releases: list[bool] = []
         self.slides: list[list[int] | None] = []
         self.backend = None
         self.measure = None
@@ -90,11 +89,9 @@ class FakeStage:
         slides=None,
         page_from: int = 1,
         draft: bool = False,
-        release: bool = False,
     ) -> StageResult:
         self.calls.append(script)
         self.drafts.append(draft)
-        self.releases.append(release)
         self.slides.append(list(slides) if slides is not None else None)
         # The stage decides which pages the reply shows, because that is where the
         # deck is published and an unseen page has to refuse before delivery.
@@ -999,79 +996,3 @@ async def test_the_pages_a_build_names_are_read_before_the_backlog(project: Proj
     await tool.execute(project=project.slug, slides=[2])
 
     assert reader.asked == [[2, 1]]
-
-
-@pytest.mark.asyncio
-async def test_the_tiers_build_cap_releases_the_deck_and_says_so(project: Project) -> None:
-    """A capped tier (services/tier) counts whole-deck builds: the build that reaches
-    the cap asks the stage to release the deck as it stands, drafts count nothing,
-    and the reply names the cap so the author knows why the gates stopped holding."""
-    from raven_ppt.services import tier
-
-    tier.write_mode(project.workspace, {"buildCap": 2, "readingCap": 3}, "high")
-    tool = _tool(project, _ok(project))
-    stage = tool.stage
-
-    await tool.execute(project="tarvis", draft=True)
-    await tool.execute(project="tarvis")
-    assert stage.releases == [False, False]
-    assert tier.whole_builds_taken(project) == 1
-
-    reply = await tool.execute(project="tarvis")
-    assert stage.releases[-1] is True
-    assert tier.whole_builds_taken(project) == 2
-    said = reply if isinstance(reply, str) else reply.model_text
-    assert "released_at_cap" not in said, "the stage had nothing to release, so nothing is claimed"
-
-    tier.write_mode(project.workspace, {}, "max")
-    await tool.execute(project="tarvis")
-    assert stage.releases[-1] is False, "the max tier caps nothing"
-
-
-@pytest.mark.asyncio
-async def test_a_deck_released_at_the_cap_is_returned_as_delivered(project: Project) -> None:
-    """The stage keeps the findings it released past in the result, as reports. The
-    reply must not derive a refusal from them again: a deck returned with a pptx_path,
-    `ok: false` and "not published" in one breath kept an author building past the
-    cap it had reached, and skipped the final reading a delivery gets."""
-    from raven_ppt.services import tier
-
-    tier.write_mode(project.workspace, {"buildCap": 1, "readingCap": 3}, "high")
-    held = Finding(kind="citation", severity=Severity.BLOCKING, message="page 1 cites Fig. 4, shows Fig. 5", page=1)
-    released = replace(_ok(project, findings=(held,), released=["citation"]), ok=True)
-    reader = _Reader()
-    tool = _tool(project, released)
-    tool.review = reader
-
-    body = _body(await tool.execute(project="tarvis"))
-
-    assert tool.stage.releases == [True]
-    assert body["ok"] is True and "error" not in body and "not_delivered" not in body
-    assert body["pptx_path"].endswith("deck.pptx")
-    assert body["released_at_cap"].startswith("whole-deck build 1 of the high tier's 1")
-    assert "citation" in str(body["measured"]), "the released findings stay in the reply as reports"
-    assert "this deck is delivered at " in body["next_step"]
-    assert "nothing was published" not in body["next_step"]
-    assert reader.asked, "a delivered deck gets its final reading whether or not the cap released it"
-
-
-@pytest.mark.asyncio
-async def test_a_script_that_produced_no_deck_is_not_a_whole_build(project: Project) -> None:
-    """The count that reaches the cap is of decks built, not of scripts run: two syntax
-    errors under a cap of two must not release the first deck that exists past its
-    blocking findings."""
-    from raven_ppt.services import tier
-
-    tier.write_mode(project.workspace, {"buildCap": 2, "readingCap": 3}, "high")
-    failed = StageResult(ok=False, data={"outcome": BuildOutcome(ok=False, stderr="SyntaxError: nope")})
-    tool = _tool(project, failed)
-
-    await tool.execute(project="tarvis")
-    await tool.execute(project="tarvis")
-    assert tier.whole_builds_taken(project) == 0
-    assert tool.stage.releases == [False, False]
-
-    tool.stage.result = _ok(project)
-    await tool.execute(project="tarvis")
-    assert tier.whole_builds_taken(project) == 1
-    assert tool.stage.releases[-1] is False, "the first deck that exists is the first whole build"

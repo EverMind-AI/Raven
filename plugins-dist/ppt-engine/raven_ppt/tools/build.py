@@ -37,7 +37,7 @@ from raven_ppt.contracts import (
     load_plan,
     outline_path,
 )
-from raven_ppt.services import regress, review_ledger, tier
+from raven_ppt.services import regress, review_ledger
 from raven_ppt.services.regress import Regression
 from raven_ppt.stages.build import BuildStage
 from raven_ppt.tools import _return
@@ -234,18 +234,12 @@ class PptBuildTool(Tool):
         # `wanted` and not `wanted or [page_from]`: filling it in made the stage's
         # walk branch unreachable, so omitting `slides` returned a single page whatever
         # the budget was, and a nineteen-page deck took nineteen builds to look at once.
-        # The tier's caps (services/tier): a whole-deck build past the cap releases the
-        # deck as it stands, and a reading past its cap is not taken.
-        caps = tier.read_caps(deck.workspace)
-        whole = tier.whole_builds_taken(deck) + (0 if draft else 1)
-        release = not draft and caps.build_cap is not None and whole >= caps.build_cap
         result = await self.stage.run(
             deck,
             script,
             slides=wanted,
             page_from=page_from,
             draft=draft,
-            release=release,
         )
         outcome = result.data.get("outcome")
 
@@ -261,11 +255,6 @@ class PptBuildTool(Tool):
                 note=getattr(outcome, "note", "") or None,
                 hint="fix the script and run ppt_build again",
             )
-        if not draft:
-            # Counted only now: a script that produced no deck was not a build of it,
-            # and a budget it spent would release the first deck that exists past its
-            # blocking findings after a single real build.
-            whole = tier.count_whole_build(deck)
 
         findings = list(result.findings)
         payload: dict[str, Any] = {"project": project, "slides": outcome.pages}
@@ -301,11 +290,6 @@ class PptBuildTool(Tool):
             payload["pdf_path"] = result.data["pdf_path"]
         if result.data.get("republished"):
             payload["republished"] = True
-        if released := result.data.get("released"):
-            payload["released_at_cap"] = (
-                f"whole-deck build {whole} of the {caps.mode or 'session'} tier's {caps.build_cap}: the deck is "
-                f"delivered as it stands, with {len(released)} finding(s) that would have held it back listed above"
-            )
 
         shown = list(result.data.get("showing") or [])
         outline = load_outline(outline_path(deck))
@@ -326,11 +310,6 @@ class PptBuildTool(Tool):
         # Blocking is decided on everything measured, before any folding: what refuses
         # publication cannot depend on how the reply is arranged.
         blocking = _return.blocking_of(findings, self.profile.blocking_kinds)
-        if result.data.get("released"):
-            # The stage published past these at the tier's cap. They stay in the reply
-            # as reports; deriving a refusal from them here answered a delivered deck
-            # with "not published" and a next step to build again.
-            blocking = []
         asks = _asks(findings, blocking)
         # Every build, not once at the brief. What the user ruled out was formatted
         # into each design call and nowhere else, so with those calls gone this is the
@@ -488,13 +467,6 @@ class PptBuildTool(Tool):
             return None
         taken = readings_taken(deck)
         if draft and taken >= READINGS_IN_DRAFT:
-            return None
-        caps = tier.read_caps(deck.workspace)
-        if caps.reading_cap is not None and taken >= caps.reading_cap:
-            payload["reading_cap"] = (
-                f"this deck has had its {caps.reading_cap} reading(s) for the {caps.mode or 'session'} tier; "
-                "the gates and the renders in this reply are what reads it from here"
-            )
             return None
         spent = reading_seconds_spent(deck)
         if spent >= READING_DECK_BUDGET_S:
