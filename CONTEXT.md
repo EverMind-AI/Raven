@@ -85,22 +85,6 @@ drives the LLM + tool-execution iterations, consolidates memory, and emits `Deli
 events via the Spine `emit` callback. Exposed to the Spine via `AgentTurnRunner`.
 _Avoid_: calling a single LLM call the "agent loop" — the loop spans all Iterations of one turn.
 
-**Harness Modules** (`agent/harness/`, paper `contracts/harness.py`):
-The four generation-scoped strategy roles the Agent Loop delegates to without giving up its
-Turn state machine: **Memory** assembles the window the model sees, **Planning** may prepare
-turn guidance, **Capability** picks the tool definitions one Iteration exposes, and **Action**
-produces one model response. The default set preserves what the loop did inline: Memory wraps
-this generation's Context Engine and adds the two turn decisions that were the shell's (which
-history slice is a candidate, and how much window the prompt may occupy), Planning passes
-messages through, Capability reports `ToolRegistry.get_definitions`, and Action dispatches the
-one streaming-or-retrying call.
-Frozen per Generation: the tool array is the prompt-cache prefix, so the set a turn runs on
-cannot move between two of its model calls.
-_Avoid_: treating the four as four architecture layers — they are L3 strategy roles the L2
-shell calls. And saying Action owns the loop: the shell keeps iteration accounting, hook
-phases, tool execution and approval, the three in-turn recoveries, persistence and event
-order. A replacement loop may name its own roles, which is why the paper is factory-loop tier.
-
 **Turn Runner**:
 The behavioural `Protocol` seam between Spine and an agent implementation:
 `async run(req, emit, drain) → TurnOutcome`. Spine never imports the agent side; the agent
