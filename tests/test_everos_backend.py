@@ -2170,3 +2170,176 @@ async def test_a_write_failed_by_our_own_stop_does_not_demote_the_service(tmp_pa
     assert await b.store("s1", messages) is False
 
     assert b._state is ServiceState.READY
+
+
+class TestHealth:
+    """What raven doctor and raven import read off the backend."""
+
+    def _patch(self, monkeypatch, *, owned=True, configured=(), report=None):
+        import raven.config.update_everos as ue
+        from raven_everos import health
+
+        monkeypatch.setattr(ue, "everos_owned", lambda: owned)
+        monkeypatch.setattr(ue, "everos_root", lambda: Path("/root/everos"))
+        monkeypatch.setattr(ue, "everos_role_configured", lambda s: s in configured)
+        monkeypatch.setattr(health, "probe_capabilities", lambda _u: report or health.CapabilityReport(reachable=False))
+
+    async def test_a_server_that_is_not_running_is_not_a_fault(self, tmp_path, monkeypatch):
+        self._patch(monkeypatch, configured=("llm",))
+        h = await _backend(tmp_path).health()
+        assert h.ready is False
+        assert not [c for c in h.checks if c.status == "missing"]
+        assert any(c.label == "server" and "starts on demand" in (c.hint or "") for c in h.checks)
+
+    async def test_an_unbuilt_required_role_is_a_fault(self, tmp_path, monkeypatch):
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            configured=("llm", "embedding"),
+            report=CapabilityReport(reachable=True, capabilities={"llm": False, "embed": True}),
+        )
+        h = await _backend(tmp_path).health()
+        assert h.ready is False
+        assert [c.label for c in h.checks if c.status == "missing"] == ["llm"]
+
+    async def test_an_unbuilt_optional_role_costs_quality_not_function(self, tmp_path, monkeypatch):
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            configured=("llm", "embedding"),
+            report=CapabilityReport(reachable=True, capabilities={"llm": True, "embed": False}),
+        )
+        h = await _backend(tmp_path).health()
+        assert h.ready is True
+        assert not [c for c in h.checks if c.status == "missing"]
+        assert any(c.label == "embedding" and c.status == "degraded" for c in h.checks)
+
+    async def test_a_self_managed_server_reports_only_what_it_says(self, tmp_path, monkeypatch):
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            owned=False,
+            report=CapabilityReport(reachable=True, capabilities={"llm": True, "embed": False}),
+        )
+        h = await _backend(tmp_path).health()
+        labels = {c.label for c in h.checks}
+        assert "rerank" not in labels and "multimodal" not in labels
+        assert any(c.label == "memories" and "managed by you" in (c.hint or "") for c in h.checks)
+
+    async def test_a_server_that_reports_no_capabilities_is_not_condemned(self, tmp_path, monkeypatch):
+        from raven_everos.health import CapabilityReport
+
+        self._patch(monkeypatch, configured=("llm",), report=CapabilityReport(reachable=True, capabilities={}))
+        h = await _backend(tmp_path).health()
+        assert h.ready is True
+        assert not [c for c in h.checks if c.status == "missing"]
+
+    async def test_a_bad_identity_is_a_config_fault_not_a_server_one(self, tmp_path, monkeypatch):
+        self._patch(monkeypatch)
+        h = await _backend(tmp_path, user_id="../x").health()
+        assert h.ready is False
+        assert h.checks[0].label == "identity" and h.checks[0].status == "missing"
+        assert "server log" not in (h.checks[0].hint or "")
+
+    async def test_the_probe_follows_the_configured_address(self, tmp_path, monkeypatch):
+        """Probing the default while the backend reads its own slice reports on
+        a server nobody is using: someone who moved everos off 18791 is told it
+        is not running."""
+        from raven_everos import health
+
+        asked: list[str] = []
+        self._patch(monkeypatch, configured=("llm",))
+        monkeypatch.setattr(
+            health,
+            "probe_capabilities",
+            lambda url: asked.append(url) or health.CapabilityReport(reachable=False),
+        )
+
+        h = await _backend(tmp_path, base_url="http://localhost:29999").health()
+
+        assert asked == ["http://localhost:29999"]
+        assert any(c.label == "address" and c.hint == "http://localhost:29999" for c in h.checks)
+
+    async def test_a_running_server_with_its_roles_built_is_reported_as_such(self, tmp_path, monkeypatch):
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            configured=("llm", "embedding"),
+            report=CapabilityReport(reachable=True, capabilities={"llm": True, "embed": True}),
+        )
+        h = await _backend(tmp_path).health()
+        assert h.ready is True
+        assert any(c.label == "server" and c.hint == "running" for c in h.checks)
+        assert any(c.label == "embedding" and c.status == "ok" for c in h.checks)
+
+    async def test_a_check_names_where_the_memories_are(self, tmp_path, monkeypatch):
+        """ "Where are my memories" is answered here, so nobody has to read
+        config.json by hand."""
+        self._patch(monkeypatch, configured=("llm",))
+        h = await _backend(tmp_path).health()
+        assert any(c.label == "memories" and c.hint == "/root/everos" for c in h.checks)
+
+    async def test_an_unconfigured_optional_role_names_what_it_costs(self, tmp_path, monkeypatch):
+        """Per role rather than one blanket "optional": they degrade
+        differently, and someone weighing up embedding needs to know it costs
+        semantic recall specifically. Never a fault."""
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            configured=("llm",),
+            report=CapabilityReport(reachable=True, capabilities={"llm": True, "embed": True, "rerank": False}),
+        )
+        h = await _backend(tmp_path).health()
+        assert h.ready is True
+        notes = {c.label: (c.status, c.hint) for c in h.checks}
+        assert notes["embedding"] == ("degraded", "not configured (recall matches keywords, not meaning)")
+        assert notes["rerank"][0] == "degraded"
+        assert notes["multimodal"][1] == "not configured (images, PDFs and audio stay out of memory)"
+
+    async def test_a_self_managed_root_is_never_read_from_disk(self, tmp_path, monkeypatch):
+        """No root is recorded for a root the user runs, so ``everos_root()``
+        would answer with a fallback -- a directory that is not theirs and holds
+        none of their memories -- and the roles read out of that directory's toml
+        would describe an install nobody is using."""
+        import raven.config.update_everos as ue
+        from raven_everos.health import CapabilityReport
+
+        self._patch(monkeypatch, owned=False, report=CapabilityReport(reachable=True, capabilities={"llm": True}))
+        monkeypatch.setattr(
+            ue,
+            "everos_role_configured",
+            lambda _s: pytest.fail("read the local toml for a root raven does not own"),
+        )
+
+        h = await _backend(tmp_path).health()
+
+        assert not any("/root/everos" in (c.hint or "") for c in h.checks)
+
+    async def test_a_self_managed_server_that_cannot_build_its_llm_is_a_fault(self, tmp_path, monkeypatch):
+        """ "What the server knows about" and "what it built" must not be one
+        list: over one capability map those conditions are mutually exclusive,
+        which left the fault list structurally empty and reported a server that
+        could not build its LLM as healthy."""
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            owned=False,
+            report=CapabilityReport(reachable=True, capabilities={"llm": False, "embed": True}),
+        )
+        h = await _backend(tmp_path).health()
+        assert h.ready is False
+        assert [c.label for c in h.checks if c.status == "missing"] == ["llm"]
+
+    async def test_a_self_managed_server_that_is_down_says_who_starts_it(self, tmp_path, monkeypatch):
+        """Raven starts the server it owns on demand and never touches one it
+        does not, so "not running" needs two different sentences."""
+        self._patch(monkeypatch, owned=False)
+        h = await _backend(tmp_path).health()
+        assert h.ready is False
+        assert any(c.label == "server" and "start it yourself" in (c.hint or "") for c in h.checks)

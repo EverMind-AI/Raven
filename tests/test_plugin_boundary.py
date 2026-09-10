@@ -37,8 +37,6 @@ HOST_WIRE_PROTOCOL_SURFACES: frozenset[str] = frozenset(
 # Host files that still import the plugin's internals and must stop.
 HOST_ALLOWLIST: frozenset[str] = frozenset(
     {
-        "raven/cli/doctor_commands.py",
-        "raven/cli/import_commands.py",
         "raven/cli/onboard_everos.py",
     }
 )

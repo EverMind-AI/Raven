@@ -42,7 +42,7 @@ propagate.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 # ---------------------------------------------------------------------------
 # Data carrier
@@ -82,6 +82,49 @@ class Memory:
     """
 
 
+HealthStatus = Literal["ok", "degraded", "missing"]
+"""How one thing a backend depends on stands: working, working worse, or a
+fault. Only ``"missing"`` counts against the host's exit code."""
+
+
+@dataclass(frozen=True)
+class HealthCheck:
+    """One line of :attr:`BackendHealth.checks`, rendered verbatim."""
+
+    label: str
+    """What was checked, in the backend's own vocabulary (a role name, a
+    server, an address). The host prints it and does not interpret it."""
+
+    status: HealthStatus
+    """``"ok"`` when nothing is wrong with this one, ``"degraded"`` when it
+    costs quality rather than function, ``"missing"`` when memory cannot work
+    until someone fixes it."""
+
+    hint: str | None = None
+    """What a person should look at, or the value that answers the check (a
+    path, an address). ``None`` when the label and status say it all."""
+
+
+@dataclass(frozen=True)
+class BackendHealth:
+    """A backend's own account of itself, for the two hosts that ask.
+
+    ``ready`` answers the importer's question; ``checks`` answers
+    ``raven doctor``'s. They are separate because a backend can be
+    diagnosable and not usable: a server that starts on demand has nothing
+    wrong with it and still cannot take a write this second.
+    """
+
+    ready: bool
+    """Whether a write issued now would land. The importer refuses to run on
+    ``False``: one deliberate batch against nothing writes nothing while
+    consuming the source list."""
+
+    checks: list[HealthCheck]
+    """What ``raven doctor`` prints, one line each, in this order. Empty is
+    valid: a backend with nothing to report and nothing wrong."""
+
+
 # ---------------------------------------------------------------------------
 # Protocol
 # ---------------------------------------------------------------------------
@@ -91,7 +134,7 @@ class Memory:
 class MemoryBackend(Protocol):
     """The single contract every memory plugin implements.
 
-    Five methods, ordered by hot-path:
+    Six methods, ordered by hot-path:
 
     1. :meth:`recall` — called by ``ContextEngine.assemble`` every turn
        (potentially twice: once for user-track memory with ``user_id``,
@@ -103,6 +146,8 @@ class MemoryBackend(Protocol):
        when ``injected_skill_ids`` contains source-qualified entries
        belonging to this backend.
     4. :meth:`start` / :meth:`stop` — lifecycle, awaited by the host.
+    5. :meth:`health` — asked by ``raven doctor`` and ``raven import``,
+       off the turn path and before ``start``.
     """
 
     async def recall(
@@ -189,8 +234,21 @@ class MemoryBackend(Protocol):
         cleans up)."""
         ...
 
+    async def health(self) -> BackendHealth | None:
+        """Whether the backend can work now, and what a person should look at
+        when it cannot.
 
-__all__ = ["Memory", "MemoryBackend"]
+        Callable before ``start``: ``raven doctor`` asks an instance it never
+        started. ``ready`` is the import gate (a write now would land);
+        ``checks`` is what doctor prints, verbatim, one line each. Only a real
+        fault is ``"missing"``; a server that starts on demand and is not
+        running yet is ``"ok"`` with a hint. ``None`` means this backend
+        offers no diagnostics and the host proceeds.
+        """
+        ...
+
+
+__all__ = ["BackendHealth", "HealthCheck", "HealthStatus", "Memory", "MemoryBackend"]
 
 
 __tier__ = "contract"

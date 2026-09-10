@@ -9,7 +9,11 @@ import pytest
 
 from raven.memory_engine import LifecycleContractTests, MemoryBackendContractTests
 from raven_everos.backend import EverosBackend
-from tests.test_everos_backend import _backend, _FakeAdapter
+from tests.test_everos_backend import (
+    _backend,
+    _FakeAdapter,
+    _no_capability_probe,  # noqa: F401  (autouse fixture: keeps health() off the developer's own server)
+)
 
 
 @pytest.fixture(autouse=True)
