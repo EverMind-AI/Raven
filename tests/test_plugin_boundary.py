@@ -2,10 +2,12 @@
 
 The host may know the plugin only through the plugin contract
 (``raven.contracts.memory`` and ``raven.plugins``); it must not import the
-``raven_everos`` package. The plugin may use the host's public helpers but
-must not reach into host modules that exist for the plugin's sake. The list
-below holds the violations still standing; a task that removes one deletes its
-entry here, and the final task asserts it is empty.
+``raven_everos`` package. The plugin may use the host's public helpers --
+``raven.config.update`` included, since the ``plugins.config`` slice it writes
+there is its own data -- but must not reach into host modules that exist for
+the plugin's sake. The list below holds the violations still standing; a task
+that removes one deletes its entry here, and the final task asserts it is
+empty.
 """
 
 from __future__ import annotations
@@ -38,13 +40,6 @@ HOST_WIRE_PROTOCOL_SURFACES: frozenset[str] = frozenset(
     }
 )
 
-# Host files that still import the plugin's internals and must stop.
-HOST_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        "raven/cli/onboard_everos.py",
-    }
-)
-
 
 def _rel(p: Path) -> str:
     return str(p.relative_to(REPO_ROOT))
@@ -65,10 +60,9 @@ def test_scan_roots_exist() -> None:
 
 def test_host_does_not_import_plugin_internals() -> None:
     offenders = {_rel(p) for p in _host_files() if _PLUGIN_IMPORT.search(p.read_text(encoding="utf-8"))}
-    expected = HOST_ALLOWLIST | HOST_WIRE_PROTOCOL_SURFACES
-    assert offenders == set(expected), (
-        f"new host->plugin imports: {sorted(offenders - expected)}; "
-        f"stale allowlist entries: {sorted(expected - offenders)}"
+    assert offenders == set(HOST_WIRE_PROTOCOL_SURFACES), (
+        f"new host->plugin imports: {sorted(offenders - HOST_WIRE_PROTOCOL_SURFACES)}; "
+        f"stale entries: {sorted(HOST_WIRE_PROTOCOL_SURFACES - offenders)}"
     )
 
 

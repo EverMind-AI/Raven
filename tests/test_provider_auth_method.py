@@ -485,9 +485,6 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # and an empty answer disables routing rather than ruling on a provider.
         "raven/routing/classifier.py",
         "raven/cli/onboard_commands.py",
-        # Carries the wizard's EverOS cluster split out of onboard_commands --
-        # same reads, same argument, new file name.
-        "raven/cli/onboard_everos.py",
         # The same EverOS section again, read by the knowledge embedder: the
         # three strings it needs to reach an OpenAI-compatible endpoint, and
         # their absence read as "no embedding is configured, so there are no
