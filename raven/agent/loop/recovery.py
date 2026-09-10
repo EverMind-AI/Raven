@@ -83,10 +83,12 @@ class RecoveryLimits:
     #: client is a machine: one measured deck build had two hours behind it when a
     #: mid-stream "Network connection lost" ended the turn with nothing published.
     llm_retry_after_output: bool = False
-    #: Decoded bytes of tool-shown pictures one request may carry before the standing
+    #: Base64 bytes of tool-shown pictures one request may carry before the standing
     #: image window collapses to the newest messages (``agents.defaults.
-    #: imageWindowBudgetBytes``). 0 turns the standing pass off: pictures then leave
-    #: only through the ladder that answers a size refusal.
+    #: imageWindowBudgetBytes``). Counted as the pictures travel, encoded, because
+    #: that is what the request body and the gateway are charged for. 0 turns the
+    #: standing pass off: pictures then leave only through the ladder that answers a
+    #: size refusal.
     image_window_budget_bytes: int = 12_000_000
 
 

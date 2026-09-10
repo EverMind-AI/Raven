@@ -453,6 +453,159 @@ def test_the_d3_page_stamp_rides_the_encode_path(tmp_path: Path) -> None:
     assert stamped[0] == 320 and stamped[1] > 180
 
 
+def test_what_the_model_sees_is_jpeg_and_what_a_check_measures_stays_png(tmp_path: Path) -> None:
+    """One page render, two readers, two formats.
+
+    `data_uri` is the model's side and it is JPEG at the pinned quality: 23 template
+    page renders were 4.32MB of base64 on the request that a gateway answered with an
+    empty 200. The renders `pages_of` writes are the measurement's side and stay PNG,
+    because `measure.contrast` opens them to decide ink against ground and JPEG's ring
+    around a stroke is exactly the kind of pixel that reading answers wrongly.
+    """
+    import base64
+    import io
+
+    from PIL import Image
+
+    from raven.utils.images import detect_image_mime
+    from raven_ppt.stages._views import MODEL_IMAGE_QUALITY, DeckViews
+
+    page = tmp_path / "page-001.png"
+    noise = Image.new("RGB", (640, 360))
+    noise.putdata([((x * 7) % 256, (y * 11) % 256, (x * y) % 256) for y in range(360) for x in range(640)])
+    noise.save(page, format="PNG")
+
+    class _Renderer:
+        def to_pngs(self, pdf, out_dir, dpi, pages):
+            return [page]
+
+    views = DeckViews(renderer=_Renderer())
+    rendered = asyncio.run(views.pages_of(tmp_path / "deck.pdf", tmp_path, [1]))
+    assert detect_image_mime(rendered[1].read_bytes()) == "image/png", "a measurement reads PNG"
+
+    uri = views.data_uri(page)
+    head, _, payload = uri.partition(",")
+    assert head == "data:image/jpeg;base64"
+    sent = base64.b64decode(payload)
+    assert detect_image_mime(sent) == "image/jpeg", "the label and the bytes agree"
+
+    at_quality = io.BytesIO()
+    Image.open(page).convert("RGB").save(
+        at_quality, format="JPEG", quality=MODEL_IMAGE_QUALITY, subsampling=0, optimize=True, progressive=True
+    )
+    assert sent == at_quality.getvalue(), "the quality and the chroma sampling are the pinned ones"
+    assert MODEL_IMAGE_QUALITY == 85
+
+
+def test_a_picture_the_reader_sees_through_stays_png(tmp_path: Path) -> None:
+    """A keyed illustration is judged on its transparency and JPEG has nowhere to put
+    it, so alpha is the one thing that keeps a picture out of the JPEG path."""
+    import base64
+
+    from PIL import Image
+
+    from raven.utils.images import detect_image_mime
+    from raven_ppt.stages._views import DeckViews
+
+    keyed = tmp_path / "figure.png"
+    Image.new("RGBA", (120, 90), (255, 0, 0, 0)).save(keyed, format="PNG")
+    opaque = tmp_path / "photo.png"
+    Image.new("RGBA", (120, 90), (255, 0, 0, 255)).save(opaque, format="PNG")
+
+    views = DeckViews()
+    assert views.data_uri(keyed).startswith("data:image/png;base64,")
+    assert detect_image_mime(base64.b64decode(views.data_uri(keyed).partition(",")[2])) == "image/png"
+    assert views.data_uri(opaque).startswith("data:image/jpeg;base64,"), "an alpha channel that hides nothing is not it"
+
+
+def test_a_page_too_heavy_for_its_budget_is_a_jpeg_before_it_is_downscaled(tmp_path: Path) -> None:
+    """The budget is answered by the format first and the pixels only after.
+
+    As a PNG a dark photographic page missed the 900KB ceiling by enough for two
+    halvings, and the model was handed a 1920x1080 slide at 784x453 to read 10pt type
+    off. Encoded first, the same page fits at full size.
+    """
+    import base64
+    import io
+    import random
+
+    from PIL import Image, ImageFilter
+
+    from raven.utils.images import image_pixel_size
+    from raven_ppt.stages._views import MODEL_IMAGE_QUALITY, DeckViews
+
+    rng = random.Random(7)
+    heavy = Image.new("RGB", (1400, 800))
+    heavy.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256)) for _ in range(1400 * 800)])
+    heavy = heavy.filter(ImageFilter.GaussianBlur(2))
+    page = tmp_path / "page-002.png"
+    heavy.save(page, format="PNG")
+
+    as_png = io.BytesIO()
+    heavy.save(as_png, format="PNG", optimize=True)
+    as_jpeg = io.BytesIO()
+    heavy.save(as_jpeg, format="JPEG", quality=MODEL_IMAGE_QUALITY, subsampling=0, optimize=True, progressive=True)
+    png_wire = len(base64.b64encode(as_png.getvalue()))
+    jpeg_wire = len(base64.b64encode(as_jpeg.getvalue()))
+    assert jpeg_wire < png_wire
+    budget = (png_wire + jpeg_wire) // 2
+
+    views = DeckViews()
+    sent = base64.b64decode(views.data_uri(page, budget=budget).partition(",")[2])
+    assert len(base64.b64encode(sent)) <= budget
+    assert image_pixel_size(sent) == (1400, 800), "the format paid for the budget, not the pixels"
+
+
+def test_a_sheet_goes_out_whole_where_a_page_is_clipped_to_the_token_cap(tmp_path: Path) -> None:
+    """Two pictures, two caps, and the reason they cannot be one number.
+
+    `_IMAGE_TOKEN_CAP` is 1568 because past it the patch count is clamped, which is
+    right for a picture whose subject fills the frame. A sheet's subject is one cell, a
+    twentieth of the frame, so the same cap takes a 768px cell to 392px: measured on the
+    model this engine runs, a sheet clipped that way names the right page 82% of the
+    time against 90% un-clipped and 90% for twenty separate renders.
+
+    The page door is the one `ppt_review` reads a page through, and it keeps the cap.
+    """
+    import base64
+
+    from PIL import Image
+
+    from raven.utils.images import _IMAGE_TOKEN_CAP, image_pixel_size
+    from raven_ppt.stages._views import CONTACT_SHEET_BYTES, CONTACT_SHEET_PIXELS, DeckViews
+
+    wide = tmp_path / "sheet.png"
+    Image.new("RGB", (3112, 1764), (245, 245, 247)).save(wide)
+    views = DeckViews()
+
+    def decode(uri: str) -> bytes:
+        return base64.b64decode(uri.partition(",")[2])
+
+    as_sheet = views.sheet_uri(wide)
+    assert as_sheet.startswith("data:image/jpeg;base64,"), "a sheet rides the same JPEG door a page does"
+    assert image_pixel_size(decode(as_sheet)) == (3112, 1764), "the sheet keeps the pixels its cells need"
+    assert max(image_pixel_size(decode(views.data_uri(wide)))) == _IMAGE_TOKEN_CAP, "a page is still clipped"
+    assert CONTACT_SHEET_PIXELS >= 3112 and CONTACT_SHEET_BYTES == 6_000_000
+
+
+def test_the_second_reader_still_gets_one_page_at_a_time(tmp_path: Path) -> None:
+    """The path the sheet must not touch.
+
+    `ppt_review` asks a fresh reader what is wrong with one page, and a void is a fact
+    about that page: it sends one render per call, labelled, at the page cap. Choosing
+    a page off a sheet and reading a page closely are different jobs, and only the first
+    one got cheaper.
+    """
+    import inspect
+
+    from raven_ppt.tools import review
+
+    source = inspect.getsource(review.PptReviewTool)
+
+    assert source.count('self.views.data_uri(renders[number], label=f"page {number}")') == 2
+    assert "sheet_uri" not in source and "contact_sheet" not in source
+
+
 def test_the_identity_prompts_ride_the_wheel_for_the_seeding_wave() -> None:
     """pw2b's write-if-missing seeding needs the three drifted prompts as
     package data; byte-equality against the fork is the launcher family's pin,
