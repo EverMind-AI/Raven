@@ -40,10 +40,11 @@ class MemoryBackend(Protocol):
                      user_id: str | None = None,
                      agent_id: str | None = None,
                      top_k: int) -> list[Memory]: ...
-    async def store(self, session_id: str, messages: list[dict]) -> None: ...
+    async def store(self, session_id: str, messages: list[dict]) -> bool: ...
     async def feedback(self, signals: dict) -> None: ...   # may be no-op
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
+    async def health(self) -> BackendHealth | None: ...   # doctor + import
 ```
 
 Contract rules:
@@ -229,6 +230,14 @@ A backend is integrated through any of three channels; the contract is
 identical: ship `raven-plugin.toml` declaring a `memory_backends`
 contribution (name + factory) + a factory returning a `MemoryBackend`.
 
+Two more surfaces are optional. A `[[plugin.contributes.onboard]]` entry
+(name + factory returning an `OnboardStep`) gives the backend a screen in
+`raven onboard`: the host lends the wizard shell as one `OnboardUI` and
+records `memory.backend` from the `StepOutcome` the step returns.
+Implementing `MemoryBackend.health()` lets `raven doctor` and `raven
+import` diagnose the backend through the contract alone, without the host
+importing it ahead of selection.
+
 | Channel | Where | "Install" | Dependencies |
 |---|---|---|---|
 | pip + entry_points (recommended) | standalone package | `uv add <pkg>` | package declares its own (e.g. `mem0ai`) |
@@ -284,8 +293,17 @@ imported.
   `services`, `logger`.
 - **Lifecycle**: host awaits `start()` once at boot, `stop()` at
   shutdown.
-- **Substrate missing / import fails**: the EverOS adapter degrades to a
-  no-op adapter and logs once; the host still boots.
+- **Failure contract** (`raven/contracts/memory.py`): a session host --
+  the agent loop, the TUI, the gateway, `raven serve` -- wraps every call
+  into a backend and treats a raise as the loss of that one call: `recall`
+  counts as no hits, `store` as not landed, `start` as no long-term memory
+  for this session, `feedback` and `stop` as logged and ignored. `raven
+  import` is the deliberate exception: nothing wraps `start` or `stop`
+  there, so a raise in either ends the command, and a `store` that raises
+  or returns `False` fails that one source and leaves it unsubmitted for a
+  retry rather than passing as not landed. A backend that can classify its own
+  failures (a timeout is not a refused connection) should catch and act on
+  them, because the host cannot.
 - **Factory raises**: `maybe_build_memory_backend` catches and falls
   back to no backend (core `MemoryStore` still works).
 - **Drop-in dep missing**: that backend's construction fails and is
