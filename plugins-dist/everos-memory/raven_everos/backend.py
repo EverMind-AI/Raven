@@ -652,7 +652,7 @@ class EverosBackend:
                 self._adapter = _NoOpAdapter()
                 return
 
-            from raven.config.update_everos import everos_owned
+            from raven_everos.config import everos_owned
             from raven_everos.server import (
                 EverosBinaryMissingError,
                 EverosNotConfiguredError,
@@ -766,7 +766,7 @@ class EverosBackend:
         the user never configured is a choice they already know about, and
         repeating it every start would be noise.
         """
-        from raven.config.update_everos import everos_owned
+        from raven_everos.config import everos_owned
         from raven_everos.health import probe_capabilities
 
         report = probe_capabilities(base_url)
@@ -778,7 +778,7 @@ class EverosBackend:
             # the only move raven has left on this path, never fired at all.
             self._warn_unowned_recall(base_url, report)
             return
-        from raven.config.update_everos import everos_role_configured
+        from raven_everos.config import everos_role_configured
 
         if not (everos_role_configured("embedding") and report.available("embedding") is False):
             return
@@ -818,7 +818,7 @@ class EverosBackend:
         itself is the only source for a root the user runs -- no root is
         recorded for one, and its ``everos.toml`` is not Raven's to read.
         """
-        from raven.config.update_everos import everos_owned, everos_role_configured, everos_root
+        from raven_everos.config import everos_owned, everos_role_configured, everos_root
         from raven_everos.health import (
             DEGRADING_SECTIONS,
             REQUIRED_SECTIONS,
@@ -1415,7 +1415,7 @@ def make_backend(ctx: PluginContext) -> EverosBackend:
     """Plugin entry-point factory. Called by :class:`PluginRegistry`
     after manifest activation. Sync construction only — async setup
     happens in ``EverosBackend.start()``."""
-    from raven.config.update_everos import (
+    from raven_everos.config import (
         configure_everos_env,
         ensure_everos_home,
         everos_owned,

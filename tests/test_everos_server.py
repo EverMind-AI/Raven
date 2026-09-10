@@ -92,7 +92,7 @@ class TestEverosExecutable:
 @pytest.fixture
 def everos_toml(tmp_path, monkeypatch):
     """Redirect the EverOS config read/write to a throwaway root raven owns."""
-    import raven.config.update_everos as ue
+    from raven_everos import config as ue
 
     root = tmp_path / ".everos"
     monkeypatch.setattr(ue, "everos_root", lambda: root)
@@ -1039,10 +1039,10 @@ class TestTheWrittenAddressIsVerified:
         (root / "everos.toml").write_text('[api]\nhost = "127.0.0.1"\nport = 8000\n')
 
         monkeypatch.setattr(_server, "_everos_executable", lambda: "/bin/true")
-        monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: root)
+        monkeypatch.setattr("raven_everos.config.everos_root", lambda: root)
         # A write that silently does not take: the readback is the only thing
         # standing between this and a server bound to 8000 while raven probes 18791.
-        monkeypatch.setattr("raven.config.update_everos.set_everos_api", lambda **kw: None)
+        monkeypatch.setattr("raven_everos.config.set_everos_api", lambda **kw: None)
 
         with pytest.raises(RuntimeError, match="did not take effect"):
             _server._start_server_if_unlocked("http://localhost:18791")
@@ -1195,8 +1195,8 @@ class TestAnUnwritableRootFailsAsAStartFailure:
         (root / "everos.toml").write_text('[api]\nhost = "127.0.0.1"\nport = 8000\n')
         root.chmod(0o555)
         monkeypatch.setattr(_server, "_everos_executable", lambda: "/bin/true")
-        monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: root)
-        monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: True)
+        monkeypatch.setattr("raven_everos.config.everos_root", lambda: root)
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
         try:
             with pytest.raises(RuntimeError) as caught:
                 _server._start_server_if_unlocked("http://localhost:18791")

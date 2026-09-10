@@ -49,7 +49,7 @@ REQUIRED_SECTIONS = ("llm",)
 # rerank lane without rerank, and without the multimodal llm images / PDFs /
 # audio never make it in. Reported, never treated as a fault.
 #
-# Every optional role the wizard can write belongs here: `update_everos`
+# Every optional role the wizard can write belongs here: `raven_everos.config`
 # WRITABLE_SECTIONS is the source of that list, and a role missing from here is
 # one that can fail to build with nobody saying so.
 DEGRADING_SECTIONS = ("embedding", "rerank", "multimodal")

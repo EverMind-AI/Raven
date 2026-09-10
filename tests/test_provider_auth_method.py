@@ -450,7 +450,6 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # to make (web search, jina): still a tool's own key, no provider
         # verdict -- the entrances themselves no longer read any key.
         "raven/core/runtime.py",
-        "raven/config/update_everos.py",
         # The RPC surface that renders that EverOS section: the same key,
         # reduced to a set/unset flag for the settings page. No verdict about
         # a Raven provider is being made from it.

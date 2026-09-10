@@ -1015,7 +1015,7 @@ def everos_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     Owned is pinned rather than inferred: these tests exercise the wizard's
     write paths, and a root the user manages is read-only by design.
     """
-    import raven.config.update_everos as ue
+    from raven_everos import config as ue
 
     root = tmp_path / ".everos"
     monkeypatch.setattr(ue, "everos_root", lambda: root)
@@ -1387,7 +1387,7 @@ def test_memory_giving_up_sets_backend_null(
     # The step lays down EverOS's config templates before asking anything, so
     # what matters is that no role ended up configured -- not that the file is
     # absent. A template [llm] carries an empty api_key and reads as unconfigured.
-    from raven.config.update_everos import everos_role_configured
+    from raven_everos.config import everos_role_configured
 
     assert not everos_role_configured("llm")
     # Effective config (schema default is "everos") must resolve to disabled.
@@ -1579,7 +1579,7 @@ def test_memory_enable_writes_everos_sections(
     # Skipped roles keep whatever the shipped template holds, which is a model
     # name with no credentials -- so they must read as unconfigured rather than
     # be absent outright.
-    from raven.config.update_everos import everos_role_configured
+    from raven_everos.config import everos_role_configured
 
     assert not everos_role_configured("rerank")
     assert not everos_role_configured("multimodal")
@@ -2281,7 +2281,7 @@ def test_memory_rerank_reuse_llm_provider(
     """rerank picks the LLM's provider by default and reuses its key."""
     import tomllib
 
-    from raven.config.update_everos import set_everos_section
+    from raven_everos.config import set_everos_section
 
     set_everos_section(
         "llm",
@@ -2350,7 +2350,7 @@ def test_every_recommendation_reaches_the_catalog() -> None:
 
 def test_memory_seeded_role_is_not_configured(tmp_env: Path, everos_isolated: Path) -> None:
     """A seeded model with an empty api_key does not count as configured."""
-    from raven.config.update_everos import set_everos_section
+    from raven_everos.config import set_everos_section
 
     assert onboard_everos._everos_role_configured("llm") is False
     set_everos_section("llm", {"model": "openai/gpt-4.1-mini", "api_key": ""})
@@ -2365,7 +2365,7 @@ def test_memory_required_role_back_reaches_give_up_menu(
     """Backing out of the picker must offer the give-up exit even when the
     shipped everos.toml template already seeded a model with an empty api_key —
     otherwise Back re-asks the provider picker forever."""
-    from raven.config.update_everos import set_everos_section
+    from raven_everos.config import set_everos_section
 
     set_everos_section(
         "llm",
@@ -4659,10 +4659,10 @@ def test_configuring_azure_stores_the_endpoint_it_was_given(tmp_env: Path, monke
 
 
 def _stub_capabilities(monkeypatch: pytest.MonkeyPatch, *, configured: tuple[str, ...], **caps: bool) -> None:
-    from raven.config import update_everos
+    from raven_everos import config as ue
     from raven_everos import health
 
-    monkeypatch.setattr(update_everos, "everos_role_configured", lambda s: s in configured)
+    monkeypatch.setattr(ue, "everos_role_configured", lambda s: s in configured)
     monkeypatch.setattr(
         health,
         "probe_capabilities",
@@ -4855,8 +4855,8 @@ def test_a_provider_configured_in_raven_needs_no_second_key_entry(tmp_env: Path,
     """The reuse that matters is not limited to the provider a previous step
     used: embedding and rerank routinely move to another vendor, and raven
     already holds that vendor's key."""
-    from raven.config.update_everos import set_everos_section
     from raven.config.update_providers import set_provider_fields
+    from raven_everos.config import set_everos_section
 
     set_provider_fields("siliconflow", {"api_key": "sk-sf"})
     set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://openrouter.ai/api/v1"})
@@ -4875,7 +4875,7 @@ def test_a_provider_configured_in_raven_needs_no_second_key_entry(tmp_env: Path,
 def test_the_memory_llms_own_key_answers_first_for_the_roles_after_it(tmp_env: Path, everos_isolated: Path) -> None:
     """A key typed into the memory-LLM step lives in that section and nowhere
     else, so it has to be read from there or it is lost."""
-    from raven.config.update_everos import set_everos_section
+    from raven_everos.config import set_everos_section
 
     set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://api.siliconflow.cn/v1"})
 
@@ -5068,8 +5068,8 @@ def test_the_picker_tags_every_provider_whose_key_is_on_file(
     go hunt for the key instead."""
     import questionary
 
-    from raven.config.update_everos import set_everos_section
     from raven.config.update_providers import set_provider_fields
+    from raven_everos.config import set_everos_section
 
     monkeypatch.setattr(i18n, "_language", lang)
     set_provider_fields("siliconflow", {"api_key": "sk-sf"})
@@ -5156,8 +5156,8 @@ def test_picking_another_configured_provider_does_not_ask_for_its_key(
 
     import questionary
 
-    from raven.config.update_everos import set_everos_section
     from raven.config.update_providers import set_provider_fields
+    from raven_everos.config import set_everos_section
 
     set_provider_fields("siliconflow", {"api_key": "sk-sf"})
     set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://openrouter.ai/api/v1"})
@@ -6900,7 +6900,7 @@ class TestTheLaneDecidesOwnership:
         import questionary
 
         from raven.cli import onboard_everos
-        from raven.config import update_everos as ue
+        from raven_everos import config as ue
 
         mine = tmp_env.parent / "mine"
         monkeypatch.setattr(ue, "default_everos_root", lambda: mine)

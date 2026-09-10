@@ -180,13 +180,13 @@ async def test_settings_usage_reads_what_the_default_tracker_writes(
 
 
 async def test_settings_everos(workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven.config import update_everos
     from raven.rpc.methods import console
+    from raven_everos import config as ue
 
-    monkeypatch.setattr(update_everos, "everos_root", lambda: tmp_path)
+    monkeypatch.setattr(ue, "everos_root", lambda: tmp_path)
     # Upstream gates the write primitives on root ownership; a tmp root is not
     # one raven created, so declare it owned for the test.
-    monkeypatch.setattr(update_everos, "everos_owned", lambda: True)
+    monkeypatch.setattr(ue, "everos_owned", lambda: True)
     _check("settings.everos", await console.settings_everos({}))
     _check(
         "settings.everosSet",

@@ -3,9 +3,9 @@
 The host may know the plugin only through the plugin contract
 (``raven.contracts.memory`` and ``raven.plugins``); it must not import the
 ``raven_everos`` package. The plugin may use the host's public helpers but
-must not reach into host modules that exist for the plugin's sake. Both lists
-below are the violations still standing; a task that removes one deletes its
-entry here, and the final task asserts both are empty.
+must not reach into host modules that exist for the plugin's sake. The list
+below holds the violations still standing; a task that removes one deletes its
+entry here, and the final task asserts it is empty.
 """
 
 from __future__ import annotations
@@ -19,17 +19,21 @@ PLUGIN_DIR = REPO_ROOT / "plugins-dist" / "everos-memory" / "raven_everos"
 
 _PLUGIN_IMPORT = re.compile(r"^\s*(from|import)\s+raven_everos\b", re.M)
 _HOST_PRIVATE = re.compile(
-    r"^\s*from\s+raven\.(cli|config\.update_everos|config\.loader)\b(?!.*get_config_path)",
+    r"^\s*from\s+raven\.(cli|config\.loader)\b(?!.*get_config_path)",
     re.M,
 )
 
 # Host surfaces built on everos's wire protocol rather than on MemoryBackend.
 # They need a contract that does not exist yet (browse / delete memories,
-# sub-agent trace records) and are out of this round's scope.
+# sub-agent trace records) and are out of this round's scope. ``_embedding.py``
+# and ``console.py`` are here for a second reason: they borrow everos config
+# for other features.
 HOST_WIRE_PROTOCOL_SURFACES: frozenset[str] = frozenset(
     {
         "raven/agent/subagent/manager.py",
         "raven/agent/subagent_memory.py",
+        "raven/knowledge/_embedding.py",
+        "raven/rpc/methods/console.py",
         "raven/rpc/methods/memory.py",
     }
 )
@@ -38,16 +42,6 @@ HOST_WIRE_PROTOCOL_SURFACES: frozenset[str] = frozenset(
 HOST_ALLOWLIST: frozenset[str] = frozenset(
     {
         "raven/cli/onboard_everos.py",
-    }
-)
-
-# Plugin files that still import host modules written for the plugin.
-PLUGIN_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        "plugins-dist/everos-memory/raven_everos/backend.py",
-        "plugins-dist/everos-memory/raven_everos/roots.py",
-        "plugins-dist/everos-memory/raven_everos/server.py",
-        "plugins-dist/everos-memory/raven_everos/tools.py",
     }
 )
 
@@ -80,7 +74,4 @@ def test_host_does_not_import_plugin_internals() -> None:
 
 def test_plugin_does_not_import_host_private_modules() -> None:
     offenders = {_rel(p) for p in _plugin_files() if _HOST_PRIVATE.search(p.read_text(encoding="utf-8"))}
-    assert offenders == set(PLUGIN_ALLOWLIST), (
-        f"new plugin->host imports: {sorted(offenders - PLUGIN_ALLOWLIST)}; "
-        f"stale allowlist entries: {sorted(PLUGIN_ALLOWLIST - offenders)}"
-    )
+    assert offenders == set(), f"new plugin->host imports: {sorted(offenders)}"

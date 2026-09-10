@@ -1,4 +1,4 @@
-"""Full coverage for ``raven.config.update_everos``.
+"""Full coverage for ``raven_everos.config``.
 
 The onboard memory step writes EverOS model settings to
 ``~/.everos/raven/everos.toml`` through these ops. EverOS reads that file back
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-import raven.config.update_everos as ue
+from raven_everos import config as ue
 
 
 @pytest.fixture
@@ -362,27 +362,27 @@ class TestTheLegacyRootBelongsToTheDefaultInstall:
         """``Path("~/...").expanduser()`` reads $HOME directly, so it slipped
         past the ``Path.home`` redirection the test fixtures isolate with and
         reached the developer's own machine."""
-        from raven.config import update_everos as ue
+        from raven_everos import config as ue
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         assert ue.legacy_everos_root() == tmp_path / ".everos" / "raven"
 
     def test_the_default_install_still_considers_it(self, tmp_path, monkeypatch) -> None:
-        from raven.config import update_everos as ue
+        from raven_everos import config as ue
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: tmp_path / ".raven" / "config.json")
+        monkeypatch.setattr("raven.home.get_config_path", lambda: tmp_path / ".raven" / "config.json")
 
         assert ue.applicable_legacy_root() == tmp_path / ".everos" / "raven"
 
     def test_a_moved_install_does_not(self, tmp_path, monkeypatch) -> None:
         """The isolated instance never created this root, so treating it as a
         candidate would have one installation converge another's service."""
-        from raven.config import update_everos as ue
+        from raven_everos import config as ue
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: tmp_path / "elsewhere" / "config.json")
+        monkeypatch.setattr("raven.home.get_config_path", lambda: tmp_path / "elsewhere" / "config.json")
 
         assert ue.applicable_legacy_root() is None
 
@@ -390,68 +390,25 @@ class TestTheLegacyRootBelongsToTheDefaultInstall:
         """Selecting the root and recognising it are different questions. A
         config that already records it recorded a root raven created, whichever
         installation is reading now."""
-        from raven.config import update_everos as ue
+        from raven_everos import config as ue
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: tmp_path / "elsewhere" / "config.json")
+        monkeypatch.setattr("raven.home.get_config_path", lambda: tmp_path / "elsewhere" / "config.json")
 
         assert ue.root_is_raven_owned(tmp_path / ".everos" / "raven") is True
 
     def test_the_fallback_skips_it_when_moved(self, tmp_path, monkeypatch) -> None:
-        from raven.config import update_everos as ue
+        from raven_everos import config as ue
 
         legacy = tmp_path / ".everos" / "raven"
         legacy.mkdir(parents=True)
         (legacy / "everos.toml").write_text("", encoding="utf-8")
         mine = tmp_path / "elsewhere" / "everos"
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: tmp_path / "elsewhere" / "config.json")
+        monkeypatch.setattr("raven.home.get_config_path", lambda: tmp_path / "elsewhere" / "config.json")
         monkeypatch.setattr(ue, "default_everos_root", lambda: mine)
 
         assert ue.fallback_everos_root() == mine
-
-
-# ---------------------------------------------------------------------------
-# borrow_provider_credentials: the three documented outcomes
-# ---------------------------------------------------------------------------
-
-
-def _config_with_provider(name: str, api_key: str, api_base: str = ""):
-    from raven.config.schema import Config
-
-    cfg = Config()
-    section = cfg.providers.get(name)
-    section.api_key = api_key
-    if api_base:
-        section.api_base = api_base
-    return cfg
-
-
-def test_borrow_raises_key_error_for_an_unknown_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    import raven.config
-
-    monkeypatch.setattr(raven.config, "load_config", lambda: _config_with_provider("openai", "sk-lend"))
-    with pytest.raises(KeyError):
-        ue.borrow_provider_credentials("no-such-vendor")
-
-
-def test_borrow_raises_value_error_when_the_provider_holds_no_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    import raven.config
-
-    monkeypatch.setattr(raven.config, "load_config", lambda: _config_with_provider("openai", ""))
-    with pytest.raises(ValueError):
-        ue.borrow_provider_credentials("openai")
-
-
-def test_borrow_copies_the_key_and_the_address(monkeypatch: pytest.MonkeyPatch) -> None:
-    import raven.config
-
-    monkeypatch.setattr(
-        raven.config, "load_config", lambda: _config_with_provider("openai", "sk-lend", "https://api.example.test/v1")
-    )
-    borrowed = ue.borrow_provider_credentials("openai")
-    assert borrowed["api_key"] == "sk-lend"
-    assert borrowed["base_url"] == "https://api.example.test/v1"
 
 
 def test_a_section_reads_back_as_the_table_that_was_written(everos_home: Path) -> None:
@@ -470,62 +427,3 @@ def test_a_section_nobody_wrote_reads_as_empty(everos_home: Path) -> None:
 
     assert ue.everos_section("embedding") == {}
     assert ue.everos_section("llm") != {}
-
-
-class TestWhatABorrowedCredentialMustCarry:
-    """A url/key/header group is reachable only whole, and an everos section
-    holds a model, an api_key and a base_url. Anything the section cannot hold
-    is not lent at all -- lending the representable part hands over a
-    credential the far end refuses, which reads as a broken provider."""
-
-    @staticmethod
-    def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fields: dict) -> None:
-        from raven.config.loader import set_config_path
-        from raven.config.update_providers import set_provider_fields
-
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        set_config_path(tmp_path / "config.json")
-        monkeypatch.setattr("raven.config.paths.get_workspace_path", lambda: tmp_path / "ws")
-        set_provider_fields("openai", fields)
-
-    def test_a_header_authenticated_group_is_declined(self, tmp_path, monkeypatch) -> None:
-        self._configure(
-            tmp_path,
-            monkeypatch,
-            {
-                "endpoints": [
-                    {
-                        "label": "tenant",
-                        "apiKey": "relay-key",
-                        "apiBase": "https://relay.internal/v1",
-                        "extraHeaders": {"X-Tenant": "acme"},
-                    }
-                ]
-            },
-        )
-
-        with pytest.raises(ValueError, match="X-Tenant"):
-            ue.borrow_provider_credentials("openai")
-
-    def test_flat_headers_reach_an_endpoint_that_names_none(self, tmp_path, monkeypatch) -> None:
-        """``provider_endpoints`` lets an entry inherit the section's flat
-        headers, so the group needs them even though the entry is silent."""
-        self._configure(
-            tmp_path,
-            monkeypatch,
-            {
-                "extra_headers": {"X-Tenant": "acme"},
-                "endpoints": [{"label": "a", "apiKey": "relay-key", "apiBase": "https://relay.internal/v1"}],
-            },
-        )
-
-        with pytest.raises(ValueError, match="X-Tenant"):
-            ue.borrow_provider_credentials("openai")
-
-    def test_a_group_with_no_headers_still_lends_key_and_address(self, tmp_path, monkeypatch) -> None:
-        self._configure(tmp_path, monkeypatch, {"api_key": "relay-key", "api_base": "https://relay.internal/v1"})
-
-        assert ue.borrow_provider_credentials("openai") == {
-            "api_key": "relay-key",
-            "base_url": "https://relay.internal/v1",
-        }

@@ -16,7 +16,11 @@ from typing import Any, Protocol
 
 
 class StepOutcome(Enum):
-    """What one onboard screen decided, for the host to record."""
+    """What one onboard screen decided, for the host to record.
+
+    The host records ``CONFIGURED`` as ``memory.backend = <contribution name>``
+    and ``DISABLED`` as ``memory.backend = None``.
+    """
 
     CONFIGURED = "configured"
     DISABLED = "disabled"

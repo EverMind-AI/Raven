@@ -897,7 +897,7 @@ _EVEROS_REQUIRED = ("llm", "embedding")
 
 async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
     """Current EverOS model sections, api_key reduced to a set/unset flag."""
-    from raven.config.update_everos import (
+    from raven_everos.config import (
         WRITABLE_SECTIONS,
         get_everos_config_path,
         load_everos_config,
@@ -922,7 +922,7 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
 
 async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     """Merge fields into one EverOS section, or clear an optional section."""
-    from raven.config.update_everos import (
+    from raven_everos.config import (
         WRITABLE_SECTIONS,
         clear_everos_section,
         set_everos_section,
@@ -956,10 +956,10 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     if borrow is not None:
         if not isinstance(borrow, str) or not borrow.strip():
             raise ConfigValidationError("borrow_from must be a provider name")
-        from raven.config.update_everos import borrow_provider_credentials
+        from raven.config.update_providers import lend_provider_credentials
 
         try:
-            lent = borrow_provider_credentials(borrow.strip())
+            lent = lend_provider_credentials(borrow.strip())
         except KeyError as exc:
             raise ConfigValidationError(f"no such provider: {borrow}") from exc
         except ValueError as exc:

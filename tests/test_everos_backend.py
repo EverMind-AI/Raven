@@ -321,9 +321,9 @@ class TestAUserManagedRootIsReadOnly:
 
     @staticmethod
     def _not_owned(monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.config import update_everos
+        from raven_everos import config as ue
 
-        monkeypatch.setattr(update_everos, "everos_owned", lambda: False)
+        monkeypatch.setattr(ue, "everos_owned", lambda: False)
 
     async def test_an_unreachable_server_is_not_started_for_us(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
@@ -373,21 +373,21 @@ class TestAUserManagedRootIsReadOnly:
 
     def test_the_factory_drops_no_templates_into_it(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self._not_owned(monkeypatch)
-        from raven.config import update_everos
+        from raven_everos import config as ue
 
         seeded: list[int] = []
-        monkeypatch.setattr(update_everos, "ensure_everos_home", lambda *_a, **_kw: seeded.append(1))
+        monkeypatch.setattr(ue, "ensure_everos_home", lambda *_a, **_kw: seeded.append(1))
 
         make_backend(_ctx(tmp_path))
 
         assert seeded == [], "wrote template files into a root the user manages"
 
     def test_an_owned_root_still_gets_its_templates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.config import update_everos
+        from raven_everos import config as ue
 
-        monkeypatch.setattr(update_everos, "everos_owned", lambda: True)
+        monkeypatch.setattr(ue, "everos_owned", lambda: True)
         seeded: list[int] = []
-        monkeypatch.setattr(update_everos, "ensure_everos_home", lambda *_a, **_kw: seeded.append(1))
+        monkeypatch.setattr(ue, "ensure_everos_home", lambda *_a, **_kw: seeded.append(1))
 
         make_backend(_ctx(tmp_path))
 
@@ -409,9 +409,9 @@ class TestStartWarnsWhenRecallCannotWork:
 
     @staticmethod
     def _configured(monkeypatch: pytest.MonkeyPatch, *sections: str) -> None:
-        from raven.config import update_everos
+        from raven_everos import config as ue
 
-        monkeypatch.setattr(update_everos, "everos_role_configured", lambda s: s in sections)
+        monkeypatch.setattr(ue, "everos_role_configured", lambda s: s in sections)
 
     async def test_the_probe_runs_off_the_event_loop(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The probe and the config read behind it are blocking IO, and start()
@@ -1926,9 +1926,9 @@ class TestTheDegradationWarningOnASelfManagedServer:
         from raven_everos.backend import EverosBackend
         from raven_everos.server import ProbeVerdict
 
-        monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: False)
         monkeypatch.setattr(
-            "raven.config.update_everos.everos_role_configured",
+            "raven_everos.config.everos_role_configured",
             lambda _s: pytest.fail("read the local toml for a root raven does not own"),
         )
         monkeypatch.setattr("raven_everos.server.probe_health", lambda _u, **_kw: ProbeVerdict.OK)
@@ -2176,7 +2176,7 @@ class TestHealth:
     """What raven doctor and raven import read off the backend."""
 
     def _patch(self, monkeypatch, *, owned=True, configured=(), report=None):
-        import raven.config.update_everos as ue
+        from raven_everos import config as ue
         from raven_everos import health
 
         monkeypatch.setattr(ue, "everos_owned", lambda: owned)
@@ -2323,7 +2323,7 @@ class TestHealth:
         would answer with a fallback -- a directory that is not theirs and holds
         none of their memories -- and the roles read out of that directory's toml
         would describe an install nobody is using."""
-        import raven.config.update_everos as ue
+        from raven_everos import config as ue
         from raven_everos.health import CapabilityReport
 
         self._patch(monkeypatch, owned=False, report=CapabilityReport(reachable=True, capabilities={"llm": True}))
