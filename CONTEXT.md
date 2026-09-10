@@ -291,8 +291,7 @@ It reads the task as the model wrote it (`authored_task` on `SubagentBackend.run
 hands it over through `optional_keyword`, so only a `run` that declares it or takes `**kwargs`
 receives it and a backend typed against the earlier paper keeps running; the rendered `task`
 only where a caller has no other text). The order is fixed:
-a reused instance handle continues where its transport bound it; a task whose wording, file
-references taken out, matches a route's `match` pattern goes there without a model call;
+a reused instance handle continues where its transport bound it;
 otherwise the manager's classifier (the host's own model) picks between the targets' roster
 lines and the entry itself, and any other answer keeps the task on the entry. A fronting row is only as ready as its
 targets (readiness kind `route`): a missing, unready or switched-off target disables the row
