@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 162 methods, 92 component schemas.
+// 163 methods, 93 component schemas.
 
 /* eslint-disable */
 /**
@@ -714,6 +714,10 @@ export interface ModelOptionProvider {
   slug: string;
   name: string;
   homepage?: string;
+  /**
+   * The vendor's own model index. Distinct from `homepage`: the question a settings page asks is which model to put here, and a marketing front page does not answer it.
+   */
+  docs?: string;
   authenticated: boolean;
   is_current: boolean;
   auth_type: string;
@@ -721,6 +725,14 @@ export interface ModelOptionProvider {
   api_base?: string;
   default_api_base?: string;
   models: string[];
+  /**
+   * Only what the provider's config section lists. `models` is the picker's offer -- config plus a curated shortlist plus a catalogue -- so a page managing the list reads this one or it shows models nobody added.
+   */
+  configured_models?: string[];
+  /**
+   * Whether to draw a key field. False for an OAuth flow and for a local deployment reached by address alone; true for the local servers that can be put behind a token, which the registry declares rather than each surface matching on the slug.
+   */
+  accepts_api_key?: boolean;
   /**
    * Effective API protocol keyed by model id.
    */
@@ -744,11 +756,48 @@ export interface ModelOptionProvider {
   };
 }
 /**
- * How a model reads to a person. Absent for a model no catalogue knows -- one released since the bundled snapshot, or served by a local deployment -- in which case the id is all there is to show.
+ * How a model reads to a person, and what it can do. Absent for a model the registry knows nothing about -- one released since the bundled files, or served by a local deployment -- in which case the id is all there is to show. An empty tag list means nothing is published, not that the model cannot: a surface renders absence as no icon, never as a denial.
  */
 export interface ModelLabel {
   label: string;
   description?: string;
+  /**
+   * Closed vocabulary, drawn as icons: function-call, reasoning, structured-output, image-recognition, audio-recognition, video-recognition, file-input, image-generation, audio-generation, video-generation, embedding, rerank, computer-use.
+   */
+  capabilities?: string[];
+  /**
+   * What the model reads: text, image, video, audio, vector.
+   */
+  input_modalities?: string[];
+  /**
+   * What the model writes: text, image, video, audio, vector.
+   */
+  output_modalities?: string[];
+  /**
+   * Tokens the model reads in one request, from the tables that also route rather than from the display registry -- the number shown has to be the number a request is sized with. Absent where no such table names the model.
+   */
+  context_window?: number;
+}
+/**
+ * One model a provider reports. `added` is about this provider's configured list, not about the vendor: the same model offered by two gateways is added to each separately.
+ */
+export interface ModelCandidate {
+  id: string;
+  label: string;
+  /**
+   * The bucket the list filters by: text, image, embedding, reranker, audio or video. Derived from what the model writes -- reading pictures is something a text model does.
+   */
+  kind: string;
+  added: boolean;
+  /**
+   * `live` when the vendor named this model just now, `registry` when only the bundled catalogue does. A registry row is not less real: it is how a provider lists at all before a key is entered.
+   */
+  source?: string;
+  description?: string;
+  capabilities?: string[];
+  input_modalities?: string[];
+  output_modalities?: string[];
+  context_window?: number;
 }
 /**
  * One of a provider section's several url/key groups. `label` is the idempotency key the write methods address an entry by.
@@ -1828,9 +1877,24 @@ export interface ModelDisconnectParams {
 export interface ModelDisconnectResult {
   disconnected: boolean;
 }
+export interface ModelFetchModelsParams {
+  slug: string;
+}
+export interface ModelFetchModelsResult {
+  models: ModelCandidate[];
+  /**
+   * `ok` when the vendor answered, otherwise why it did not (`not_configured`, `unauthorized`, `network_error`, `no_probe_endpoint`, `http_NNN`). The models are the bundled catalogue unioned with whatever the vendor named, so a failure to reach it costs currency, not the list.
+   */
+  status: string;
+  error?: string;
+}
 export interface ModelAddModelParams {
   slug: string;
   model: string;
+  label?: string;
+  capabilities?: string[];
+  input_modalities?: string[];
+  output_modalities?: string[];
   session_id?: string;
 }
 export interface ModelAddModelResult {
@@ -3683,6 +3747,7 @@ export interface RpcMethods {
   'model.set_protocol': { params: ModelSetProtocolParams; result: ModelSetProtocolResult };
   'model.save_key': { params: ModelSaveKeyParams; result: ModelSaveKeyResult };
   'model.disconnect': { params: ModelDisconnectParams; result: ModelDisconnectResult };
+  'model.fetch_models': { params: ModelFetchModelsParams; result: ModelFetchModelsResult };
   'model.add_model': { params: ModelAddModelParams; result: ModelAddModelResult };
   'model.remove_model': { params: ModelRemoveModelParams; result: ModelRemoveModelResult };
   'model.endpoints': { params: ModelEndpointsParams; result: ModelEndpointsResult };
@@ -3892,6 +3957,7 @@ export const RPC_METHODS = [
   "model.add_model",
   "model.disconnect",
   "model.endpoints",
+  "model.fetch_models",
   "model.options",
   "model.remove_endpoint",
   "model.remove_model",

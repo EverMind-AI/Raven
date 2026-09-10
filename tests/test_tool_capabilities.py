@@ -437,6 +437,34 @@ def test_a_plugin_shadowing_a_media_tool_is_not_gated_by_the_builtin_config(work
     assert loop.tools.offers_by_name("image_generate"), "the built-in's empty section must not gate the plugin"
 
 
+def test_a_plugin_tool_that_declares_configured_rides_the_live_withheld_lane(workspace, tmp_path: Path) -> None:
+    """The paper in plugin_surface.py: a contributed tool that declares `configured()`
+    is asked per assembly and withheld while it answers False -- offered the moment
+    the deployment configures it, withdrawn the moment it does not, no restart."""
+    from raven.contracts.tool import Tool
+
+    state = {"configured": False}
+
+    class _DeckPicture(Tool):
+        name = "deck_picture"
+        description = "a plugin tool that bills against a credential the host may not have"
+        parameters = {"type": "object", "properties": {}}
+
+        def configured(self) -> bool:
+            return state["configured"]
+
+        async def execute(self, **kwargs):
+            return "drawn"
+
+    loop = _loop(workspace, _config(tmp_path), plugin_tools=[_DeckPicture()])
+    assert loop.tools.has("deck_picture"), "withheld, not unregistered"
+    assert not loop.tools.offers_by_name("deck_picture")
+    state["configured"] = True
+    assert loop.tools.offers_by_name("deck_picture")
+    state["configured"] = False
+    assert not loop.tools.offers_by_name("deck_picture")
+
+
 def test_a_plugin_subclass_of_a_media_tool_is_not_gated_either(workspace, tmp_path: Path) -> None:
     from raven.agent.tools.media_gen import ImageGenerateTool
     from raven.config.schema import MediaToolConfig
