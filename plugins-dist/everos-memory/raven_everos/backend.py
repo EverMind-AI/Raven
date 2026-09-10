@@ -897,7 +897,9 @@ class EverosBackend:
             return []
         if data is None:
             return []
-        return self._search_data_to_memories(data, owner_type)
+        # The profile row rides outside the server's top_k; the contract bound
+        # applies to the whole list, after sorting.
+        return self._search_data_to_memories(data, owner_type)[:top_k]
 
     async def store(
         self,
