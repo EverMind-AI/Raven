@@ -1,0 +1,9 @@
+{
+  "plugins": {
+    "config": {
+      "my-agent-flow": {
+        "enabled": true
+      }
+    }
+  }
+}

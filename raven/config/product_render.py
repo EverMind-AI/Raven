@@ -182,36 +182,6 @@ def inherit_llm(config: dict, host: dict) -> str:
     )
 
 
-def inherit_media_image(config: dict, host: dict) -> dict:
-    """Take the host raven's image-generation section, and keep following it.
-
-    The section is resolved the way the host resolves it for its own
-    ``image_generate`` -- ``tools.media.image`` with the OpenRouter key borrowed
-    where it names none -- then written whole into the product config, and
-    ``selectionConfig`` is pointed at the host's config file so a model or
-    quality changed in Settings later reaches the product's next generation
-    without a re-render. A host with no image section leaves an empty section,
-    which is how the product's tool learns to withhold itself. Returns the
-    section written.
-
-    Called before a product's own ``.env`` overrides land, so an explicit
-    product-side key or base still wins over the inherited one.
-    """
-    from raven.config.schema import live_media_tool_config
-
-    host_tools = host.get("tools") or {}
-    host_image = (host_tools.get("media") or {}).get("image")
-    section = live_media_tool_config(host_image, (host.get("providers") or {}).get("openrouter"))
-    image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
-    image["selectionConfig"] = str(raven_home() / CONFIG_FILENAME)
-    media = config.setdefault("tools", {}).setdefault("media", {})
-    media["image"] = image
-    proxy = (host_tools.get("media") or {}).get("proxy")
-    if proxy and not media.get("proxy"):
-        media["proxy"] = proxy
-    return image
-
-
 def product_state_root(product: str, *, override: str | None = None) -> Path:
     """Where a product keeps its WORK -- never in its own folder.
 

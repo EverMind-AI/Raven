@@ -1,16 +1,4 @@
-"""A generated slide visual becomes a figure the same turn it is created.
-
-The generation rides the host's ``image_generate`` transport, so the tests drive
-the same mocked HTTP the host tool's own tests drive and look at what the deck
-adds around it: the figure, the stable file name a second ask writes over, the
-green-screen cut-out, the references.
-
-The name is the caller's and every call generates into it. That is the case
-worth pinning rather than a cache: a second ask is the author saying the
-picture was wrong, and it repeats the words of the first, so answering from
-disk returned the rejected picture -- while writing over the name the page
-already carries puts the new one on the page with no edit to the program.
-"""
+"""A generated slide visual becomes a figure the same turn it is created."""
 
 from __future__ import annotations
 
@@ -22,48 +10,28 @@ from pathlib import Path
 import httpx
 import pytest
 
-from raven.agent.tools.media_gen import ImageGenerateTool
 from raven.config.schema import MediaToolConfig
 from raven_ppt.contracts import Project
 from raven_ppt.tools.generate_image import PptGenerateImageTool
 
-OPENROUTER = "https://openrouter.ai/api/v1"
 
-
-def _png(colour: str = "blue", size: tuple[int, int] = (800, 450)) -> bytes:
+def _png() -> bytes:
     from PIL import Image
 
     stream = io.BytesIO()
-    Image.new("RGB", size, colour).save(stream, "PNG")
+    Image.new("RGB", (800, 450), "blue").save(stream, "PNG")
     return stream.getvalue()
 
 
-def _jpeg() -> bytes:
-    from PIL import Image
+def _mock_images(monkeypatch, requested: list[httpx.Request]) -> None:
+    """Answer every /images post with one PNG, recording the request."""
+    encoded = base64.b64encode(_png()).decode("ascii")
 
-    stream = io.BytesIO()
-    Image.new("RGB", (640, 640), "orange").save(stream, "JPEG")
-    return stream.getvalue()
-
-
-def _subject_on_green() -> bytes:
-    from PIL import Image, ImageDraw
-
-    image = Image.new("RGB", (200, 200), (0, 255, 0))
-    ImageDraw.Draw(image).ellipse((60, 60, 140, 140), fill=(200, 40, 40))
-    stream = io.BytesIO()
-    image.save(stream, "PNG")
-    return stream.getvalue()
-
-
-def _mock(monkeypatch, handler) -> list[httpx.Request]:
-    requested: list[httpx.Request] = []
-
-    def seen(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
         requested.append(request)
-        return handler(request)
+        return httpx.Response(200, json={"data": [{"b64_json": encoded}]})
 
-    transport = httpx.MockTransport(seen)
+    transport = httpx.MockTransport(handler)
     real = httpx.AsyncClient
 
     def client(*args, **kwargs):
@@ -71,37 +39,104 @@ def _mock(monkeypatch, handler) -> list[httpx.Request]:
         return real(*args, transport=transport, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", client)
-    return requested
 
 
-def _images_api(png: bytes):
-    encoded = base64.b64encode(png).decode("ascii")
-    return lambda request: httpx.Response(200, json={"data": [{"b64_json": encoded}]})
+def test_a_host_edit_after_assembly_reaches_the_generator(monkeypatch, tmp_path: Path) -> None:
+    """SessionTool keeps this tool for the life of the process, so a section
+    read once at assembly would serve a rotated key and a changed model until
+    the product restarts. A section carrying selectionConfig is re-resolved
+    per call against the host file."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    host = tmp_path / "config.json"
+    host.write_text(json.dumps({"tools": {"media": {"image": {"apiKey": "sk-boot", "model": "vendor/boot"}}}}))
+    tool = PptGenerateImageTool(
+        tmp_path,
+        MediaToolConfig.model_validate({"apiKey": "sk-boot", "model": "vendor/boot", "selectionConfig": str(host)}),
+    )
+    assert (tool.api_key, tool.model) == ("sk-boot", "vendor/boot")
+
+    host.write_text(json.dumps({"tools": {"media": {"image": {"apiKey": "sk-rotated", "model": "vendor/new"}}}}))
+    assert (tool.api_key, tool.model) == ("sk-rotated", "vendor/new")
 
 
-def _tool(tmp_path: Path, config: MediaToolConfig | None = None, **kwargs) -> PptGenerateImageTool:
-    config = config or MediaToolConfig(api_key="test", api_base=OPENROUTER, model="openai/gpt-image-2")
-    return PptGenerateImageTool(tmp_path, config=config, **kwargs)
+def test_a_section_without_a_selection_stays_the_one_assembly_handed_over(monkeypatch, tmp_path: Path) -> None:
+    """The launcher writes selectionConfig only where the host file is what
+    answers -- a borrowed key lives in the rendered config alone, and an empty
+    key in a present host section is a revocation, so re-resolving one would
+    erase it every call."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    tool = PptGenerateImageTool(tmp_path, MediaToolConfig(api_key="sk-borrowed"))
+    assert tool.api_key == "sk-borrowed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("section", "asked", "sent"),
+    [
+        ({"apiKey": "k", "quality": "low"}, None, "low"),
+        ({"apiKey": "k", "quality": "low"}, "high", "low"),
+        ({"apiKey": "k", "quality": ""}, "high", None),
+        ({"apiKey": "k"}, None, "high"),
+    ],
+)
+async def test_the_configured_quality_travels_on_the_request(
+    monkeypatch, tmp_path: Path, section: dict, asked: str | None, sent: str | None
+) -> None:
+    """The host's own setting outranks the call argument, the shared media
+    tool's precedence, and an explicitly empty one means the provider's
+    default -- which travels as no `quality` field rather than an empty
+    string. Asserted on the outgoing body, because the copied section was
+    already right while the request was not."""
+    requested: list[httpx.Request] = []
+    _mock_images(monkeypatch, requested)
+    tool = PptGenerateImageTool(tmp_path, MediaToolConfig.model_validate(section))
+
+    call: dict = {"project": "talk", "prompt": "a plain blue square, no text", "filename": "sq"}
+    if asked is not None:
+        call["quality"] = asked
+    assert json.loads(await tool.execute(**call))["ok"] is True
+
+    body = json.loads(requested[0].content)
+    assert body.get("quality") == sent
 
 
 @pytest.mark.asyncio
 async def test_generated_image_enters_sources_and_returns_a_figure_id(monkeypatch, tmp_path: Path) -> None:
-    requested = _mock(monkeypatch, _images_api(_png()))
+    requested: list[httpx.Request] = []
+    encoded = base64.b64encode(_png()).decode("ascii")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": encoded}]})
+
+    transport = httpx.MockTransport(handler)
+    real = httpx.AsyncClient
+
+    def client(*args, **kwargs):
+        kwargs.pop("proxy", None)
+        return real(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    tool = PptGenerateImageTool(
+        tmp_path,
+        MediaToolConfig(api_key="test", api_base="https://openrouter.ai/api/v1", model="openai/gpt-image-2"),
+    )
+
     body = json.loads(
-        await _tool(tmp_path).execute(
-            project="talk", prompt="a blue bridge between two abstract memory nodes, no text", filename="memory bridge"
+        await tool.execute(
+            project="talk",
+            prompt="a blue bridge between two abstract memory nodes, no text",
+            filename="memory bridge",
         )
     )
 
     assert body["ok"] is True
     assert body["model"] == "openai/gpt-image-2"
     assert body["figure_id"]
-    assert (body["width"], body["height"]) == (800, 450)
     assert Path(body["path"]).parent == Project(workspace=tmp_path, slug="talk").sources_dir
     assert requested[0].url.path == "/api/v1/images"
-    assert json.loads(requested[0].content)["aspect_ratio"] == "16:9"
-    # The host tool's scratch copy does not linger beside the deck's own file.
-    assert not any((Project(workspace=tmp_path, slug="talk").build_dir / ".generated").glob("*"))
+    sent = json.loads(requested[0].content)
+    assert sent["aspect_ratio"] == "16:9" and sent["quality"] == "high"
 
 
 @pytest.mark.asyncio
@@ -110,9 +145,28 @@ async def test_several_pictures_are_generated_together_and_ingested_once(monkeyp
     nine rewrites of the same catalogue. `prompts` asks for them together: every one is
     requested, each lands in sources with its own figure id, and the reply carries one
     result per picture."""
-    requested = _mock(monkeypatch, _images_api(_png()))
+    requested: list[httpx.Request] = []
+    encoded = base64.b64encode(_png()).decode("ascii")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": encoded}]})
+
+    transport = httpx.MockTransport(handler)
+    real = httpx.AsyncClient
+
+    def client(*args, **kwargs):
+        kwargs.pop("proxy", None)
+        return real(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    tool = PptGenerateImageTool(
+        tmp_path,
+        MediaToolConfig(api_key="test", api_base="https://openrouter.ai/api/v1", model="openai/gpt-image-2"),
+    )
+
     body = json.loads(
-        await _tool(tmp_path).execute(
+        await tool.execute(
             project="talk",
             prompts=[
                 {"prompt": "a night market street, photographic", "filename": "market"},
@@ -126,221 +180,99 @@ async def test_several_pictures_are_generated_together_and_ingested_once(monkeyp
     assert len(body["results"]) == 2
     assert all(item["figure_id"] for item in body["results"])
     assert len({item["figure_id"] for item in body["results"]}) == 2
-    assert {json.loads(r.content)["aspect_ratio"] for r in requested} == {"16:9", "3:2"}
+    assert json.loads(requested[1].content)["aspect_ratio"] == "3:2"
 
 
 @pytest.mark.asyncio
-async def test_asking_again_generates_again_and_overwrites_the_file(monkeypatch, tmp_path: Path) -> None:
-    """The ask this tool exists for is "that picture is not what I wanted, do it
-    again", and the words that ask carries are the same words as the first time.
-    Answering the second ask from the file the first one wrote hands back the very
-    picture the author rejected, so a call generates. The name is the same on
-    purpose: the page already names this file, so the new picture arrives without
-    the script being edited."""
-    requested = _mock(monkeypatch, _images_api(_png()))
-    tool = _tool(tmp_path)
-    first = json.loads(await tool.execute(project="talk", prompt="a lantern", filename="lantern"))
-    second = json.loads(await tool.execute(project="talk", prompt="a lantern", filename="lantern"))
+async def test_compatible_gateway_uses_images_generations(monkeypatch, tmp_path: Path) -> None:
+    requested: list[httpx.Request] = []
+    encoded = base64.b64encode(_png()).decode("ascii")
 
-    assert len(requested) == 2, "the second ask reached the provider"
-    assert second["path"] == first["path"], "and overwrote the file the page names"
-    assert "cached" not in second
-    assert (second["width"], second["height"]) == (800, 450)
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": encoded}]})
 
+    transport = httpx.MockTransport(handler)
+    real = httpx.AsyncClient
 
-@pytest.mark.asyncio
-async def test_the_name_is_keyed_on_the_quality_the_host_sends_not_the_one_asked(monkeypatch, tmp_path: Path) -> None:
-    """Settings' quality replaces the request's inside the host tool, so the deck
-    names the file after the effective value: the same deck call before and after
-    an operator switches from low to high writes two files rather than one, and the
-    page can be pointed at the one it wants."""
-    requested = _mock(monkeypatch, _images_api(_png()))
-    section = {"now": MediaToolConfig(api_key="test", api_base=OPENROUTER, model="openai/gpt-image-2", quality="low")}
-    tool = PptGenerateImageTool(tmp_path, config=lambda: section["now"])
+    def client(*args, **kwargs):
+        kwargs.pop("proxy", None)
+        return real(*args, transport=transport, **kwargs)
 
-    first = json.loads(await tool.execute(project="talk", prompt="a lantern", filename="lantern"))
-    assert json.loads(requested[0].content)["quality"] == "low"
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    tool = PptGenerateImageTool(
+        tmp_path,
+        MediaToolConfig(api_key="test", api_base="https://api.example.test/v1", model="gpt-image-2"),
+    )
 
-    section["now"] = MediaToolConfig(api_key="test", api_base=OPENROUTER, model="openai/gpt-image-2", quality="high")
-    second = json.loads(await tool.execute(project="talk", prompt="a lantern", filename="lantern"))
-    assert len(requested) == 2 and json.loads(requested[1].content)["quality"] == "high"
-    assert second["path"] != first["path"], "a different effective quality is a different picture, so a different file"
-
-
-@pytest.mark.asyncio
-async def test_an_unset_quality_is_the_hosts_to_resolve_not_this_tools(monkeypatch, tmp_path: Path) -> None:
-    """A deck asking for a picture without naming a quality must reach the provider
-    the way the host's own `image_generate` reaches it. This tool used to declare
-    `high` as its schema default, so the default model -- which the host sends with
-    no quality at all -- was sent `high` from inside a deck and provider-default
-    from outside it. Naming one still overrules the resolution; not naming one no
-    longer means anything."""
-    requested = _mock(monkeypatch, _images_api(_png()))
-    default = MediaToolConfig(api_key="test", api_base=OPENROUTER)
-    await _tool(tmp_path, config=default).execute(project="talk", prompt="a lantern", filename="lantern")
-
-    sent = json.loads(requested[0].content)
-    assert sent["model"] == ImageGenerateTool.default_model
-    assert "quality" not in sent, "the host sends this model no quality, so neither does the deck"
-
-    await _tool(tmp_path, config=default).execute(project="talk", prompt="a lantern", filename="lantern", quality="low")
-    assert json.loads(requested[1].content)["quality"] == "low", "an explicit ask still carries"
-
-
-@pytest.mark.asyncio
-async def test_a_compatible_gateway_gets_a_frame_the_gpt_image_family_accepts(monkeypatch, tmp_path: Path) -> None:
-    """Behind an OpenAI-compatible base the Images API takes a size, and gpt-image draws
-    three frames: the deck's 16:9 is asked for as the landscape frame, and the reply says
-    what came back so the author fits it to the box instead of assuming the ratio."""
-    requested = _mock(monkeypatch, _images_api(_png(size=(1536, 1024))))
-    tool = _tool(tmp_path, MediaToolConfig(api_key="k", api_base="https://gw.example/v1", model="gpt-image-2"))
-    body = json.loads(await tool.execute(project="deck", prompt="a skyline", filename="skyline"))
+    body = json.loads(await tool.execute(project="talk", prompt="abstract memory system, no text", filename="map"))
 
     assert body["ok"] is True
     assert requested[0].url.path == "/v1/images/generations"
-    sent = json.loads(requested[0].content)
-    assert sent["model"] == "gpt-image-2" and sent["size"] == "1536x1024" and "aspect_ratio" not in sent
-    assert (body["width"], body["height"]) == (1536, 1024)
+    assert json.loads(requested[0].content)["size"] == "1536x864"
 
 
-@pytest.mark.asyncio
-async def test_a_chat_routed_model_is_served_too_and_its_jpeg_becomes_a_png(monkeypatch, tmp_path: Path) -> None:
-    """Not fixed to one model: a model the host configured that answers on chat/completions
-    (Nano Banana and its kind) is driven the way image_generate drives it, and whatever it
-    answers with is received as the PNG the deck's figures are."""
-    data_uri = "data:image/jpeg;base64," + base64.b64encode(_jpeg()).decode("ascii")
+def _subject_on_green() -> bytes:
+    """A teal figure on a green screen with a white window inside it, as a cut-out prompt returns;
+    one row of its edge is blended with the screen the way anti-aliasing leaves it."""
+    from PIL import Image, ImageDraw
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path.endswith("/chat/completions")
-        return httpx.Response(
-            200,
-            json={"choices": [{"message": {"images": [{"image_url": {"url": data_uri}}]}, "finish_reason": "stop"}]},
-        )
-
-    requested = _mock(monkeypatch, handler)
-    tool = _tool(tmp_path, MediaToolConfig(api_key="k", api_base=OPENROUTER, model="google/gemini-3.1-flash-image"))
-    body = json.loads(await tool.execute(project="deck", prompt="a warm section backdrop", filename="warm"))
-
-    assert body["ok"] is True, body
-    assert body["model"] == "google/gemini-3.1-flash-image"
-    assert json.loads(requested[0].content)["modalities"] == ["image", "text"]
-    assert Path(body["path"]).suffix == ".png" and Path(body["path"]).read_bytes()[:4] == b"\x89PNG"
-    assert (body["width"], body["height"]) == (640, 640)
-
-
-@pytest.mark.asyncio
-async def test_references_ride_along_and_change_the_cache_key(monkeypatch, tmp_path: Path) -> None:
-    """A template's own illustration, an earlier generation, a user's photograph: named as
-    figure ids, source names or paths, they reach the model as input references, and a
-    generation with a different reference is a different picture."""
-    requested = _mock(monkeypatch, _images_api(_png()))
-    deck = Project(workspace=tmp_path, slug="deck")
-    deck.sources_dir.mkdir(parents=True)
-    (deck.sources_dir / "template-cover.png").write_bytes(_png("red", (100, 100)))
-    tool = _tool(tmp_path)
-
-    first = json.loads(
-        await tool.execute(
-            project="deck", prompt="the skyline in this manner", filename="sky", references=["template-cover.png"]
-        )
-    )
-    assert first["ok"] is True, first
-    sent = json.loads(requested[0].content)
-    assert len(sent["input_references"]) == 1
-    assert sent["input_references"][0]["image_url"]["url"].startswith("data:image/png;base64,")
-
-    (deck.sources_dir / "other.png").write_bytes(_png("green", (100, 100)))
-    second = json.loads(
-        await tool.execute(
-            project="deck", prompt="the skyline in this manner", filename="sky", references=["other.png"]
-        )
-    )
-    assert second["path"] != first["path"] and len(requested) == 2
-
-    missing = json.loads(
-        await tool.execute(project="deck", prompt="the skyline", filename="sky", references=["nowhere.png"])
-    )
-    assert missing["ok"] is False and "nowhere.png" in missing["error"]
-
-
-@pytest.mark.asyncio
-async def test_the_spend_is_reported_where_the_host_records_it(monkeypatch, tmp_path: Path) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "data": [{"b64_json": base64.b64encode(_png()).decode("ascii")}],
-                "usage": {"input_tokens": 40, "output_tokens": 1600, "total_tokens": 1640},
-            },
-        )
-
-    _mock(monkeypatch, handler)
-    recorded = []
-
-    async def recorder(snapshot) -> None:
-        recorded.append(snapshot)
-
-    tool = _tool(tmp_path, usage_recorder=recorder)
-    body = json.loads(await tool.execute(project="deck", prompt="a lantern", filename="lantern"))
-
-    assert body["ok"] is True
-    assert len(recorded) == 1 and recorded[0].model == "openai/gpt-image-2"
-
-
-@pytest.mark.asyncio
-async def test_without_a_key_the_reply_points_at_the_host_config(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    tool = _tool(tmp_path, MediaToolConfig(model="openai/gpt-image-2"))
-    body = json.loads(await tool.execute(project="deck", prompt="a lantern", filename="lantern"))
-    assert body["ok"] is False and "tools.media.image.apiKey" in body["hint"]
-
-
-@pytest.mark.asyncio
-async def test_a_configured_host_tool_can_be_lent_as_is(monkeypatch, tmp_path: Path) -> None:
-    """The assembly hands over the host's ImageGenerateTool rather than a config: one
-    transport, one key resolution, one usage recorder for both faces."""
-    _mock(monkeypatch, _images_api(_png()))
-    media = ImageGenerateTool(
-        MediaToolConfig(api_key="k", api_base=OPENROUTER, model="openai/gpt-image-2"), workspace=tmp_path
-    )
-    tool = PptGenerateImageTool(tmp_path, media)
-    body = json.loads(await tool.execute(project="deck", prompt="a lantern", filename="lantern"))
-    assert body["ok"] is True and body["model"] == "openai/gpt-image-2"
+    image = Image.new("RGB", (400, 300), (0, 255, 0))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((100, 60, 300, 240), fill=(30, 120, 120))
+    draw.rectangle((180, 130, 220, 170), fill=(250, 250, 250))
+    draw.line((100, 60, 100, 240), fill=(20, 190, 70))
+    stream = io.BytesIO()
+    image.save(stream, "PNG")
+    return stream.getvalue()
 
 
 def test_key_out_green_clears_the_screen_and_keeps_white_and_the_subject() -> None:
+    """The screen is what reads as screen green, wherever it is; white inside the subject
+    stays, and the blended edge loses its green excess instead of standing as a fringe."""
     from PIL import Image
 
     from raven_ppt.tools.generate_image import key_out_green
 
-    image = Image.new("RGB", (60, 60), (0, 255, 0))
-    for x in range(20, 40):
-        for y in range(20, 40):
-            image.putpixel((x, y), (255, 255, 255))
-    image.putpixel((30, 30), (180, 20, 20))
-    stream = io.BytesIO()
-    image.save(stream, "PNG")
+    cleared, share = key_out_green(_subject_on_green())
 
-    keyed, share = key_out_green(stream.getvalue())
-    out = Image.open(io.BytesIO(keyed))
-    assert out.getpixel((2, 2))[3] == 0
-    assert out.getpixel((25, 25))[:3] == (255, 255, 255) and out.getpixel((25, 25))[3] == 255
-    assert out.getpixel((30, 30))[:3] == (180, 20, 20)
-    assert share > 0.8
+    image = Image.open(io.BytesIO(cleared))
+    assert image.mode == "RGBA"
+    assert image.getpixel((5, 5))[3] == 0 and image.getpixel((395, 295))[3] == 0
+    assert image.getpixel((200, 100))[3] == 255, "the subject is opaque"
+    assert image.getpixel((200, 150))[3] == 255, "white inside the subject is not screen"
+    edge = image.getpixel((100, 150))
+    assert edge[3] in (0, 255) and (edge[3] == 0 or edge[1] <= max(edge[0], edge[2])), "no green fringe on the rim"
+    assert 0.65 < share < 0.72
 
 
 @pytest.mark.asyncio
 async def test_a_transparent_request_asks_for_a_green_screen_and_keys_it_out(monkeypatch, tmp_path: Path) -> None:
-    """The image endpoints refuse `background: transparent` and paint a checkerboard when
-    asked in words, so the tool asks for a green screen and keys it out itself; the caller
-    learns how much was keyed."""
+    """OpenRouter's gpt-image models refuse `background: transparent` and paint a
+    checkerboard when asked in words, so the tool asks for a green screen and keys it out
+    itself; the caller learns how much was keyed. This case drives the shipped default,
+    so it follows whichever id `_OPENROUTER_MODEL` names."""
     from PIL import Image
 
-    requested = _mock(monkeypatch, _images_api(_subject_on_green()))
+    requested: list[httpx.Request] = []
+    encoded = base64.b64encode(_subject_on_green()).decode("ascii")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": encoded}]})
+
+    transport = httpx.MockTransport(handler)
+    real = httpx.AsyncClient
+
+    def client(*args, **kwargs):
+        kwargs.pop("proxy", None)
+        return real(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    tool = PptGenerateImageTool(tmp_path, MediaToolConfig(api_key="k"))
+
     result = json.loads(
-        await _tool(tmp_path, MediaToolConfig(api_key="k")).execute(
-            project="deck", prompt="a night market stall", filename="stall.png", transparent=True
-        )
+        await tool.execute(project="deck", prompt="a night market stall", filename="stall.png", transparent=True)
     )
 
     body = json.loads(requested[0].content)

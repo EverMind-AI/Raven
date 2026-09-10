@@ -1,0 +1,34 @@
+[project]
+name = "my-agent-engine"
+version = "0.1.0"
+description = "My-Agent's harness as a standalone raven plugin distribution"
+requires-python = ">=3.12"
+# NOTE: this raven is the locally installed raven distribution, NOT the
+# `raven` name on PyPI (that one is the retired Sentry client). Install this
+# engine into the environment where raven is already installed (the launcher
+# tells you to), or point the name at your raven source (a workspace source,
+# a path, or a URL) -- a bare pip resolve in an empty environment would fetch
+# the wrong package.
+dependencies = [
+    "raven",
+]
+
+# The one line that makes this package findable: raven's plugin discovery
+# reads this group, takes the value as a bare package name, and loads
+# raven-plugin.toml out of that package with importlib.resources. No path,
+# no registration file -- installed is discovered.
+[project.entry-points."raven.plugins"]
+my-agent-engine = "my_agent_engine"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["my_agent_engine"]
+
+# Developing inside the raven repository under plugins-dist/ (the --here
+# landing)? The shipped engines resolve raven from the workspace:
+#
+# [tool.uv.sources]
+# raven = { workspace = true }
