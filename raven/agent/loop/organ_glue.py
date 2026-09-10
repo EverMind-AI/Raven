@@ -10,11 +10,9 @@ from raven.agent.loop._shared import (
     Session,
     TokenBudget,
     _filter_qualified_ids,
-    estimate_prompt_tokens,
     image_placeholder_text,
     logger,
     semconv,
-    send_max_tokens,
     supports_image_tool_result,
     trace,
     vision_verdict,
@@ -137,55 +135,12 @@ class OrganGlueMixin:
     # ── Context engine helpers ──────────────────────────────────────────
 
     def _context_messages_for_session(self, session: Session) -> list[dict[str, Any]]:
-        """Return the candidate message view owned by the active context engine.
-
-        Curator (``owns_compaction=True``) wants the full append-only log so
-        it can decide what to archive itself; Legacy wants the post-consolidation
-        slice to match the pre-Curator behavior exactly.
-        """
-        if self.context_engine.owns_compaction:
-            return list(session.messages)
-        return session.get_history(max_messages=0)
+        """The candidate message view, asked of the Memory role that owns it."""
+        return self.harness.memory.candidate_messages(session)
 
     def _make_token_budget(self, selected_skills: list[Any] | None = None) -> TokenBudget:
-        """Compute a conservative per-turn prompt budget for the active engine."""
-        # allow_fetch=False for the same reason construction passes it (see
-        # __init__): this runs per turn on the loop's own thread, and it only
-        # needs a number to reserve -- not the one a request will carry. The
-        # fallback under-reserves at worst; the importing tier costs seconds.
-        ceiling = send_max_tokens(
-            getattr(self.provider, "generation", None),
-            # The id a request will go out under, so the reservation matches the
-            # ceiling that request will carry rather than the stored name's.
-            getattr(self.provider, "wire_model_id", lambda m: m)(self.model),
-            allow_fetch=False,
-        )
-        # The whole ceiling, not a share of it. Requests no longer name a
-        # ceiling, so the one that applies is the model's own -- whatever the
-        # vendor or LiteLLM's transformation fills in. Reserving less than that
-        # hands out a prompt the reply cannot coexist with: measured on this
-        # repo's default model, a share leaves the prompt 150000 of a 200000
-        # window against a reply allowed 64000, and the sum is refused at
-        # request time. `_emergency_shrink` only elides tool bodies, so a
-        # history grown on conversation gets no retry from that refusal.
-        #
-        # A share would be right again only if the request carried one, which
-        # is the trade the previous shape made and this one does not.
-        reserved_output = min(ceiling, self.context_window_tokens)
-        tool_tokens = estimate_prompt_tokens([], self.tools.get_definitions())
-        system_prompt = self.context.build_system_prompt(selected_skills)
-        system_tokens = estimate_prompt_tokens([{"role": "system", "content": system_prompt}])
-        available_history = max(
-            0,
-            self.context_window_tokens - reserved_output - tool_tokens - system_tokens,
-        )
-        return TokenBudget(
-            context_length=self.context_window_tokens,
-            reserved_output=reserved_output,
-            reserved_tools=tool_tokens,
-            reserved_system=system_tokens,
-            available_history=available_history,
-        )
+        """The per-turn prompt budget, asked of the Memory role that owns it."""
+        return self.harness.memory.token_budget(selected_skills)
 
     def _uses_default_engine(self) -> bool:
         """Whether the active engine owns skill selection via SkillForgeRouter.
@@ -242,7 +197,7 @@ class OrganGlueMixin:
         self._last_injected_skill_sources = {}
         self._last_degraded_segments: list[str] = []
         session_messages = self._context_messages_for_session(session)
-        assembled = await self.context_engine.assemble(
+        assembled = await self.harness.memory.assemble(
             session_key,
             session_messages,
             self._make_token_budget(selected_skills),

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-import raven.agent.loop.organ_glue as agent_main
+import raven.agent.harness.memory as budget_owner
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.base import LLMProvider, LLMResponse
@@ -43,7 +43,7 @@ def workspace():
 
 
 def _loop(workspace: Path, *, window: int, ceiling: int, monkeypatch) -> AgentLoop:
-    monkeypatch.setattr(agent_main, "send_max_tokens", lambda *a, **k: ceiling)
+    monkeypatch.setattr(budget_owner, "send_max_tokens", lambda *a, **k: ceiling)
     agent = AgentLoop(
         provider=_StubProvider(),
         workspace=workspace,
