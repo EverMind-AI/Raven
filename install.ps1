@@ -225,6 +225,10 @@ function Resolve-RavenWheel {
     Write-Info "Resolving the latest Raven release from GitHub..."
     try {
         $release = Invoke-RestMethod "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" -Headers @{ "User-Agent" = "raven-installer" }
+        # Kept for Resolve-RavenPluginWheel, which reads the same asset list.
+        # The GitHub API caps unauthenticated callers at 60 requests/hour per
+        # IP, so a shared egress can exhaust it -- one lookup serves them all.
+        $script:RavenRelease = $release
         $asset = $release.assets | Where-Object { $_.browser_download_url -match "/raven-[^/]+\.whl$" } | Select-Object -First 1
         if ($asset) { return $asset.browser_download_url }
         Write-Warn "GitHub API returned no release wheel; falling back to the release page."
@@ -236,6 +240,21 @@ function Resolve-RavenWheel {
         Fail "Could not resolve the latest Raven release wheel from GitHub. Retry later, or set RAVEN_WHEEL_URL to a wheel URL."
     }
     return "https://github.com/EverMind-AI/Raven/releases/download/v$version/raven-$version-py3-none-any.whl"
+}
+
+function Resolve-RavenPluginWheel([string]$FilePrefix) {
+    # A product engine's wheel from the same release, or $null. Absent is not a
+    # failure: the release still installs and the roster reports the product
+    # disabled, which is what it already does when the package is missing.
+    # Reads the asset list Resolve-RavenWheel cached rather than calling the
+    # API again; a release resolved through the page fallback leaves no cache,
+    # and the engine is then treated as absent because nothing lists it.
+    if (-not $script:RavenRelease) { return $null }
+    $asset = $script:RavenRelease.assets |
+        Where-Object { $_.browser_download_url -match "/$FilePrefix-[^/]+\.whl$" } |
+        Select-Object -First 1
+    if ($asset) { return $asset.browser_download_url }
+    return $null
 }
 
 function Resolve-RavenConstraints([string]$WheelUrl) {
@@ -356,16 +375,31 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
         # Pin to the locked dependency set so an install matches what we test.
         $constraints = Join-Path ([IO.Path]::GetTempPath()) ("raven-constraints-" + [guid]::NewGuid().ToString("N") + ".txt")
         & $UvPath export --directory "$scriptDir" --frozen --all-extras --no-hashes --no-emit-workspace -o "$constraints"
+        # Raven-Design and Raven-PPT keep their harness in their own
+        # distributions, and the roster gates on them: discovery reads the
+        # `engine` block in each agents/<product>/subagent.json and disables the
+        # row when that package is not importable where raven runs. Without
+        # these two the products are listed and cannot be dispatched to.
+        $enginePlugins = @(
+            "--with-editable", (Join-Path $scriptDir "plugins-dist\design-engine"),
+            "--with-editable", (Join-Path $scriptDir "plugins-dist\ppt-engine")
+        )
         # Install all channel adapters by default; fall back to base raven if
         # the umbrella extra fails to build on this platform, so one broken
-        # channel SDK cannot block the whole install.
+        # channel SDK cannot block the whole install. The engines fall before
+        # raven itself for the same reason: they carry native builds a platform
+        # can refuse on its own.
         try {
-            & $UvPath tool install --force -c "$constraints" -e "$scriptDir[channels]"
+            & $UvPath tool install --force -c "$constraints" @enginePlugins -e "$scriptDir[channels]"
             if ($LASTEXITCODE -ne 0) { throw "channel extras install failed" }
         } catch {
-            Write-Warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-            & $UvPath tool install --force -c "$constraints" -e "$scriptDir"
-            if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
+            Write-Warn "Channel dependencies failed to install; retrying with base raven. Some channels stay unavailable (see: raven channels list)."
+            & $UvPath tool install --force -c "$constraints" @enginePlugins -e "$scriptDir"
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "A product engine failed to build; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
+                & $UvPath tool install --force -c "$constraints" -e "$scriptDir"
+                if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
+            }
         }
     } else {
         $wheelUrl = Resolve-RavenWheel
@@ -377,13 +411,34 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
             $cArgs = @()
         }
         Write-Info "  installing $wheelUrl"
+        # The product engines ship as their own wheels from the same release.
+        # Absent ones are a warning, not a failure: the release still installs
+        # and Raven-Design / Raven-PPT stay disabled the way discovery already
+        # reports them.
+        $pArgs = @()
+        foreach ($engine in @(
+            @{ Prefix = "design_engine"; Package = "design-engine"; Label = "design engine"; Product = "Raven-Design" },
+            @{ Prefix = "ppt_engine";    Package = "ppt-engine";    Label = "deck engine";   Product = "Raven-PPT" }
+        )) {
+            $url = Resolve-RavenPluginWheel $engine.Prefix
+            if ($url) {
+                $pArgs += @("--with", "$($engine.Package)@$url")
+                Write-Info "  with $($engine.Label) $url"
+            } else {
+                Write-Warn "This release carries no $($engine.Package) wheel; $($engine.Product) stays disabled (raven doctor explains)."
+            }
+        }
         try {
-            & $UvPath tool install --force @cArgs "raven[channels] @ $wheelUrl"
+            & $UvPath tool install --force @cArgs @pArgs "raven[channels] @ $wheelUrl"
             if ($LASTEXITCODE -ne 0) { throw "channel extras install failed" }
         } catch {
-            Write-Warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-            & $UvPath tool install --force @cArgs $wheelUrl
-            if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
+            Write-Warn "Channel dependencies failed to install; retrying with base raven. Some channels stay unavailable (see: raven channels list)."
+            & $UvPath tool install --force @cArgs @pArgs $wheelUrl
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
+                & $UvPath tool install --force @cArgs $wheelUrl
+                if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
+            }
         }
     }
     & $UvPath tool update-shell | Out-Null

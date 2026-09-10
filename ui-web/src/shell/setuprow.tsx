@@ -42,10 +42,14 @@ export function Led({ cls }: { cls: string }): JSX.Element {
 
 export interface SetupRowProps {
   name: string
-  /* The letter tile, or nothing. A channel and an agent are things with an
-     identity worth a mark; a scheduled job is a sentence, and giving it an
-     initial in a coloured square dressed a task up as an account. */
-  tile?: boolean
+  /* The row's mark. Unset draws the letter tile; `false` draws none -- a
+     scheduled job is a sentence, and giving it an initial in a coloured square
+     dressed a task up as an account. A node is for a row whose identity is a
+     thing in itself rather than its name: an agent draws its brand, which is a
+     fact about the package behind it and not about what the reader called it.
+     Same shape as `SheetHead`'s `tile`, so a row and the sheet it opens can
+     take the one mark. */
+  tile?: ReactNode
   /* State: the dot's class, and the one line of fact beside the name. An empty
      `text` draws no line rather than an empty one -- "nothing measured" is not
      a status worth a row of its own height. */
@@ -67,10 +71,14 @@ export interface SetupRowProps {
   foot?: ReactNode
 }
 
-export function SetupRow({ name, state, tags, act, onOpen, sel, tile = true, extra, foot }: SetupRowProps): JSX.Element {
+export function SetupRow({ name, state, tags, act, onOpen, sel, tile, extra, foot }: SetupRowProps): JSX.Element {
+  /* Resolved once, and against `undefined` rather than for truthiness: "no
+     tile" and "the default tile" are different answers that a `tile ? ...`
+     test reads as the same one. */
+  const mark = tile === undefined ? <Tile name={name} /> : tile
   return (
     <div
-      className={'surow' + (tile ? '' : ' notile') + (state.cls === 'bad' ? ' bad' : '')}
+      className={'surow' + (mark ? '' : ' notile') + (state.cls === 'bad' ? ' bad' : '')}
       role="button"
       tabIndex={0}
       aria-current={sel ? 'true' : undefined}
@@ -89,7 +97,7 @@ export function SetupRow({ name, state, tags, act, onOpen, sel, tile = true, ext
         }
       }}
     >
-      {tile ? <Tile name={name} /> : null}
+      {mark}
       <div className="nm">
         <Led cls={state.cls} />
         <b>{name}</b>

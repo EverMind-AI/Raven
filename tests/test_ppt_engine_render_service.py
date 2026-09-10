@@ -582,6 +582,18 @@ def test_invisible_characters_are_not_copy() -> None:
 # --- the contact sheet ------------------------------------------------------
 
 
+def test_the_sheet_defaults_are_the_measured_ones() -> None:
+    """The three numbers a switch to sheets is only worth making at.
+
+    Three columns under a 1568px long edge -- what this module and the encoder used to
+    agree on -- can never produce a cell wider than 522px, and produced 232px on the
+    largest template measured. The ceiling has to clear the sheets that get built: 36
+    reference pages at six columns come out 4664px wide.
+    """
+    assert (sheet.DEFAULT_COLUMNS, sheet.DEFAULT_CELL_WIDTH) == (4, 768)
+    assert sheet.DEFAULT_MAX_EDGE >= 4664
+
+
 def _png(path: Path, size: tuple[int, int] = (400, 225)) -> Path:
     image = pytest.importorskip("PIL.Image", reason="Pillow draws the pages to tile")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -622,6 +634,75 @@ def test_a_contact_sheet_labels_the_page_the_reader_will_turn_to() -> None:
     assert sheet._page_label(Path("page-007.png"), 0) == "7"
     assert sheet._page_label(Path("page-012.png"), 3) == "12"
     assert sheet._page_label(Path("cover.png"), 2) == "3", "no number in the name falls back to the grid position"
+
+
+def test_a_caller_whose_cells_are_not_one_decks_pages_names_them_itself(tmp_path: Path) -> None:
+    """A page number is not an identity once the cells come from several files.
+
+    `_page_label` parses the number out of the file name, which is exactly right inside
+    one deck and ambiguous across seven templates -- amber page 4 and gold page 4 would
+    both be labelled `4`. So the caller says what each cell is, and a list that does not
+    line up with the pages is refused rather than silently mislabelling one.
+    """
+    pages = [_png(tmp_path / f"page-{number:03d}.png") for number in (4, 4, 7)]
+
+    out = sheet.contact_sheet(pages, tmp_path / "sheet.png", 3, labels=["amber 4", "gold 4", "warm 7"])
+
+    assert out.is_file()
+    with pytest.raises(RenderError, match="needs 3 label"):
+        sheet.contact_sheet(pages, tmp_path / "short.png", 3, labels=["amber 4"])
+
+
+def _cell_of(out: Path) -> tuple[int, int]:
+    """The first cell's size, measured off the finished sheet.
+
+    Measured rather than solved from the sheet's dimensions, so this asserts on the
+    picture and not on a restatement of the tiler's own arithmetic. Each page fills its
+    cell exactly here -- one page size, one scale -- so the run of non-background pixels
+    from the first cell's corner is the cell.
+    """
+    image = pytest.importorskip("PIL.Image")
+    with image.open(out) as tiled:
+        page = tiled.convert("RGB")
+        pixels, (width, height) = page.load(), page.size
+        ground = pixels[0, 0]
+        # The first cell's corner, inside the sheet's own margin, which is one gap wide.
+        left, top = next((x, y) for y in range(80) for x in range(80) if pixels[x, y] != ground)
+        across = next((x for x in range(left, width) if pixels[x, top + 1] == ground), width) - left
+        down = next((y for y in range(top, height) if pixels[left + 1, y] == ground), height) - top
+    return across, down
+
+
+def test_a_cell_stays_the_size_the_model_can_read_it_at_however_many_pages_there_are(tmp_path: Path) -> None:
+    """The floor the whole switch to sheets rests on, and the flaw it had to fix.
+
+    Measured on the model this engine runs: 767px-wide cells name the right page 90% of
+    the time, matching separate full-size renders, and 232-523px cells manage 82% -- the
+    loss being the model naming the page next door in the grid, 5 of 150 answers there
+    and 0 of 150 at 400-510px. A sheet sized by clipping its long edge loses cell width
+    with every row, so an 11-page template got 523px cells and a 34-page one 232px; the
+    cell is sized first here, and 34 pages get the same cell 8 pages do.
+    """
+
+    def sheet_of(count: int) -> tuple[int, int]:
+        pages = [_png(tmp_path / f"{count}" / f"page-{number:03d}.png", (1280, 720)) for number in range(1, count + 1)]
+        out = sheet.contact_sheet(pages, tmp_path / f"sheet-{count}.png")
+        return _cell_of(out)
+
+    small, large = sheet_of(8), sheet_of(34)
+
+    assert small == large, "the cell is what is sized, so the page count does not shrink it"
+    assert small[0] == sheet.DEFAULT_CELL_WIDTH
+    assert min(small) >= 400, f"a cell of {small} is under the width the neighbour-in-the-grid error appears at"
+
+
+def test_a_page_is_never_pasted_bigger_than_it_was_rendered(tmp_path: Path) -> None:
+    """A 320px page in a 768px cell would be grey padding around a soft page."""
+    pages = [_png(tmp_path / f"page-{number:03d}.png", (320, 180)) for number in range(1, 5)]
+
+    out = sheet.contact_sheet(pages, tmp_path / "sheet.png", 2)
+
+    assert _cell_of(out) == (320, 180)
 
 
 def test_a_contact_sheet_of_nothing_is_refused(tmp_path: Path) -> None:

@@ -861,4 +861,79 @@ describe('xa island', () => {
     })
   })
 
+  /* The mark is the agent's brand, and the preset is what picks it -- never the
+     row's name. A configured row's name is the reader's to change, so keying on
+     it would cost a renamed agent its identity, and would hand a brand to a
+     hand-written row that merely spells itself like a preset. The generic glyph
+     is what a row with no preset gets: one of the shipped products, or an agent
+     the reader wrote. A glyph rather than an initial in a coloured square,
+     which is what this page drew for every row before it had marks at all. */
+  describe('the brand mark', () => {
+    const markImg = (name: string): HTMLImageElement | null =>
+      rowNamed(name).querySelector<HTMLImageElement>('.agent-mark img')
+
+    it('draws each row its own brand, chosen by preset', async () => {
+      install([
+        row({ name: 'Coder', preset: 'claude_code' }),
+        row({ name: 'Writer', preset: 'codex' }),
+        row({ name: 'Researcher', preset: 'mirothinker', kind: 'openai', has_api_key: true }),
+      ])
+      await mount()
+
+      expect(markImg('Coder')!.getAttribute('src')).toBe('assets/agents/claudecode-color.svg')
+      expect(markImg('Writer')!.getAttribute('src')).toBe('assets/agents/codex-color.svg')
+      expect(markImg('Researcher')!.getAttribute('src')).toBe('assets/agents/miromind.svg')
+    })
+
+    /* The case the keying decision exists for: every preset row ships under a
+       name the reader may replace, and this repository's own roster has three
+       that were replaced. */
+    it('keeps the brand when the row has been renamed', async () => {
+      install([row({ name: 'my own helper', preset: 'claude_code' })])
+      await mount()
+
+      expect(markImg('my own helper')!.getAttribute('src')).toBe('assets/agents/claudecode-color.svg')
+    })
+
+    /* The other half of it. Spelling a name like a preset is not being that
+       preset, and a brand on such a row would be a claim about a command line
+       nobody verified. */
+    it('withholds the brand from a row that only shares a preset name', async () => {
+      install([row({ name: 'codex', preset: undefined })])
+      await mount()
+
+      /* Both halves, because "no brand" is also true of a page that draws no
+         marks at all: the slot has to be there, holding the generic glyph, or
+         this passes for the wrong reason. */
+      const slot = rowNamed('codex').querySelector('.agent-mark')
+      expect(slot).not.toBeNull()
+      expect(slot!.querySelector('svg')).not.toBeNull()
+      expect(markImg('codex')).toBeNull()
+    })
+
+    it('draws the generic glyph, never an initial, for a row with no preset', async () => {
+      install([row({ name: 'Raven-Code', preset: undefined, configured: false, vendored: true, kind: 'acp' })])
+      await mount()
+
+      const slot = rowNamed('Raven-Code').querySelector('.agent-mark')
+      expect(slot).not.toBeNull()
+      expect(slot!.querySelector('svg')).not.toBeNull()
+      expect(markImg('Raven-Code')).toBeNull()
+      expect(rowNamed('Raven-Code').querySelector('.pmtile')).toBeNull()
+    })
+
+    /* One identity, drawn the same in both places. The card headed itself with
+       an initial while the row beside it drew a brand. */
+    it('heads the card with the same mark the row draws', async () => {
+      install([row({ name: 'Coder', preset: 'claude_code' })])
+      await mount()
+      await openCard('Coder')
+
+      const head = document.querySelector<HTMLImageElement>('#dBody .pmdhead .agent-mark img')
+      expect(head).not.toBeNull()
+      expect(head!.getAttribute('src')).toBe('assets/agents/claudecode-color.svg')
+      expect(document.querySelector('#dBody .pmdhead .pmtile')).toBeNull()
+    })
+  })
+
 })

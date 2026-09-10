@@ -473,6 +473,18 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* Filled, like `run`: a failure is a state the row is IN, not a transition it
    just made, and the ring is already spoken for by `done`. */
 .sess .w[data-sig="err"] i { background: var(--clay); animation: sigin .5s ease backwards; }
+/* A disc inside a halo, which is neither of the two shapes above: `ask` is the
+   only one of the four that is a request rather than a report, and it is the one
+   mark that has to be found without being looked for -- the request behind it
+   expires in half a minute and its own sheet is drawn only on its own
+   conversation. A fourth hue alone would not do that; the two shapes together
+   read as louder than either. Legible with no animation at all, which is what
+   the reduced-motion block below leaves it with. */
+.sess .w[data-sig="ask"] i {
+  background: var(--sky);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--sky) 30%, transparent);
+  animation: pulse 1.6s ease-in-out infinite;
+}
 @keyframes sigin { from { opacity: 0; transform: scale(.4); } }
 
 .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
@@ -3113,6 +3125,12 @@ details[open] summary { margin-bottom: 8px; }
 }
 .pmdhead { display: flex; align-items: center; gap: 13px; margin-bottom: 10px; }
 .pmdhead .pmtile { width: 46px; height: 46px; font-size: 19px; border-radius: 13px; }
+/* A brand mark stands in for the letter tile here as it does in a row, so it
+   takes the header's geometry rather than its own roster size -- left at 20px
+   the card's identity came out smaller than the 28px mark on the row that
+   opened it, which reads as the header mattering less. */
+.pmdhead > .agent-mark { width: 46px; height: 46px; border-radius: 13px; }
+.pmdhead > .agent-mark img { width: 32px; height: 32px; }
 /* head action slot: the sheet's one decisive control lives up here, not at
    the bottom of a scroll. Padded clear of the floating close button. */
 .pmdhead .dact { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
@@ -3247,6 +3265,12 @@ details[open] summary { margin-bottom: 8px; }
    state line already says what is wrong, in words. */
 .surow.bad { box-shadow: inset 2px 0 0 var(--clay); }
 .surow > .pmtile { grid-column: 1; grid-row: 1 / span 2; width: 28px; height: 28px; font-size: 12px; border-radius: 8px; }
+/* A brand mark is the other thing that can fill that one slot, so it takes the
+   same cell at the same size rather than its own 20px roster size -- one column
+   of marks down a page whose other lists draw letter tiles. Spanning both rows
+   is what stops a row with a second line from hanging its mark off the first. */
+.surow > .agent-mark { grid-column: 1; grid-row: 1 / span 2; width: 28px; height: 28px; border-radius: 8px; }
+.surow > .agent-mark img { width: 20px; height: 20px; }
 .surow > .nm {
   grid-column: 2; grid-row: 1;
   display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13.5px;

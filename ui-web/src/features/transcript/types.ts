@@ -2,6 +2,12 @@
  * stage, or one agent stage pane); its content is a list of segments, and a
  * turn reads as: an ask, then steps (thought, narration, calls), then the
  * answer -- with the steps folding behind one line once the answer lands.
+ *
+ * A delegated pane reads the same model with two differences, both in
+ * `collapse` and `history`: its fold is born open, because that pane IS one
+ * sub-agent's work; and only a text nothing follows becomes the answer, so a
+ * line said on the way stays a step where it was said rather than being lifted
+ * past the fold.
  */
 
 import type { SnapshotRow } from '../dag/nodes'
