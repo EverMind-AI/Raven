@@ -46,10 +46,6 @@ _TOTAL_STEPS = 7
 # screen; ``None`` from a picker means Ctrl+C (exit).
 _BACK = object()
 
-# Sentinel a required EverOS role returns when the user chooses to give up EverOS
-# rather than configure it; ``_step4_memory`` then leaves memory disabled.
-_ABORT_EVEROS = object()
-
 # Unified prompt chrome (display-only), shared with every other command's
 # prompts: a single-space qmark renders as one blank, which -- with
 # questionary's own leading space -- puts every prompt line on the same 2-space

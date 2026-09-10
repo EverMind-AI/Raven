@@ -1,10 +1,12 @@
 """The seam through which a plugin contributes a screen to ``raven onboard``.
 
 The host owns the wizard shell (console, translation, prompt helpers, the
-back sentinel, the lender of an already-configured provider's credentials)
-and hands it over as one ``OnboardUI``. The plugin owns the screen's content.
-The plugin never writes ``memory.backend``: it returns a ``StepOutcome`` and
-the host records the choice, so the host's config key stays the host's.
+back sentinel) and what only the host knows about providers (the lender of an
+already-configured provider's credentials, and what the main chat model
+resolves to), and hands the lot over as one ``OnboardUI``. The plugin owns
+the screen's content. The plugin never writes ``memory.backend``: it returns a
+``StepOutcome`` and the host records the choice, so the host's config key
+stays the host's.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ class OnboardUI:
     """The wizard shell, lent to a plugin's screen for the duration of one run."""
 
     console: Any
-    t: Callable[[str], str]
+    t: Callable[..., str]
     require_questionary: Callable[[], Any]
     qmark: str
     back: object
@@ -42,6 +44,7 @@ class OnboardUI:
     prompt_api_key: Callable[..., Any]
     style: Any
     lend_provider_credentials: Callable[[str], dict[str, str]]
+    resolve_main_model: Callable[[str], dict[str, Any]]
 
 
 class OnboardStep(Protocol):

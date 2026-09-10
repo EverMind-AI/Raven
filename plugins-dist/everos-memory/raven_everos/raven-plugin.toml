@@ -10,6 +10,15 @@ enabled_by_default = true
 name    = "everos"
 factory = "raven_everos.backend:make_backend"
 
+# Step 4 of ``raven onboard``: the host lends the wizard shell as one
+# ``OnboardUI``, this screen configures the EverOS roles and returns a
+# ``StepOutcome``; the host records ``memory.backend`` from the outcome. Named
+# after the backend it configures, which is what lets the host resolve this
+# plugin's config slice for it.
+[[plugin.contributes.onboard]]
+name    = "everos"
+factory = "raven_everos.onboard:make_onboard_step"
+
 # Multimodal understanding exposed as an agent tool: the LLM calls
 # ``understand_media(paths=[...])`` to read attachments it can't consume
 # natively (PDF / audio / Office / scanned images), reusing EverOS's

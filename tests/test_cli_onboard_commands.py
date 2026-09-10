@@ -28,16 +28,42 @@ import typer
 from typer.testing import CliRunner
 
 from raven import i18n
-from raven.cli import _onboard_shared, onboard_channels, onboard_commands, onboard_everos, onboard_web
+from raven.cli import _onboard_shared, onboard_channels, onboard_commands, onboard_web
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 from raven.i18n import t
 from raven.i18n import zh as zh_catalog
+from raven_everos import onboard as onboard_everos
 from raven_everos import roots as _discover_mod
 from raven_everos import server
 from tests._everos_presence import everos_plugin_absent
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _everos_onboard_ui(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lend the wizard shell to the plugin's screen, as ``run()`` does.
+
+    A test that calls one of the screen's helpers directly skips ``run()`` and
+    so would find no handle installed. The shared-kit helpers are resolved per
+    call rather than captured, which ``_onboard_ui`` is right not to do: a test
+    monkeypatches one of them after this handle is built.
+    """
+    from dataclasses import replace
+
+    monkeypatch.setattr(
+        onboard_everos,
+        "_UI",
+        replace(
+            onboard_commands._onboard_ui(),
+            require_questionary=lambda: _onboard_shared._require_questionary(),
+            prompt_api_key=lambda *a, **kw: _onboard_shared._prompt_api_key(*a, **kw),
+            failure_choice=lambda *a, **kw: _onboard_shared._failure_choice(*a, **kw),
+            back_placeholder=lambda *a, **kw: _onboard_shared._back_placeholder(*a, **kw),
+            step_header=lambda *a, **kw: _onboard_shared._step_header(*a, **kw),
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- async stub helpers
@@ -699,7 +725,7 @@ def test_onboard_interactive_uses_stubbed_pickers(
     # interactive Step 1 path can be asserted without driving every screen.
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_web, "_step5_web", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
@@ -836,7 +862,7 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
     monkeypatch.setattr(questionary, "autocomplete", _fake_autocomplete)
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_web, "_step5_web", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
@@ -1381,7 +1407,7 @@ def test_memory_giving_up_sets_backend_null(
             return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
     data = json.loads(tmp_env.read_text())
     assert data["memory"]["backend"] is None
     # The step lays down EverOS's config templates before asking anything, so
@@ -1415,7 +1441,7 @@ def test_memory_step_is_skipped_on_native_windows(
     monkeypatch.setattr(questionary, "select", _explode)
     monkeypatch.setattr(questionary, "text", _explode)
 
-    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     assert json.loads(tmp_env.read_text())["memory"]["backend"] is None
     assert not everos_isolated.exists()
@@ -1440,7 +1466,7 @@ def test_memory_step_without_the_plugin_says_so_and_writes_nothing(
     monkeypatch.setattr(questionary, "text", _explode)
 
     with everos_plugin_absent():
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     out = " ".join(capsys.readouterr().out.split())
     assert "everos-memory" in out
@@ -1467,7 +1493,7 @@ def test_giving_up_says_what_is_lost(
             return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     out = " ".join(capsys.readouterr().out.split())
     assert "no memory across sessions" in out
@@ -1502,7 +1528,7 @@ def test_giving_up_says_what_is_lost_in_both_languages(
             return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     out = " ".join(capsys.readouterr().out.split())
     for needle in needles:
@@ -1555,7 +1581,7 @@ def test_memory_enable_writes_everos_sections(
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fake_ensure_everos_server)
 
-    onboard_everos._step4_memory(
+    onboard_commands._step4_memory(
         skip=False,
         non_interactive=False,
         main_model="openrouter/anthropic/claude-sonnet-4-5",
@@ -1622,7 +1648,7 @@ def test_the_memory_step_reaches_the_capability_report(
     reported: list[int] = []
     monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: reported.append(1))
 
-    onboard_everos._step4_memory(
+    onboard_commands._step4_memory(
         skip=False,
         non_interactive=False,
         main_model="openrouter/anthropic/claude-sonnet-4-5",
@@ -1667,7 +1693,7 @@ def test_memory_step_starts_the_configured_address_not_the_default(
     monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
     monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
     monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
-    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+    monkeypatch.setattr(onboard_everos, "_configured", lambda: False)
 
     class _FQ:
         def ask(self):
@@ -1675,7 +1701,7 @@ def test_memory_step_starts_the_configured_address_not_the_default(
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
 
-    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     assert seen == ["http://localhost:1995", "http://localhost:1995"]
 
@@ -1706,7 +1732,7 @@ def test_a_failed_start_does_not_decide_to_abandon_memory(
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _always_fails)
     monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
-    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+    monkeypatch.setattr(onboard_everos, "_configured", lambda: False)
     monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
 
     class _FQ:
@@ -1715,7 +1741,7 @@ def test_a_failed_start_does_not_decide_to_abandon_memory(
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
 
-    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     assert json.loads(tmp_env.read_text())["memory"]["backend"] == expected_backend
 
@@ -1737,7 +1763,7 @@ def test_a_failed_start_can_be_retried_until_it_works(
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fails_twice)
     monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
-    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+    monkeypatch.setattr(onboard_everos, "_configured", lambda: False)
     monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
 
     class _FQ:
@@ -1746,7 +1772,7 @@ def test_a_failed_start_can_be_retried_until_it_works(
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
 
-    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     assert len(attempts) == 3
     assert json.loads(tmp_env.read_text())["memory"]["backend"] == "everos"
@@ -1768,7 +1794,7 @@ def test_a_failed_start_can_switch_port(tmp_env: Path, everos_isolated: Path, mo
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fails_once)
     monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
-    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+    monkeypatch.setattr(onboard_everos, "_configured", lambda: False)
     monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
 
     calls = {"n": 0}
@@ -1789,7 +1815,7 @@ def test_a_failed_start_can_switch_port(tmp_env: Path, everos_isolated: Path, mo
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
 
-    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     assert seen == ["http://localhost:18791", "http://localhost:20000"]
     data = json.loads(tmp_env.read_text())
@@ -1814,7 +1840,7 @@ def test_change_port_asks_even_when_the_port_tests_free(
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fails_once)
     monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
-    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+    monkeypatch.setattr(onboard_everos, "_configured", lambda: False)
     monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
     monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
     prompted: list[str] = []
@@ -1830,7 +1856,7 @@ def test_change_port_asks_even_when_the_port_tests_free(
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
 
-    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     assert prompted == ["18791"], "Change port did not ask for a port"
     assert seen == ["http://localhost:18791", "http://localhost:20000"]
@@ -1900,7 +1926,7 @@ class TestTakingOverAFoundRoot:
         _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: pytest.fail("reconfigured on reuse"))
         self._answers(_stubs, ["managed", "reuse"])
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert touched == [], "touched a service the user asked to leave as it is"
         data = json.loads(tmp_env.read_text())
@@ -1934,7 +1960,7 @@ class TestTakingOverAFoundRoot:
         _stubs.setattr(server, "ensure_everos_server", _ensure)
         self._answers(_stubs, ["managed", "reuse"])
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert started == ["http://localhost:20000"]
         data = json.loads(tmp_env.read_text())
@@ -1969,7 +1995,7 @@ class TestTakingOverAFoundRoot:
         _stubs.setattr(server, "ensure_everos_server", _ensure)
         self._answers(_stubs, ["managed", "reuse", "change"])
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert started == ["http://localhost:18791", "http://localhost:20000"]
         data = json.loads(tmp_env.read_text())
@@ -1998,7 +2024,7 @@ class TestTakingOverAFoundRoot:
 
         _stubs.setattr(questionary, "select", _select)
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert len(asked) == 3, "the failed start offered no way out"
         assert json.loads(tmp_env.read_text()).get("memory", {}).get("backend") != "everos"
@@ -2028,7 +2054,7 @@ class TestTakingOverAFoundRoot:
         _stubs.setattr(server, "ensure_everos_server", _ensure)
         self._answers(_stubs, ["managed", "reuse", "change"])
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert prompted == ["18791"], "Change port did not ask for a port"
         assert started == ["http://localhost:18791", "http://localhost:20000"]
@@ -2066,7 +2092,7 @@ class TestTakingOverAFoundRoot:
         _found(_stubs, _root_state(root, declared_url="http://localhost:8000"))
         self._answers(_stubs, ["managed", "reuse"])
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
         assert slice_["owned"] is True
@@ -2090,7 +2116,7 @@ class TestTakingOverAFoundRoot:
         _stubs.setattr(server, "ensure_everos_server", _ensure)
         self._answers(_stubs, ["managed", "redo"])
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert reached == ["llm", "embedding", "rerank", "multimodal"]
         assert started == ["http://localhost:18791"]
@@ -2119,7 +2145,7 @@ class TestTakingOverAFoundRoot:
         _stubs.setattr(server, "ensure_everos_server", _ensure)
         self._answers(_stubs, ["managed", "reuse"])
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert started == ["http://localhost:1995"]
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
@@ -2151,7 +2177,7 @@ class TestTakingOverAFoundRoot:
         _stubs.setattr(server, "ensure_everos_server", _ensure)
         self._answers(_stubs, ["managed", "reuse"])
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert started == [], "started a second instance against a directory already in use"
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
@@ -2184,7 +2210,7 @@ class TestTakingOverAFoundRoot:
         _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: pytest.fail("walked the roles anyway"))
         self._answers(_stubs, ["managed", "reuse"])
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         out = " ".join(capsys.readouterr().out.split())
         assert "4242" in out
@@ -2206,7 +2232,7 @@ class TestTakingOverAFoundRoot:
         _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: pytest.fail("walked the roles anyway"))
         self._answers(_stubs, ["managed", "reuse", "skip"])
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         out = " ".join(capsys.readouterr().out.split())
         assert "port 1995 is occupied" in out, "swallowed the reason the start failed"
@@ -2219,7 +2245,7 @@ class TestTakingOverAFoundRoot:
         _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: pytest.fail("configured after Back"))
         self._answers(_stubs, ["managed", "back", "skip"])
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         slice_ = (json.loads(tmp_env.read_text()).get("plugins") or {}).get("config", {}).get("everos-memory", {})
         assert "root" not in slice_, "recorded a root the user backed out of"
@@ -2389,13 +2415,20 @@ def test_memory_required_role_back_reaches_give_up_menu(
     monkeypatch.setattr(questionary, "select", _FQ)
 
     out = onboard_everos._config_everos_role(section="llm", main_model=None, non_interactive=False, warnings=[])
-    assert out is onboard_commands._ABORT_EVEROS
+    assert out is onboard_everos._ABORT_EVEROS
     assert asked == ["picker", "give-up"]
 
 
 def test_model_openai_compatible_heuristic(tmp_env: Path) -> None:
-    """Compat heuristic gates whether the memory LLM can reuse the main model."""
-    f = onboard_everos._model_is_openai_compatible
+    """Compat heuristic gates whether the memory LLM can reuse the main model.
+
+    Host knowledge about providers, lent to the screen through ``OnboardUI``.
+    """
+    from raven.config.update_providers import resolve_main_model
+
+    def f(model: str | None) -> bool:
+        return bool(resolve_main_model(model or "")["openai_compatible"])
+
     assert f("openai/gpt-4o-mini")
     assert f("openrouter/anthropic/claude-sonnet-4-5")
     assert f("deepseek/deepseek-chat")
@@ -2411,12 +2444,12 @@ def test_custom_model_reuse_is_compatible(
 ) -> None:
     """A custom endpoint's bare model is reusable; the provider picker
     defaults to the matching provider and reuses its key."""
-    from raven.config.update_providers import set_provider_fields
+    from raven.config.update_providers import resolve_main_model, set_provider_fields
 
     set_provider_fields("custom", {"api_key": "sk-cust", "api_base": "https://my-llm/v1"})
-    assert onboard_everos._model_is_openai_compatible("qwen-max")
-
-    creds = onboard_everos._resolve_reuse_llm_creds("qwen-max")
+    creds = resolve_main_model("qwen-max")
+    assert creds["openai_compatible"]
+    assert creds["provider"] == "custom"
     assert creds["model"] == "qwen-max"
     assert creds["api_key"] == "sk-cust"
     assert creds["base_url"] == "https://my-llm/v1"
@@ -2634,7 +2667,7 @@ def test_back_navigation_rewinds_one_screen(tmp_env: Path, monkeypatch: pytest.M
     monkeypatch.setattr(onboard_commands, "_step1_provider", _s1)
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", _s2)
     monkeypatch.setattr(onboard_channels, "_step3_channel", _s3)
-    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_web, "_step5_web", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
@@ -2664,7 +2697,7 @@ def test_first_screen_back_does_not_skip_step1(
     # Optional steps are no-ops here; we only assert Step 1 wasn't skipped.
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_web, "_step5_web", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
@@ -2712,7 +2745,7 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "switch")
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_web, "_step5_web", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
@@ -2748,7 +2781,7 @@ def test_step1_bare_key_refused_vendor_rewinds_to_picker(
     monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_web, "_step5_web", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step6_subagents", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step7_import", lambda **_: None)
@@ -3090,7 +3123,7 @@ def _trace_screens(monkeypatch: pytest.MonkeyPatch, seen: list[str]) -> None:
         (onboard_commands, "_step1_provider"),
         (onboard_commands, "_step2_sandbox"),
         (onboard_channels, "_step3_channel"),
-        (onboard_everos, "_step4_memory"),
+        (onboard_commands, "_step4_memory"),
         (onboard_web, "_step5_web"),
         (onboard_commands, "_step6_subagents"),
         (onboard_commands, "_step7_import"),
@@ -3316,7 +3349,7 @@ def _run_import_step(
     # whoever's machine runs the suite, not of the behaviour under test. Left
     # real, these tests pass on a developer box that has onboarded and fail
     # everywhere else, including CI.
-    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr(
         "raven.importer.scanners.scan_all",
@@ -3368,7 +3401,7 @@ def test_import_step_installs_skills_when_the_scan_finds_nothing(
     already covers, on the entry point that matters more.
     """
     scripted = _ScriptedSelect([("import conversation history", "yes")])
-    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
     _patch_skills_only_install(monkeypatch, tmp_path)
@@ -3405,7 +3438,7 @@ def test_import_step_installs_skills_when_the_tier_keeps_nothing(
             ("Select import tier", Tier.MEMORY_FILES),
         ]
     )
-    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[conversation]))
     _patch_skill_count(monkeypatch, 12)
@@ -3427,7 +3460,7 @@ def test_the_wizard_asks_before_copying_a_skill_tree(
     directory copy nothing undoes.
     """
     scripted = _ScriptedSelect([("import conversation history", "yes")])
-    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
     installer = _patch_skills_only_install(monkeypatch, tmp_path, confirm=False)
@@ -5226,7 +5259,7 @@ def test_the_memory_step_states_the_capability_tiers(
             return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     out = " ".join(capsys.readouterr().out.split())
     for needle in needles:
@@ -6059,7 +6092,7 @@ def test_memory_skip_hints_configure_later(
     import re
 
     monkeypatch.setattr(onboard_commands.console, "_width", 200)
-    onboard_everos._step4_memory(skip=True, non_interactive=False, main_model=None, warnings=[])
+    onboard_commands._step4_memory(skip=True, non_interactive=False, main_model=None, warnings=[])
     out = " ".join(capsys.readouterr().out.split())
     assert re.search(r"raven onboard.*again", out)
 
@@ -6147,8 +6180,8 @@ def test_everos_role_optionality_matches_design():
     """Design guard: the memory llm role is mandatory (no skip affordance in
     the wizard) while embedding/rerank/multimodal degrade gracefully and stay
     skippable. Keeps the wizard metadata aligned with the health contract."""
-    from raven.cli.onboard_everos import _EVEROS_ROLES
     from raven_everos.health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
+    from raven_everos.onboard import _EVEROS_ROLES
 
     assert REQUIRED_SECTIONS == ("llm",)
     assert set(DEGRADING_SECTIONS) == {"embedding", "rerank", "multimodal"}
@@ -6170,7 +6203,6 @@ class TestMemoryEnabledRespectsOwnership:
     def test_an_unowned_slice_is_enabled_on_its_address_alone(
         self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(
             json.dumps(
@@ -6187,10 +6219,9 @@ class TestMemoryEnabledRespectsOwnership:
 
         monkeypatch.setattr(onboard_everos, "_everos_role_configured", _must_not_read_their_toml)
 
-        assert onboard_everos._memory_enabled() is True
+        assert onboard_everos._configured() is True
 
     def test_an_unowned_slice_without_an_address_is_not_enabled(self, tmp_env: Path) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(
             json.dumps(
@@ -6202,10 +6233,9 @@ class TestMemoryEnabledRespectsOwnership:
             encoding="utf-8",
         )
 
-        assert onboard_everos._memory_enabled() is False
+        assert onboard_everos._configured() is False
 
     def test_an_owned_slice_still_reads_the_llm_role(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(
             json.dumps(
@@ -6218,7 +6248,7 @@ class TestMemoryEnabledRespectsOwnership:
         )
         monkeypatch.setattr(onboard_everos, "_everos_role_configured", lambda _s: False)
 
-        assert onboard_everos._memory_enabled() is False
+        assert onboard_everos._configured() is False
 
 
 class TestTheConvergenceTargetIsConfigured:
@@ -6231,14 +6261,12 @@ class TestTheConvergenceTargetIsConfigured:
     """
 
     def test_defaults_to_the_shipped_port(self, tmp_env: Path) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
 
         assert onboard_everos._configured_target_url() == "http://localhost:18791"
 
     def test_a_recorded_port_wins(self, tmp_env: Path) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(
             json.dumps({"plugins": {"config": {"everos-memory": {"port": 20000}}}}),
@@ -6262,18 +6290,16 @@ class TestPointingRavenAtAnEverosYouRun:
     def _stub_prompts(monkeypatch, *, host: str, port: str) -> None:
         import questionary
 
-        from raven.cli import onboard_everos
-
         answers = iter([host, port])
-        # _prompt_text reaches questionary through the shared wizard module, so
-        # that is where the stub has to land.
+        # _prompt_text reaches questionary through the shell the host lends, and
+        # that resolves through the shared wizard module, so that is where the
+        # stub has to land.
         monkeypatch.setattr(questionary, "text", lambda *a, **kw: _Answer(next(answers)))
-        monkeypatch.setattr(onboard_everos.oc, "_require_questionary", lambda: questionary)
+        monkeypatch.setattr(_onboard_shared, "_require_questionary", lambda: questionary)
 
     def test_a_reachable_address_is_recorded_without_a_root(
         self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from raven.cli import onboard_everos
         from raven_everos.server import ProbeVerdict
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
@@ -6292,7 +6318,6 @@ class TestPointingRavenAtAnEverosYouRun:
         every future session, with nothing left to say why."""
         import questionary
 
-        from raven.cli import onboard_everos
         from raven_everos.server import ProbeVerdict
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
@@ -6313,8 +6338,6 @@ class TestPointingRavenAtAnEverosYouRun:
         the managed setup's address."""
         import inspect
 
-        from raven.cli import onboard_everos
-
         src = inspect.getsource(onboard_everos._use_self_managed_everos)
         assert "18791" not in src
 
@@ -6330,7 +6353,6 @@ class TestTheIntendedPortIsAlwaysRecorded:
     """
 
     def test_setting_the_address_records_the_port_with_it(self, tmp_env: Path) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         onboard_everos._set_base_url("http://localhost:20000")
@@ -6340,7 +6362,6 @@ class TestTheIntendedPortIsAlwaysRecorded:
         assert slice_["port"] == 20000, "address recorded without the intent behind it"
 
     def test_the_target_then_survives_a_second_run(self, tmp_env: Path) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         onboard_everos._set_base_url("http://localhost:20000")
@@ -6359,7 +6380,6 @@ class TestSwitchingToSelfManagedClearsTheOldRoot:
     """
 
     def test_the_previous_root_does_not_survive(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.cli import onboard_everos
         from raven_everos.server import ProbeVerdict
 
         tmp_env.write_text(
@@ -6375,7 +6395,7 @@ class TestSwitchingToSelfManagedClearsTheOldRoot:
 
         answers = iter(["127.0.0.1", "8000"])
         monkeypatch.setattr(questionary, "text", lambda *a, **kw: _Answer(next(answers)))
-        monkeypatch.setattr(onboard_everos.oc, "_require_questionary", lambda: questionary)
+        monkeypatch.setattr(_onboard_shared, "_require_questionary", lambda: questionary)
         monkeypatch.setattr("raven_everos.server.probe_health", lambda _u, **_kw: ProbeVerdict.OK)
 
         assert onboard_everos._use_self_managed_everos() is True
@@ -6395,7 +6415,6 @@ class TestTheManagedPortIsOfferedNotImposed:
     """
 
     def test_a_free_port_is_not_worth_a_screen(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
@@ -6406,7 +6425,6 @@ class TestTheManagedPortIsOfferedNotImposed:
         assert onboard_everos._ask_managed_port(Path("/r")) == 18791
 
     def test_a_typed_port_is_recorded_as_the_target(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_port_is_free", lambda p: p == 20000)
@@ -6418,7 +6436,6 @@ class TestTheManagedPortIsOfferedNotImposed:
     def test_nonsense_is_rejected_until_the_default_is_kept(
         self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
@@ -6433,7 +6450,6 @@ class TestTheManagedPortIsOfferedNotImposed:
     ) -> None:
         """A second run must not offer 18791 to someone who already moved off
         it -- accepting the offer would silently undo their choice."""
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(
             json.dumps({"plugins": {"config": {"everos-memory": {"port": 20000}}}}),
@@ -6456,7 +6472,6 @@ class TestTheManagedPortIsOfferedNotImposed:
     def test_a_declared_default_is_the_port_checked(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A caller that brings its own port -- the reuse lane, whose root
         declares one -- has that port checked, not raven's recorded intent."""
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(
             json.dumps({"plugins": {"config": {"everos-memory": {"port": 20000}}}}),
@@ -6472,7 +6487,6 @@ class TestTheManagedPortIsOfferedNotImposed:
     def test_an_occupied_answer_is_rechecked(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Typing a port that is also taken asks again instead of starting
         into a bind failure one screen later."""
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_port_is_free", lambda p: p == 20001)
@@ -6485,7 +6499,6 @@ class TestTheManagedPortIsOfferedNotImposed:
     def test_an_out_of_range_port_is_rejected_not_fatal(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The bind test raises OverflowError outside 0-65535, so a typed
         out-of-range port must be rejected before it reaches the socket."""
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
@@ -6507,7 +6520,6 @@ class TestTheManagedPortIsOfferedNotImposed:
     def test_the_bind_guard_rejects_out_of_range_ports(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """0 and >65535 must not reach the socket: bind(0) silently takes an
         ephemeral port, and bind(70000) raises OverflowError."""
-        from raven.cli import onboard_everos
 
         assert onboard_everos._port_is_free(0) is False
         assert onboard_everos._port_is_free(70000) is False
@@ -6515,7 +6527,6 @@ class TestTheManagedPortIsOfferedNotImposed:
     def test_force_prompt_asks_even_when_the_port_is_free(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Change port is an explicit request; deciding the port is fine and
         staying put makes the menu item look broken."""
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
@@ -6531,8 +6542,6 @@ class TestTheManagedPortIsOfferedNotImposed:
 
     def test_the_build_path_asks(self) -> None:
         import inspect
-
-        from raven.cli import onboard_everos
 
         assert "_ask_managed_port" in inspect.getsource(onboard_everos._step4_memory)
 
@@ -6556,11 +6565,9 @@ class TestARefusedSelfManagedAddressReturnsToTheLaneQuestion:
     ) -> None:
         import questionary
 
-        from raven.cli import onboard_everos
-
         self._seed(tmp_env)
         monkeypatch.setattr(onboard_everos, "_use_self_managed_everos", lambda: False)
-        monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+        monkeypatch.setattr(onboard_everos, "_configured", lambda: False)
         monkeypatch.setattr(
             onboard_everos,
             "_config_everos_role",
@@ -6570,7 +6577,7 @@ class TestARefusedSelfManagedAddressReturnsToTheLaneQuestion:
         answers = iter(["self", "skip"])
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer(next(answers)))
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert next(answers, None) is None, "the lane question was not asked again"
 
@@ -6583,16 +6590,14 @@ class TestARefusedSelfManagedAddressReturnsToTheLaneQuestion:
         """
         import questionary
 
-        from raven.cli import onboard_everos
-
         self._seed(tmp_env)
         monkeypatch.setattr(onboard_everos, "_use_self_managed_everos", lambda: False)
-        monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+        monkeypatch.setattr(onboard_everos, "_configured", lambda: False)
         monkeypatch.setattr(_discover_mod, "discover", lambda **_kw: [])
         answers = iter(["self", "skip"])
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer(next(answers)))
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         data = json.loads(tmp_env.read_text())
         assert data["memory"]["backend"] is None
@@ -6610,7 +6615,6 @@ class TestARefusedAddressCanBeRetyped:
 
     @staticmethod
     def _prompts(monkeypatch, answers):
-        from raven.cli import onboard_everos
 
         it = iter(answers)
         monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: next(it))
@@ -6619,14 +6623,11 @@ class TestARefusedAddressCanBeRetyped:
     def _choices(monkeypatch, answers):
         import questionary
 
-        from raven.cli import onboard_everos
-
         it = iter(answers)
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer(next(it)))
-        monkeypatch.setattr(onboard_everos.oc, "_require_questionary", lambda: questionary)
+        monkeypatch.setattr(_onboard_shared, "_require_questionary", lambda: questionary)
 
     def test_a_second_address_is_accepted(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.cli import onboard_everos
         from raven_everos.server import ProbeVerdict
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
@@ -6646,7 +6647,6 @@ class TestARefusedAddressCanBeRetyped:
         assert slice_["base_url"] == "http://127.0.0.1:8100"
 
     def test_skipping_gives_up_without_recording_anything(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.cli import onboard_everos
         from raven_everos.server import ProbeVerdict
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
@@ -6661,7 +6661,6 @@ class TestARefusedAddressCanBeRetyped:
     def test_a_nonsense_port_offers_the_same_choice(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A typo in the port is the same mistake as a typo in the host; it
         should not be the one that ends the step without asking."""
-        from raven.cli import onboard_everos
         from raven_everos.server import ProbeVerdict
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
@@ -6685,11 +6684,9 @@ class TestARefusalDoesNotAnnounceAnythingItDidNotDo:
     ) -> None:
         import questionary
 
-        from raven.cli import onboard_everos
-
         tmp_env.write_text(json.dumps({"memory": {"backend": "everos"}}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_use_self_managed_everos", lambda: False)
-        monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+        monkeypatch.setattr(onboard_everos, "_configured", lambda: False)
         monkeypatch.setattr(_discover_mod, "discover", lambda **_kw: [])
         answers = iter(["self", "skip"])
         # One snapshot per question, so what follows the refusal can be read on
@@ -6702,7 +6699,7 @@ class TestARefusalDoesNotAnnounceAnythingItDidNotDo:
 
         monkeypatch.setattr(questionary, "select", _select)
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert len(between) == 2, "the lane question was not asked again"
         after_refusal = " ".join(between[1].split())
@@ -6724,7 +6721,6 @@ class TestReconfiguringRestartsOurOwnService:
     def test_our_own_port_is_not_reported_as_taken(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The occupancy check is a bind test, so a service we started and are
         about to restart into looks exactly like a stranger squatting."""
-        from raven.cli import onboard_everos
         from raven_everos.server import LockHolder
 
         tmp_env.write_text(
@@ -6744,7 +6740,6 @@ class TestReconfiguringRestartsOurOwnService:
         assert onboard_everos._ask_managed_port(Path("/r")) == 31995
 
     def test_a_stranger_on_the_port_still_asks(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_port_is_free", lambda p: p == 19999)
@@ -6754,14 +6749,12 @@ class TestReconfiguringRestartsOurOwnService:
         assert onboard_everos._ask_managed_port(Path("/r")) == 19999
 
     def test_the_running_service_is_stopped_before_the_restart(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.cli import onboard_everos
 
         stopped: list[str] = []
         monkeypatch.setattr(onboard_everos, "_stop_for_reload", lambda root: stopped.append(str(root)) or True)
         assert "_stop_for_reload" in __import__("inspect").getsource(onboard_everos._step4_memory)
 
     def test_stop_for_reload_is_a_noop_when_nothing_runs(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.cli import onboard_everos
 
         monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
         assert onboard_everos._stop_for_reload(Path("/r")) is False
@@ -6782,7 +6775,6 @@ class TestIntentAndAddressAreDifferentQuestions:
     """
 
     def test_no_recorded_intent_targets_the_default(self, tmp_env: Path) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(
             json.dumps({"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:1995"}}}}),
@@ -6792,7 +6784,6 @@ class TestIntentAndAddressAreDifferentQuestions:
         assert onboard_everos._configured_target_url() == "http://localhost:18791"
 
     def test_recorded_intent_wins(self, tmp_env: Path) -> None:
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(
             json.dumps(
@@ -6808,7 +6799,6 @@ class TestIntentAndAddressAreDifferentQuestions:
     ) -> None:
         """The build path is where "do not ignore the configured address"
         belongs; convergence is not."""
-        from raven.cli import onboard_everos
 
         tmp_env.write_text(
             json.dumps({"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:1995"}}}}),
@@ -6848,8 +6838,6 @@ class TestTheLaneDecidesOwnership:
         runs: those are their keys and their toml."""
         import questionary
 
-        from raven.cli import onboard_everos
-
         self._self_managed(tmp_env)
         monkeypatch.setattr(_discover_mod, "discover", lambda **_kw: [])
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("self"))
@@ -6860,7 +6848,7 @@ class TestTheLaneDecidesOwnership:
         )
         monkeypatch.setattr(onboard_everos, "_use_self_managed_everos", lambda: True)
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     def test_skipping_leaves_a_self_managed_setup_untouched(
         self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
@@ -6868,13 +6856,11 @@ class TestTheLaneDecidesOwnership:
         """Nothing may flip owned, record a root, or move the address behind a skip."""
         import questionary
 
-        from raven.cli import onboard_everos
-
         self._self_managed(tmp_env)
         monkeypatch.setattr(_discover_mod, "discover", lambda **_kw: [])
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("skip"))
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         data = json.loads(tmp_env.read_text())
         slice_ = data["plugins"]["config"]["everos-memory"]
@@ -6899,7 +6885,6 @@ class TestTheLaneDecidesOwnership:
         """
         import questionary
 
-        from raven.cli import onboard_everos
         from raven_everos import config as ue
 
         mine = tmp_env.parent / "mine"
@@ -6912,7 +6897,7 @@ class TestTheLaneDecidesOwnership:
             json.dumps({"memory": {"backend": "everos"}, "plugins": {"config": {"everos-memory": slice_in}}}),
             encoding="utf-8",
         )
-        assert onboard_everos._memory_enabled() is True
+        assert onboard_everos._configured() is True
 
         monkeypatch.setattr(_discover_mod, "discover", lambda **_kw: [])
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("managed"))
@@ -6928,7 +6913,7 @@ class TestTheLaneDecidesOwnership:
 
         monkeypatch.setattr("raven_everos.server.ensure_everos_server", _ok)
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
         assert slice_["owned"] is True
@@ -6946,7 +6931,6 @@ class TestTheLaneDecidesOwnership:
         Dropping that offers 18791 again on the next run, which is the silent
         undo ``_ask_managed_port`` exists to prevent.
         """
-        from raven.cli import onboard_everos
 
         mine = tmp_env.parent / "mine"
         tmp_env.write_text(
@@ -6989,8 +6973,6 @@ class TestALeftoverRootIsOnlyTakenOverOnPurpose:
     ) -> None:
         import questionary
 
-        from raven.cli import onboard_everos
-
         tmp_env.write_text(
             json.dumps(
                 {
@@ -7009,7 +6991,7 @@ class TestALeftoverRootIsOnlyTakenOverOnPurpose:
             lambda _s: pytest.fail("offered a takeover the user did not ask for"),
         )
 
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
         assert slice_["owned"] is False

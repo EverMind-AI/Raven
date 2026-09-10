@@ -33,17 +33,16 @@ already written.
 from __future__ import annotations
 
 import sys
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import typer
 from rich.panel import Panel
 
 from raven import i18n
-from raven.cli import onboard_channels, onboard_everos, onboard_web
+from raven.cli import onboard_channels, onboard_web
 from raven.cli._helpers import print_probe_troubleshooting
 from raven.cli._onboard_shared import (  # noqa: F401  (re-exports: tests and
     # sibling wizards address these through this module's namespace)
-    _ABORT_EVEROS,
     _BACK,
     _POINTER,
     _QMARK,
@@ -66,6 +65,9 @@ from raven.providers.registry import (
     auth_shape,
 )
 from raven.providers.wire import stored_model_id
+
+if TYPE_CHECKING:
+    from raven.plugins import OnboardStep, OnboardUI
 
 # ---------------------------------------------------------------------------
 # Curated provider catalogue surfaced in Step 1's picker.
@@ -1848,6 +1850,118 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
 
 
 # ---------------------------------------------------------------------------
+# Step 4 -- long-term memory (a plugin's screen; paper: contracts/onboard.py)
+# ---------------------------------------------------------------------------
+
+
+def _onboard_ui() -> "OnboardUI":
+    """The wizard shell a plugin's screen borrows for the length of one run."""
+    from raven.cli._styles import RAVEN_STYLE
+    from raven.config.update_providers import lend_provider_credentials, resolve_main_model
+    from raven.plugins import OnboardUI
+
+    return OnboardUI(
+        console=console,
+        t=t,
+        require_questionary=_require_questionary,
+        qmark=_QMARK,
+        back=_BACK,
+        step_header=_step_header,
+        failure_choice=_failure_choice,
+        back_placeholder=_back_placeholder,
+        prompt_api_key=_prompt_api_key,
+        style=RAVEN_STYLE,
+        lend_provider_credentials=lend_provider_credentials,
+        resolve_main_model=resolve_main_model,
+    )
+
+
+def _memory_steps() -> list[tuple[str, "OnboardStep"]]:
+    from raven.config import load_config
+    from raven.config.raven import load_raven_config
+    from raven.core.plugin_stack import build_onboard_steps
+
+    return build_onboard_steps(load_config().workspace_path, load_raven_config())
+
+
+def _selected_backend() -> Optional[str]:
+    """``memory.backend`` as recorded, before asking whether it works."""
+    return (_load_raw_config().get("memory") or {}).get("backend") or None
+
+
+def _memory_enabled() -> bool:
+    """The selected backend says it is configured.
+
+    The recorded name is read first so a config with memory off answers
+    without a plugin being built at all -- the recap and the import step ask
+    this on every run.
+    """
+    selected = _selected_backend()
+    if not selected:
+        return False
+    return any(name == selected and step.configured() for name, step in _memory_steps())
+
+
+def _step4_memory(
+    *, skip: bool, non_interactive: bool, main_model: Optional[str], warnings: list[str], skip_test: bool = False
+) -> object:
+    """Run every plugin-contributed memory screen and record what it decided.
+
+    The host owns ``memory.backend`` and nothing else here: a screen returns a
+    ``StepOutcome`` and this writes the contribution's own name (or ``None``)
+    against it, so a plugin never touches the host's config key.
+    """
+    from raven.config.update import set_memory_backend
+    from raven.core.plugin_stack import everos_plugin_missing_note
+    from raven.plugins import StepOutcome
+
+    steps = _memory_steps()
+    if not steps or skip or non_interactive:
+        _step_header(4, t("Long-term memory"))
+        if not steps:
+            # Nothing is written. Every lane a screen would offer configures,
+            # starts or probes a service this install does not carry, and
+            # turning the backend off here would answer for the user a question
+            # only installing the plugin settles.
+            console.print(
+                t(
+                    "  [yellow]⚠ Long-term memory cannot be configured in this installation.[/yellow]\n  [dim]{note}[/dim]",
+                    note=everos_plugin_missing_note(),
+                ),
+                highlight=False,
+            )
+            return None
+        # Never configured here -> disable backend-driven memory so the runtime
+        # does not activate a backend with no models behind it. An
+        # already-configured setup is preserved, since ``_memory_enabled`` asks
+        # the selected backend itself.
+        if not _memory_enabled():
+            set_memory_backend(None)
+        console.print(
+            t(
+                "  [dim]Long-term memory stays off.[/dim]\n"
+                "  [dim]Run `raven onboard` again whenever you want to configure it.[/dim]"
+            )
+        )
+        return None
+
+    ui = _onboard_ui()
+    for name, step in steps:
+        outcome = step.run(
+            ui,
+            step_no=4,
+            non_interactive=non_interactive,
+            main_model=main_model,
+            warnings=warnings,
+            skip_test=skip_test,
+        )
+        if outcome is StepOutcome.BACK:
+            return _BACK
+        set_memory_backend(name if outcome is StepOutcome.CONFIGURED else None)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Final summary
 # ---------------------------------------------------------------------------
 
@@ -1884,7 +1998,7 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
     provs = ", ".join(_provider_label(n).split(" (")[0] for n in _configured_providers()) or "—"
     run_loc = t("Host (direct)") if _current_sandbox_backend() == "none" else t("Sandbox (boxlite)")
     chans = ", ".join(onboard_channels._enabled_channels()) or t("none")
-    mem = t("EverOS") if onboard_everos._memory_enabled() else t("[yellow]off[/yellow]")
+    mem = _selected_backend() if _memory_enabled() else t("[yellow]off[/yellow]")
     recap = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
     recap.add_column(style="dim", no_wrap=True)
     recap.add_column()
@@ -1966,7 +2080,7 @@ def _step7_import(*, skip: bool, non_interactive: bool) -> object:
         console.print(t("  [dim]Skipped (non-interactive).[/dim]"))
         return None
 
-    if not onboard_everos._memory_enabled():
+    if not _memory_enabled():
         console.print(t("  [dim]Skipped — EverOS long-term memory is required for history import.[/dim]"))
         return None
 
@@ -2535,7 +2649,7 @@ def _run_wizard_body(
         ),
         lambda: _step2_sandbox(skip=skip_sandbox, non_interactive=non_interactive),
         lambda: onboard_channels._step3_channel(channel=channel, skip=skip_channel, non_interactive=non_interactive),
-        lambda: onboard_everos._step4_memory(
+        lambda: _step4_memory(
             skip=skip_memory,
             non_interactive=non_interactive,
             main_model=_load_current_default_model(),
