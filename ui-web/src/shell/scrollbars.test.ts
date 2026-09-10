@@ -44,6 +44,7 @@ const px = (t: HTMLElement, prop: 'top' | 'left' | 'height' | 'width'): number =
 beforeAll(() => {
   install()
 })
+
 beforeEach(() => {
   vi.useFakeTimers()
 })
@@ -194,62 +195,5 @@ describe('overlay scrollbars', () => {
     expect(thumbs()).toHaveLength(1)
     window.dispatchEvent(new Event('resize'))
     expect(thumbs()).toHaveLength(0)
-  })
-})
-
-describe('a scroller inside another scroller', () => {
-  /* The settings dialog: a page that scrolls, with a provider rail scrolling
-     inside it. Scroll the page and the rail's box moves out of the dialog,
-     while the rail's own thumb was still placed from that box -- drawn over
-     the dialog's header, outside anything the reader can see there. */
-  const clipper = (top: number, height: number): HTMLElement => {
-    const el = document.createElement('div')
-    el.style.overflowY = 'auto'
-    el.getBoundingClientRect = () =>
-      ({
-        top, bottom: top + height, left: 0, right: 500, width: 500, height,
-        x: 0, y: top, toJSON: () => ({}),
-      }) as DOMRect
-    document.body.appendChild(el)
-    return el
-  }
-
-  it('clamps the thumb to the part of the scroller that is on screen', () => {
-    const outer = clipper(100, 400)
-    const inner = scroller({ top: -50, clientHeight: 600, scrollHeight: 3000 })
-    outer.appendChild(inner)
-
-    show(inner)
-    const t = vert()!
-    /* Without this the bar started at -50 + SB_PAD, above the dialog. It now
-       sits the same SB_PAD inside the visible slice as an unclipped bar sits
-       inside its own box. */
-    expect(px(t, 'top')).toBe(100 + SB_PAD)
-    expect(px(t, 'top') + px(t, 'height')).toBeLessThanOrEqual(500)
-  })
-
-  it('draws no thumb for a scroller scrolled entirely out of its container', () => {
-    const outer = clipper(600, 200)
-    const inner = scroller({ top: 0, clientHeight: 300, scrollHeight: 3000 })
-    outer.appendChild(inner)
-
-    show(inner)
-    /* Its box ends at 300 and the container starts at 600: there is nothing of
-       it on screen, so a bar would be furniture for an invisible box. */
-    expect(vert()).toBeUndefined()
-  })
-
-  it('ignores an ancestor that does not clip', () => {
-    const plain = document.createElement('div')
-    plain.getBoundingClientRect = () =>
-      ({ top: 0, bottom: 10, left: 0, right: 10, width: 10, height: 10, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
-    document.body.appendChild(plain)
-    const inner = scroller()
-    plain.appendChild(inner)
-
-    show(inner)
-    /* A positioned box narrower than its overflowing child must not cut a bar
-       the page is perfectly happy to show. */
-    expect(px(vert()!, 'top')).toBe(10 + SB_PAD)
   })
 })

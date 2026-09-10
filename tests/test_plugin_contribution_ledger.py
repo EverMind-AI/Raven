@@ -13,27 +13,14 @@ from __future__ import annotations
 import dataclasses
 
 
-def test_the_service_locator_grants_are_the_ledgered_eight() -> None:
+def test_the_service_locator_grants_are_the_ledgered_five() -> None:
     from raven.plugins.context import ServiceLocator
 
     assert sorted(f.name for f in dataclasses.fields(ServiceLocator)) == [
         "agent_id",
-        # The host's tools.media.<kind> section, read live and resolved as the
-        # host's own image_generate resolves it (paper: contracts/plugin_surface.py).
-        # A credential grant: whoever holds it can spend the deployment's image
-        # budget, so a plugin that generates pictures rides the host's tool and
-        # its usage ledger instead of carrying a key of its own.
-        "media_config",
-        # The proxy the host's media calls go through; generation state, not a
-        # preference, so it is a value rather than a reader.
-        "media_proxy",
         "notify",
         "provider",
         "user_id",
-        # The host's tools.web section (proxy, search vendor keys), so a plugin
-        # with a web-facing tool defaults to the host's routing and credentials
-        # and its own slice keys become overrides rather than the only source.
-        "web_config",
         "workspace",
     ], "a new field here is a new grant to every plugin factory: ledger it and say why"
     assert ServiceLocator.__dataclass_params__.frozen, "grants are handed over, never handed back"
@@ -53,10 +40,6 @@ def test_the_runtime_handles_grants_are_ledgered() -> None:
         "session_dir",
         "subagent_registry",
         "subagents_paused",
-        # Where a tool that bills per call reports its spend: the loop's own
-        # image-usage recorder. Hands over the power to write into the host's
-        # usage ledger, nothing more; None means the host keeps none.
-        "usage_recorder",
         # Keyed one-shot wakes on the host scheduler, namespaced to the
         # contributing plugin (paper: contracts/scheduling.py).
         "wake_scheduler",

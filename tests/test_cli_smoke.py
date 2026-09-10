@@ -176,10 +176,6 @@ REGISTERED_COMMAND_NAMES = {
     # not a command -- raven spawns those agents itself.
     "acp",
     "agent",
-    # Plural beside the singular: `agents` manages the roster of agent
-    # products (`agents new` scaffolds one), while `agent` talks to the
-    # host's own agent.
-    "agents",
     "channels",
     "cron",
     "deep-research",

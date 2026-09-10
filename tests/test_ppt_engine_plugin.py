@@ -22,7 +22,6 @@ import pytest
 pytest.importorskip("pptx")
 
 from raven.agent import workdir  # noqa: E402
-from raven.config.schema import MediaToolConfig  # noqa: E402
 from raven.contracts.loop_hooks import AgentHookContext  # noqa: E402
 from raven.plugins.context import PluginContext, ServiceLocator  # noqa: E402
 from raven_ppt import plugin as plugin_module  # noqa: E402
@@ -33,14 +32,10 @@ ENGINE_HOME = REPO / "plugins-dist" / "ppt-engine"
 ENABLED = {"enabled": True, "profile": "script_author"}
 
 
-def _ctx(slice_: dict, workspace: Path, *, image: MediaToolConfig | None = None) -> PluginContext:
-    """A host that configured an image tool, unless the test says otherwise."""
-    image = MediaToolConfig(api_key="k", model="openai/gpt-image-2") if image is None else image
+def _ctx(slice_: dict, workspace: Path) -> PluginContext:
     return PluginContext(
         config=slice_,
-        services=ServiceLocator(
-            workspace=workspace, user_id="u", agent_id="a", media_config=lambda kind: image, media_proxy=None
-        ),
+        services=ServiceLocator(workspace=workspace, user_id="u", agent_id="a"),
     )
 
 
@@ -106,92 +101,6 @@ def test_image_search_declines_without_a_key(tmp_path: Path, monkeypatch) -> Non
     assert plugin_module.make_ppt_image_search(_ctx(dict(ENABLED), tmp_path)) is None
 
 
-def test_image_generation_is_contributed_and_offered_only_while_the_host_section_asks(tmp_path: Path) -> None:
-    """The same withholding image_generate applies to itself, on the same live lane:
-    the tool is contributed once and declares `configured()`, which follows the
-    host's section both ways -- a section added after the prototypes were built
-    offers it on the next assembly, an emptied one withdraws it -- instead of a
-    decision frozen at the first prototype. A host that grants no media_config at
-    all (an older ServiceLocator) is a tool that is never offered."""
-    section: dict[str, MediaToolConfig | None] = {"now": MediaToolConfig()}
-    ctx = PluginContext(
-        config=dict(ENABLED),
-        services=ServiceLocator(
-            workspace=tmp_path, user_id="u", agent_id="a", media_config=lambda kind: section["now"], media_proxy=None
-        ),
-    )
-    tool = plugin_module.make_ppt_generate_image(ctx)
-    assert tool is not None and tool.configured() is False
-    section["now"] = MediaToolConfig(api_key="k", model="openai/gpt-image-2")
-    assert tool.configured() is True
-    section["now"] = MediaToolConfig()
-    assert tool.configured() is False
-
-    bare = PluginContext(config=dict(ENABLED), services=ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a"))
-    plugin_module._SHARED.clear()
-    bare_tool = plugin_module.make_ppt_generate_image(bare)
-    assert bare_tool is not None and bare_tool.configured() is False
-
-
-def test_image_generation_follows_the_host_image_config(tmp_path: Path) -> None:
-    ctx = _ctx(dict(ENABLED), tmp_path, image=MediaToolConfig(api_key="k", model="google/gemini-3.1-flash-image"))
-    tool = plugin_module.make_ppt_generate_image(ctx)
-    assert tool is not None
-    assert "references" in tool.parameters["properties"]
-    assert "16:9" in tool.parameters["properties"]["aspect_ratio"]["enum"]
-
-
-def test_the_usage_recorder_bound_at_runtime_reaches_the_image_generator(tmp_path: Path) -> None:
-    """The host mints RuntimeHandles after the factories ran; a recorder that arrives
-    then must reach the generator built for the next turn, so the deck's image spend
-    is recorded where image_generate records its own."""
-    from raven.contracts.plugin_surface import RuntimeHandles
-
-    async def recorder(snapshot) -> None:
-        return None
-
-    ctx = _ctx(dict(ENABLED), tmp_path)
-    tool = plugin_module.make_ppt_generate_image(ctx)
-    tool.bind_runtime(RuntimeHandles(usage_recorder=recorder))
-    generator = tool._engine_for(tmp_path)["ppt_generate_image"]
-    assert generator.media._usage_recorder is recorder
-
-
-def test_image_search_reads_the_hosts_serper_key_through_the_web_grant(tmp_path: Path, monkeypatch) -> None:
-    """A deployment that configured web_search once has configured the deck's image
-    search too: the host's tools.web reaches the plugin through the locator, vendor
-    slot first, legacy leaf after, and the slice key stays an override."""
-    from raven.config.schema import WebToolsConfig
-
-    monkeypatch.delenv("SERPER_API_KEY", raising=False)
-    web = WebToolsConfig.model_validate({"providers": {"serper": {"apiKey": "vendor-key"}}, "proxy": "http://p:1"})
-    ctx = PluginContext(
-        config=dict(ENABLED),
-        services=ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a", web_config=lambda: web),
-    )
-    shared = plugin_module._Shared(ctx)
-    assert shared.image_search_key() == "vendor-key"
-    assert shared.web_proxy() == "http://p:1"
-    assert plugin_module.make_ppt_image_search(ctx) is not None
-
-    legacy = WebToolsConfig.model_validate({"search": {"apiKey": "legacy-key"}})
-    shared = plugin_module._Shared(
-        PluginContext(
-            config=dict(ENABLED),
-            services=ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a", web_config=lambda: legacy),
-        )
-    )
-    assert shared.image_search_key() == "legacy-key"
-
-    shared = plugin_module._Shared(
-        PluginContext(
-            config={**ENABLED, "imageSearch": {"apiKey": "slice-key"}, "webProxy": "http://own:2"},
-            services=ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a", web_config=lambda: web),
-        )
-    )
-    assert shared.image_search_key() == "slice-key" and shared.web_proxy() == "http://own:2"
-
-
 def test_a_malformed_slice_casts_the_fail_closed_sentinel(tmp_path: Path) -> None:
     """The host's stack builder logs-and-skips a raising factory, so a parse
     error that escaped would boot this deck product with no deck face at all
@@ -237,11 +146,16 @@ def test_a_malformed_slice_casts_the_fail_closed_sentinel(tmp_path: Path) -> Non
     assert "script_writer" in profile_reply and "script_author" in profile_reply
 
 
-def test_a_slice_image_section_overrides_the_hosts_grant(tmp_path: Path, monkeypatch) -> None:
-    """The grant is the default; a slice naming its own ``image`` section is the
-    override -- the seat for a host that grants nothing, or a deck kept on another
-    account than the host's pictures. Read off the built tool: both values name
-    what neither the grant nor any environment fallback would produce."""
+def test_the_image_section_reaches_the_generator_it_was_copied_for(tmp_path: Path, monkeypatch) -> None:
+    """A plugin sees only its slice, so the launcher copies the resolved
+    tools.media.image across -- the bridge imageSearch.apiKey already walks.
+
+    Read off the built tool rather than off the call: nothing passed
+    ``image_config`` before this, and the tool answers with the shipped default
+    model and the OPENROUTER_API_KEY environment fallback when it is handed no
+    section at all. Both assertions therefore name values that neither fallback
+    can produce, so a builder that accepted the section and dropped it fails
+    here."""
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     slice_ = {
         **ENABLED,
@@ -254,17 +168,16 @@ def test_a_slice_image_section_overrides_the_hosts_grant(tmp_path: Path, monkeyp
     assert generator.model == "google/gemini-3.1-flash-image"
 
 
-def test_without_slice_or_grant_the_generator_has_no_key_and_the_shipped_default(tmp_path: Path, monkeypatch) -> None:
-    """A host that grants nothing and a slice that says nothing: the generator
-    stands on the shipped default id with no key, which is the shape configured()
-    answers False on."""
+def test_no_image_section_leaves_the_generator_on_its_shipped_default(tmp_path: Path, monkeypatch) -> None:
+    """The slice is optional: a config that never mentions pictures keeps the
+    behaviour that shipped, which is the OpenRouter default id and no key of its
+    own."""
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    tools = plugin_module._Shared(_ctx(dict(ENABLED), tmp_path, image=MediaToolConfig()))._assemble(tmp_path)
+    tools = plugin_module._Shared(_ctx(dict(ENABLED), tmp_path))._assemble(tmp_path)
 
     generator = tools["ppt_generate_image"]
     assert generator.api_key == ""
     assert generator.model == "openai/gpt-image-2.5-sunburst"
-    assert generator.configured() is False
 
 
 def test_a_well_typed_slice_never_meets_the_sentinel(tmp_path: Path) -> None:

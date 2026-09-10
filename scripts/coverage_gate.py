@@ -22,9 +22,6 @@ PRODUCTION_PATHSPECS = (
     # Distributables beside the host wheel (the everos memory plugin) are
     # production code too; without this a change there dodges the diff gate.
     ":(glob)plugins-dist/**/*.py",
-    # Scaffold templates are copied out by the scaffolder, never imported by
-    # the runtime; they are data with a .py spelling, not production code.
-    ":(glob,exclude)raven/templates/agents_scaffold/**",
 )
 DEFAULT_DIFF_THRESHOLD = 90.0
 OMITTED_PATHS = {

@@ -301,7 +301,6 @@ def test_the_own_key_also_pays_for_the_image_generator_on_openrouter(grounded, m
     gets nothing written there, and an explicit PPT_IMAGE_API_KEY wins."""
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     assert data["tools"]["media"]["image"]["apiKey"] == "sk-own"
-    assert "selectionConfig" not in data["tools"]["media"]["image"]
 
     monkeypatch.setenv("PPT_API_BASE", "https://gateway.example/v1")
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
@@ -333,7 +332,7 @@ def _inheriting_host(tmp_path, image: dict | None = None) -> None:
 def test_the_inherit_branch_takes_the_hosts_image_section(grounded, tmp_path, monkeypatch):
     """The operator's model and quality choice reach the deck, and selectionConfig
     keeps a later Settings edit live rather than frozen at launch. The engine gets
-    no copy: it reads the section through the locator's media_config grant."""
+    its own copy because a plugin sees only its slice, never tools.media."""
     monkeypatch.delenv("PPT_API_KEY", raising=False)
     _inheriting_host(tmp_path, {"apiKey": "sk-pictures", "model": "openai/gpt-image-2.5-sunburst"})
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
@@ -342,7 +341,9 @@ def test_the_inherit_branch_takes_the_hosts_image_section(grounded, tmp_path, mo
     assert image["apiKey"] == "sk-pictures"
     assert image["model"] == "openai/gpt-image-2.5-sunburst"
     assert image["selectionConfig"] == str(tmp_path / "home" / "config.json")
-    assert "image" not in data["plugins"]["config"]["ppt-engine"]
+    slice_image = data["plugins"]["config"]["ppt-engine"]["image"]
+    assert slice_image["apiKey"] == "sk-pictures"
+    assert slice_image["model"] == "openai/gpt-image-2.5-sunburst"
 
 
 def test_the_inherit_branch_borrows_the_chat_key_for_pictures(grounded, tmp_path, monkeypatch):
@@ -354,7 +355,7 @@ def test_the_inherit_branch_borrows_the_chat_key_for_pictures(grounded, tmp_path
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
 
     assert data["tools"]["media"]["image"]["apiKey"] == "sk-or-chat"
-    assert "image" not in data["plugins"]["config"]["ppt-engine"]
+    assert data["plugins"]["config"]["ppt-engine"]["image"]["apiKey"] == "sk-or-chat"
 
 
 def test_a_borrowed_key_is_never_lent_to_another_gateway(grounded, tmp_path, monkeypatch):
@@ -721,68 +722,6 @@ def test_the_three_tiers_are_declared_from_the_modes_directory(grounded):
     assert modes["medium"]["reasoningEffort"] == "low" and "reasoningEffort" not in modes["high"]
     assert modes["medium"]["overlay"] == modes["high"]["overlay"] == {"buildCap": 10, "readingCap": 3}
     assert modes["max"]["overlay"] == {} and "reasoningEffort" not in modes["max"]
-
-
-def test_the_host_image_section_is_inherited_whole_and_followed_live(grounded, tmp_path, monkeypatch):
-    """A deck's pictures are configured once, on the host: key, base, model and quality
-    come across together, `selectionConfig` points back at the host file so a model
-    switched in Settings reaches the next deck, and the host's media proxy rides along.
-    Before this the render carried the key alone, and the engine read none of it."""
-    home = tmp_path / "home"
-    home.mkdir(parents=True, exist_ok=True)
-    (home / "config.json").write_text(
-        json.dumps(
-            {
-                "tools": {
-                    "media": {
-                        "image": {
-                            "apiKey": "sk-host-images",
-                            "apiBase": "https://images.example/v1",
-                            "model": "qwen/qwen-image-3",
-                            "quality": "low",
-                        },
-                        "proxy": "http://media-proxy.example:3128",
-                    }
-                }
-            }
-        )
-    )
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-    image = data["tools"]["media"]["image"]
-    assert (image["apiKey"], image["apiBase"], image["model"], image["quality"]) == (
-        "sk-host-images",
-        "https://images.example/v1",
-        "qwen/qwen-image-3",
-        "low",
-    )
-    assert image["selectionConfig"] == str(home / "config.json")
-    assert data["tools"]["media"]["proxy"] == "http://media-proxy.example:3128"
-
-    # The product's own settings pin a deck account or endpoint over the inherited one.
-    monkeypatch.setenv("PPT_IMAGE_API_KEY", "sk-deck")
-    monkeypatch.setenv("PPT_IMAGE_API_BASE", "https://deck-images.example/v1")
-    monkeypatch.setenv("PPT_IMAGE_MODEL", "gpt-image-2")
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-    image = data["tools"]["media"]["image"]
-    assert (image["apiKey"], image["apiBase"], image["model"]) == (
-        "sk-deck",
-        "https://deck-images.example/v1",
-        "gpt-image-2",
-    )
-    assert image["quality"] == "low", "what the product did not pin is still the host's, as a snapshot"
-    assert "selectionConfig" not in image, "a pinned section is not replaced by the host's live one"
-
-
-def test_a_host_without_an_image_section_renders_an_empty_one(grounded, tmp_path, monkeypatch):
-    """No key, no model: exactly the shape on which the engine withholds the generator
-    instead of offering a tool whose every call would fail. Against a gateway that is
-    not OpenRouter the LLM key does not pay for pictures either, and a host that
-    selected nothing has no file worth following."""
-    monkeypatch.setenv("PPT_API_BASE", "https://gateway.example/v1")
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-    image = data["tools"]["media"]["image"]
-    assert not image.get("model") and not image.get("apiBase") and not image.get("apiKey")
-    assert "selectionConfig" not in image
 
 
 def test_the_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkeypatch):

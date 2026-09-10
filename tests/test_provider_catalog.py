@@ -322,7 +322,7 @@ def test_a_model_family_quirk_is_declared_not_branched_on_in_the_factory() -> No
     assert "qwen" not in source, "the model-family branch is back in the factory"
 
 
-def test_the_bundled_registry_is_packaged() -> None:
+def test_the_bundled_label_snapshot_is_packaged() -> None:
     """A data file the wheel omits is missing only for installed users.
 
     The build include list is a whitelist of patterns, so a new non-Python asset
@@ -333,17 +333,17 @@ def test_the_bundled_registry_is_packaged() -> None:
     import tomllib
     from pathlib import Path
 
-    from raven.providers.registry_data import MODELS_FILE, PROVIDER_MODELS_FILE, PROVIDERS_FILE
+    from raven.providers.catalog import SNAPSHOT
 
     root = Path(__file__).resolve().parents[1]
+    assert SNAPSHOT.exists(), "the snapshot itself is missing; run scripts/refresh_models_dev_snapshot.py"
+
     patterns = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["hatch"]["build"]["include"]
-    for path in (MODELS_FILE, PROVIDER_MODELS_FILE, PROVIDERS_FILE):
-        assert path.exists(), f"{path.name} is missing; run scripts/refresh_provider_registry.py"
-        relative = str(path.relative_to(root))
-        assert any(fnmatch.fnmatch(relative, p) for p in patterns), f"{relative} matches no build include pattern"
+    relative = str(SNAPSHOT.relative_to(root))
+    assert any(fnmatch.fnmatch(relative, p) for p in patterns), f"{relative} matches no build include pattern"
 
 
-#: Providers whose models the registry labels today. A refresh that drops one is
+#: Providers whose models the snapshot labels today. A refresh that drops one is
 #: a regression no total can show: the catalogue grew from 16 providers to 37
 #: while a criterion change silently took every label off three gateways, and
 #: both the provider count and the model count still went up. Taking a name off
@@ -371,120 +371,59 @@ LABELLED_PROVIDERS = frozenset(
 )
 
 
-def _rows_by_provider() -> dict[str, list]:
-    from collections import defaultdict
+def _packaged_snapshot() -> dict:
+    import json
 
-    from raven.providers.registry_data import _index
+    from raven.providers.catalog import SNAPSHOT
 
-    out: dict[str, list] = defaultdict(list)
-    for (provider, _), row in _index().items():
-        out[provider].append(row)
-    return out
+    return json.loads(SNAPSHOT.read_text(encoding="utf-8"))
 
 
-def test_the_registry_labels_every_provider_it_labelled_before() -> None:
-    rows = _rows_by_provider()
-    missing = sorted(LABELLED_PROVIDERS - set(rows))
+def test_the_snapshot_labels_every_provider_it_labelled_before() -> None:
+    snapshot = _packaged_snapshot()
+    missing = sorted(LABELLED_PROVIDERS - set(snapshot))
     assert not missing, f"the refresh dropped labels for: {missing}"
+
+    empty = sorted(name for name in LABELLED_PROVIDERS if not snapshot[name].get("models"))
+    assert not empty, f"present but carrying no models: {empty}"
 
     # Present, non-empty, and every row unlabelled renders exactly like being
     # absent -- the id as its own label -- so presence alone is not the property.
-    unlabelled = sorted(name for name in LABELLED_PROVIDERS if not any(row.name for row in rows[name]))
+    unlabelled = sorted(
+        name for name in LABELLED_PROVIDERS if not any(model.get("name") for model in snapshot[name]["models"].values())
+    )
     assert not unlabelled, f"present but no model carries a name: {unlabelled}"
 
 
-def test_the_registry_records_where_it_came_from() -> None:
+def test_the_snapshot_records_where_it_came_from() -> None:
     """Provenance a reader can act on, not a date they have to trust.
 
     The catalogue is refreshed from someone else's repository; without the commit
-    it was built at, "the registry is stale" is unanswerable and a regenerated
+    it was built at, "the snapshot is stale" is unanswerable and a regenerated
     file is unreviewable.
     """
-    import json
-
-    from raven.providers.registry_data import MODELS_FILE, PROVIDER_MODELS_FILE, PROVIDERS_FILE
-
-    for path in (MODELS_FILE, PROVIDER_MODELS_FILE, PROVIDERS_FILE):
-        source = json.loads(path.read_text(encoding="utf-8")).get("_source")
-        assert source, f"{path.name} has no _source; regenerate with scripts/refresh_provider_registry.py"
-        assert source.keys() >= {"repo", "ref", "sha"}, source
-        assert len(source["sha"]) == 40, source["sha"]
+    source = _packaged_snapshot().get("_source")
+    assert source, "no _source; regenerate with scripts/refresh_models_dev_snapshot.py"
+    assert source.keys() >= {"repo", "ref", "sha"}, source
+    assert len(source["sha"]) == 40, source["sha"]
 
 
-def test_the_registry_carries_no_context_window_anywhere() -> None:
-    """The one number these files must never answer, asserted field by field.
+def test_the_snapshot_carries_labels_and_cost_and_nothing_that_shapes_a_request() -> None:
+    """The split this file's module docstring rests on, asserted.
 
-    A window sizes trimming, so it shapes the next request and only the tables
-    that also route may answer it (``providers/rates.py``). Everything else here
-    is read for display: a stale tag costs an icon, a stale price costs an
-    inaccurate total. Carrying a window would make a community-maintained file
-    able to cause a truncated request, which is the failure the split exists to
-    prevent. ``maxOutputTokens`` is not that number -- it is a ceiling the
-    provider enforces, reported next to the model, and nothing sizes a prompt
-    with it.
+    Cost prices a finished call and a stale figure costs an inaccurate total.
+    A context window sizes trimming and a capability flag picks a wire shape, so
+    both must come from the table that also routes -- carrying them here would
+    make a community-maintained file able to cause a wrong request.
     """
-    import json
-
-    from raven.providers.registry_data import MODELS_FILE, PROVIDER_MODELS_FILE
-
-    banned = {"contextWindow", "context_window", "context", "maxInputTokens", "limit"}
-    for path in (MODELS_FILE, PROVIDER_MODELS_FILE):
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        for key in ("models", "overrides", "curated"):
-            for row in payload.get(key) or []:
-                offending = banned & set(row)
-                assert not offending, f"{path.name} {key} row {row.get('id') or row.get('apiModelId')}: {offending}"
-
-
-def test_every_tag_in_the_registry_is_one_the_uis_can_draw() -> None:
-    """A closed vocabulary, because an icon table cannot render a new string.
-
-    The reader drops an unknown tag on the way in, so this asserts the data
-    rather than the reader: a refresh that introduces a name nobody has drawn
-    should fail here, where the fix is a mapping or an icon, not silently show
-    one fewer icon.
-    """
-    import json
-
-    from raven.providers.registry_data import CAPABILITIES, MODALITIES, MODELS_FILE, PROVIDER_MODELS_FILE
-
-    for path in (MODELS_FILE, PROVIDER_MODELS_FILE):
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        for key in ("models", "overrides", "curated"):
-            for row in payload.get(key) or []:
-                assert set(row.get("capabilities") or []) <= set(CAPABILITIES), row
-                assert set(row.get("inputModalities") or []) <= set(MODALITIES), row
-                assert set(row.get("outputModalities") or []) <= set(MODALITIES), row
-
-
-def test_nothing_that_shapes_a_request_reads_the_registry() -> None:
-    """The boundary as an import rule, which is the half a schema cannot state.
-
-    A field can be display-only and still be read by the code that builds a
-    request; that is how the previous snapshot's cost figures would have become
-    routing input if anyone had reached for them. The modules listed here decide
-    what goes on the wire, so a registry import appearing in one is the change
-    this test exists to catch.
-    """
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[1] / "raven" / "providers"
-    request_path = (
-        "binding.py",
-        "capabilities.py",
-        "endpoints.py",
-        "factory.py",
-        "litellm_provider.py",
-        "prompt_cache.py",
-        "protocol.py",
-        "resolving_provider.py",
-        "streaming.py",
-        "truncation.py",
-        "wire.py",
-    )
-    for name in request_path:
-        source = (root / name).read_text(encoding="utf-8")
-        assert "registry_data" not in source, f"{name} reads the display registry"
+    fields: set[str] = set()
+    for name, entry in _packaged_snapshot().items():
+        if name.startswith("_"):
+            continue
+        assert set(entry) == {"models"}, f"{name} carries more than models: {sorted(entry)}"
+        for model in entry["models"].values():
+            fields |= set(model)
+    assert fields <= {"name", "description", "cost"}, f"snapshot carries request-shaping fields: {sorted(fields)}"
 
 
 def test_a_model_in_the_snapshot_is_described_and_one_outside_it_still_renders() -> None:
@@ -628,28 +567,3 @@ def test_the_env_key_exemption_list_has_no_stale_entries() -> None:
         if expected and declared in expected:
             stale.append(f"{name}: LiteLLM now names {declared!r} too -- drop the exemption")
     assert not stale, "\n".join(stale)
-
-
-def test_the_qwen_vendor_is_shelved_under_the_cloud_that_runs_it() -> None:
-    """The service is DashScope and the company is Alibaba Cloud.
-
-    Every id and config section is written with the service name, so that is
-    what the slug stays; what a person picks from a list is the company, which
-    is how the rest of the industry labels this shelf. The address is the
-    OpenAI-compatible endpoint, offered as a default rather than forced onto
-    the wire -- LiteLLM's own driver already knows where a dashscope call goes,
-    and a second answer is how a working route breaks.
-    """
-    from raven.providers.registry import find_by_name
-
-    spec = find_by_name("dashscope")
-    assert spec.name == "dashscope", "the slug is what stored ids and config keys are written with"
-    assert spec.display_name == "Alibaba Cloud"
-    assert spec.env_key == "DASHSCOPE_API_KEY"
-    assert spec.default_api_base == "https://dashscope.aliyuncs.com/compatible-mode/v1/"
-    assert spec.usable_default_api_base == "", "shown and probed, never sent as a per-call base"
-
-    # A model id written before the rename still resolves to the same section.
-    from raven.providers.registry import find_by_model
-
-    assert find_by_model("dashscope/qwen-plus") is spec

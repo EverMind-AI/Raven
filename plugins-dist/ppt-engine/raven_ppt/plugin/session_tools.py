@@ -33,15 +33,9 @@ from raven_ppt.tools import _return
 class SessionTool(Tool):
     """One deck tool's registered face: fork schema, per-turn workspace."""
 
-    def __init__(
-        self,
-        prototype: Tool,
-        engine_for: Callable[[Path], Mapping[str, Tool]],
-        on_bind: Callable[[Any], None] | None = None,
-    ) -> None:
+    def __init__(self, prototype: Tool, engine_for: Callable[[Path], Mapping[str, Tool]]) -> None:
         self._prototype = prototype
         self._engine_for = engine_for
-        self._on_bind = on_bind
         # Instance attributes shadow the ABC's class defaults, so the registry
         # reads the fork tool's own budget off this wrapper.
         self.timeout_seconds = prototype.timeout_seconds
@@ -59,20 +53,6 @@ class SessionTool(Tool):
     @property
     def parameters(self) -> dict[str, Any]:
         return self._prototype.parameters
-
-    def configured(self) -> bool:
-        """The prototype's answer where it declares one; a tool that does not is
-        always offered. Asked of the prototype rather than an engine because the
-        question is about the deployment's configuration, not about a deck."""
-        probe = getattr(self._prototype, "configured", None)
-        return bool(probe()) if callable(probe) else True
-
-    def bind_runtime(self, handles: Any) -> None:
-        """The loop's late-bound grants, handed on to the assembly that builds the
-        engines: the usage recorder a generating tool reports its spend to lives on
-        the loop, which does not exist when the prototypes are built."""
-        if self._on_bind is not None:
-            self._on_bind(handles)
 
     async def execute(self, **params: Any) -> str | ToolResult:
         bound = workdir.current()

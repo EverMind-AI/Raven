@@ -77,6 +77,15 @@ class TestLintExternalPaths:
         )
         assert lint_external_paths(body) == ["~/.claude", "~/.openclaw"]
 
+    def test_generic_xdg_root_names_the_product_under_it(self) -> None:
+        assert lint_external_paths("db at ~/.config/openclaw/db.sqlite") == ["~/.config/openclaw"]
+        assert lint_external_paths("cache in $HOME/.cache/openclaw/x") == ["~/.cache/openclaw"]
+        assert lint_external_paths("/home/bob/.local/share/openclaw/y") == ["~/.local/share/openclaw"]
+
+    def test_generic_xdg_root_alone_is_not_foreign(self) -> None:
+        assert lint_external_paths("set XDG_CONFIG_HOME to ~/.config") == []
+        assert lint_external_paths("our settings live in ~/.config/raven/config.json") == []
+
 
 class TestSkillPolicy:
     def test_allows_clean_meta(self) -> None:
@@ -99,6 +108,19 @@ class TestSkillPolicy:
             {"slug": "tag-memory", "score_safety": 0.9, "skill_md": "write to ~/.openclaw/db"},
         )
         assert reason is not None and "~/.openclaw" in reason
+
+    def test_read_refusal_skips_the_body_lint(self) -> None:
+        policy = SkillPolicy.create()
+        meta = {"slug": "tag-memory", "score_safety": 0.9, "skill_md": "write to ~/.openclaw/db"}
+        assert policy.refusal_for_detail(meta) is not None
+        assert policy.refusal_for_read(meta) is None
+
+    def test_read_refusal_still_honours_blocklist_and_safety(self) -> None:
+        policy = SkillPolicy.create(min_safety=0.7, blocklist=["bad"])
+        blocked = policy.refusal_for_read({"slug": "bad", "score_safety": 0.9})
+        assert blocked is not None and "blocklist" in blocked
+        shady = policy.refusal_for_read({"slug": "x", "score_safety": 0.2})
+        assert shady is not None and "score_safety" in shady
 
     def test_extra_identifiers_hit_blocklist(self) -> None:
         policy = SkillPolicy.create(blocklist=["native-id"])
