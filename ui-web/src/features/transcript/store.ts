@@ -1918,54 +1918,6 @@ export interface AgentCtxLike {
   ended_at?: string
 }
 
-/* The rows a redraw replaces keep the identity the reader is looking at.
-
-   A run in flight is redrawn from its newest committed row on every poll: the
-   provisional rows are thrown away and drawn again from the messages, and
-   `history` mints every row it draws a fresh id. The views key on that id, so
-   the same sentence came back as a new element -- measured against the shipped
-   renderer, the answer row was a different node after every poll of a growing
-   answer (`answer#84 -> #94 -> #104`), and a row's `.in` runs its entrance
-   animation on mount. On screen that is the last paragraph fading in again
-   every two seconds for as long as the model is writing -- and, with a
-   delegated fold born open, every step inside it too, on every new call. The
-   store-level guard in the subagents island only refuses a poll whose snapshot
-   did not change; a snapshot that grew by one token still came through here.
-
-   Read by position, the way `readToggles` is: the redraw walks the same
-   messages, so a row that was there keeps its place and new rows only follow.
-   Adopted only where the kind agrees. A line the model said can stop being the
-   turn's answer and become narration inside a fold when a call follows it, and
-   that IS a different row -- one that should arrive as one. */
-function adoptIdentity(prev: Seg[], next: Seg[]): void {
-  next.forEach((seg, i) => {
-    const old = prev[i]
-    if (!old || old.kind !== seg.kind) return
-    seg.id = old.id
-    if (seg.kind === 'fold' && old.kind === 'fold') adoptStepIdentity(old.steps, seg.steps)
-    if (seg.kind === 'step' && old.kind === 'step') adoptCallIdentity(old, seg)
-  })
-}
-
-function adoptStepIdentity(prev: StepData[], next: StepData[]): void {
-  next.forEach((st, i) => {
-    const old = prev[i]
-    if (!old) return
-    st.id = old.id
-    adoptCallIdentity(old, st)
-  })
-}
-
-/* A call row is keyed on its own id inside the step. Matched on what it is as
-   well as where it is: two calls at the same index with different names are a
-   redraw that reordered the work, not one call growing. */
-function adoptCallIdentity(prev: StepData, next: StepData): void {
-  next.calls.forEach((c, i) => {
-    const old = prev.calls[i]
-    if (old && old.kind === c.kind && old.name === c.name) c.id = old.id
-  })
-}
-
 /* What the reader opened on the rows a poll is about to redraw. The provisional
    rows are thrown away and drawn again from the messages, so a fold opened while
    its run was still going closed again on the next poll. Read by position and
@@ -2054,21 +2006,12 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
   /* And never behind what is already committed: those rows are on screen, and
      a hold that started before them would draw them a second time. */
   if (commit < lane.agentDrawn) commit = lane.agentDrawn
-  const hold = lane.agentHold
-  const toggles = hold ? readToggles(lane) : null
-  /* The rows the previous paint drew provisionally, read before the restore
-     below throws them away: every segment past the committed prefix, and the
-     steps it appended into the committed folds. `adoptIdentity` hands their ids
-     to the rows drawn in their place once this paint is done. */
-  const redrawn = hold ? lane.segs.slice(hold.segs.length) : []
-  const drawnAt = hold ? hold.segs.length : 0
-  const heldSteps = hold ? hold.folds.map(({ steps }) => steps.length) : []
-  const appended = hold ? hold.folds.map(({ fold }, i) => fold.steps.slice(heldSteps[i])) : []
+  const toggles = lane.agentHold ? readToggles(lane) : null
   /* Whatever the previous paint drew provisionally goes first, so the answer
      grows in place instead of stacking one copy per poll. */
-  if (hold) {
-    lane.segs = hold.segs
-    hold.folds.forEach(({ fold, steps, time }) => {
+  if (lane.agentHold) {
+    lane.segs = lane.agentHold.segs
+    lane.agentHold.folds.forEach(({ fold, steps, time }) => {
       fold.steps = steps
       fold.time = time
       bump(lane, fold)
@@ -2095,10 +2038,6 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
       folds: lane.segs.flatMap((s) => (s.kind === 'fold' ? [{ fold: s, steps: s.steps.slice(), time: s.time }] : [])),
     }
     history(lane, msgs.slice(commit))
-  }
-  if (hold) {
-    adoptIdentity(redrawn, lane.segs.slice(drawnAt))
-    hold.folds.forEach(({ fold }, i) => adoptStepIdentity(appended[i] || [], fold.steps.slice(heldSteps[i])))
   }
   if (toggles) writeToggles(lane, toggles)
   lane.running = running

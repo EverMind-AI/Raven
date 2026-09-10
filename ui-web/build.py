@@ -28,7 +28,6 @@ Run:
     python ui-web/build.py
 """
 
-import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -40,15 +39,6 @@ I18N_MARK = '/*__I18N__*/{ "slash": {}, "ui": {} }'
 STYLE_MARK = "/*__STYLE__*/"
 MODERN_MARK = "/*__MODERN__*/"
 DEMO_MARK = "/*__DEMO__*/"
-#: Replaced with a digest of the asset tree, which the page hands to the icon
-#: helpers as a query on every asset URL.
-#:
-#: These files live at one unversioned path each, so a replaced drawing lands at
-#: exactly the URL its predecessor is cached under -- and a client that decided
-#: the old one was fresh keeps showing it through a rebuild, a restart and a
-#: hard reload. A digest in the URL makes a changed file a different URL, which
-#: no cache can answer from what it already has.
-ASSETV_MARK = "__ASSETV__"
 
 
 # Load order is semantics: parts declare bindings earlier parts reference at
@@ -136,24 +126,6 @@ def _concat(subdir: str, manifest: list[str]) -> str:
     return text[:-1] if text.endswith("\n") else text
 
 
-def _assets_stamp() -> str:
-    """A short digest of everything under ``src/assets``, or "dev" if it is gone.
-
-    Content, not mtime: a rebuild that changes nothing should not invalidate
-    every icon in every client, and a checkout that restores an old file should
-    go back to that file's old URL.
-    """
-    src_assets = ROOT / "src" / "assets"
-    if not src_assets.is_dir():
-        return "dev"
-    digest = hashlib.sha1(usedforsecurity=False)
-    for path in sorted(src_assets.rglob("*")):
-        if path.is_file():
-            digest.update(path.relative_to(src_assets).as_posix().encode("utf-8"))
-            digest.update(path.read_bytes())
-    return digest.hexdigest()[:10]
-
-
 def main() -> None:
     page = (ROOT / "src" / "page.html").read_text(encoding="utf-8")
     style = (ROOT / "src" / "styles" / "page.css").read_text(encoding="utf-8")
@@ -187,7 +159,6 @@ def main() -> None:
     catalog.pop("_readme", None)
     page = page.replace(I18N_MARK, json.dumps(catalog, ensure_ascii=False, separators=(",", ":")), 1)
     out = page.replace(MARK, f"\n{live}\n{MARK}", 1)
-    out = out.replace(ASSETV_MARK, _assets_stamp(), 1)
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
     (dist / "index.html").write_text(out, encoding="utf-8")

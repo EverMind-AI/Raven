@@ -860,37 +860,6 @@ def test_add_provider_model_appends_in_order(cfg_path: Path) -> None:
     assert models == ["gpt-4o", "gpt-4o-mini"]
 
 
-def test_an_overlay_merges_into_the_row_it_already_had(cfg_path: Path) -> None:
-    """A tag added from Settings must not take the description with it.
-
-    The caller states only what it was told -- `_stated_overlay` builds a
-    partial dict on purpose -- and `description` has no parameter to be restated
-    with at all, so a wholesale write lost anything a person had put there by
-    hand the first time they tagged the model.
-    """
-    add_provider_model(
-        "openai",
-        "m1",
-        overlay={"label": "My Model", "description": "our fine-tune, do not delete"},
-        config_path=cfg_path,
-    )
-    add_provider_model("openai", "m1", overlay={"capabilities": ["reasoning"]}, config_path=cfg_path)
-
-    row = _read(cfg_path)["providers"]["openai"]["modelOverlay"]["m1"]
-    assert row["label"] == "My Model"
-    assert row["description"] == "our fine-tune, do not delete"
-    assert row["capabilities"] == ["reasoning"]
-
-
-def test_re_adding_corrects_the_field_it_names(cfg_path: Path) -> None:
-    """Merging must not turn a correction into an append: re-adding is how a
-    person fixes a tag they got wrong, so a restated field replaces."""
-    add_provider_model("openai", "m1", overlay={"capabilities": ["reasoning"]}, config_path=cfg_path)
-    add_provider_model("openai", "m1", overlay={"capabilities": ["function-call"]}, config_path=cfg_path)
-
-    assert _read(cfg_path)["providers"]["openai"]["modelOverlay"]["m1"]["capabilities"] == ["function-call"]
-
-
 def test_remove_provider_model(cfg_path: Path) -> None:
     add_provider_model("openai", "gpt-4o", config_path=cfg_path)
     add_provider_model("openai", "gpt-4o-mini", config_path=cfg_path)
@@ -1429,21 +1398,16 @@ def test_a_vendor_litellm_knows_the_address_of_is_actually_probed(cfg_path: Path
 
 
 def test_a_vendor_with_no_catalogue_endpoint_is_reported_as_unprobed_not_unconfigured(cfg_path: Path) -> None:
-    """A vendor that keeps its address inside its SDK has no ``/models`` to ping
-    and nothing the user could supply. The key is there; this probe simply
-    cannot reach the vendor. Saying so is the honest answer, and it is not a
-    failure.
-
-    OpenAI rather than Anthropic: this used to name three vendors, and two of
-    them turned out to publish a catalogue after all -- see
-    ``_CATALOGUE_SHAPES``, which now probes those two where they actually
-    answer. The rule this pins is the same one, on the vendor it still fits."""
-    _seed_key(cfg_path, "openai", "sk-openai")
+    """Anthropic, OpenAI and Gemini compile the address into their SDKs, so
+    there is no ``/models`` to ping and nothing the user could supply. The key is
+    there; this probe simply cannot reach the vendor. Saying so is the honest
+    answer, and it is not a failure."""
+    _seed_key(cfg_path, "anthropic", "sk-ant")
 
     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - must not be reached
         raise AssertionError(f"nothing should have been sent: {request.url}")
 
-    result = probe_provider("openai", config_path=cfg_path, transport=_mock_transport(handler))
+    result = probe_provider("anthropic", config_path=cfg_path, transport=_mock_transport(handler))
 
     assert result["status"] == "no_probe_endpoint"
     assert result["ok"] is False
@@ -1543,129 +1507,3 @@ def test_an_oauth_provider_is_never_resolved_through_litellm_for_its_address(spe
         litellm.get_llm_provider = original
 
     assert not asked, f"{spec.name}: handed to LiteLLM anyway ({asked})"
-
-
-def test_a_vendor_with_no_address_is_probed_where_it_actually_publishes(cfg_path: Path) -> None:
-    """Anthropic and Google keep their catalogue off the OpenAI path.
-
-    Neither ships a ``default_api_base`` and LiteLLM holds their address inside
-    its SDK, so the generic probe had nowhere to ask and told a working key it
-    could not be checked. The address and the header both come from the table,
-    and Google's ``models/`` prefix comes off the ids on the way back.
-    """
-    _seed_key(cfg_path, "gemini", "AIza-TEST")
-    seen: dict[str, Any] = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["url"] = str(request.url)
-        seen["goog"] = request.headers.get("x-goog-api-key")
-        seen["auth"] = request.headers.get("authorization")
-        return httpx.Response(200, json={"models": [{"name": "models/gemini-3-pro"}]})
-
-    result = probe_provider("gemini", config_path=cfg_path, transport=_mock_transport(handler))
-    assert result["ok"] is True
-    assert "generativelanguage.googleapis.com/v1beta/models" in seen["url"]
-    assert seen["goog"] == "AIza-TEST"
-    assert seen["auth"] is None
-    assert result["model_ids"] == ["gemini-3-pro"]
-
-
-def test_an_address_of_ones_own_keeps_the_shape_that_address_speaks(cfg_path: Path) -> None:
-    """A section pointed at an api_base is pointed at somebody's proxy, and a
-    proxy speaks the OpenAI shape. Answering it with Google's header would break
-    a probe that works today, so the table only fills the empty case."""
-    _seed_key(cfg_path, "anthropic", "sk-ant-x")
-    set_provider_fields("anthropic", {"api_base": "https://proxy.test/v1"}, config_path=cfg_path)
-    seen: dict[str, Any] = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["url"] = str(request.url)
-        seen["auth"] = request.headers.get("authorization")
-        return httpx.Response(200, json={"data": []})
-
-    result = probe_provider("anthropic", config_path=cfg_path, transport=_mock_transport(handler))
-    assert result["ok"] is True
-    assert seen["url"] == "https://proxy.test/v1/models"
-    assert seen["auth"] == "Bearer sk-ant-x"
-
-
-def test_a_full_catalogue_asks_the_sibling_endpoints_a_probe_does_not(cfg_path: Path) -> None:
-    """OpenRouter files its embedders and image models away from ``/models``.
-
-    A key that works listed 428 of the 511 models it serves, and none of the
-    embedders. The credential check still asks once -- three requests to answer
-    the same question would make ``provider test`` three times as slow.
-    """
-    _seed_key(cfg_path, "openrouter", "sk-or-test")
-    asked: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        asked.append(request.url.path)
-        if request.url.path.endswith("/embeddings/models"):
-            return httpx.Response(200, json={"data": [{"id": "voyageai/voyage-code-4"}]})
-        if request.url.path.endswith("/images/models"):
-            return httpx.Response(200, json={"data": [{"id": "microsoft/mai-image-2.6"}]})
-        return httpx.Response(200, json={"data": [{"id": "openai/gpt-6"}]})
-
-    probe = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
-    assert probe["model_ids"] == ["openai/gpt-6"]
-    assert len(asked) == 1
-
-    asked.clear()
-    full = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler), full_catalogue=True)
-    assert len(asked) == 3
-    assert full["model_ids"] == ["openai/gpt-6", "voyageai/voyage-code-4", "microsoft/mai-image-2.6"]
-    assert full["models_count"] == 3
-    # The endpoint a model was listed at is better evidence than its name:
-    # nothing in "voyage-code-4" says embedding.
-    assert full["implied_capabilities"] == {
-        "voyageai/voyage-code-4": "embedding",
-        "microsoft/mai-image-2.6": "image-generation",
-    }
-
-
-def test_a_sibling_that_answers_200_with_the_wrong_shape_costs_only_itself(cfg_path: Path) -> None:
-    """The 500 case above is the easy half. A sibling can also answer 200 with a
-    body that is not a catalogue at all -- an error object, a bare list, an html
-    error page parsed as json -- and that used to raise `TypeError` out of the
-    whole probe, taking the main list down with it. `model.fetch_models` calls
-    this with no guard, so it took the Settings fetch button down too.
-    """
-    _seed_key(cfg_path, "openrouter", "sk-or-test")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if (
-            request.url.path.endswith("/models")
-            and "embeddings" not in request.url.path
-            and "images" not in request.url.path
-        ):
-            return httpx.Response(200, json={"data": [{"id": "openai/gpt-6"}]})
-        return httpx.Response(200, json={"error": "no such collection"})
-
-    full = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler), full_catalogue=True)
-    assert full["ok"] is True
-    assert full["model_ids"] == ["openai/gpt-6"]
-    assert full["implied_capabilities"] == {}
-
-
-def test_a_sibling_endpoint_that_fails_costs_its_own_models_and_nothing_else(cfg_path: Path) -> None:
-    """The credential is plainly working -- the main list came back.
-
-    So an extra catalogue refusing, or going away entirely, is nothing to add
-    rather than a failed probe.
-    """
-    _seed_key(cfg_path, "openrouter", "sk-or-test")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if (
-            request.url.path.endswith("/models")
-            and "embeddings" not in request.url.path
-            and "images" not in request.url.path
-        ):
-            return httpx.Response(200, json={"data": [{"id": "openai/gpt-6"}]})
-        return httpx.Response(500, json={"error": "down"})
-
-    full = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler), full_catalogue=True)
-    assert full["ok"] is True
-    assert full["model_ids"] == ["openai/gpt-6"]
-    assert full["implied_capabilities"] == {}

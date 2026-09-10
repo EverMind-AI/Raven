@@ -45,8 +45,6 @@ const NAMES = [
   'goState', 'drawBanner', 'sess', 'markNewCurrent', 'plainTitle', 'parkedTurns',
   'restoreTurn', 'wsSetRoot', 'setCtx', 'renderHistory', 'wsOnHistory', 'RavenIslands',
   'loadProviders',
-  /* rpc.onReconnect's own collaborators. */
-  'SURFACE', 'killStatus', 'showStatus', 'loadExt', 'drawCapsBadge', 'drawCaps', 'sessionRows',
   'loadTier',
   'loadPermMode',
 ]
@@ -62,10 +60,6 @@ function harness({ rows, deferSubscribe } = {}) {
   }
   let current = null
   const state = { fresh: '1' }
-  /* The top-bar editor stands IN PLACE OF h1#title, so while it is open that id
-     resolves to nothing; committing puts the heading back and writes the typed
-     name onto the row the editor captured when it opened. */
-  const editor = { commit: () => {} }
   const pending = []
   const subs = []
   const env = {
@@ -116,27 +110,11 @@ function harness({ rows, deferSubscribe } = {}) {
     setCtx: (used) => calls.push(['setCtx', used]),
     renderHistory: (messages) => { state.fresh = null; calls.push(['renderHistory', messages[0]]) },
     wsOnHistory: () => {},
-    SURFACE: 'web',
-    sessionRows: () => rows || [],
-    killStatus: () => {},
-    showStatus: (text) => calls.push(['showStatus', text]),
-    loadExt: () => Promise.resolve(),
-    drawCapsBadge: () => {},
-    drawCaps: () => {},
     RavenIslands: {
       workspace: { loadDeliveries: (id) => calls.push(['loadDeliveries', id]) },
       view: {
         resume: (id) => calls.push(['viewResume', id]),
         refreshDag: (id) => calls.push(['viewRefreshDag', id]),
-      },
-      /* What the heading held when the editor was ended, so the order is
-         assertable: ending it has to come before anything reads or writes
-         h1#title, and while one is open that id resolves to nothing. */
-      rail: {
-        endRename: () => {
-          calls.push(['endRename', boxes['#title'] ? boxes['#title'].textContent : null])
-          editor.commit()
-        },
       },
     },
   }
@@ -145,12 +123,7 @@ function harness({ rows, deferSubscribe } = {}) {
     `const { ${NAMES.join(', ')} } = env;
      ${span('async function subscribe(sessionKey) {', 'function claimStream')}
      ${span('let draft = false;', 'async function openLiveSession')}
-     /* The seam the live layer reaches openLiveSession through: sessionOpen is
-        DS.sessions.open, which the boot guard installs as openLiveSession. Bound
-        here rather than stubbed, so the reconnect drives the real function. */
-     const sessionOpen = (s) => openLiveSession(s);
-     ${span('rpc.onReconnect = async () => {', 'rpc.onReconnect')}
-     return { subscribe, startDraft, openLiveSession, onReconnect: rpc.onReconnect,
+     return { subscribe, startDraft, openLiveSession,
        /* Test-only reach into the staged tier: it is written from the tier
           source in 120, which this harness does not compile. */
        stageTier: (m) => { pendingTier = m }, stagedTier: () => pendingTier,
@@ -162,17 +135,7 @@ function harness({ rows, deferSubscribe } = {}) {
     calls,
     env,
     state,
-    title: () => (boxes['#title'] ? boxes['#title'].textContent : null),
-    openEditor: (typed) => {
-      const heading = boxes['#title']
-      const captured = (rows || []).find((r) => r.id === current)
-      delete boxes['#title']
-      editor.commit = () => {
-        boxes['#title'] = heading
-        if (captured) captured.title = typed
-        editor.commit = () => {}
-      }
-    },
+    title: () => boxes['#title'].textContent,
     settle: (id, payload) => {
       const found = pending.find((p) => p.id === id)
       if (!found) throw new Error(`no session.resume is in flight for ${id}`)
@@ -236,60 +199,6 @@ describe('the assembled live session switch', () => {
     expect(h.env.live.subId).toBe('sub:b')
     expect(h.calls.filter((c) => c[0] === 'viewResume')).toEqual([['viewResume', 'b']])
     expect(h.calls.filter((c) => c[0] === 'setCtx')).toHaveLength(1)
-  })
-
-  /* The title editor stands IN PLACE OF h1#title, so while one is open that id
-     resolves to nothing -- and both switch paths write the heading, while the
-     reconnect that reloads the open conversation used to READ it. With an
-     editor up that read threw, which left the input in the top bar for the
-     life of the tab and the conversation never reloaded, never re-subscribed
-     and never told the reader it was back.
-
-     Ordering is the whole point, so the stub records what the heading held at
-     the moment it was ended: the name being left behind, never the one being
-     written. */
-  it('ends an open title editor before either path reaches the heading', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
-
-    h.openLiveSession({ id: 'a', title: 'Alpha' })
-    await h.settle('a')
-    expect(h.calls).toContainEqual(['endRename', ''])
-    expect(h.title()).toBe('Alpha')
-
-    h.startDraft()
-    expect(h.calls).toContainEqual(['endRename', 'Alpha'])
-    expect(h.title()).toBe('gui.new_task')
-  })
-
-  /* The reconnect is the one caller that builds a DETACHED { id, title } for
-     openLiveSession; every other one hands over the live row, whose title the
-     commit mutates in place. So it is the only one that can read a title, have
-     the editor commit a different one underneath it, and then paint the value it
-     captured -- which is what happened, because the teardown lives inside
-     openLiveSession and ran after the lookup here.
-
-     Driven through the real rpc.onReconnect rather than openLiveSession: the
-     ordering is between the two, so a test that calls the inner one cannot see
-     it. */
-  it('paints the title the editor committed, not the one it read first', async () => {
-    const h = harness({ rows: [{ id: 'a', title: 'Alpha' }] })
-    h.openLiveSession({ id: 'a', title: 'Alpha' })
-    await h.settle('a')
-    expect(h.title()).toBe('Alpha')
-
-    h.openEditor('reconciliation audit')
-    expect(h.title()).toBe(null)
-
-    const reconnected = h.onReconnect()
-    /* system.hello is awaited before the reload, so let that microtask land or
-       there is no session.resume in flight yet. */
-    await new Promise((r) => setTimeout(r, 0))
-    await h.settle('a')
-    await reconnected
-
-    expect(h.calls).toContainEqual(['endRename', null])
-    expect(h.title()).toBe('reconciliation audit')
-    expect(h.env.sess('a').title).toBe('reconciliation audit')
   })
 
   it('drops the answer to an open the reader left for a new task', async () => {

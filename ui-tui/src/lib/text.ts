@@ -14,8 +14,7 @@ import {
   LIVE_RENDER_MAX_LINES,
   THINKING_COT_MAX
 } from '../config/limits.js'
-import { FACES } from '../content/faces.js'
-import { VERBS } from '../content/verbs.js'
+import { NOISE_FACES, NOISE_VERBS } from '../content/tickerNoise.js'
 
 const ESC = String.fromCharCode(27)
 const ANSI_RE = new RegExp(`${ESC}\\[[0-9;]*m`, 'g')
@@ -185,7 +184,12 @@ export const padToWidth = (raw: string, width: number) => {
   return clipped + ' '.repeat(Math.max(0, width - stringWidth(clipped)))
 }
 
-export const TOOL_RESULT_PREVIEW_CHARS = 200
+// What a tool's result keeps on its way into a card. The gateway already bounds
+// the string it sends (_TOOL_PREVIEW_MAX_CHARS); clipping again here to a row's
+// worth threw away most of it before the card that shows it ever ran, which left
+// the "+N more" level with nothing to reveal. Matched to the gateway's own cap so
+// the client stops being the narrower of the two.
+export const TOOL_RESULT_PREVIEW_CHARS = 4000
 
 // A tool's inline result preview. Cutting on a raw character budget alone split
 // the last line mid-token ("updat" for "updated", a table header whose body
@@ -240,16 +244,15 @@ export const pasteTokenLabel = (text: string, lineCount: number) => {
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-const THINKING_STATUS_RE = new RegExp(`^(?:${VERBS.join('|')})\\.{0,3}$`, 'i')
-// The status ticker renders one FACES glyph immediately followed by one VERBS
-// word (appChrome's FaceTicker), so that pair -- not "any run of non-letters"
-// -- is the leak's signature. Matching the faces literally keeps every
-// quantifier bounded: the earlier `[^A-Za-z\n]+` stand-in for a face matches a
-// whole line of non-Latin text, which is quadratic to backtrack and swallowed
-// the prose in front of any verb-like word. A bare verb alone on a line is
-// THINKING_STATUS_RE's job, not this one's.
+const THINKING_STATUS_RE = new RegExp(`^(?:${NOISE_VERBS.join('|')})\\.{0,3}$`, 'i')
+// A leaked ticker renders one glyph immediately followed by one verb, so that
+// pair -- not "any run of non-letters" -- is its signature. Matching the faces
+// literally keeps every quantifier bounded: the earlier `[^A-Za-z\n]+` stand-in
+// for a face matches a whole line of non-Latin text, which is quadratic to
+// backtrack and swallowed the prose in front of any verb-like word. A bare verb
+// alone on a line is THINKING_STATUS_RE's job, not this one's.
 const THINKING_STATUS_CHUNK_RE = new RegExp(
-  `(?:${FACES.map(escapeRe).join('|')})[ \\t]*(?:${VERBS.join('|')})\\.{0,3}[ \\t]*`,
+  `(?:${NOISE_FACES.map(escapeRe).join('|')})[ \\t]*(?:${NOISE_VERBS.join('|')})\\.{0,3}[ \\t]*`,
   'giu'
 )
 

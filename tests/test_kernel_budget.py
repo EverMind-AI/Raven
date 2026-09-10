@@ -46,26 +46,6 @@ that fails on the next field, which is how a guard turns into a formality
 somebody edits on the way past -- the failure mode this docstring names. The
 alternative on the table was to shorten an unrelated paper's prose by a line,
 which buys the same room while hiding that the papers grew.
-
-It moved again, 2,520 -> 2,730 (2026-09-10), and this is that review. The
-change is a whole paper rather than a field: contracts/harness.py, 198 lines,
-declaring the four strategy roles the agent loop delegates to (Memory,
-Planning, Capability, Action) and the carriers between them. It is the one
-addition the four-module seam needs -- the roles were carved out of code the
-loop already ran, so no behaviour moves with them -- and no amount of trimming
-fits it under the old number: the overage alone is 193 lines against a file of
-198, which would leave four Protocol signatures and nothing saying why they
-are the four.
-
-The paper is the whole of it. Without it the package stands at 2,515, which is
-five lines under the number it has been passing on, so nothing here is a
-ceiling absorbing somebody else's growth.
-
-Seventeen lines of headroom, and deliberately not more. The smallest paper in
-the package is 37 lines, so the slack cannot absorb a second one: the next
-paper trips this gate and lands in this docstring the way this one did, while
-a field or a docstring line on an existing paper still fits without a review
-nobody would learn anything from.
 """
 
 from __future__ import annotations
@@ -76,7 +56,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 2_730
+CONTRACTS_LINE_CEILING = 2_520
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

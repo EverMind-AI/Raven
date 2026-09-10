@@ -870,20 +870,9 @@ def add_provider_model(
     name: str,
     model: str,
     *,
-    overlay: dict[str, Any] | None = None,
     config_path: Path | None = None,
 ) -> list[str]:
     """Append ``model`` to a provider's curated ``models`` list (idempotent).
-
-    ``overlay`` is what the person stated about the model as they added it -- a
-    name, and the tags the pickers draw. Written in the same edit as the list
-    entry rather than by a second call: a model that landed in the list while
-    its description failed to would show as a bare id with no way to tell that
-    anything was lost.
-
-    An overlay for a model already in the list still applies. Adding is
-    idempotent on the list, not on what is known about the row: re-adding is how
-    a person corrects a tag they got wrong the first time.
 
     Returns the new model list. Raises KeyError for an unknown provider.
     """
@@ -898,27 +887,14 @@ def add_provider_model(
         # By identity, not by string: the same model written two ways used to land
         # in the list twice, and neither entry could then be removed by the other's
         # spelling.
-        fresh = merge_key(name, model) not in {merge_key(name, m) for m in models}
-        if not fresh and not overlay:
-            return None, models
-        if fresh:
+        if merge_key(name, model) not in {merge_key(name, m) for m in models}:
             models.append(model)
-        section = _raw_section(data, name)
-        section["models"] = models
-        if overlay:
-            overlays = dict(section.get("modelOverlay") or section.get("model_overlay") or {})
-            # Merged, not replaced. The caller states only what it was told --
-            # `_stated_overlay` builds a partial dict precisely so an untouched
-            # field is not overwritten with an empty one -- and `description`
-            # has no parameter to be restated with at all, so a wholesale write
-            # loses it every time. Re-adding corrects the tags it names and
-            # leaves the rest of the row alone.
-            overlays[model] = {**(overlays.get(model) or {}), **overlay}
-            section["modelOverlay"] = overlays
-            section.pop("model_overlay", None)
-        validated = cls.model_validate(section)
-        _write_raw_section(data, name, validated.model_dump(by_alias=True))
-        return json.dumps(data, indent=2, ensure_ascii=False), models
+            section = _raw_section(data, name)
+            section["models"] = models
+            validated = cls.model_validate(section)
+            _write_raw_section(data, name, validated.model_dump(by_alias=True))
+            return json.dumps(data, indent=2, ensure_ascii=False), models
+        return None, models
 
     return atomic_update(path, _apply)
 
@@ -1106,16 +1082,8 @@ def test_provider(
     timeout_s: int = 10,
     config_path: Path | None = None,
     transport: httpx.BaseTransport | None = None,
-    full_catalogue: bool = False,
 ) -> dict[str, Any]:
     """Verify a provider's credentials via a free GET request to ``/v1/models``.
-
-    ``full_catalogue`` asks for everything the provider serves rather than just
-    enough to check the credential: some file their embedding and image models
-    at sibling endpoints (``_CATALOGUE_EXTRAS``), and a list that omits them is
-    missing whole classes of model. Off by default, because the credential check
-    is answered by the first response and a probe should not cost three
-    requests to say the same thing.
 
     Why ``/v1/models`` rather than a chat completion (same rationale as
     hermes-agent's ``doctor._probe_apikey_provider``):
@@ -1239,21 +1207,6 @@ def test_provider(
             "error": "api_key is empty",
         }
 
-    extras = _CATALOGUE_EXTRAS.get(spec.name, ()) if (spec and full_catalogue) else ()
-    shape = _CATALOGUE_SHAPES.get(spec.name) if spec else None
-    if shape and api_key and not api_base:
-        # The vendor's own catalogue, for the two whose address is not in the
-        # registry and whose door is not opened by a bearer token. Asked before
-        # the derivation below, which answers "" for both of them and leaves the
-        # guard after it reporting `no_probe_endpoint` for a working key.
-        #
-        # Only when nothing else supplied an address: a section pointed at an
-        # api_base is pointed at somebody's proxy, and a proxy speaks the OpenAI
-        # shape the generic path sends. Answering that with Google's header
-        # would break a probe that works today.
-        url, headers = shape(api_key)
-        return _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
-
     if not api_base:
         # Asked here and not above: the branches in between return for the
         # families whose credential check is not an HTTP ping, and one of them
@@ -1288,18 +1241,6 @@ def test_provider(
             ),
         }
 
-    extras = _CATALOGUE_EXTRAS.get(spec.name, ()) if (spec and full_catalogue) else ()
-    shape = _CATALOGUE_SHAPES.get(spec.name) if spec else None
-    if shape and api_key and not api_base:
-        # The vendor's own catalogue, for the two whose address is not in the
-        # registry and whose door is not opened by a bearer token. Only when
-        # nothing else supplied an address: a section pointed at an api_base is
-        # pointed at somebody's proxy, and a proxy speaks the OpenAI shape the
-        # generic path below sends -- answering it with Google's header would
-        # break a probe that works today.
-        url, headers = shape(api_key)
-        return _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
-
     url = api_base.rstrip("/") + "/models"
     if "/v1" not in api_base:
         url = api_base.rstrip("/") + "/v1/models"
@@ -1308,7 +1249,7 @@ def test_provider(
     if spec and spec.name in {"minimax_global", "minimax_cn"} and api_key:
         headers["x-api-key"] = api_key
 
-    result = _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
+    result = _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport)
     if derived_api_base and result.get("status") == "http_404":
         # The address LiteLLM sends completions to is not always where the
         # catalogue lives -- DeepSeek's is `/beta`, which has no `/models`. A 404
@@ -1361,66 +1302,18 @@ def _litellm_api_base(spec: Any) -> str:
     return base or ""
 
 
-#: The two vendors that publish a catalogue but no address the probe can find.
-#: Keyed by provider name; each entry answers "where, and with which headers"
-#: for a key already in hand, and is consulted only when the section names no
-#: ``api_base`` of its own -- see the call site.
-#:
-#: Neither ships a ``default_api_base`` and LiteLLM keeps their address inside
-#: its SDK, so before this table the probe had nowhere to ask and answered
-#: ``no_probe_endpoint`` for a perfectly good key. Everything else either speaks
-#: the OpenAI shape or arrives through its own probe (``_probe_codex_catalog``,
-#: ``_probe_copilot_seat``).
-#: Sibling catalogue endpoints a provider serves beside its main one: the path
-#: replacing the last segment of the probed URL, and what being listed there
-#: proves about a model.
-#:
-#: OpenRouter files its embedding and image models away from ``/models``, which
-#: is why a key that works listed 428 of the 511 models it serves and none of
-#: the embedders. The endpoint is better evidence than the name is: nothing in
-#: ``voyageai/voyage-code-4`` says embedding, and being served from
-#: ``/embeddings/models`` says it outright.
-#:
-#: Only fetched for a full catalogue -- a credential probe is one request, and
-#: three would make ``raven provider test`` three times as slow to answer the
-#: same question.
-_CATALOGUE_EXTRAS: dict[str, tuple[tuple[str, str], ...]] = {
-    "openrouter": (("embeddings/models", "embedding"), ("images/models", "image-generation")),
-}
-
-_CATALOGUE_SHAPES: dict[str, Any] = {
-    "anthropic": lambda key: (
-        "https://api.anthropic.com/v1/models?limit=1000",
-        {"x-api-key": key, "anthropic-version": "2023-06-01"},
-    ),
-    # Google keys the request by header rather than by bearer token, and files
-    # its catalogue under v1beta -- the ids come back as "models/gemini-...",
-    # which `_probe_models_endpoint` strips.
-    "gemini": lambda key: (
-        "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
-        {"x-goog-api-key": key},
-    ),
-}
-
-
 def _probe_models_endpoint(
     url: str,
     headers: dict[str, str],
     *,
     timeout_s: float,
     transport: httpx.BaseTransport | None,
-    extras: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """GET a models endpoint and report the result in the probe's vocabulary.
 
     What to ask and what to send is the caller's answer. A vendor that refuses the
     request every other one accepts is the reason there is more than one caller;
     how the answer is reported is the same for all of them.
-
-    ``extras`` are sibling catalogues to fold into the same answer -- see
-    ``_CATALOGUE_EXTRAS``. They are additions only: one of them refusing, or
-    going away entirely, must not turn a good main list into a failed probe,
-    because the credential it would be reporting on is plainly working.
     """
     import time
 
@@ -1450,30 +1343,22 @@ def _probe_models_endpoint(
     model_ids: list[str] | None = None
     if resp.status_code == 200:
         try:
-            model_ids = _ids_from_payload(resp.json())
-            if model_ids is not None:
-                models_count = len(model_ids)
+            payload = resp.json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if isinstance(data, list):
+                models_count = len(data)
+                ids: list[str] = []
+                for item in data:
+                    if isinstance(item, dict):
+                        mid = item.get("id") or item.get("name")
+                        if isinstance(mid, str) and mid:
+                            ids.append(mid)
+                model_ids = ids
         except Exception:
             models_count = None
             model_ids = None
 
-    implied: dict[str, str] = {}
-    if extras and resp.status_code == 200 and model_ids is not None:
-        base = url.rsplit("/", 1)[0]
-        known = set(model_ids)
-        for path, capability in extras:
-            for mid in _sibling_ids(f"{base}/{path}", headers, timeout_s=timeout_s, transport=transport):
-                # What the endpoint proves holds whether or not the main list
-                # named it first: a model can be in both, and being served from
-                # `/embeddings/models` is the same fact either way.
-                implied[mid] = capability
-                if mid not in known:
-                    known.add(mid)
-                    model_ids.append(mid)
-        models_count = len(model_ids)
-
     return {
-        "implied_capabilities": implied,
         "ok": resp.status_code == 200,
         "status": status_keyword,
         "elapsed_ms": elapsed_ms,
@@ -1482,68 +1367,6 @@ def _probe_models_endpoint(
         "model_ids": model_ids,
         "error": None if resp.status_code == 200 else f"HTTP {resp.status_code}",
     }
-
-
-def _sibling_ids(
-    url: str,
-    headers: dict[str, str],
-    *,
-    timeout_s: float,
-    transport: httpx.BaseTransport | None,
-) -> list[str]:
-    """Ids from one more catalogue endpoint, or none. Never raises.
-
-    Quieter than the main probe on purpose: this one is not reporting on the
-    credential, so anything other than a clean answer is simply nothing to add.
-    """
-    client_kwargs: dict[str, Any] = {"timeout": timeout_s}
-    if transport is not None:
-        client_kwargs["transport"] = transport
-    try:
-        with httpx.Client(**client_kwargs) as client:
-            resp = client.get(url, headers=headers)
-        if resp.status_code != 200:
-            return []
-        payload = resp.json()
-    except Exception:  # noqa: BLE001 - an extra list is an addition, not a verdict
-        return []
-    # `or []` is the whole promise of the signature: `_ids_from_payload` answers
-    # None for a 200 whose body is not a catalogue at all, and the caller
-    # iterates this straight. A sibling that says `{"error": "no such
-    # collection"}` is nothing to add, exactly like a 500 -- not a reason to
-    # lose the main list that already came back.
-    return _ids_from_payload(payload) or []
-
-
-def _ids_from_payload(payload: Any) -> list[str] | None:
-    """The model ids in a catalogue response, or None if it is not one.
-
-    ``data`` is the OpenAI shape every compatible vendor answers with; ``models``
-    is Google's and Ollama's. Reading only the first reported a 200 with no
-    models at all for those two, which renders exactly like a vendor that serves
-    nothing.
-    """
-    data = None
-    if isinstance(payload, dict):
-        for key in ("data", "models"):
-            if isinstance(payload.get(key), list):
-                data = payload[key]
-                break
-    if not isinstance(data, list):
-        return None
-
-    ids: list[str] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        mid = item.get("id") or item.get("name")
-        # Google returns "models/gemini-3-pro"; the id a request carries is the
-        # last segment.
-        if isinstance(mid, str) and mid.startswith("models/"):
-            mid = mid.split("/", 1)[1]
-        if isinstance(mid, str) and mid:
-            ids.append(mid)
-    return ids
 
 
 def _probe_copilot_seat(*, timeout_s: float, transport: httpx.BaseTransport | None) -> dict[str, Any]:

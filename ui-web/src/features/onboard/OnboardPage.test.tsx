@@ -120,8 +120,8 @@ describe('the onboarding island', () => {
     const rows = [...document.querySelectorAll<HTMLElement>('.ob-row')]
     expect(rows[0]!.querySelector('.nm')?.firstElementChild?.getAttribute('src')).toBe('assets/providers/anthropic.svg')
     expect(rows[0]!.querySelector('.provider-link')?.getAttribute('href')).toBe('https://anthropic.com/')
-    expect(rows[0]!.querySelector('.provider-status')?.className).toBe('provider-status on')
-    expect(rows[1]!.querySelector('.provider-status')).toBeNull()
+    expect(rows[0]!.lastElementChild?.className).toBe('provider-status on')
+    expect(rows[1]!.lastElementChild?.className).toBe('provider-status')
   })
 
   it('takes a key before offering models and hands the exact fields to the source', async () => {
@@ -141,17 +141,13 @@ describe('the onboarding island', () => {
     expect(document.querySelector('.ob-row .nm')?.textContent).toBe('gpt-5.2')
   })
 
-  it('shows an optional API key for Ollama while requiring its base URL', async () => {
+  it('requires only a base URL for a local provider', async () => {
     const local: OnboardProvider = {
       slug: 'ollama',
       name: 'Ollama',
       auth_type: 'local',
       authenticated: false,
       needs_api_base: true,
-      /* A local server that can sit behind a token. The backend says so per
-         provider; matching on the slug is what let the pane and the wizard
-         disagree about the second one. */
-      accepts_api_key: true,
       models: ['qwen3:32b']
     }
     const h = install([local])
@@ -160,32 +156,13 @@ describe('the onboarding island', () => {
     await start()
     fireEvent.click(row('Ollama'))
     const fields = document.querySelectorAll<HTMLInputElement>('.ob-form .ob-in')
-    expect(fields).toHaveLength(2)
-    expect(fields[0]!.type).toBe('password')
-    expect(fields[1]!.type).toBe('text')
-    expect(button('gui.onb.next').disabled).toBe(true)
-    fireEvent.input(fields[1]!, { target: { value: 'http://127.0.0.1:11434' } })
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.type).toBe('text')
+    fireEvent.input(fields[0]!, { target: { value: 'http://127.0.0.1:11434' } })
     await act(async () => {
       fireEvent.click(button('gui.onb.next'))
     })
     expect(h.saves).toEqual([['ollama', '', 'http://127.0.0.1:11434']])
-  })
-
-  it('passes an optional Ollama API key when provided', async () => {
-    const local: OnboardProvider = {
-      slug: 'ollama_chat', name: 'Ollama', auth_type: 'local', authenticated: false,
-      needs_api_base: true, accepts_api_key: true, models: ['qwen3:32b']
-    }
-    const h = install([local])
-    mount()
-    await open()
-    await start()
-    fireEvent.click(row('Ollama'))
-    const fields = document.querySelectorAll<HTMLInputElement>('.ob-form .ob-in')
-    fireEvent.input(fields[0]!, { target: { value: 'ollama-token' } })
-    fireEvent.input(fields[1]!, { target: { value: 'http://remote-ollama:11434' } })
-    await act(async () => { fireEvent.click(button('gui.onb.next')) })
-    expect(h.saves).toEqual([['ollama_chat', 'ollama-token', 'http://remote-ollama:11434']])
   })
 
   it('prefills the LM Studio endpoint and accepts it without an API key', async () => {
@@ -322,37 +299,5 @@ describe('the onboarding island', () => {
     expect(document.querySelector('.ob-t')?.textContent).toBe('gui.onb.welcome_t')
     expect(document.querySelector('.ob-err')?.textContent).toBe('gui.onb.err_generic:offline')
     expect(button('gui.onb.start').disabled).toBe(false)
-  })
-})
-
-describe('the onboarding model step', () => {
-  it('names the model and draws what it can do', async () => {
-    /* The first model a person picks is the one they know least about, so the
-       row shows the vendor's name over the id and the icons beside it. A
-       provider whose registry rows are missing keeps showing ids, which is what
-       every other case in this file asserts. */
-    const tagged: OnboardProvider = {
-      ...connected,
-      models: ['claude-opus-5'],
-      model_labels: {
-        'claude-opus-5': {
-          label: 'Claude Opus 5',
-          capabilities: ['reasoning', 'function-call'],
-          context_window: 400000,
-        },
-      },
-    }
-    install([tagged])
-    mount()
-    await open()
-    await start()
-    fireEvent.click(row('Anthropic'))
-
-    expect(document.querySelector('.ob-row .nm')?.textContent).toBe('Claude Opus 5')
-    expect([...document.querySelectorAll('.ob-row .model-tag use')].map(u => u.getAttribute('href'))).toEqual([
-      '#mtag-reasoning',
-      '#mtag-function-call',
-    ])
-    expect(document.querySelector('.ob-row .model-window')?.textContent).toBe('400K')
   })
 })
