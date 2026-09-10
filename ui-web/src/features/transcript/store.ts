@@ -1240,12 +1240,35 @@ export function newStep(lane: Lane): StepHandle {
 const stepSolid = (s: StepData): boolean =>
   s.calls.length > 0 || (s.thinkShown && s.hasThink) || !!s.say.trim()
 
-/* Every fold this lane opened by itself, shut. The reader's own are left
-   alone: `toggleFold` clears `auto`, so a fold they have touched is no longer
-   one of these. */
+/* Whether anything under this fold is still running.
+ *
+ * A backgrounded sub-agent outlives the turn that dispatched it -- by minutes,
+ * and the card carries a live tail of what it is saying, which is the only
+ * place a reader can see that at all. */
+function holdsALiveRun(fold: FoldData): boolean {
+  return fold.steps.some((step) => step.calls.some(spawnLive))
+}
+
+/* Every fold this lane opened by itself, shut. Two are left alone.
+ *
+ * The reader's own: `toggleFold` clears `auto`, so a fold they have touched is
+ * no longer one of these.
+ *
+ * And any that still holds a running sub-agent. Shutting it takes the run's
+ * live tail off the screen while the run is still going, and a shut body is
+ * not built at all, so nothing is left to watch. Measured: a spawn dispatched
+ * in one turn, the reader asks "how is it going" in the next, that next turn's
+ * fold opens and shuts this one -- and the answer had to be fetched by reading
+ * a file, because the page was no longer showing what the page already knew.
+ *
+ * The fold's own note already said half of this: "a backgrounded graph
+ * outlives the turn that dispatched it, so a reader saw `done` over a task
+ * still running below." That was answered by renaming the row. The row was
+ * never the part that was hidden. */
 function shutAutoFolds(lane: Lane, except: FoldData | null): void {
   lane.segs.forEach((s) => {
     if (s.kind !== 'fold' || s === except || !s.auto) return
+    if (holdsALiveRun(s)) return
     s.auto = false
     s.open = false
     bump(lane, s)
