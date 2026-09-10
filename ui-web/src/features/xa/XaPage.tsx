@@ -4,7 +4,6 @@ import { useSyncExternalStore } from 'react'
 
 import { AgentMark } from '../../shell/agent-mark'
 import { shell, t } from '../../shell/bridge'
-import { KeyInput } from '../../shell/key-input'
 import { SetupGroup, SetupRow } from '../../shell/setuprow'
 import * as store from './store'
 
@@ -395,9 +394,10 @@ function AgentCard({ row }: { row: XaRow }): JSX.Element {
         <div className="pmsec">
           <div className="cap">{t('gui.agent.key')}</div>
           <div className="sukey">
-            <KeyInput
+            <input
+              type="password"
+              autoComplete="off"
               placeholder={row.has_api_key ? t('gui.agent.key_set') : ''}
-              aria-label={t('gui.agent.key')}
               ref={keyRef}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') saveKey()

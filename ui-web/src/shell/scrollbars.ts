@@ -86,45 +86,6 @@ function thumb(b: Bars, axis: Axis): HTMLElement {
 
 /* Geometry is read from the element every time rather than cached: a scroller
    can be resized, moved by a panel drag, or re-rendered under the same node. */
-interface Box {
-  top: number
-  bottom: number
-  left: number
-  right: number
-}
-
-/* Which of a scroller's box is actually on screen.
- *
- * A scroller inside another scroller can be scrolled halfway out of it, and a
- * thumb placed from the inner box alone is then drawn over whatever sits above
- * the outer one -- the settings dialog's header, in the case that found this.
- * What is visible is decided by the ancestors that clip, so the thumb is
- * clamped to their intersection.
- *
- * Ancestors that do not clip are skipped rather than intersected: a positioned
- * box narrower than its overflowing child would otherwise cut a bar that the
- * page is perfectly happy to show. */
-function visible(el: HTMLElement): Box | null {
-  const r = el.getBoundingClientRect()
-  const box: Box = { top: r.top, bottom: r.bottom, left: r.left, right: r.right }
-  for (let node = el.parentElement; node; node = node.parentElement) {
-    const style = getComputedStyle(node)
-    const clips = (v: string): boolean => v === 'auto' || v === 'scroll' || v === 'hidden' || v === 'clip'
-    if (!clips(style.overflowY) && !clips(style.overflowX)) continue
-    const a = node.getBoundingClientRect()
-    if (!a.width && !a.height) continue
-    if (clips(style.overflowY)) {
-      box.top = Math.max(box.top, a.top)
-      box.bottom = Math.min(box.bottom, a.bottom)
-    }
-    if (clips(style.overflowX)) {
-      box.left = Math.max(box.left, a.left)
-      box.right = Math.min(box.right, a.right)
-    }
-  }
-  return box.bottom > box.top && box.right > box.left ? box : null
-}
-
 function place(el: HTMLElement, b: Bars, axis: Axis): HTMLElement | undefined {
   const vert = axis === 'v'
   const size = vert ? el.clientHeight : el.clientWidth
@@ -139,33 +100,15 @@ function place(el: HTMLElement, b: Bars, axis: Axis): HTMLElement | undefined {
   }
   const r = el.getBoundingClientRect()
   if (!r.width || !r.height) return
-  /* The track is the part of the box on screen, not the whole box: a scroller
-     inside another scroller can be scrolled halfway out of it, and a bar laid
-     out over the whole box is then drawn past the edge of the outer one -- over
-     the settings dialog's header, in the case that found this. Measured inside
-     the visible slice, the bar stays in the slice and still says where in the
-     content the reader is. */
-  const box = visible(el)
-  if (!box) {
-    const gone = b[axis]
-    if (gone) {
-      gone.remove()
-      b[axis] = null
-    }
-    return
-  }
   const t = thumb(b, axis)
-  const from = (vert ? Math.max(r.top, box.top) : Math.max(r.left, box.left)) + SB_PAD
-  const to = (vert ? Math.min(r.bottom, box.bottom) : Math.min(r.right, box.right)) - SB_PAD
-  const track = to - from
-  if (track < SB_PAD * 2) return
-  const len = Math.min(track, Math.max(SB_MIN, Math.round(track * (size / full))))
+  const track = (vert ? r.height : r.width) - SB_PAD * 2
+  const len = Math.max(SB_MIN, Math.round(track * (size / full)))
   const pos = (vert ? el.scrollTop : el.scrollLeft) / (full - size)
-  const off = Math.round((track - len) * Math.min(1, Math.max(0, pos)))
+  const off = SB_PAD + Math.round((track - len) * Math.min(1, Math.max(0, pos)))
   if (vert) {
-    t.style.cssText = `top:${from + off}px;left:${Math.min(r.right, box.right) - 8}px;width:6px;height:${len}px`
+    t.style.cssText = `top:${r.top + off}px;left:${r.right - 8}px;width:6px;height:${len}px`
   } else {
-    t.style.cssText = `left:${from + off}px;top:${Math.min(r.bottom, box.bottom) - 8}px;height:6px;width:${len}px`
+    t.style.cssText = `left:${r.left + off}px;top:${r.bottom - 8}px;height:6px;width:${len}px`
   }
   wireDrag(t, el, axis)
   return t
