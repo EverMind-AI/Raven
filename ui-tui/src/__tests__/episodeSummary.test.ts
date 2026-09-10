@@ -9,15 +9,12 @@ import type { Episode, EpisodeTool } from '../types.js'
 import { CLAUDE_VERBS, claudeRule } from '../domain/claudeCodeTools.js'
 import { CODEX_VERBS } from '../domain/codexTools.js'
 import {
-  cardDefaultOpen,
-  detailBlockShape,
   episodeFailed,
   execLabel,
   failureNote,
   foldedPreviewRows,
   previewLines,
   segmentTurn,
-  TOOL_FULL_ROWS,
   TOOL_PREVIEW_ROWS,
   toolArgument,
   toolParts,
@@ -127,9 +124,7 @@ describe('result preview rows', () => {
     // Filtering this as "redundant with the row" left an empty detail block --
     // the row carries a short label, so the payload is all there is to show.
     expect(previewLines(withPreview(payload, 'web_fetch', url))).toEqual([payload])
-    // Indentation is content once a card can show a whole payload, so it is the
-    // shared prefix that comes off, not each line's own.
-    expect(previewLines(withPreview('{\n  "a": 1\n}', 'read_file', 'x.json'))).toEqual(['{', '  "a": 1', '}'])
+    expect(previewLines(withPreview('{\n  "a": 1\n}', 'read_file', 'x.json'))).toEqual(['{', '"a": 1', '}'])
   })
 
   it('counts every row when short, and cap + the "+N" row when long', () => {
@@ -438,68 +433,5 @@ describe('call intent', () => {
 
     expect(toolsPhrase([call])).toBe('Bash List the repo')
     expect(toolParts(call).detail).toBe('List the repo')
-  })
-})
-
-
-describe('card default and shape', () => {
-  const call = (extra: Partial<EpisodeTool> = {}): EpisodeTool => ({
-    done: true,
-    id: 'c1',
-    name: 'exec',
-    ok: true,
-    summary: 'ls -la',
-    ...extra
-  })
-
-  it('opens what the reader already has a question about', () => {
-    expect(cardDefaultOpen(call({ ok: false, resultPreview: 'boom' }))).toBe(true)
-    expect(cardDefaultOpen(call({ diff: '@@ -1 +1 @@', resultPreview: 'wrote a.ts' }))).toBe(true)
-    expect(cardDefaultOpen(call({ resultPreview: 'total 42' }))).toBe(true)
-  })
-
-  it('opens a long clean result too, because the cap is what bounds it', () => {
-    const long = Array.from({ length: TOOL_PREVIEW_ROWS + 40 }, (_, i) => `line ${i}`).join('\n')
-
-    expect(cardDefaultOpen(call({ resultPreview: long }))).toBe(true)
-    expect(foldedPreviewRows(call({ resultPreview: long }))).toBe(TOOL_PREVIEW_ROWS + 1)
-  })
-
-  it('does not open a card onto the argument the row is already showing', () => {
-    expect(cardDefaultOpen(call())).toBe(false)
-    expect(cardDefaultOpen(call({ resultPreview: '' }))).toBe(false)
-  })
-
-  it('caps the block at the level, and reports what the cap left', () => {
-    const lines = Array.from({ length: TOOL_PREVIEW_ROWS + 7 }, (_, i) => `line ${i}`).join('\n')
-    const capped = detailBlockShape(call({ resultPreview: lines }))
-
-    expect(capped?.output).toHaveLength(TOOL_PREVIEW_ROWS)
-    expect(capped?.hidden).toBe(7)
-    expect(capped?.more).toEqual({ count: 7, kind: 'reveal' })
-
-    // The third level is the same block asked for more, not a different one.
-    const full = detailBlockShape(call({ resultPreview: lines }), true)
-
-    expect(full?.output).toHaveLength(TOOL_PREVIEW_ROWS + 7)
-    expect(full?.hidden).toBe(0)
-    // Revealed, the row turns around: it takes back what it just revealed
-    // rather than shutting the card, which is the block's own click.
-    expect(full?.more).toEqual({ count: 7, kind: 'collapse' })
-
-    // A result short enough to open whole has no row either way.
-    expect(detailBlockShape(call({ resultPreview: 'a\nb' }))?.more).toBeNull()
-  })
-
-  it('keeps a ceiling on the full level, which previewLines has none of', () => {
-    const huge = Array.from({ length: TOOL_FULL_ROWS + 30 }, (_, i) => `line ${i}`).join('\n')
-    const full = detailBlockShape(call({ resultPreview: huge }), true)
-
-    expect(full?.output).toHaveLength(TOOL_FULL_ROWS)
-    expect(full?.hidden).toBe(30)
-  })
-
-  it('renders no block at all when there is neither an argument nor output', () => {
-    expect(detailBlockShape(call({ summary: '' }))).toBeNull()
   })
 })

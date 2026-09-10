@@ -173,51 +173,21 @@ function AgentAct({ row, onKey }: { row: XaRow; onKey?: () => void }): JSX.Eleme
   )
 }
 
-/* Which group a row belongs in: what it would take to use it, in four steps of
-   one answer each. The page used to lead with provenance -- built-in, then
+/* Which group a row belongs in: two verbs, two groups. A row that is dispatchable
+   sits under "on duty" and offers disconnect; everything else is addable and
+   offers connect. The page used to lead with provenance -- built-in, then
    vendored, then connected, then available -- which put a broken agent three
-   groups down while a healthy built-in row sat at the top with nothing to do.
-   Two groups replaced that and were right about the ordering and too coarse
-   about the rest: "available" held the switch that takes a click and the CLI
-   this machine has never had, in one list of eleven, sorted by a cost the
-   heading did not name.
-
-   The fourth group is the one worth having. Everything else here is a question
-   about Raven's config; that one is a question about the machine, and it is
-   where nine of the eleven live on a stock install. It is also the only group a
-   reader can be done with, which is why it is the one that folds. */
-type Grp = 'on' | 'switch' | 'setup' | 'install'
+   groups down while a healthy built-in row sat at the top with nothing to do. */
+type Grp = 'on' | 'off'
 const groupOf = (row: XaRow): Grp => {
   const stage = stageOf(row)
-  if (stage === 'live' || stage === 'builtin') return 'on'
-  if (stage === 'install' || stage === 'building') return 'install'
-  /* The probe before the stage, for everything that is not connected and runs
-     a command. A switch, an entry, a credential: each is a write to Raven's own
-     config, and each connects nothing when the command it names is not on this
-     machine -- and the probe is the only thing that knows. That includes the
-     switch. A configured agent keeps its entry after its binary is removed, so
-     `off` is a stage a missing executable can be in, and `subagents.toggle`'s
-     enable gate probes the agent and refuses the write when nothing answers; a
-     row like that under "ready to enable" promised the one click that cannot
-     work. `attention` stays out of this group: it means the binary answered
-     and nothing has verified what it can do, which is a row worth connecting
-     and then testing, not one worth hiding.
-
-     Only the command-backed kinds. An openai row is an endpoint, and its probe
-     says `missing` for "unreachable" -- a connection error, a timeout -- which
-     is a network fact with nothing to install behind it, and the enable gate
-     does not ping that kind at all. Its group stays the one its config state
-     says: the switch, or the credential. The server's own grouping draws the
-     same line for the same reason (`_group` keys an openai row off its key). */
-  if ((row.kind === 'cli' || row.kind === 'acp') && row.probe_status === 'missing') return 'install'
-  return stage === 'off' ? 'switch' : 'setup'
+  return stage === 'live' || stage === 'builtin' ? 'on' : 'off'
 }
 
-/* What connecting costs, which is what a group is ordered by inside itself --
-   the same question the entrances page sorts on. Most of this is now said by
-   which group the row is in; what is left is the one distinction the groups do
-   not draw, between an entry Raven writes on its own and a credential the
-   reader has to go and find. */
+/* What connecting costs, which is what the addable group is ordered by -- the
+   same question the entrances page sorts on. A switch is instant, an entry is a
+   file write, a credential needs the reader to go and find one, and an install
+   is several hundred megabytes. */
 const costOf = (row: XaRow): number => {
   const stage = stageOf(row)
   return stage === 'off' ? 0 : stage === 'add' ? 1 : stage === 'key' ? 2 : 3
@@ -271,10 +241,10 @@ const testCosts = (row: XaRow): boolean => row.kind === 'cli'
 
 function AgentRow({ row, sel }: { row: XaRow; sel: boolean }): JSX.Element {
   /* Health is only a question about an agent that is supposed to be working.
-     Outside the connected group not-dispatchable is what every row is, so a red
-     dot and the clay stripe that comes with it were an alarm about the group's
-     own definition -- and with the status line gone there was nothing left to
-     say what the alarm meant. */
+     In the addable group not-dispatchable is what every row is, so a red dot and
+     the clay stripe that comes with it were an alarm about the group's own
+     definition -- and with the status line gone there was nothing left to say
+     what the alarm meant. */
   const cls = groupOf(row) === 'on' ? dotOf(row) : 'off'
   return (
     <SetupRow
@@ -285,16 +255,7 @@ function AgentRow({ row, sel }: { row: XaRow; sel: boolean }): JSX.Element {
       /* Empty text on purpose: SetupRow draws the second line only when there
          is something to say there, and here there is not. */
       state={{ cls, text: '' }}
-      tags={
-        <>
-          <span className="kd">{kindText(row.kind)}</span>
-          {/* The one row in this group whose connect is not the group's verb:
-              a preset that changed transport is removed and added back, and
-              the card asks first. Without the tag it sits among the ordinary
-              entries looking identical to them. */}
-          {stageOf(row) === 'stale' ? <span className="kd warn">{t('gui.agent.tag_stale')}</span> : null}
-        </>
-      }
+      tags={<span className="kd">{kindText(row.kind)}</span>}
       act={<AgentAct row={row} />}
       sel={sel}
       onOpen={() => store.sheetOpen(row)}
@@ -565,17 +526,8 @@ export function XaApp(): JSX.Element {
     ob.observe(el, { attributes: true, attributeFilter: ['data-open'] })
     return () => ob.disconnect()
   }, [])
-  /* One pass, in the order the groups are drawn in, so a row can only be in
-     one of them and a group nobody is in cannot be drawn. The last is the
-     catalogue, and the only one that folds. */
-  const groups: Array<{ grp: Grp; label: string; folds?: boolean }> = [
-    { grp: 'on', label: t('gui.agent.g_on') },
-    { grp: 'switch', label: t('gui.agent.g_switch') },
-    { grp: 'setup', label: t('gui.agent.g_setup') },
-    { grp: 'install', label: t('gui.agent.g_install'), folds: true },
-  ]
-  const listFor = (grp: Grp): XaRow[] =>
-    s.rows.filter((a) => groupOf(a) === grp).sort((a, b) => costOf(a) - costOf(b))
+  const on = s.rows.filter((a) => groupOf(a) === 'on')
+  const off = s.rows.filter((a) => groupOf(a) === 'off').sort((a, b) => costOf(a) - costOf(b))
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
   const rows = (list: XaRow[]): JSX.Element => (
     <div className="sulist">
@@ -590,25 +542,19 @@ export function XaApp(): JSX.Element {
         <h3>{t('gui.page.agents')}</h3>
       </div>
       {/* A heading with nothing under it is a heading about nothing: each group
-          appears only when it has rows -- which on a stock install is two of
-          the four, and on a machine with three CLIs installed is three. The
-          ordering inside a group is still by what connecting costs -- that is
-          behaviour, and it does not need a caption to be true. */}
-      {groups.map(({ grp, label, folds }) => {
-        const list = listFor(grp)
-        /* Except while one of them is installing. A build is minutes of
-           downloads with no notification at the end of it, so the row carrying
-           `building` is the one thing on this page a reader is watching -- and
-           folding the group it sits in hides the progress behind the click
-           that started it. The group folds again on its own when the flag
-           clears, because nothing here remembers a decision. */
-        const shuts = folds && !list.some((r) => r.building)
-        return list.length ? (
-          <SetupGroup count={list.length} folds={shuts} key={grp} label={label}>
-            {rows(list)}
-          </SetupGroup>
-        ) : null
-      })}
+          appears only when it has rows. The ordering inside the addable one is
+          still by what connecting costs -- that is behaviour, and it does not
+          need a caption to be true. */}
+      {on.length ? (
+        <SetupGroup label={t('gui.agent.g_on')} count={on.length}>
+          {rows(on)}
+        </SetupGroup>
+      ) : null}
+      {off.length ? (
+        <SetupGroup label={t('gui.agent.g_off')} count={off.length}>
+          {rows(off)}
+        </SetupGroup>
+      ) : null}
       {sheetRow ? (
         <AgentCard key={`${s.sheet}:${s.epoch}`} row={sheetRow} testing={s.testing.includes(sheetRow.name)} />
       ) : null}

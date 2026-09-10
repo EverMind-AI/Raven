@@ -34,12 +34,8 @@ const HEART_COLORS = ['#ff5fa2', '#ff4d6d']
 export const VERB_PAD_LEN = VERBS.reduce((max, v) => Math.max(max, v.length), 0) + 1 // + ellipsis
 export const padVerb = (verb: string) => `${verb}…`.padEnd(VERB_PAD_LEN, ' ')
 
-// Compact alternates for the `emoji` and `ascii` indicator styles. The emoji
-// read as the same round the verbs do -- a feather, the dark, a look around, a
-// found thing, a shine -- and each is a single code point: a ZWJ sequence or a
-// variation selector renders as two glyphs on terminals that do not compose it,
-// which shifts everything right of the ticker.
-const emojiFrames = (brandMark: string) => [`${brandMark} `, '🪶', '🌑', '🔭', '🔑', '✨']
+// Compact alternates for the `emoji` and `ascii` indicator styles.
+const emojiFrames = (brandMark: string) => [`${brandMark} `, '🌀', '🤔', '✨', '🍵', '🔮']
 const ASCII_FRAMES = ['|', '/', '-', '\\']
 
 // Faster tick for spinner-style indicators — they read as motion only

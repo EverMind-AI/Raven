@@ -26,8 +26,8 @@ the flow on (per D6). Worktree isolation retired with the write gate: nothing
 locks a checkout, and a session learns from the flow when other sessions are
 working beside it. The launch contract is otherwise the fork launcher's: refuse
 without any LLM key before any process starts, seed the fork's TOOLS.md
-wording into the state partition once, keep secrets out of the published
-config and in a 0600 rendered copy whose parent decides the data dir.
+wording into the state partition, refresh untouched seeds, keep secrets out of
+the published config and in a 0600 rendered copy whose parent decides the data dir.
 
 Serving ACP, stdout belongs to the protocol and diagnostics go to stderr.
 Hosting a CLI turn, stdout carries the answer and nothing else -- the
@@ -39,6 +39,7 @@ diagnostics go to ``launcher.log`` in the conversation's state directory;
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -55,6 +56,26 @@ DEFAULT_CONFIG = HERE / "config.json"
 PLUGINS_DIR = HERE / "plugins"
 FLOW_PLUGIN_ID = "code-flow"
 GUIDE = PLUGINS_DIR / FLOW_PLUGIN_ID / "prompts" / "TOOLS_CODE.md"
+#: The coding conduct the model reads as ``agent.md`` beside the host identity:
+#: one variant per model family, the fork's split (its per-family prompt files).
+CONDUCT_DEFAULT = PLUGINS_DIR / FLOW_PLUGIN_ID / "prompts" / "CODE_CONDUCT_default.md"
+CONDUCT_ANTHROPIC = PLUGINS_DIR / FLOW_PLUGIN_ID / "prompts" / "CODE_CONDUCT_anthropic.md"
+#: The phased discipline for changing code, held apart from the conduct that
+#: carries it and spliced in through a sentinel -- the fork's own shape
+#: (``{{SE_DISCIPLINE}}``), and the reason is the same: it is the one section
+#: whose effect is worth measuring on its own, so it has to be removable
+#: without touching a word of the rest. Byte-identical in both variants, so
+#: one file serves both.
+CONDUCT_DISCIPLINE = PLUGINS_DIR / FLOW_PLUGIN_ID / "prompts" / "CODE_DISCIPLINE.md"
+DISCIPLINE_SENTINEL = "{{DISCIPLINE}}"
+CONDUCT_RELATIVE = Path("agent_memory") / "profile" / "agent.md"
+#: The product identity, seeded as ``soul.md`` the way raven-research seeds
+#: its own. Bootstrap renders soul.md first; without a seed of ours the
+#: one-turn CLI hosting's workspace sync writes trunk's template there -- a
+#: personal assistant with a personality -- in front of the coding conduct,
+#: while the ACP hosting (no sync) reads none, so the two hostings disagreed.
+SOUL = HERE / "soul.md"
+SOUL_RELATIVE = Path("agent_memory") / "profile" / "soul.md"
 
 PRODUCT = "raven-code"
 
@@ -168,16 +189,175 @@ def log(message: str) -> None:
             stream.write(message + "\n")
 
 
-def seed_guide(partition: Path) -> None:
-    """Seed the partition's TOOLS.md with the fork's own wording, once.
+# Pristine guide and conduct seeds from before per-file seed receipts existed.
+# Digests recognize exact product text without overwriting an operator's edit.
+_LEGACY_GUIDE_DIGESTS = frozenset(
+    {
+        "7d0dc36934316639000b486d2775e2581b1378472b29841bdc67231570576657",
+        "bfd21b466b22dc3d851eedcfcc9219610d88b7622ba9fa84895a8379b35be6f9",
+        "e64bb8409b14a883a075cb5afec9a1d56786cbfb502cb13b20e470e86d4b433d",
+        "b1b3980cf6cd91b4ae78c9a5b9a9ec3d089147ecea23ae2dfe943e83cebe1c69",
+    }
+)
 
-    Raven writes workspace templates only for files still missing, so seeding
-    first is what keeps the fork's tool guidance (exec sessions, background
-    jobs, the 30k spill) in front of the model instead of the trunk template
-    that would otherwise land there, and an operator's in-place edits are
-    never overwritten.
+_LEGACY_CONDUCT_DIGESTS = frozenset(
+    {
+        "6702142378f6c7e65b1053a1c60b5fc826b0ae1f0efe03977fce9ea30fc807fe",
+        "7a14f80c2e947f854d2282031ab61f065d2539f27576fac38e294e2c7ae6bc7f",
+        "b9a8e109f77c36244cd16290b93488c985f461534ae3b9fd6f7a6d7d2541a667",
+        "bad49cf7efb520c98ad55a1305d3f096be7a43c531ff3c4ab0500fb9e02dd781",
+    }
+)
+
+
+def _seed_prompt(target: Path, wanted: str | None, pristine: set[str] | frozenset[str]) -> None:
+    """Refresh an untouched product seed; keep edited files byte-for-byte.
+
+    A small sibling receipt remembers the last text this launcher wrote, so
+    later product updates do not need an ever-growing list of old templates.
     """
-    render.seed_once(partition / "TOOLS.md", lambda: GUIDE.read_text(encoding="utf-8"))
+    receipt = target.with_name(f".{target.name}.code-flow.sha256")
+    if target.exists():
+        current = target.read_text(encoding="utf-8")
+        digest = hashlib.sha256(current.encode()).hexdigest()
+        previous = receipt.read_text(encoding="ascii").strip() if receipt.exists() else ""
+        if current != wanted and digest not in pristine and digest != previous:
+            log(f"[run] {target.name}: edited in place; kept unchanged")
+            return
+    if wanted is None:
+        target.unlink(missing_ok=True)
+        receipt.unlink(missing_ok=True)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists() or target.read_text(encoding="utf-8") != wanted:
+        target.write_text(wanted, encoding="utf-8")
+    receipt.write_text(hashlib.sha256(wanted.encode()).hexdigest() + "\n", encoding="ascii")
+
+
+def seed_guide(partition: Path) -> None:
+    """Seed or refresh the tool guide while preserving in-place edits."""
+    _seed_prompt(partition / "TOOLS.md", GUIDE.read_text(encoding="utf-8"), _LEGACY_GUIDE_DIGESTS)
+
+
+def conduct_source(model: str | None) -> Path:
+    """Which conduct variant a model reads: the anthropic family gets the fork's
+    anthropic prompt (tone, objectivity, todo guidance), everyone else the
+    shared default. The family is read off the routed model id the way the
+    fork's identity_prompts did: by substring, so a gateway prefix
+    (``anthropic/claude-opus-5``) and a bare id both resolve."""
+    lowered = (model or "").lower()
+    if "claude" in lowered or "anthropic" in lowered:
+        return CONDUCT_ANTHROPIC
+    return CONDUCT_DEFAULT
+
+
+def render_conduct(model: str | None, *, discipline: bool = True) -> str:
+    """The conduct as the model reads it: the family's variant, with the
+    discipline spliced in or left out. The sentinel never survives either way.
+    """
+    text = conduct_source(model).read_text(encoding="utf-8")
+    block = ""
+    if discipline:
+        block = CONDUCT_DISCIPLINE.read_text(encoding="utf-8").rstrip("\n") + "\n"
+    rendered = text.replace(DISCIPLINE_SENTINEL + "\n", block).replace(DISCIPLINE_SENTINEL, block.rstrip("\n"))
+    if DISCIPLINE_SENTINEL in rendered:
+        raise SystemExit(f"error: {conduct_source(model)} still carries {DISCIPLINE_SENTINEL} after rendering")
+    return rendered
+
+
+def conduct_settings() -> dict:
+    """What this product's own settings say about the conduct.
+
+    Same lookup as every other setting (the process environment, then this
+    folder's ``.env``): the switch belongs to raven-code, and a host config
+    never has to know this prompt exists.
+    """
+    out: dict = {}
+    for name, key in (("CODE_CONDUCT", "enabled"), ("CODE_CONDUCT_DISCIPLINE", "discipline")):
+        raw = env_value(name)
+        if raw is None or not raw.strip():
+            continue
+        out[key] = raw.strip().lower() not in _OFF
+    return out
+
+
+def seed_soul(partition: Path) -> None:
+    """Seed the product identity as the partition's ``soul.md``, once.
+
+    The workspace sync only creates what is missing, so a file seeded before
+    the engine starts is the one bootstrap reads on both hostings. Once is the
+    contract (``seed_once``): an operator's edit is never overwritten.
+    """
+    render.seed_once(partition / SOUL_RELATIVE, lambda: SOUL.read_text(encoding="utf-8"))
+
+
+def seed_conduct(partition: Path, model: str | None) -> None:
+    """Seed the configured conduct, replacing only untouched product text.
+
+    Bootstrap reads agent.md after the product identity. Model-family,
+    discipline and product updates refresh managed seeds; edited text stays.
+    Turning conduct off removes a managed seed instead of leaving it resident.
+    """
+    settings = conduct_settings()
+    wanted = (
+        render_conduct(model, discipline=settings.get("discipline", True)) if settings.get("enabled", True) else None
+    )
+    pristine = _LEGACY_CONDUCT_DIGESTS | {hashlib.sha256(text.encode()).hexdigest() for text in pristine_conducts()}
+    _seed_prompt(partition / CONDUCT_RELATIVE, wanted, pristine)
+
+
+def pristine_conducts() -> set[str]:
+    """Every composition this product could have written, so a file that is
+    still one of them can be replaced and a file that is not is left alone."""
+    return {
+        render_conduct(model, discipline=discipline)
+        for model in (None, "anthropic/claude")
+        for discipline in (True, False)
+    }
+
+
+#: Off switch for the working directory's own instruction files (``AGENTS.md``
+#: and its equivalents), contributed to each turn's system message. On by
+#: default -- a person joining a repository reads them, and so should this.
+#: A run that must judge the model alone turns them off here,
+#: without editing a config.
+PROJECT_FILES_SETTING = "CODE_PROJECT_FILES"
+#: The product's spelling of off, for every on/off setting it reads.
+_OFF = frozenset({"0", "false", "no", "off", "disabled"})
+
+
+def superseded_host_tools() -> dict[str, str]:
+    """The host names this product's tool face replaces under another name.
+
+    Imported from the plugin that owns the table rather than restated here:
+    the launcher stays stdlib-only (this is the product's own module, the same
+    seam raven-research uses to render its prompts) and there is one place to
+    edit when the face changes.
+    """
+    if str(PLUGINS_DIR / FLOW_PLUGIN_ID) not in sys.path:
+        sys.path.insert(0, str(PLUGINS_DIR / FLOW_PLUGIN_ID))
+    from code_flow.tools import SUPERSEDED_HOST_TOOLS
+
+    return dict(SUPERSEDED_HOST_TOOLS)
+
+
+def default_project_files() -> list[str]:
+    """The coding set of instruction-file names, from the plugin that reads them."""
+    if str(PLUGINS_DIR / FLOW_PLUGIN_ID) not in sys.path:
+        sys.path.insert(0, str(PLUGINS_DIR / FLOW_PLUGIN_ID))
+    from code_flow.flow import PROJECT_FILES
+
+    return list(PROJECT_FILES)
+
+
+def project_files_off() -> bool:
+    """Whether this product's settings turn the checkout's own files off.
+
+    Absent means on: the slice decides the names. Only an explicit off value
+    empties the list.
+    """
+    raw = env_value(PROJECT_FILES_SETTING)
+    return bool(raw and raw.strip()) and raw.strip().lower() in _OFF
 
 
 def overlay_effort(overlay: dict) -> str | None:
@@ -206,14 +386,16 @@ def resolve_mode(overlay: dict) -> tuple[None, dict]:
     return None, {}
 
 
-def render_config(source: Path, partition: Path, mode: str | None = None) -> Path:
+def render_config(source: Path, partition: Path, mode: str | None = None, *, unattended: bool = False) -> Path:
     """Write a copy of ``source`` with the secrets merged in, under ``partition``.
 
     The partition is the rendered file's parent and the pinned Agent home, so
     the runtime data dir and transcripts stay in this host-owned partition; the
     working directory repository work happens in stays a separate path (the ACP
     session cwd, or ``--workspace``). ``mode`` is which effort tier sessions
-    start in; the source stays the baseline whatever the tier.
+    start in; the source stays the baseline whatever the tier. ``unattended``
+    says this hosting has nobody to answer a permission prompt -- see the
+    ask-tier note below.
     """
     config = json.loads(source.read_text(encoding="utf-8"))
     host = render.host_config()
@@ -245,6 +427,59 @@ def render_config(source: Path, partition: Path, mode: str | None = None) -> Pat
     # lacking the code-flow slice still gets the product's conduct. setdefault,
     # so an operator's explicit false still opts out.
     flow_slice.setdefault("enabled", True)
+    # The tool face rides the same switch shape as the flow: on for the
+    # product's own renders, an explicit false in a custom config opts out. It
+    # is a section of the same slice, so the flow and the tools have one switch
+    # each and neither drags the other along.
+    tools_slice = flow_slice.setdefault("tools", {})
+    tools_slice.setdefault("enabled", True)
+    # The tool fence travels through the slice because a plugin factory cannot
+    # read it: these tools replace the host's own by name, and the host grants
+    # its own the workspace root only when tools.restrictToWorkspace is on.
+    # Rendered rather than defaulted, so the replacements are fenced exactly
+    # when the originals would have been.
+    tools_slice["restrictToWorkspace"] = bool((config.get("tools") or {}).get("restrictToWorkspace", False))
+    # The shell's knobs travel the same way as the fence: the host's own
+    # tools.exec values and the sandbox backend, rendered into the slice so the
+    # exec factory can match the host's defaults and refuse to replace a
+    # sandboxed shell. maxTimeout is the product's own knob (trunk has none)
+    # and stays whatever config.json's slice says.
+    exec_slice = tools_slice.setdefault("exec", {})
+    host_tools = config.get("tools") or {}
+    host_exec = host_tools.get("exec") or {}
+    exec_slice["timeout"] = host_exec.get("timeout", 60)
+    exec_slice["pathAppend"] = host_exec.get("pathAppend", "")
+    exec_slice["sandboxBackend"] = (host_tools.get("sandbox") or {}).get("backend", "none")
+    if tools_slice.get("enabled"):
+        # One capability, one name. Where this face serves a host capability
+        # under a different name, the host's name is withheld -- read from the
+        # plugin's own table so adding a tool is a line beside the tool, not an
+        # edit here, and only while the face is actually being served: written
+        # into config.json it would outlive the switch and leave a product with
+        # the face off unable to find a file at all.
+        disabled = config.setdefault("tools", {}).setdefault("disabledTools", [])
+        for host_name in superseded_host_tools():
+            if host_name not in disabled:
+                disabled.append(host_name)
+    # The checkout's own instruction files ride the flow slice like the tool
+    # face does: named for the product's own renders, an explicit list in a
+    # custom config wins, and the off setting empties the list rather than
+    # deleting the key (a missing key would fall back to the names below).
+    flow_slice.setdefault("projectFiles", default_project_files())
+    if project_files_off():
+        flow_slice["projectFiles"] = []
+        log(f"[run] project files: off ({PROJECT_FILES_SETTING})")
+    if unattended:
+        # The ask tier has nobody to ask on this hosting: one CLI turn prints
+        # a reply and exits, so the gate refuses every write and every command
+        # instead of prompting (measured 2026-09-08: the model could not edit
+        # one line and reported the task incomplete), and trunk's own one-shot
+        # spine names this the operator's call. The ACP hosting keeps the
+        # default: raven dispatching a sub-agent answers those prompts itself,
+        # and a person in an editor should still be asked. Builtin refusals
+        # (the catastrophic-command list) hold in every mode, and an explicit
+        # permissions block in a custom config wins.
+        config.setdefault("permissions", {}).setdefault("mode", "full")
 
     # Declared, not merged: the engine composes a profile per session from the
     # catalogue over session/set_mode, and --mode only picks the starting entry.
@@ -265,6 +500,8 @@ def render_config(source: Path, partition: Path, mode: str | None = None) -> Pat
 
     partition.mkdir(parents=True, exist_ok=True)
     seed_guide(partition)
+    seed_soul(partition)
+    seed_conduct(partition, defaults.get("model"))
     render.sweep_stale_renders(partition)
     return render.write_rendered(config, partition)
 
@@ -492,7 +729,7 @@ def run_task(args: argparse.Namespace) -> int:
     _VERBOSE = args.verbose
     _LOG_FILE = state_dir / "launcher.log"
 
-    rendered = render_config(Path(args.config).resolve(), state_dir)
+    rendered = render_config(Path(args.config).resolve(), state_dir, unattended=True)
     workspace = resolve_workspace(state_dir, args.workspace)
 
     transcript = session_file(state_dir, workspace, conversation)
