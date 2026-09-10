@@ -2,7 +2,6 @@
 
 import difflib
 import mimetypes
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -12,16 +11,6 @@ from raven.contracts.tool import FileChange, Tool, ToolResult
 from raven.utils.images import detect_image_mime
 
 _DIFF_MAX_LINES = 400
-
-
-def _write_text_bytes(content: str) -> bytes:
-    """The bytes ``Path.write_text`` would leave on disk for ``content``.
-
-    It writes through a text layer with ``newline=None``, which translates
-    every ``\n`` to ``os.linesep`` -- so on a CRLF platform this is not the
-    plain UTF-8 encoding of the string.
-    """
-    return content.replace("\n", os.linesep).encode("utf-8")
 
 
 def _unified(before: str, after: str, name: str) -> str | None:
@@ -377,33 +366,6 @@ class WriteFileTool(_FsTool):
                 with fp.open("a", encoding="utf-8") as handle:
                     handle.write(content)
                 return f"Successfully appended {len(content)} bytes to {fp}"
-            # The bytes decide, with no text gate in front of them. Text
-            # equality is wrong in both directions here: ``read_text`` folds
-            # CRLF to LF, so a CRLF file looks equal to the LF content that
-            # would replace it, and content carrying CRLF never looks equal to
-            # the file already holding exactly those bytes.
-            would_write = _write_text_bytes(content)
-            if fp.is_file():
-                try:
-                    unchanged = fp.read_bytes() == would_write
-                except OSError:
-                    # Reading to decide whether to write must not become a
-                    # precondition for writing: a POSIX mode-0200 file is
-                    # writable and unreadable, and overwriting one worked
-                    # before this check existed. An unreadable file is simply
-                    # not a no-op.
-                    unchanged = False
-                if unchanged:
-                    # A byte count for a rewrite that changed nothing reads as
-                    # progress, and ``model_text`` is the whole account of the
-                    # call the caller gets: a loop shrinking a file can rewrite
-                    # the same bytes several times before anything says
-                    # otherwise. Nothing is written, so there is no diff or
-                    # file_change to carry either.
-                    return ToolResult(
-                        f"File unchanged: {fp} already holds exactly these "
-                        f"{len(would_write)} bytes, so nothing was written.",
-                    )
             fp.write_text(content, encoding="utf-8")
             return ToolResult(
                 f"Successfully wrote {len(content)} bytes to {fp}",

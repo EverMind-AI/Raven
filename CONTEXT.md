@@ -291,7 +291,8 @@ It reads the task as the model wrote it (`authored_task` on `SubagentBackend.run
 hands it over through `optional_keyword`, so only a `run` that declares it or takes `**kwargs`
 receives it and a backend typed against the earlier paper keeps running; the rendered `task`
 only where a caller has no other text). The order is fixed:
-a reused instance handle continues where its transport bound it;
+a reused instance handle continues where its transport bound it; a task whose wording, file
+references taken out, matches a route's `match` pattern goes there without a model call;
 otherwise the manager's classifier (the host's own model) picks between the targets' roster
 lines and the entry itself, and any other answer keeps the task on the entry. A fronting row is only as ready as its
 targets (readiness kind `route`): a missing, unready or switched-off target disables the row
@@ -1028,21 +1029,13 @@ conflating it with a sub-agent DAG run (`run_subagent_dag` executes one graph a
 model just wrote; a playbook stores one for reuse).
 
 **SkillPolicy** (`skill_hub/policy.py`):
-The safety decision every Hub skill path consults, at two strengths.
-`refusal_for_detail()` is the install strength, taken before any
-`SkillHubClient.install()` by the segment builder's post-gate hydrate and the `use_skill`
-tool. It checks, in order: the operator blocklist
+The install-time safety decision both Hub install paths consult before any
+`SkillHubClient.install()` — the segment builder's post-gate hydrate and the `use_skill`
+tool. `refusal_for_detail()` checks, in order: the operator blocklist
 (`skillForge.blocklist`, matched case-insensitively against name / slug / native id), the
 `min_safety` bar against the *detail*-level `score_safety` (the catalog payload omits the
 score; a missing or malformed score passes), and an external home-dotdir lint over the
-skill body. `~/.raven` is allowed, and so is a generic root such as `~/.config` on its own
-or `~/.config/raven` under it; a dotdir naming another product refuses the install and is
-reported down to the segment that names it (`~/.config/openclaw`).
-`refusal_for_read()` is the read strength, taken by `read_skill`: blocklist and safety bar
-only. A read installs nothing and returns the body wrapped as untrusted data, and the
-scent menu advertises hub candidates on those same two checks — linting the read as well
-would put ids in front of the model that no call can resolve. The lint still runs on that
-path, as a note above the body naming the flagged paths. A hub
+skill body (`~/.raven` is allowed; any other dotdir reference refuses the install). A hub
 candidate whose detail fetch fails is unvetted and dropped — it never reaches `install()`.
 Every install that passes is appended to a JSONL audit trail
 (`<workspace>/skills/hub/installs.jsonl`, `skill_hub/audit.py`).
@@ -2117,72 +2110,9 @@ false there by construction, never a fact about the tree.
 _Avoid_: reading a `shared` report as one session's work - it is the shared tree's, and
 `baseCommit..HEAD` cannot tell whose.
 
-**Coding Conduct** (`agents/raven-code/plugins/code-flow/prompts/CODE_CONDUCT_*.md`,
-`agents/raven-code/run.py`):
-The working rules a coding product seeds into its workspace as
-`agent_memory/profile/agent.md`, which bootstrap renders right after the host identity:
-tone, the project's own conventions, the phased discipline for changing code (understand,
-implement, verify) and the tool policy for the face this product actually serves. One
-variant per model family, since an instruction that helps one family can hurt another; a
-partition still carrying the other variant is reseeded, and anything an operator tuned in
-place is left alone. Small sibling digest receipts recognize untouched prompt seeds across
-product updates; known pristine legacy tool guides are migrated without replacing operator edits.
-Avoid writing an evaluation harness's vocabulary into it - no benchmark, no grader, no
-completion token; a conduct reads the same to a model on a real task and to one under
-measurement.
-Avoid promising a tool or a behaviour the served face does not have - the model acts on
-the promise and the failure looks like the model's mistake.
-
-**Repository Instructions** (`agents/raven-code/plugins/code-flow/code_flow/flow.py`,
-`code_flow/config.py`):
-The working directory's own instruction files - `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, the
-slice's `projectFiles` - which code-flow appends to the system message in its existing
-`before_iteration` hook, capped per file and read anew each turn. The hook preserves the host's
-system prefix and transcript, sizes its addition against the remaining prompt allowance with
-the active model's full reply ceiling reserved, and labels truncation. If even the notice
-cannot fit, the turn reports insufficient context instead of sending an oversized request.
-Repeated iterations replace the hook's own addition. Resolved paths must remain inside the
-resolved bound directory; aliases resolving to one file are read once.
-They are the project's standing instructions to whoever works in it, so they are not fenced as untrusted data; they
-are read from the bound working directory only, never from the agent's own home, and an empty
-list (the launcher's `CODE_PROJECT_FILES=off`) reads none. File names do not select message
-roles: every configured instruction file enters system context. The inbound query and the
-session record keep the user's own words, including slash commands.
-_Avoid_: confusing them with the bootstrap files - those are the agent's own (`soul.md`,
-`agent.md`, `TOOLS.md`, read from Agent home by the host); these are the checkout's.
-
-**Read Ledger** (`agents/raven-code/plugins/code-flow/code_flow/tools/read_state.py`):
-The resolved file versions observed by one session in one Raven-Code runtime. The flow hook
-binds its own store before each model iteration, including subagent turns and when flow
-notices are disabled. File tools consume that binding; instances and sessions never share
-read permission. Successful reads and full writes establish a record. An append preserves
-one only when the previous content was current or the file is new. Enforced edits reject
-unbound, unread, or externally changed content. Session deletion and runtime replacement
-discard the affected records; a new session has its own records. This is an edit precondition, not a file
-lock or a mandatory read-before-overwrite check on the public tools.
-
-**Checklist** (`agents/raven-code/plugins/code-flow/code_flow/tools/todo.py`, `code_flow/flow.py`):
-The model's own plan for a multi-step task, kept by Raven-Code's `todo` tool: `read` shows it,
-`write` replaces the whole list. Saved under Agent home (`todos/<channel>/<chat_id>.json`) before
-the write is acknowledged, so it outlives the rest of the tool batch and the process; the saved
-record is the source of truth, never the transcript. The hook binds the store at inbound and
-checks the actual session before the first model call, covering turns that skip inbound or
-select another session. Binding and cleanup stay active while the tools are enabled, even
-when flow notices and reports are disabled. An unbound tool returns an error. New tasks use
-new session IDs: ACP callers create a session, and CLI callers use a new `--session` value.
-Resuming an existing session restores its plan; deleting it removes the plan. The host's
-in-place `/new` command retains the session key and does not clear this separate product
-state. The product neither intercepts that command nor adds a shared reset hook.
-Before a model call, the hook appends one restore
-snapshot to the last message only while no message in the window still shows the current
-revision -- a durable transcript entry, not a per-request reminder.
-Avoid treating a `completed` status as verified - the plan is the model's, and an item it
-marks done is a claim, not evidence.
-Avoid reading a pasted `<system-reminder>` as a plan - only the saved record decides.
-
 **Concurrency Notice** (`agents/raven-code/plugins/code-flow/code_flow/flow.py`,
 `code_flow/sessions.py`):
-The paragraph code-flow contributes to the volatile part of the system message when other
+The paragraph the code-flow hook puts in front of a Raven-Code turn's prompt when other
 sessions of the same process are mid-turn in the same working directory - the parallel
 nodes of one DAG, which the host serves through one connection and one session each - and
 only then; a lone session hears nothing. It replaces the lock: re-read before every write,

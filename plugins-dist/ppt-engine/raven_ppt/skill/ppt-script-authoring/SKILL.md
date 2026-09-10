@@ -645,9 +645,9 @@ from ppt_charts import (
     write_label
 )
 from ppt_template import (
-    adapt, add_unit, backdrop, bundled, clear_region, clone_page, clone_shape, drop_shape, fill,
-    layout_pictures, page_box, prototype, raise_type, remove_unit, replace_picture, replace_text,
-    shape_at, shape_near, shape_saying, shapes_in, units, wash
+    adapt, add_unit, backdrop, bundled, clone_page, clone_shape, drop_shape, fill, layout_pictures,
+    prototype, raise_type, remove_unit, replace_picture, replace_text, shape_at, shape_near,
+    shape_saying, units, wash
 )
 ```
 
@@ -788,9 +788,6 @@ use, by their DrawingML names, and the two layouts built on them. Signatures in
 | `shape_near(container, left, top, tol=0.08, with_text=False)` | one shape by where the page shows it, in inches |
 | `shape_saying(container, prefix)` | one shape by the copy it starts with |
 | `page_position(shape)` | `(left, top)` in inches on the page, groups resolved |
-| `page_box(shape)` | where a shape is drawn, as the **two corners** a region is given in, with the scale its group applies -- so it drops straight into `clear_region` |
-| `shapes_in(container, box, *, share=0.5, with_text=False)` | every shape drawn in `box` -- a `ppt_layout.Box` or a `page_box(shape)`, never four bare numbers -- groups walked into -- `shape_near`'s plural, and the way to find by place rather than by words; `share` is how much of a shape must be inside to count, and `share=0` asks what touches the box at all |
-| `clear_region(container, box, *, share=0.5, keep=())` | empty `box` -- `Box.corners(...)`, `Box.at(...)` or `page_box(shape)`, since four bare numbers cannot say which reading they are and are refused -- so you can draw in it: `drop_shape` for everything `shapes_in` finds, returning what it removed and, in `left_standing`, what still lies over the box. `keep` spares a shape by the words it shows or by its `# [n]` |
 | `raise_type(slide, floor=BODY_FLOOR_PT, min_chars=COPY_CHARS)` | lift copy the template states under the readability floor (`BODY_FLOOR_PT` is 14pt) and let its box grow to hold it |
 | `replace_text(target, text, new=None)`, `replace_picture(shape, image, fit="contain", *, anchor="centre", trim=None, zoom=1.0, alpha=None, box=None)` | in place, keeping how the template set it; `alpha` washes the new picture the way `backdrop` does, for the frame that is the page. `shape` may be a drawing rather than a frame -- a group of freeforms, a cartoon -- or a list of shapes making one: the picture takes its box and its depth and the drawing goes |
 | `backdrop(slide, image, *, alpha=1.0, scrim=0.62, ink=None, light_type=True, box=None, anchor="centre", trim=None, zoom=1.0)` | a photograph behind everything on the page, cover-cropped to the canvas (or `box`), at full strength under a plane of the theme's ink at `scrim`, with every run of type on the page set light (saturated accents kept) -- the cover form; `scrim=None` with `alpha` at 0.12 or under is the texture form behind a template's own ground; returns the picture |
@@ -844,8 +841,7 @@ the other half of `type_floor` — copy stated at the floor and shrunk by its bo
 needs a bigger box rather than a bigger size (`ppt_layout.fits`, `text_size`).
 
 **With a template bound, the title row is the template's.** `house_style` measures where
-its own pages put one, so use the box it names — `title_row_box_corners_in`, or the
-`title_row_as_code` line built from it
+its own pages put one, so use the box it names — `title_row_box_in`, at the size it names
 — and decide it **once, in the shared setup**, with every content page calling that one
 thing. A page block that computes its own title coordinates is how a deck ends up with
 three title rows (§8, §12).
@@ -1224,7 +1220,7 @@ slack goes below.
 kicker and the title set on it, stopping short of the body, and `bleed=False` to keep that
 ground inside the safe area. It sets the title in `page()`'s own box rather than the
 template's, so reach for it where you are composing a page yourself (§8) and where that box
-agrees with the `title_row_box_corners_in` the template was measured for (§4).
+agrees with the `title_row_box_in` the template was measured for (§4).
 
 **The header is one compact group.** A section tag, title and one explanatory line sit
 close enough to scan as a single unit; the larger vertical break belongs between that unit
@@ -1380,8 +1376,8 @@ one page of the deck that does have room, or on the page you composed yourself.
 ```python
 clone_page(prs, tpl, 7)                            # the template's page, filled in
 strip = page().footer
-taken = shapes_in(slide, strip, share=0)           # anything of the template's reaching in
-if not taken:                                      # the band is the template's, or it is yours
+clear = max((b.y1 for s in slide.shapes if (b := page_box(s)) and b.y0 < strip.y1), default=0.0)
+if clear <= strip.y0:                              # the band is the template's, or it is yours
     footer(slide, strip, T, note=source, font=F, cjk_font=HAN)
 ```
 
@@ -1605,37 +1601,6 @@ every shape, so name that line in `texts={...}` off the render. A cover can reso
 `title` onto the presenter credit above the real title -- if the render shows the wrong
 row rewritten, `texts` keyed on the words is the fix.
 
-**Drawing into a cloned page means clearing the space first.** `replace_text` swaps
-words where they stand, and that is all it does; the moment a chart, a panel or a figure
-of your own goes onto a cloned page, whatever the template drew in that space is still
-under it. `clear_region(slide, box)` empties the box -- every shape drawn in it, groups
-walked into -- where `box` is a `Box.corners(...)`, a `Box.at(x, y, w=, h=)` or a
-`page_box(shape)`, because the two corners a `Box` holds and the `(left, top, width,
-height)` a template reference prints are the same four numbers and a bare tuple of them
-is refused rather than guessed at -- and returns what it removed, with `left_standing` for anything that still
-lies over the box. Read that. The shape the box sits *inside* is kept on purpose: on a
-template that is the card the chart was drawn in, and the card is the arrangement the
-page was cloned for. `keep=("the words a shape shows",)` or `keep=(7,)` spares one, and
-`share=` (half by default) decides how much of a shape has to be inside the box to go.
-
-Do not write the sweep yourself. One live program wrote two -- one keyed on whether a
-shape's text was Chinese, the other on whether the shape was bigger than 1.0x0.7in -- and
-on the page it ran on those kept all ten arrows (1.27x0.68in, under the height bar), all
-five number labels ("01".."05", not Chinese) and every connector, because a horizontal
-rule is 0.00in tall and a vertical one 0.00in wide. Two charts came out drawn on top of
-the arrows. Neither sweep could take a region, which is the whole of what went wrong.
-
-```python
-slide = clone_page(prs, prototype(tpl, 4))
-replace_text(slide, "the template's title", "System prices fell 31% in one year")
-print(clear_region(slide, Box.corners(0.95, 1.95, 12.55, 6.55)))   # say what went
-column(slide, Box.corners(0.95, 2.30, 4.15, 6.05), T, prices, unit="$")
-```
-
-A shape's own box is a region, so clearing exactly where the template drew something is
-`clear_region(slide, page_box(shape_at(slide, 3)))` -- `page_box` answers in the two
-corners a region is given in, with the scale the shape's group applies to it.
-
 **Numbering: an integer key is the shape's place on the page**, as the read-back page
 prints it (`# [n]`, groups opened, counting shapes that cannot be drawn as well as those
 that can). `shape_at(slide, n)` counts the slide as it stands **now**, so it is the same numbering only
@@ -1767,8 +1732,8 @@ title_row_as_code: from ppt_layout import Box, write; TITLE_ROW = Box.corners(0.
           colour=INK, font=FACE, cjk_font=HAN)
 type_pt: {title: 28, subtitle: 24, body: 18, secondary: 16, caption: 14}
 face: "Arial"
-safe_area_corners_in: [0.72, 0.14, 12.6, 6.7]     # two corners, what Box takes -- not a size
-body_area_corners_in: [0.72, 1.24, 12.6, 6.7]
+safe_area_in: [0.72, 0.14, 11.88, 6.56]
+body_area_in: [0.72, 1.24, 11.88, 5.46]
 body_area_as_code: from ppt_layout import Box; body = Box.corners(0.72, 1.24, 12.6, 6.7)
 ```
 
@@ -1809,7 +1774,7 @@ on purpose, so a box that cannot hold its copy comes back as a measurement rathe
 type quietly dropping to 10.8pt. The answer to `overset_copy` is a taller box, a wider
 column, less copy or a second page — never a smaller size (§12).
 
-**Stay inside the safe area.** `safe_area_corners_in` is where the template keeps its own content;
+**Stay inside the safe area.** `safe_area_in` is where the template keeps its own content;
 a layout's artwork lives outside it, and copy laid across that artwork comes back as
 `over_layout_art`.
 
@@ -2021,12 +1986,6 @@ The rest land on the built deck:
 - copy **printing an escape** (`48.3\nOVIS` -- pass a real newline);
 - type a reader **cannot make out**: under 2:1 against the ground it landed on;
 - words **colliding in the render**, which is not answerable by shrinking them;
-- copy **set above where its box starts**: a frame anchored to the middle or the bottom
-  of its box holds its last line on the box's bottom edge, so a line the box cannot hold
-  is added *above* the first one -- off the top of the page, or over what the page
-  already drew there. Anchor the frame to the top, or `place()` it: the box, the copy and
-  every neighbour stay as they are. Nothing here asks you to cut a line, and a frame that
-  shrinks its own type to fit is not in this at all;
 - the template's own **placeholder text** still on a page you cloned, or that page
   cloned for its background with **new text boxes laid over** it.
 
@@ -2045,9 +2004,9 @@ The rest land on the built deck:
 | `card_overflow` | copy **escaping a card** | `fits(body, card_body_box(box, icon=, title=))` first, then the height it asks for |
 | `crowded_panel` | a line **crowding its panel**'s bottom rim | the padding your other panels have, or one line less |
 | `covered_shape` | content three fifths **hidden behind an opaque shape** drawn after it, read off the file's z-order rather than off the render | draw the covering shape first, or shrink it off what it hides. It reads the file and not the page, so a shape that covers nothing a reader was looking at is yours to dismiss -- the render-side check that can prove a reader lost something is `word_collision`, and that one refuses |
-| `off_page` | a shape **over the page edge** | inside `safe_area_corners_in` |
+| `off_page` | a shape **over the page edge** | inside `safe_area_in` |
 | `spilled_copy` | copy **painted off the page** by a `wrap=False` box | turn wrapping on and give the box a second line's height |
-| `over_layout_art` | copy **on the layout's artwork** | inside `safe_area_corners_in` |
+| `over_layout_art` | copy **on the layout's artwork** | inside `safe_area_in` |
 | `flat_formula` | an **expression set as prose**, so its subscripts are flat and the box may break it inside a symbol | `formula()` (§9) |
 | `listed_claims` | one box holding two or more parallel claims, so they **read as a list to be read out** | separate them so a reader can see where one ends; §6.5 has the calls that measure a region before it is drawn |
 | `orphan_line` | a **label the render broke** onto a second line, as "为什么要统 / 一", in a text box or a table cell | a hair more width, or fewer characters |

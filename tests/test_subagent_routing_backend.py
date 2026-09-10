@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from raven.agent.subagent.backends.routing import RoutingBackend
+from raven.agent.subagent.backends.routing import RoutingBackend, without_file_references
 from raven.agent.subagent.registry import AgentRegistry
 from raven.config.schema import ThirdPartyAcpSubagentConfig
 
@@ -61,7 +61,9 @@ def _entry(
     router: _Router | None = None, instances: _Instances | None = None
 ) -> tuple[RoutingBackend, _Backend, _Backend]:
     design, deck = _Backend("Design"), _Backend("Deck")
-    entry = RoutingBackend("Design", design, [("Deck", "builds a .pptx", deck)], instances=instances or _Instances())
+    entry = RoutingBackend(
+        "Design", design, [("Deck", r"\.pptx\b|\bdeck\b", "builds a .pptx", deck)], instances=instances or _Instances()
+    )
     entry.set_router(router)
     return entry, design, deck
 
@@ -70,8 +72,8 @@ async def _run(entry: RoutingBackend, task: str, **kwargs: Any) -> str:
     return await entry.run(task, task_id="t1", workspace=Path("/tmp"), executor=None, **kwargs)
 
 
-async def test_a_task_naming_the_deliverable_still_uses_the_classifier() -> None:
-    router = _Router("Deck")
+async def test_a_task_naming_the_deliverable_routes_without_the_classifier() -> None:
+    router = _Router("Design")
     entry, design, deck = _entry(router)
 
     assert (
@@ -81,8 +83,7 @@ async def test_a_task_naming_the_deliverable_still_uses_the_classifier() -> None
     # The lane's own keywords reach the implementation untouched; the mode is
     # the one that went missing once (see test_subagent_mode_wiring.py).
     assert deck.runs[0]["mode"] == "high" and deck.runs[0]["task_id"] == "t1"
-    assert design.runs == []
-    assert len(router.asked) == 1
+    assert design.runs == [] and router.asked == []
 
 
 async def test_an_ambiguous_task_is_classified_against_the_targets_lines_only() -> None:
@@ -161,35 +162,42 @@ async def test_an_implementation_typed_against_the_earlier_paper_is_not_handed_t
     it selects, primary or target, may enumerate the paper's parameters with no
     ``**kwargs`` and must keep running with an authored task present."""
     design, deck = _V14Implementation("Design"), _V14Implementation("Deck")
-    entry = RoutingBackend("Design", design, [("Deck", "builds a .pptx", deck)], instances=_Instances())
-    entry.set_router(_Router("Deck"))
+    entry = RoutingBackend("Design", design, [("Deck", r"\.pptx\b", "builds a .pptx", deck)], instances=_Instances())
+    entry.set_router(_Router("Design"))
 
     assert (
         await _run(entry, "Turn {{ ref:/x/report.md }} into a .pptx", authored_task="Turn it into a .pptx")
         == "Deck did it"
     )
-    entry.set_router(_Router("Design"))
     assert await _run(entry, "a poster of {{ ref:/x/report.md }}", authored_task="a poster of it") == "Design did it"
     assert deck.runs == ["Turn {{ ref:/x/report.md }} into a .pptx"] and design.runs == [
         "a poster of {{ ref:/x/report.md }}"
     ]
 
 
-async def test_deck_words_and_file_references_do_not_override_the_classifier() -> None:
+async def test_a_file_that_happens_to_be_a_deck_is_not_a_deck_being_asked_for() -> None:
     router = _Router("Design")
-    entry, _, deck = _entry(router)
-    tasks = (
-        "Do not make a PPT; make a poster",
-        "create a poster from /data/keynote.pptx",
-        "{{ ref:/data/report.pptx }}\nMake a poster of it",
-        "summarise @deck.pptx as a poster",
-        "build a 10-slide deck from /data/keynote.pptx",
-        "Export the summary as a .pptx",
-    )
-    for task in tasks:
-        assert await _run(entry, task) == "Design did it"
-    assert [task for _, task, _ in router.asked] == list(tasks)
-    assert deck.runs == []
+    entry, design, deck = _entry(router)
+
+    assert await _run(entry, "create a poster from /data/keynote.pptx") == "Design did it"
+    assert await _run(entry, "{{ ref:/data/report.pptx }}\nMake a poster of it") == "Design did it"
+    assert await _run(entry, "summarise @deck.pptx as a poster") == "Design did it"
+    assert len(router.asked) == 3, "with the references out, nothing named a deck; the classifier decides"
+    assert await _run(entry, "build a 10-slide deck from /data/keynote.pptx") == "Deck did it"
+    assert await _run(entry, "Export the summary as a .pptx") == "Deck did it"
+    assert len(router.asked) == 3
+
+
+def test_file_references_are_taken_out_and_deliverable_words_stay() -> None:
+    assert without_file_references("a poster from /data/keynote.pptx and ~/x.key").split() == [
+        "a",
+        "poster",
+        "from",
+        "and",
+    ]
+    assert without_file_references(r"open C:\\decks\\q3.pptx").split() == ["open"]
+    assert without_file_references("{{ inputs.source }}\nExport as a .pptx").split() == ["Export", "as", "a", ".pptx"]
+    assert without_file_references("read @notes.md then make slides").split() == ["read", "then", "make", "slides"]
 
 
 async def test_a_reused_handle_continues_where_its_transport_bound_it() -> None:
@@ -238,7 +246,9 @@ class TestTheTableHandsBackTheEntry:
         registry = AgentRegistry(build_builtin=lambda row, narrowed: None)
         registry.apply(
             [
-                ThirdPartyAcpSubagentConfig(name="Design", command="design-agent", routes=[{"to": "Deck"}]),
+                ThirdPartyAcpSubagentConfig(
+                    name="Design", command="design-agent", routes=[{"to": "Deck", "match": r"\.pptx"}]
+                ),
                 ThirdPartyAcpSubagentConfig(
                     name="Deck", command="deck-agent", description="builds a .pptx", hidden=True, enabled=deck_enabled
                 ),
@@ -285,10 +295,10 @@ class TestTheShippedManifestsRoute:
         registry.apply(rows)
         return registry
 
-    async def test_a_deck_request_reaches_the_deck_engine_through_the_classifier(self) -> None:
+    async def test_a_deck_request_reaches_the_deck_engine_without_a_model_call(self) -> None:
         entry = self._table().backend("Raven-Design")
         assert isinstance(entry, RoutingBackend)
-        router = _Router("Raven-PPT")
+        router = _Router("Raven-Design")
         entry.set_router(router)
 
         for task in (
@@ -298,7 +308,7 @@ class TestTheShippedManifestsRoute:
             "{{ inputs.source }}\nExport the summary as a .pptx",
         ):
             assert (await entry.pick(task, session_key="s1", instance=None))[0] == "Raven-PPT", task
-        assert len(router.asked) == 4
+        assert router.asked == []
 
     async def test_the_classifier_reads_the_deck_engines_line_and_never_the_entrys_own(self) -> None:
         registry = self._table()

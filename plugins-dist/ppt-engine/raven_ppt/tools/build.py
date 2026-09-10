@@ -237,7 +237,7 @@ class PptBuildTool(Tool):
         # The tier's caps (services/tier): a whole-deck build past the cap releases the
         # deck as it stands, and a reading past its cap is not taken.
         caps = tier.read_caps(deck.workspace)
-        whole = reached = tier.whole_builds_taken(deck) + (0 if draft else 1)
+        whole = tier.whole_builds_taken(deck) + (0 if draft else 1)
         release = not draft and caps.build_cap is not None and whole >= caps.build_cap
         result = await self.stage.run(
             deck,
@@ -261,25 +261,13 @@ class PptBuildTool(Tool):
                 note=getattr(outcome, "note", "") or None,
                 hint="fix the script and run ppt_build again",
             )
-        findings = list(result.findings)
-        # Pages the runner stood in for because their block raised. Read before the
-        # count, because it is what the count turns on.
-        lost = sorted({f.page for f in findings if f.kind == "page_failed" and f.page is not None})
-        reprieve = None
         if not draft:
             # Counted only now: a script that produced no deck was not a build of it,
             # and a budget it spent would release the first deck that exists past its
-            # blocking findings after a single real build. A build that lost a page to a
-            # raised block is the same thing for that page, so it goes against its own
-            # allowance instead (services/tier) until the allowance is spent.
-            reprieve = tier.count_lost_build(deck) if lost else None
-            whole = tier.whole_builds_taken(deck) if reprieve else tier.count_whole_build(deck)
-            # `reached` and not `whole`: the release above was decided on the count this
-            # build would have made, and it is what the author is being told about --
-            # while `whole` is what the build was actually charged, which the lost-pages
-            # line below reports. A spared build that says "build 2 of 3" beside "the cap
-            # is reached" is two true numbers reading as a contradiction.
+            # blocking findings after a single real build.
+            whole = tier.count_whole_build(deck)
 
+        findings = list(result.findings)
         payload: dict[str, Any] = {"project": project, "slides": outcome.pages}
         if outcome.note:
             payload["note"] = outcome.note
@@ -313,26 +301,10 @@ class PptBuildTool(Tool):
             payload["pdf_path"] = result.data["pdf_path"]
         if result.data.get("republished"):
             payload["republished"] = True
-        if changed := result.data.get("delivery_changed"):
-            payload["delivery_changed"] = changed
         if released := result.data.get("released"):
             payload["released_at_cap"] = (
-                f"whole-deck build {reached} of the {caps.mode or 'session'} tier's {caps.build_cap}: the deck is "
+                f"whole-deck build {whole} of the {caps.mode or 'session'} tier's {caps.build_cap}: the deck is "
                 f"delivered as it stands, with {len(released)} finding(s) that would have held it back listed above"
-            )
-        if reprieve is not None:
-            # Said whichever way the cap went, because it is the difference between a
-            # reply the author can act on and one it reads as the end of the run.
-            payload["lost_pages_not_counted"] = (
-                f"page(s) {', '.join(str(page) for page in lost)} did not draw, so this build is not counted "
-                f"against the {caps.mode or 'session'} tier's {caps.build_cap} whole-deck build(s) "
-                f"({whole} spent, reprieve {reprieve} of {tier.CRASH_REPRIEVES}). Fix the block(s) and build again"
-            )
-        elif lost and not draft:
-            payload["lost_pages_counted"] = (
-                f"page(s) {', '.join(str(page) for page in lost)} did not draw, and this deck has used all "
-                f"{tier.CRASH_REPRIEVES} of its reprieve(s) for that, so this build is counted: whole-deck build "
-                f"{whole}" + (f" of the {caps.mode} tier's {caps.build_cap}" if caps.build_cap else "")
             )
 
         shown = list(result.data.get("showing") or [])
@@ -400,29 +372,6 @@ class PptBuildTool(Tool):
                 "this tool publishes: copying deck.pptx anywhere yourself hands the user nothing, and a reply "
                 "claiming otherwise would be false",
             )
-        elif lost and "pptx_path" in payload and not draft:
-            # A published build that lost pages must not read as the end of the run. This
-            # is the state the tier's cap creates: `stages/build.py` empties the blocking
-            # list when it releases at the cap, so the deck goes out -- which is right,
-            # the user gets a deck rather than nothing -- and the reply then said "nothing
-            # refuses it". A live run's last build lost two pages to one undefined name,
-            # published, and the author never saw it. Publication is not the question a
-            # stand-in page asks: it asks for one more build, and unless the reprieves are
-            # spent that build costs nothing.
-            asks.insert(
-                0,
-                f"this deck is delivered at {payload['pptx_path']} and page(s) "
-                f"{', '.join(str(page) for page in lost)} are not in it: each is a page saying its block raised, "
-                "and the traceback is in that page's page_failed finding. That is not a finding to weigh against "
-                "the others -- a raised name or a value a chart would not take is one edit, and the deck the user "
-                "has is short until it is made. Fix the block(s) and build again"
-                + (
-                    ", which is not counted against this tier's builds"
-                    if reprieve is not None
-                    else ". This deck's reprieves for a lost page are spent, so that build is counted like any "
-                    "other -- and if it loses a page too, what is delivered now is what the user keeps"
-                ),
-            )
         elif not blocking and "pptx_path" in payload:
             # The reply used to end at "look at every page", which is not a next step for a
             # model that has already looked: one run rebuilt the same finished deck eight
@@ -451,12 +400,6 @@ class PptBuildTool(Tool):
                 "it without being asked, so a second reader reads every page on an empty context and hands "
                 "back what is wrong. A deck that stays in draft is a deck nobody but you has read",
             )
-        if changed := result.data.get("delivery_changed"):
-            # Before the regression note, because it is about the deck the user is
-            # holding rather than about a page: the file this build replaced was not
-            # the one the record described, so an edit reached the user that no gate
-            # and no reader ever saw.
-            asks.insert(0, changed)
         # Last, so it reads first: an author told a page got worse by the fix it just
         # made has to see that before it picks the next fix, or it answers the damage
         # of its own last round.
@@ -615,10 +558,7 @@ class PptBuildTool(Tool):
             "pages": outcome.pages,
         }
         regressed = regress.compare(deck, **basis)
-        # The file these findings were measured on, so the record says which bytes it is
-        # about. `compare` is not given it: it reads the previous build's record and the
-        # digest is not part of the comparison.
-        regress.record(deck, **basis, deck_file=outcome.pptx_path)
+        regress.record(deck, **basis)
         return regressed
 
     async def _with_views(
@@ -747,7 +687,6 @@ _ASK = {
     "band": "consider {count} filled colour bar(s), which carry nothing",
     "unmapped_page": "give each slide its own block in build.py",
     "page_failed": "fix the {count} page(s) whose block raised -- the traceback is in each finding's detail, and a page saying so stands where each should be",
-    "displaced_copy": "anchor {count} frame(s) to the top of their box, or place() them: their copy is set above where the box starts and lands on the page's own content",
     "unseen_page": "look at the {count} page(s) you have not been shown: build again without slides and they come back first",
     "evidence": "put something on the pages that are all prose: a figure, a diagram, cards led by icons, a chart -- a table only where a reader compares figures down a column",
     "wide_table": "narrow {count} table(s) or split them",

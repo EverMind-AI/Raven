@@ -104,15 +104,13 @@ describe('EpisodeView', () => {
     const cmd = 'curl -s "https://api.example.com/x?a=1" | python3 -c "import sys; print(1)"'
     const episodes = [step(0, 'fetching', [call('g', 'exec', cmd, { resultPreview: 'ok' })])]
 
-    // A one-line result opens the card unasked, so reading the folded row takes
-    // shutting it -- which is also the pin that a reader's close still wins.
-    const folded = view(episodes, { closedKeys: ['seg:g'] })
+    const folded = view(episodes)
     expect(folded).toContain('ran curl -> python3')
     expect(folded).not.toContain('api.example.com')
 
     // One call, so opening skips straight to the detail -- no identical row in
     // between, which is what printed the same sentence twice before.
-    const open = view(episodes)
+    const open = view(episodes, { openKeys: ['seg:g'] })
     expect(open).toContain('api.example.com')
     expect(open.match(/ran curl -> python3/g)).toHaveLength(1)
   })
@@ -125,68 +123,14 @@ describe('EpisodeView', () => {
       ])
     ]
 
-    // The middle depth is one row per call. Its cards only stay shut because
-    // this reader shut them; left alone, a short result opens with the stretch.
-    const level2 = view(episodes, { closedKeys: ['call:a'], openKeys: ['seg:a'] })
+    const level2 = view(episodes, { openKeys: ['seg:a'] })
     expect(level2).toContain('ran ruff check')
     expect(level2).toContain('ran git status')
     expect(level2).not.toContain('All checks passed!')
 
-    const level3 = view(episodes, { openKeys: ['seg:a'] })
+    const level3 = view(episodes, { openKeys: ['seg:a', 'call:a'] })
     expect(level3).toContain('ruff check raven/')
     expect(level3).toContain('All checks passed!')
-  })
-
-  it('opens a settled call whatever its result cost, capping what it shows', () => {
-    const failed = view([
-      step(0, 'linting', [call('a', 'exec', 'ruff check raven/', { ok: false, resultPreview: 'Found 1 error.' })])
-    ])
-    expect(failed).toContain('Found 1 error.')
-
-    // Length is not what decides it. The card caps itself and hands the rest to
-    // a level of its own, so a long result costs the transcript what a short one
-    // does -- and gating on it left exactly the long calls to open by hand.
-    const long = Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n')
-    const clean = view([step(0, 'reading', [call('b', 'exec', 'cat big.txt', { resultPreview: long })])])
-    expect(clean).toContain('ran cat')
-    expect(clean).toContain('line 0')
-    expect(clean).toContain(`+${40 - TOOL_PREVIEW_ROWS}`)
-  })
-
-  it('opens a landed call while the turn is still running', () => {
-    // The bug this pins: the card waited on the turn, not on the call. The check
-    // mark landed and the block followed a second or two later, when the row
-    // committed to history.
-    const landed = [step(0, 'checking', [call('a', 'exec', 'pwd', { resultPreview: '/repo' })])]
-
-    expect(view(landed, { live: true })).toContain('/repo')
-
-    // A call still running is the one that must stay shut -- its result row
-    // would appear under a spinner and move as the output arrived.
-    const running = [
-      step(0, 'checking', [call('b', 'exec', 'pwd', { done: false, ok: true, resultPreview: '/repo' })])
-    ]
-
-    expect(view(running, { live: true })).not.toContain('/repo')
-  })
-
-  it('caps an open card, then reveals the rest on a level of its own', () => {
-    const lines = Array.from({ length: TOOL_PREVIEW_ROWS + 12 }, (_, i) => `line ${i}`).join('\n')
-    const episodes = [step(0, 'reading', [call('c', 'exec', 'cat big.txt', { resultPreview: lines })])]
-
-    const capped = view(episodes, { openKeys: ['seg:c'] })
-    expect(capped).toContain('line 0')
-    expect(capped).toContain(`line ${TOOL_PREVIEW_ROWS - 1}`)
-    expect(capped).not.toContain(`line ${TOOL_PREVIEW_ROWS}`)
-    expect(capped).toContain('+12')
-
-    // `full:` is a second key, not a third set -- the two-state store is enough.
-    const full = view(episodes, { openKeys: ['full:c', 'seg:c'] })
-    expect(full).toContain(`line ${TOOL_PREVIEW_ROWS + 11}`)
-    expect(full).not.toContain('+12')
-    // And the row turns around rather than disappearing: from here it folds back
-    // to the cap, where the block's own click would shut the card outright.
-    expect(full).toContain('-12 lines')
   })
 
   it('names the failing call in the folded row, without expanding anything', () => {
