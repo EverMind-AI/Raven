@@ -11,6 +11,11 @@ loop's late-bound grants), and a binder declines with
 ``raven/plugins``: the papers hold what a third party implements against,
 never the machinery that serves it.
 
+A contributed tool may also declare ``configured() -> bool``, an authored
+member ``admit_tool`` checks and dispenses on the frozen ``ToolSpec``: the
+loop asks it per tool-array assembly and withholds a False for that turn, the
+reversible lane the built-in media tools are withheld on. Undeclared: always offered.
+
 Address note: ``raven/plugins/context.py`` re-exports all three, and that
 spelling stays the documented import for plugin authors -- moving the
 definitions under the papers changes who guards them, not who serves them.
@@ -29,11 +34,8 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ServiceLocator:
-    """Narrow grant of host services to a plugin factory.
-
-    Every field is a capability grant, and the dataclass is frozen so adding
-    one is an explicit edit here rather than an ambient setattr somewhere else.
-    """
+    """Narrow grant of host services to a plugin factory: every field is a
+    capability grant, and the dataclass is frozen so adding one is an edit here."""
 
     workspace: Path
     """Agent home (``~/.raven/<workspace>``): the global memory, skills and
@@ -53,33 +55,34 @@ class ServiceLocator:
     """Agent-track owner identity. Same single-source rule as ``user_id``."""
 
     notify: Callable[[str], None] | None = None
-    """How a plugin tells the user something they can act on ("long-term memory
-    is off: ..."). The host supplies the renderer (a console, a notice channel);
-    a plugin never owns a terminal. ``None`` means the host offers no channel and
-    the plugin falls back to its log."""
+    """How a plugin tells the user something they can act on; the host supplies
+    the renderer, a plugin never owns a terminal. ``None``: fall back to the log."""
 
     provider: "LLMProvider | None" = None
-    """The connection's language model, as the loop itself calls it. A hook or
-    tool that needs a judgement (a draft reviewer, a sufficiency check, a page
-    digest) asks this one instead of building its own from the config: one
-    credential, one pool, one place a model switch lands. ``None`` where the
-    host has no model to lend (a CLI listing plugins, a test building a locator)."""
+    """The connection's language model, as the loop calls it: a hook or tool
+    needing a judgement asks this one instead of building its own from the
+    config. ``None`` where the host has no model to lend."""
+
+    media_config: "Callable[[str], Any] | None" = None
+    """``tools.media.<kind>`` read live and resolved as the host's own media tools
+    resolve it; ``None`` where the deployment never asked for that tool."""
+
+    media_proxy: str | None = None
+    """``tools.media.proxy``: generation state, so a value, not a reader."""
+
+    web_config: "Callable[[], Any] | None" = None
+    """The host's ``tools.web``: the default a plugin's web-facing tool falls back to."""
 
 
 @dataclass(frozen=True)
 class RuntimeHandles:
     """Late-bound grants for a contributed tool that needs the assembled loop.
 
-    A factory runs in the assembly root, before the loop exists, so anything
-    only the living loop owns cannot be a ``ServiceLocator`` field -- it does
-    not exist yet. The loop hands these to a contributed tool that declares
-    ``bind_runtime(handles)``, once, right after plugin tools register: the
-    same register-first-bind-later idiom ``ask_user`` has always used for its
-    transport broker, made a first-class contribution shape. A tool that
-    raises while binding is unregistered loudly rather than left half-bound.
-
-    Same discipline as :class:`ServiceLocator`: every field is a deliberate
-    capability grant, and the dataclass is frozen.
+    What only the living loop owns cannot be a ``ServiceLocator`` field: the
+    loop hands these to a tool declaring ``bind_runtime(handles)`` once, right
+    after plugin tools register (the register-first-bind-later idiom of
+    ``ask_user``). A tool that raises while binding is unregistered loudly.
+    Same discipline as :class:`ServiceLocator`: every field is a grant, frozen.
     """
 
     session_dir: Path | None = None
@@ -88,9 +91,7 @@ class RuntimeHandles:
 
     subagent_registry: Any = None
     """The live sub-agent registry. A BIG grant -- whoever holds it can
-    enumerate and drive sub-agents -- named as such on purpose: a tool asking
-    for it is asking to orchestrate, and a reviewer should see that in the
-    manifest's own vocabulary rather than discover it in a traceback."""
+    enumerate and drive sub-agents; a tool asking for it is asking to orchestrate."""
 
     subagents_paused: "Callable[[], bool] | None" = None
     """Whether the operator paused sub-agent work; an orchestrating tool
@@ -111,24 +112,22 @@ class RuntimeHandles:
     ``None`` where the host runs no scheduler (a one-shot ``raven agent -m``,
     a test locator), which a binder treats as a decline."""
 
+    usage_recorder: Any = None
+    """The loop's image-usage recorder, ``async (UsageSnapshot) -> None``; ``None``: unrecorded."""
+
     direct_ask: Any = None
-    """Put one question to the user mid-turn and await the answer, as the
-    loop itself does (the graph-confirm flow in the loop's wiring calls the
-    registered ask_user tool's ``ask_direct`` the same way). An async
-    callable ``(prompt, choices, conversation_id, timeout_s) -> str | None``;
-    answers None when no asking transport is bound, and when the conversation
-    is still busy with another question at the deadline (one question per
-    conversation at a time; the wait and the question share the budget). A
-    BIG grant: whoever holds it can interrupt the user."""
+    """Put one question to the user mid-turn and await the answer, as the loop
+    itself does: ``async (prompt, choices, conversation_id, timeout_s) -> str | None``,
+    None when no asking transport is bound or the conversation is still busy with
+    another question at the deadline (one question per conversation at a time).
+    A BIG grant: whoever holds it can interrupt the user."""
 
     rebind_workdir: Any = None
-    """Repoint one session's working directory: a callable
-    ``(session_key, target) -> Path`` that persists the override into the
-    session's metadata (the durable truth ``WorkdirResolver`` reads back,
-    explicit > persisted > default) and, when called from inside that
-    session's own turn, repoints the live binding so the very next tool call
-    resolves the new root. Targets pass ``workdir.validate_override``. A BIG
-    grant: whoever holds it moves where every subsequent write lands."""
+    """Repoint one session's working directory: ``(session_key, target) -> Path``
+    persists the override into the session's metadata (the durable truth
+    ``WorkdirResolver`` reads back) and, from inside that session's own turn,
+    repoints the live binding too. Targets pass ``workdir.validate_override``.
+    A BIG grant: whoever holds it moves where every subsequent write lands."""
 
 
 class BindDeclinedError(Exception):

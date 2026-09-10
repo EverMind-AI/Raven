@@ -296,9 +296,26 @@ export function remove(s: SessRow): void {
   })
 }
 
+/* The open title editor's own finisher. Module-level because the input stands
+   IN PLACE OF h1#title -- while it is open that id resolves to nothing, and the
+   live layer reaches the heading through it on every path that changes which
+   conversation is open. Only ever one: `rename` returns early when the heading
+   is already gone. */
+let finishOpen: ((commit: boolean) => void) | null = null
+
+/* End an open editor, committing what was typed the way leaving the field
+   does: the name was meant for the conversation this editor belongs to, not
+   for whichever one is being opened. Quiet when there is no editor, which is
+   almost every call. */
+export function endRename(): void {
+  finishOpen?.(true)
+}
+
 /* Inline rename in the top bar; the list follows. The DOM dance -- swap
-   #title for an input, put an h1#title back -- is the legacy one, kept
-   byte-for-byte. What changed is who persists it: the source is TOLD the new
+   #title for an input, put an h1#title back -- is the legacy one, though the
+   body no longer matches it line for line: it commits at most once, and it
+   publishes that commit so a conversation switch can end an editor left
+   standing. What changed first was who persists it: the source is TOLD the new
    title (see renamed in types.ts), where the live layer used to wrap this
    function and hang its own blur listener off the input created here. */
 export function rename(): void {
@@ -321,7 +338,17 @@ export function rename(): void {
   inp.focus()
   inp.select()
   const was = s.title
+  /* One commit per editor. Enter takes the focused input out of the document
+     and Chrome fires a blur for exactly that, which ran the whole commit a
+     second time -- telling the source twice, and throwing on the second
+     `replaceWith` because the node had already left the tree, so which of the
+     two put the heading back was a race. It is also what lets `endRename` sit
+     next to a blur without either one having to know about the other. */
+  let done = false
   const finish = (commit: boolean): void => {
+    if (done) return
+    done = true
+    finishOpen = null
     const v = inp.value.trim()
     const next = commit && v ? v : s.title
     s.title = next
@@ -337,6 +364,7 @@ export function rename(): void {
     if (rb) rb.hidden = false
     draw()
   }
+  finishOpen = finish
   inp.onblur = () => finish(true)
   inp.onkeydown = e => {
     if (e.isComposing || e.keyCode === 229) return
@@ -346,7 +374,6 @@ export function rename(): void {
     }
     if (e.key === 'Escape') {
       e.preventDefault()
-      inp.onblur = null
       finish(false)
     }
   }

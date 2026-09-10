@@ -22,6 +22,7 @@ from raven.rpc.methods.model import (
     model_add_model,
     model_disconnect,
     model_endpoints,
+    model_fetch_models,
     model_options,
     model_remove_endpoint,
     model_remove_model,
@@ -676,8 +677,7 @@ async def test_save_key_configures_a_local_deployment_by_address(fake_home: Path
     TUI at all -- and an empty key written into its section would have made it look
     configured while nothing had been set.
     """
-    # Seeded with a key it should never have had, so "no key" is asserted as a
-    # write rather than as an omission: leaving the field alone kept the old value.
+    # A host-only update must preserve an existing optional Ollama token.
     _write_config(fake_home, {"providers": {"ollama_chat": {"api_key": "sk-leftover"}}})
 
     result = await model_save_key({"slug": "ollama_chat", "api_base": "http://gpu-box:11434"})
@@ -685,14 +685,67 @@ async def test_save_key_configures_a_local_deployment_by_address(fake_home: Path
     assert result["provider"]["slug"] == "ollama_chat"
     section = json.loads((fake_home / ".raven" / "config.json").read_text())["providers"]["ollama_chat"]
     assert section.get("apiBase") == "http://gpu-box:11434"
-    assert section.get("apiKey") == "", f"a stale key survived: {section}"
+    assert section.get("apiKey") == "sk-leftover"
 
 
-async def test_save_key_refuses_a_key_for_a_local_deployment(fake_home: Path) -> None:
-    """Said out loud rather than dropped, so it does not look accepted."""
+async def test_save_key_refuses_a_key_for_an_address_only_deployment(fake_home: Path) -> None:
+    """A local deployment that declares no token is still endpoint-only.
+
+    Said out loud rather than dropped: storing a key such a section will never
+    send would look like it had been accepted. `hosted_vllm` rather than LM
+    Studio, which now declares that it takes one -- the rule is about what the
+    spec says, not about which provider happened to be the example.
+    """
     with pytest.raises(ConfigValidationError) as excinfo:
-        await model_save_key({"slug": "ollama_chat", "api_key": "sk-nope", "api_base": "http://x:11434"})
+        await model_save_key({"slug": "hosted_vllm", "api_key": "sk-nope", "api_base": "http://x:8000/v1"})
     assert "api_key" in str(excinfo.value)
+
+
+async def test_save_key_accepts_optional_lm_studio_key(fake_home: Path) -> None:
+    """LM Studio's server can be put behind a token, and a remote one usually is."""
+    result = await model_save_key(
+        {"slug": "lm_studio", "api_key": "lms-token", "api_base": "http://remote-lms:1234/v1"}
+    )
+
+    assert result["provider"]["slug"] == "lm_studio"
+    section = json.loads((fake_home / ".raven" / "config.json").read_text())["providers"]["lm_studio"]
+    assert section["apiKey"] == "lms-token"
+
+
+async def test_the_key_field_is_declared_by_the_registry_not_matched_by_slug(fake_home: Path) -> None:
+    """One answer, so the pane, the wizard and the save handler cannot disagree.
+
+    Three copies of a hardcoded slug list is how the second such provider gets
+    the field in one place and not another -- which is what happened when LM
+    Studio was added beside Ollama.
+    """
+    result = await model_options({})
+    shows = {p["slug"]: p["accepts_api_key"] for p in result["providers"]}
+
+    assert shows["lm_studio"] is True
+    assert shows["ollama_chat"] is True
+    assert shows["hosted_vllm"] is False, "address-only, so there is nothing to type"
+    assert shows["openai_codex"] is False, "an OAuth flow has no key to paste"
+    assert shows["anthropic"] is True
+
+
+async def test_save_key_accepts_optional_ollama_key(fake_home: Path) -> None:
+    result = await model_save_key(
+        {"slug": "ollama_chat", "api_key": "ollama-token", "api_base": "http://remote-ollama:11434"}
+    )
+
+    assert result["provider"]["slug"] == "ollama_chat"
+    section = json.loads((fake_home / ".raven" / "config.json").read_text())["providers"]["ollama_chat"]
+    assert section["apiKey"] == "ollama-token"
+
+
+async def test_save_key_ollama_host_update_preserves_existing_key(fake_home: Path) -> None:
+    _write_config(fake_home, {"providers": {"ollama_chat": {"apiKey": "existing-token"}}})
+
+    await model_save_key({"slug": "ollama_chat", "api_base": "http://remote-ollama:11434"})
+
+    section = json.loads((fake_home / ".raven" / "config.json").read_text())["providers"]["ollama_chat"]
+    assert section["apiKey"] == "existing-token"
 
 
 async def test_save_key_still_requires_a_key_for_a_keyed_provider(fake_home: Path) -> None:
@@ -756,6 +809,10 @@ async def test_options_lists_lm_studio_models_from_the_local_server(
     first = _entry(await model_options({}), "lm_studio")
     second = _entry(await model_options({}), "lm_studio")
 
+    # An address is the whole credential for a local deployment. Pinned as True
+    # because it read False for a while: `authenticated` briefly wanted a bearer
+    # token from a local provider, which files a working server under "not set
+    # up" in the TUI picker.
     assert first["authenticated"] is True
     assert first["api_base"] == "http://localhost:1234/v1"
     assert first["models"] == ["lm-studio/qwen3-8b", "lm-studio/publisher/vision-model"]
@@ -998,6 +1055,69 @@ def test_litellm_catalogue_resolves_for_the_providers_it_used_to_carry_alone(slu
     assert all("/" in m for m in models), models[:3]
 
 
+async def test_adding_a_model_stores_what_the_person_stated_about_it(fake_home: Path) -> None:
+    """The add-model drawer's whole point: a model no catalogue carries, tagged.
+
+    Written in the same edit as the list entry -- a model that landed in the
+    list while its tags failed to would show as a bare id with no way to tell
+    that anything was lost.
+    """
+    _write_config(fake_home, {"providers": {"hosted_vllm": {"apiBase": "http://localhost:8000/v1", "models": []}}})
+    result = await model_add_model(
+        {
+            "slug": "hosted_vllm",
+            "model": "my-finetune-v3",
+            "label": "Our finetune",
+            "capabilities": ["reasoning", "function-call"],
+            "input_modalities": ["text", "image"],
+            "output_modalities": ["text"],
+        }
+    )
+    label = (result["provider"]["model_labels"] or {})["hosted-vllm/my-finetune-v3"]
+    assert label["label"] == "Our finetune"
+    assert label["capabilities"] == ["function-call", "reasoning"]
+    assert label["input_modalities"] == ["text", "image"]
+
+    stored = json.loads((fake_home / ".raven" / "config.json").read_text(encoding="utf-8"))
+    overlay = stored["providers"]["hosted_vllm"]["modelOverlay"]["hosted-vllm/my-finetune-v3"]
+    assert overlay["capabilities"] == ["function-call", "reasoning"]
+
+
+async def test_a_tag_no_surface_can_draw_is_refused_rather_than_stored(fake_home: Path) -> None:
+    """The vocabulary is the contract, checked where it enters rather than where
+    it is drawn: a name nobody has an icon for renders as a gap, and a gap reads
+    as "cannot" -- a wrong fact instead of a missing one."""
+    _write_config(fake_home, {"providers": {"hosted_vllm": {"apiBase": "http://localhost:8000/v1", "models": []}}})
+    with pytest.raises(ConfigValidationError):
+        await model_add_model({"slug": "hosted_vllm", "model": "m", "capabilities": ["telepathy"]})
+
+    stored = json.loads((fake_home / ".raven" / "config.json").read_text(encoding="utf-8"))
+    assert not stored["providers"]["hosted_vllm"].get("models")
+
+
+async def test_adding_an_id_alone_leaves_a_hand_written_overlay_alone(fake_home: Path) -> None:
+    """Adding without stating anything is "add this id", not "and forget the
+    rest": an overlay of empty lists would blank a description a person put in
+    the config by hand."""
+    _write_config(
+        fake_home,
+        {
+            "providers": {
+                "hosted_vllm": {
+                    "apiBase": "http://localhost:8000/v1",
+                    "models": [],
+                    "modelOverlay": {"hosted-vllm/mine": {"label": "Mine", "description": "tuned on tickets"}},
+                }
+            }
+        },
+    )
+    await model_add_model({"slug": "hosted_vllm", "model": "hosted-vllm/mine"})
+    stored = json.loads((fake_home / ".raven" / "config.json").read_text(encoding="utf-8"))
+    overlay = stored["providers"]["hosted_vllm"]["modelOverlay"]["hosted-vllm/mine"]
+    assert overlay["label"] == "Mine"
+    assert overlay["description"] == "tuned on tickets"
+
+
 async def test_a_user_written_overlay_reaches_the_picker(fake_home: Path) -> None:
     """A model the catalogues cannot describe still arrives with a name.
 
@@ -1021,6 +1141,74 @@ async def test_a_user_written_overlay_reaches_the_picker(fake_home: Path) -> Non
     entry = _entry(await model_options({}), "hosted_vllm")
     label = (entry.get("model_labels") or {}).get("hosted-vllm/my-finetune-v3")
     assert label == {"label": "Our finetune", "description": "tuned on tickets"}
+
+
+async def test_the_picker_gets_the_tags_it_draws_as_icons(fake_home: Path) -> None:
+    """Capabilities and modalities ride with the label, in the closed vocabulary.
+
+    The surfaces draw one icon per name and have no entry for a name they have
+    not been given, so an unknown tag reaching here renders as a gap the reader
+    reads as "cannot" -- a wrong fact rather than a missing one.
+    """
+    from raven.providers.registry_data import CAPABILITIES, MODALITIES
+
+    _write_config(fake_home, {"providers": {"anthropic": {"apiKey": "sk-ant-test"}}})
+    entry = _entry(await model_options({}), "anthropic")
+    label = (entry.get("model_labels") or {})["anthropic/claude-opus-5"]
+
+    assert "function-call" in label["capabilities"]
+    assert set(label["capabilities"]) <= set(CAPABILITIES)
+    assert set(label["input_modalities"]) <= set(MODALITIES)
+    assert "image" in label["input_modalities"]
+
+
+async def test_a_model_with_tags_and_no_name_still_reaches_the_picker(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The row used to be dropped for having no label, and its icons with it.
+
+    A gateway lists models the vendor rows tag without naming; skipping those
+    left the picker with an id and nothing else, which is exactly the case the
+    icon row exists for.
+    """
+    from raven.providers import catalog
+    from raven.rpc.methods import model as model_methods
+
+    row = catalog.ModelRow(
+        ref="anthropic/whatever",
+        provider="anthropic",
+        label="whatever",
+        source=catalog.SOURCE_ID_ONLY,
+        capabilities=("reasoning",),
+    )
+    monkeypatch.setattr(catalog, "describe", lambda *a, **k: row)
+    labels = model_methods._model_labels("anthropic", ["anthropic/whatever"], section=None)
+    assert labels["anthropic/whatever"]["capabilities"] == ["reasoning"]
+
+
+async def test_the_context_window_a_picker_shows_is_the_one_a_request_is_sized_with(
+    fake_home: Path,
+) -> None:
+    """Not from the registry -- from the table that also routes.
+
+    Two sources for one number is how a picker ends up promising a window the
+    trimmer does not honour. The registry carries none by construction, so this
+    pins where the figure comes from rather than what it is.
+    """
+    from raven.providers.litellm_setup import import_litellm
+    from raven.providers.rates import resolve_context_window
+    from raven.rpc.methods.model import _model_labels
+
+    # Imported first, and asked about a model LiteLLM's own static table names:
+    # the OpenRouter tier answers from a disk cache this fixture's home does not
+    # have, so an openrouter id would compare None against None and prove
+    # nothing.
+    import_litellm()
+    labels = _model_labels("openai", ["openai/gpt-4o"], section=None)
+    shown = labels["openai/gpt-4o"].get("context_window")
+    assert shown, "no window resolved at all; the assertion below would be vacuous"
+    assert shown == resolve_context_window("openai/gpt-4o", allow_fetch=False)
 
 
 async def test_options_config_reads_do_not_scale_with_the_row_count(
@@ -1101,3 +1289,126 @@ async def test_direct_provider_without_native_base_is_flagged_without_protocol_f
     assert "Explicit API base required for responses" in entry["warning"]
     with pytest.raises(MissingCredentialsError, match="requires an explicit API base"):
         make_provider(load_config())
+
+
+async def test_fetching_a_catalogue_dresses_what_the_vendor_answered(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ids come from the probe; everything a person reads comes from here.
+
+    The asking is `test_provider`, which already knows where each vendor's
+    catalogue lives and what opens it. What this adds is the name, the tags, the
+    bucket the filter row sorts by, and whether the id is already in the
+    provider's list -- none of which a raw id carries.
+    """
+    _write_config(fake_home, {"providers": {"anthropic": {"apiKey": "k", "models": ["anthropic/claude-opus-5"]}}})
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *a, **k: {"ok": True, "status": "valid", "model_ids": ["claude-opus-5", "claude-sonnet-5"]},
+    )
+    out = await model_fetch_models({"slug": "anthropic"})
+
+    assert out["status"] == "ok"
+    rows = {row["id"]: row for row in out["models"]}
+    opus = rows["anthropic/claude-opus-5"]
+    assert opus["label"] == "Claude Opus 5"
+    assert opus["kind"] == "text"
+    assert "function-call" in opus["capabilities"]
+    # Already configured, so the list offers the way out rather than the way in.
+    assert opus["added"] is True
+    assert rows["anthropic/claude-sonnet-5"]["added"] is False
+
+
+async def test_a_refused_key_is_said_out_loud_beside_the_list_it_did_not_fill(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal travels even though the list is not empty.
+
+    Dropped, a bad key would look exactly like a successful fetch of the
+    bundled catalogue -- and a person would go on believing the credential
+    works. The rows are the registry's; the status says the vendor never
+    answered.
+    """
+    _write_config(fake_home, {"providers": {"anthropic": {"apiKey": "bad"}}})
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *a, **k: {"ok": False, "status": "unauthorized", "error": "HTTP 401", "model_ids": None},
+    )
+    out = await model_fetch_models({"slug": "anthropic"})
+
+    assert out["status"] == "unauthorized"
+    assert out["error"] == "HTTP 401"
+    assert out["models"] and {row["source"] for row in out["models"]} == {"registry"}
+
+
+async def test_a_provider_with_no_key_still_lists_what_it_can_serve(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bundled catalogue needs no credential, so the list is not empty.
+
+    A provider being set up has no key yet, and that is exactly when a person
+    wants to see what it offers. Answering with the probe's refusal and nothing
+    else made the button useless until after the thing it helps with was done.
+    """
+    _write_config(fake_home, {"providers": {"deepseek": {}}})
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *a, **k: {"ok": False, "status": "not_configured", "error": "api_key is empty", "model_ids": None},
+    )
+    out = await model_fetch_models({"slug": "deepseek"})
+
+    assert out["status"] == "not_configured"
+    assert out["models"], "the registry knows this provider's catalogue without asking it"
+    assert {row["source"] for row in out["models"]} == {"registry"}
+
+
+async def test_the_vendors_answer_and_the_bundled_one_are_unioned_not_chosen_between(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each source knows something the other does not.
+
+    The live call carries a model released since the last registry refresh; the
+    registry carries the names and tags for everything, and answers at all when
+    the vendor cannot be reached. Taking either alone loses one of those.
+    """
+    _write_config(fake_home, {"providers": {"deepseek": {"apiKey": "k"}}})
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *a, **k: {"ok": True, "status": "valid", "model_ids": ["deepseek-v4-pro", "deepseek-brand-new"]},
+    )
+    out = await model_fetch_models({"slug": "deepseek"})
+    rows = {row["id"]: row for row in out["models"]}
+
+    assert out["status"] == "ok"
+    # Named by the vendor and known to the registry: one row, not two.
+    assert rows["deepseek/deepseek-v4-pro"]["source"] == "live"
+    assert rows["deepseek/deepseek-v4-pro"]["label"] == "DeepSeek V4 Pro"
+    # Too new for the bundled files, and still offered.
+    assert rows["deepseek/deepseek-brand-new"]["source"] == "live"
+    # In the registry, not named just now -- still worth showing.
+    assert any(row["source"] == "registry" for row in out["models"])
+
+
+async def test_the_offer_and_the_configured_list_are_separate_answers(fake_home: Path) -> None:
+    """A settings page manages a list; a picker offers one. Not the same list.
+
+    The offer folds in a curated shortlist so a provider nobody has configured
+    still has something to choose from -- which, read as the configured list,
+    said seven models had been added to a provider with no key and no models.
+    """
+    _write_config(fake_home, {"providers": {"anthropic": {"apiKey": "sk-ant-test"}}})
+    entry = _entry(await model_options({}), "anthropic")
+
+    assert entry["configured_models"] == []
+    assert entry["models"], "the picker still offers the curated shortlist"
+
+    _write_config(
+        fake_home,
+        {"providers": {"anthropic": {"apiKey": "sk-ant-test", "models": ["anthropic/claude-opus-5"]}}},
+    )
+    entry = _entry(await model_options({}), "anthropic")
+    assert entry["configured_models"] == ["anthropic/claude-opus-5"]

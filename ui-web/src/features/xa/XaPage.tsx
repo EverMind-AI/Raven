@@ -4,6 +4,7 @@ import { useSyncExternalStore } from 'react'
 
 import { AgentMark } from '../../shell/agent-mark'
 import { shell, t } from '../../shell/bridge'
+import { KeyInput } from '../../shell/key-input'
 import { SetupGroup, SetupRow } from '../../shell/setuprow'
 import * as store from './store'
 
@@ -14,14 +15,16 @@ import type { JSX } from 'react'
    are whatever `DS.xa` answers -- the fixture source with no gateway behind the
    page, the `subagents.*` source in the live layer.
  *
- * Two verbs, and only two: connect and disconnect. Connect does whatever this
- * particular agent needs to become dispatchable -- build a shipped folder's venv
- * and its dependencies, write a config entry from a preset, take a credential,
- * or just flip the roster switch back on -- and disconnect only marks it
- * unavailable in the registry, so it is one click away from working again. What
+ * Two verbs on a row, and only two: connect and disconnect. Connect does whatever
+ * this particular agent needs to become dispatchable -- build a shipped folder's
+ * venv and its dependencies, write a config entry from a preset, take a
+ * credential, or just flip the roster switch back on -- and disconnect only marks
+ * it unavailable in the registry, so it is one click away from working again. What
  * used to be here instead was the mechanism, spread across five buttons
  * (install, connect, enable, test, switch to) that each named a step of the same
- * errand and left the reader to sequence them.
+ * errand and left the reader to sequence them. Test is back, but not as a step of
+ * that errand and not on a row: it is a question about one agent, asked inside the
+ * card that agent opens.
  *
  * The rows carry no descriptions. They are the preset's own prompt text, written
  * for the model that reads it when choosing whom to delegate to -- printing it
@@ -170,32 +173,108 @@ function AgentAct({ row, onKey }: { row: XaRow; onKey?: () => void }): JSX.Eleme
   )
 }
 
-/* Which group a row belongs in: two verbs, two groups. A row that is dispatchable
-   sits under "on duty" and offers disconnect; everything else is addable and
-   offers connect. The page used to lead with provenance -- built-in, then
+/* Which group a row belongs in: what it would take to use it, in four steps of
+   one answer each. The page used to lead with provenance -- built-in, then
    vendored, then connected, then available -- which put a broken agent three
-   groups down while a healthy built-in row sat at the top with nothing to do. */
-type Grp = 'on' | 'off'
+   groups down while a healthy built-in row sat at the top with nothing to do.
+   Two groups replaced that and were right about the ordering and too coarse
+   about the rest: "available" held the switch that takes a click and the CLI
+   this machine has never had, in one list of eleven, sorted by a cost the
+   heading did not name.
+
+   The fourth group is the one worth having. Everything else here is a question
+   about Raven's config; that one is a question about the machine, and it is
+   where nine of the eleven live on a stock install. It is also the only group a
+   reader can be done with, which is why it is the one that folds. */
+type Grp = 'on' | 'switch' | 'setup' | 'install'
 const groupOf = (row: XaRow): Grp => {
   const stage = stageOf(row)
-  return stage === 'live' || stage === 'builtin' ? 'on' : 'off'
+  if (stage === 'live' || stage === 'builtin') return 'on'
+  if (stage === 'install' || stage === 'building') return 'install'
+  /* The probe before the stage, for everything that is not connected and runs
+     a command. A switch, an entry, a credential: each is a write to Raven's own
+     config, and each connects nothing when the command it names is not on this
+     machine -- and the probe is the only thing that knows. That includes the
+     switch. A configured agent keeps its entry after its binary is removed, so
+     `off` is a stage a missing executable can be in, and `subagents.toggle`'s
+     enable gate probes the agent and refuses the write when nothing answers; a
+     row like that under "ready to enable" promised the one click that cannot
+     work. `attention` stays out of this group: it means the binary answered
+     and nothing has verified what it can do, which is a row worth connecting
+     and then testing, not one worth hiding.
+
+     Only the command-backed kinds. An openai row is an endpoint, and its probe
+     says `missing` for "unreachable" -- a connection error, a timeout -- which
+     is a network fact with nothing to install behind it, and the enable gate
+     does not ping that kind at all. Its group stays the one its config state
+     says: the switch, or the credential. The server's own grouping draws the
+     same line for the same reason (`_group` keys an openai row off its key). */
+  if ((row.kind === 'cli' || row.kind === 'acp') && row.probe_status === 'missing') return 'install'
+  return stage === 'off' ? 'switch' : 'setup'
 }
 
-/* What connecting costs, which is what the addable group is ordered by -- the
-   same question the entrances page sorts on. A switch is instant, an entry is a
-   file write, a credential needs the reader to go and find one, and an install
-   is several hundred megabytes. */
+/* What connecting costs, which is what a group is ordered by inside itself --
+   the same question the entrances page sorts on. Most of this is now said by
+   which group the row is in; what is left is the one distinction the groups do
+   not draw, between an entry Raven writes on its own and a credential the
+   reader has to go and find. */
 const costOf = (row: XaRow): number => {
   const stage = stageOf(row)
   return stage === 'off' ? 0 : stage === 'add' ? 1 : stage === 'key' ? 2 : 3
 }
 
+/* Whether `subagents.test` can answer for this row at all.
+
+   Two rows it cannot. A built-in agent is this process, and `run_test` refuses
+   one outright -- "there is nothing to test". A discovered one is looked up by
+   neither name the call accepts: `source: "preset"` searches the preset table
+   it was never in, and `source: "config"` searches a config file it has no
+   entry in, so both answer `subagent_not_found`. Offering the button there
+   would be offering a click that can only fail. */
+const canTest = (row: XaRow): boolean => !row.builtin && !row.vendored
+
+/* How long ago, in the coarsest unit that still says it. Same thresholds as the
+   TUI's roster (ui-tui/src/components/subagentsHub.tsx `ageText`), spelled
+   again rather than imported across the two apps -- and through t(), because a
+   bare "3h" beside a Chinese sentence is the one part of the line that stays
+   English. */
+function agoText(ms: number): string {
+  const mins = Math.max(0, Math.round((Date.now() - ms) / 60000))
+  if (mins < 1) return t('gui.time.ago_now')
+  if (mins < 60) return t('gui.time.ago_m', { n: mins })
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return t('gui.time.ago_h', { n: hours })
+  return t('gui.time.ago_d', { n: Math.round(hours / 24) })
+}
+
+/* The last verdict as one sentence, and the dot beside it.
+
+   A verdict with no time on it reads as untested rather than as a verdict with
+   a hole in it: the server writes `ok` and `tested_at_ms` from one record, so
+   the two are either both there or both absent, and printing "Worked, {ago}"
+   with the placeholder still in it is worse than saying nothing was measured. */
+function testVerdict(row: XaRow): { cls: string; text: string } {
+  if (row.last_test_ok == null || row.last_test_at_ms == null) {
+    return { cls: 'off', text: t('gui.agent.test_never') }
+  }
+  const ago = agoText(row.last_test_at_ms)
+  return row.last_test_ok
+    ? { cls: '', text: t('gui.agent.test_ok', { ago }) }
+    : { cls: 'bad', text: t('gui.agent.test_bad', { ago }) }
+}
+
+/* Does running this one cost the reader anything? Only a cli test dispatches a
+   real task; acp reaches its verdict in the handshake and openai in the free
+   `/models` probe, and warning about a bill neither of them sends is how a
+   reader learns to ignore the warning. */
+const testCosts = (row: XaRow): boolean => row.kind === 'cli'
+
 function AgentRow({ row, sel }: { row: XaRow; sel: boolean }): JSX.Element {
   /* Health is only a question about an agent that is supposed to be working.
-     In the addable group not-dispatchable is what every row is, so a red dot and
-     the clay stripe that comes with it were an alarm about the group's own
-     definition -- and with the status line gone there was nothing left to say
-     what the alarm meant. */
+     Outside the connected group not-dispatchable is what every row is, so a red
+     dot and the clay stripe that comes with it were an alarm about the group's
+     own definition -- and with the status line gone there was nothing left to
+     say what the alarm meant. */
   const cls = groupOf(row) === 'on' ? dotOf(row) : 'off'
   return (
     <SetupRow
@@ -206,7 +285,16 @@ function AgentRow({ row, sel }: { row: XaRow; sel: boolean }): JSX.Element {
       /* Empty text on purpose: SetupRow draws the second line only when there
          is something to say there, and here there is not. */
       state={{ cls, text: '' }}
-      tags={<span className="kd">{kindText(row.kind)}</span>}
+      tags={
+        <>
+          <span className="kd">{kindText(row.kind)}</span>
+          {/* The one row in this group whose connect is not the group's verb:
+              a preset that changed transport is removed and added back, and
+              the card asks first. Without the tag it sits among the ordinary
+              entries looking identical to them. */}
+          {stageOf(row) === 'stale' ? <span className="kd warn">{t('gui.agent.tag_stale')}</span> : null}
+        </>
+      }
       act={<AgentAct row={row} />}
       sel={sel}
       onOpen={() => store.sheetOpen(row)}
@@ -305,8 +393,10 @@ function Editable({
  * What it is not any more: a form. It carried editable name and description
  * fields, a status line with a second copy of the row's own sentence, a test
  * verdict, a transport-migration offer and a save button -- five things to read
- * before the one thing to do. */
-function AgentCard({ row }: { row: XaRow }): JSX.Element {
+ * before the one thing to do. The verdict is back, but as a section of its own
+ * with the button that renews it: it was noise as a line in a form nobody had
+ * asked a question of, and it is the answer once somebody asks. */
+function AgentCard({ row, testing }: { row: XaRow; testing: boolean }): JSX.Element {
   const dHost = store.detailHost()
   const keyRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
@@ -331,13 +421,29 @@ function AgentCard({ row }: { row: XaRow }): JSX.Element {
      connecting the agent, which is not what typing a name asks for. Connect
      first and describe after: neither field is out of reach either way. */
   const owned = row.configured || !!row.vendored
+  const verdict = testVerdict(row)
+  /* Two ways to be running, and both count: this page started one and is
+     holding the call open, or the rows came back saying somebody else's is
+     still in flight. Reading only the row flag left the button live for the
+     whole two minutes of the test this very card started. */
+  const running = testing || row.test_running
   /* And the name is narrower than the description. `subagents.update` refuses a
      rename on a row it had to materialise from a shipped launcher -- "its name
      binds it to the shipped launcher" -- so offering the control there would be
      offering a write the server always refuses. The description has no such
      rule and writes the entry, after which the row is configured and its name
-     is the reader's like any other. */
-  const renamable = row.configured
+     is the reader's like any other.
+
+     Narrower again while a test runs, and this one is not about the write: the
+     name is the only handle either side keeps on the run. The server registers
+     the task under it (`_RUNNING[name]`, which is what `subagents.test_cancel`
+     looks in) and records the verdict against it. Rename mid-run and the row
+     the card is now showing matches neither -- Stop disappears, Run comes back
+     and starts a *second* test under the new name, and the first goes on for
+     up to two minutes with nothing pointing at it and a verdict nothing will
+     display. Holding the name for the length of the test is the whole fix; the
+     description keys nothing and stays live. */
+  const renamable = row.configured && !running
   const edit = (patch: { description?: string; new_name?: string }): void => {
     void store.run('update', row, patch)
   }
@@ -390,14 +496,45 @@ function AgentCard({ row }: { row: XaRow }): JSX.Element {
           </div>
         </div>
       ) : null}
+      {/* Whether it works, which is the one thing about an agent this page
+          could never say: the probe answers "the command is on the machine",
+          and the reader wanting to know whether it can be delegated to had to
+          find out by delegating. Its own section, below the description and
+          not beside the connect button, because it is not a step of connecting
+          -- a connected agent is the one most worth asking about. */}
+      {canTest(row) ? (
+        <div className="pmsec">
+          <div className="cap">{t('gui.agent.sec_test')}</div>
+          <div className="sutest">
+            <span className={verdict.cls ? `led ${verdict.cls}` : 'led'} />
+            <span className="vd">{verdict.text}</span>
+            {/* Stop is offered only while one is running, and it is the ghost
+                of the pair: the reader who opened this section came to test. */}
+            {running ? (
+              <button className="mini ghost" onClick={() => store.stopTest(row)}>
+                {t('gui.agent.test_stop')}
+              </button>
+            ) : null}
+            <button className="mini" disabled={running} onClick={() => void store.runTest(row)}>
+              {running ? t('gui.agent.test_running') : t('gui.agent.test_do')}
+            </button>
+          </div>
+          {/* The detail is worth the line only when it is a reason. A passing
+              cli test says "the agent ran and replied", which the verdict above
+              already said in fewer words. */}
+          {row.last_test_ok === false && row.last_test_detail ? (
+            <div className="pmdesc">{row.last_test_detail}</div>
+          ) : null}
+          {testCosts(row) ? <div className="pmdesc">{t('gui.agent.test_note')}</div> : null}
+        </div>
+      ) : null}
       {stage === 'key' ? (
         <div className="pmsec">
           <div className="cap">{t('gui.agent.key')}</div>
           <div className="sukey">
-            <input
-              type="password"
-              autoComplete="off"
+            <KeyInput
               placeholder={row.has_api_key ? t('gui.agent.key_set') : ''}
+              aria-label={t('gui.agent.key')}
               ref={keyRef}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') saveKey()
@@ -428,8 +565,17 @@ export function XaApp(): JSX.Element {
     ob.observe(el, { attributes: true, attributeFilter: ['data-open'] })
     return () => ob.disconnect()
   }, [])
-  const on = s.rows.filter((a) => groupOf(a) === 'on')
-  const off = s.rows.filter((a) => groupOf(a) === 'off').sort((a, b) => costOf(a) - costOf(b))
+  /* One pass, in the order the groups are drawn in, so a row can only be in
+     one of them and a group nobody is in cannot be drawn. The last is the
+     catalogue, and the only one that folds. */
+  const groups: Array<{ grp: Grp; label: string; folds?: boolean }> = [
+    { grp: 'on', label: t('gui.agent.g_on') },
+    { grp: 'switch', label: t('gui.agent.g_switch') },
+    { grp: 'setup', label: t('gui.agent.g_setup') },
+    { grp: 'install', label: t('gui.agent.g_install'), folds: true },
+  ]
+  const listFor = (grp: Grp): XaRow[] =>
+    s.rows.filter((a) => groupOf(a) === grp).sort((a, b) => costOf(a) - costOf(b))
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
   const rows = (list: XaRow[]): JSX.Element => (
     <div className="sulist">
@@ -444,20 +590,28 @@ export function XaApp(): JSX.Element {
         <h3>{t('gui.page.agents')}</h3>
       </div>
       {/* A heading with nothing under it is a heading about nothing: each group
-          appears only when it has rows. The ordering inside the addable one is
-          still by what connecting costs -- that is behaviour, and it does not
-          need a caption to be true. */}
-      {on.length ? (
-        <SetupGroup label={t('gui.agent.g_on')} count={on.length}>
-          {rows(on)}
-        </SetupGroup>
+          appears only when it has rows -- which on a stock install is two of
+          the four, and on a machine with three CLIs installed is three. The
+          ordering inside a group is still by what connecting costs -- that is
+          behaviour, and it does not need a caption to be true. */}
+      {groups.map(({ grp, label, folds }) => {
+        const list = listFor(grp)
+        /* Except while one of them is installing. A build is minutes of
+           downloads with no notification at the end of it, so the row carrying
+           `building` is the one thing on this page a reader is watching -- and
+           folding the group it sits in hides the progress behind the click
+           that started it. The group folds again on its own when the flag
+           clears, because nothing here remembers a decision. */
+        const shuts = folds && !list.some((r) => r.building)
+        return list.length ? (
+          <SetupGroup count={list.length} folds={shuts} key={grp} label={label}>
+            {rows(list)}
+          </SetupGroup>
+        ) : null
+      })}
+      {sheetRow ? (
+        <AgentCard key={`${s.sheet}:${s.epoch}`} row={sheetRow} testing={s.testing.includes(sheetRow.name)} />
       ) : null}
-      {off.length ? (
-        <SetupGroup label={t('gui.agent.g_off')} count={off.length}>
-          {rows(off)}
-        </SetupGroup>
-      ) : null}
-      {sheetRow ? <AgentCard key={`${s.sheet}:${s.epoch}`} row={sheetRow} /> : null}
     </>
   )
 }

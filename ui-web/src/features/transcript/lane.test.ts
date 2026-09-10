@@ -111,7 +111,8 @@ describe('a delegated run redrawn while in flight', () => {
   it('keeps the fold state the reader chose across polls', () => {
     /* The fold over an in-flight turn lives in the provisional rows, which are
        redrawn from scratch on every poll -- so the state the reader left it in
-       was a new, default object one poll later. The same goes for the rows
+       was a new, default object one poll later (a new object still; only its
+       id is carried over now, see `adoptIdentity`). The same goes for the rows
        inside it: a call the reader unfolded closed again with it.
 
        Driven from the reader CLOSING it, because a delegated fold is born open
@@ -142,6 +143,109 @@ describe('a delegated run redrawn while in flight', () => {
     expect(again.open).toBe(false)
     expect(again.steps[callAt]!.calls[0]!.open).toBe(true)
     expect(drawn(lane)).toEqual(['read_file'])
+  })
+})
+
+/* The rows a poll redraws keep their identity.
+ *
+ * A run in flight is redrawn from its newest committed row on every poll, and
+ * `history` mints every row it draws a fresh id -- so the same sentence came
+ * back as a new element, and an element's entrance animation runs on mount.
+ * Measured against the shipped renderer: a growing answer was a different node
+ * after every poll. Driven through the store, because the id IS the React key:
+ * a kept id is a kept node. */
+describe('a delegated run redrawn while in flight keeps its rows', () => {
+  const idsOf = (lane: ReturnType<typeof store.newLane>) => lane.segs.map((s) => `${s.kind}#${s.id}`)
+
+  it('keeps the answer row while the answer grows', () => {
+    const lane = store.newLane('agent:grow', false)
+    const at = (text: string) => ({ messages: [{ role: 'user' as const, text: 'Q' }, { role: 'assistant' as const, text }], status: 'run' })
+    store.agentPaintLane(lane, at('The quick'), { key: 'g1' })
+    const first = idsOf(lane)
+    store.agentPaintLane(lane, at('The quick brown'), { key: 'g1' })
+    store.agentPaintLane(lane, at('The quick brown fox'), { key: 'g1' })
+    expect(idsOf(lane)).toEqual(first)
+    const answer = lane.segs.find((s) => s.kind === 'answer')
+    expect(answer && answer.kind === 'answer' ? answer.text : null).toBe('The quick brown fox')
+  })
+
+  it('keeps the fold, its steps and their calls when a new step arrives', () => {
+    const lane = store.newLane('agent:steps', false)
+    const msgs = [
+      { role: 'user' as const, text: 'job' },
+      { role: 'assistant' as const, reasoning_content: 'think', text: 'reading', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+      { role: 'tool' as const, tool_call_id: 'c1', text: 'ok' },
+    ]
+    store.agentPaintLane(lane, { messages: msgs, status: 'run' }, { key: 's1' })
+    const fold = lane.segs.find((s) => s.kind === 'fold')
+    if (!fold || fold.kind !== 'fold') throw new Error('no fold drawn')
+    const before = { fold: fold.id, steps: fold.steps.map((st) => st.id), calls: fold.steps.flatMap((st) => st.calls.map((c) => c.id)) }
+
+    store.agentPaintLane(lane, {
+      messages: [...msgs, { role: 'assistant', reasoning_content: 'more', text: 'and searching', tool_calls: [{ id: 'c2', name: 'find', arguments: '{}' }] }],
+      status: 'run',
+    }, { key: 's1' })
+    const again = lane.segs.find((s) => s.kind === 'fold')
+    if (!again || again.kind !== 'fold') throw new Error('fold gone')
+    expect(again.id).toBe(before.fold)
+    expect(again.steps.slice(0, before.steps.length).map((st) => st.id)).toEqual(before.steps)
+    expect(again.steps.flatMap((st) => st.calls.map((c) => c.id)).slice(0, before.calls.length)).toEqual(before.calls)
+    /* The new step is new: a kept id is for a row that was there. */
+    expect(again.steps.length).toBe(before.steps.length + 1)
+    expect(before.steps).not.toContain(again.steps[again.steps.length - 1]!.id)
+  })
+
+  it('keeps the steps a poll appended into an already-folded turn', () => {
+    /* The other place provisional rows live: not past the committed prefix but
+       inside it, appended to a fold that was committed before the model said
+       anything. The redraw truncates that fold back to its committed steps and
+       draws the appended ones again, so they have their own path to keep. */
+    const lane = store.newLane('agent:appended', false)
+    const silent = [
+      { role: 'user' as const, text: 'job' },
+      { role: 'assistant' as const, text: '', tool_calls: [{ id: 'c1', name: 'list_dir', arguments: '{}' }] },
+      { role: 'tool' as const, tool_call_id: 'c1', text: 'ok' },
+    ]
+    const spoke = [
+      { role: 'assistant' as const, text: 'now reading', tool_calls: [{ id: 'c2', name: 'read_file', arguments: '{}' }] },
+      { role: 'tool' as const, tool_call_id: 'c2', text: 'body' },
+    ]
+    store.agentPaintLane(lane, { messages: silent, status: 'run' }, { key: 'a1' })
+    store.agentPaintLane(lane, { messages: [...silent, ...spoke], status: 'run' }, { key: 'a1' })
+    const folds = lane.segs.filter((s): s is Extract<typeof s, { kind: 'fold' }> => s.kind === 'fold')
+    expect(folds).toHaveLength(1)
+    const stepIds = folds[0]!.steps.map((st) => st.id)
+    expect(stepIds.length).toBeGreaterThan(1)
+
+    store.agentPaintLane(lane, {
+      messages: [...silent, ...spoke, { role: 'assistant', text: 'and one more', tool_calls: [{ id: 'c3', name: 'find', arguments: '{}' }] }],
+      status: 'run',
+    }, { key: 'a1' })
+    const again = lane.segs.filter((s): s is Extract<typeof s, { kind: 'fold' }> => s.kind === 'fold')
+    expect(again).toHaveLength(1)
+    expect(again[0]!.steps.slice(0, stepIds.length).map((st) => st.id)).toEqual(stepIds)
+    expect(again[0]!.steps.length).toBe(stepIds.length + 1)
+  })
+
+  it('gives a row that became a different kind a new identity', () => {
+    /* A text nothing followed was the turn's answer; a call after it makes it
+       narration inside the fold. That is a different row, and it should arrive
+       as one rather than inherit the answer's node. */
+    const lane = store.newLane('agent:kind', false)
+    const first = [{ role: 'user' as const, text: 'Q' }, { role: 'assistant' as const, text: 'let me look' }]
+    store.agentPaintLane(lane, { messages: first, status: 'run' }, { key: 'k1' })
+    const answer = lane.segs.find((s) => s.kind === 'answer')
+    if (!answer) throw new Error('no answer drawn')
+    store.agentPaintLane(lane, {
+      messages: [
+        { role: 'user', text: 'Q' },
+        { role: 'assistant', text: 'let me look', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+        { role: 'tool', tool_call_id: 'c1', text: 'body' },
+      ],
+      status: 'run',
+    }, { key: 'k1' })
+    expect(lane.segs.some((s) => s.kind === 'answer')).toBe(false)
+    expect(lane.segs.map((s) => s.id)).not.toContain(answer.id)
   })
 })
 

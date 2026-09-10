@@ -19,6 +19,10 @@
  *   are not row verbs at all: they live in the sheet's overflow menu.
  */
 
+import { useState } from 'react'
+
+import { t } from './bridge'
+
 import type { JSX, ReactNode } from 'react'
 
 /* Eight tints, picked from the name so a row keeps its colour across reloads
@@ -128,23 +132,46 @@ export function SetupRow({ name, state, tags, act, onOpen, sel, tile, extra, foo
 
 /* A group heading: name, count, and -- for a group that has one -- a single
    tool on the right. No hint sentence under it; if a group needs a sentence to
-   explain what it holds, its name is wrong. */
+   explain what it holds, its name is wrong.
+
+   `folds` opens that right-hand slot for the one tool a group can carry: its
+   own visibility. A group asks for it when its rows are a catalogue rather
+   than an inventory -- everything the product could talk to, most of which
+   this machine has never had -- so the reader scrolling for the four agents
+   they actually run is scrolling past nine they do not. It starts shut, since
+   a group that had to ask for the switch is a group whose length is the
+   problem.
+
+   Absent, and the heading is what it always was: no button, no state, nothing
+   for the two pages that never asked to change. */
 export function SetupGroup({
   label,
   count,
+  folds,
   children,
 }: {
   label: string
   count: number
+  folds?: boolean
   children: ReactNode
 }): JSX.Element {
+  const [shut, setShut] = useState(true)
+  /* Only a folding group reads it. The hook still runs -- it is a hook -- but
+     a group that never folds cannot be shut, and reading the state anyway is
+     how one would end up hidden by a prop nobody passed. */
+  const hidden = !!folds && shut
   return (
     <div className="sugrp">
       <div className="hd">
         <b>{label}</b>
         <span className="n">{String(count)}</span>
+        {folds ? (
+          <button aria-expanded={!hidden} className="gfold" onClick={() => setShut(!shut)} type="button">
+            {t(hidden ? 'gui.grp.show' : 'gui.grp.hide')}
+          </button>
+        ) : null}
       </div>
-      {children}
+      {hidden ? null : children}
     </div>
   )
 }
