@@ -15,7 +15,6 @@
 id = "ppt-engine"
 version = "0.2.0"
 display_name = "PPT Engine"
-enabled_by_default = true
 
 # The turn-frame hook: on the way in (before_user_inbound) the first turn
 # seeds the carried deck identity into the granted agent home (write-if-

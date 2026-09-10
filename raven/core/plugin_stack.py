@@ -223,6 +223,12 @@ def maybe_build_memory_backend(
             "entry-point group. Continuing without a plugin backend.",
             name,
         )
+        from rich.console import Console
+
+        Console(stderr=True).print(
+            f"[yellow]Long-term memory is off: memory.backend={name!r} but no installed plugin provides it "
+            f"(installed: {', '.join(registry.memory_backend_names()) or 'none'}).[/yellow]"
+        )
         return None
     except Exception as e:
         # Factory raised during construction: log and degrade rather

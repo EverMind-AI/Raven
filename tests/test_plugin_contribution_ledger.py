@@ -84,7 +84,6 @@ def test_the_manifest_kinds_are_ledgered() -> None:
         "config_schema",
         "contributes",
         "display_name",
-        "enabled_by_default",
         "id",
         "raven",
         "version",

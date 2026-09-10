@@ -4,7 +4,6 @@ version            = "1.2.0"
 display_name       = "EverOS memory"
 raven              = ">=0.1"
 bundled            = false
-enabled_by_default = true
 
 [[plugin.contributes.memory_backends]]
 name    = "everos"

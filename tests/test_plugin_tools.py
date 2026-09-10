@@ -59,7 +59,6 @@ def _discovered_with_tools(
     mf = PluginManifest(
         id=plugin_id,
         version="0.1.0",
-        enabled_by_default=True,
         contributes=Contributes(
             tools=[ToolContribution(name=n, factory=f) for n, f in tools],
         ),

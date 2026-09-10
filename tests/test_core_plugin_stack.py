@@ -120,6 +120,13 @@ class TestMaybeBuildBackend:
         )
         assert backend is None
 
+    def test_a_missing_backend_is_said_out_loud(self, tmp_path: Path, capsys) -> None:
+        cfg = _config(memory_backend="ghost")
+        backend = maybe_build_memory_backend(tmp_path, cfg, registry=PluginRegistry())
+        assert backend is None
+        err = capsys.readouterr().err
+        assert "memory.backend" in err and "ghost" in err
+
 
 # ---------------------------------------------------------------------------
 # Per-plugin config slice resolution
@@ -245,7 +252,7 @@ class TestConfiguredDirs:
         root = tmp_path / "plugins"
         (root / "shelf").mkdir(parents=True)
         (root / "shelf" / "raven-plugin.toml").write_text(
-            '[plugin]\nid = "shelf"\nversion = "0.1.0"\nenabled_by_default = true\n',
+            '[plugin]\nid = "shelf"\nversion = "0.1.0"\n',
             encoding="utf-8",
         )
         assert "shelf" in build_plugin_registry(_config(dirs=[str(root)])).activated_ids()

@@ -25,11 +25,10 @@ def _write_manifest(
     factory_ref: str,
     backend_name: str = "everos",
     bundled: bool = True,
-    enabled: bool = True,
 ) -> None:
     sub = root / plugin_id
     sub.mkdir(parents=True, exist_ok=True)
-    flags = f"bundled = {str(bundled).lower()}\nenabled_by_default = {str(enabled).lower()}\n"
+    flags = f"bundled = {str(bundled).lower()}\n"
     (sub / "raven-plugin.toml").write_text(
         textwrap.dedent(f"""
         [plugin]
@@ -114,7 +113,6 @@ def _write_real_plugin(
         [plugin]
         id = "{plugin_id}"
         version = "0.1.0"
-        enabled_by_default = true
         """)
         + blocks,
         encoding="utf-8",

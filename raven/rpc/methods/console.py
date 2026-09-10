@@ -126,7 +126,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                     "id": mf.id,
                     "display_name": mf.display_name,
                     "version": mf.version,
-                    "enabled": mf.id not in disabled and mf.enabled_by_default,
+                    "enabled": mf.id not in disabled,
                     "bundled": mf.bundled,
                 }
             )
