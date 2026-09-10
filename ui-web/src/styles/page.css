@@ -3272,16 +3272,6 @@ details[open] summary { margin-bottom: 8px; }
   letter-spacing: .12em; text-transform: uppercase;
 }
 .sugrp > .hd .n { font-family: var(--mono); font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
-/* The heading's one tool, in the slot the heading has always had room for.
-   Drawn as the eyebrow's own third word rather than as a button: it belongs to
-   a line of 11px mono small caps, and a `.mini` pill there would outweigh the
-   group it labels. */
-.sugrp > .hd .gfold {
-  margin-left: auto; background: none; border: 0; padding: 0; cursor: pointer;
-  font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
-  color: var(--faint); transition: color .12s;
-}
-.sugrp > .hd .gfold:hover { color: var(--text); }
 .sulist { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--ink); }
 .surow {
   display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0 12px;

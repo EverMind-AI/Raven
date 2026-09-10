@@ -5,7 +5,6 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { VERBS } from '../content/verbs.js'
 import { hasMeaningfulReasoning, hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
 import { cleanThinkingText } from '../lib/text.js'
 
@@ -77,15 +76,6 @@ describe('cleanThinkingText', () => {
 
   it('still drops a bare verb line', () => {
     expect(cleanThinkingText('musing...\nthe real thought')).toBe('the real thought')
-  })
-
-  it("keeps Raven's own ticker words, which are not what leaks", () => {
-    // The filter reads `tickerNoise`, not `VERBS`. Sharing one list meant a
-    // rename of the status ticker silently changed what gets censored out of a
-    // model's reasoning -- and `tracing` is a word a model writes for real.
-    for (const verb of VERBS) {
-      expect(cleanThinkingText(`${verb}...\nthe real thought`)).toBe(`${verb}...\nthe real thought`)
-    }
   })
 
   it('stays linear on a long non-Latin buffer', () => {

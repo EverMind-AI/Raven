@@ -315,6 +315,25 @@ DISPATCH: Mapping[str, Severity] = {
     # than by looking at what the renderer did with it. The render checks could only
     # report the consequence -- words on top of words -- one round later.
     "overset_copy": Severity.WARNING,
+    # And the half of that reading which does not run on into room below the frame.
+    # A frame anchored to the middle or the bottom of its box sets the lines it cannot
+    # hold *above* the first one, so the copy leaves the page or lands on copy that is
+    # already there -- the second measurement that refuses, and it passes the test D2
+    # set for the first one. It is not taste: the words are somewhere no reader reads
+    # them, and the render agrees -- one delivered page's four card labels each painted
+    # their first line over the sentence beneath them. It is not answerable by
+    # shrinking: a frame that shrinks its type to fit displaces nothing and is not
+    # reported here at all, so the check never asks for the trade the type floor would
+    # then refuse. And the move it wants costs the page nothing -- one anchor, or one
+    # place() -- which is exactly `word_collision`'s argument, made one round earlier
+    # off font metrics instead of off the render. What it deliberately does not refuse
+    # is the other direction: copy running on below its frame is `box_overflow`'s
+    # report, whose fix is height taken from a neighbour or a line cut, which is the
+    # trade D2 says a refusal must not force. Calibrated before it was raised: over the
+    # ten bundled templates' own copy in their own boxes, 42 boxes are overset and none
+    # is displaced; over 25 delivered decks it fires on one, three times, on the page
+    # its run was called out for.
+    "displaced_copy": Severity.BLOCKING,
     "off_page": Severity.WARNING,
     # A shape inside the page whose copy is not: a box with wrapping off does not clip,
     # it paints straight out of itself, and two page titles of one delivered deck ran off
@@ -552,7 +571,11 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         # own case -- a box guessed at 0.25in -- is one the file alone catches. The
         # render is handed in as a veto where there is one.
         "wrapped_label": lambda deck: wrapped_labels(deck.pptx_path, deck.measurer, deck.rendered_words),
-        "overset_copy": lambda deck: overset_copy(deck.pptx_path, deck.measurer),
+        # One reading, filtered two ways, the way the adherence and figure rows are:
+        # a box's copy is measured once and which of the two rows it lands in is which
+        # way the copy went.
+        "overset_copy": lambda deck: _of_kind(overset_copy(deck.pptx_path, deck.measurer), "overset_copy"),
+        "displaced_copy": lambda deck: _of_kind(overset_copy(deck.pptx_path, deck.measurer), "displaced_copy"),
         # Not findings about the deck, but about which of the checks above were
         # able to run at all.
         "unchecked_citations": unchecked_citations,
