@@ -535,29 +535,6 @@ describe('subagents island, the list', () => {
     expect(store.getState().starting).toBeNull()
     expect(plusFor('hermes')!.disabled).toBe(false)
   })
-
-  /* Which agent a row came from, on the one list that has no heading to say it.
-     The desk's variant hangs its rows under an agent head that carries the
-     mark; this panel draws a single flat list of instances, so without a mark
-     on the row the agent goes unnamed -- three runs from three agents read as
-     three runs from nowhere. Resolved through the roster, because an instance
-     row carries its agent's name and never its preset. */
-  it('marks each instance row with the brand of the agent that ran it', async () => {
-    instances(
-      [inst({ handle: 'one', agent: 'Coder' }), inst({ handle: 'two', agent: 'Raven-Code' })],
-      {
-        roster: async () => [{ name: 'Coder', preset: 'claude_code' }, { name: 'Raven-Code' }] as SubagentRow[],
-      },
-    )
-    await mount()
-
-    /* The second row's agent ships no preset, so it takes the generic glyph --
-       the same fallback the roster draws, not a blank column. */
-    const rows = [...document.querySelectorAll('.salist .sarow')]
-    expect(rows.map((r) => r.querySelector('.agent-mark img')?.getAttribute('src') ?? null))
-      .toEqual(['assets/agents/claudecode-color.svg', null])
-    expect(rows.every((r) => !!r.querySelector('.agent-mark'))).toBe(true)
-  })
 })
 
 /* A run detail is no longer reached from this list -- the panel lists instances

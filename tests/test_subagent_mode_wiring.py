@@ -30,12 +30,7 @@ SUBAGENT = RAVEN / "agent" / "subagent"
 # user's override could reach. Named here rather than met by an allow-list of
 # lane files, because an allow-list cannot fail for the lane it does not list --
 # which is the one this file exists to catch.
-#
-# `backends/routing.py` forwards one lane's own call to the implementation it
-# picked, keywords and all (`**kwargs`): the mode was resolved by the lane that
-# reached it, so the forward is not a place a mode could go missing. Its
-# pass-through is pinned at runtime in test_subagent_routing_backend.py.
-NOT_A_LANE = {"probe.py", "routing.py"}
+NOT_A_LANE = {"probe.py"}
 
 # Where a sub-agent task is handed to a backend. A lane is a `backend.run(...)`
 # carrying `task_id`, which is what separates a dispatch from every other `run`.
@@ -58,25 +53,9 @@ def _lanes() -> list[tuple[str, int, set[str]]]:
             if node.func.attr != "run":
                 continue
             names = {kw.arg for kw in node.keywords if kw.arg}
-            names |= {name for kw in node.keywords if kw.arg is None for name in _spread_keys(kw.value)}
             if "task_id" in names:
                 found.append((rel, node.lineno, names))
     return sorted(found)
-
-
-def _spread_keys(node: ast.AST) -> set[str]:
-    """The keyword names a ``**...`` spread can hand over: a dict literal's
-    constant keys (through an ``if`` expression) or ``optional_keyword``'s name
-    argument -- the shape a lane uses for a keyword the paper gained after some
-    backend was written, so the spread carries it only to a ``run`` that declares it."""
-    if isinstance(node, ast.Dict):
-        return {k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
-    if isinstance(node, ast.IfExp):
-        return _spread_keys(node.body) | _spread_keys(node.orelse)
-    if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", None)) == "optional_keyword":
-        arg = node.args[1] if len(node.args) > 1 else None
-        return {arg.value} if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else set()
-    return set()
 
 
 def test_the_enumeration_still_finds_the_dispatch_lanes():
@@ -96,17 +75,6 @@ def test_the_enumeration_still_finds_the_dispatch_lanes():
 def test_every_dispatch_lane_hands_the_backend_a_mode(lane):
     rel, line, names = lane
     assert "mode" in names, f"{rel}:{line} dispatches without a mode"
-
-
-@pytest.mark.parametrize("lane", _lanes(), ids=lambda lane: f"{lane[0]}:{lane[1]}")
-def test_every_dispatch_lane_hands_the_backend_the_authored_task(lane):
-    """The same enumeration, for the other value that went missing once: a
-    routing entry reads the task as the model wrote it, and a lane that hands
-    over only its rendering lets inlined file contents pick the implementation
-    (and travel through the host model a second time). Source-level for the
-    same reason as the mode: the missing keyword makes no runtime noise."""
-    rel, line, names = lane
-    assert "authored_task" in names, f"{rel}:{line} dispatches without the authored task"
 
 
 def test_the_override_is_read_in_exactly_one_place():

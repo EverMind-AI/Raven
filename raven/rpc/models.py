@@ -1389,25 +1389,13 @@ class SkillUnpinResult(_Strict):
 class ModelLabel(_Strict):
     """How a model reads to a person, for the ids in ``models``.
 
-    Present only for models the registry knows something about; one released
-    since the bundled files, or served by a local deployment, has no entry and
-    the picker shows its id.
-
-    The tags are drawn as icons. An empty list means "nothing published", not
-    "cannot": a surface that renders absence as a denial would tell a person a
-    model has no tools when all that is missing is a catalogue row.
+    Present only for models a catalogue describes; one released since the
+    bundled snapshot, or served by a local deployment, has no entry and the
+    picker shows its id.
     """
 
     label: str
     description: str | None = None
-    capabilities: list[str] = Field(default_factory=list)
-    input_modalities: list[str] = Field(default_factory=list)
-    output_modalities: list[str] = Field(default_factory=list)
-    #: Tokens the model reads in one request. Resolved from the tables that also
-    #: route, never from the display registry -- a window sizes trimming, so the
-    #: number a picker shows has to be the number a request is sized with. None
-    #: where no such table names the model.
-    context_window: int | None = None
 
 
 class ModelOptionProvider(_Strict):
@@ -1416,10 +1404,6 @@ class ModelOptionProvider(_Strict):
     slug: str
     name: str
     homepage: str | None = None
-    #: The vendor's own model index. Distinct from ``homepage`` on purpose: the
-    #: question a settings page asks is "which model do I put here", and a
-    #: marketing front page does not answer it.
-    docs: str | None = None
     authenticated: bool
     is_current: bool
     auth_type: str
@@ -1427,16 +1411,6 @@ class ModelOptionProvider(_Strict):
     api_base: str | None = None
     default_api_base: str | None = None
     models: list[str]
-    #: Only what the provider's config section lists. ``models`` above is the
-    #: picker's offer -- config plus a curated shortlist plus a catalogue -- so
-    #: a page managing the list has to read this one or it shows models nobody
-    #: added.
-    configured_models: list[str] = Field(default_factory=list)
-    #: Whether to draw a key field. False for an OAuth flow and for a local
-    #: deployment reached by address alone; true for the local servers that can
-    #: be put behind a token, which the registry declares rather than each
-    #: surface matching on the slug.
-    accepts_api_key: bool = True
     protocols: dict[str, str] = Field(default_factory=dict)
     protocol_overrides: dict[str, str] = Field(default_factory=dict)
     model_labels: dict[str, ModelLabel] | None = None
@@ -1487,64 +1461,9 @@ class ModelDisconnectResult(_Strict):
     disconnected: bool
 
 
-class ModelFetchModelsParams(_Strict):
-    """Ask a provider what it serves right now."""
-
-    slug: str
-
-
-class ModelCandidate(_Strict):
-    """One model a provider reports, as the picker draws it.
-
-    ``added`` is about this provider's configured list, not about the vendor:
-    the same model offered by two gateways is added to each separately.
-    """
-
-    id: str
-    label: str
-    kind: str
-    added: bool
-    #: ``live`` when the vendor named it just now, ``registry`` when only the
-    #: bundled catalogue does. A row is not less real for being the second: it
-    #: is how a provider lists at all before a key is entered.
-    source: str = "registry"
-    description: str | None = None
-    capabilities: list[str] = Field(default_factory=list)
-    input_modalities: list[str] = Field(default_factory=list)
-    output_modalities: list[str] = Field(default_factory=list)
-    context_window: int | None = None
-
-
-class ModelFetchModelsResult(_Strict):
-    """What the vendor answered, or why it did not.
-
-    ``status`` is ``ok`` when the vendor answered, and otherwise says why it did
-    not -- ``not_configured`` for a provider with no credential yet, which is the
-    ordinary state of one being set up. Either way the models are the bundled
-    catalogue unioned with whatever the vendor named, so a failure to reach it
-    costs currency, not the list.
-    """
-
-    models: list[ModelCandidate]
-    status: str
-    error: str | None = None
-
-
 class ModelAddModelParams(_Strict):
-    """Add a model to a provider's list, with what the person stated about it.
-
-    The tags are optional and are display only: they give a model no catalogue
-    carries the icon row every other model has. Names outside the published
-    vocabulary are refused rather than stored -- a surface draws one icon per
-    name and has nothing to draw for a name it has never heard of.
-    """
-
     slug: str
     model: str
-    label: str | None = None
-    capabilities: list[str] | None = None
-    input_modalities: list[str] | None = None
-    output_modalities: list[str] | None = None
     session_id: str | None = None
 
 
@@ -4045,7 +3964,6 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "model.save_key": (ModelSaveKeyParams, ModelSaveKeyResult),
     "model.disconnect": (ModelDisconnectParams, ModelDisconnectResult),
     "model.add_model": (ModelAddModelParams, ModelAddModelResult),
-    "model.fetch_models": (ModelFetchModelsParams, ModelFetchModelsResult),
     "model.remove_model": (ModelRemoveModelParams, ModelRemoveModelResult),
     "model.endpoints": (ModelEndpointsParams, ModelEndpointsResult),
     "model.add_endpoint": (ModelAddEndpointParams, ModelAddEndpointResult),

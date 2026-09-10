@@ -79,7 +79,6 @@ class SubagentBackend(Protocol):
         mcps: list[str] | None = None,
         mcp_grant: Any = None,
         mode: str | None = None,
-        authored_task: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str: ...
 

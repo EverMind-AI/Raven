@@ -1,15 +1,15 @@
 {
-  "purpose": "Per-file sha256 pins for the 10 bundled deck templates the ppt engine offers when a task brings no template of its own. The pins are the tracked truth; the .pptx payload stays out of git (see the destination directory's .gitignore) and out of PRs: it is hosted as a generic package in the project's GitLab package registry and rides the built ppt-engine wheel as package data.",
+  "purpose": "Per-file sha256 pins for the 8 bundled deck templates the ppt engine offers when a task brings no template of its own. The pins are the tracked truth; the .pptx payload stays out of git (see the destination directory's .gitignore) and out of PRs: it is hosted as a generic package in the project's GitLab package registry and rides the built ppt-engine wheel as package data.",
   "endpoint": {
-    "url": "https://gitlab.com/api/v4/projects/84258686/packages/generic/ppt-templates/2026.09.09",
+    "url": "https://gitlab.com/api/v4/projects/84258686/packages/generic/ppt-templates/2026.09.03",
     "status": "NAMED",
-    "package": "ppt-templates 2026.09.09, generic package registry of gitlab.com/npc-work/aic/ai/raven (project 84258686)",
+    "package": "ppt-templates 2026.09.03, generic package registry of gitlab.com/npc-work/aic/ai/raven (project 84258686)",
     "auth": "the project is private: fetch_templates.py sends PRIVATE-TOKEN from $GITLAB_TOKEN (any token that can read the repository), or JOB-TOKEN from $CI_JOB_TOKEN inside CI",
     "owner": "maintainer + raven-ppt product team, jointly (ppt verdict C4)",
     "note": "a new template cut is a new package version: upload the files, rewrite the pins, bump this url; the old version stays downloadable for older checkouts"
   },
   "destination": "raven_ppt/assets/templates",
-  "source_of_truth": "GitLab generic package ppt-templates/2026.09.09 (project 84258686), the version this file's pins identify and the endpoint above serves: the eight re-cut light templates, corrected for a lone-punctuation text box and for card titles that collided when wrapped, plus two dark templates cut from user uploads (hidden vendor pages removed, reference pages from the other templates borrowed onto their own layouts, vendor marks stripped). The earlier 2026.09.03 version carries only the eight-file payload and a gold template that no longer matches these pins; it stays downloadable for older checkouts. The retired fork kept its own twelve and was never the payload (its record: git history at the subagents/ removal commit)",
+  "source_of_truth": "GitLab generic package ppt-templates/2026.09.03 (project 84258686): the eight re-cut templates this branch bundles; the retired fork kept its own twelve and was never the payload (its record: git history at the subagents/ removal commit)",
   "files": [
     {
       "name": "amber_wave_quarterly_summary.pptx",
@@ -22,24 +22,14 @@
       "sha256": "d63c47c66e0dcab00272bea7136bc6f27251c481220f8396a6bae3543f2ec163"
     },
     {
-      "name": "black_circuit_tech_launch.pptx",
-      "bytes": 6493082,
-      "sha256": "7c17db85748b80450b210b7a0b751602c3b0d4602e5dabba31a4974728cb5d89"
-    },
-    {
       "name": "blue_minimal_general_analysis.pptx",
       "bytes": 3751723,
       "sha256": "6999220b1ecb69c351de1d910f17cf6e90b842cc425ba5d8a6f57b43ef95c6e2"
     },
     {
       "name": "gold_panel_year_end_summary.pptx",
-      "bytes": 3096950,
-      "sha256": "5f9a734c1508584e2dd6aac29979d109fa786dc643ed5bce7451ef8ee7b3328b"
-    },
-    {
-      "name": "green_aurora_tech_trends.pptx",
-      "bytes": 6078308,
-      "sha256": "24080aa775385d8f52c1daf4243534afc9a332432aeadaa9525b3ca4e2e1389f"
+      "bytes": 3097013,
+      "sha256": "2f25cb1cbcdb36472e79a00656336fbeec21913ef6f830b7ed685023f21ffc36"
     },
     {
       "name": "mint_memphis_thesis_defense.pptx",

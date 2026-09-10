@@ -303,22 +303,10 @@ class ModelOverlay(Base):
     all. What has no knob either is a *price* for an endpoint no catalogue
     prices; such a deployment reports unknown spend rather than borrowing a
     hosted model's rate. Adding one is a separate ask.
-
-    The tags are the same closed vocabulary the registry publishes
-    (`providers/registry_data.py`), and they are read for display only -- the
-    surfaces draw them as icons. Stating one here is how a model no catalogue
-    carries gets an icon row at all; an empty list means nothing was stated,
-    which every surface renders as no icon rather than as a denial. What a
-    request may actually carry is still decided by `capabilities.supports_vision`
-    and `ProviderSpec`, which is why a wrong tag here costs a wrong picture of a
-    model and never a wrong call.
     """
 
     label: str = ""
     description: str = ""
-    capabilities: list[str] = Field(default_factory=list)
-    input_modalities: list[str] = Field(default_factory=list)
-    output_modalities: list[str] = Field(default_factory=list)
 
 
 class ProviderEndpoint(Base):
@@ -1291,39 +1279,6 @@ class SubagentEverosConfig(Base):
         return self
 
 
-class SubagentEngineConfig(Base):
-    """The engine wheel a folder-discovered agent declares, as
-    ``{"package": "<import name>", "wheel": "<distribution name>"}``.
-
-    Declared by the folder's ``subagent.json`` (the ``raven agents new
-    --engine-wheel`` scaffold writes it); readiness probes the package where
-    raven runs and lists the row disabled, naming the wheel, until it imports.
-    Carried on the config row so a pinned copy of the manifest round-trips the
-    declaration instead of silently dropping it -- discovery itself keeps
-    reading the manifest fresh (``vendored_agents._declared_engine``), so this
-    field changes no merge or readiness semantics.
-    """
-
-    package: str = ""
-    wheel: str = ""
-
-    @model_validator(mode="before")
-    @classmethod
-    def _malformed_reads_as_empty(cls, data: Any) -> Any:
-        """A malformed declaration reads as no declaration, mirroring
-        ``vendored_agents._declared_engine``: the launcher still refuses at
-        dispatch, so a manifest typo degrades to a late loud failure rather
-        than a rejected row."""
-        if not isinstance(data, (dict, cls)):
-            return {}
-        if isinstance(data, dict):
-            return {
-                "package": str(data.get("package") or "").strip(),
-                "wheel": str(data.get("wheel") or "").strip(),
-            }
-        return data
-
-
 class ThirdPartyCliSubagentConfig(Base):
     """A third-party CLI agent (claude code, codex, …) callable as a native subagent.
 
@@ -1438,11 +1393,6 @@ class ThirdPartyCliSubagentConfig(Base):
     everos: SubagentEverosConfig | None = None
     """This agent's everos identity, or ``None`` for an agent that writes no
     everos memory. Declaring it is what turns the Memory record on."""
-    engine: SubagentEngineConfig | None = None
-    """The engine wheel this folder's manifest declares, or ``None`` for an
-    agent whose whole capability is raven's own. Round-trip retention only:
-    readiness keeps probing the manifest's own declaration, and the merge
-    reads nothing from this field."""
 
     @model_validator(mode="after")
     def _check_stateful_matches_resume(self) -> "ThirdPartyCliSubagentConfig":
@@ -1652,18 +1602,6 @@ load-path coercion below cannot drift onto different lists.
 ACP_PROMPT_PLACEHOLDERS: tuple[str, ...] = ("{prompt}", "{prompt_file}", "{agent_id}")
 
 
-class SubagentRouteConfig(Base):
-    """One row a spawn addressed to the declaring row may be redirected to.
-
-    ``match`` is a regular expression searched in the task text (case-insensitive);
-    a hit routes there without a model call. Empty, the target is offered to the
-    host's classifier only.
-    """
-
-    to: str
-    match: str = ""
-
-
 class ThirdPartyAcpSubagentConfig(Base):
     """A third-party agent reached over ACP (Agent Client Protocol), e.g. ``hermes acp``.
 
@@ -1740,23 +1678,6 @@ class ThirdPartyAcpSubagentConfig(Base):
     hand-written one. Provenance only -- see the cli config for why the web UI
     needs it."""
     enabled: bool = True
-    hidden: bool = False
-    """Off the roster the dispatching model reads, while staying on the table.
-
-    A hidden row cannot be named by the model (it is absent from the roster text
-    and the ``enum``), but a spawn *routed* to it by another row's ``routes``
-    dispatches to it exactly as a named spawn would. A manifest fact, filled from
-    the folder over a stored row the way ``owns`` is.
-    """
-    routes: list[SubagentRouteConfig] = Field(default_factory=list)
-    """Rows a task dispatched to this row may be redirected to.
-
-    Non-empty, this row's backend is the routing entry
-    (:class:`raven.agent.subagent.backends.routing.RoutingBackend`): every
-    caller that runs the row -- spawn, a DAG node, a direct chat -- has the
-    implementation picked on ``run`` from the task text, a reused handle staying
-    where it was opened. A manifest fact, filled like ``hidden``.
-    """
     command: str
     mcps: list[str] | None = None
     allow_mcp_secrets: bool = False
@@ -1812,11 +1733,6 @@ class ThirdPartyAcpSubagentConfig(Base):
     memory for. Not in :data:`ACP_UNSUPPORTED_FIELDS` because it declares nothing
     about the agent -- it is how the *host* addresses that agent's memories, which
     no ``initialize`` handshake reports."""
-    engine: SubagentEngineConfig | None = None
-    """The engine wheel this folder's manifest declares, or ``None`` for an
-    agent whose whole capability is raven's own. Round-trip retention only:
-    readiness keeps probing the manifest's own declaration, and the merge
-    reads nothing from this field."""
 
     @model_validator(mode="before")
     @classmethod

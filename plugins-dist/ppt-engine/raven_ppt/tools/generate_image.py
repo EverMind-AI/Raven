@@ -1,33 +1,15 @@
-"""Generate a slide image and make it a figure of this deck immediately.
-
-The generation itself is the host's: this tool rides ``image_generate``'s
-transport (``raven.agent.tools.media_gen``), so whichever image model, base
-and key the deployment configured under ``tools.media.image`` -- a gpt-image
-deployment behind OpenRouter, a chat-routed model such as Nano Banana, an
-OpenAI-compatible gateway -- serves the deck too, the spend is recorded where
-the host records it, and a Settings edit lands on the next call. What is the
-deck's own is everything around the call: the cut-out on a green screen and
-its keying, the file the picture lands under, the figure that comes out the
-other end.
-
-The file name is the caller's, and every call generates into it, overwriting
-what the last ask left there. Nothing is answered from disk: the ask this tool
-exists for is "that picture is not what I wanted, do it again", and it arrives
-carrying the same words as the ask before it, so a name-keyed cache handed back
-the very picture that had just been rejected. Overwriting the name is also what
-keeps the re-ask cheap for the page: the program already names that file, so
-the second picture reaches the deck with no edit to the script.
-"""
+"""Generate a slide image and make it a figure of this deck immediately."""
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
-import io
-import json
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import httpx
 
 from raven.contracts.tool import Tool
 from raven_ppt.contracts import Project
@@ -35,13 +17,13 @@ from raven_ppt.services.ingest import ingest_materials, sources
 from raven_ppt.tools import _return
 
 if TYPE_CHECKING:
-    from raven.agent.tools.media_gen import ImageGenerateTool
+    from raven.config.schema import MediaToolConfig
 
+_OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+_OPENROUTER_MODEL = "openai/gpt-image-2.5-sunburst"
+_COMPATIBLE_MODEL = "gpt-image-2.5-sunburst"
 # How many pictures are asked for at once when a call carries several.
 _CONCURRENCY = 4
-
-RATIOS = ("16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16", "21:9")
-QUALITIES = ("low", "medium", "high")
 
 # How a cut-out is asked for: the subject on a green screen, keyed out afterwards. White
 # was tried first and is the wrong ground -- it is inside most subjects (a shirt, a
@@ -61,111 +43,100 @@ _CUT_OUT_MIN_SHARE = 0.2
 _DESPILL_REACH = 5
 
 _SAFE_NAME = re.compile(r"[^a-zA-Z0-9._-]+")
-# Where a generation lands before it is keyed and received into sources.
-_SCRATCH_DIRNAME = ".generated"
 
 
 class PptGenerateImageTool(Tool):
     name = "ppt_generate_image"
     description = (
-        "Generate a new raster visual for a page with the image model this deployment configured. Use it for "
-        "an illustration, a backdrop or a decorative picture that does not exist yet; use ppt_image_search and "
-        "ppt_fetch for a real logo, product screen, published plot or other existing evidence. Every call "
-        "generates: asking again for a picture you did not like gets a new one, written over the file the last "
-        "ask made, so the page that names it needs no edit. Decide the manner "
-        "from two things you can see, in this order. First the subject: a real place, street, market, crowd, "
-        "product, building or meal is photographic (natural light, no illustration), with the template's palette "
-        "only in the grade. Then the slot: an idea with no face takes the manner of the picture the template "
-        "itself put where this one will go -- look at the template's render and say what you see (photograph, "
-        "flat vector, line drawing, 3D render, watercolour; its palette; its outline weight) rather than naming a "
-        "template or a house style. A slot that holds a photograph takes a photograph; a slot that holds a "
-        "drawing takes a cut-out in that drawing's manner (`transparent=true`, the manner in the prompt). Keep one "
-        "manner per kind across the deck. `references` carries pictures to match or vary: the template's own "
-        "illustration for its manner, an earlier generation for consistency, a user's photograph to restyle. The "
-        "generated PNG is added to this deck's sources, ingested immediately, and returned with its figure id so "
-        "the build can place it."
+        "Generate a new raster visual for a page with GPT Image 2. Use this for an illustration or visual "
+        "that does not already exist; use ppt_image_search and ppt_fetch for a real logo, product "
+        "screen, published plot or other existing evidence. Say the style in the prompt, and let the "
+        "subject choose it before the template does: a real place, street, market, crowd, product or "
+        "building is photographic (natural light, no illustration) with the template's palette only in "
+        "the grade; a concept with no face takes the template's own manner. Keep one manner per kind "
+        "across the deck. One exception: the illustration slot of an illustrated template's cover or "
+        "closing page takes a cut-out in the template's own manner (`transparent=true`, its palette and "
+        "outline named in the prompt), even for a real place -- the slot is part of the design, and a "
+        "photograph in it is a hole in the page. The generated PNG is added to this deck's "
+        "sources, ingested immediately, and returned with its figure id so the build can place it."
     )
     timeout_seconds = 360.0
 
     def __init__(
         self,
         workspace: Path,
-        media: "ImageGenerateTool | None" = None,
+        config: "MediaToolConfig | None" = None,
         *,
-        config: Any = None,
         proxy: str | None = None,
-        usage_recorder: Any = None,
     ) -> None:
         self.workspace = workspace
-        if media is None:
-            from raven.agent.tools.media_gen import ImageGenerateTool
+        self._section = config
+        self.proxy = proxy
 
-            media = ImageGenerateTool(config, workspace=workspace, proxy=proxy, usage_recorder=usage_recorder)
-        self.media = media
+    @property
+    def config(self) -> "MediaToolConfig | None":
+        """The section as the host has it now, not as assembly saw it.
+
+        ``SessionTool`` keeps this tool for the life of the process, so a
+        boot-time snapshot serves a rotated key and a changed model until the
+        product restarts. A section carrying ``selectionConfig`` is a
+        host-owned selection, and the trunk's own media tools re-read one per
+        call through their callable source; this is the same resolution, and
+        it is deliberately the trunk's rather than a second policy -- a
+        section that leaves the host file answers "no key", which is how a
+        selection is revoked without a restart.
+        """
+        section = self._section
+        if not getattr(section, "selection_config", ""):
+            return section
+        from raven.config.live import resolve_media_selection
+
+        return resolve_media_selection(section, "image")
 
     @property
     def parameters(self) -> dict[str, Any]:
-        picture = {
-            "prompt": {
-                "type": "string",
-                "description": (
-                    "subject, scene, composition, then the manner -- photographic for a real place, street, "
-                    "market, crowd, product or building; for a concept, the manner of the picture the template "
-                    "shows in that slot, described from the render. Do not use this for a product screenshot, "
-                    "logo, published chart, paper figure or factual architecture. Do not put prose, labels or "
-                    "numbers into the image; slide text stays editable in PowerPoint"
-                ),
-            },
-            "filename": {
-                "type": "string",
-                "description": "short file name for the generated PNG, without a directory",
-            },
-            "quality": {
-                "type": "string",
-                "enum": list(QUALITIES),
-                "description": (
-                    "leave it unset and the host's own setting decides, which is what the same model gets "
-                    "asked for outside a deck; name one only to overrule that for this picture"
-                ),
-            },
-            "transparent": {
-                "type": "boolean",
-                "default": False,
-                "description": (
-                    "a cut-out that sits on the template's own ground, in place of a drawing it put there: the "
-                    "subject is generated on a green screen and the green is keyed out to alpha afterwards, so "
-                    "the page's colour shows around it. Then `replace_picture(<that drawing>, path)` or "
-                    "`adapt(pictures={n: path})` puts it where the template's drawing was. Not for a photograph "
-                    "or a scene that fills its frame"
-                ),
-            },
-            "aspect_ratio": {
-                "type": "string",
-                "enum": list(RATIOS),
-                "default": "16:9",
-                "description": (
-                    "the shape of the frame the picture will fill: cover-fitting crops whatever does not match, "
-                    "so a 16:9 picture in a portrait column keeps a sliver. Pick the nearest ratio to the frame "
-                    "and put the subject where the crop keeps it. A model that only draws a few frames is asked "
-                    "for the nearest one and the result is cropped to the box"
-                ),
-            },
-            "references": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": (
-                    "pictures the generation should match or vary, as figure ids of this deck, file names under "
-                    "its sources, or absolute paths: the template's own illustration to take its manner, an "
-                    "earlier generation to stay consistent with, a user's photograph to restyle. Up to six"
-                ),
-            },
-        }
         return {
             "type": "object",
             "additionalProperties": False,
             "properties": {
                 "project": {"type": "string", "description": "the deck project"},
-                **picture,
+                "prompt": {
+                    "type": "string",
+                    "description": (
+                        "a background or decorative visual for the page: subject, scene, composition, then the "
+                        "style -- photographic for a real place, street, market, crowd, product or building, the "
+                        "template's own illustration manner only for a concept with no face. "
+                        "Do not use this for a product screenshot, logo, published chart, paper figure or "
+                        "factual architecture. Do not put prose, labels or numbers into the image; slide "
+                        "text stays editable in PowerPoint"
+                    ),
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "short file name for the generated PNG, without a directory",
+                },
+                "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"], "default": "high"},
+                "transparent": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "an illustration that sits on the template's own ground, in place of its cartoon: the "
+                        "subject is drawn on a green screen and the green is keyed out to alpha afterwards, so "
+                        "the page's colour shows around it. Then `replace_picture(<that "
+                        "drawing>, path)` or `adapt(pictures={n: path})` puts it where the template's drawing "
+                        "was. Not for a photograph or a scene that fills its frame"
+                    ),
+                },
+                "aspect_ratio": {
+                    "type": "string",
+                    "enum": ["16:9", "4:3", "3:2", "1:1", "3:4", "9:16"],
+                    "default": "16:9",
+                    "description": (
+                        "the shape of the frame the picture will fill: cover-fitting crops whatever does not "
+                        "match, so a 16:9 picture in a portrait column keeps a sliver. Pick the nearest ratio "
+                        "to the frame and put the subject where the crop keeps it"
+                    ),
+                },
                 "prompts": {
                     "type": "array",
                     "description": (
@@ -178,10 +149,9 @@ class PptGenerateImageTool(Tool):
                         "properties": {
                             "prompt": {"type": "string"},
                             "filename": {"type": "string"},
-                            "quality": {"type": "string", "enum": list(QUALITIES)},
+                            "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"]},
                             "transparent": {"type": "boolean"},
-                            "aspect_ratio": {"type": "string", "enum": list(RATIOS)},
-                            "references": {"type": "array", "items": {"type": "string"}},
+                            "aspect_ratio": {"type": "string", "enum": ["16:9", "4:3", "3:2", "1:1", "3:4", "9:16"]},
                         },
                         "required": ["prompt", "filename"],
                     },
@@ -191,34 +161,32 @@ class PptGenerateImageTool(Tool):
         }
 
     @property
-    def model(self) -> str:
-        return self.media._model(None)
+    def api_key(self) -> str:
+        import os
+
+        configured = getattr(self.config, "api_key", "") if self.config else ""
+        return configured or os.environ.get("OPENROUTER_API_KEY", "")
 
     @property
-    def api_key(self) -> str:
-        return self.media.api_key
+    def api_base(self) -> str:
+        configured = getattr(self.config, "api_base", "") if self.config else ""
+        return (configured or _OPENROUTER_BASE).rstrip("/")
 
-    def configured(self) -> bool:
-        """Offered on the host tool's own terms: its section names a key or a model.
-
-        The loop's withheld axis asks this per assembly (the paper is in
-        ``raven/contracts/plugin_surface.py``), so the deck's generator follows a
-        section added or emptied in Settings the way ``image_generate`` does. An
-        ambient ``OPENROUTER_API_KEY`` alone does not offer it, for the reason it
-        does not offer the built-in: a key set for chat must not switch on a tool
-        that bills per call.
-        """
-        return self.media.configured()
+    @property
+    def model(self) -> str:
+        configured = getattr(self.config, "model", "") if self.config else ""
+        if configured:
+            return configured
+        return _OPENROUTER_MODEL if "openrouter.ai" in self.api_base else _COMPATIBLE_MODEL
 
     async def execute(
         self,
         project: str,
         prompt: str = "",
         filename: str = "",
-        quality: str | None = None,
+        quality: str = "high",
         aspect_ratio: str = "16:9",
         transparent: bool = False,
-        references: list[str] | None = None,
         prompts: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> str:
@@ -226,10 +194,10 @@ class PptGenerateImageTool(Tool):
             deck = Project(workspace=self.workspace, slug=project)
         except ValueError as exc:
             return _return.failed(str(exc))
-        if not self.media.api_key:
+        if not self.api_key:
             return _return.failed(
                 "no image API key is configured",
-                hint="set tools.media.image.apiKey (or providers.openrouter.apiKey) in the host config",
+                hint="set tools.media.image.apiKey and optionally apiBase/model, or export OPENROUTER_API_KEY",
             )
         wanted = list(prompts or [])
         if prompt or filename:
@@ -241,7 +209,6 @@ class PptGenerateImageTool(Tool):
                     "quality": quality,
                     "aspect_ratio": aspect_ratio,
                     "transparent": transparent,
-                    "references": references or [],
                 },
             )
         if not wanted:
@@ -253,9 +220,6 @@ class PptGenerateImageTool(Tool):
                 return _return.failed(
                     "every picture needs a prompt and a filename", hint='prompts=[{"prompt": ..., "filename": ...}]'
                 )
-            ratio = str(spec.get("aspect_ratio") or "16:9")
-            if ratio not in RATIOS:
-                return _return.failed(f"aspect_ratio {ratio!r} is not one of {', '.join(RATIOS)}")
         # Generated together and ingested once: nine pictures made one at a time cost a
         # measured deck 16 minutes of waiting, and the ingest that follows each is a
         # rewrite of the same catalogue, which is not something to run nine ways at once.
@@ -276,79 +240,62 @@ class PptGenerateImageTool(Tool):
                 if item.get("path"):
                     item["figure_id"] = by_name.get(Path(item["path"]).name)
         asks = ["inspect the returned figure id with ppt_figure_inspect, then place it with picture_fit"]
-        model = next((item["model"] for item in made if item.get("model")), self.model)
         if len(made) == 1:
             item = made[0]
             if item.get("error"):
                 return _return.failed(item["error"])
             return _return.done(
-                project=project,
-                model=model,
-                asks=asks,
-                **{k: v for k, v in item.items() if k not in ("error", "model")},
+                project=project, model=self.model, asks=asks, **{k: v for k, v in item.items() if k != "error"}
             )
         failed = [item for item in made if item.get("error")]
         if failed:
             asks.insert(0, f"{len(failed)} of {len(made)} pictures failed; the error is on each")
-        return _return.done(project=project, model=model, results=made, asks=asks)
+        return _return.done(project=project, model=self.model, results=made, asks=asks)
 
     async def _one(self, deck: Project, spec: dict[str, Any]) -> dict[str, Any]:
         """Generate one picture into the deck's sources; the figure id is filled in after ingest."""
         prompt = str(spec.get("prompt") or "")
-        # None rather than a quality of this tool's own, because the host resolves an
-        # unset one: Settings' value where the operator set one, otherwise whatever the
-        # model's provider defaults to. A default here stood in for "unset" and sent
-        # `high` where the same model asked for outside a deck was sent nothing.
-        quality = str(spec["quality"]) if spec.get("quality") else None
+        config = self.config
+        if "quality" in getattr(config, "model_fields_set", set()):
+            # The host's own setting outranks an omitted-or-supplied call
+            # argument, the shared media tool's precedence. Empty is a real
+            # answer there and means the provider's default, so it travels as
+            # no `quality` field at all rather than as an empty string.
+            quality = str(config.quality or "")
+        else:
+            quality = str(spec.get("quality") or "high")
         aspect_ratio = str(spec.get("aspect_ratio") or "16:9")
         transparent = bool(spec.get("transparent"))
-        try:
-            refs = self._references(deck, spec.get("references") or [])
-        except FileNotFoundError as exc:
-            return {"filename": str(spec.get("filename") or ""), "error": str(exc)}
         if transparent:
-            # The image endpoints take no `background` parameter (OpenRouter's gpt-image-2
-            # answers "Accepted: auto, opaque", and asked in words it paints a checkerboard),
+            # The providers reached here take no `background` parameter (OpenRouter
+            # answers "Accepted: auto, opaque" for gpt-image-2.5-sunburst and
+            # gpt-image-2 alike, and asked in words the model paints a checkerboard),
             # so a cut-out is asked for on a green screen and keyed.
             prompt = f"{prompt.rstrip()}\n\n{_CUT_OUT_PROMPT}"
-        model = self.model
-        # The name is keyed on what the host will send, not on what was asked --
-        # Settings' quality replaces the request's -- so the same ask lands on the
-        # same file and a re-ask overwrites it. It is a name, not a cache: a call
-        # generates. The author asks for a picture again when the one it got is not
-        # the one it wanted, and answering that from disk hands back the picture it
-        # just rejected. Overwriting is what makes the retry work without editing
-        # the script, since the page already names this file.
-        sent_quality = self.media.effective_quality(quality, model)
-        ref_digest = "".join(hashlib.sha256(ref.read_bytes()).hexdigest()[:8] for ref in refs)
-        digest = hashlib.sha256(
-            f"{model}\x00{sent_quality}\x00{aspect_ratio}\x00{ref_digest}\x00{prompt}".encode("utf-8")
-        ).hexdigest()[:12]
+        digest = hashlib.sha256(f"{self.model}\x00{quality}\x00{aspect_ratio}\x00{prompt}".encode("utf-8")).hexdigest()[
+            :12
+        ]
         name = _filename(str(spec.get("filename") or ""), digest)
-        scratch = deck.build_dir / _SCRATCH_DIRNAME
-        scratch.mkdir(parents=True, exist_ok=True)
-        answer = await self.media.execute(
-            prompt=prompt,
-            images=[str(ref) for ref in refs] or None,
-            aspect_ratio=aspect_ratio,
-            quality=quality,
-            output_dir=str(scratch),
-        )
+        existing = deck.sources_dir / name
+        if existing.is_file() and existing.stat().st_size > 0:
+            return {"filename": name, "path": str(existing), "bytes": existing.stat().st_size, "cached": True}
+        body = {
+            "model": self.model,
+            "prompt": prompt,
+            "n": 1,
+            "aspect_ratio": aspect_ratio,
+            "output_format": "png",
+        }
+        if quality:
+            body["quality"] = quality
         try:
-            reply = json.loads(answer)
-        except (TypeError, ValueError):
-            return {"filename": name, "error": f"image generation returned no usable answer: {answer!r}"}
-        if reply.get("error") or not reply.get("paths"):
-            return {"filename": name, "error": f"image generation failed: {reply.get('error') or 'no image returned'}"}
-        produced = Path(reply["paths"][0])
-        try:
-            payload = _as_png(produced.read_bytes())
-        except (OSError, ValueError) as exc:
-            return {"filename": name, "error": f"image generation returned no usable picture: {exc}"}
-        finally:
-            for extra in reply["paths"]:
-                Path(extra).unlink(missing_ok=True)
-        made: dict[str, Any] = {"filename": name, "model": str(reply.get("model") or model)}
+            response = await self._generate(body)
+            payload = _image_bytes(response)
+        except httpx.HTTPError as exc:
+            return {"filename": name, "error": f"image generation failed: {exc}"}
+        except (KeyError, ValueError, TypeError) as exc:
+            return {"filename": name, "error": f"image generation returned no usable PNG: {exc}"}
+        made: dict[str, Any] = {"filename": name}
         if transparent:
             payload, share = key_out_green(payload)
             made["transparent_share"] = round(share, 2)
@@ -358,30 +305,38 @@ class PptGenerateImageTool(Tool):
                     "a subject on the green screen, so this is not a cut-out. Ask again with one subject and "
                     "nothing behind it"
                 )
-        made["width"], made["height"] = _dimensions(payload)
-        source = sources.receive(deck, name, payload, f"generated:{made['model']}")
+        source = sources.receive(deck, name, payload, f"generated:{self.model}")
         if source is None:
             return {"filename": name, "error": "the generated image could not be added to this deck"}
         return {**made, "path": str(source.path), "bytes": len(payload)}
 
-    def _references(self, deck: Project, given: list[Any]) -> list[Path]:
-        """Resolve the pictures a generation should match: figure ids, source names, or paths."""
-        found: list[Path] = []
-        for item in list(given)[:6]:
-            text = str(item or "").strip()
-            if not text:
-                continue
-            candidates = [Path(text)] if Path(text).is_absolute() else []
-            candidates += [deck.sources_dir / text, deck.sources_dir / Path(text).name]
-            figures = deck.ingest_dir / "figures"
-            if figures.is_dir():
-                candidates += list(figures.glob(f"{Path(text).stem}*"))
-                candidates += list(figures.glob(f"*{text}*"))
-            hit = next((c for c in candidates if c.is_file()), None)
-            if hit is None:
-                raise FileNotFoundError(f"reference {text!r} is not a figure id, a source file or a readable path")
-            found.append(hit)
-        return found
+    async def _generate(self, body: dict[str, Any]) -> dict[str, Any]:
+        openrouter = "openrouter.ai" in self.api_base
+        endpoints = ["/images"] if openrouter else ["/images/generations", "/images"]
+        request = dict(body)
+        if not openrouter:
+            ratio = request.pop("aspect_ratio", "16:9")
+            request["size"] = {
+                "16:9": "1536x864",
+                "4:3": "1536x1152",
+                "3:2": "1536x1024",
+                "1:1": "1024x1024",
+                "3:4": "1152x1536",
+                "9:16": "864x1536",
+            }[ratio]
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        async with httpx.AsyncClient(
+            proxy=self.proxy,
+            timeout=300.0,
+            trust_env=openrouter and self.proxy is None,
+        ) as client:
+            for index, endpoint in enumerate(endpoints):
+                response = await client.post(f"{self.api_base}{endpoint}", headers=headers, json=request)
+                if response.status_code == 404 and index + 1 < len(endpoints):
+                    continue
+                response.raise_for_status()
+                return response.json()
+        raise ValueError("no image endpoint accepted the request")
 
 
 def _filename(value: str, digest: str) -> str:
@@ -390,23 +345,12 @@ def _filename(value: str, digest: str) -> str:
     return f"{stem}-{digest}.png"
 
 
-def _as_png(payload: bytes) -> bytes:
-    """A generation as PNG bytes, whatever the model answered with (jpeg, webp)."""
-    from PIL import Image
-
-    if payload[:8] == b"\x89PNG\r\n\x1a\n":
-        return payload
-    image = Image.open(io.BytesIO(payload))
-    out = io.BytesIO()
-    image.convert("RGBA" if image.mode in ("RGBA", "LA", "P") else "RGB").save(out, format="PNG")
-    return out.getvalue()
-
-
-def _dimensions(png: bytes) -> tuple[int, int]:
-    from PIL import Image
-
-    with Image.open(io.BytesIO(png)) as image:
-        return image.size
+def _image_bytes(response: dict[str, Any]) -> bytes:
+    item = (response.get("data") or [])[0]
+    encoded = item.get("b64_json")
+    if not encoded:
+        raise ValueError("missing data[0].b64_json")
+    return base64.b64decode(encoded, validate=True)
 
 
 def key_out_green(png: bytes) -> tuple[bytes, float]:
@@ -418,6 +362,8 @@ def key_out_green(png: bytes) -> tuple[bytes, float]:
     blended with the screen has more green than either of its other channels, and
     taking that excess off leaves the subject's own colour instead of a green fringe.
     """
+    import io
+
     from PIL import Image, ImageFilter
 
     image = Image.open(io.BytesIO(png)).convert("RGBA")
@@ -458,6 +404,3 @@ def _is_screen_green(r: int, g: int, b: int) -> bool:
         return False
     hue = 60 * ((b - r) / spread + 2)
     return 80 <= hue <= 160 and spread / top >= 0.35 and top / 255 >= 0.45
-
-
-__all__ = ["PptGenerateImageTool", "key_out_green", "RATIOS", "QUALITIES"]

@@ -22,7 +22,6 @@ from typing import Any, Protocol
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent.backends.base import optional_keyword
 from raven.agent.subagent.dag_adjudication import (
     CONTINUE,
     REPLAN,
@@ -1651,10 +1650,6 @@ async def _run_node(
                             session_key=session_key,
                             instance=node.instance,
                             mode=node_mode,
-                            # The template, not the rendering: a routing entry
-                            # reads the deliverable off the words the planner
-                            # wrote, not off whatever an upstream output inlined.
-                            **optional_keyword(agent_backend, "authored_task", node.prompt_template),
                             # The invoking turn's binding, when the tool resolved one:
                             # a pooled ACP worker otherwise keeps whatever model it
                             # was first launched with. Only when set, because a node

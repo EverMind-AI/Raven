@@ -322,7 +322,6 @@ benchmarks/             # Benchmark adapters, including AppWorld evolver wiring
 evolver/                # Benchmark-driven harness self-evolution: a tool over the library, not in the wheel
 agents/                 # Product definitions served over ACP: launcher + rendered config + product plugins
 plugins-dist/           # Standalone plugin distributions (everos-memory, ppt-engine) on the raven.plugins entry-point group
-schemas/                # Editor-facing JSON Schemas exported from the pydantic models (scripts/export_agent_schemas.py)
 ```
 
 <br>

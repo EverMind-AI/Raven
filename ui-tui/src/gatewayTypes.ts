@@ -355,36 +355,10 @@ export interface ModelOptionProvider {
   auth_type?: string
   authenticated?: boolean
   default_api_base?: string
-  /* The vendor's own model index, which is a different link from `homepage`.
-     The web settings page draws it beside the model list; the TUI carries the
-     field so the two declarations of this payload stay one contract. */
-  docs?: string
   homepage?: string
   is_current?: boolean
   key_env?: null | string
-  /* Keyed by the id as it appears in `models`. The tags are drawn as glyphs
-     (see components/modelTags.ts); an absent list means the registry publishes
-     nothing, not that the model cannot. `context_window` comes from the tables
-     that also route, never from the display registry. */
-  /* Whether the provider has a key field at all: false for an OAuth flow and
-     for a local deployment reached by address alone. Declared by the registry
-     so no surface has to match on the slug. */
-  accepts_api_key?: boolean
-  /* Only what the provider's config section lists. `models` below is the
-     picker's offer -- config plus a curated shortlist plus a catalogue -- which
-     is what the TUI picker draws; a surface managing the list reads this one. */
-  configured_models?: string[]
-  model_labels?: Record<
-    string,
-    {
-      capabilities?: string[]
-      context_window?: number
-      description?: string
-      input_modalities?: string[]
-      label: string
-      output_modalities?: string[]
-    }
-  >
+  model_labels?: Record<string, { description?: string; label: string }>
   models?: string[]
   name: string
   needs_api_base?: boolean

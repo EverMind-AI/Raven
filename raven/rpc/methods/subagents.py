@@ -230,9 +230,6 @@ async def _rows(*, probe: bool = True) -> list[dict]:
         for c in merged_all
         if getattr(c, "kind", None) != "builtin"
         and not (is_builtin_agent_name(getattr(c, "name", "") or "") and getattr(c, "kind", None) in ("cli", "openai"))
-        # A hidden row is reached only through another row's routes; the page
-        # shows the roster the model reads, and this row is not on it.
-        and not getattr(c, "hidden", False)
     ]
     configured_names = {canonical_agent_name(getattr(c, "name", "")) for c in configured}
 

@@ -22,22 +22,20 @@ from raven_ppt.services.template.defaults import DEFAULT_TEMPLATES  # noqa: E402
 from raven_ppt.services.template.menu import menu, roles  # noqa: E402
 
 
-def test_every_bundled_template_says_which_ground_it_has_and_is_named_once() -> None:
+def test_every_bundled_template_is_light_present_and_named_once() -> None:
     """Counted off the declaration rather than written down here.
 
     A number in this test said ten while twelve shipped, because the swap that
     changed the set had no reason to come here. What the catalogue owes is that
     every entry resolves, none is a duplicate, and the promise the prompt makes
-    about them -- each is tagged light or dark, never both, and the dark ones are the
-    exception the prompt names -- is true of each.
+    about them -- these are the light ones -- is true of each.
     """
     catalog = default_template_catalog()
     declared = [template for template in DEFAULT_TEMPLATES if template.path.is_file()]
 
     assert catalog == tuple(declared), "the catalogue is what is declared and on disk"
     assert catalog, "a checkout with no bundled template leaves a task with none to offer"
-    assert all(("light" in template.tags) != ("dark" in template.tags) for template in catalog)
-    assert 1 <= sum("dark" in template.tags for template in catalog) < len(catalog) / 2
+    assert all("light" in template.tags for template in catalog)
     assert len({template.filename for template in catalog}) == len(catalog)
 
 

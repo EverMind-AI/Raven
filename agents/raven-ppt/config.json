@@ -102,8 +102,8 @@
   },
   "memory": {
     "backend": "everos",
-    "userId": "raven-design",
-    "agentId": "raven-design",
+    "userId": "raven-ppt",
+    "agentId": "raven-ppt",
     "memoryTopK": 5
   },
   "plugins": {

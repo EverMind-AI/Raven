@@ -19,16 +19,9 @@ export interface XaState {
      mutated in place, so a fresh answer remounts it -- the same wholesale
      redraw the legacy xaSheetDraw performed after every mutation. */
   epoch: number
-  /* Names this page has a test in flight for. The rows carry the server's own
-     `test_running`, but they are only re-read when a call returns and a test
-     can take two minutes, so between the click and the verdict the rows say
-     nothing is running. This is what the card reads until the refetch replaces
-     it -- and it is a union with the row flag, not a substitute: a test another
-     client started is only on the row. */
-  testing: string[]
 }
 
-let state: XaState = { rows: [], sheet: null, epoch: 0, testing: [] }
+let state: XaState = { rows: [], sheet: null, epoch: 0 }
 const listeners = new Set<() => void>()
 
 export const getState = (): XaState => state
@@ -95,34 +88,6 @@ export async function run(op: XaOp, row?: XaRow, args?: XaActArgs): Promise<void
   set(landed)
   if (state.sheet && !rows.some((x) => x.name === state.sheet)) closeSheet()
   watchBuilds(rows)
-}
-
-/* One test, and the flag that says it is under way. `run` cannot carry this:
-   its await *is* the test -- `subagents.test` holds the connection open for the
-   whole run and answers with the verdict -- so the rows it repaints from are
-   the first news of the test being over, and nothing before them says it began.
-
-   A second press for a name already running is dropped here rather than sent:
-   the server refuses it, but its refusal is a normal result, so the toast-free
-   path would repaint the card as though the running test had answered. */
-export async function runTest(row: XaRow): Promise<void> {
-  if (state.testing.includes(row.name)) return
-  set({ testing: [...state.testing, row.name] })
-  /* `finally` rather than a line after the await: `run` turns every rejection
-     into a toast, so nothing throws through here today -- and a flag cleared
-     only on the path that returned would leave the button disabled for the
-     rest of the session the first time one does. */
-  try {
-    await run('test', row)
-  } finally {
-    set({ testing: state.testing.filter((name) => name !== row.name) })
-  }
-}
-
-/* Stop it. The cancelled test's own call returns too, with `cancelled` set, and
-   repaints from its own refetch -- so this one only has to reach the server. */
-export function stopTest(row: XaRow): void {
-  void run('test_cancel', row)
 }
 
 /* A build is the one action whose call returns before the work does -- it is a

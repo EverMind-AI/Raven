@@ -45,14 +45,11 @@ export interface XaRow {
   upgrade_to?: string | null
 }
 
-/* What the page can ask the server to do.
-
-   Five of these are writes -- the four steps of "connect", plus the switch --
-   and each is one of the row's two verbs for one kind of row. `test` and its
-   cancel are the odd pair: they write nothing the reader asked for and answer
-   a question instead. They are here rather than on a row for that reason, and
-   they live in the card. Remove is still gone with the buttons that named it. */
-export type XaOp = 'build' | 'connect' | 'migrate' | 'test' | 'test_cancel' | 'toggle' | 'update'
+/* The four writes the page can make, which are the four steps of "connect" plus
+   the switch. Test, remove and the transport migration are gone with the buttons
+   that named them: the page has two verbs now, and each of these is one of them
+   for one kind of row. */
+export type XaOp = 'build' | 'connect' | 'migrate' | 'toggle' | 'update'
 
 export interface XaActArgs {
   new_name?: string

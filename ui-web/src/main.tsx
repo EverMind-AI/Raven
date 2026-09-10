@@ -274,7 +274,6 @@ window.RavenIslands = {
     markNew: rail.markNew,
     remove: rail.remove,
     rename: rail.rename,
-    endRename: rail.endRename,
     reconcile: rail.reconcileRows,
     removeRow: rail.removeSessionRow,
   },

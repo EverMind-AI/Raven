@@ -9,30 +9,29 @@ configured in ``config.providers.<slug>.models``; users can always type any
 model id by hand (``model.add_model``), so this list only needs to cover the
 common case, not every model.
 
-Model ids drift as providers ship releases -- update the ``curated`` array of
-``data/provider-models.json`` as needed, where a row also carries the tags and
-the canonical model a shortlist entry points at. Providers with no curated rows
-fall back to their configured list.
+Model ids drift as providers ship releases — update the packaged table in
+``data/common_models.toml`` as needed. Providers not listed there fall back
+to their configured list.
 """
 
 from __future__ import annotations
 
+import tomllib
 from functools import lru_cache
 
 
+@lru_cache(maxsize=1)
+def _common_models() -> dict[str, tuple[str, ...]]:
+    """The curated table, read once from packaged data."""
+    from importlib.resources import files as pkg_files
+
+    text = (pkg_files("raven") / "providers" / "data" / "common_models.toml").read_text(encoding="utf-8")
+    return {slug: tuple(models) for slug, models in tomllib.loads(text).items()}
+
+
 def common_models_for(slug: str) -> list[str]:
-    """The curated shortlist for ``slug``, as ids a caller can store and send.
-
-    The registry files the shortlist by wire id, which is what a provider
-    answers to; every other surface deals in the stored spelling that also names
-    its provider, so the two are the same list through ``stored_model_id`` --
-    except where a curated row states the spelling itself, which is how the two
-    providers whose metadata is filed under an underscored prefix keep it.
-    """
-    from raven.providers.registry_data import curated_for
-    from raven.providers.wire import stored_model_id
-
-    return [row.stored_id or stored_model_id(slug, row.api_model_id) for row in curated_for(slug)]
+    """Return a copy of the curated common-model shortlist for ``slug``."""
+    return list(_common_models().get(slug, ()))
 
 
 def _is_priced_template(model: str) -> bool:

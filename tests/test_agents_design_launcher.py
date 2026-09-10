@@ -122,22 +122,8 @@ def test_the_roster_row_carries_the_forks_identity_verbatim():
     fork = json.loads((FORK / "subagent.json").read_text())
 
     assert ours["kind"] == "acp" and fork["kind"] == "cli"
-    for field in ("name", "everos", "maxOutputChars", "timeout"):
+    for field in ("name", "description", "owns", "everos", "maxOutputChars", "timeout"):
         assert ours[field] == fork[field], field
-    # The fork's text, plus the deck lane this row fronts: the deck agent is
-    # hidden behind it (see ``routes``), so the only place the dispatching model
-    # can learn that decks go here is this row. The briefing sentence is scoped
-    # to visual work, because a deck is briefed the opposite way (the deck agent
-    # asks the user itself; see the ppt launcher test on the measured harm).
-    assert ours["owns"].startswith(fork["owns"])
-    briefed = fork["description"].replace("Brief it with", "For visual work, brief it with")
-    assert briefed != fork["description"] and ours["description"].startswith(briefed)
-    assert ".pptx" in ours["description"] and ".pptx" in ours["owns"]
-    assert "in the user's own words" in ours["description"]
-    assert [route["to"] for route in ours["routes"]] == ["Raven-PPT"]
-    assert ours["routes"][0]["match"], (
-        "a deck names its deliverable; the match pattern is what makes that route certain"
-    )
     assert "recommendedLlm" not in ours and "recommendedLlm" in fork
     assert ours["command"] == "{PYTHON} {SUBAGENT_DIR}/run.py --acp"
     assert ours["cwd"] == "{SUBAGENT_DIR}"

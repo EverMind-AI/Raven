@@ -20,7 +20,6 @@ import type { Theme } from '../theme.js'
 
 import { providerDisplayNames } from '../domain/providers.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
-import { tagBadge, tagLegend } from './modelTags.js'
 import { OverlayHint, useOverlayKeys, windowItems } from './overlayControls.js'
 
 const VISIBLE = 12
@@ -1395,10 +1394,8 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
         // The id stays: it is what gets stored, and a user comparing it against
         // a vendor's docs needs to see it. The name goes first because that is
         // what someone choosing a model is reading for.
-        const facts = provider?.model_labels?.[row]
-        const label = facts?.label
+        const label = provider?.model_labels?.[row]?.label
         const text = label && label !== row ? `${label} · ${row}` : row
-        const badge = tagBadge(facts)
 
         return (
           <Text
@@ -1410,7 +1407,6 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
           >
             {prefix}
             {idx + 1}. {text}
-            {badge ? `  ${badge}` : ''}
           </Text>
         )
       })}
@@ -1424,13 +1420,6 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
           catalogue describes and one it does not. */}
       <Text color={t.color.label} wrap="truncate-end">
         {provider?.model_labels?.[models[modelIdx] ?? '']?.description ?? ' '}
-      </Text>
-
-      {/* What the glyphs on the rows above mean. A terminal has nowhere to hang
-          a tooltip, and only the tags actually on screen are worth a line. Kept
-          in the layout when empty so the rows below hold still. */}
-      <Text color={t.color.muted} wrap="truncate-end">
-        {tagLegend(models.map((model) => provider?.model_labels?.[model])) || ' '}
       </Text>
 
       <Text color={t.color.muted} wrap="truncate-end">

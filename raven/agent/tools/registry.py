@@ -52,12 +52,6 @@ class ToolSpec:
     timeout_seconds: float | None
     truncation_hint: str | None
     incomplete_hint: str | None
-    # The optional availability declaration (raven/contracts/plugin_surface.py):
-    # a tool that bills against a credential the deployment may not have
-    # configured authors ``configured()``, and the withheld axis asks it per
-    # assembly. Dispensed here so the consumer reads the admitted shape, not a
-    # member discovered off the live object; None when the tool declares none.
-    configured: Callable[[], bool] | None
     tool: Tool
 
 
@@ -89,11 +83,6 @@ def admit_tool(tool: Tool) -> ToolSpec:
         raise ToolAdmissionError(f"tool {name!r}: timeout_seconds must be a number or None")
     truncation = getattr(tool, "truncation_hint", None)
     incomplete = getattr(tool, "incomplete_hint", None)
-    configured = getattr(tool, "configured", None)
-    if configured is not None and not callable(configured):
-        # ``configured = False`` reads as an author declaring the tool
-        # unavailable; admitting it would offer the tool anyway, silently.
-        raise ToolAdmissionError(f"tool {name!r}: configured must be a callable answering bool, or absent")
     schema = {
         "type": "function",
         "function": {
@@ -112,7 +101,6 @@ def admit_tool(tool: Tool) -> ToolSpec:
         timeout_seconds=float(timeout) if timeout is not None else None,
         truncation_hint=truncation if isinstance(truncation, str) else None,
         incomplete_hint=incomplete if isinstance(incomplete, str) else None,
-        configured=configured,
         tool=tool,
     )
 
@@ -475,11 +463,6 @@ class ToolRegistry:
     def origin_of(self, name: str) -> "MCPToolRef | None":
         """Where this registered tool came from, or None if it has no origin."""
         return self._origins.get(name)
-
-    def spec_of(self, name: str) -> ToolSpec | None:
-        """The admitted shape of a registered tool, or None for a name the door
-        never saw (a session overlay tool, or nothing by that name)."""
-        return self._specs.get(name)
 
     def names_from(self, server: str) -> list[str]:
         """Every registered name contributed by one MCP server.

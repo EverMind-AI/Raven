@@ -179,10 +179,6 @@ export const fileURL = (p: string): string => {
   return '/file?path=' + encodeURIComponent(path) + (session ? '&session=' + encodeURIComponent(session) : '')
 }
 
-/* The same route asked for a PDF rendering of the file instead of its bytes:
-   the page cannot draw a deck, so it frames what LibreOffice makes of it. */
-export const renderURL = (p: string): string => fileURL(p) + '&render=pdf'
-
 const TEXT_EXT = new Set(['c', 'cfg', 'conf', 'cpp', 'css', 'diff', 'env', 'go', 'h', 'ini', 'java',
   'js', 'json', 'jsonl', 'jsx', 'kt', 'log', 'lua', 'patch', 'php', 'pl', 'py', 'pyi', 'rb', 'rs',
   'sh', 'sql', 'swift', 'toml', 'ts', 'tsx', 'txt', 'vue', 'yaml', 'yml', 'zsh'])
@@ -194,7 +190,6 @@ export function fileKind(p: string): string {
   if (IMG_EXT.has(ext)) return 'img'
   if (ext === 'svg') return 'svg'
   if (ext === 'pdf') return 'pdf'
-  if (ext === 'pptx') return 'pptx'
   if (ext === 'html' || ext === 'htm') return 'html'
   if (ext === 'csv' || ext === 'tsv') return 'csv'
   if (ext === 'json') return 'json'
