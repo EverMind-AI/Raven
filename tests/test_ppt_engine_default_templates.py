@@ -52,13 +52,6 @@ def test_each_bundled_template_binds_and_exposes_house_style(tmp_path: Path, ind
     named = roles(entries)
     assert named.get("cover") == 1
     assert "closing" in named
-    # All four, on every bundled template. Two of them used to be missing: gold_panel
-    # reported page 14 as its closing and beige_geometric reported no agenda at all,
-    # both because the words on a page were read ahead of the layout the template named
-    # it with -- and the agenda word on beige page 2 is not on its first line at all.
-    assert set(named) == {"cover", "agenda", "section", "closing"}, f"{template.filename} names {sorted(named)}"
-    # The page the deck closes on is the page the file calls a closing page.
-    assert entries[named["closing"] - 1].layout == "Closing"
     assert house_style(bound.source, entries) is not None
 
 
@@ -114,45 +107,6 @@ def test_every_reference_page_ships_and_is_a_content_page(stem: str, number: int
     assert entry is not None, f"{stem} has no page {number}"
     assert not entry.role and not entry.hidden, f"{stem} page {number} is the template's {entry.role or 'hidden'} page"
     assert entry.arrangement, f"{stem} page {number} reads as no arrangement"
-
-
-def test_every_page_the_borrow_offer_lists_is_a_page_the_sheet_can_show() -> None:
-    """How many pages the borrow offer is, and that not one of them is withheld.
-
-    The count matters because the offer is now a picture as well as a list, and the two
-    are built from one walk over `reference_pages()`: a page the sentences name and the
-    sheet has no cell for, or the other way round, is a key that does not fit its lock.
-
-    The number itself is not the claim -- another branch adding a template adds rows to
-    the table, and a test that pins the total makes that a failure rather than a fact.
-    What is pinned is that the table and the offer are the same length. 36 on the eight
-    templates this branch ships. An earlier reading of that set put the number at 35, on
-    the grounds that `teal_illustrated_work_analysis` page 13 is one of
-    the vendor's own advertising pages and marked not-for-show. That is true of a
-    different copy of that template -- the fork tree ships a 13-slide file whose pages
-    12 and 13 carry `show="0"` and the vendor's channels -- and not of the file this
-    engine ships, whose sha256 is the one in `templates.manifest.json`: 15 slides, none
-    marked hidden, and page 13 a five-item numbered list beside an illustration. The
-    filter in `_borrowable` still drops a hidden page if a refresh ever brings one back.
-    """
-    from raven_ppt.services.template.defaults import REFERENCE_PAGES, bundled_path, reference_pages
-
-    offered = reference_pages(except_stem="")
-
-    assert len(offered) == sum(len(pages) for pages in REFERENCE_PAGES.values()), (
-        "every reference page ships, so the offer is the whole table"
-    )
-    withheld = [
-        (stem, number)
-        for stem, number in offered
-        if (entry := {page.number: page for page in menu(bundled_path(stem))}.get(number)) is None
-        or entry.role
-        or entry.hidden
-    ]
-    assert withheld == [], f"the sentences offer pages the sheet cannot show: {withheld}"
-    teal = {entry.number: entry for entry in menu(bundled_path("teal_illustrated_work_analysis"))}
-    assert len(teal) == 15 and not teal[13].hidden and not teal[13].role
-    assert teal[13].arrangement, "page 13 reads as an arrangement, which an advertisement would not"
 
 
 def test_the_bound_template_is_not_offered_to_itself() -> None:

@@ -67,18 +67,24 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
     inputRef.current?.focus()
     inputRef.current?.select()
   }, [editing])
-  const live = s.id === cur && busy ? 'run' : s.status
+  /* `ask` outranks `run`: a conversation blocked on an approval or a question
+     still has a turn open, so it is busy -- and reading as merely working is
+     what let a request that only lives for 30 seconds expire behind a row that
+     looked like every other one. */
+  const live = s.status === 'ask' ? 'ask' : s.id === cur && busy ? 'run' : s.status
   // run/done/err all speak from the tail slot (see .sess .w[data-sig]). A turn
   // that failed is the outcome of the same turn `run` was reporting, so it
   // belongs in the slot the reader is already watching; splitting it onto a
   // leading dot moved the row's state to the other end on the one transition
   // where the reader cares most. `que` stays a leading dot -- it is a
   // condition of the session, not the state of a turn just watched.
-  const tail = live === 'run' || live === 'done' || live === 'err' ? live : null
+  const tail = live === 'run' || live === 'done' || live === 'err' || live === 'ask' ? live : null
   // The state is only colour and motion otherwise, and the stamp behind it
   // is visibility:hidden, so name it for a reader who gets the row as text.
   const label = tail
-    ? t(tail === 'run' ? 'gui.sess.running' : tail === 'err' ? 'gui.sess.failed' : 'gui.sess.finished')
+    ? t(tail === 'ask'
+      ? 'gui.sess.asking'
+      : tail === 'run' ? 'gui.sess.running' : tail === 'err' ? 'gui.sess.failed' : 'gui.sess.finished')
     : undefined
   const go = (): void => {
     if (editing) return
