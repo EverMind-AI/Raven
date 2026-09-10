@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -227,6 +229,61 @@ class TestDirectExecutor:
         assert result.exit_code == -1
         assert "Timed" in result.stderr
 
+    async def test_timeout_keeps_the_output_already_produced(self):
+        """A timeout must hand back the part that already ran.
+
+        The command that outruns the clock is usually several joined by ``;``,
+        and the last one is what hangs. Returning empty streams spends the
+        whole timeout to say nothing, so the caller can only re-run the steps
+        that had already finished.
+        """
+        e = DirectExecutor()
+        result = await e.exec("echo early; echo warned >&2; sleep 30", timeout=2)
+        assert result.exit_code == -1
+        assert "Timed out after" in result.stderr
+        assert "early" in result.stdout
+        assert "warned" in result.stderr
+
+    async def test_a_timeout_stays_recognisable_to_the_cap_kill_detector(self):
+        """The note leads the stderr block because another tree depends on it.
+
+        oncall-flow's ExecCapKillHook matches "Timed out after <n>s" directly
+        after the "STDERR:" header ``ExecResult.as_text`` writes, to tell a run
+        killed at the cap from a fault worth retrying. Nothing on this side of
+        the boundary notices the note moving under the partial output, and per
+        that hook's own comment an unrecognised cap kill "reads as a fault to
+        retry" -- the command is re-run into the same wall.
+
+        Imported inside the test rather than at module scope: this file is
+        about the sandbox, and only this one assertion should care whether a
+        product tree is present.
+        """
+        plugin = Path(__file__).resolve().parent.parent / "agents" / "raven-oncall" / "plugins" / "oncall-flow"
+        sys.path.insert(0, str(plugin))
+        from oncall_flow.flow import _EXEC_CAP_KILL
+
+        result = await DirectExecutor().exec("echo out; echo noisy >&2; sleep 30", timeout=2)
+
+        assert result.exit_code == -1
+        assert _EXEC_CAP_KILL.search(result.as_text()), (
+            f"cap-kill detector no longer recognises this timeout:\n{result.as_text()}"
+        )
+
+    async def test_a_command_that_closes_its_pipes_still_times_out(self):
+        """The reap sits inside the deadline, not after it.
+
+        Draining both pipes ends at EOF, which a command reaches by closing
+        them while it keeps running. Waiting for the process outside the
+        timeout window would then hold the call for that command's whole
+        lifetime, however short a timeout the caller asked for.
+        """
+        started = time.monotonic()
+        result = await DirectExecutor().exec("exec 1>&- 2>&-; sleep 30", timeout=2)
+        elapsed = time.monotonic() - started
+
+        assert result.exit_code == -1
+        assert elapsed < 10, f"returned after {elapsed:.1f}s, so the reap outlived the deadline"
+
     async def test_cancel_kills_the_whole_process_group(self, tmp_path):
         """A cancelled exec must leave nothing of the command running.
 
@@ -331,8 +388,11 @@ class TestDirectExecutor:
         async def _never(*a, **kw):
             await asyncio.Event().wait()
 
-        process.communicate = _never
         process.wait = _never
+        # Stands for a process that produces nothing and never exits: exec
+        # drains the pipes itself, so the hang has to live in the reads.
+        process.stdout.read = _never
+        process.stderr.read = _never
 
         async def _fake_spawn(*a, **kw):
             return process

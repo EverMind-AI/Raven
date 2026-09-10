@@ -10,6 +10,7 @@ from raven.sandbox.interfaces import ExecResult, SandboxExecutor
 
 _DEFAULT_TIMEOUT = 60
 _MAX_TIMEOUT = 600
+_READ_CHUNK = 65536
 
 # DirectExecutor runs on the host with no isolation, so commands the agent is
 # coaxed into running (via prompt injection) would otherwise inherit every host
@@ -117,7 +118,7 @@ class DirectExecutor(SandboxExecutor):
             # ``ProcessLookupError`` once ``_proc`` has been cleared -- and it is
             # cleared by ``_call_connection_lost``, the same callback that wakes
             # ``wait()``. A cancellation arriving in the loop iteration after the
-            # process finished, but before ``communicate()`` resumed, would let
+            # process finished, but before the reap below resumed, would let
             # that error replace the ``CancelledError`` on the way out; the
             # caller's ``except Exception`` would then report a failed tool call
             # for a turn that was cancelled, which is the confusion this change
@@ -156,15 +157,54 @@ class DirectExecutor(SandboxExecutor):
         # Read before the first await: this is the last point where the pid is
         # guaranteed to still belong to the shell we just spawned.
         pgid = process.pid
+
+        # Drained into buffers this frame owns rather than through
+        # ``communicate()``: a timeout cancels whatever is being awaited, and
+        # communicate's reads take the output already produced down with them.
+        # The command that outruns the clock is usually the last of several
+        # joined by ``;``, so that output is the only account of the steps
+        # that did finish -- discarding it spends the whole timeout to say
+        # nothing and leaves the caller no choice but to run them again.
+        stdout_buf = bytearray()
+        stderr_buf = bytearray()
+
+        async def _drain(stream: asyncio.StreamReader | None, into: bytearray) -> None:
+            if stream is None:
+                return
+            while chunk := await stream.read(_READ_CHUNK):
+                into.extend(chunk)
+
+        async def _collect() -> None:
+            await asyncio.gather(
+                _drain(process.stdout, stdout_buf),
+                _drain(process.stderr, stderr_buf),
+            )
+            # Reaped inside the deadline on purpose: a command may close both
+            # pipes and keep running, and waiting for it after the timeout
+            # window would hang for longer than the caller asked for.
+            await process.wait()
+
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(process.communicate(), timeout=effective_timeout)
+            await asyncio.wait_for(_collect(), timeout=effective_timeout)
         except asyncio.TimeoutError:
             self._kill_process_group(process, pgid)
             try:
                 await asyncio.wait_for(process.wait(), timeout=5.0)
             except asyncio.TimeoutError:
                 pass
-            return ExecResult(stdout="", stderr=f"Timed out after {effective_timeout}s", exit_code=-1)
+            # Note first, partial stderr under it: ExecResult.as_text renders
+            # this as "STDERR:\n<stderr>", and oncall-flow's cap-kill hook
+            # anchors on "Timed out after" sitting directly after that header.
+            # A capped command has usually written something by then, so
+            # appending the note instead would hide the kill from the one
+            # reader that routes it away from a retry.
+            note = f"Timed out after {effective_timeout}s"
+            partial_err = stderr_buf.decode("utf-8", errors="replace")
+            return ExecResult(
+                stdout=stdout_buf.decode("utf-8", errors="replace"),
+                stderr=f"{note}\n{partial_err}" if partial_err else note,
+                exit_code=-1,
+            )
         except asyncio.CancelledError:
             # Without this branch a cancelled turn drops the process object and
             # the command survives for the life of the Raven process:
@@ -181,7 +221,7 @@ class DirectExecutor(SandboxExecutor):
                 pass
             raise
         return ExecResult(
-            stdout=stdout_b.decode("utf-8", errors="replace"),
-            stderr=stderr_b.decode("utf-8", errors="replace"),
+            stdout=stdout_buf.decode("utf-8", errors="replace"),
+            stderr=stderr_buf.decode("utf-8", errors="replace"),
             exit_code=process.returncode,
         )
