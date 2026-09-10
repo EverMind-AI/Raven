@@ -7,7 +7,8 @@ import { stringWidth } from '@hermes/ink'
 
 import type { EpisodeTool, Msg } from '../types.js'
 
-import { foldedPreviewRows, segmentTurn } from '../domain/episodeSummary.js'
+import { EMPTY_CALL_FOLDS, type CallFolds } from '../app/foldStore.js'
+import { cardDefaultOpen, detailBlockShape, foldedPreviewRows, segmentTurn } from '../domain/episodeSummary.js'
 import { layoutDagGraph } from './dagGraphLayout.js'
 import { dagNodeToggleKey } from './dagOpenNodes.js'
 import { dagDetailRoom, dagRowDetail, dagTraceBoxRows, dagTraceRows } from './dagStatus.js'
@@ -165,10 +166,40 @@ const dagPanelRows = (run: NonNullable<EpisodeTool['dag']>, width: number, open:
 const spawnPanelRows = (run: NonNullable<EpisodeTool['spawn']>, overrides: ReadonlyMap<string, boolean>): number =>
   spawnTraceOpen(run, overrides) ? 6 + dagTraceRows(run.status) : 5
 
+/**
+ * Rows an open card spends beyond the call's own row: the blank row `ActivityRow`
+ * puts above an opened row, the block's argument and result, its "+N" row, and
+ * the block's own padding and margin. Exactly `DetailBlock`'s structure, off the
+ * same `detailBlockShape` the view renders from -- a card whose block renders
+ * nothing costs nothing, which is why the shape is asked rather than assumed.
+ *
+ * The result rows are measured wrapped, not counted. `foldedPreviewRows` counts
+ * logical lines and the block draws them with `wrap="wrap"`, so a long line is
+ * several rows there and one row here -- and a low estimate is the stale-cell
+ * symptom. The cap itself still comes from the shape, so it stays single-sourced.
+ */
+const openCardRows = (tool: EpisodeTool, width: number, indent: number, full: boolean): number => {
+  const shape = detailBlockShape(tool, full)
+
+  if (!shape) {
+    return 0
+  }
+
+  // DetailBlock's own paddingLeft (indent + 1) and paddingRight (1).
+  const body = Math.max(8, width - indent - 2)
+  const argument = shape.argument ? wrappedLines(shape.argument, body) : 0
+  const output = shape.output.reduce((n, line) => n + wrappedLines(line, body), 0)
+  // The "+N" row truncates rather than wraps, so it is one row whatever it says.
+  const more = shape.more ? 1 : 0
+
+  return 1 + argument + output + more + 2
+}
+
 export const estimatedMsgHeight = (
   msg: Msg,
   cols: number,
   {
+    cardFolds = EMPTY_CALL_FOLDS,
     compact,
     dagOpen = EMPTY_OPEN,
     dense = false,
@@ -178,6 +209,10 @@ export const estimatedMsgHeight = (
     userPrompt = '',
     withSeparator = false
   }: {
+    /** What the reader has opened or shut, so a card that is not at its default
+     *  is measured as it is drawn. Omitted, every card sits at its default --
+     *  which is what a trace box and a first paint both want. */
+    cardFolds?: CallFolds
     compact: boolean
     dagOpen?: ReadonlySet<string>
     /** Trace-box rendering (see `MessageLine`): segments keep no breathing
@@ -215,41 +250,76 @@ export const estimatedMsgHeight = (
   if (msg.kind === 'episodes') {
     let h = 0
 
-    // A committed message is never live and never opened at first paint, so
-    // every stretch of work is exactly one row and every talk segment is its
-    // reasoning row plus its wrapped prose. episodeView separates segments with
-    // marginTop={1}; counting no row for that is what keeps the estimate low,
-    // and a low estimate is the stale-cell symptom.
+    // episodeView separates segments with marginTop={1}; counting no row for
+    // that is what keeps the estimate low, and a low estimate is the stale-cell
+    // symptom. A stretch of work is no longer one row by construction: a settled
+    // card opens on its own predicate, so its block is measured here the same way
+    // it is drawn, and a talk segment is its reasoning row plus its wrapped prose.
     for (const [i, seg] of segmentTurn(msg.episodes ?? []).entries()) {
       h += i > 0 && !dense ? 1 : 0
 
       if (seg.kind === 'work') {
-        const panelTools = seg.tools.filter(tool => tool.dag || tool.spawn)
-
-        if (panelTools.length === 0) {
-          h++
-          continue
-        }
-
         // A DAG call's graph -- and a spawn call's panel -- renders at every
         // fold depth, including the folded default; see dagFor/spawnFor and
-        // WorkSegment in episodeView.tsx. So this mirrors that instead of the
-        // one-row approximation below. Neither call draws a row of its own: the
-        // panel is a titled box that carries the call, so only the other tools
-        // in the stretch are counted as rows. depth/width match episodeView's
-        // own INDENT/STEP and width formula so the two cannot drift apart.
+        // WorkSegment in episodeView.tsx. Neither call draws a row of its own:
+        // the panel is a titled box that carries the call, so only the other
+        // tools in the stretch are counted as rows. depth/width match
+        // episodeView's own INDENT/STEP and width formula so the two cannot
+        // drift apart.
         const panelWidth = cols ? Math.max(20, cols - 4) : 116
+        const panelTools = seg.tools.filter(tool => tool.dag || tool.spawn)
+        const hasPanel = panelTools.length > 0
         const panelRows = (tool: EpisodeTool, width: number) =>
           (tool.dag ? dagPanelRows(tool.dag, width, dagOpen) : 0) +
           (tool.spawn ? spawnPanelRows(tool.spawn, spawnOverrides) : 0)
+        // A stretch keys on `seg:` and a card on `call:`, and the two id spaces
+        // overlap -- a stretch reuses its first call's id. Reading them apart is
+        // what keeps a shut stretch from also shutting the card that shares that
+        // id (see callFolds).
+        const segIsOpen = (key: string, fallback: boolean) =>
+          cardFolds.segOpen.has(key) ? true : cardFolds.segClosed.has(key) ? false : fallback
+        const callIsOpen = (id: string, fallback: boolean) =>
+          cardFolds.callOpen.has(id) ? true : cardFolds.callClosed.has(id) ? false : fallback
 
+        // Mirrors episodeView's detailDefaultOpen: for one call the stretch's own
+        // fold IS the card's, because the row opens straight into the block, and
+        // it waits on the call being done rather than on the turn ending. A solo
+        // panel call keeps the folded default -- its graph is already drawn
+        // above, so opening adds a block rather than revealing one.
         if (seg.tools.length === 1) {
-          h += panelRows(seg.tools[0]!, Math.max(28, panelWidth - INDENT))
-        } else {
-          h += 1 + (seg.tools.length - panelTools.length)
+          const tool = seg.tools[0]!
 
+          h += hasPanel ? panelRows(tool, Math.max(28, panelWidth - INDENT)) : 1
+
+          if (segIsOpen(seg.key, !hasPanel && Boolean(tool.done) && cardDefaultOpen(tool))) {
+            h += openCardRows(tool, panelWidth, INDENT, cardFolds.full.has(tool.id))
+          }
+
+          continue
+        }
+
+        h += 1
+
+        // Folded, a multi-call stretch is its summary row; the panels inside it
+        // still draw (WorkSegment's own defaultOpen branch).
+        if (!segIsOpen(seg.key, hasPanel && !seg.live)) {
           for (const tool of panelTools) {
             h += panelRows(tool, Math.max(28, panelWidth - (INDENT + STEP)))
+          }
+
+          continue
+        }
+
+        for (const tool of seg.tools) {
+          if (tool.dag || tool.spawn) {
+            h += panelRows(tool, Math.max(28, panelWidth - (INDENT + STEP)))
+            continue
+          }
+
+          h += 1
+
+          if (callIsOpen(tool.id, Boolean(tool.done) && cardDefaultOpen(tool))) {
+            h += openCardRows(tool, panelWidth, INDENT + STEP, cardFolds.full.has(tool.id))
           }
         }
 

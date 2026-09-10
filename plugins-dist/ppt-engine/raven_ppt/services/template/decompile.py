@@ -50,7 +50,13 @@ _UNWRITABLE = (
 _CLONE_INSTEAD = (
     "this page also holds {what}, which python-pptx cannot write. Code here will not "
     "reproduce it: to keep it, clone the page with ppt_template.clone_page and replace "
-    "its text and pictures rather than redrawing it."
+    "its text and pictures rather than redrawing it. To draw anything of your own into "
+    "the clone -- a chart, a panel, a figure -- clear the space for it first with "
+    "ppt_template.clear_region(slide, box) -- a ppt_layout.Box or a page_box(shape), not "
+    "four bare numbers, which cannot say whether they are two corners or a corner and a "
+    "size. Whatever the template drew there is still "
+    "there, and it is never one shape. The call says what it removed and what it left "
+    "over your box."
 )
 
 # Every name the emitted code may use, and where it comes from. Only the ones a

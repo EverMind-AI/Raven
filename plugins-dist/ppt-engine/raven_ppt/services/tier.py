@@ -8,6 +8,19 @@ a deck gets before it is released as it stands, and how many readings the
 second reader takes. Six measured runs put the plateau of useful fixes inside
 ten whole builds and three readings; what came after was churn on taste
 findings and misread pages.
+
+One thing the build cap is not spent on, and the reason is in the same
+measurements: a build that lost a page to a raised block is not a whole build of
+the deck. `tools/build.py` already declines to count a script that produced no
+deck at all -- "a budget it spent would release the first deck that exists past
+its blocking findings after a single real build" -- and a build whose page 10
+and page 11 came back as stand-ins saying `NameError` is that same thing for
+those two pages. A live medium run spent its tenth and last build on exactly
+that: two pages lost to one undefined name, five copy findings on the pages that
+did draw, the deck published because the cap had been reached, and none of it
+read by the author. So such a build is counted against its own small allowance
+instead, `CRASH_REPRIEVES` of them, and the total stays bounded at the tier's cap
+plus that allowance.
 """
 
 from __future__ import annotations
@@ -23,6 +36,15 @@ MODE_FILENAME = ".deck-mode.json"
 BUILDS_FILENAME = "builds.json"
 BUILD_CAP_KEY = "buildCap"
 READING_CAP_KEY = "readingCap"
+
+# How many builds that lost a page to a raised block are spared the whole-deck count.
+# Two: one for the fix, which an undefined name or a chart handed a None takes exactly
+# one more turn to make, and one for a second crash of a different kind. A third in a
+# row is an author not converging, and from there a lost page costs a build like
+# anything else -- so the run cannot be extended by crashing, and the deck still goes
+# out with the pages that drew.
+CRASH_REPRIEVES = 2
+_SPARED_KEY = "spared"
 
 
 @dataclass(frozen=True)
@@ -86,9 +108,37 @@ def whole_builds_taken(project: Project) -> int:
 def count_whole_build(project: Project) -> int:
     """One more whole-deck build; returns the count including this one."""
     taken = whole_builds_taken(project) + 1
+    _write_builds(project, taken, reprieves_taken(project))
+    return taken
+
+
+def reprieves_taken(project: Project) -> int:
+    """How many builds this deck has already been spared for losing a page."""
+    try:
+        held = json.loads(_builds_path(project).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    value = held.get(_SPARED_KEY) if isinstance(held, dict) else None
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
+def count_lost_build(project: Project) -> int | None:
+    """A build that lost a page to a raised block, counted against its own allowance.
+
+    Returns which reprieve this was when the build is spared the whole-deck count, and
+    None when the allowance is spent -- and then the caller counts it as a whole build,
+    which is what keeps the total bounded.
+    """
+    taken = reprieves_taken(project) + 1
+    if taken > CRASH_REPRIEVES:
+        return None
+    _write_builds(project, whole_builds_taken(project), taken)
+    return taken
+
+
+def _write_builds(project: Project, whole: int, spared: int) -> None:
     try:
         _builds_path(project).parent.mkdir(parents=True, exist_ok=True)
-        _builds_path(project).write_text(json.dumps({"whole": taken}), encoding="utf-8")
+        _builds_path(project).write_text(json.dumps({"whole": whole, _SPARED_KEY: spared}), encoding="utf-8")
     except OSError:
         pass
-    return taken
