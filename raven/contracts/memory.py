@@ -30,13 +30,17 @@ MemoryBackend)`` works in tests — at the cost of accepting any class
 whose surface matches, including duck-typed mocks. That's the trade we
 want: contract tests don't have to inherit from a base class.
 
-Failure contract. The host wraps every call into a backend and treats a
-raise as the loss of that one call: ``recall`` counts as no hits, ``store``
-as not landed, ``start`` as no long-term memory for this session, ``feedback``
-and ``stop`` as logged and ignored. A backend that can classify its own
-failures (a timeout is not a refused connection) should catch and act on
-them, because the host cannot; what it does not understand it may let
-propagate.
+Failure contract. A session host -- the agent loop, the TUI, the gateway,
+``raven serve`` -- wraps every call into a backend and treats a raise as the
+loss of that one call: ``recall`` counts as no hits, ``store`` as not landed,
+``start`` as no long-term memory for this session, ``feedback`` and ``stop``
+as logged and ignored. The import CLI (``raven import``) is the deliberate
+exception: it lets ``start`` and ``store`` raise, because a bulk import that
+runs against nothing consumes the source list while writing nothing.
+
+A backend that can classify its own failures (a timeout is not a refused
+connection) should catch and act on them, because the host cannot; what it
+does not understand it may let propagate.
 """
 
 from __future__ import annotations
@@ -170,7 +174,11 @@ class MemoryBackend(Protocol):
 
         Empty result is a valid response (no hits). A raise is tolerated by
         the host and costs this call its hits; prefer returning ``[]`` for
-        failures the backend can recognise.
+        failures the backend can recognize. The host also bounds the call
+        with a per-turn wall clock (the floor under any backend, since this
+        Protocol does not oblige one to have a timeout at all; the constant
+        lives in ``raven/context_engine/segments/memory.py``) and abandons a
+        slower call, so keep the backend's own timeouts stricter than that.
         """
         ...
 
@@ -223,8 +231,12 @@ class MemoryBackend(Protocol):
         """One-time / idempotent initialization (open connections,
         warm caches, run migrations).
 
-        The host awaits this exactly once during agent boot. A raise leaves
-        the session without this backend; it does not abort the host.
+        The host calls this once at boot, but may not await it before the
+        first turn: the TUI and ``raven serve`` spawn it as a task, so
+        ``recall`` and ``store`` must tolerate being called while ``start``
+        is still running -- no hits and not landed are the expected answers
+        then. A raise leaves the session without this backend; it does not
+        abort the host.
         """
         ...
 

@@ -13,6 +13,8 @@ import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable
 
+from loguru import logger
+
 import raven.agent.loop as agent_loop
 from raven.agent.loop.bundles import EngineWiring, HostWiring, SubagentWiring, ToolWiring, TurnPolicy
 from raven.core import eval_stack, hooks_stack, plugin_stack, token_wise_stack
@@ -93,7 +95,13 @@ class RavenRuntime:
         self.loop.stop()
         if self.backend is not None:
             await self.loop.drain_backend_stores()
-            await self.backend.stop()
+            try:
+                await self.backend.stop()
+            except Exception:
+                logger.exception(
+                    "memory backend stop failed ({}); continuing generation swap",
+                    type(self.backend).__name__,
+                )
 
     def discard(self) -> None:
         """Drop a candidate that never served.
