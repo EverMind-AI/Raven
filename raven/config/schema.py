@@ -8,6 +8,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
+from raven.config.agent_names import THIRD_PARTY_PRESET_NAMES
 from raven.contracts.path_policy import WORKSPACE_DEFAULT_SENTINEL
 from raven.sandbox.config import SandboxConfig
 
@@ -1222,14 +1223,13 @@ def _resolve_preset_provenance(name: str, preset: str | None) -> str | None:
     it an upgrade. Gating on kind would instead read it as hand-written, hide the
     upgrade, and offer the preset again as unconfigured.
 
-    The preset name set is imported inside this function, not at module
-    level: ``raven.agent.subagent.presets`` imports ``SubagentsConfig`` from
-    this module (deferred inside ``_normalized``), and importing back here at
-    module level would put both sides of that cycle at module-init time.
+    Matched against the name vocabulary (``raven.config.agent_names``), not the
+    preset table: this needs to know which names are legal, never what they run.
+    The table stays in ``raven.agent.subagent.presets``, which reads config
+    downward; the two spellings of the name set are pinned equal by
+    tests/test_subagent_name_vocabulary.py.
     """
-    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
-
-    presets = THIRD_PARTY_SUBAGENT_PRESETS
+    presets = THIRD_PARTY_PRESET_NAMES
     if preset is None:
         return name if name in presets else None
     if preset not in presets:
