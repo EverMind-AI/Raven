@@ -1145,9 +1145,10 @@ degrades to the full description catalog for that turn.
 
 **Admission** (`config/admission.py`, `plugins/registry.py:_admit`, `agent/tools/registry.py:admit_tool`):
 The declare-check-dispense pattern at a boundary: the owner declares its authored members
-(a manifest's `config_schema`, a tool's four authored members), the door checks the
-declaration once at entry, and dispenses a frozen result (an admitted config slice, a
-`ToolSpec`) that the machinery reads afterwards. An empty declaration keeps verbatim
+(a manifest's `config_schema`, a tool's four authored members and its optional
+`configured()` availability declaration), the door checks the declaration once at entry,
+and dispenses a frozen result (an admitted config slice, a `ToolSpec`) that the machinery
+reads afterwards. An empty declaration keeps verbatim
 pass-through. Failures name the owner and the key at the door, not deep inside a turn.
 
 **Config-with-cargo** (`channels/contract.py:ChannelSpec.config_schema`, `raven-plugin.toml [plugin.config_schema]`):

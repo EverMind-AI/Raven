@@ -467,6 +467,15 @@ class TestLoopCastsGates:
         assert answer == "Yes"
         assert broker.asked == ["proceed?"]
 
+    def test_the_handles_carry_the_loops_usage_recorder(self, tmp_path: Path) -> None:
+        """The plugin side reads ``usage_recorder`` off a hand-built ``RuntimeHandles``;
+        this pins that the host mints it, so a deck's generations reach the usage
+        ledger rather than going unrecorded with nothing looking different."""
+        loop = _loop(tmp_path)
+        handles = loop.mint_runtime_handles("plug")
+        assert handles.usage_recorder is not None
+        assert handles.usage_recorder == loop._record_image_usage
+
     def test_rebind_workdir_persists_repoints_and_reads_back(self, tmp_path: Path) -> None:
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver
 

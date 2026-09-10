@@ -22,16 +22,23 @@ slice means "this instance never asked for deck tools" and every factory
 declines (the D6 admission shape). The shipped product slice spells
 ``enabled: true``, so the product face is unchanged.
 
-Plugin-only keys, none of which the shipped product config carries:
+Plugin-only keys, none of which the shipped product config carries. Both are
+overrides: absent, the plugin reads the host's own ``tools.web`` through the
+locator's grant, so a deployment that configured the web tools once has
+configured the deck tools too. Image generation has no slice key at all -- the
+generator rides the host's ``tools.media.image`` (key, base, model, quality,
+proxy) through the same grant and is withheld where the host configured none.
 
-  webProxy            forwarded to ppt_fetch and ppt_image_search, the seat the
-                      fork's launcher-rendered tools.web.proxy fed
-  imageSearch.apiKey  Serper key for ppt_image_search; falls back to
+  webProxy            forwarded to ppt_fetch and ppt_image_search in place of
+                      the host's tools.web.proxy
+  imageSearch.apiKey  Serper key for ppt_image_search in place of the host's
+                      Serper key (tools.web.providers.serper.apiKey, or the
+                      legacy tools.web.search.apiKey); falls back to
                       $SERPER_API_KEY (the research-flow spelling)
-  image               the media section ppt_generate_image draws with
-                      (apiKey/apiBase/model/quality, as tools.media.image
-                      spells them); without it the tool sees no section at all
-                      and only $OPENROUTER_API_KEY can pay for a picture
+  image               an override of the host's tools.media.image for
+                      ppt_generate_image (apiKey/apiBase/model/quality, as
+                      tools.media.image spells them); absent, the generator
+                      reads the host's section through the locator's grant
   deckPerSession      true by default: each session builds its deck in
                       <workdir>/decks/<session>/ rather than in <workdir>/deck,
                       so sessions sharing one channel directory do not share a deck
@@ -90,9 +97,8 @@ class EngineConfig:
     # engine per session; here the hook repoints the turn's working directory instead.
     deck_per_session: bool = True
     image_search_api_key: str | None = None
-    # What ppt_generate_image is handed as its section. A plugin sees only its
-    # own slice, so the launcher copies the resolved tools.media.image across --
-    # the bridge imageSearch.apiKey already walks for the picture SEARCH key.
+    # An override of the host's tools.media.image for ppt_generate_image; the
+    # grant on the locator is what serves it otherwise.
     image: Any | None = None
     # The second reader's reasoning effort, passed through to the provider as given
     # ("low", "none", ...). Empty means the provider's own default, which is the

@@ -79,13 +79,7 @@ def log(message: str) -> None:
 
 def configure_image_generation(config: dict, host: dict) -> None:
     """Use the host image section and keep subsequent settings edits live."""
-    from raven.config.schema import live_media_tool_config
-
-    host_image = ((host.get("tools") or {}).get("media") or {}).get("image")
-    section = live_media_tool_config(host_image, (host.get("providers") or {}).get("openrouter"))
-    image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
-    image["selectionConfig"] = str(render.raven_home() / render.CONFIG_FILENAME)
-    config.setdefault("tools", {}).setdefault("media", {})["image"] = image
+    render.inherit_media_image(config, host)
 
 
 def render_config(source: Path) -> Path:
