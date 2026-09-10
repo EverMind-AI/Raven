@@ -12,6 +12,7 @@ group. The actual implementations live in per-feature modules:
     - ``upgrade``  → ``raven/cli/upgrade_commands.py``
 
 - Subcommand groups (each exposes a typer ``*_app`` instance):
+    - ``agents``   → ``raven/cli/agents_commands.py`` (mounted via its ``register(app)``)
     - ``channels`` → ``raven/cli/channel_commands.py``
     - ``cron``     → ``raven/cli/cron_commands.py``
     - ``provider`` → ``raven/cli/provider_commands.py``
@@ -113,6 +114,7 @@ def main(
 
 from raven.cli import (
     agent_commands,
+    agents_commands,
     doctor_commands,
     gateway_commands,
     onboard_commands,
@@ -126,6 +128,7 @@ from raven.cli import (
 onboard_commands.register(app)
 gateway_commands.register(app)
 agent_commands.register(app)
+agents_commands.register(app)
 status_commands.register(app)
 doctor_commands.register(app)
 plugin_commands.register(app)

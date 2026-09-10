@@ -6,6 +6,7 @@ Module-level names live in ``_shared``; method groups live in mixins
 
 from __future__ import annotations
 
+from raven.agent.harness import default_harness_modules
 from raven.agent.loop._shared import (
     TYPE_CHECKING,
     Any,
@@ -58,6 +59,7 @@ if TYPE_CHECKING:
     )
     from raven.context_engine import ContextEngine
     from raven.contracts.asking import QuestionResponder
+    from raven.contracts.harness import HarnessModules
     from raven.contracts.memory import MemoryBackend
     from raven.contracts.tool import Tool
     from raven.mcp.manager import MCPConnectionManager
@@ -454,6 +456,27 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 skill_hub_client=self._skill_hub_client,
                 provider_pool=provider_pool,
             )
+
+        # The four strategy roles this generation runs on. Assembled here
+        # because both organs they wrap are in hand by now -- the registry
+        # from above and the engine just bound -- and frozen for the
+        # generation's life: the tool array is the prompt-cache prefix, so a
+        # mid-turn swap would move it between two model calls of one turn.
+        # ``tools`` is read through a lambda rather than captured, and the
+        # engine above is not: trajectory replay rebinds ``loop.tools`` onto a
+        # recorded registry after this constructor returns, so both roles that
+        # read it -- Capability's array and Memory's tool-token reservation --
+        # have to keep reading it fresh, the way the inline code they replaced
+        # did. Nothing rebinds ``context_engine``, and a generation's window
+        # *is* its engine (see ``harness/memory.py``), so that one is bound.
+        self.harness: HarnessModules = default_harness_modules(
+            self.context_engine,
+            lambda: self.tools,
+            provider=lambda: self.provider,
+            model=lambda: self.model,
+            context_window_tokens=lambda: self.context_window_tokens,
+            system_prompt=lambda skills: self.context.build_system_prompt(skills),
+        )
 
         # Checkpointing is configured under ``runtime.checkpoint``;
         # gated by (policy, interactive) — see ``_checkpoint_active``. When

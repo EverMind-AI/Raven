@@ -1,9 +1,9 @@
-"""What a model is called and what it is for, for the surfaces people read.
+"""What a model is called, what it can do, and what it is for.
 
 A picker showing `anthropic/claude-sonnet-4-6` is showing an identifier. What a
-person choosing a model wants is its name, roughly what it is good at, how much
-context it takes and how recent it is -- none of which LiteLLM's table carries,
-because that table exists to price and route.
+person choosing a model wants is its name, roughly what it is good at, what it
+can take in and hand back, and how recent it is -- none of which LiteLLM's table
+carries, because that table exists to price and route.
 
 So there are two catalogue sources and they answer different questions:
 
@@ -12,36 +12,36 @@ So there are two catalogue sources and they answer different questions:
   Raven deliberately does not read: its `supports_prompt_caching` asks whether a
   model caches at all, while what a request needs to know is whether the provider
   accepts `cache_control` blocks -- `ProviderSpec`'s field of the same name.
-* the models.dev snapshot decides labels, and prices a finished call. It carries
-  a name, a one-line description, and the vendor's published cost per model.
-  Context windows and capability flags are deliberately absent: those shape the
-  *next* request -- a window sizes trimming, a flag picks a wire shape -- and a
-  second source for them is a second answer.
+* the bundled provider registry (`providers/registry_data.py`, three packaged
+  files) decides labels and display tags, and prices a finished call. It carries
+  a name, a one-line description, what the model reads and writes, and the
+  vendor's published cost. The context window is deliberately absent: it sizes
+  trimming, which shapes the *next* request, so `providers/rates.py` answers it
+  from the tables that also route.
 
-Keeping the split is the point rather than an implementation detail. The snapshot
+Keeping the split is the point rather than an implementation detail. The registry
 is community-maintained data; if it goes stale, wrong, or missing, the cost is a
-model shown by its id instead of its name, or a total that is off. It can never
-cause a wrong request, because nothing that shapes one reads it.
+model shown by its id instead of its name, a missing icon, or a total that is
+off. It can never cause a wrong request, because nothing that shapes one reads it.
 
-The snapshot ships with Raven so a fresh install labels models offline and tests
+A capability tag is display only, and specifically not the answer to "may this
+request carry an image". That question is `capabilities.supports_vision`, which
+reads a catalogue Raven fetches for rates, and `ProviderSpec`, which knows what
+the wire can hold -- a model that can see is still not reachable with a picture
+over a transport with nowhere to put one.
+
+The registry ships with Raven so a fresh install labels models offline and tests
 never reach the network. Regenerate with
-``scripts/refresh_models_dev_snapshot.py``.
+``scripts/refresh_provider_registry.py``.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, replace
-from functools import lru_cache
-from pathlib import Path
 from typing import TYPE_CHECKING
-
-from loguru import logger
 
 if TYPE_CHECKING:
     from raven.config.schema import ModelOverlay
-
-SNAPSHOT = Path(__file__).parent / "data" / "models_dev.json"
 
 #: Where a row's facts came from, kept on the row so a surface can tell a
 #: label it can trust from an id it is falling back to.
@@ -53,30 +53,32 @@ SOURCE_OVERLAY = "overlay"
 
 @dataclass(frozen=True)
 class ModelRow:
-    """One model, as a person reads it."""
+    """One model, as a person reads it.
+
+    The tags are the registry's answer and are rendered as icons; they are empty
+    for a model nothing describes, which a surface must read as "unknown" rather
+    than as "cannot". Being wrong the confident way would hide a capability the
+    model has; being wrong this way shows one fewer icon.
+    """
 
     ref: str
     provider: str
     label: str
     source: str
     description: str = ""
+    capabilities: tuple[str, ...] = ()
+    input_modalities: tuple[str, ...] = ()
+    output_modalities: tuple[str, ...] = ()
 
     @property
     def described(self) -> bool:
         return self.source != SOURCE_ID_ONLY
 
-
-@lru_cache(maxsize=1)
-def _snapshot() -> dict[str, dict]:
-    """The bundled labels, or nothing when they cannot be read.
-
-    Never raises: a missing or corrupt snapshot must cost labels, not startup.
-    """
-    try:
-        return json.loads(SNAPSHOT.read_text(encoding="utf-8"))
-    except Exception as exc:  # pragma: no cover - only on a damaged install
-        logger.debug(f"model label snapshot unavailable: {exc}")
-        return {}
+    @property
+    def tagged(self) -> bool:
+        """Whether there is anything to draw. A row can be tagged and unlabelled:
+        a gateway lists a model the vendor rows describe without naming it."""
+        return bool(self.capabilities or self.input_modalities or self.output_modalities)
 
 
 def describe(provider: str, model: str, *, overlay: "ModelOverlay | None" = None) -> ModelRow:
@@ -88,24 +90,67 @@ def describe(provider: str, model: str, *, overlay: "ModelOverlay | None" = None
     as a row rather than as nothing to show.
     """
     from raven.providers.registry import canonical_provider_name
+    from raven.providers.registry_data import inferred_tags, row_by_name, row_for
     from raven.providers.wire import split_model_id, stored_model_id
 
     provider = canonical_provider_name(provider)
     ref = stored_model_id(provider, model)
-    entry = _snapshot().get(provider, {}).get("models", {}).get(_vendor_id(provider, model))
+    vendor_id = _vendor_id(provider, model)
+    entry = row_for(provider, vendor_id)
+    if entry is None:
+        # The same model under whoever else lists it. Upstream files models per
+        # provider and its coverage is uneven -- SiliconFlow gets twelve rows
+        # and none of them are the image models it actually serves, though
+        # those models are described in full elsewhere. Display facts only: the
+        # price on a borrowed row is the other provider's, which is why
+        # `model_cost` below does not take this path.
+        entry = row_by_name(vendor_id)
 
-    if entry:
+    if entry is not None:
         row = ModelRow(
             ref=ref,
             provider=provider,
-            label=entry.get("name") or ref,
-            source=SOURCE_SNAPSHOT,
-            description=entry.get("description") or "",
+            # A row without a name is still a row: the tags it carries are worth
+            # drawing, and the id is what the picker showed before either way.
+            label=entry.name or split_model_id(ref)[1] or ref,
+            source=SOURCE_SNAPSHOT if entry.name else SOURCE_ID_ONLY,
+            description=entry.description,
+            capabilities=_with_inferred(ref, entry.capabilities),
+            input_modalities=entry.input_modalities,
+            output_modalities=entry.output_modalities,
         )
     else:
-        row = ModelRow(ref=ref, provider=provider, label=split_model_id(ref)[1] or ref, source=SOURCE_ID_ONLY)
+        # A model no catalogue carries -- a live fetch from a gateway serving
+        # hundreds of them -- still has a name, and for one whole class of
+        # model the name is the only thing that says what it is.
+        row = ModelRow(
+            ref=ref,
+            provider=provider,
+            label=split_model_id(ref)[1] or ref,
+            source=SOURCE_ID_ONLY,
+            capabilities=inferred_tags(ref),
+        )
 
     return _with_overlay(row, overlay)
+
+
+def _with_inferred(ref: str, capabilities: tuple[str, ...]) -> tuple[str, ...]:
+    """The catalogue's tags, plus what its silence leaves the name to answer.
+
+    Added rather than substituted, and only where the catalogue has claimed
+    neither: a multimodal embedder really does read images, so
+    ``cohere-embed-v4`` keeps ``image-recognition`` and gains ``embedding``. A
+    model the catalogue already calls an embedder is left exactly as it is.
+    """
+    from raven.providers.registry_data import CAPABILITIES, inferred_tags
+
+    if {"embedding", "rerank"} & set(capabilities):
+        return capabilities
+    extra = inferred_tags(ref)
+    if not extra:
+        return capabilities
+    merged = set(capabilities) | set(extra)
+    return tuple(name for name in CAPABILITIES if name in merged)
 
 
 def model_cost(model: str) -> dict | None:
@@ -136,9 +181,10 @@ def model_cost(model: str) -> dict | None:
     provider = spec.name if spec else split_model_id(model)[0]
     if not provider:
         return None
-    entry = _snapshot().get(canonical_provider_name(provider), {}).get("models", {}).get(_vendor_id(provider, model))
-    cost = entry.get("cost") if isinstance(entry, dict) else None
-    return cost if isinstance(cost, dict) else None
+    from raven.providers.registry_data import row_for
+
+    entry = row_for(canonical_provider_name(provider), _vendor_id(provider, model))
+    return dict(entry.cost) if entry is not None and entry.cost else None
 
 
 def _with_overlay(row: ModelRow, overlay: "ModelOverlay | None") -> ModelRow:
@@ -152,9 +198,17 @@ def _with_overlay(row: ModelRow, overlay: "ModelOverlay | None") -> ModelRow:
     if overlay is None:
         return row
 
+    from raven.providers.registry_data import CAPABILITIES, MODALITIES, clean_tags
+
     changed = {
         "label": overlay.label or row.label,
         "description": overlay.description or row.description,
+        # Stated tags replace the catalogue's rather than joining them: a person
+        # correcting a row that says "vision" is saying it does not, and a union
+        # would make that correction unsayable.
+        "capabilities": clean_tags(overlay.capabilities, CAPABILITIES) or row.capabilities,
+        "input_modalities": clean_tags(overlay.input_modalities, MODALITIES) or row.input_modalities,
+        "output_modalities": clean_tags(overlay.output_modalities, MODALITIES) or row.output_modalities,
     }
     described = row.described or bool(overlay.label or overlay.description)
     return replace(row, **changed, source=SOURCE_OVERLAY if described else row.source)

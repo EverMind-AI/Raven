@@ -44,6 +44,22 @@ from raven_ppt.tools.template import PptTemplateTool
 log = logging.getLogger(__name__)
 
 
+def _image_tools(workspace: Path, image_config: Any, proxy: str | None, usage_recorder: Any) -> list[Tool]:
+    """The generator, always assembled; whether it is offered is asked live.
+
+    Built once, like the other tools, and offered on the same terms as the host's
+    own ``image_generate``: the tool declares ``configured()``, which the loop's
+    withheld axis asks per assembly, so a ``tools.media.image`` section naming a
+    key or a model surfaces it on the next turn and an emptied one withdraws it,
+    without a restart. Deciding here, at assembly, froze the answer at the first
+    prototype and let a section added or removed later go unnoticed.
+    """
+    from raven.agent.tools.media_gen import ImageGenerateTool
+
+    media = ImageGenerateTool(image_config, workspace=workspace, proxy=proxy, usage_recorder=usage_recorder)
+    return [PptGenerateImageTool(workspace, media)]
+
+
 def build_ppt_tools(
     workspace: Path,
     *,
@@ -57,6 +73,7 @@ def build_ppt_tools(
     web_proxy: str | None = None,
     image_config: Any | None = None,
     media_proxy: str | None = None,
+    usage_recorder: Any | None = None,
     reader_effort: str | None = None,
 ) -> list[Tool]:
     """The tools for one route, or [] when python-pptx is not importable.
@@ -126,7 +143,7 @@ def build_ppt_tools(
         PptPrepareTool(workspace, _prepare(provider), provision=provision_script_workspace),
         PptBriefTool(workspace),
         PptFetchTool(workspace, proxy=web_proxy, ingest=ingest_materials),
-        PptGenerateImageTool(workspace, image_config, proxy=media_proxy),
+        *_image_tools(workspace, image_config, media_proxy, usage_recorder),
         PptIngestTool(workspace),
         PptFigureInspectTool(
             workspace,

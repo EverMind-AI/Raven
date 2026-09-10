@@ -1034,8 +1034,13 @@ ingests them once; nine pictures one call each cost a measured run sixteen minut
 waiting. Generate with `ppt_generate_image` only after both paths find no suitable existing
 visual; a generated image illustrates a concept and never replaces evidence. Ask at the
 shape of the region it will sit in — `aspect_ratio` takes `16:9`, `4:3`, `3:2`, `1:1`,
-`3:4` or `9:16` and defaults to `16:9`, so a portrait strip gets a landscape image to
-crop unless you say otherwise. Fetched *numbers* are another matter: those are a source
+`2:3`, `3:4`, `9:16` or `21:9` and defaults to `16:9`, so a portrait strip gets a landscape
+image to crop unless you say otherwise; a model that draws only a few frames answers with the
+nearest one, and the reply's `width` and `height` say what came back, so fit it to the box
+rather than assuming the ratio. The picture is drawn by whatever image model the host
+configured, not by a fixed one: say the manner in words the model can act on. `references`
+hands it pictures to match or vary -- the template's own illustration for its manner, an
+earlier generation for a consistent series, a user's photograph to restyle. Fetched *numbers* are another matter: those are a source
 the user did not choose, so anything the deck states as fact still comes from the
 materials.
 
@@ -1048,11 +1053,15 @@ placeholder. Put the page's picture into that slot -- `replace_picture(layout_pi
 image, "cover")` when the slot is on the layout, `pictures={n: image}` when it is on the page --
 and never drop the layout's art to make room for a full-bleed photograph (`drop_shape` refuses a
 layout shape): a live cover did exactly that and came out as black type on a washed skyline.
-An illustrated template's slot takes a cut-out in its own manner, `ppt_generate_image(...,
-transparent=true)` with the palette and the outline weight named in the prompt, even for a real
-place -- a flat Shanghai skyline in the template's blue, yellow and black sat in one such slot
-as if drawn for it. A slot that holds a photograph takes a photograph. A template whose cover
-*is* a photograph takes `backdrop`.
+What goes into the slot is decided by what the template put there, and the template can be
+anyone's -- a bundled one, or a deck the user uploaded. Look at the slot in the render before
+you ask for a picture: a slot that holds a photograph takes a photograph; a slot that holds a
+drawing takes a cut-out in that drawing's manner, `ppt_generate_image(..., transparent=true)`
+with the manner described from what you see (flat vector, line art, 3D render, watercolour;
+its palette; its outline weight), even for a real place, and with the template's own
+illustration passed as `references` so the model matches it rather than your description of
+it. Never name a template or a house style you have not seen on the page. A template whose
+cover *is* a photograph takes `backdrop`.
 
 **A backdrop is the one generated picture that never poses as evidence.** A cover, a
 section page or a closing page wants atmosphere more than a figure, and a template's own

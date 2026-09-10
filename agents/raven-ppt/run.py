@@ -83,6 +83,12 @@ SECRET_SLOTS = {
     "PPT_IMAGE_API_KEY": ("tools", "media", "image", "apiKey"),
 }
 IMAGE_KEY_SLOT = SECRET_SLOTS["PPT_IMAGE_API_KEY"]
+# The rest of the image section a product may pin against the inherited one:
+# a different base or model than the host's, for a deck account of its own.
+IMAGE_SETTING_SLOTS = {
+    "PPT_IMAGE_API_BASE": ("tools", "media", "image", "apiBase"),
+    "PPT_IMAGE_MODEL": ("tools", "media", "image", "model"),
+}
 
 # Where the web tools take their proxy from, and the environment names that
 # stand in for it. The engine's fetch builds its client with `trust_env=False` on
@@ -176,17 +182,28 @@ def configure_image_generation(config: dict, host: dict) -> None:
     its OpenRouter key for chat alone deliberately surfaces no media tool, so
     the deck asked for a key nobody had written and drew nothing.
 
-    The engine slice gets a copy for the reason the Serper key does: the
-    trunk's ``image_generate`` reads ``tools.media.image``, while the deck's own
-    ``ppt_generate_image`` is handed a section by the plugin, which sees only
-    its own slice. setdefault, so a slice that shipped one keeps it.
+    The product's own ``PPT_IMAGE_API_BASE`` and ``PPT_IMAGE_MODEL`` pin a deck
+    endpoint or model over the inherited one, and any product pin (key, base or
+    model) also pins the section as rendered: a live host selection would
+    replace it whole on the next call. The host's media proxy rides along.
+
+    The engine gets no copy: the deck's ``ppt_generate_image`` rides the host's
+    ``image_generate`` and reads ``tools.media.image`` through the locator's
+    ``media_config`` grant, live, exactly as the host tool does. The slice's own
+    ``image`` key stays an operator override for a host that grants nothing.
     """
     from raven.config.schema import live_media_tool_config
 
-    host_image = ((host.get("tools") or {}).get("media") or {}).get("image")
+    host_tools = host.get("tools") or {}
+    host_image = (host_tools.get("media") or {}).get("image")
     section = live_media_tool_config(host_image, (host.get("providers") or {}).get("openrouter"))
     image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
     paid_by = "the host image section"
+    pinned: list[str] = []
+    for name, path in IMAGE_SETTING_SLOTS.items():
+        if value := env_value(name):
+            image[path[-1]] = value
+            pinned.append(name)
     if resolved := render.dig(config, IMAGE_KEY_SLOT):
         image["apiKey"], paid_by = resolved, "PPT_IMAGE_API_KEY or the host image key"
     elif not image.get("apiKey") and _IMAGE_GATEWAY in (image.get("apiBase") or _IMAGE_GATEWAY):
@@ -206,15 +223,19 @@ def configure_image_generation(config: dict, host: dict) -> None:
     # and an explicit PPT_IMAGE_API_KEY is this deployment's choice, not a
     # host preference to be overridden by a later Settings edit.
     host_selects = isinstance(host_image, dict) and bool(host_image.get("apiKey") or host_image.get("model"))
-    if host_selects and not env_value("PPT_IMAGE_API_KEY"):
+    if env_value("PPT_IMAGE_API_KEY"):
+        pinned.insert(0, "PPT_IMAGE_API_KEY")
+    if host_selects and not pinned:
         image["selectionConfig"] = str(render.raven_home() / render.CONFIG_FILENAME)
-    config.setdefault("tools", {}).setdefault("media", {})["image"] = image
+    media = config.setdefault("tools", {}).setdefault("media", {})
+    media["image"] = image
+    if (proxy := (host_tools.get("media") or {}).get("proxy")) and not media.get("proxy"):
+        media["proxy"] = proxy
     if not image.get("apiKey"):
         log("[run] images: no OpenRouter key to draw with; the deck keeps only the pictures it can find")
         return
-    engine_slice = config.setdefault("plugins", {}).setdefault("config", {}).setdefault(ENGINE_PLUGIN_ID, {})
-    engine_slice.setdefault("image", dict(image))
-    log(f"[run] images: {image.get('model') or 'the shipped default'}, paid by {paid_by}")
+    pin_note = f", pinned by {', '.join(pinned)}" if pinned else ", following the host" if host_selects else ""
+    log(f"[run] images: {image.get('model') or 'the shipped default'}, paid by {paid_by}{pin_note}")
 
 
 def recommended_llm() -> str:
