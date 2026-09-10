@@ -1000,6 +1000,168 @@ describe('settings island', () => {
     expect(document.querySelector('.mpanel .mtitle')?.textContent).toContain('MiniMax (CN)')
   })
 
+  /* The rail's search box and its filter. `t()` answers with the key here, so
+     these assert structure and which rows survive -- never the English copy,
+     which the catalogue owns. */
+  describe('narrowing the rail', () => {
+    const openModelPage = async (fixture = withMiniMax()) => {
+      install(fixture)
+      await mount()
+      await act(async () => {
+        screen.getByText('gui.set.pg.model').click()
+      })
+    }
+
+    const type = async (text: string) => {
+      const box = document.querySelector<HTMLInputElement>('.mrhead .mrsearch')!
+      await act(async () => {
+        fireEvent.change(box, { target: { value: text } })
+      })
+    }
+
+    /* `shell/menu` writes into a host element the page owns, so a test that
+       opens the menu has to provide one -- and exactly one. `show` finds it by
+       id, which answers with the first in the document, so a second host would
+       be the one queried and never the one written to. */
+    const menuHost = (): HTMLElement => {
+      const existing = document.getElementById('menu')
+      if (existing) return existing
+      const host = document.createElement('div')
+      host.id = 'menu'
+      document.body.appendChild(host)
+      return host
+    }
+
+    const chooseFilter = async (label: string) => {
+      const host = menuHost()
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('.mrhead .mrfilter')!.click()
+      })
+      const item = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+        b.textContent?.startsWith(label),
+      )!
+      await act(async () => {
+        item.click()
+      })
+      return host
+    }
+
+    it('keeps only the providers whose name carries what was typed', async () => {
+      await openModelPage()
+      expect(railNames()).toEqual(['Anthropic', 'MiniMax', 'OpenAI'])
+
+      /* Case-insensitive, and a substring rather than a prefix: "ai" sits at
+         the end of "OpenAI" and nowhere in the other two. */
+      await type('ai')
+      expect(railNames()).toEqual(['OpenAI'])
+
+      await type('THRO')
+      expect(railNames()).toEqual(['Anthropic'])
+    })
+
+    it('keeps a family for a hit on one member alone', async () => {
+      await openModelPage()
+      /* "Global" names two of the four MiniMax sections and no family, so the
+         group survives on its members and carries only those two. */
+      await type('global')
+      expect(railNames()).toEqual(['MiniMax'])
+      expect(document.querySelector('.mrail .mrow.gh .gc')?.textContent).toBe('2')
+      expect([...document.querySelectorAll<HTMLElement>('.mgsub .mrow')].map(
+        (row) => row.querySelector('.nm')?.textContent,
+      )).toEqual(['MiniMax (Global)', 'MiniMax Global (OAuth)'])
+    })
+
+    it('matches a family by its own heading, not just by its members', async () => {
+      await openModelPage()
+      await type('minimax')
+      expect(railNames()).toEqual(['MiniMax'])
+      /* All four members, because the family itself matched: filtering the
+         group by the same needle would have left one row and dissolved it. */
+      expect(document.querySelector('.mrail .mrow.gh .gc')?.textContent).toBe('4')
+    })
+
+    it('draws a narrowed rail open, so a match inside a family is visible', async () => {
+      await openModelPage()
+      expect(document.querySelector('.mrail .mrow.gh')!.getAttribute('aria-expanded')).toBe('false')
+
+      await type('CN')
+      const head = document.querySelector<HTMLButtonElement>('.mrail .mrow.gh')!
+      expect(head.getAttribute('aria-expanded')).toBe('true')
+      expect([...document.querySelectorAll<HTMLElement>('.mgsub .mrow')].map(
+        (row) => row.querySelector('.nm')?.textContent,
+      )).toEqual(['MiniMax (CN)', 'MiniMax CN (OAuth)'])
+
+      /* Clearing the box returns the reader's own folds rather than leaving
+         everything open. */
+      await type('')
+      expect(document.querySelector('.mrail .mrow.gh')!.getAttribute('aria-expanded')).toBe('false')
+    })
+
+    it('narrows to the enabled half and back', async () => {
+      await openModelPage(withMiniMax({ cnOn: true }))
+      await chooseFilter('gui.model.prov_filter.on')
+      /* MiniMax survives on one connected member out of four, and says so. */
+      expect(railNames()).toEqual(['Anthropic', 'MiniMax (CN)'])
+
+      await chooseFilter('gui.model.prov_filter.off')
+      expect(railNames()).toEqual(['MiniMax', 'OpenAI'])
+      expect(document.querySelector('.mrail .mrow.gh .gc')?.textContent).toBe('3')
+
+      await chooseFilter('gui.model.prov_filter.all')
+      expect(railNames()).toEqual(['Anthropic', 'MiniMax', 'OpenAI'])
+    })
+
+    it('dissolves a family the filter has left with one member', async () => {
+      await openModelPage(withMiniMax({ cnOn: true }))
+      await chooseFilter('gui.model.prov_filter.on')
+      /* A lone provider behind a fold costs a click and saves nothing, which is
+         the same rule `railEntries` applies to a family that never had two. */
+      expect(document.querySelector('.mrail .mrow.gh')).toBeNull()
+    })
+
+    it('applies the name and the filter together', async () => {
+      await openModelPage(withMiniMax({ cnOn: true }))
+      await chooseFilter('gui.model.prov_filter.on')
+      await type('anthropic')
+      expect(railNames()).toEqual(['Anthropic'])
+
+      await type('openai')
+      /* OpenAI matches the name and fails the filter, so nothing is left -- and
+         that is a different sentence from having nothing set up. */
+      expect(railNames()).toEqual([])
+      expect(document.querySelector('.mrail .pnote')?.textContent).toBe('gui.model.prov_no_match')
+    })
+
+    it('ticks the filter in force and flags the control that narrowed the rail', async () => {
+      await openModelPage()
+      const button = document.querySelector<HTMLButtonElement>('.mrhead .mrfilter')!
+      expect(button.getAttribute('data-narrowed')).toBe('false')
+
+      const host = await chooseFilter('gui.model.prov_filter.off')
+      expect(button.getAttribute('data-narrowed')).toBe('true')
+
+      await act(async () => {
+        button.click()
+      })
+      const labels = [...host.querySelectorAll('button')].map((b) => b.textContent)
+      expect(labels).toEqual([
+        'gui.model.prov_filter.all',
+        'gui.model.prov_filter.on',
+        'gui.model.prov_filter.off \u2713',
+      ])
+    })
+
+    it('leaves the pane on a provider the narrowing hid rather than blanking it', async () => {
+      await openModelPage()
+      expect(document.querySelector('.mpanel .mtitle')?.textContent).toContain('Anthropic')
+
+      await type('openai')
+      /* The selection moves to something the reader can see: a pane describing
+         a row that is no longer in the list has nothing pointing at it. */
+      expect(document.querySelector('.mpanel .mtitle')?.textContent).toContain('OpenAI')
+    })
+  })
+
   it('puts provider branding first and connection state at the far edge', async () => {
     install()
     await mount()

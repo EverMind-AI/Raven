@@ -4069,8 +4069,24 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 /* 10px of right padding, not 4: the overlay thumb is drawn 8px in from the
    scroller's right edge, and a narrower gutter put it on top of the divider
    that separates the rail from the pane. */
-.mrail { overflow-y: auto; display: grid; gap: 2px; align-content: start;
-  padding-right: 10px; border-right: 1px solid var(--line-soft); }
+/* The search box holds still while the rail scrolls under it: a filter you
+   have to scroll back up to reach is a filter you stop using. So the divider
+   and the scroller's gutter move out here, onto the column, and `.mrail` keeps
+   only the scrolling. */
+.mrailwrap { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px;
+  min-height: 0; padding-right: 10px; border-right: 1px solid var(--line-soft); }
+.mrhead { display: flex; align-items: center; gap: 6px; }
+.mrsearch { flex: 1; min-width: 0; }
+.mrfilter { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px;
+  padding: 0; border: 1px solid var(--line-soft); border-radius: 8px; background: none;
+  color: var(--muted); cursor: pointer; }
+.mrfilter:hover { color: var(--text); background: color-mix(in oklab, var(--text) 6%, transparent); }
+.mrfilter svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round; }
+/* A narrowed rail says so on the control that narrowed it -- otherwise the
+   list is short for a reason nothing on screen explains. */
+.mrfilter[data-narrowed="true"] { color: var(--amber); border-color: currentColor; }
+.mrail { overflow-y: auto; display: grid; gap: 2px; align-content: start; min-height: 0; }
 .mrow {
   display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
   padding: 8px 9px; border: 0; border-radius: 8px; background: none; cursor: pointer;
