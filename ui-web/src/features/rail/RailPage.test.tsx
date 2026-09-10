@@ -191,20 +191,6 @@ describe('rail island', () => {
     expect(document.getElementById('newBtn')!.getAttribute('aria-current')).toBe('true')
   })
 
-  /* A conversation that is asking something says so from the same slot, and says
-     it even while its turn is busy. Its sheet only mounts on its own screen, so
-     the row is the only place the reader can learn a request is waiting -- and an
-     approval expires 35s after it was raised. */
-  it('shows the asking tail, and it outranks a busy turn', () => {
-    const h = install({ rows: [row({ status: 'ask' })], busy: true })
-    const host = mount()
-
-    const w = rowByTitle(host, 'GTM research').querySelector('.w')!
-    expect(w.getAttribute('data-sig')).toBe('ask')
-    expect(w.getAttribute('aria-label')).toBe('gui.sess.asking')
-    expect(h).toBeTruthy()
-  })
-
   it('shows the running tail on the busy current row and clears it after', () => {
     const h = install({
       rows: [

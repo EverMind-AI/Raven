@@ -20,9 +20,6 @@ composition.
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import logging
 from collections.abc import Callable
 from dataclasses import is_dataclass, replace
 from pathlib import Path
@@ -31,7 +28,6 @@ from typing import Any
 from raven.contracts.tool import Tool, ToolResult
 from raven.utils.images import image_block, text_block
 from raven_ppt.contracts import Project
-from raven_ppt.services.render import RenderError
 from raven_ppt.services.template import (
     PaletteError,
     as_palette,
@@ -48,8 +44,6 @@ from raven_ppt.services.template.theme import borrow_ink_note, ground_of
 from raven_ppt.tools import _return
 from raven_ppt.tools._args import ArgumentError, as_ints
 
-_log = logging.getLogger(__name__)
-
 # Every example page comes back in one reply. A cap was the first answer and it
 # was indefensible: the templates measured ship thirteen pages, the cap was twelve,
 # and the thirteenth was simply never shown -- an author choosing a page to adapt
@@ -60,29 +54,6 @@ _log = logging.getLogger(__name__)
 # bytes it is at 144.
 BATCH_PAGES = 8
 RENDER_DPI = 96
-
-# How the example pages travel: one tiled sheet, four cells to a row, rather than one
-# picture each. Measured over 459 vision calls on the model this engine runs, asking it
-# to name the page whose arrangement fits a stated need: the sheet scores 90% top-1 over
-# 150 answers and so do 20 separate renders, at 3.27MB against 8.71MB, a 7.0s median
-# against 11.0s, and -- the cost that actually killed a recorded run -- one image pinned
-# in the request afterwards instead of twenty. That run put 23 template renders into a
-# request, `ppt_figure_inspect` took it to 58 images and 16.8MB, and the provider
-# answered 200 with empty content five times on a byte-identical body.
-#
-# The renders are not replaceable by the text beside them. The same measurement sent
-# this reply's own `template_pages` lines with no pictures at all: 49% overall, 10% on a
-# row of headline figures, 30% on a chart page, 43% on a timeline. `page_signature` has
-# no word for those shapes and says so in its own docstring, so what the pictures carry
-# is exactly the part the sentences cannot.
-SHEET_COLUMNS = 4
-# The borrowable pages, six to a row: 36 of them at four columns would be nine rows,
-# where the ceiling starts costing cell width, while six columns is six rows and comes
-# out 4664x2642 with the same 768px cells. Measured on the same model: this sheet
-# answers 100% of the same need list, where the text-only offer that ships today
-# answers 27% -- the largest single gain in the whole measurement, and a picture the
-# author has never been shown at any price.
-BORROW_SHEET_COLUMNS = 6
 
 # How many pages come back as source in one call. Bounded because a decompiled
 # page runs to fifty lines and this is read, not scrolled -- and the count is
@@ -339,21 +310,17 @@ class PptTemplateTool(Tool):
         ]
 
     @staticmethod
-    def _borrowable(source: Path) -> list[tuple[str, int, str]]:
+    def _borrowable(source: Path) -> list[str]:
         """The reference pages of the other bundled templates, each named by its arrangement.
 
         Measured before this existed: an author whose template had no timeline drew one
         from `stack` and `plane`, while three other bundled templates shipped one. A
         page named by template, number and arrangement is an offer the way the bound
         template's own pages are; "the other templates have pages too" is not.
-
-        (stem, page, sentence) rather than the sentence alone, so the sheet of these
-        pages and the sentences about them cannot come apart: one walk over the offer
-        list decides both what is said and what is shown.
         """
         from raven_ppt.services.template.defaults import bundled_path, reference_artwork, reference_pages
 
-        said: list[tuple[str, int, str]] = []
+        said: list[str] = []
         menus: dict[str, dict[int, Any]] = {}
         for stem, number in reference_pages(except_stem=Path(source).stem):
             if stem not in menus:
@@ -373,86 +340,8 @@ class PptTemplateTool(Tool):
                 if drawings
                 else ""
             )
-            said.append((stem, number, f"{_cell(stem, number)} = {stem} page {number} is {what}{slots}{carried}"))
+            said.append(f"{stem} page {number} is {what}{slots}{carried}")
         return said
-
-    async def _borrow_sheet(
-        self, deck: Project, offers: list[tuple[str, int, str]]
-    ) -> tuple[Path, list[tuple[str, int]]] | None:
-        """The offered reference pages as one picture, and which of them are on it.
-
-        None when none of them can be rendered.
-
-        Their own sheet rather than cells appended to the bound template's, because the
-        two answer different questions -- which of my template's pages is nearest this,
-        against which page of another template can carry what mine cannot -- and a cell
-        the author cannot tell apart from its neighbour by provenance is worse than no
-        cell. The pages of every offered template are rendered once into the deck and
-        kept, so the second call through here pays for the tiling only.
-
-        The pictured pages come back with the sheet because the sentences beside it
-        count them. One lender that fails to convert leaves the other lenders' cells
-        intact, and a sheet of those cells is worth showing -- but named after the whole
-        offer it claimed to picture pages it did not, the reply said so in two places,
-        and every later call read that sheet out of the cache and never asked the failed
-        lender again. Named after what rendered it is honest and still a cache: a later
-        call with that lender back in service renders one page more, names a different
-        sheet and composes it, while the per-template conversions beside it are already
-        on disk, so the retry costs the tiling and not the LibreOffice run.
-        """
-        from raven_ppt.services.template.defaults import bundled_path
-
-        folder = deck.review_dir / "borrowable"
-        wanted = {stem: pages for stem, pages in _by_stem(offers).items() if bundled_path(stem) is not None}
-        # The complete sheet's own name is known before anything is rendered, and it is
-        # what the ordinary follow-up call wants. Only the tiling is downstream of the
-        # render: `pages_of` rasterises every page it is handed whether or not a sheet
-        # already holds them (9.9s of the 41.3s over the seven templates), so looking
-        # for the file after the render pays that on every call. A sheet short of the
-        # offer has no fast path on purpose -- falling through is how the lender that
-        # failed is asked again.
-        offered = [(stem, number) for stem, pages in wanted.items() for number in pages]
-        whole = folder / f"sheet_{len(offered)}_{_pictured_key(offered)}.png"
-        if whole.is_file() and whole.stat().st_size > 0:
-            return whole, offered
-
-        async def render(stem: str, pages: list[int]) -> dict[int, Path]:
-            pdf = await self.thumbnails.pdf(bundled_path(stem), folder / stem)
-            return await self.thumbnails.pages_of(pdf, folder / stem, pages) if pdf is not None else {}
-
-        # Together, because seven templates is seven LibreOffice conversions and they
-        # are what this costs: 31.5s of the 41.3s measured over the seven, against 9.9s
-        # of rasterising. The views' own gate still holds the conversions to two at a
-        # time, which is what keeps this from being the reason a build machine stalls.
-        done = await asyncio.gather(*(render(stem, pages) for stem, pages in wanted.items()))
-        shots: list[Path] = []
-        labels: list[str] = []
-        pictured: list[tuple[str, int]] = []
-        for (stem, pages), rendered in zip(wanted.items(), done, strict=True):
-            for number in pages:
-                if number in rendered:
-                    shots.append(rendered[number])
-                    labels.append(_cell(stem, number))
-                    pictured.append((stem, number))
-        if not shots:
-            return None
-        # Named after which pages are on it, not how many. A deck rebound from one
-        # bundled template to another is offered a different 34 pages, and a cache
-        # keyed on the count would hand it the first template's sheet -- showing the
-        # pages of the template it is now built in and hiding the ones it may borrow.
-        made = whole if pictured == offered else folder / f"sheet_{len(pictured)}_{_pictured_key(pictured)}.png"
-        if made.is_file() and made.stat().st_size > 0:
-            return made, pictured
-        try:
-            sheet = await asyncio.to_thread(
-                self.thumbnails.contact_sheet, shots, made, BORROW_SHEET_COLUMNS, labels=labels
-            )
-        except RenderError:
-            # One picture short of an offer the text still makes in full. The sentences
-            # are the capability; the sheet is what makes them choosable.
-            _log.warning("template: the borrowable reference sheet did not compose", exc_info=True)
-            return None
-        return sheet, pictured
 
     async def _as_renders(self, deck: Project, template: Any, payload: dict[str, Any]) -> str | ToolResult:
         """Every example page as pictures, plus the measured house style."""
@@ -561,30 +450,15 @@ class PptTemplateTool(Tool):
                 "layout carries none -- or keep it if it is the design rather than a stock photograph"
             )
         borrowable = self._borrowable(template.source)
-        borrowed = await self._borrow_sheet(deck, borrowable) if borrowable else None
-        borrow_sheet, pictured = borrowed if borrowed is not None else (None, [])
-        whole_offer = len(pictured) == len(borrowable)
         if borrowable:
-            payload["borrowable_pages"] = [said for _, _, said in borrowable]
+            payload["borrowable_pages"] = borrowable
             asks.append(
                 "for a page no example above can carry, borrow one of these pages from another bundled "
                 "template -- its colours and master become this deck's, only the arrangement comes across: "
-                + "; ".join(said for _, _, said in borrowable)
+                + "; ".join(borrowable)
                 + ". Clone it with `adapt(prs, prototype(bundled('<template>'), N), ...)` after "
                 "`from ppt_template import bundled`, and record both `borrowed: '<template>'` and "
                 "`prototype: N` on that page of the plan"
-                + (
-                    (
-                        f". The picture below shows all {len(pictured)} of them, one cell each, the plate on "
-                        "every cell reading as the key above"
-                        if whole_offer
-                        else f". The picture below shows {len(pictured)} of them, one cell each, the plate on "
-                        f"every cell reading as the key above; the other {len(borrowable) - len(pictured)} "
-                        "did not render on this host and are offered by the text above alone"
-                    )
-                    if borrow_sheet is not None
-                    else ""
-                )
                 + (f". {ink}" if (ink := borrow_ink_note(template.inventory, template.source)) else "")
             )
         asks.append(
@@ -675,62 +549,10 @@ class PptTemplateTool(Tool):
         blocks: list[Any] = []
         by_number = {number: role for role, number in named.items()}
         entries = {entry.number: entry for entry in listing}
-        shown_pages = sorted(renders)
-        legend = [_render_label(number, by_number.get(number), entries.get(number)) for number in shown_pages]
-        pages_sheet = await self._pages_sheet(folder, renders) if renders else None
-        if pages_sheet is not None:
-            blocks.append(
-                text_block(
-                    f"The {len(shown_pages)} example pages are one picture below, {SHEET_COLUMNS} to a row in "
-                    "page order, each cell carrying its page number on a dark plate at its top-left. What each "
-                    "one is:\n\n" + "\n\n".join(legend)
-                )
-            )
-            blocks.append(image_block(self.views.sheet_uri(pages_sheet)))
-        else:
-            for number, said in zip(shown_pages, legend, strict=True):
-                blocks.append(text_block(said))
-                blocks.append(image_block(self.views.data_uri(renders[number])))
-        if borrow_sheet is not None:
-            blocks.append(
-                text_block(
-                    (
-                        f"And the {len(pictured)} pages offered from the other bundled templates, "
-                        if whole_offer
-                        else f"And {len(pictured)} of the {len(borrowable)} pages offered from the other bundled "
-                        "templates -- the rest did not render here -- "
-                    )
-                    + f"{BORROW_SHEET_COLUMNS} to a row, each cell's plate naming the template and the page the "
-                    "way the key above does. Only their arrangement comes across when you clone one; the "
-                    "colours you see are their own template's and become this deck's."
-                )
-            )
-            blocks.append(image_block(self.views.sheet_uri(borrow_sheet)))
+        for number in sorted(renders):
+            blocks.append(text_block(_render_label(number, by_number.get(number), entries.get(number))))
+            blocks.append(image_block(self.views.data_uri(renders[number])))
         return _return.with_images(body, blocks)
-
-    async def _pages_sheet(self, folder: Path, renders: dict[int, Path]) -> Path | None:
-        """The template's example pages as one picture, or None when tiling is unavailable.
-
-        The cell's plate carries the page number this reply names, handed over rather
-        than parsed back out of the file name: the numbering an author answers in is
-        this listing's, and a subset or a renumbered render would make the two disagree.
-        """
-        numbers = sorted(renders)
-        made = folder / f"pages_sheet_{len(numbers)}.png"
-        try:
-            return await asyncio.to_thread(
-                self.thumbnails.contact_sheet,
-                [renders[number] for number in numbers],
-                made,
-                SHEET_COLUMNS,
-                labels=[str(number) for number in numbers],
-            )
-        except RenderError:
-            # Back to one picture per page, which is what this reply carried before the
-            # sheet: costlier and measurably no better, but a reply with no renders in
-            # it sends an author to read every example page as code.
-            _log.warning("template: the example-page sheet did not compose", exc_info=True)
-            return None
 
     async def _as_code(
         self, deck: Project, template: Any, pages: list[int], payload: dict[str, Any]
@@ -823,36 +645,6 @@ class PptTemplateTool(Tool):
         if imports:
             texts[0] = "\n".join(f"# {line}" for line in imports) + "\n" + texts[0]
         return _return.with_images(body, [text_block(text) for text in texts])
-
-
-def _cell(stem: str, number: int) -> str:
-    """What a borrowed page's cell says, and the key its sentence is written against.
-
-    The template's first word and the page, not a running index: the measured harness
-    numbered the cells 1..35 and spent a legend teaching the model to dereference them,
-    and the cell can simply say it. Short because it is painted over the page's own
-    top-left corner -- eight characters at a 768px cell, against thirty for the stem.
-    The first word is what tells the eight bundled templates apart.
-    """
-    return f"{str(stem).split('_')[0]} {int(number)}"
-
-
-def _pictured_key(pictured: list[tuple[str, int]]) -> str:
-    """A short stable name for exactly this set of pages on a sheet."""
-    said = ";".join(f"{stem}:{number}" for stem, number in pictured)
-    return hashlib.sha256(said.encode("utf-8")).hexdigest()[:8]
-
-
-def _by_stem(offers: list[tuple[str, int, str]]) -> dict[str, list[int]]:
-    """The offered pages grouped by template, each template's pages in offer order.
-
-    Grouped because rendering is per file: a template converted once answers every page
-    of it that is offered, and the offer list walks templates several pages at a time.
-    """
-    grouped: dict[str, list[int]] = {}
-    for stem, number, _ in offers:
-        grouped.setdefault(stem, []).append(number)
-    return grouped
 
 
 def _roster(template: Any) -> dict[str, Any]:

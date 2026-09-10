@@ -313,10 +313,6 @@ window.RavenIslands = {
      transcript's own `dag.get` seam, which is why it is not any of theirs. */
   view: {
     resume: resume.resume,
-    /* The graph alone. The parked path in the live layer restores a
-       conversation from detached DOM and must not replay the desk's opens, but
-       its graph still needs re-reading -- see shell/resume.ts. */
-    refreshDag: resume.refreshDag,
     landing: resume.landing,
     /* Started by the live layer once the pointer is real; see shell/resume.ts. */
     watch: resume.watch,
