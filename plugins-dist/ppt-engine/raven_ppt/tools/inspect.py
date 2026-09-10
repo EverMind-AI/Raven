@@ -319,11 +319,12 @@ class PptFigureInspectTool(Tool):
         return declined, unseen
 
     def _shown(self, path: Path, out_dir: Path) -> Path | None:
-        """The figure as a PNG this tool can hand over.
+        """The figure as a PNG this tool can hand over, or None when it will not decode.
 
-        Converted rather than passed through: the encoder labels whatever it sends
-        as `image/png`, and a JPEG announced as a PNG is the kind of thing that
-        works until it does not.
+        Converted rather than passed through: this is where a figure the project
+        cannot decode is found out, and the caller reports it as unreadable instead
+        of sending it. The label on the wire is no longer the reason -- `stages/_views`
+        names the media type it encoded.
         """
         if not path.is_file():
             return None

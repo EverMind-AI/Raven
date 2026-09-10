@@ -19,6 +19,7 @@ state between calls.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -44,7 +45,14 @@ class DeckRenderer(Protocol):
 
     def page_count(self, pdf: Path) -> int: ...
 
-    def contact_sheet(self, pngs: list[Path], out: Path, columns: int = ...) -> Path: ...
+    def contact_sheet(
+        self,
+        pngs: list[Path],
+        out: Path,
+        columns: int = ...,
+        *,
+        labels: Sequence[str] | None = ...,
+    ) -> Path: ...
 
 
 @dataclass(frozen=True)
@@ -60,6 +68,7 @@ class LocalDeckRenderer:
     poppler_timeout_s: float = pdf_reader.DEFAULT_POPPLER_TIMEOUT_S
     dpi: int = pdf_reader.DEFAULT_DPI
     contact_sheet_max_edge: int = sheet.DEFAULT_MAX_EDGE
+    contact_sheet_cell_width: int = sheet.DEFAULT_CELL_WIDTH
 
     def available(self) -> RenderCapabilities:
         return available(soffice=self.soffice)
@@ -85,5 +94,19 @@ class LocalDeckRenderer:
     def page_count(self, pdf: Path) -> int:
         return pdf_reader.page_count(pdf, timeout_s=self.poppler_timeout_s)
 
-    def contact_sheet(self, pngs: list[Path], out: Path, columns: int = sheet.DEFAULT_COLUMNS) -> Path:
-        return sheet.contact_sheet(pngs, out, columns, max_edge=self.contact_sheet_max_edge)
+    def contact_sheet(
+        self,
+        pngs: list[Path],
+        out: Path,
+        columns: int = sheet.DEFAULT_COLUMNS,
+        *,
+        labels: Sequence[str] | None = None,
+    ) -> Path:
+        return sheet.contact_sheet(
+            pngs,
+            out,
+            columns,
+            cell_width=self.contact_sheet_cell_width,
+            max_edge=self.contact_sheet_max_edge,
+            labels=labels,
+        )
