@@ -236,7 +236,6 @@ class PluginManifest(_ManifestBase):
     display_name: str | None = None
     raven: str | None = None  # the host version the plugin declares; nothing enforces it
     bundled: bool = False
-    enabled_by_default: bool = False
     contributes: Contributes = Field(default_factory=Contributes)
     config_schema: dict[str, Any] = Field(default_factory=dict)
 

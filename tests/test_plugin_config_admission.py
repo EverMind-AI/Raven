@@ -69,7 +69,7 @@ def _registry_with(tmp_path, schema_toml: str):
     plug = tmp_path / "plugins" / "demo"
     plug.mkdir(parents=True)
     plug.joinpath("raven-plugin.toml").write_text(
-        '[plugin]\nid = "demo"\nversion = "1.0"\nenabled_by_default = true\n'
+        '[plugin]\nid = "demo"\nversion = "1.0"\n'
         "[[plugin.contributes.memory_backends]]\n"
         'name = "demo"\nfactory = "demo_mod:make"\n' + schema_toml
     )

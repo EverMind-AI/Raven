@@ -31,7 +31,6 @@ class TestMinimalManifest:
         assert mf.version == "0.1.0"
         # Defaults
         assert mf.bundled is False
-        assert mf.enabled_by_default is False
         assert mf.contributes.memory_backends == []
         assert mf.config_schema == {}
 
@@ -217,22 +216,32 @@ class TestMemoryBackends:
 
 
 # ---------------------------------------------------------------------------
-# Bundled / enabled_by_default / config_schema passthrough
+# Bundled / config_schema passthrough
 # ---------------------------------------------------------------------------
 
 
 class TestFlagsAndSchema:
-    def test_bundled_and_default_enabled(self) -> None:
+    def test_bundled_flag(self) -> None:
         toml = textwrap.dedent("""
             [plugin]
             id = "everos-memory"
             version = "0.1.0"
             bundled = true
-            enabled_by_default = true
         """)
         mf = PluginManifest.from_toml_str(toml)
         assert mf.bundled is True
-        assert mf.enabled_by_default is True
+
+    def test_a_legacy_enabled_by_default_key_still_parses(self) -> None:
+        """``extra="ignore"`` lets an old manifest with the removed key
+        keep working: the key is dropped, not stored as an attribute."""
+        toml = textwrap.dedent("""
+            [plugin]
+            id = "everos-memory"
+            version = "0.1.0"
+            enabled_by_default = true
+        """)
+        mf = PluginManifest.from_toml_str(toml)
+        assert not hasattr(mf, "enabled_by_default")
 
     def test_config_schema_passthrough(self) -> None:
         toml = textwrap.dedent("""

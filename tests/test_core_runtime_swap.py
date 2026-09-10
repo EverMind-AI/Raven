@@ -80,7 +80,7 @@ def _install_demo_plugin(root: Path) -> Path:
     plug = root / "plugins" / "swapdemo"
     plug.mkdir(parents=True)
     plug.joinpath("raven-plugin.toml").write_text(
-        '[plugin]\nid = "swapdemo"\nversion = "1.0"\nenabled_by_default = true\n'
+        '[plugin]\nid = "swapdemo"\nversion = "1.0"\n'
         "[[plugin.contributes.memory_backends]]\n"
         'name = "swapdemo"\nfactory = "swapdemo_backend:make"\n'
     )

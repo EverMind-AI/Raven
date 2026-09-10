@@ -53,14 +53,12 @@ def _make_discovered(
     *,
     backends: list[tuple[str, str]] | None = None,
     onboard: list[tuple[str, str]] | None = None,
-    enabled: bool = True,
     bundled: bool = False,
 ) -> DiscoveredPlugin:
     mf = PluginManifest(
         id=plugin_id,
         version="0.1.0",
         bundled=bundled,
-        enabled_by_default=enabled,
         contributes=Contributes(
             memory_backends=[MemoryBackendContribution(name=n, factory=f) for n, f in (backends or [])],
             onboard=[OnboardContribution(name=n, factory=f) for n, f in (onboard or [])],
@@ -156,7 +154,7 @@ class TestEnablement:
         assert reg.activated_ids() == []
         assert reg.memory_backend_names() == []
 
-    def test_non_default_plugin_is_skipped(self) -> None:
+    def test_every_discovered_plugin_not_disabled_is_activated(self) -> None:
         def fake_factory(ctx):
             return "x"
 
@@ -169,11 +167,10 @@ class TestEnablement:
                     backends=[
                         ("everos", "_test_plugin_d:make_backend"),
                     ],
-                    enabled=False,
                 ),
             ]
         )
-        assert reg.activated_ids() == []
+        assert reg.activated_ids() == ["plug"]
 
 
 # ---------------------------------------------------------------------------

@@ -3,11 +3,11 @@
 Two responsibilities, split deliberately:
 
 1. **Activation** (:meth:`activate`) — for each discovered plugin
-   admitted by the user's config (``plugins.disabled`` opt-out list +
-   ``enabled_by_default`` flag), resolve each contributed factory
-   reference (``module.path:callable``) into an actual callable and
-   record it in the factory table. This is where plugin Python code is
-   first imported — manifests up to this point have been pure data.
+   admitted by the user's config (``plugins.disabled`` opt-out list),
+   resolve each contributed factory reference (``module.path:callable``)
+   into an actual callable and record it in the factory table. This is
+   where plugin Python code is first imported — manifests up to this
+   point have been pure data.
 
 2. **Lookup** (:meth:`get_memory_backend_factory` etc.) — the synchronous
    lookups the assembly root builds a backend through.
@@ -103,23 +103,12 @@ class PluginRegistry:
     ) -> None:
         """Resolve and register every contribution from every admitted plugin.
 
-        A plugin is admitted iff:
-
-        - its id is not in ``disabled`` (user opt-out), AND
-        - ``enabled_by_default`` is True OR the host has another reason
-          to include it. PG-2 enforces only the first rule; PG-3 layers
-          on the second when wired to the user config.
+        A plugin is admitted iff its id is not in ``disabled``.
         """
         for d in discovered:
             mf = d.manifest
             if mf.id in disabled:
                 logger.info("plugin %s disabled by user config", mf.id)
-                continue
-            if not mf.enabled_by_default:
-                logger.info(
-                    "plugin %s not enabled by default; skipping (use explicit opt-in once supported)",
-                    mf.id,
-                )
                 continue
             self._activate_one(mf, source=d.source, location=d.location)
 
