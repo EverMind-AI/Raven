@@ -11,6 +11,7 @@ import {
   dagLineName,
   dagLineStats,
   isDagRunActive,
+  isHereLine,
   stripLines,
   stripRowLabel,
   stripRows
@@ -179,8 +180,7 @@ const inst = (over: Partial<InstanceRow> & Pick<InstanceRow, 'agent' | 'handle'>
   ...over
 })
 
-const rowLines = (lines: ReturnType<typeof stripLines>['lines']) =>
-  lines.flatMap(l => (l.kind === 'row' ? [l] : []))
+const rowLines = (lines: ReturnType<typeof stripLines>['lines']) => lines.flatMap(l => (l.kind === 'row' ? [l] : []))
 
 describe('stripLines — instance rows', () => {
   const targetsOf = (lines: ReturnType<typeof stripLines>['lines']) =>
@@ -257,7 +257,14 @@ describe('stripLines — instance rows', () => {
   })
 
   it('synthesizes the graph header from the rows themselves after a resume', () => {
-    const a = inst({ agent: 'Coder', createdAtMs: 1, handle: 'node-a', nodeId: 'a', runId: 'run-9', runTitle: 'ship the site' })
+    const a = inst({
+      agent: 'Coder',
+      createdAtMs: 1,
+      handle: 'node-a',
+      nodeId: 'a',
+      runId: 'run-9',
+      runTitle: 'ship the site'
+    })
     const b = inst({ agent: 'Writer', createdAtMs: 2, handle: 'node-b', nodeId: 'b', runId: 'run-9' })
     const { lines } = stripLines([], [], [a, b], null)
     const header = lines.find(l => l.kind === 'dag')
@@ -318,5 +325,57 @@ describe('stripLines — instance rows', () => {
 
     expect(targetsOf(lines)).toEqual(['Raven', 'busy1', 'busy2', 'idle1', 'idle2'])
     expect(overflow).toBe(0)
+  })
+})
+
+describe('isHereLine', () => {
+  const hereOf = (lines: ReturnType<typeof stripLines>['lines'], active: Parameters<typeof stripLines>[3]) =>
+    lines.filter(l => isHereLine(l, active)).map(l => (l.kind === 'row' ? (l.target?.handle ?? 'Raven') : 'dag'))
+
+  it('marks the way-back row while the main conversation is the one on screen', () => {
+    const { lines } = stripLines([], [], [inst({ agent: 'Coder', handle: 'h1' })], null)
+
+    expect(hereOf(lines, null)).toEqual(['Raven'])
+  })
+
+  it('moves to the instance the user switched into, and off the way back', () => {
+    const active = { agent: 'Coder', handle: 'h1' }
+    const { lines } = stripLines([], [], [inst({ agent: 'Coder', handle: 'h1' })], active)
+
+    expect(hereOf(lines, active)).toEqual(['h1'])
+  })
+
+  it('tells two instances of the same agent apart', () => {
+    const active = { agent: 'Coder', handle: 'h2' }
+    const instances = ['h1', 'h2'].map((handle, i) => inst({ agent: 'Coder', createdAtMs: i, handle }))
+    const { lines } = stripLines([], [], instances, active)
+
+    expect(hereOf(lines, active)).toEqual(['h2'])
+  })
+
+  it('marks an instance kept under its own graph line', () => {
+    const active = { agent: 'Coder', handle: 'h1' }
+    const { lines } = stripLines(
+      [],
+      [dagRun({ runId: 'run-1' })],
+      [inst({ agent: 'Coder', handle: 'h1', runId: 'run-1' })],
+      active
+    )
+
+    expect(hereOf(lines, active)).toEqual(['h1'])
+  })
+
+  it('marks nothing a click cannot switch to: graph lines and loose spawn rows', () => {
+    const { lines } = stripLines([row({ agent: 'Coder', id: 'task-1', status: 'running' })], [dagRun()], [], null)
+
+    expect(hereOf(lines, null)).toEqual([])
+  })
+
+  it('always has a row to mark, since the active target is never dropped', () => {
+    const active = { agent: 'Coder', handle: 'h4' }
+    const instances = ['h1', 'h2', 'h3', 'h4'].map((handle, i) => inst({ agent: 'Coder', createdAtMs: i, handle }))
+    const { lines } = stripLines([], [], instances, active)
+
+    expect(hereOf(lines, active)).toEqual(['h4'])
   })
 })

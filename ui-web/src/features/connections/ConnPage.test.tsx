@@ -952,6 +952,17 @@ describe('connections island', () => {
     expect(document.querySelector('#connBody .free')).toBeNull()
   })
 
+  /* `SetupGroup` grew an optional fold for the sub-agents page's catalogue.
+     This page's groups are an inventory of what is wired, not a catalogue to
+     get through, and did not ask for it -- so the heading is what it always
+     was, and both rows stay on screen. */
+  it('has no fold on its group headings', async () => {
+    install([chan({ on: true, running: true }), chan({ id: 'telegram', name: 'Telegram' })])
+    await mount()
+    expect(document.querySelector('#connBody .sugrp .hd .gfold')).toBeNull()
+    expect([...document.querySelectorAll('#connBody .surow')].length).toBe(2)
+  })
+
   /* The same centred card every module's detail is. It was briefly a side
      drawer, which made this the one set-up surface with a shape of its own. */
   it('draws the configure surface as the shared centred card', async () => {

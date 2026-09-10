@@ -8,10 +8,12 @@
 // addressable instance while resumable, running or idle -- are the job the
 // chips row above the composer used to do: clicking one switches Direct Chat
 // to it, the `Raven` row leading the strip is the way back to the main
-// conversation, and the composer's own top border, not the strip, says which
-// one is active. A graph line per `run_subagent_dag` run carries that run's
-// tally and stays after the run is over, so a finished fan-out leaves
-// something behind; under each, an agent line per running or queued node, then
+// conversation, and the row the user is on carries a gutter bar -- the same
+// fact the composer's top border states at the point of typing, said here
+// against the list so the name up there can be read back to a row.
+//
+// A graph line per `run_subagent_dag` run carries that run's tally and stays
+// after the run is over, so a finished fan-out leaves something behind; under each, an agent line per running or queued node, then
 // the instances the graph fanned out -- kept indented there after the run, the
 // header rebuilt from the rows themselves after a resume. The loose spawns
 // leave as each one settles.
@@ -51,6 +53,8 @@ const MAX_IDLE_INSTANCE_ROWS = 2
  *  with the flat budget, so one large fan-out neither hides every other
  *  instance nor stacks its whole roster under its own line. */
 const MAX_IDLE_RUN_INSTANCE_ROWS = 2
+/** The gutter bar on the row whose conversation is on screen. */
+const HERE_BAR = '▌'
 
 /** How long a settled agent line stays on the strip. 0 -- the default -- is the
  *  shipped behaviour: the agent layer shows what is in flight and nothing else.
@@ -98,6 +102,17 @@ export const stripRows = (
 export type StripLine =
   | { indent: boolean; kind: 'row'; row: LiveAgentRow; target?: DirectTargetRef | null }
   | { kind: 'dag'; run: LiveDagRun }
+
+/** Whether a line is the conversation on screen.
+ *
+ *  Not `isDirectTarget` alone: that answers false for two nulls, and the main
+ *  row -- the one carrying `target: null` -- is exactly the null case. A line
+ *  with no `target` at all opens the Agents Overlay rather than a chat, so it
+ *  is never somewhere the user can be. */
+export const isHereLine = (line: StripLine, active: DirectTargetRef | null): boolean =>
+  line.kind === 'row' &&
+  line.target !== undefined &&
+  (line.target === null ? active === null : isDirectTarget(active, line.target))
 
 /** The way back to the main conversation, heading the instance layer whenever
  *  that layer is non-empty. What the chips row's first chip always was: a strip
@@ -181,8 +196,7 @@ export const stripLines = (
   const switchable = instances
     .filter(
       r =>
-        r.kind !== 'dag-node' &&
-        (r.resumable === true || isDirectTarget(active, { agent: r.agent, handle: r.handle }))
+        r.kind !== 'dag-node' && (r.resumable === true || isDirectTarget(active, { agent: r.agent, handle: r.handle }))
     )
     .sort((a, b) => (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0))
 
@@ -410,25 +424,31 @@ export function LiveAgentsStrip({ cols, t }: { cols: number; t: Theme }) {
 
   return (
     <Box flexDirection="column">
-      {lines.map(line =>
-        line.kind === 'dag' ? (
-          <Box
-            key={`dag:${line.run.runId}`}
-            // On the Box, not the Text: only Box carries mouse props in this
-            // renderer, so a handler on the Text is silently never called.
-            onClick={() => openAgentsOverlay()}
-          >
-            <Text color={t.color.muted} wrap="truncate-end">
-              {'  '}
-              <Text color={isDagRunActive(line.run) ? t.color.accent : t.color.muted}>
-                {isDagRunActive(line.run) ? '◆' : '◇'}
-              </Text>{' '}
-              <Text color={t.color.label}>dag</Text>{' '}
-              <Text color={t.color.text}>{dagLineName(line.run, cols - 48)}</Text>
-              {dagLineStats(line.run, now) === '' ? '' : ` · ${dagLineStats(line.run, now)}`}
-            </Text>
-          </Box>
-        ) : (
+      {lines.map(line => {
+        if (line.kind === 'dag') {
+          return (
+            <Box
+              key={`dag:${line.run.runId}`}
+              // On the Box, not the Text: only Box carries mouse props in this
+              // renderer, so a handler on the Text is silently never called.
+              onClick={() => openAgentsOverlay()}
+            >
+              <Text color={t.color.muted} wrap="truncate-end">
+                {'  '}
+                <Text color={isDagRunActive(line.run) ? t.color.accent : t.color.muted}>
+                  {isDagRunActive(line.run) ? '◆' : '◇'}
+                </Text>{' '}
+                <Text color={t.color.label}>dag</Text>{' '}
+                <Text color={t.color.text}>{dagLineName(line.run, cols - 48)}</Text>
+                {dagLineStats(line.run, now) === '' ? '' : ` · ${dagLineStats(line.run, now)}`}
+              </Text>
+            </Box>
+          )
+        }
+
+        const here = isHereLine(line, direct.active)
+
+        return (
           <Box
             key={line.row.id}
             onClick={() => {
@@ -440,11 +460,18 @@ export function LiveAgentsStrip({ cols, t }: { cols: number; t: Theme }) {
             }}
           >
             <Text color={t.color.muted} wrap="truncate-end">
-              {line.indent ? '    ' : '  '}
+              {/* Nothing else ever draws in the gutter column, so the bar reads
+                  as a position rather than as a colour, and the bullet beside
+                  it is left saying status alone. One cell either way, so the
+                  labels keep their column and their truncation budget. */}
+              {here ? <Text color={t.color.accent}>{HERE_BAR}</Text> : ' '}
+              {line.indent ? '   ' : ' '}
               <Text color={line.row.status === 'running' ? t.color.accent : t.color.muted}>
                 {line.row.status === 'running' ? '●' : '○'}
               </Text>{' '}
-              <Text color={t.color.text}>{stripRowLabel(line.row, cols - 24)}</Text>
+              <Text bold={here} color={here ? t.color.accent : t.color.text}>
+                {stripRowLabel(line.row, cols - 24)}
+              </Text>
               {!line.indent && line.row.kind === 'dag-node' ? <Text color={t.color.label}> dag</Text> : null}
               {line.row.status === 'running' && line.row.startedAtMs !== undefined
                 ? ` ${fmtDuration(now - line.row.startedAtMs)}`
@@ -453,7 +480,7 @@ export function LiveAgentsStrip({ cols, t }: { cols: number; t: Theme }) {
             </Text>
           </Box>
         )
-      )}
+      })}
 
       {overflow > 0 ? (
         <Box onClick={() => openAgentsOverlay()}>

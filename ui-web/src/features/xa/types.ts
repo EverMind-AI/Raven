@@ -18,7 +18,7 @@ export interface XaRow {
   kind: XaKind | string
   configured: boolean
   /* A built-in agent is this process. It has no row to write, which is why
-     `configured` is false on one and why the two lists below filter it out:
+     `configured` is false on one and why the connect paths below leave it out:
      not writing a row is what "use the default" means. */
   builtin?: boolean
   /* Discovered under the `agents/` product tree rather than written into

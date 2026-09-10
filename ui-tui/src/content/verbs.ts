@@ -19,20 +19,31 @@ export const TOOL_VERBS: Record<string, string> = {
   write_file: 'writing'
 }
 
+// What the status ticker says while a turn runs. Ordered as one round of work
+// -- arrive, gather, work, converge -- rather than by how close the words are
+// in meaning: at one word every 2.5s a reader sees most of the list in a single
+// turn, and fifteen synonyms for "thinking" in a row read as a thesaurus.
+//
+// Each one is true of a raven and true of the agent. Not a filter list: these
+// words never censor a model's reasoning, which is why an ordinary word like
+// `tracing` is safe here (see `tickerNoise.ts`).
+//
+// `remembering` is the one that fits best and cannot be used -- `TOOL_VERBS`
+// already spends it on the memory tool, and the ticker would then say the same
+// word for "thinking" and for "calling a tool".
 export const VERBS = [
-  'pondering',
-  'contemplating',
-  'musing',
-  'cogitating',
-  'ruminating',
-  'deliberating',
-  'mulling',
-  'reflecting',
-  'processing',
-  'reasoning',
-  'analyzing',
-  'computing',
-  'synthesizing',
-  'formulating',
-  'brainstorming'
+  'circling',
+  'scouting',
+  'gathering',
+  'sifting',
+  'tracing',
+  'turning',
+  'weighing',
+  'prying',
+  'homing',
+  'tallying',
+  'caching',
+  'watching',
+  'perching',
+  'plotting'
 ]
