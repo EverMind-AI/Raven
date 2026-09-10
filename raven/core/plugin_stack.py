@@ -223,12 +223,18 @@ def maybe_build_memory_backend(
             "entry-point group. Continuing without a plugin backend.",
             name,
         )
-        from rich.console import Console
-
-        Console(stderr=True).print(
-            f"[yellow]Long-term memory is off: memory.backend={name!r} but no installed plugin provides it "
-            f"(installed: {', '.join(registry.memory_backend_names()) or 'none'}).[/yellow]"
+        # Said to the user, not only to the log: a backend the config names and
+        # nothing provides is the hardest "no memory" to diagnose. Through the
+        # host's notifier when it lent one, else plain stderr -- this layer
+        # renders through no terminal toolkit.
+        message = (
+            f"Long-term memory is off: memory.backend={name!r} but no installed plugin provides it "
+            f"(installed: {', '.join(registry.memory_backend_names()) or 'none'})."
         )
+        if notify is not None:
+            notify(message)
+        else:
+            print(message, file=sys.stderr)
         return None
     except Exception as e:
         # Factory raised during construction: log and degrade rather
