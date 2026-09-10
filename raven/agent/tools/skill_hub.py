@@ -16,10 +16,11 @@ registers wherever the registry does and needs no Hub endpoint.
 catalog, so it should not reason about provenance — it calls ``use_skill`` with
 the qualified id and the tool dispatches on the ``<source>/`` prefix:
 
-- ``local/<name>`` / ``everos/<id>`` — already materialized on disk (Everos
-  skills are written to ``<workspace>/skills/everos/<id>/`` by the evolver);
-  resolve the skill dir via the registry and return its ``scripts/`` path. No
-  download — for these sources ``use_skill`` is effectively a no-op resolver.
+- ``local/<name>`` / ``<memory-backend>/<id>`` — already materialized on disk
+  (the configured memory backend writes its extracted skills into
+  ``<workspace>/skills/<memory-backend>/<id>/``); resolve the skill dir via
+  the registry and return its ``scripts/`` path. No download — for these
+  sources ``use_skill`` is effectively a no-op resolver.
 - ``hub/<slug>`` — download + safely extract the zip into the workspace skill
   tree (so it becomes registry-discoverable), then return the ``scripts/`` path.
 
@@ -220,7 +221,7 @@ class UseSkillTool(Tool):
         return (
             "Make a skill's bundled scripts/assets available on local disk so "
             "you can run them via the exec tool. Pass the skill's qualified id "
-            "from the '# Skills' catalog (e.g. 'local/x', 'everos/x', "
+            "from the '# Skills' catalog (e.g. 'local/x', '<memory-backend>/x', "
             "'hub/x'). Returns the SKILL.md body plus a 'scripts_dir' path when "
             "the skill ships runnable files. Pure-instruction skills need no "
             "scripts — just follow the body; you only need this for skills "

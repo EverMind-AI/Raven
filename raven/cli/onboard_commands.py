@@ -1957,7 +1957,10 @@ def _step4_memory(
         )
         if outcome is StepOutcome.BACK:
             return _BACK
-        set_memory_backend(name if outcome is StepOutcome.CONFIGURED else None)
+        if outcome is StepOutcome.CONFIGURED:
+            set_memory_backend(name)
+            return None
+    set_memory_backend(None)
     return None
 
 
