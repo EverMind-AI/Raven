@@ -218,6 +218,13 @@ const dispatchDirect = (
       disarmEscape(target)
       patchUiState({ status: 'ready' })
       sys?.(`${target.agent}/${target.handle}: ${message}`)
+      // As `message.complete` does: this end of a turn moves the instance's
+      // registry row too -- the manager writes `cancelled` or `failed` where a
+      // clean turn writes `completed`. Without the re-read the strip keeps the
+      // `running` row it took at `message.start`, so an interrupted instance
+      // goes on showing a filled bullet and its view goes on polling for the
+      // steps of a turn that ended.
+      scheduleInstanceRefresh()
       return
     }
     default:

@@ -49,23 +49,27 @@ FORK_CONFIG_INTENT = {
 #: The engine wheel's three contributions, admitted by the rendered slice.
 ENGINE_TOOLS = {"preview_file", "render_file", "update_task_state"}
 
+#: Four trunk rows the fork face never had, un-gated for this product: the
+#: roster tells the host to leave a brief's gaps to the agent, so it needs
+#: ask_user to collect them, and the domain Skills are reached by name rather
+#: than by the selector's cards alone. tool_call/tool_search need
+#: tools.toolSearch.enabled as well, which the config now sets.
+UNGATED = {"ask_user", "find_skill", "tool_call", "tool_search"}
+
 #: The host image section makes image_generate available in the grounded render.
-VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | ENGINE_TOOLS | {"image_generate"}
+VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | ENGINE_TOOLS | UNGATED | {"image_generate"}
 KEY_GATED = {"web_search"}
 
-#: Trunk-born names the fork face never had; every one held out by a config
-#: row (the w96 ledger discipline). tool_call/tool_search additionally keep
-#: the fork's face by default (tools.toolSearch never set).
+#: Trunk-born names the fork face never had and this product still holds out;
+#: every one by a config row (the w96 ledger discipline). The three that left
+#: this set are in ``UNGATED``.
 TRUNK_HELD_OUT = {
     "create_playbook",
     "deliver_files",
-    "find_skill",
     "hub",
     "load_playbook",
     "plugin",
     "run_subagent_dag",
-    "tool_call",
-    "tool_search",
 }
 
 
@@ -112,32 +116,34 @@ def _render(grounded) -> dict:
 
 
 def test_the_roster_row_carries_the_forks_identity_verbatim():
-    """The lane flips cli -> acp (the verdict's feature 10); everything the
-    fork row said about WHO this agent is -- description, ownership, everos
-    identity pair -- is carried byte-for-byte. The fork's recommendedLlm is
-    not: this product runs on the host's LLM and its launcher reads no key of
-    its own, and a recommended model in the manifest is what told the wizard
-    to take one and certify a product that could not start."""
+    """The lane flips cli -> acp (the verdict's feature 10); the fork row's
+    identity pair -- name, everos, output cap, timeout -- is carried
+    byte-for-byte. Its description and owns are not: those two are rendered
+    three times a turn (the spawn and DAG tool descriptions, and the skill
+    gate), so this row states capability and role and leaves procedure to the
+    engine's Skills. The fork's recommendedLlm is dropped as well: this product
+    runs on the host's LLM and its launcher reads no key of its own, and a
+    recommended model in the manifest is what told the wizard to take one and
+    certify a product that could not start."""
     ours = json.loads((RUN_PY.parent / "subagent.json").read_text())
     fork = json.loads((FORK / "subagent.json").read_text())
 
     assert ours["kind"] == "acp" and fork["kind"] == "cli"
     for field in ("name", "everos", "maxOutputChars", "timeout"):
         assert ours[field] == fork[field], field
-    # The fork's text, plus the deck lane this row fronts: the deck agent is
-    # hidden behind it (see ``routes``), so the only place the dispatching model
-    # can learn that decks go here is this row. The briefing sentence is scoped
-    # to visual work, because a deck is briefed the opposite way (the deck agent
-    # asks the user itself; see the ppt launcher test on the measured harm).
-    assert ours["owns"].startswith(fork["owns"])
-    briefed = fork["description"].replace("Brief it with", "For visual work, brief it with")
-    assert briefed != fork["description"] and ours["description"].startswith(briefed)
-    assert ".pptx" in ours["description"] and ".pptx" in ours["owns"]
-    assert "in the user's own words" in ours["description"]
-    assert [route["to"] for route in ours["routes"]] == ["Raven-PPT"]
-    assert ours["routes"][0]["match"], (
-        "a deck names its deliverable; the match pattern is what makes that route certain"
+    # The deck agent is hidden behind this row (see ``routes``), so this row is
+    # the only place the dispatching model can learn that decks go here, and the
+    # only place left to state how a deck is briefed: the opposite way round
+    # from visual work, because the deck agent asks the user itself (see the ppt
+    # launcher test on the measured harm).
+    assert "slide deck" in ours["description"] and "slide deck" in ours["owns"]
+    assert "hand it the user's request in the user's own words" in ours["description"]
+    assert "Do not fill in what the user did not say" in ours["description"]
+    assert len(ours["description"]) <= 700, (
+        "rendered three times a turn; procedure belongs in the engine's Skills, not here"
     )
+    assert [route["to"] for route in ours["routes"]] == ["Raven-PPT"]
+    assert ours["routes"] == [{"to": "Raven-PPT"}]
     assert "recommendedLlm" not in ours and "recommendedLlm" in fork
     assert ours["command"] == "{PYTHON} {SUBAGENT_DIR}/run.py --acp"
     assert ours["cwd"] == "{SUBAGENT_DIR}"
@@ -161,16 +167,22 @@ def test_the_config_ports_the_forks_leaves_onto_the_trunk_schema():
     assert ours["language"] == fork["language"] == "zh"
     assert "providers" not in ours
     assert not {"model", "provider", "reasoningEffort"} & ours["agents"]["defaults"].keys()
-    # The fork's seven disable rows survive whole; the nine extras are the
-    # swap ledger's trunk-born names, held out of the face by config rather
-    # than luck (the w96 discipline). emit_session_title is deliberately NOT
+    # Six of the fork's seven disable rows survive; ask_user is dropped on
+    # purpose, because the roster row tells the host to leave a brief's gaps
+    # to this agent and only ask_user can collect them. The six extras are the
+    # swap ledger's trunk-born names still held out of the face by config
+    # rather than by luck (the w96 discipline). emit_session_title is deliberately NOT
     # among them: it is the session-namer's side-call schema, not a loop
     # registration, so the hermetic face structurally cannot see it and need
     # not -- the live acp lane adds it beside the pinned face, one call per
     # new session (the same +1 ppt's A/B measured; owner adjudicated it a
     # host gain, and that ruling carries forward).
-    assert set(fork["tools"]["disabledTools"]) <= set(ours["tools"]["disabledTools"])
+    assert set(fork["tools"]["disabledTools"]) - set(ours["tools"]["disabledTools"]) == {"ask_user"}
     assert set(ours["tools"]["disabledTools"]) - set(fork["tools"]["disabledTools"]) == TRUNK_HELD_OUT
+    assert not UNGATED & set(ours["tools"]["disabledTools"])
+    assert ours["tools"]["toolSearch"] == {"enabled": True}, (
+        "tool_call/tool_search register on this, not on the disable row"
+    )
     # The launcher hands the product the host's ``tools.web`` wholesale, so a
     # leaf of its own here could never take effect; the trunk config carries none.
     assert "web" not in ours["tools"]

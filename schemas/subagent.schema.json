@@ -76,13 +76,8 @@
       "type": "object"
     },
     "SubagentRouteConfig": {
-      "description": "One row a spawn addressed to the declaring row may be redirected to.\n\n``match`` is a regular expression searched in the task text (case-insensitive);\na hit routes there without a model call. Empty, the target is offered to the\nhost's classifier only.",
+      "description": "One candidate target offered to the host's route classifier.",
       "properties": {
-        "match": {
-          "default": "",
-          "title": "Match",
-          "type": "string"
-        },
         "to": {
           "title": "To",
           "type": "string"

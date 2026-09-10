@@ -1653,15 +1653,9 @@ ACP_PROMPT_PLACEHOLDERS: tuple[str, ...] = ("{prompt}", "{prompt_file}", "{agent
 
 
 class SubagentRouteConfig(Base):
-    """One row a spawn addressed to the declaring row may be redirected to.
-
-    ``match`` is a regular expression searched in the task text (case-insensitive);
-    a hit routes there without a model call. Empty, the target is offered to the
-    host's classifier only.
-    """
+    """One candidate target offered to the host's route classifier."""
 
     to: str
-    match: str = ""
 
 
 class ThirdPartyAcpSubagentConfig(Base):

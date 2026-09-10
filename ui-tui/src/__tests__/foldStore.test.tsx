@@ -55,12 +55,15 @@ describe('foldStore', () => {
 })
 
 describe('EpisodeView folds', () => {
-  it('renders a call detail only once its fold is open', () => {
+  it('opens a short result unasked, and lets a click shut it', () => {
     const eps = episodes([tool('c1', 'ls -la', 'total 42')])
 
-    expect(frame(eps, 'v1')).not.toContain('total 42')
-    toggleFold('v1', 'seg:c1')
+    // The card answers its own default now (see cardDefaultOpen); the fold is
+    // what overrides it. The toggle has to be told that default, or the first
+    // click "opens" what is already open and the card does not move.
     expect(frame(eps, 'v1')).toContain('total 42')
+    toggleFold('v1', 'seg:c1', true)
+    expect(frame(eps, 'v1')).not.toContain('total 42')
   })
 
   it('survives the row being replaced by a poll', () => {
@@ -107,11 +110,14 @@ describe('EpisodeView folds', () => {
   })
 
   it('does not leak a fold into another instance view', () => {
-    toggleFold('v1', 'seg:c1')
     const eps = episodes([tool('c1', 'ls -la', 'total 42')])
 
-    expect(frame(eps, 'v1')).toContain('total 42')
-    expect(frame(eps, 'v2')).not.toContain('total 42')
+    // Both views open this card by default, so a close is the decision that
+    // would leak -- which is the half `foldStore` keeps a `closed` set for.
+    toggleFold('v1', 'seg:c1', true)
+
+    expect(frame(eps, 'v1')).not.toContain('total 42')
+    expect(frame(eps, 'v2')).toContain('total 42')
   })
 })
 

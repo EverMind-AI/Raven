@@ -51,7 +51,9 @@ HTML、SVG、图表、地图、控件或动画只是实现形式，不能决定�
   生成 → 描摹流程，并在 README 写明它是本次新建。
 
 主体的标识与其上级 / 出品方的标识分两层，各归各位：署名位（"by X"、页脚、开源角标）用出品方的官方标，主体位
-不借出品方符号；主体只有字标没有符号时，favicon / 头像从字标字形派生并注明来源。
+不借出品方符号；主体只有字标没有符号时，favicon / 头像优先直接提取已有字形并注明来源。
+直接提取可以裁切、等比缩放、适配画布，不能增造轮廓。若需要新形状，转品牌 Skill，以已有品牌资产作为
+`image_generate(images=[...])` 的参考生成／编辑候选，再从选定母图矢量化；不由模型手写几何替代。
 
 ## 2. 使用轻量工作状态，而不是完成度叙事
 
@@ -155,7 +157,10 @@ CONTRACT
 母版或状态、可重复构建/导出，以及消费者结果。
 
 代表画面前按[素材与图像生成](references/assets-and-imagegen.md)先定义整页图像角色，再为每个图像与 icon 槽位选择
-`truth_asset / standard_symbol / generated_visual / exact_graphic`。需要审美绘制的 hero、场景、
+`truth_asset / standard_symbol / generated_visual / exact_graphic`。分类依据是资产用途，不是轮廓复杂度或交付格式：
+承担主体识别的 Logo、品牌头像、产品标识归品牌 Skill；已有母版是 `truth_asset`，需要新设计的符号是
+`generated_visual`。只有搜索、关闭等标准操作含义才属于 `standard_symbol`；圆和线组成的品牌标志
+也不是 `exact_graphic`，要求 SVG 只决定交付格式，不授权手绘。需要审美绘制的 hero、场景、
 插画、纹理、物件和表现型 icon 默认由 `image_generate` 生产；标准功能 icon 来自既有系统或一个
 成熟家族；精确数据、文字、坐标与拓扑交给专业工具。没有 `manual_svg` 或 `decorative_css` 降级
 路线，生成工具不可用不授权模型用 SVG、Canvas 或 CSS 模拟。
