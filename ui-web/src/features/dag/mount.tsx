@@ -17,7 +17,7 @@ import { Sheet } from './DagSheet'
 import { fromSnapshot } from './nodes'
 import * as store from './store'
 
-import type { DagRun, DagSummary } from './types'
+import type { DagNode, DagRun, DagSummary } from './types'
 import type { Root } from 'react-dom/client'
 
 const HOSTS = new Map<string, { el: HTMLElement; root: Root }>()
@@ -130,28 +130,55 @@ interface CompletionWire {
   files?: unknown
 }
 
-/* Put a sheet back after the page was replaced.
+/* Draw what `dag.get` just said, either as a sheet this conversation did not
+ * have or as fresher state for the one it does.
  *
- * The reader had one open on this conversation and `dag.get` has just said what
- * the run looks like now, so `wire` decides every node's status and the stored
- * note decides only the fold. That asymmetry is the reason this exists at all:
- * a resumed graph that trusted a stored copy would show the run frozen at the
- * moment of the reload, and the nodes that finished while the page was away
- * would sit at `running` for good.
+ * `wire` decides every node's status and the reader decides only the fold. That
+ * asymmetry is the reason this exists at all: a graph that trusted a stored copy
+ * would show the run frozen at the moment the page stopped hearing about it, and
+ * the nodes that finished in between would sit at `running` for good.
  *
- * False when there is nothing to put back -- no note, a sheet already up (the
- * live events won the race), or a read that came back without nodes. */
+ * A sheet already up is refreshed rather than declined, and that is the case
+ * this was missing. A graph is fed live events, and only for the conversation on
+ * screen -- so every node report that lands while the reader is in another
+ * conversation is dropped, and the sheet they come back to is as stale as the
+ * moment they left. Declining is right only for a DIFFERENT run: the live one is
+ * then the newer of the two and replacing it would step back to a graph that has
+ * already been superseded.
+ *
+ * Whether this conversation should be asked about at all is the caller's
+ * decision, not this function's -- see `resumeDag` in shell/resume.ts, which
+ * refuses when it has no run to read. It used to be settled here by requiring a
+ * stored note, which is per-tab and only ever as new as the last event that
+ * reached this page: a run that started while the reader was elsewhere left no
+ * note, so the read that could have drawn it was never made.
+ *
+ * False when nothing was put back -- a read that came back without nodes, or a
+ * refresh, which updates a sheet rather than raising one. */
 export function resume(key: string, wire: unknown): boolean {
-  const kept = store.saved(key)
-  if (!kept || store.run(key)) return false
   const run = (wire || {}) as RunWire
   const nodes = fromSnapshot(run.files)
   if (!nodes.length) return false
+  const id = text(run.run_id)
+  const live = store.run(key)
+  const kept = store.saved(key)
+  if (live) {
+    if (!id || live.run_id !== id) return false
+    draw(key, run, nodes, id, live.folded)
+    return false
+  }
+  /* The read's own id, falling back to the note's: the two agree, and asking
+     the answer rather than the request is what keeps a run that was resumed
+     under a canonical id from being drawn under the one we asked with. */
+  const drawAs = id || kept?.run
+  if (!drawAs) return false
+  draw(key, run, nodes, drawAs, !!kept?.folded)
+  return true
+}
+
+function draw(key: string, run: RunWire, nodes: DagNode[], runId: string, folded: boolean): void {
   start(key, {
-    /* The read's own id, falling back to the note's: the two agree, and asking
-       the answer rather than the request is what keeps a run that was resumed
-       under a canonical id from being drawn under the one we asked with. */
-    run_id: text(run.run_id) || kept.run,
+    run_id: runId,
     session: key,
     order: nodes.map((n) => n.id),
     nodes: new Map(nodes.map((n) => [n.id, n])),
@@ -160,11 +187,10 @@ export function resume(key: string, wire: unknown): boolean {
        own answer to "is it over" -- not something the page can infer from node
        statuses, which an interrupted run leaves looking unfinished forever. */
     done: !!run.finalized,
-    folded: kept.folded,
+    folded,
     dir: text(run.dir) || null,
     task_summary: text(run.task_summary) || null,
   })
-  return true
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && isFinite(v) ? v : null)
@@ -248,7 +274,8 @@ export const forget = (key: string): void => drop(key)
 export const run = (key: string): DagRun | null => store.run(key)
 
 /* What this conversation had open before the page was replaced. Read by
-   shell/resume.ts, which is what turns it back into a sheet. */
+   shell/resume.ts, which turns a sheet back with it or without it: the note
+   settles which run and whether it was folded, never whether there is one. */
 export const saved = store.saved
 
 /* Test seam. */

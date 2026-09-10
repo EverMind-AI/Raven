@@ -1470,21 +1470,30 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
     <div className={'tfold' + (seg.open ? ' open' : '')}>
       <button ref={headRef} className="tfh" aria-label={t('gui.fold.aria')}
         aria-expanded={String(seg.open) as 'true' | 'false'} onClick={flip}>
-        {/* What the fold HOLDS, not a verdict on the task. `collapse` builds
-            one only once the answer has landed, so the fold's existence already
-            says the turn finished -- "done" added nothing and implied something
-            false: a backgrounded graph outlives the turn that dispatched it, so
-            a reader saw `done` over a task still running below. */}
+        {/* What the fold HOLDS, not a verdict on the task. "done" added
+            nothing and implied something false: a backgrounded graph outlives
+            the turn that dispatched it, so a reader saw `done` over a task
+            still running below. On a delegated lane it would be false outright
+            -- a text said on the way no longer closes the turn, so that pane
+            shows a fold with no answer under it for as long as the turn runs. */}
         <span className="lb">{t('gui.fold.steps')}</span>
         <span className="tm">{seg.time || ''}</span>
         <Chev />
       </button>
       {/* A shut body is not built, which is where the weight was: a forty-turn
-          session built 7361 nodes of which 6400 sat in shut fold bodies. At
-          most one fold is open -- the turn the reader is looking at, whether
-          they just watched it finish (`collapse`) or just reopened the
-          conversation on it (`openLastFold`) -- so one body IS built, and one
-          is not a session's worth. */}
+          session built 7361 nodes of which 6400 sat in shut fold bodies. On the
+          conversation's lane at most one fold is open -- the turn the reader is
+          looking at, whether they just watched it finish (`collapse`) or just
+          reopened the conversation on it (`openLastFold`) -- so one body IS
+          built, and one is not a session's worth.
+
+          A delegated pane opens every turn's, and is a different size of thing:
+          measured on the two largest instance records on hand, 55 messages in
+          one turn built 356 nodes against 103 shut, and 197 messages in two
+          turns built 738 against 334. That is one instance's whole
+          conversation, an order of magnitude under the figure above. It grows
+          with the record at roughly 4 nodes a message, so an instance kept for
+          thousands of turns would reach it; nothing caps it today. */}
       <div className="tfb" hidden={!seg.open}>
         {seg.open ? seg.steps.map((s) => <StepView key={s.id} lane={lane} seg={s} />) : null}
       </div>

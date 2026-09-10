@@ -14,8 +14,6 @@ So: each call gets its own session, and a timeout kills the whole group.
 
 from __future__ import annotations
 
-import os
-import signal
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -76,8 +74,12 @@ def run(command: Sequence[str], *, timeout_s: float, what: str) -> Completed:
 
 
 def _kill_group(process: subprocess.Popen[str]) -> None:
-    """SIGKILL the session `run` started, ignoring a group that already left."""
-    try:
-        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        process.kill()
+    """Stop the run and its children, through the host's own teardown.
+
+    The same problem this module exists for -- the thing that must die is not the
+    thing that was started -- is the one `raven.utils.office.terminate` answers,
+    and it answers it on Windows too, which this did not.
+    """
+    from raven.utils.office import terminate
+
+    terminate(process)
