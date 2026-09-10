@@ -602,17 +602,19 @@ def _gather_static_checks() -> DoctorReport:
     return report
 
 
-def _probe_memory(config: "RavenConfig") -> MemoryInfo:
+def _probe_memory(config: "RavenConfig", workspace_path: "Path") -> MemoryInfo:
     """Ask the configured backend what it can do. Never raises.
 
     Deliberately not part of ``_gather_static_checks``: that stays zero-network.
     A backend's own ``health`` may talk to localhost, which is cheap enough to
     run unconditionally -- unlike ``--probe``, it spends no tokens and reaches
     no third party.
+
+    ``workspace_path`` is passed in because it lives on ``Config``, not on the
+    ``RavenConfig`` this takes, and the caller already holds both.
     """
     import asyncio
 
-    from raven.config.loader import load_config
     from raven.core.plugin_stack import maybe_build_memory_backend
 
     info = MemoryInfo(backend=config.memory.backend)
@@ -621,9 +623,7 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     if config.memory.backend == "everos" and not everos_plugin_installed():
         info.plugin_missing = True
         return info
-    # The workspace is on the other config object: the backend's ServiceLocator
-    # wants it, and ``RavenConfig`` does not carry one.
-    backend = maybe_build_memory_backend(load_config().workspace_path, config)
+    backend = maybe_build_memory_backend(workspace_path, config)
     if backend is None:
         # Configured, its distribution present, and still no backend: the
         # factory did not build. Reported rather than passed over silently --
@@ -635,9 +635,19 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
         )
         return info
     try:
-        info.health = asyncio.run(backend.health())
+        answer = asyncio.run(backend.health())
     except Exception as exc:
         info.health = BackendHealth(ready=False, checks=[HealthCheck("health", "missing", f"health() raised: {exc}")])
+        return info
+    if answer is not None and not isinstance(answer, BackendHealth):
+        # A backend that answers off-contract is as broken as one that raises,
+        # and everything downstream reads ``.ready`` / ``.checks``.
+        info.health = BackendHealth(
+            ready=False,
+            checks=[HealthCheck("health", "missing", f"health() returned {type(answer).__name__}, not BackendHealth")],
+        )
+        return info
+    info.health = answer
     return info
 
 
@@ -668,7 +678,7 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
     mark = {"ok": "[green]ok[/green]", "degraded": "[yellow]degraded[/yellow]", "missing": "[red]missing[/red]"}
     for c in memory.health.checks:
         hint = f"  [dim]{c.hint}[/dim]" if c.hint else ""
-        console.print(f"  {c.label + ':':<14}{mark[c.status]}{hint}")
+        console.print(f"  {c.label + ':':<14}{mark.get(c.status, c.status)}{hint}")
     if memory.faults:
         console.print(f"\n  [yellow]Memory cannot work until this is fixed: {', '.join(memory.faults)}[/yellow]")
 
@@ -999,8 +1009,9 @@ def register(app: typer.Typer) -> None:
             from raven.config.loader import load_config
             from raven.config.raven import load_raven_config
 
-            report.memory = _probe_memory(load_raven_config())
-            report.config_health = _inspect_config_health(load_config(), fix=fix)
+            config = load_config()
+            report.memory = _probe_memory(load_raven_config(), config.workspace_path)
+            report.config_health = _inspect_config_health(config, fix=fix)
 
         if probe and report.routing is not None and report.routing.provider is not None:
             report.probe = _run_llm_probe(timeout_s=timeout)

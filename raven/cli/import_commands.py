@@ -111,7 +111,8 @@ async def _require_memory_service_ready(backend: "MemoryBackend") -> None:
     against nothing writes nothing while consuming the source list. A backend
     that offers no diagnostics is left alone rather than locked out.
     """
-    health = await backend.health()
+    probe = getattr(backend, "health", None)
+    health = await probe() if probe is not None else None
     if health is None or health.ready:
         return
     console.print("[red]Memory service is not ready; nothing would be imported.[/red]")
@@ -151,10 +152,11 @@ async def _build_and_run(
         raise typer.Exit(1)
 
     await backend.start()
-    # Asked after start rather than caught around it: start degrades instead of
-    # raising, so an except here would never fire.
-    await _require_memory_service_ready(backend)
     try:
+        # Asked after start rather than caught around it: start degrades instead
+        # of raising, so an except here would never fire. Inside the try so the
+        # ``finally`` still stops the backend when the check exits.
+        await _require_memory_service_ready(backend)
         summary = await run_import(items, backend, state, on_progress=on_progress, cancel_path=cancel_path)
         # Both phases below are additive and run after the EverOS pass, so a
         # failure in either is reported without reversing an import that has

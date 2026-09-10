@@ -1064,6 +1064,20 @@ class TestImportRefusesToRunWithoutMemory:
 
         asyncio.run(_require_memory_service_ready(_Silent()))
 
+    def test_a_backend_without_a_health_method_is_allowed(self) -> None:
+        """``health`` arrived after the Protocol shipped. A backend built
+        before it has no diagnostics to offer, which is the same answer as
+        ``None`` -- not a reason to refuse the import."""
+        import asyncio
+
+        from raven.cli.import_commands import _require_memory_service_ready
+
+        class _Older:
+            async def store(self, *_a, **_kw):
+                return True
+
+        asyncio.run(_require_memory_service_ready(_Older()))
+
     async def test_a_missing_plugin_is_not_an_unconfigured_backend(
         self, tmp_path: Path, capsys: pytest.CaptureFixture
     ) -> None:
