@@ -18,16 +18,31 @@ pytest.importorskip("pptx")
 
 from raven.contracts.tool import ToolResult  # noqa: E402
 from raven_ppt.contracts import Project  # noqa: E402
+from raven_ppt.services.render import RenderError, sheet  # noqa: E402
+from raven_ppt.services.template.defaults import reference_pages  # noqa: E402
 from raven_ppt.tools.template import PptTemplateTool  # noqa: E402
 from tests._ppt_engine_fixtures import deck, image, noise_image, noise_png, product_page, template_file  # noqa: F401
 
+_TEMPLATES = Path(__file__).resolve().parents[1] / "plugins-dist" / "ppt-engine" / "raven_ppt" / "assets" / "templates"
+_needs_templates = pytest.mark.skipif(
+    not any(_TEMPLATES.glob("*.pptx")),
+    reason="the template payload is fetched, not tracked; see plugins-dist/ppt-engine/templates.manifest.json",
+)
+
 
 class FakeViews:
-    """Renders without LibreOffice. `pages` is asked for the template's own file."""
+    """Renders without LibreOffice. `pages` is asked for the template's own file.
 
-    def __init__(self, available: bool = True) -> None:
+    The pages are real PNGs and the tiling is the real tiler: what this reply carries
+    is one sheet of them, so a stand-in that could not be composed would test the
+    fallback and nothing else. `tiling=False` is how the fallback is asked for.
+    """
+
+    def __init__(self, available: bool = True, tiling: bool = True) -> None:
         self.available = available
+        self.tiling = tiling
         self.rendered: list[Path] = []
+        self.sheets: list[Path] = []
 
     async def pages(self, pptx: Path, out_dir: Path, numbers) -> dict[int, Path]:
         self.rendered.append(pptx)
@@ -51,12 +66,30 @@ class FakeViews:
         made = {}
         for number in numbers or ():
             path = out_dir / f"template-{number:02d}.png"
-            path.write_bytes(b"\x89PNG")
+            _page_png(path)
             made[number] = path
+        return made
+
+    def contact_sheet(self, pngs, out: Path, columns: int = 4, *, labels=None) -> Path:
+        if not self.tiling:
+            raise RenderError("this host cannot tile")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        made = sheet.contact_sheet(list(pngs), out, columns, labels=labels)
+        self.sheets.append(made)
         return made
 
     def data_uri(self, png: Path, budget: int | None = None) -> str:
         return f"data:image/png;base64,{png.stem}"
+
+    def sheet_uri(self, png: Path) -> str:
+        return f"data:image/jpeg;base64,{png.stem}"
+
+
+def _page_png(path: Path, size: tuple[int, int] = (320, 180)) -> Path:
+    image = pytest.importorskip("PIL.Image", reason="Pillow tiles the pages into a sheet")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.new("RGB", size, (210, 210, 215)).save(path, "PNG")
+    return path
 
 
 @pytest.fixture
@@ -111,17 +144,31 @@ async def test_the_users_file_is_copied_not_taken(workspace: Path, house: Path):
 
 
 async def test_all_example_pages_come_back_as_pictures(workspace: Path, house: Path):
-    """Every example page is available so the model can choose and adapt a close fit."""
+    """Every example page is available so the model can choose and adapt a close fit.
+
+    On one sheet, with the page numbers on the cells and the shape of every page in the
+    text above it. Measured on the model this engine runs: the sheet and 20 separate
+    renders both score 90% top-1 at naming the page whose arrangement fits a need, and
+    the sheet does it with one image pinned in the request afterwards instead of 20 --
+    the cost a recorded run died of.
+    """
     views = FakeViews()
     tool = PptTemplateTool(workspace, views)
 
     result = await tool.execute(project="talk", path="uploads/house-style.pptx")
 
     assert isinstance(result, ToolResult)
-    assert [block["type"] for block in result.blocks] == ["text", "image_url", "text", "image_url"]
-    assert "Template page 1 -- the template's cover" in result.blocks[0]["text"]
-    assert result.blocks[2]["text"].startswith("Template page 2 -- a content example")
-    assert "prototype(tpl, 2)" in result.blocks[2]["text"], "the call that takes the page sits beside its picture"
+    assert [block["type"] for block in result.blocks[:2]] == ["text", "image_url"]
+    assert result.blocks[1]["image_url"]["url"].startswith("data:image/jpeg;base64,"), (
+        "the sheet goes through the sheet door"
+    )
+    made = [path.name for path in views.sheets if path.name.startswith("pages_sheet_")]
+    assert made == ["pages_sheet_2.png"], "two example pages arrive as one picture, not two"
+    legend = result.blocks[0]["text"]
+    assert "The 2 example pages are one picture below, 4 to a row" in legend
+    assert "Template page 1 -- the template's cover" in legend
+    assert "Template page 2 -- a content example" in legend
+    assert "prototype(tpl, 2)" in legend, "the call that takes the page is in the key to the sheet"
     body = _body(result)
     assert body["house_pages"] == {"cover": 1}
     assert len(body["template_pages"]) == 2
@@ -364,3 +411,159 @@ def test_the_render_caption_names_the_picture_slots_and_leaves_the_fill_to_the_a
     )
     assert "An icon slot" in marked and "one per unit" in marked and "swap_icon(slide, shape_at(slide, n)" in marked
     assert "An icon slot" not in said, "said beside the page that has one, and nowhere else"
+
+
+async def test_a_host_that_cannot_tile_gets_one_picture_per_page(workspace: Path, house: Path):
+    """The sheet is the cheaper reply, not the only one.
+
+    Pillow composes the sheet and a host without it still has pages to show. A reply
+    with no renders in it is the one outcome to avoid: one live run read every example
+    page as code and never asked for a picture again, on a host that could render.
+    """
+    views = FakeViews(tiling=False)
+    tool = PptTemplateTool(workspace, views)
+
+    result = await tool.execute(project="talk", path="uploads/house-style.pptx")
+
+    assert isinstance(result, ToolResult)
+    assert [block["type"] for block in result.blocks[:4]] == ["text", "image_url", "text", "image_url"]
+    assert result.blocks[1]["image_url"]["url"].startswith("data:image/png;base64,"), (
+        "a page comes through the page door"
+    )
+    assert result.blocks[0]["text"].startswith("Template page 1 -- the template's cover")
+    assert result.blocks[2]["text"].startswith("Template page 2 -- a content example")
+
+
+@_needs_templates
+async def test_a_complete_borrow_sheet_is_found_before_anything_is_rasterised(workspace: Path, house: Path):
+    """The ordinary follow-up call must not pay for the pictures again.
+
+    Naming the sheet after what rendered put the cache lookup after the render, and
+    `pages_of` rasterises every page it is handed whether or not a sheet already holds
+    them -- 9.9s of the 41.3s measured over the seven templates, on the path a
+    palette-only follow-up takes. The complete sheet's name is knowable up front, so
+    it is looked for there; a sheet short of the offer deliberately has no fast path,
+    because falling through is what asks the failed lender again.
+    """
+    views = FakeViews()
+    tool = PptTemplateTool(workspace, views)
+    lenders = {stem for stem, _, _ in PptTemplateTool._borrowable(house)}
+
+    await tool.execute(project="talk", path="uploads/house-style.pptx")
+    borrowed = [path for path in views.rendered if path.stem in lenders]
+    assert borrowed, "the first call renders the lenders"
+    composed = [path.name for path in views.sheets if path.name.startswith("sheet_")]
+    assert composed, "and composes their sheet"
+
+    await tool.execute(project="talk", path="uploads/house-style.pptx")
+
+    assert [path for path in views.rendered if path.stem in lenders] == borrowed, (
+        "the second call rasterised the lenders again"
+    )
+    assert [path.name for path in views.sheets if path.name.startswith("sheet_")] == composed, (
+        "and composed their sheet again"
+    )
+
+
+@_needs_templates
+async def test_a_lender_that_will_not_render_does_not_leave_a_sheet_claiming_its_page(
+    workspace: Path, house: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A partial sheet used to be cached under the whole offer's name.
+
+    One lender that cannot be converted leaves the other lenders' cells intact, and
+    that sheet is worth showing -- but stored as the sheet of every offered page it
+    claimed cells it did not have, both sentences beside it counted the offer rather
+    than the picture, and every later call read it out of the cache, so the lender that
+    failed was never asked again. Keyed on what rendered instead: the reply counts the
+    cells it has, and the call after the lender comes back names a different sheet.
+    """
+    from raven_ppt.tools import template as template_module
+
+    views = FakeViews()
+    tool = PptTemplateTool(workspace, views)
+    offers = template_module.PptTemplateTool._borrowable(house)
+    stems = list(dict.fromkeys(stem for stem, _, _ in offers))
+    assert len(stems) > 1, "the fixture must offer pages from more than one template"
+    broken, working = stems[0], stems[1:]
+    offered_by_broken = [(stem, number) for stem, number, _ in offers if stem == broken]
+    assert offered_by_broken, "the lender chosen to fail must have an offer"
+
+    real_pdf = views.pdf
+    failing = {broken}
+
+    async def pdf(pptx: Path, out_dir: Path):
+        return None if pptx.stem in failing else await real_pdf(pptx, out_dir)
+
+    monkeypatch.setattr(views, "pdf", pdf)
+    monkeypatch.setattr(
+        template_module.PptTemplateTool,
+        "_borrowable",
+        staticmethod(lambda source: offers),
+    )
+
+    result = await tool.execute(project="talk", path="uploads/house-style.pptx")
+
+    body = _body(result)
+    pictured = len(offers) - len(offered_by_broken)
+    borrow = [path.name for path in views.sheets if path.name.startswith("sheet_")]
+    assert borrow == [f"sheet_{pictured}_" + borrow[0].split("_")[2]], borrow
+    assert not borrow[0].startswith(f"sheet_{len(offers)}_"), "a partial sheet is not the whole offer's sheet"
+    assert f"shows {pictured} of them" in body["next_step"]
+    assert f"the other {len(offered_by_broken)} did not render" in body["next_step"]
+    assert f"shows all {len(offers)}" not in body["next_step"]
+    said = next(
+        block["text"] for block in result.blocks if "pages offered from the other bundled" in block.get("text", "")
+    )
+    assert f"And {pictured} of the {len(offers)} pages offered" in said
+    assert "the rest did not render here" in said
+    assert all(stem in str(views.rendered) for stem in working[:1]), "the lenders that work are still rendered"
+
+    # The lender comes back: the sheet it could not be part of is built now, under its
+    # own name, rather than served from the cache of the partial one.
+    failing.clear()
+    views.sheets.clear()
+    again = await tool.execute(project="talk", path="uploads/house-style.pptx")
+
+    names = [path.name for path in views.sheets if path.name.startswith("sheet_")]
+    assert names and names[0].startswith(f"sheet_{len(offers)}_"), names
+    assert f"shows all {len(offers)} of them" in _body(again)["next_step"]
+
+
+@_needs_templates
+async def test_the_pages_worth_borrowing_arrive_as_a_picture_of_their_own(workspace: Path, house: Path):
+    """The offer the product could not make at any price.
+
+    The borrowable reference pages have always been text -- "<stem> page N is <shape>"
+    -- and on the model this engine runs that text answers 27% of a need list the same
+    pages on one sheet answer 100%. Their own sheet rather than more cells on the
+    template's, because the two answer different questions and a cell whose provenance
+    the author cannot read is worse than no cell.
+    """
+    views = FakeViews()
+    tool = PptTemplateTool(workspace, views)
+
+    result = await tool.execute(project="talk", path="uploads/house-style.pptx")
+
+    assert isinstance(result, ToolResult)
+    made = sorted(path.name for path in views.sheets)
+    assert len(made) == 2, "the template's pages and the borrowable pages are two sheets"
+    assert made[0] == "pages_sheet_2.png"
+    # Named after which pages are on it: a deck rebound to another bundled template is
+    # offered a different set of the same size, and a name keyed on the count alone
+    # would serve it the first template's sheet out of the cache. The count comes from
+    # the table rather than a literal, because a branch that bundles another template
+    # adds rows to it and the shape of the name is what this pins.
+    # An uploaded template is bound here, so no bundled stem is excluded from the offer.
+    offered = len(reference_pages(except_stem=""))
+    assert made[1].startswith(f"sheet_{offered}_") and made[1].endswith(".png"), made[1]
+    assert made[1] != f"sheet_{offered}_.png"
+    said, shown = result.blocks[-2], result.blocks[-1]
+    assert said["type"] == "text" and shown["type"] == "image_url"
+    assert "6 to a row" in said["text"] and "their arrangement comes across" in said["text"]
+    assert shown["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    body = _body(result)
+    offered = body["borrowable_pages"]
+    assert offered and all(" = " in line for line in offered), "every offer names the cell it is a key to"
+    assert any(line.startswith("amber 4 = amber_wave_quarterly_summary page 4 is ") for line in offered)
+    assert f"The picture below shows all {len(offered)} of them" in body["next_step"]
