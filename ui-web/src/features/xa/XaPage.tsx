@@ -2,9 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useSyncExternalStore } from 'react'
 
-import { AgentMark } from '../../shell/agent-mark'
 import { shell, t } from '../../shell/bridge'
-import { SetupGroup, SetupRow } from '../../shell/setuprow'
+import { SetupGroup, SetupRow, Tile } from '../../shell/setuprow'
 import * as store from './store'
 
 import type { XaRow } from './types'
@@ -200,9 +199,6 @@ function AgentRow({ row, sel }: { row: XaRow; sel: boolean }): JSX.Element {
   return (
     <SetupRow
       name={row.name}
-      /* The brand of the package behind the row, not an initial taken off its
-         name: the name is the reader's to change, and the two need not agree. */
-      tile={<AgentMark preset={row.preset} />}
       /* Empty text on purpose: SetupRow draws the second line only when there
          is something to say there, and here there is not. */
       state={{ cls, text: '' }}
@@ -344,7 +340,7 @@ function AgentCard({ row }: { row: XaRow }): JSX.Element {
   return createPortal(
     <>
       <div className="pmdhead">
-        <AgentMark preset={row.preset} />
+        <Tile name={row.name} />
         <div className="pmdmeta">
           <div className="l1">
             <b>

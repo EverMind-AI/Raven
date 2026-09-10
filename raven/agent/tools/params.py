@@ -1,14 +1,12 @@
 """Tool arguments against the tool's declared JSON schema: safe casts, then validation.
 
 The registry runs this on every call after the tool's own ``cast_params`` hook
-and before ``execute``: a string that should be an integer -- or an array, or
-an object -- is coerced, a missing required key or a wrong type is reported,
-and a rejected call never reaches the tool. Kept out of the paper --
-:class:`raven.contracts.tool.Tool` declares the schema and the hooks; this is
-what the harness does with them.
+and before ``execute``: a string that should be an integer is coerced, a
+missing required key or a wrong type is reported, and a rejected call never
+reaches the tool. Kept out of the paper -- :class:`raven.contracts.tool.Tool`
+declares the schema and the hooks; this is what the harness does with them.
 """
 
-import json
 from typing import Any
 
 _TYPE_MAP = {
@@ -93,24 +91,6 @@ def _cast_value(val: Any, schema: dict[str, Any]) -> Any:
             return True
         if val_lower in ("false", "0", "no"):
             return False
-        return val
-
-    if target_type in ("array", "object") and isinstance(val, str):
-        # Taken only when the parse yields the type the schema asked for, so a
-        # string that is not JSON -- or is JSON of the wrong shape -- reaches
-        # `validate_params` untouched and is refused by name. Coercing it into
-        # something would trade a precise error for a confusing one.
-        #
-        # `RecursionError` is in the list because `json.loads` answers deeply
-        # nested input with it and it is not a `ValueError`; see
-        # `agent/tools/ask_user.py::_loads`, where catching only the other two
-        # let it escape and kill the turn.
-        try:
-            parsed = json.loads(val)
-        except (ValueError, TypeError, RecursionError):
-            return val
-        if isinstance(parsed, _TYPE_MAP[target_type]):
-            return _cast_value(parsed, schema)
         return val
 
     if target_type == "array" and isinstance(val, list):

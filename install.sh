@@ -250,44 +250,12 @@ install_raven() {
     # The default config names the everos memory backend, which ships as its
     # own distribution beside the wheel -- carry it, and degrade loudly (the
     # host boots memoryless and `raven doctor` says why) if it cannot build.
-    memory_dir="$script_dir/plugins-dist/everos-memory"
-    # Raven-Design and Raven-PPT keep their harness in a distribution too, and
-    # the roster gates on it: discovery reads the `engine` block in each
-    # agents/<product>/subagent.json and disables the row when that package is
-    # not importable where raven runs. Installing raven without them therefore
-    # yields two agents that are listed and cannot be dispatched to, with the
-    # remedy stated nowhere the installer ran.
-    design_dir="$script_dir/plugins-dist/design-engine"
-    ppt_dir="$script_dir/plugins-dist/ppt-engine"
-    # tool_install <target> [<plugin dir>...]. The directories ride in the
-    # positional parameters rather than in one string: sh has no arrays, and a
-    # checkout path holding a space must stay one argv entry -- encoding the
-    # option/path pairs into a scalar splits every one of them and ends the
-    # ladder at bare raven with no plugin installed. The loop rotates the list
-    # in place, taking each directory off the front and appending its option
-    # pair to the back, so what remains is exactly the pairs.
-    tool_install() {
-      spec="$1"
-      shift
-      remaining=$#
-      while [ "$remaining" -gt 0 ]; do
-        set -- "$@" --with-editable "$1"
-        shift
-        remaining=$((remaining - 1))
-      done
-      uv tool install --force -c "$constraints" "$@" -e "$spec"
-    }
-    # Four rungs, dropping one capability each: the engines carry native
-    # builds (PDF, raster, plotting) that a platform can refuse on its own, so
-    # they fall before the memory plugin rather than taking it down with them.
-    if ! tool_install "$script_dir[channels]" "$memory_dir" "$design_dir" "$ppt_dir"; then
+    plugin_dir="$script_dir/plugins-dist/everos-memory"
+    if ! uv tool install --force -c "$constraints" --with-editable "$plugin_dir" -e "$script_dir[channels]"; then
       warn "Channel dependencies failed to install; retrying with base raven. Some channels stay unavailable (see: raven channels list)."
-      if ! tool_install "$script_dir" "$memory_dir" "$design_dir" "$ppt_dir"; then
-        warn "A product engine failed to build; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
-        if ! tool_install "$script_dir" "$memory_dir"; then
-          warn "EverOS memory plugin failed to install; long-term memory stays off (raven doctor explains)."
-          tool_install "$script_dir"
-        fi
+      if ! uv tool install --force -c "$constraints" --with-editable "$plugin_dir" -e "$script_dir"; then
+        warn "EverOS memory plugin failed to install; long-term memory stays off (raven doctor explains)."
+        uv tool install --force -c "$constraints" -e "$script_dir"
       fi
     fi
   else
@@ -305,8 +273,6 @@ install_raven() {
       # release; older releases carry none, and its absence only means the
       # default memory backend degrades loudly at boot.
       everos_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/everos_memory-[^"]*\.whl' | head -n1)"
-      design_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/design_engine-[^"]*\.whl' | head -n1)"
-      ppt_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/ppt_engine-[^"]*\.whl' | head -n1)"
     fi
     if [ -z "$wheel_url" ]; then
       # The GitHub API caps unauthenticated callers at 60 requests/hour per IP, so a
@@ -371,37 +337,10 @@ install_raven() {
     else
       warn "This release carries no EverOS memory plugin wheel; long-term memory stays off (raven doctor explains)."
     fi
-    # Same shape for the product engines the roster gates Raven-Design and
-    # Raven-PPT on. Absent wheels are a warning, not a failure: the release
-    # still installs, and the two rows stay disabled the way discovery
-    # already reports them.
-    # Kept in their own variable, not appended to the memory plugin's: the
-    # ladder below drops the engines one rung before the memory plugin, and a
-    # shared scalar would take everos-memory down with the first engine that
-    # cannot resolve or build.
-    e_args=""
-    if [ -n "${design_url:-}" ]; then
-      e_args="$e_args --with design-engine@$design_url"
-      info "  with design engine $design_url"
-    else
-      warn "This release carries no design-engine wheel; Raven-Design stays disabled (raven doctor explains)."
-    fi
-    if [ -n "${ppt_url:-}" ]; then
-      e_args="$e_args --with ppt-engine@$ppt_url"
-      info "  with deck engine $ppt_url"
-    else
-      warn "This release carries no ppt-engine wheel; Raven-PPT stays disabled (raven doctor explains)."
-    fi
-    # shellcheck disable=SC2086  # $c_args / $p_args / $e_args are intentional word-split option pairs.
-    if ! uv tool install --force $c_args $p_args $e_args "raven[channels] @ $wheel_url"; then
-      warn "Channel dependencies failed to install; retrying with base raven. Some channels stay unavailable (see: raven channels list)."
-      if ! uv tool install --force $c_args $p_args $e_args "$wheel_url"; then
-        warn "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
-        if ! uv tool install --force $c_args $p_args "$wheel_url"; then
-          warn "EverOS memory plugin failed to install; long-term memory stays off (raven doctor explains)."
-          uv tool install --force $c_args "$wheel_url"
-        fi
-      fi
+    # shellcheck disable=SC2086  # $c_args / $p_args are intentional word-split option pairs.
+    if ! uv tool install --force $c_args $p_args "raven[channels] @ $wheel_url"; then
+      warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
+      uv tool install --force $c_args $p_args "$wheel_url" || uv tool install --force $c_args "$wheel_url"
     fi
   fi
   # Ensure ~/.local/bin (uv tool bin dir) is on PATH for future shells.

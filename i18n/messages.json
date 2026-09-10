@@ -3503,10 +3503,6 @@
       "en": "Archived {title}",
       "zh": "已归档「{title}」"
     },
-    "gui.sess.asking": {
-      "en": "Waiting on you",
-      "zh": "等你回应"
-    },
     "gui.sess.restore_failed": {
       "en": "Could not restore the session - {detail}",
       "zh": "会话恢复失败 · {detail}"
@@ -5059,14 +5055,6 @@
     "gui.ws.file_loading": {
       "en": "reading...",
       "zh": "读取中…"
-    },
-    "gui.ws.file_rendering": {
-      "en": "rendering as PDF...",
-      "zh": "正在转成 PDF…"
-    },
-    "gui.ws.render_failed": {
-      "en": "This file could not be rendered as a PDF.",
-      "zh": "这个文件没法转成 PDF。"
     },
     "gui.ws.file_newtab": {
       "en": "Open in a new tab",

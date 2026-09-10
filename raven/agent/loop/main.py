@@ -97,20 +97,16 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
 
     # The image window. Pictures a tool showed stay in the request while all of
     # them together fit the configured budget (``agents.defaults.imageWindowBudgetBytes``,
-    # base64 bytes as they travel, carried on ``RecoveryLimits``); when they do not,
+    # decoded bytes, carried on ``RecoveryLimits``); when they do not,
     # every image-bearing message but the newest ``_IMAGE_WINDOW_RECENT_MESSAGES``
     # loses its pictures at once, each replaced by a note saying what it showed and
     # how to see it again. Pictures stay for as long as a turn runs otherwise, and
-    # one deck build reached 75 of them in a single request (26.6 MB decoded, 35.5 MB
-    # encoded) before OpenRouter refused it with 413, four times across two runs; the
-    # refusals were measured to start at about 26.3 MB decoded, i.e. 35.1 MB on the
-    # wire. Counting decoded was the bug: 11.24 MB of pictures passed this 12 MB
-    # budget on a request that put 16.8 MB on the wire, and the gateway answered it
-    # with an empty 200 and zero usage. So the same 12 MB now bounds the encoded side,
-    # which is 9 MB decoded -- tighter by a third, and affordable because a deck's page
-    # renders are JPEG rather than PNG by the time they are encoded. 0 turns the
-    # standing pass off and leaves the refusal ladder.
-    # A collapse rather than a per-batch slide because every withdrawal
+    # one deck build reached 75 of them in a single request (26.6 MB decoded) before
+    # OpenRouter refused it with 413, four times across two runs; the refusals were
+    # measured to start at about 26.3 MB decoded, so the default of 12 MB leaves
+    # room for the largest batch seen (21 template pages, 6.06 MB) to land on top
+    # of a full window; 0 turns the standing pass off and leaves the refusal
+    # ladder. A collapse rather than a per-batch slide because every withdrawal
     # breaks the prefix an upstream cache can match: sliding cost 16 breaks in 60
     # calls and 20 points of cache hit rate on one measured deck, collapsing costs
     # one to four per deck on the same sequences. Two kept so the render an edit

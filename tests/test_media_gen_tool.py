@@ -407,7 +407,7 @@ async def test_image_selection_is_live_and_settings_win(monkeypatch, tmp_path):
     tool._config_source = lambda: holder["config"]
     await tool.execute("a circle")
     assert seen[-1]["model"] == "openai/gpt-image-2.5-sunburst"
-    assert seen[-1]["quality"] == "medium"
+    assert "quality" not in seen[-1]
     holder["config"] = MediaToolConfig(api_key="k", model="openai/gpt-image-2", quality="low")
     await tool.execute("a circle")
     assert seen[-1]["quality"] == "low"

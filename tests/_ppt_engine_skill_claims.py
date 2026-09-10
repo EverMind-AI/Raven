@@ -762,14 +762,13 @@ ok(
     "the skill names chart_series as the role a stated accent does not move",
 )
 
-# The ten bundled templates and the colour every one of them declares and none of
+# The eight bundled templates and the colour every one of them declares and none of
 # them paints. Measured here rather than written down, because the count and the value
-# are both claims in the document. The two dark ones map bg2 to dk2, so the claim is
-# about the light colour declared, lt2, which is what the loop below reads first.
+# are both claims in the document.
 _bundled = sorted((ROOT / "plugins-dist/ppt-engine/raven_ppt/assets/templates").glob("*.pptx"))
-ok(len(_bundled) == 10, f"the skill says ten bundled templates and {len(_bundled)} ship")
+ok(len(_bundled) == 8, f"the skill says eight bundled templates and {len(_bundled)} ship")
 ok(
-    "all ten bundled templates declare `#F0F0F0` as their second light colour" in _flat,
+    "all eight bundled templates declare their second background as `#F0F0F0`" in _flat,
     "the skill no longer states what every bundled template declares and none of them paints",
 )
 try:
