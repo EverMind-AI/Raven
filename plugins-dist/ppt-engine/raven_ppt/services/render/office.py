@@ -29,14 +29,6 @@ output after the input's stem, so it is produced in a private directory and move
 -- with `shutil.move`, not `Path.replace`, because the private directory is under
 the system temp (tmpfs here) and the destination is on the project's disk, and a
 rename across devices raises EXDEV.
-
-The spawn itself is not here any more. Building the argv, giving the run a
-profile of its own and killing the tree on a timeout are the same three things
-the host's viewer needs to show a deck, and they were written twice; they live in
-`raven.utils.office` now and this module calls them. What stayed is what is the
-engine's: the budget above, the four failure modes below, the rule that only the
-file appearing counts as success, and the three errors the rest of the package
-catches. The engine gains the Windows teardown that copy had and this one did not.
 """
 
 from __future__ import annotations
@@ -45,14 +37,9 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from raven.utils import office as soffice_run
+from raven_ppt.services.render import process
 from raven_ppt.services.render.capabilities import find_soffice
-from raven_ppt.services.render.errors import (
-    LOG_TAIL_CHARS,
-    RenderError,
-    RenderTimeoutError,
-    RenderUnavailableError,
-)
+from raven_ppt.services.render.errors import RenderError, RenderUnavailableError
 
 # A deck of forty image-heavy pages converts in about half a minute on a cold
 # profile; three minutes is a hang, not a slow deck.
@@ -84,27 +71,35 @@ def to_pdf(
     destination.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="raven-ppt-soffice-") as scratch:
+        profile = Path(scratch) / "profile"
         staged = Path(scratch) / "out"
+        profile.mkdir()
         staged.mkdir()
-        try:
-            done = soffice_run.to_pdf(source, staged, executable=executable, timeout_s=timeout_s)
-        except TimeoutError as exc:
-            raise RenderTimeoutError(f"LibreOffice exceeded its {timeout_s:g}s budget and was killed") from exc
-        except FileNotFoundError as exc:
-            raise RenderUnavailableError(f"LibreOffice is not installed: {executable!r} could not be executed") from exc
-        except OSError as exc:
-            raise RenderError(f"LibreOffice could not be started: {exc}") from exc
-        if len(done.produced) != 1 or not done.produced[0].is_file():
+        command = [
+            executable,
+            "--headless",
+            "--nologo",
+            "--nodefault",
+            "--nolockcheck",
+            "--nofirststartwizard",
+            # A profile with nothing in it cannot offer to recover a document
+            # from a previous crash, which is the other way headless startup
+            # blocks forever.
+            "--norestore",
+            f"-env:UserInstallation={profile.resolve().as_uri()}",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(staged),
+            str(source.resolve()),
+        ]
+        completed = process.run(command, timeout_s=timeout_s, what="LibreOffice")
+        produced = sorted(staged.glob("*.pdf"))
+        if len(produced) != 1 or not produced[0].is_file():
             raise RenderError(
                 f"LibreOffice did not produce a PDF for {source.name}",
-                detail={
-                    "deck": str(source),
-                    "produced": [p.name for p in done.produced],
-                    "exit_code": done.returncode,
-                    "stdout": done.stdout.strip()[-LOG_TAIL_CHARS:],
-                    "stderr": done.stderr.strip()[-LOG_TAIL_CHARS:],
-                },
+                detail={"deck": str(source), "produced": [p.name for p in produced], **completed.log_tails},
             )
         target = destination / f"{source.stem}.pdf"
-        shutil.move(str(done.produced[0]), str(target))
+        shutil.move(str(produced[0]), str(target))
     return target

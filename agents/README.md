@@ -31,6 +31,28 @@ What one product directory carries:
 
   The folder itself can stay -- an unregistered folder is inert. A live raven
   holds the roster it read at startup; restart it afterwards.
+  Two manifest fields shape how the row is reached rather than what it runs:
+  `"hidden": true` keeps the row off the roster the dispatching model reads
+  (and off the WebUI's sub-agent page) while a task routed to it still runs
+  there; `"routes": [{"to": "<name>", "match": "<regex>"}, ...]` makes this
+  row's backend a routing entry (`agent/subagent/backends/routing.py`): every
+  caller -- `spawn`, a DAG node, a direct chat -- runs the row, and the entry
+  picks the implementation on `run`, reading the task as the model wrote it
+  (`authored_task`), never the rendering with file contents inlined. A reused
+  instance handle stays where its transport bound it; a task whose wording
+  (file references taken out) matches a route's `match` goes there without a
+  model call; otherwise the host's own model picks between the targets' roster
+  lines and this row. A fronting row is only as ready as its targets: a route
+  to a folder that is missing, unready or switched off disables the row with
+  the reason on it, so a half-installed product does not run the missing
+  half's work on the wrong implementation. Both fields are manifest facts: a
+  stored row takes them from the folder on every merge. `raven-ppt` ships hidden behind
+  `raven-design`'s routes, so the model sees one design agent and decks still
+  build on the deck engine, its own model and key; the two halves share one
+  everos identity (`raven-design`), so what the user says over a deck is
+  remembered for the next design turn. Its `PPT_API_KEY` is
+  configured through `raven subagents setup` or the folder's `.env`, since the
+  page no longer lists it.
 - `plugins/<id>/` -- the product's own harness as raven plugins: hooks on the
   loop's six phases, replacement tools under the built-in names, its own
   config slice under `plugins.config["<id>"]`. `run.py` names the directory

@@ -88,14 +88,6 @@ All notable changes to Raven are documented here.
 
 ### Added
 
-- A slide deck opens in the WebUI file viewer as a PDF. Clicking a `.pptx`
-  asks the file route for `render=pdf`: the deck's own published `<stem>.pdf`
-  is served when it is beside the deck and current, otherwise LibreOffice
-  renders one into a cache under raven's state directory keyed by path, size
-  and mtime, one render at a time per deck. The viewer says it is rendering
-  until the frame loads, offers the PDF in a tab and the deck itself as a
-  download, and falls back to the open-with note with the gateway's words when
-  the host has no LibreOffice, the render times out, or nothing is produced.
 - The research agent's three modes are three stop rules rather than three sizes
   of one budget. `medium` may answer a settled general-knowledge question
   without searching: the first model call has the web tools withheld and a

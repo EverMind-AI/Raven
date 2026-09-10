@@ -1054,6 +1054,7 @@ class AcpAgentBackend:
         mcps: list[str] | None = None,
         mcp_grant: McpGrant | None = None,
         mode: str | None = None,
+        authored_task: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
     ) -> str:

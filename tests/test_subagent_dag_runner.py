@@ -277,6 +277,7 @@ class _FakeExec:
         session_key: str | None = None,
         instance: str | None = None,
         mode: str | None = None,
+        authored_task: str | None = None,
     ) -> str:
         self.calls.append(
             {"task_id": task_id, "session_key": session_key, "instance": instance, "prompt": task, "mode": mode}
@@ -525,6 +526,7 @@ async def test_run_dag_preserves_omitted_override_and_explicit_empty_mcps() -> N
             session_key: str | None = None,
             instance: str | None = None,
             mode: str | None = None,
+            authored_task: str | None = None,
             mcps: Any = omitted,
         ) -> str:
             self.calls.append({"task_id": task_id, "mcps": mcps})
@@ -733,7 +735,9 @@ async def test_run_dag_cancel_skips_unfinished_and_reaps_in_flight_task(tmp_path
     reaped: list[str] = []
 
     class _BlockingExec:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None) -> str:
+        async def run(
+            self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None, authored_task=None
+        ) -> str:
             if task_id == "b":
                 b_running.set()
                 try:
@@ -807,7 +811,9 @@ async def test_an_injected_semaphore_bounds_concurrent_runs_together() -> None:
     peak = 0
 
     class _Tracking:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None) -> str:
+        async def run(
+            self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None, authored_task=None
+        ) -> str:
             nonlocal live, peak
             live += 1
             peak = max(peak, live)
@@ -3174,7 +3180,9 @@ async def test_an_id_is_claimed_at_run_start_so_a_concurrent_graph_cannot_take_i
     release = asyncio.Event()
 
     class _Slow:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None) -> str:
+        async def run(
+            self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None, authored_task=None
+        ) -> str:
             started.set()
             await release.wait()
             return "slow"
@@ -3352,7 +3360,9 @@ async def test_referencing_an_in_flight_node_does_not_suggest_re_creating_it() -
     started, release = asyncio.Event(), asyncio.Event()
 
     class _Slow:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None) -> str:
+        async def run(
+            self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None, authored_task=None
+        ) -> str:
             started.set()
             await release.wait()
             return "eventually"
@@ -3658,7 +3668,9 @@ class _SuspendingBackend(_InMemBackend):
 
 
 class _Yielding:
-    async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None) -> str:
+    async def run(
+        self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None, authored_task=None
+    ) -> str:
         for _ in range(10):
             await asyncio.sleep(0)
         return f"OUT[{task_id}]"
@@ -5294,14 +5306,18 @@ async def test_a_continued_node_runs_again_while_a_sibling_is_still_running(tmp_
     attempts = {"quick": 0}
 
     class _Quick:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None):
+        async def run(
+            self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None, authored_task=None
+        ):
             attempts["quick"] += 1
             if attempts["quick"] > 1:
                 release.set()
             return f"quick {attempts['quick']}"
 
     class _Slow:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None):
+        async def run(
+            self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None, authored_task=None
+        ):
             await release.wait()
             return "slow"
 
@@ -5375,7 +5391,9 @@ async def test_a_carried_group_queued_for_a_slot_is_not_dispatched_twice(tmp_pat
     calls: list[str] = []
 
     class _Backend:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None):
+        async def run(
+            self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None, authored_task=None
+        ):
             calls.append(task_id.rsplit(":", 1)[-1] if ":" in task_id else task_id)
             return "out"
 
@@ -5444,7 +5462,9 @@ async def _park_the_loop_with_a_carried_task(tmp_path, desk, gate, announced, ex
     from raven.agent.subagent.dag_verdict import Verdict
 
     class _Backend:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None):
+        async def run(
+            self, task, *, task_id, workspace, executor, session_key=None, instance=None, mode=None, authored_task=None
+        ):
             if task_id == "a":
                 # Ordering, not delay: `late` has to be the suspension that goes
                 # unanswered, so the continue that ends the round comes second.

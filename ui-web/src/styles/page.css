@@ -4640,8 +4640,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-dlv-row .dlv-kind[data-kind="md"] { color: var(--sky); }
 .desk-dlv-row .dlv-kind[data-kind="img"],
 .desk-dlv-row .dlv-kind[data-kind="svg"],
-.desk-dlv-row .dlv-kind[data-kind="pdf"],
-.desk-dlv-row .dlv-kind[data-kind="pptx"] { color: var(--clay); }
+.desk-dlv-row .dlv-kind[data-kind="pdf"] { color: var(--clay); }
 .desk-dlv-row .dlv-kind[data-kind="csv"],
 .desk-dlv-row .dlv-kind[data-kind="json"] { color: var(--moss); }
 .desk-dlv-row .desk-name { display: grid; gap: 1px; }

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
+from typing import Any
 
 from loguru import logger
 
@@ -150,3 +152,24 @@ async def clamp_output(
     # Clamped again: with a `limit` below the fixed lines' own length there is
     # no arrangement that fits, and the cap is the promise that holds.
     return (text[:kept] + notice + reserved)[:limit]
+
+
+def optional_keyword(backend: Any, name: str, value: Any) -> dict[str, Any]:
+    """``{name: value}`` when ``backend.run`` can take it, else ``{}``.
+
+    How a lane hands over a keyword the paper gained after a backend was written.
+    A third-party backend types against the paper as it stood, enumerating its
+    parameters with no ``**kwargs``, and handing it a keyword it never declared
+    fails the run; so a new optional keyword travels only to a ``run`` that
+    declares it or takes ``**kwargs``, and never as ``None``. A signature that
+    cannot be read (a C callable, a mock) is taken to accept everything.
+    """
+    if value is None:
+        return {}
+    try:
+        params = inspect.signature(backend.run).parameters
+    except (TypeError, ValueError):
+        return {name: value}
+    if name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return {name: value}
+    return {}

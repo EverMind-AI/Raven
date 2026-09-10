@@ -3542,3 +3542,108 @@ async def test_unprompted_wakes_are_debounced_per_instance_and_the_latest_report
     assert "finished, results ready" in submitted[2].text
     assert "still running" not in submitted[2].text, "the latest report wins, not the first held one"
     assert "third" in submitted[1].text
+
+
+class _ClassifyingProvider(_StubProvider):
+    def __init__(self, answer: str) -> None:
+        self.answer = answer
+        self.asked: list[list[dict[str, Any]]] = []
+
+    async def chat(self, messages: list[dict[str, Any]], **_: Any) -> LLMResponse:
+        self.asked.append(messages)
+        return LLMResponse(content=self.answer)
+
+
+async def test_the_manager_lends_its_model_to_the_tables_routing_entries() -> None:
+    """The table has no provider; the manager sets its classifier on it at
+    construction, so every routing entry the table builds can ask."""
+    provider = _ClassifyingProvider(" `Deck` ")
+    manager = SubagentManager(
+        provider=provider,
+        workspace=Path("/tmp"),
+        agents=[
+            ThirdPartyAcpSubagentConfig(name="Design", command="design-agent", routes=[{"to": "Deck"}]),
+            ThirdPartyAcpSubagentConfig(name="Deck", command="deck-agent", description="builds a .pptx", hidden=True),
+        ],
+    )
+
+    entry = manager.registry.backend("Design")
+    assert entry._router == manager._classify
+    assert await manager._classify([("Deck", "builds a .pptx")], "the board meeting", "Design") == "Deck"
+    asked = provider.asked[0]
+    assert "answer Design when none of them fits" in asked[0]["content"]
+    assert asked[-1]["content"] == "Specialists:\n- Deck: builds a .pptx\n\nTask:\nthe board meeting"
+
+
+class _V14Backend:
+    """Enumerates the paper's parameters as they stood before ``authored_task``, no ``**kwargs``."""
+
+    kind = "cli"
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def run(
+        self,
+        task,
+        *,
+        task_id,
+        workspace,
+        executor,
+        session_key=None,
+        instance=None,
+        provider=None,
+        model=None,
+        mcps=None,
+        mcp_grant=None,
+        mode=None,
+        on_delta=None,
+    ) -> str:
+        self.calls.append({"task": task})
+        return "drawn"
+
+
+class _V15Backend(_V14Backend):
+    async def run(self, task, *, authored_task=None, **kwargs) -> str:
+        self.calls.append({"task": task, "authored_task": authored_task})
+        return "drawn"
+
+
+@pytest.mark.parametrize("backend_cls", [_V14Backend, _V15Backend], ids=["v14-shaped", "declares-authored_task"])
+async def test_a_backend_is_handed_the_authored_task_only_if_its_run_declares_it(
+    tmp_path, monkeypatch, backend_cls
+) -> None:
+    """The paper is additions-safe only if a lane hands a new keyword to a
+    ``run`` that declared it: a third-party backend typed against yesterday's
+    paper enumerates the parameters and takes no ``**kwargs``. Driven with an
+    authored task present, which is every spawn the spawn tool makes."""
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: InstanceRegistry(tmp_path / "reg.json"))
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1)
+    backend = backend_cls()
+    table = _OneBackendRegistry(backend)
+    table.get = lambda agent: None  # no row, so no declared everos identity to record under
+    manager.registry = table
+    announced: list[str] = []
+
+    async def _capture(task_id, label, task, result, origin, status, **_) -> None:
+        announced.append(result)
+
+    monkeypatch.setattr(manager, "_announce_result", _capture)
+    origin = {**_spawn_origin("Coder", None), "authored_task": "draw the poster"}
+
+    await manager._run_subagent_inner(
+        "task-a",
+        "draw the poster from {{ ref:/x/brief.md }}",
+        "draw",
+        origin,
+        _DummyExecutor(),
+        manager.provider,
+        manager.model,
+    )
+
+    assert announced == ["drawn"]
+    assert backend.calls[0]["task"] == "draw the poster from {{ ref:/x/brief.md }}"
+    if backend_cls is _V15Backend:
+        assert backend.calls[0]["authored_task"] == "draw the poster"

@@ -7,8 +7,6 @@ import * as store from './store'
 import type { JSX } from 'react'
 
 const PRESETS = [
-  { model: 'openai/gpt-image-2.5-sunburst', quality: '', label: 'GPT Image 2.5 Sunburst' },
-  { model: 'openai/gpt-image-2.5-flare', quality: '', label: 'GPT Image 2.5 Flare' },
   { model: 'openai/gpt-image-2', quality: 'low', label: 'gpt-image-2 · low' },
   { model: 'openai/gpt-image-2', quality: 'medium', label: 'gpt-image-2 · medium' },
   { model: 'openai/gpt-image-2', quality: 'high', label: 'gpt-image-2 · high' },
@@ -17,6 +15,7 @@ const PRESETS = [
   { model: 'qwen/qwen-image-3', quality: '', label: 'qwen-image-3' },
   { model: 'qwen/qwen-image-3-pro', quality: '', label: 'qwen-image-3-pro' },
   { model: 'x-ai/grok-imagine-image-2.0', quality: '', label: 'grok-imagine-image-2.0' },
+  { model: 'google/gemini-3.1-flash-image', quality: '', label: 'gemini-3.1-flash-image' },
 ]
 
 export function ImageModelPicker({
@@ -28,8 +27,8 @@ export function ImageModelPicker({
   quality: string | undefined
   say: () => void
 }): JSX.Element {
-  const effectiveModel = model || 'openai/gpt-image-2.5-sunburst'
-  const effectiveQuality = effectiveModel.includes('gpt-image') ? (quality ?? (effectiveModel === 'openai/gpt-image-2' ? 'medium' : '')) : ''
+  const effectiveModel = model || 'openai/gpt-image-2'
+  const effectiveQuality = effectiveModel.includes('gpt-image') ? (quality ?? 'medium') : ''
   const preset = PRESETS.findIndex((p) => p.model === effectiveModel && p.quality === effectiveQuality)
   const [custom, setCustom] = useState(false)
   const [draft, setDraft] = useState(effectiveModel)

@@ -235,7 +235,7 @@ class Readiness(NamedTuple):
     """
 
     kind: str
-    """"" when the folder is ready; otherwise ``launcher`` / ``engine``."""
+    """"" when the folder is ready; otherwise ``launcher`` / ``engine`` / ``route``."""
     detail: str
 
     @property
@@ -329,6 +329,38 @@ def _scan(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
     A folder that fails to parse is skipped with a warning: one malformed
     manifest must not take the other products down.
     """
+    found = list(_scan_folders(root))
+    by_name = {str(entry.get("name") or folder.name): (entry, reason) for folder, entry, reason in found}
+    for folder, entry, reason in found:
+        yield folder, entry, _routes_ready(entry, by_name) if reason.ready else reason
+
+
+def _routes_ready(entry: dict, by_name: dict[str, tuple[dict, Readiness]]) -> Readiness:
+    """A fronting row is only as ready as the rows it routes to.
+
+    Its roster line claims the targets' work (that claim is what sends the work
+    here), and its routing entry silently drops a target that is not on the
+    table; a product with nobody behind its door must not report itself ready,
+    or every task for the missing half would run on the wrong implementation
+    with nothing anywhere to say so.
+    """
+    for route in entry.get("routes") or []:
+        to = str(route.get("to") or "") if isinstance(route, dict) else ""
+        if not to:
+            continue
+        target = by_name.get(to)
+        if target is None:
+            return Readiness("route", f"routes to {to!r}, which is not a product here")
+        target_entry, target_reason = target
+        if not target_reason.ready:
+            return Readiness("route", f"routes to {to!r}, which is not ready: {target_reason.detail}")
+        if not bool(target_entry.get("enabled", True)):
+            return Readiness("route", f"routes to {to!r}, which its own manifest switches off")
+    return _READY
+
+
+def _scan_folders(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
+    """One folder at a time, judged on its own: launcher present, engine importable."""
     root = agents_root() if root is None else root
     if root is None:
         return
@@ -534,7 +566,7 @@ def merge_product_seeds(configs: list[Any] | None, discovered: list[Any] | None)
             # stay empty on every install until each agent was reinstalled.
             # `None` is that absence; `""` is the user saying "owns nothing" and
             # is left alone.
-            cfg = _fill_owns(cfg, by_name[name])
+            cfg = _fill_routing(_fill_owns(cfg, by_name[name]), by_name[name])
         by_name[name] = cfg
 
     return [by_name[name] for name in order]
@@ -574,6 +606,23 @@ def _fill_owns(cfg: Any, discovered: Any) -> Any:
         return cfg
     try:
         return cfg.model_copy(update={"owns": found})
+    except Exception:  # noqa: BLE001 - a duck-typed row must not sink the table
+        return cfg
+
+
+def _fill_routing(cfg: Any, discovered: Any) -> Any:
+    """``cfg`` with ``hidden`` and ``routes`` taken from ``discovered``.
+
+    Unconditionally, unlike ``owns``: both are facts about how the folder's
+    agent is reached, a stored row has no user meaning for either, and a
+    ``False`` cannot be told from "written before the field existed".
+    """
+    update = {
+        "hidden": bool(getattr(discovered, "hidden", False)),
+        "routes": list(getattr(discovered, "routes", None) or []),
+    }
+    try:
+        return cfg.model_copy(update=update)
     except Exception:  # noqa: BLE001 - a duck-typed row must not sink the table
         return cfg
 

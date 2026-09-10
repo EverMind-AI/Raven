@@ -301,6 +301,12 @@ async def instances_list(
         # ``raven.agent.subagent.dag_live``.
         active_run_ids=(lambda: live_run_ids(loop)),
     )
+    # A hidden agent's transport binds the handle under its own name when a
+    # routing entry sends a task there; that row is the entry's affinity memory,
+    # not a second instance, and the entry's own row already shows the handle.
+    table = getattr(manager, "registry", None)
+    hidden = {row.name for row in table.rows() if getattr(row, "hidden", False)} if table is not None else set()
+    reconciled = [row for row in reconciled if row.get("agent") not in hidden]
     return {
         "instances": _mark_titles(
             _mark_resumable(_collapse_dag_rows(_drop_nodes_that_never_ran(reconciled)), manager),

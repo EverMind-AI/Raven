@@ -198,6 +198,7 @@ class RavenLoopBackend:
         mcps: list[str] | None = None,
         mcp_grant: McpGrant | None = None,
         mode: str | None = None,
+        authored_task: str | None = None,
         history: list[dict[str, Any]] | None = None,
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,

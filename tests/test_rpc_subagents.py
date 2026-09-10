@@ -119,6 +119,31 @@ async def test_a_preset_is_withheld_when_a_configured_row_holds_its_name(
     assert "OpenClaw" in {r["name"] for r in result["rows"]}
 
 
+async def test_list_leaves_out_a_hidden_row(tmp_path: Path, monkeypatch) -> None:
+    """The page shows the roster the model reads; a row reached only through
+    another row's routes is not on it, so it has no line and no switch here."""
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {"name": "Design", "kind": "acp", "command": "design --acp", "routes": [{"to": "Deck"}]},
+                        {"name": "Deck", "kind": "acp", "command": "deck --acp", "hidden": True},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    names = {r["name"] for r in (await subagents_list({"probe": False}))["rows"]}
+    assert "Design" in names
+    assert "Deck" not in names
+
+
 async def test_list_never_returns_an_api_key(config_path: Path) -> None:
     result = await subagents_list({})
     blob = json.dumps(result)

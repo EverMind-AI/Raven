@@ -1602,6 +1602,18 @@ load-path coercion below cannot drift onto different lists.
 ACP_PROMPT_PLACEHOLDERS: tuple[str, ...] = ("{prompt}", "{prompt_file}", "{agent_id}")
 
 
+class SubagentRouteConfig(Base):
+    """One row a spawn addressed to the declaring row may be redirected to.
+
+    ``match`` is a regular expression searched in the task text (case-insensitive);
+    a hit routes there without a model call. Empty, the target is offered to the
+    host's classifier only.
+    """
+
+    to: str
+    match: str = ""
+
+
 class ThirdPartyAcpSubagentConfig(Base):
     """A third-party agent reached over ACP (Agent Client Protocol), e.g. ``hermes acp``.
 
@@ -1678,6 +1690,23 @@ class ThirdPartyAcpSubagentConfig(Base):
     hand-written one. Provenance only -- see the cli config for why the web UI
     needs it."""
     enabled: bool = True
+    hidden: bool = False
+    """Off the roster the dispatching model reads, while staying on the table.
+
+    A hidden row cannot be named by the model (it is absent from the roster text
+    and the ``enum``), but a spawn *routed* to it by another row's ``routes``
+    dispatches to it exactly as a named spawn would. A manifest fact, filled from
+    the folder over a stored row the way ``owns`` is.
+    """
+    routes: list[SubagentRouteConfig] = Field(default_factory=list)
+    """Rows a task dispatched to this row may be redirected to.
+
+    Non-empty, this row's backend is the routing entry
+    (:class:`raven.agent.subagent.backends.routing.RoutingBackend`): every
+    caller that runs the row -- spawn, a DAG node, a direct chat -- has the
+    implementation picked on ``run`` from the task text, a reused handle staying
+    where it was opened. A manifest fact, filled like ``hidden``.
+    """
     command: str
     mcps: list[str] | None = None
     allow_mcp_secrets: bool = False

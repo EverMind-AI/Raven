@@ -262,6 +262,21 @@ what can be delegated and so decides which candidate skills are dropped as alrea
 that copy omits the generic `builtin` row, which claims no capability bias and would read as
 covering everything. Pull discovery builds no skills segment, so it has no gate and drops
 nothing on these grounds.
+A row marked `hidden` (an acp manifest field) is enabled and on the table yet off the roster and
+the `enum`: the model cannot name it, but a task *routed* to it runs there. `routes` on a row
+makes its backend a **Routing entry** (`agent/subagent/backends/routing.py:RoutingBackend`): the
+table hands it back for the row, so every caller that resolves a backend by name -- `spawn`, a
+DAG node and its retries, a direct chat -- has the implementation picked on `run`, in one place.
+It reads the task as the model wrote it (`authored_task` on `SubagentBackend.run`; every lane
+hands it over through `optional_keyword`, so only a `run` that declares it or takes `**kwargs`
+receives it and a backend typed against the earlier paper keeps running; the rendered `task`
+only where a caller has no other text). The order is fixed:
+a reused instance handle continues where its transport bound it; a task whose wording, file
+references taken out, matches a route's `match` pattern goes there without a model call;
+otherwise the manager's classifier (the host's own model) picks between the targets' roster
+lines and the entry itself, and any other answer keeps the task on the entry. A fronting row is only as ready as its
+targets (readiness kind `route`): a missing, unready or switched-off target disables the row
+with the reason on it. Both fields are manifest facts, filled from the folder over a stored row.
 _Avoid_: treating it as the table — the roster is the enabled subset, formatted for a prompt.
 
 **Ownership** (`owns`, on a sub-agent's manifest and on any config entry, built-in included):

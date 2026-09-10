@@ -17,4 +17,4 @@ exports; never prose. The surface digest pinned beside the ledger guard
 makes a silent shape change a red gate.
 """
 
-CONTRACTS_VERSION = "14"
+CONTRACTS_VERSION = "15"

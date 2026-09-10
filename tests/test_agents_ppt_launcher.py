@@ -102,6 +102,13 @@ def test_the_roster_row_is_the_vendored_twins_modulo_the_ledgered_deltas():
     ours = json.loads((RUN_PY.parent / "subagent.json").read_text(encoding="utf-8"))
     theirs = json.loads((FORK / "subagent.json").read_text(encoding="utf-8"))
     assert ours.pop("engine") == {"package": "raven_ppt", "wheel": "ppt-engine"}
+    # Reached only through Raven-Design's routes; the dispatching model never sees this row.
+    assert ours.pop("hidden") is True
+    # One product, one memory: the deck half remembers the user under the
+    # design product's identity, so a preference stated over a deck reaches the
+    # next design turn (Hongda, MR 605). The fork's own id is the A side's.
+    assert ours.pop("everos") == {"userId": "raven-design", "agentId": "raven-design"}
+    assert theirs.pop("everos") == {"userId": "raven-ppt", "agentId": "raven-ppt"}
     assert ours["recommendedLlm"].pop("model") == TRUNK_MODEL
     assert theirs["recommendedLlm"].pop("model") == FORK_MODEL
     told = ours.pop("description")
@@ -213,6 +220,9 @@ def test_the_config_is_the_forks_modulo_the_swap_ledger():
     assert theirs["agents"]["defaults"].pop("model") == FORK_MODEL
     assert ours["providers"]["ppt"].pop("models") == [TRUNK_MODEL]
     assert theirs["providers"]["ppt"].pop("models") == [FORK_MODEL]
+    # The merged product's one identity; see the manifest test above.
+    assert ours["memory"].pop("userId") == ours["memory"].pop("agentId") == "raven-design"
+    assert theirs["memory"].pop("userId") == theirs["memory"].pop("agentId") == "raven-ppt"
     assert ours == theirs
 
 
@@ -220,7 +230,8 @@ def test_the_everos_identity_agrees_in_all_its_places():
     """ppt's shape: the memory block and the roster row carry the identity
     (the everos-memory slice holds only the endpoint), and the factory
     posture is everos ON -- the fork ships backend "everos" with no plugin
-    opt-out, unlike code's double-off."""
+    opt-out, unlike code's double-off. The identity is the design product's:
+    one merged product keeps one memory of the user."""
     config = json.loads((RUN_PY.parent / "config.json").read_text())
     row = json.loads((RUN_PY.parent / "subagent.json").read_text())
     ids = {
@@ -229,7 +240,7 @@ def test_the_everos_identity_agrees_in_all_its_places():
         row["everos"]["userId"],
         row["everos"]["agentId"],
     }
-    assert ids == {"raven-ppt"}
+    assert ids == {"raven-design"}
     assert config["memory"]["backend"] == "everos"
     assert "disabled" not in config["plugins"]
     assert config["plugins"]["config"]["everos-memory"] == {"base_url": "http://localhost:18791"}

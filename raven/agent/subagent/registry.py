@@ -36,10 +36,13 @@ from raven.agent.subagent.backends import (
     format_agent_listing,
     session_mcp_effective,
 )
+from raven.agent.subagent.backends.routing import RoutingBackend
 from raven.agent.subagent.builtin_agents import LEGACY_AGENT_ALIASES, canonical_agent_name, merge_builtin_seeds
+from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
 
 if TYPE_CHECKING:
+    from raven.agent.subagent.backends.routing import Router
     from raven.agent.subagent.mcp_grant import McpSource
 
 
@@ -77,6 +80,14 @@ class Injectable:
 
 
 @dataclass(frozen=True)
+class Route:
+    """One redirect a row declares: the target's name and the task pattern that takes it outright."""
+
+    to: str
+    match: str = ""
+
+
+@dataclass(frozen=True)
 class AgentRow:
     """One dispatchable agent: identity, advertised capability, and its config."""
 
@@ -92,6 +103,12 @@ class AgentRow:
 
     owns_watched_work: bool = False
     """Whether this agent owns run-and-watch work; see ``AgentMeta``."""
+
+    hidden: bool = False
+    """Kept off the roster the model reads; still dispatchable by name (a route)."""
+
+    routes: tuple[Route, ...] = ()
+    """Rows a task dispatched here may be redirected to; the row's backend is then a ``RoutingBackend``."""
 
     def meta(self) -> AgentMeta:
         """This row as the roster renders it."""
@@ -145,7 +162,14 @@ def _row_for(cfg: Any) -> AgentRow:
         owns=meta.owns,
         config=cfg,
         owns_watched_work=meta.owns_watched_work,
+        hidden=bool(getattr(cfg, "hidden", False)),
+        routes=tuple(_route_for(route) for route in (getattr(cfg, "routes", None) or ())),
     )
+
+
+def _route_for(declared: Any) -> Route:
+    read = declared.get if isinstance(declared, dict) else lambda key, default="": getattr(declared, key, default)
+    return Route(to=str(read("to", "") or ""), match=str(read("match", "") or ""))
 
 
 class AgentRegistry:
@@ -168,6 +192,7 @@ class AgentRegistry:
         self._order: list[str] = []
         self._backends: dict[str, SubagentBackend] = {}
         self._mcp_source: "McpSource | None" = None
+        self._router: "Router | None" = None
 
     def set_builtin_builder(self, build_builtin: BuiltinBuilder | None) -> None:
         """Late-bind the in-process backend factory.
@@ -179,6 +204,17 @@ class AgentRegistry:
         """
         self._build_builtin = build_builtin
         self._backends = {name: b for name, b in self._backends.items() if self._rows[name].kind != "builtin"}
+
+    def set_router(self, router: "Router | None") -> None:
+        """Hand every routing entry the classifier that picks between its implementations.
+
+        Set by the manager, which holds the host model; the table itself has
+        none. Applied to the entries already built and to every later build.
+        """
+        self._router = router
+        for backend in self._backends.values():
+            if isinstance(backend, RoutingBackend):
+                backend.set_router(router)
 
     def set_mcp_source(self, source: "McpSource | None") -> None:
         """Late-bind the host MCP view into cached and future backends."""
@@ -233,9 +269,44 @@ class AgentRegistry:
                 order.append(row.name)
             except Exception as exc:  # noqa: BLE001 - a bad entry must not sink the table
                 logger.warning("Skipping sub-agent {!r}: {}", name, exc)
+        for row in rows.values():
+            if row.routes and row.name in backends:
+                backends[row.name] = self._routing_entry(row, rows, backends)
         self._rows = rows
         self._order = order
         self._backends = backends
+
+    def _routing_entry(self, row: AgentRow, rows: dict[str, AgentRow], backends: dict[str, Any]) -> Any:
+        """The row's backend behind a routing entry over its enabled targets.
+
+        A target that is not on the table, is disabled, or is the row itself is
+        left out; with no target left the row's own backend stands unwrapped.
+        Targets are read after every row is built, so declaration order on the
+        table does not decide whether a route resolves.
+        """
+        targets = []
+        for route in row.routes:
+            if route.to == row.name:
+                continue
+            if route.to not in backends or not rows[route.to].enabled:
+                # Discovery already disables a product row whose route target is
+                # unready; this is the config-written case (a stored row, a
+                # switch), where the dropped route would otherwise leave the
+                # target's work running on this row with nothing said.
+                logger.warning(
+                    "Sub-agent {!r} routes to {!r}, which is {}; its tasks run on {!r} itself",
+                    row.name,
+                    route.to,
+                    "not on the table" if route.to not in backends else "switched off",
+                    row.name,
+                )
+                continue
+            targets.append((route.to, route.match, rows[route.to].description, backends[route.to]))
+        if not targets:
+            return backends[row.name]
+        entry = RoutingBackend(row.name, backends[row.name], targets, instances=get_registry())
+        entry.set_router(self._router)
+        return entry
 
     def rows(self) -> list[AgentRow]:
         """Every row, disabled included -- the operations view.
@@ -254,7 +325,7 @@ class AgentRegistry:
         that changed underneath it -- worse than a spawn that fails with a clear
         error.
         """
-        return [row for row in self.rows() if row.enabled]
+        return [row for row in self.rows() if row.enabled and not row.hidden]
 
     def get(self, name: str) -> AgentRow | None:
         """One row by name, enabled or not.
