@@ -234,6 +234,11 @@ class WsGateway:
         the session cookie and the RPC socket -- to whatever the agent wrote.
         The sandbox directive gives the response an opaque origin instead, both
         in an iframe and in a tab the reader opened themselves.
+
+        ``render=pdf`` asks for a PDF rendering of a slide deck instead of the
+        deck's own bytes. The path goes through the same policy first; what is
+        served afterwards is a file this gateway produced or the author's own
+        published PDF, never a second path the page chose.
         """
         from raven.rpc.files import MAX_VIEW_BYTES, content_type_for, resolve_readable, sandbox_for
 
@@ -260,6 +265,8 @@ class WsGateway:
             raise web.HTTPNotFound(reason=str(exc)) from None
         except OSError as exc:
             raise web.HTTPBadRequest(reason=str(exc)) from None
+        if request.query.get("render") == "pdf":
+            path = await self._rendered_pdf(path, workspace)
         if path.stat().st_size > MAX_VIEW_BYTES:
             raise web.HTTPRequestEntityTooLarge(max_size=MAX_VIEW_BYTES, actual_size=path.stat().st_size)
         return web.FileResponse(
@@ -272,6 +279,31 @@ class WsGateway:
                 "Cache-Control": "no-store",
             },
         )
+
+    async def _rendered_pdf(self, path: Path, workspace: Path | None = None) -> Path:
+        """The PDF to serve for a deck, or the HTTP error the page can show.
+
+        The status codes are the page's only signal: 503 when the host has no
+        LibreOffice, 504 when the render outran its budget, 500 when it ran and
+        wrote nothing. Each carries its message as the plain-text body so the
+        viewer can quote it beside the fallback note.
+
+        ``workspace`` rides along because the render path takes a shortcut to the
+        PDF published beside the deck, and that sibling has to face the fence this
+        request admitted the deck with rather than the configured default.
+        """
+        from raven.rpc import pdf_preview
+
+        if not pdf_preview.is_renderable(path):
+            raise web.HTTPBadRequest(text=f"{path.suffix or path.name} cannot be rendered as a PDF")
+        try:
+            return await pdf_preview.pdf_for(path, workspace=workspace)
+        except pdf_preview.PdfPreviewUnavailableError as exc:
+            raise web.HTTPServiceUnavailable(text=str(exc)) from None
+        except pdf_preview.PdfPreviewTimeoutError as exc:
+            raise web.HTTPGatewayTimeout(text=str(exc)) from None
+        except pdf_preview.PdfPreviewError as exc:
+            raise web.HTTPInternalServerError(text=str(exc)) from None
 
     async def handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         if not self._origin_ok(request):

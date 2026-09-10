@@ -5,13 +5,6 @@
  * the gateway what the work looks like NOW and replaying the opens in the order
  * they were made -- and neither of those belongs to any single store.
  *
- * A note is a preference, though, not the price of admission. It is written when
- * a live event is applied, so a conversation whose work began while the reader
- * was in another one has none -- and that is the conversation with the most to
- * put back. The graph half therefore also takes the run ids the caller read off
- * `session.resume`, and asks the gateway even where this page remembers nothing
- * (see `dagToRead`).
- *
  * Called when a conversation is opened rather than at boot, which is a decision
  * and not a convenience. The page boots to the new-task screen on purpose
  * (live/200-boot.js), so at startup there is no conversation for a restored
@@ -27,7 +20,7 @@
  * promotion rules.
  */
 
-import { resume as dagResume, run as dagOpen, saved as dagSaved } from '../features/dag/mount'
+import { resume as dagResume, saved as dagSaved } from '../features/dag/mount'
 import * as agents from '../features/subagents/store'
 import * as desk from '../features/workspace/deskStore'
 import { ds } from './bridge'
@@ -117,70 +110,23 @@ async function resumeDesk(key: string): Promise<void> {
   }
 }
 
-/* Which run this conversation's sheet should be showing, or nothing.
- *
- * Three sources, in the order they can be trusted to be current:
- *
- * - the graph already on screen, which is the newest thing this page knows: a
- *   run that started since the transcript was read is only here;
- * - the stored note, which names the run the page was watching when it was
- *   last replaced. It exists only where a live event for this conversation was
- *   once applied, so it is absent exactly when the third source is needed -- but
- *   where it is present it is the reader's own choice of which graph to watch,
- *   and a conversation that ran several does not get moved off it;
- * - the ids the transcript carries, which is the gateway's own record of every
- *   graph this conversation started. Last because it is the only one that cannot
- *   express a preference, and new: it is what survives a run the reader never saw
- *   start, where no live event reached this page and so nothing was written down.
- *
- * The newest of those ids rather than the first: a sheet shows one graph per
- * conversation, and with nothing to say which the reader wanted, the newest is
- * the one whose nodes may still be moving. */
-const dagToRead = (key: string, runIds?: readonly string[]): string | null =>
-  dagOpen(key)?.run_id || dagSaved(key)?.run
-  || (runIds && runIds.length ? runIds[runIds.length - 1]! : null)
-
-async function resumeDag(key: string, runIds?: readonly string[]): Promise<void> {
-  const id = dagToRead(key, runIds)
-  if (!id) return
-  /* `dag.get` and nothing else decides what the nodes are doing: the sources
-     above say WHICH run, never a status. */
+async function resumeDag(key: string): Promise<void> {
+  const kept = dagSaved(key)
+  if (!kept) return
+  /* `dag.get` and nothing else decides what the nodes are doing: the note says
+     which run and whether it was folded, never a status. */
   const read = ds<TranscriptSource>('transcript').dagRun
   if (!read) return
-  dagResume(key, await read(id))
+  dagResume(key, await read(kept.run))
 }
 
 /* Whatever this conversation had: the desk, the sheet, or nothing.
  *
- * `dagRunIds` is every run the conversation's transcript names, oldest first, as
- * the caller read them off `session.resume`. Optional: a caller with none still
- * gets the sheet back from what the page itself remembers.
- *
  * Settled rather than awaited as a chain, and per part. A run whose directory
  * has been cleaned and a file that has since been deleted are both ordinary
  * outcomes, and neither is a reason for the rest of the layout to stay away. */
-export async function resume(key: string, dagRunIds?: readonly string[]): Promise<void> {
-  await Promise.allSettled([resumeDesk(key), resumeDag(key, dagRunIds)])
-}
-
-/* The graph alone, for a conversation that never left this page.
- *
- * Coming back to a conversation whose turn was parked restores its transcript
- * from detached DOM rather than from disk, so `resume` above is the wrong verb
- * there: the desk half replays the reader's opens through the same verbs a click
- * goes through, and every window they had would come back a second time. The
- * graph half has the opposite problem and needs running -- a parked turn buffers
- * the events that arrive while it is away, but only while it is BUSY, and a
- * graph outlives the turn that started it. So the node reports that land after
- * that turn ends are dropped, and the sheet on screen is stale until something
- * re-reads it. This is that something.
- *
- * Settled rather than awaited, for the reason `resume` above settles: a run
- * whose directory has been cleaned answers with a rejection, and the live layer
- * calls this without awaiting it -- so a raise here would be an unhandled
- * rejection rather than a sheet that simply does not refresh. */
-export async function refreshDag(key: string): Promise<void> {
-  await Promise.allSettled([resumeDag(key)])
+export async function resume(key: string): Promise<void> {
+  await Promise.allSettled([resumeDesk(key), resumeDag(key)])
 }
 
 /* Which conversation the tab was on.

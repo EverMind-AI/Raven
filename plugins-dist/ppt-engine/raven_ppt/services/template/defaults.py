@@ -1,4 +1,4 @@
-"""Bundled templates available when a task has no user template: eight light, two dark."""
+"""Bundled light templates available when a task has no user template."""
 
 from __future__ import annotations
 
@@ -145,45 +145,6 @@ DEFAULT_TEMPLATES: tuple[DefaultTemplate, ...] = (
         ),
         "vermilion with a line-drawn landscape and classical borders; traditional culture, heritage and history, 15 example pages",
     ),
-    DefaultTemplate(
-        "black_circuit_tech_launch.pptx",
-        (
-            "dark",
-            "technology",
-            "tech",
-            "black",
-            "orange",
-            "photographic",
-            "circuit",
-            "product",
-            "launch",
-            "release",
-            "ai",
-            "digital",
-            "industry",
-            "analysis",
-        ),
-        "near-black circuit-board photography under an orange glow; dark, for technology product launches, AI, hardware and digital-industry decks, 34 example pages",
-    ),
-    DefaultTemplate(
-        "green_aurora_tech_trends.pptx",
-        (
-            "dark",
-            "technology",
-            "tech",
-            "green",
-            "black",
-            "futuristic",
-            "aurora",
-            "innovation",
-            "trends",
-            "digital",
-            "energy",
-            "sustainability",
-            "strategy",
-        ),
-        "near-black with green aurora light waves and no photographs; dark, for technology trend, innovation and energy or sustainability decks, 28 example pages",
-    ),
 )
 
 
@@ -196,10 +157,7 @@ def default_template_catalog() -> tuple[DefaultTemplate, ...]:
 # any other bundled template can carry, once its colours and master follow the deck.
 # Measured on four cross-template clones rendered side by side with their sources: every
 # fill on these pages is a theme colour or white, so a borrowed page arrives in the
-# deck's own palette with nothing of its source's showing but the arrangement. The two
-# dark templates' pages were measured the other way round, cloned into two light
-# templates: their translucent panels follow the ground they land on, and the orange 3D
-# renders of the first stay orange.
+# deck's own palette with nothing of its source's showing but the arrangement.
 REFERENCE_PAGES: dict[str, tuple[int, ...]] = {
     "amber_wave_quarterly_summary": (4, 5, 6, 8, 9, 10, 12, 13, 14, 16, 17),
     "beige_geometric_general_report": (17, 19),
@@ -208,8 +166,6 @@ REFERENCE_PAGES: dict[str, tuple[int, ...]] = {
     "mint_memphis_thesis_defense": (6, 9),
     "teal_illustrated_work_analysis": (5, 6, 7, 10, 13),
     "warm_bauhaus_quarterly_review": (6, 8, 9, 10, 14),
-    "black_circuit_tech_launch": (4, 5, 10, 11, 13, 14, 15, 18),
-    "green_aurora_tech_trends": (4, 5, 6, 8, 9, 10, 11, 14, 15, 16),
 }
 
 # How many pictures each reference page carries that are drawings rather than
@@ -223,7 +179,6 @@ REFERENCE_PAGES: dict[str, tuple[int, ...]] = {
 # deck. Absent means photographs or nothing.
 REFERENCE_ARTWORK: dict[str, dict[int, int]] = {
     "teal_illustrated_work_analysis": {6: 1, 7: 4, 10: 1, 13: 1},
-    "black_circuit_tech_launch": {13: 1},
 }
 
 # Under this, white type on a fill of that colour stops being type. The number is
@@ -288,9 +243,8 @@ def default_template_prompt() -> str:
     return (
         "Bundled default templates are available because the user did not provide a template. "
         "Choose exactly one filename below for the `template` field when its tags fit the subject. "
-        "Take one tagged dark only when the request asks for a dark, black or night look or a "
-        "technology register; otherwise stay with the light ones. Do not invent a path or choose an "
-        "irrelevant style:\n" + "\n".join(template.prompt_line() for template in available)
+        "Do not invent a path or choose a dark or irrelevant style:\n"
+        + "\n".join(template.prompt_line() for template in available)
     )
 
 

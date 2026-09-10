@@ -1240,35 +1240,12 @@ export function newStep(lane: Lane): StepHandle {
 const stepSolid = (s: StepData): boolean =>
   s.calls.length > 0 || (s.thinkShown && s.hasThink) || !!s.say.trim()
 
-/* Whether anything under this fold is still running.
- *
- * A backgrounded sub-agent outlives the turn that dispatched it -- by minutes,
- * and the card carries a live tail of what it is saying, which is the only
- * place a reader can see that at all. */
-function holdsALiveRun(fold: FoldData): boolean {
-  return fold.steps.some((step) => step.calls.some(spawnLive))
-}
-
-/* Every fold this lane opened by itself, shut. Two are left alone.
- *
- * The reader's own: `toggleFold` clears `auto`, so a fold they have touched is
- * no longer one of these.
- *
- * And any that still holds a running sub-agent. Shutting it takes the run's
- * live tail off the screen while the run is still going, and a shut body is
- * not built at all, so nothing is left to watch. Measured: a spawn dispatched
- * in one turn, the reader asks "how is it going" in the next, that next turn's
- * fold opens and shuts this one -- and the answer had to be fetched by reading
- * a file, because the page was no longer showing what the page already knew.
- *
- * The fold's own note already said half of this: "a backgrounded graph
- * outlives the turn that dispatched it, so a reader saw `done` over a task
- * still running below." That was answered by renaming the row. The row was
- * never the part that was hidden. */
+/* Every fold this lane opened by itself, shut. The reader's own are left
+   alone: `toggleFold` clears `auto`, so a fold they have touched is no longer
+   one of these. */
 function shutAutoFolds(lane: Lane, except: FoldData | null): void {
   lane.segs.forEach((s) => {
     if (s.kind !== 'fold' || s === except || !s.auto) return
-    if (holdsALiveRun(s)) return
     s.auto = false
     s.open = false
     bump(lane, s)
@@ -1322,16 +1299,8 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
     return
   }
   if (!loose.some(stepSolid)) return
-  /* A delegated lane's fold is born open. That pane IS one sub-agent's work, and
-     its steps are what the reader opened it for -- putting them behind a click
-     hid the only thing there was to see. Every turn's, not just the last: one
-     instance's conversation is short enough to read at once, which is why
-     `shutAutoFolds` stays on the live path, where a whole session's folds
-     accumulate. Marked `auto` either way, so the reader's own collapse takes it
-     over from the runtime (`toggleFold`) and survives the next poll. */
-  const born = live || !lane.main
   const f: FoldData = {
-    v: 0, id: nextId(), kind: 'fold', time: time || null, open: born, auto: born, steps: [],
+    v: 0, id: nextId(), kind: 'fold', time: time || null, open: live, auto: live, steps: [],
   }
   if (live) shutAutoFolds(lane, f)
   segs.splice(firstAt, 0, f)
@@ -1656,32 +1625,12 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
      instead of narration folded under the work it introduced. `after` is the
      rest of the conversation; nothing in it is drawn here. */
   const ahead = after.length ? messages.concat(after) : messages
-  /* Work the model did after saying something. Its own calls count: the text was
-     written before them, and their results arrive as later rows. */
-  const worked = (m: HistoryMessage | undefined): boolean =>
-    !!m && (m.role === 'tool' || !!(m.tool_calls || []).length)
   const isFinal = messages.map((m, i) => {
     if (!(m && m.role === 'assistant' && m.text && m.text.trim())) return false
-    /* On a delegated lane the answer is the model's LAST WORD, not merely the
-       last thing it said. The two differ whenever a turn goes on working after
-       speaking, and the answer is emitted past the turn's fold -- so a line that
-       introduced a tool call was drawn below the call, and a running turn, which
-       is redrawn from its newest line on every poll, pinned that line under
-       everything that came after it. Such a line is narration and stays in the
-       fold where it was said; the turn keeps its answer row for the text
-       nothing follows.
-
-       The conversation's own lane is not read this way. Its live path does not
-       come through here at all -- `finishTurn` inserts the answer past the step
-       as the turn ends -- so this reading is what keeps a replay agreeing with
-       what the reader watched. */
-    const lastWord = !lane.main
-    if (lastWord && worked(m)) return false
     for (let j = i + 1; j < ahead.length; j += 1) {
       const n = ahead[j] as HistoryMessage
       if (n && n.role === 'user' && n.text && n.text.trim()) return true
       if (spoken(n)) return false
-      if (lastWord && worked(n)) return false
     }
     return true
   })
@@ -1696,12 +1645,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
      after it in the payload, so emitting it here would fold the work in
      afterwards and leave the answer sitting ABOVE the calls it introduced --
      the reverse of the order the same turn ends in live, where finishTurn
-     inserts the answer past the step.
-
-     The conversation's lane only. A delegated lane never reaches this: `worked`
-     above has already made a text that carried calls into narration, which is
-     the same ordering question answered the other way round, for a surface
-     whose live path is this function rather than finishTurn. */
+     inserts the answer past the step. */
   let held: { text: string; when: string | null } | null = null
   /* The turn number the workspace record files a change under, counted the way
      it counts them: one per user message with text (wsOnHistory in

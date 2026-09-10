@@ -1,6 +1,6 @@
 """The ppt-engine template payload machinery: pins, the gitignore fence, the pulls.
 
-The 10 bundled deck templates (about 47 MiB, 7 over the repo's 1 MiB cap)
+The 8 bundled deck templates (35.73 MiB, 5 over the repo's 1 MiB cap)
 never enter git; ``plugins-dist/ppt-engine/templates.manifest.json`` is the
 tracked truth and ``fetch_templates.py`` the only way payload reaches the
 gitignored destination. What this family pins: the manifest agrees with the
@@ -55,11 +55,11 @@ def _pinned(payload: dict[str, bytes]) -> dict:
     }
 
 
-def test_the_manifest_names_the_ten_templates_and_a_real_endpoint(manifest):
+def test_the_manifest_names_the_eight_templates_and_a_real_endpoint(manifest):
     """The pins are the tracked truth and the endpoint is a place, not a placeholder:
-    the ten templates live as a generic package in the project's own GitLab
+    the eight re-cut templates live as a generic package in the project's own GitLab
     package registry, so a fresh clone fetches them with the token that cloned it."""
-    assert len(manifest["files"]) == 10
+    assert len(manifest["files"]) == 8
     assert [entry["name"] for entry in manifest["files"]] == sorted(entry["name"] for entry in manifest["files"])
     for entry in manifest["files"]:
         assert entry["name"].endswith(".pptx")

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { _resetForTests as sheetReset } from '../features/composer/sheets'
 import { run as dagOpen, start as dagStart, _resetForTests as dagReset } from '../features/dag/mount'
 import { openDeskAgent, openDeskAgentRecord, openDeskFile, openDeskTab, getState as deskState, reset as deskLeave, saved as deskSaved, setActive, toggleSolo, updateSplits, _resetForTests as deskReset } from '../features/workspace/deskStore'
-import { landing, refreshDag, resume, watch } from './resume'
+import { landing, resume, watch } from './resume'
 import { _resetForTests as sessionReset, setCurrent } from './session'
 import { reset as agentsLeave, _resetForTests as agentsReset, getState as agentsState } from '../features/subagents/store'
 
@@ -243,76 +243,6 @@ describe('opening a conversation after a reload', () => {
     expect(readRuns).toEqual([])
     expect(paneIds()).toEqual([])
     expect(sheets()).toBe(0)
-  })
-
-  /* The run started while the reader was in another conversation, so no live
-     event ever reached this one and no note was written. The gateway knows the
-     run either way, and the ids the transcript carries are how this learns of
-     it -- without them a graph that ran entirely off-screen could never be
-     drawn, however long it kept running. */
-  it('raises the sheet on a run the reader never saw start', async () => {
-    reload()
-
-    await resume('s1', ['r1'])
-
-    expect(readRuns).toEqual(['r1'])
-    expect(sheets()).toBe(1)
-    expect(dagOpen('s1')!.run_id).toBe('r1')
-  })
-
-  /* One sheet per conversation, so a conversation that ran several graphs comes
-     back on its newest -- the one whose nodes may still be moving. */
-  it('draws the newest run when the conversation ran several', async () => {
-    reload()
-
-    await resume('s1', ['r0', 'r1'])
-
-    expect(readRuns).toEqual(['r1'])
-  })
-
-  /* A note names the run the page was watching when it was replaced; the
-     transcript names every run the conversation ever started. The note wins,
-     because it is the only one of the two that carries a preference -- a reader
-     watching the first of two graphs is not moved onto the second by a reload.
-     The transcript is what answers when there is no note at all. */
-  it('keeps the reader on the run the note names', async () => {
-    dagStart('s1', graph('r0'))
-    reload()
-
-    await resume('s1', ['r0', 'r1'])
-
-    expect(readRuns).toEqual(['r0'])
-  })
-
-  /* The parked path's verb. A conversation whose turn was parked comes back from
-     detached DOM, so replaying the reader's window opens would give them every
-     window twice -- but its graph went on running with nobody listening and is
-     the one thing that does need re-reading. */
-  it('re-reads the graph without replaying the desk', async () => {
-    dagStart('s1', graph('r1'))
-    openDeskFile('/workspace/a.ts')
-    const before = paneIds()
-
-    await refreshDag('s1')
-
-    expect(readRuns).toEqual(['r1'])
-    expect(paneIds()).toEqual(before)
-  })
-
-  it('re-reads nothing for a conversation with no graph', async () => {
-    await refreshDag('s1')
-
-    expect(readRuns).toEqual([])
-  })
-
-  /* The live layer calls this without awaiting it, so a raise would be an
-     unhandled rejection rather than a sheet that merely does not refresh. A run
-     whose directory has been cleaned answers exactly that way. */
-  it('survives a run that cannot be read', async () => {
-    dagStart('s1', graph('r1'))
-    dagRun = () => Promise.reject(new Error('run dir is gone'))
-
-    await expect(refreshDag('s1')).resolves.toBeUndefined()
   })
 })
 

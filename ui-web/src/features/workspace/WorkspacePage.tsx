@@ -5,7 +5,7 @@ import { show as menuAt } from '../../shell/menu'
 import { show as toast } from '../../shell/toast'
 import {
   RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL,
-  hostPlatform, mdHtml, openInApp, setAppFor,
+  hostPlatform, mdHtml, openInApp, renderURL, setAppFor,
 } from './store'
 import * as deliveries from './deliveries'
 import * as store from './store'
@@ -28,6 +28,7 @@ const ICO = {
   reveal: 'M4 7.5c0-1.1.9-2 2-2h3.5l2 2.5H18c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-9.5Z'
     + 'M9.5 16l5-4.5M14.5 15V11.5H11',
   chev: 'M9.5 6.5 15 12l-5.5 5.5',
+  save: 'M12 4v10.5M7.5 10.5 12 15l4.5-4.5M5 19.5h14',
 }
 
 const FT_ICO = {
@@ -332,6 +333,9 @@ export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile |
 
 function Fbar({ f }: { f: WsFile | null }): JSX.Element {
   const platform = hostPlatform()
+  /* Subscribed for the same reason BinNote is: the delivery row a save link
+     prefers can arrive after the pane mounts. */
+  useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
   const revealTip = t(platform === 'mac' ? 'gui.ws.reveal_finder'
     : platform === 'windows' ? 'gui.ws.reveal_explorer' : 'gui.ws.reveal_folder')
   const rel = f ? store.source().shortPath(f.path) : ''
@@ -383,15 +387,29 @@ function Fbar({ f }: { f: WsFile | null }): JSX.Element {
           ))}
         </div>
       ) : null}
-      {f && (f.kind === 'pdf' || f.kind === 'html') ? (
+      {f && (f.kind === 'pdf' || f.kind === 'html' || f.kind === 'pptx') ? (
         <button
           className="ghost-ic tipdn"
           data-tip={t('gui.ws.file_newtab')}
           aria-label={t('gui.ws.file_newtab')}
-          onClick={() => window.open(fileURL(f.path), '_blank', 'noopener')}
+          onClick={() => window.open(f.kind === 'pptx' ? renderURL(f.path) : fileURL(f.path), '_blank', 'noopener')}
         >
           <Ico d={ICO.ext} />
         </button>
+      ) : null}
+      {/* The frame shows a PDF of the deck, so the deck itself is reachable
+          from here: the delivery route when this session delivered it, the
+          viewer route otherwise. */}
+      {f && f.kind === 'pptx' ? (
+        <a
+          className="ghost-ic tipdn"
+          data-tip={t('gui.ws.save_copy')}
+          aria-label={t('gui.ws.save_copy')}
+          href={deliveries.byPath(f.path)?.downloadPath || fileURL(f.path)}
+          download={f.path.split('/').pop() || ''}
+        >
+          <Ico d={ICO.save} />
+        </a>
       ) : null}
       {f ? (
         <button
@@ -428,7 +446,8 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
   const asSource = f.raw || !RENDERED[f.kind]
   const asImage = f.kind === 'img' || (f.kind === 'svg' && !asSource)
   const asFrame = (f.kind === 'pdf' || f.kind === 'html') && !asSource
-  const wantsText = !asImage && !asFrame && f.kind !== 'bin'
+  const asDeck = f.kind === 'pptx'
+  const wantsText = !asImage && !asFrame && !asDeck && f.kind !== 'bin'
   useEffect(() => {
     if (wantsText && !f.err && f.text == null && !f.loading) void store.loadFileText(f)
   })
@@ -458,6 +477,8 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
     body = f.kind === 'pdf'
       ? <iframe referrerPolicy="no-referrer" src={fileURL(f.path)} />
       : <iframe sandbox="" referrerPolicy="no-referrer" src={fileURL(f.path)} />
+  } else if (asDeck) {
+    body = <DeckBody f={f} />
   } else if (f.kind === 'bin') {
     body = <BinNote f={f} />
   } else if (f.text == null) {
@@ -471,6 +492,55 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
     body = parsed ? <JsonView v={parsed.v} /> : <CodeLines text={f.text} kind={f.kind} />
   }
   return <div className="fview">{body}</div>
+}
+
+/* A deck is shown as the PDF the gateway renders of it. The render is asked
+   for before it is framed, because a frame cannot say why its document did not
+   come, and this one can take a while or fail outright: LibreOffice may be
+   missing on the host, or hang on a deck. The answer's body is dropped unread
+   -- the gateway keeps the rendering, so the frame's own request is a cache
+   read -- and a failure falls back to the note a deck used to get, with the
+   gateway's words beside it. */
+function DeckBody({ f }: { f: WsFile }): JSX.Element {
+  const [stage, setStage] = useState<'convert' | 'frame' | 'shown'>('convert')
+  const [failed, setFailed] = useState<string | null>(null)
+  const url = renderURL(f.path)
+  useEffect(() => {
+    let alive = true
+    const said = (e: unknown): string => ((e as Error) && (e as Error).message) || String(e)
+    fetch(url, { credentials: 'same-origin' }).then(async (r) => {
+      if (!alive) return
+      if (r.ok) {
+        void r.body?.cancel()
+        setStage('frame')
+        return
+      }
+      let text = ''
+      try {
+        text = (await r.text()).trim()
+      } catch {
+        /* An error without a body still has a status to show. */
+      }
+      if (alive) setFailed(text || `${r.status} ${r.statusText}`.trim())
+    }, (e: unknown) => { if (alive) setFailed(said(e)) })
+    return () => { alive = false }
+  }, [url])
+  if (failed != null) {
+    return (
+      <>
+        <div className="verr">{t('gui.ws.render_failed')} {failed}</div>
+        <BinNote f={f} />
+      </>
+    )
+  }
+  return (
+    <>
+      {stage !== 'shown' ? <div className="vspin">{t('gui.ws.file_rendering')}</div> : null}
+      {stage !== 'convert'
+        ? <iframe referrerPolicy="no-referrer" src={url} onLoad={() => setStage('shown')} />
+        : null}
+    </>
+  )
 }
 
 function CodeLines({ text, kind }: { text: string; kind: string }): JSX.Element {

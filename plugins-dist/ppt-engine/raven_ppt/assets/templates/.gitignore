@@ -1,4 +1,4 @@
-# The bundled deck templates (10 .pptx, 47.72 MiB, 7 of them over the repo's
+# The bundled deck templates (8 .pptx, 35.73 MiB, 5 of them over the repo's
 # 1 MiB cap) never enter git: this directory holds fetched payload only,
 # pinned per file by sha256 in ../../../templates.manifest.json and pulled by
 # ../../../fetch_templates.py (or copied from the vendored fork tree while it
