@@ -62,6 +62,7 @@ from raven_ppt.contracts import (
     outline_path,
 )
 from raven_ppt.services import seen
+from raven_ppt.services.gates.quiet import quiet
 from raven_ppt.services.measure.geometry import iter_shapes, open_deck, picture_blob, shows_picture
 from raven_ppt.services.measure.type_size import census, rendered_spans
 from raven_ppt.services.publish import PublishRefusedError, publish, stage, strip_vendor_marks
@@ -127,6 +128,7 @@ class BuildStage:
         slides: Sequence[int] | None = None,
         page_from: int = 1,
         draft: bool = False,
+        release: bool = False,
     ) -> StageResult:
         outcome = await self.backend(project, script)
         if not outcome.ok:
@@ -140,6 +142,8 @@ class BuildStage:
         findings = list(await self.measure(project, outcome.pptx_path, outcome, _changed(project, outcome, draft)))
         findings.extend(_page_failure_findings(project))
         findings.extend(_mapping_findings(project, outcome))
+        # What the audited runs showed to be noise is not repeated (services/gates/quiet).
+        findings = quiet(project, findings, stood_in={int(entry["page"]) for entry in page_failures(project)})
         # After measuring, because measuring is what renders the deck and the record
         # reads that render. Before either exit, because a draft is the state the
         # record is worth most in: half the program is written and the rest of it is
@@ -172,6 +176,15 @@ class BuildStage:
         blocking = self._blocking(findings)
         data: dict[str, Any] = {"outcome": outcome, "findings": findings, "showing": showing}
         data["unseen_after"] = _unseen_pages(project, outcome)
+        publishable = findings
+        if blocking and release:
+            # The tier's build cap is reached: the deck goes out as it stands and the
+            # findings ride along in the reply. Only a deck that exists reaches here;
+            # a program that produced none returned above. The publish step refuses
+            # on a blocking finding of its own accord, so it is handed the rest.
+            data["released"] = [f.kind for f in blocking]
+            publishable = [f for f in findings if f not in blocking]
+            blocking = []
         if blocking:
             pages = sorted({f.page for f in blocking if f.page is not None})
             where = f" on page(s) {', '.join(str(page) for page in pages)}" if pages else ""
@@ -186,8 +199,8 @@ class BuildStage:
                 project,
                 staged,
                 self.destination(project),
-                findings=findings,
-                blocking_kinds=self.profile.blocking_kinds,
+                findings=publishable,
+                blocking_kinds=() if "released" in data else self.profile.blocking_kinds,
             )
         except PublishRefusedError as exc:
             record_refused(project, str(exc), blocking)

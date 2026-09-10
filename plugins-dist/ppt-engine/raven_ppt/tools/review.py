@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -34,6 +35,7 @@ from raven.utils.images import image_block, text_block
 from raven_ppt.backends.script import deck_path, page_failures
 from raven_ppt.contracts import Project, brief_path, load_brief, load_outline, outline_path
 from raven_ppt.services import review_ledger
+from raven_ppt.services.render.pdf import words_by_page
 from raven_ppt.services.review_ledger import REFUSED_FIGURE_REASON
 from raven_ppt.stages.build import BATCH_VIEWS
 from raven_ppt.tools import _return
@@ -123,9 +125,18 @@ what, not how far. Nothing for what the page does well. No repeats.
 JSON and nothing else:
 
 {{"reads": "one sentence",
+ "headline": "the largest words on the page, copied exactly as printed",
  "problems": [{{"kind": "oversized_shape|underfilled_page|too_full|alignment|marks|figure|table|listed|type|claim",
  "where": "...", "what": "...", "fix": "..."}}]}}
 """
+
+# How much of the reader's `headline` has to be on the page it was asked about. On
+# the audited decks fourteen `claim` findings described a different page than the one
+# the entry named (page 1's entry read as a contents page, page 8's as a paper page);
+# whatever crossed them, a headline that is not on the page is the one cheap check
+# that a reading is about its page. Words of one character are skipped: CJK
+# punctuation and single letters match anything.
+HEADLINE_MATCH = 0.5
 
 
 def requirements() -> str:
@@ -299,7 +310,9 @@ class PptReviewTool(Tool):
         else:
             queue = sorted(renders, key=lambda number: (number in _already_read(deck), number))
             shown = [number for number in queue if number not in stood_in][:MAX_PAGES]
-        read, reads = await self._read(deck, renders, shown)
+        read, reads = await self._read(
+            deck, renders, shown, words_by_page(deck.review_dir / f"{built.stem}.pdf") or None
+        )
 
         found = {number: problems for number, problems in read.items() if problems}
         clean = [number for number in shown if number in read and not read[number]]
@@ -387,7 +400,11 @@ class PptReviewTool(Tool):
         return _return.with_images(body, blocks)
 
     async def _read(
-        self, deck: Project, renders: dict[int, Path], shown: list[int]
+        self,
+        deck: Project,
+        renders: dict[int, Path],
+        shown: list[int],
+        words: dict[int, str] | None = None,
     ) -> tuple[dict[int, list[dict[str, str]]], dict[int, str]]:
         """One page, one empty context, one list. Concurrently, and per page.
 
@@ -401,10 +418,18 @@ class PptReviewTool(Tool):
         ruled_out = tuple(brief.forbidden) if brief is not None else ()
         outline = load_outline(outline_path(deck))
         planned = {page.page: page for page in outline.pages} if outline is not None else {}
+        # The plan is keyed by the finished deck's page numbers. A draft shorter than
+        # the outline (a 12-page draft of a 34-page plan) numbers its pages by what it
+        # drew, so page 8 of the draft is not page 8 of the plan; asked anyway, the
+        # reader reported "the claim is missing" on every such page. No plan, no
+        # `claim` finding, until the deck has the outline's length.
+        if words is not None and planned and len(words) != len(planned):
+            planned = {}
         asked = BRIEF.format(language=language, requirements=requirements())
 
         reading = asyncio.Semaphore(READERS)
         seconds: dict[int, float] = {}
+        misread: list[int] = []
 
         async def one(number: int) -> tuple[int, list[dict[str, str]]] | None:
             async with reading:
@@ -439,7 +464,14 @@ class PptReviewTool(Tool):
                     len(reply or "") if isinstance(reply, str) else 0,
                 )
                 return None
-            return number, _vetted(payload.get("problems")), str(payload.get("reads") or "").strip()
+            if words is not None and not _headline_on_page(str(payload.get("headline") or ""), words.get(number, "")):
+                logger.info("ppt_review: page {} came back describing another page; its reading is dropped", number)
+                misread.append(number)
+                return None
+            problems = _vetted(payload.get("problems"))
+            if not planned:
+                problems = [problem for problem in problems if problem.get("kind") != "claim"]
+            return number, problems, str(payload.get("reads") or "").strip()
 
         # Bounded as a whole, not per page: the budget is what the author waits, and
         # a page still being read when it runs out is left for the next build rather
@@ -456,6 +488,7 @@ class PptReviewTool(Tool):
             "seconds": round(time.monotonic() - started, 1),
             "per_page_s": {str(number): seconds[number] for number in sorted(seconds)},
             "over_budget": sorted(tasks[task] for task in pending),
+            "misread": sorted(misread),
         }
         logger.info(
             "ppt_review: read {} of {} page(s) in {}s ({} over the {:.0f}s budget)",
@@ -756,6 +789,20 @@ def _said(number: int, plan: Any, ruled_out: tuple[str, ...] = ()) -> str:
     if plan.carries:
         said.append(f"What it was planned to carry: {plan.carries}")
     return "\n".join(said)
+
+
+def _headline_on_page(headline: str, text: str) -> bool:
+    """Whether enough of the headline the reader quoted is printed on the page.
+
+    True when the reader gave no headline, or the page has no readable text: the
+    check refuses a reading only on evidence, never on absence of it.
+    """
+    tokens = [token for token in re.findall(r"[\w\u4e00-\u9fff]+", headline) if len(token) > 1]
+    if not tokens or not text.strip():
+        return True
+    flat = re.sub(r"\s+", "", text).lower()
+    hits = sum(1 for token in tokens if token.lower() in flat)
+    return hits / len(tokens) >= HEADLINE_MATCH
 
 
 def _vetted(problems: Any) -> list[dict[str, str]]:

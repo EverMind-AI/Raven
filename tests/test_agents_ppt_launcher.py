@@ -701,6 +701,18 @@ def test_a_carried_tools_ppt_block_is_dropped_with_the_successor_named(grounded,
     assert 'plugins.config["ppt-engine"]' in capsys.readouterr().err
 
 
+def test_the_three_tiers_are_declared_from_the_modes_directory(grounded):
+    """medium: low effort and the caps; high (the default): the caps; max: the source
+    config as shipped, no overlay. The plugin's knobs travel in the overlay the hook
+    reads, the effort on the entry the host dispenses."""
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    modes = data["acp"]["modes"]
+    assert sorted(modes) == ["high", "max", "medium"] and data["acp"]["defaultMode"] == "high"
+    assert modes["medium"]["reasoningEffort"] == "low" and "reasoningEffort" not in modes["high"]
+    assert modes["medium"]["overlay"] == modes["high"]["overlay"] == {"buildCap": 10, "readingCap": 3}
+    assert modes["max"]["overlay"] == {} and "reasoningEffort" not in modes["max"]
+
+
 def test_the_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkeypatch):
     """One key, two readers, ONE source of truth: the slice key is copied from
     the tools.web slot after the secret merge, so every admission source --

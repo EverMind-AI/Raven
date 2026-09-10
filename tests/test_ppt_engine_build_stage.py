@@ -801,3 +801,19 @@ async def test_a_second_delivery_is_marked_as_a_republish(project: Project) -> N
 
     again = await _stage(project, outcome=_outcome(project)).run(project)
     assert again.ok and again.data["republished"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_released_build_publishes_past_its_blocking_findings_and_names_them(project: Project) -> None:
+    """The capped tiers' last word: at the build cap the deck goes out as it stands.
+    The findings are not lost -- they ride in the result for the reply to list -- but
+    they no longer hold the file back."""
+    collision = Finding(
+        kind="word_collision", severity=Severity.BLOCKING, message="'31.1' is painted over 'VPS-only'", page=16
+    )
+    result = await _stage(project, findings=[collision]).run(project, release=True)
+
+    assert result.ok, result.note
+    assert Path(result.data["pptx_path"]).is_file()
+    assert result.data["released"] == ["word_collision"]
+    assert any(f.kind == "word_collision" for f in result.findings), "released, not forgotten"

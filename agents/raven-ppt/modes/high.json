@@ -1,0 +1,10 @@
+{
+  "plugins": {
+    "config": {
+      "ppt-engine": {
+        "buildCap": 10,
+        "readingCap": 3
+      }
+    }
+  }
+}
