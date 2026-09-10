@@ -81,6 +81,9 @@ LEDGER = {
         "ImageURL",
         "LLMProvider",
         "LLMResponse",
+        "BackendHealth",
+        "HealthCheck",
+        "HealthStatus",
         "Memory",
         "MemoryBackend",
         "ProviderHTTPError",
@@ -259,7 +262,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("18", "396e6a8c0663f8b8979711eac1c879cf4b070d2ad36e2628d37ba2e063dcaed2")
+PINNED_CONTRACT_SURFACE = ("19", "061d1d325a2492ad2f13b8928c841d519d501f2173485e57c7e5e997f31b9b54")
 
 
 def _render(node) -> str:

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pytest
 
-from raven.contracts.memory import Memory, MemoryBackend
+from raven.contracts.memory import BackendHealth, HealthCheck, Memory, MemoryBackend
 
 
 class MemoryBackendContractTests:
@@ -137,6 +137,16 @@ class MemoryBackendContractTests:
             top_k=5,
         )
         assert isinstance(hits, list)
+
+    async def test_health_is_none_or_backend_health(self, backend) -> None:
+        h = await backend.health()
+        if h is None:
+            return
+        assert isinstance(h, BackendHealth)
+        assert isinstance(h.ready, bool)
+        for c in h.checks:
+            assert isinstance(c, HealthCheck)
+            assert c.status in ("ok", "degraded", "missing")
 
 
 class LifecycleContractTests:

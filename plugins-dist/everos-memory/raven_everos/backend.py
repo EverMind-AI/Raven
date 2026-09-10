@@ -39,7 +39,7 @@ from typing import Any, Literal, Protocol
 
 import httpx
 
-from raven.contracts.memory import Memory
+from raven.contracts.memory import BackendHealth, HealthCheck, HealthStatus, Memory
 from raven.plugins import PluginContext
 from raven_everos.server import DEFAULT_EVEROS_BASE_URL
 
@@ -382,6 +382,17 @@ class _HttpEverosAdapter:
 
 def _log_notice(text: str) -> None:
     logging.getLogger(__name__).warning(text)
+
+
+# What is lost by leaving an optional role unconfigured. Stated per role rather
+# than as one blanket "optional": they degrade differently, and a user deciding
+# whether to configure embedding needs to know it costs semantic recall
+# specifically.
+_DEGRADATION_NOTE = {
+    "embedding": "not configured (recall matches keywords, not meaning)",
+    "rerank": "not configured (agent-track recall uses the LLM lane instead of a cross-encoder)",
+    "multimodal": "not configured (images, PDFs and audio stay out of memory)",
+}
 
 
 class EverosBackend:
@@ -818,6 +829,101 @@ class EverosBackend:
                     "EverosBackend: adapter.aclose failed: %s",
                     e,
                 )
+
+    async def health(self) -> BackendHealth:
+        """What ``raven doctor`` prints and what ``raven import`` gates on.
+
+        Callable before ``start``: doctor asks an instance it never started, so
+        nothing here may read the state machine. What the server says about
+        itself is the only source for a root the user runs -- no root is
+        recorded for one, and its ``everos.toml`` is not Raven's to read.
+        """
+        from raven.config.update_everos import everos_owned, everos_role_configured, everos_root
+        from raven_everos.health import (
+            DEGRADING_SECTIONS,
+            REQUIRED_SECTIONS,
+            base_url_from_slice,
+            probe_capabilities,
+        )
+        from raven_everos.server import server_log_path
+
+        try:
+            self._validate_identity()
+        except ValueError as e:
+            return BackendHealth(
+                ready=False,
+                checks=[HealthCheck("identity", "missing", f"{e} Fix memory.userId / memory.agentId in config.json.")],
+            )
+
+        checks: list[HealthCheck] = []
+        owned = everos_owned()
+        base_url = base_url_from_slice(self._config)
+        if owned:
+            checks.append(HealthCheck("memories", "ok", str(everos_root())))
+        else:
+            checks.append(
+                HealthCheck(
+                    "memories",
+                    "ok",
+                    "managed by you; Raven reads at the address below and never writes, starts or stops it",
+                )
+            )
+        checks.append(HealthCheck("address", "ok", base_url))
+
+        report = await asyncio.to_thread(probe_capabilities, base_url)
+        sections = (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS)
+        if owned:
+            configured = [s for s in sections if everos_role_configured(s)]
+        else:
+            configured = [s for s in sections if report.available(s) is not None]
+
+        if not report.reachable:
+            hint = "not running (starts on demand)" if owned else "not running; start it yourself and Raven follows"
+            checks.append(HealthCheck("server", "ok", hint))
+            if configured:
+                checks.append(HealthCheck("configured", "ok", ", ".join(configured)))
+            return BackendHealth(ready=False, checks=checks)
+
+        checks.append(HealthCheck("server", "ok", "running"))
+        if not report.reports_capabilities:
+            checks.append(HealthCheck("capabilities", "ok", "not reported by this server (everos < 1.2.1)"))
+            if configured:
+                checks.append(HealthCheck("configured", "ok", ", ".join(configured)))
+            return BackendHealth(ready=True, checks=checks)
+
+        ready = True
+        for section in sections:
+            if section not in configured:
+                if not owned:
+                    # Their server said nothing about this role and their toml is
+                    # not ours to read, so there is no evidence either way --
+                    # reporting it as unconfigured invents one.
+                    continue
+                status: HealthStatus = "degraded" if section in DEGRADING_SECTIONS else "missing"
+                checks.append(HealthCheck(section, status, _DEGRADATION_NOTE.get(section, "not configured")))
+                ready = ready and section not in REQUIRED_SECTIONS
+                continue
+            built = report.available(section)
+            if built is True:
+                checks.append(HealthCheck(section, "ok"))
+            elif built is False and section in REQUIRED_SECTIONS:
+                ready = False
+                checks.append(
+                    HealthCheck(
+                        section, "missing", f"configured, but the server could not build it. Check {server_log_path()}"
+                    )
+                )
+            elif built is False:
+                checks.append(
+                    HealthCheck(
+                        section,
+                        "degraded",
+                        f"configured, but the server could not build it; memory runs degraded. Check {server_log_path()}",
+                    )
+                )
+            else:
+                checks.append(HealthCheck(section, "ok", "not reported"))
+        return BackendHealth(ready=ready, checks=checks)
 
     async def _flush_unflushed_sessions(self) -> None:
         """Give every session with unextracted content one last flush.

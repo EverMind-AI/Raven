@@ -92,6 +92,13 @@ def capability_available(capabilities: dict[str, bool], section: str) -> bool | 
     return value if isinstance(value, bool) else None
 
 
+def base_url_from_slice(slice_: dict[str, Any] | None) -> str:
+    """Where the backend listens, per its own config slice."""
+    if isinstance(slice_, dict) and slice_.get("base_url"):
+        return str(slice_["base_url"])
+    return DEFAULT_EVEROS_BASE_URL
+
+
 def configured_base_url(config: Any) -> str:
     """Where the backend will actually be, per ``plugins.config``.
 
@@ -106,7 +113,7 @@ def configured_base_url(config: Any) -> str:
     for key in ("everos-memory", "everos"):
         slice_ = slices.get(key)
         if isinstance(slice_, dict) and slice_.get("base_url"):
-            return str(slice_["base_url"])
+            return base_url_from_slice(slice_)
     return DEFAULT_EVEROS_BASE_URL
 
 

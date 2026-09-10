@@ -80,6 +80,9 @@ class _DictBackend:
         # No-op — valid per Protocol.
         return None
 
+    async def health(self):
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Run the contract base against the fake backend

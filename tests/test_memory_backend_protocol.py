@@ -66,6 +66,9 @@ class _CompleteBackend:
     async def stop(self):
         return None
 
+    async def health(self):
+        return None
+
 
 class _IncompleteBackend:
     """Missing ``feedback`` — should NOT satisfy the Protocol."""

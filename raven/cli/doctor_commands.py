@@ -28,6 +28,7 @@ from rich.console import Console
 
 from raven import __logo__
 from raven.cli._helpers import print_probe_troubleshooting
+from raven.contracts.memory import BackendHealth, HealthCheck
 from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 from raven.core.provider_stack import send_probe
 
@@ -97,56 +98,23 @@ class GatewayInfo:
 
 @dataclass
 class MemoryInfo:
-    """What the memory backend is, and what it can actually do.
+    """The configured backend's own account of itself, rendered verbatim.
 
-    ``configured`` comes from the config files; ``capabilities`` from a running
-    server's ``/health``. Keeping both is the point: from everos 1.2.1 a server
-    whose embedding provider failed to build still answers 200 and degrades to
-    keyword-only search, so the two can disagree, and that disagreement is the
-    fault worth reporting.
-
-    ``plugin_missing`` is the case where neither can be filled in at all: the
-    backend the config names ships as its own distribution, and this install
-    does not have it.
+    ``health`` is ``None`` both when no backend is configured and when the
+    backend offers no diagnostics; ``backend`` tells the two apart.
+    ``plugin_missing`` stays: the configured backend's distribution is not
+    installed, so there is no backend to ask.
     """
 
     backend: Optional[str] = None
-    root: Optional[str] = None
-    owned: bool = True
-    address: Optional[str] = None
-    server_running: bool = False
-    reports_capabilities: bool = False
-    configured: list[str] = field(default_factory=list)
-    capabilities: dict[str, bool] = field(default_factory=dict)
-    retrieval: Optional[str] = None
+    health: Optional[BackendHealth] = None
     plugin_missing: bool = False
 
     @property
-    def unbuilt(self) -> list[str]:
-        """Roles the user configured that the server could not build."""
-        # Nothing configured has nothing to be unbuilt, and this is the shape a
-        # plugin-less install reports -- so the answer must not need the plugin.
-        if not self.configured:
+    def faults(self) -> list[str]:
+        if self.health is None:
             return []
-        from raven_everos.health import capability_available
-
-        return [s for s in self.configured if capability_available(self.capabilities, s) is False]
-
-    @property
-    def broken(self) -> list[str]:
-        """Unbuilt roles that memory cannot work without at all.
-
-        Separate from :attr:`unbuilt` because the others cost quality, not
-        function: without embedding the adapter searches lexically instead of
-        semantically, and that is a worse memory rather than no memory. Only this
-        list decides the exit code.
-        """
-        unbuilt = self.unbuilt
-        if not unbuilt:
-            return []
-        from raven_everos.health import REQUIRED_SECTIONS
-
-        return [s for s in unbuilt if s in REQUIRED_SECTIONS]
+        return [c.label for c in self.health.checks if c.status == "missing"]
 
 
 @dataclass
@@ -270,7 +238,7 @@ class DoctorReport:
         # A role the user configured that the server could not build is a real
         # fault, not a warning: recall silently returns nothing. A backend whose
         # plugin is not installed is the same fault one step earlier.
-        if self.memory is not None and (self.memory.plugin_missing or self.memory.broken):
+        if self.memory is not None and (self.memory.plugin_missing or self.memory.faults):
             return 2
         return 0
 
@@ -635,62 +603,41 @@ def _gather_static_checks() -> DoctorReport:
 
 
 def _probe_memory(config: "RavenConfig") -> MemoryInfo:
-    """Ask the memory server what it can do. Local HTTP only, never raises.
+    """Ask the configured backend what it can do. Never raises.
 
     Deliberately not part of ``_gather_static_checks``: that stays zero-network.
-    This one talks to localhost, which is cheap enough to run unconditionally --
-    unlike ``--probe``, it spends no tokens and reaches no third party.
+    A backend's own ``health`` may talk to localhost, which is cheap enough to
+    run unconditionally -- unlike ``--probe``, it spends no tokens and reaches
+    no third party.
     """
-    backend = config.memory.backend
-    info = MemoryInfo(backend=backend)
-    if backend != "everos":
+    import asyncio
+
+    from raven.config.loader import load_config
+    from raven.core.plugin_stack import maybe_build_memory_backend
+
+    info = MemoryInfo(backend=config.memory.backend)
+    if config.memory.backend is None:
         return info
-    if not everos_plugin_installed():
+    if config.memory.backend == "everos" and not everos_plugin_installed():
         info.plugin_missing = True
         return info
-    from raven.config.update_everos import everos_owned, everos_role_configured, everos_root
-    from raven_everos.health import (
-        DEGRADING_SECTIONS,
-        REQUIRED_SECTIONS,
-        configured_base_url,
-        probe_capabilities,
-    )
-
-    # Which memories, and whose: this is where "where are my memories" is
-    # answered, without reading config.json by hand.
-    info.owned = everos_owned()
-    info.address = configured_base_url(config)
-    report = probe_capabilities(configured_base_url(config))
-    info.server_running = report.reachable
-    info.reports_capabilities = report.reports_capabilities
-    info.capabilities = dict(report.capabilities)
-
-    if info.owned:
-        info.root = str(everos_root())
-        info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
-        # Recall quality is decided by the embedding role in the user-level
-        # everos.toml: with it recall matches meaning, without it only keywords.
-        info.retrieval = "semantic" if "embedding" in info.configured else "keyword-only"
+    # The workspace is on the other config object: the backend's ServiceLocator
+    # wants it, and ``RavenConfig`` does not carry one.
+    backend = maybe_build_memory_backend(load_config().workspace_path, config)
+    if backend is None:
+        # Configured, its distribution present, and still no backend: the
+        # factory did not build. Reported rather than passed over silently --
+        # nothing else in this report would mention it, and doctor is the
+        # command someone runs precisely when something is wrong.
+        info.health = BackendHealth(
+            ready=False,
+            checks=[HealthCheck("backend", "missing", f"{config.memory.backend!r} did not build; check the log")],
+        )
         return info
-
-    # A root the user runs. Nothing here may come from the local filesystem:
-    # no root is recorded for it, so ``everos_root()`` would answer with the
-    # fallback -- a directory that is not theirs and holds none of their
-    # memories -- and the roles read out of that directory's toml would
-    # describe an install nobody is using. Reading their toml is not an option
-    # either; not touching it is the promise. What the server says about itself
-    # is the only honest source, and when it is down there is no source at all.
-    info.root = None
-    # Every section the server has an opinion about -- built or failed. Taking
-    # only the built ones made ``unbuilt`` (the failed subset of this list)
-    # structurally empty, so ``broken`` and the exit code could never fire and
-    # a server that could not build its LLM reported healthy. Raven cannot read
-    # their toml to learn what they configured, and does not need to: a section
-    # the server reports as unavailable is one it tried to build and could not.
-    info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if report.available(s) is not None]
-    info.retrieval = None
-    if report.reports_capabilities:
-        info.retrieval = "semantic" if report.available("embedding") is True else "keyword-only"
+    try:
+        info.health = asyncio.run(backend.health())
+    except Exception as exc:
+        info.health = BackendHealth(ready=False, checks=[HealthCheck("health", "missing", f"health() raised: {exc}")])
     return info
 
 
@@ -704,65 +651,26 @@ def _run_llm_probe(timeout_s: int) -> LlmProbeResult:
 
 
 def _render_memory_capabilities(memory: MemoryInfo) -> None:
-    """Report the running server's capabilities, or say why they are unknown.
+    """Print the backend's own checks, one line each, in its own words.
 
-    "Server running" and "server can recall" stopped being the same statement in
-    everos 1.2.1, so they are printed as separate lines rather than one tick.
+    Nothing here interprets a label: "server running" and "server can recall"
+    stopped being the same statement, and which roles exist at all is the
+    backend's vocabulary, not the host's.
     """
-    if memory.backend != "everos":
+    if memory.backend is None:
         return
     if memory.plugin_missing:
-        console.print(f"  Plugin:     [red]✗ {everos_plugin_missing_note()}[/red]")
+        console.print(f"  Plugin:     [red]x {everos_plugin_missing_note()}[/red]")
         return
-    from raven_everos.health import capability_available
-
-    if memory.root:
-        console.print(f"  Memories:   {memory.root}")
-    if not memory.owned:
-        console.print(
-            "  [dim]Managed by you -- Raven reads it at the address below and never writes,\n"
-            "  starts or stops it, so it does not track where on disk it keeps them.[/dim]"
-        )
-    console.print(f"  Address:    {memory.address}")
-    if not memory.server_running:
-        console.print("  Server:     [dim]not running  (starts on demand)[/dim]")
-        if memory.configured:
-            console.print(f"  Configured: {', '.join(memory.configured)}")
+    if memory.health is None:
+        console.print("  [dim]This backend offers no diagnostics.[/dim]")
         return
-    console.print("  Server:     [green]running[/green]")
-    if not memory.reports_capabilities:
-        console.print("  [dim]This server does not report capabilities (everos < 1.2.1).[/dim]")
-        if memory.configured:
-            console.print(f"  Configured: {', '.join(memory.configured)}")
-        return
-    from raven_everos.health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
-
-    for section in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS):
-        label = f"  {section + ':':<12}"
-        if section not in memory.configured:
-            console.print(f"{label}[dim]not configured{_degradation_note(section)}[/dim]")
-            continue
-        state = capability_available(memory.capabilities, section)
-        if state is True:
-            console.print(f"{label}[green]✓[/green]")
-        elif state is False:
-            console.print(f"{label}[red]✗ configured, but the server could not build it[/red]")
-        else:
-            console.print(f"{label}[dim]not reported[/dim]")
-    if memory.unbuilt:
-        console.print()
-        if memory.broken:
-            console.print(
-                f"  [yellow]⚠ Memory needs {' and '.join(memory.broken)} and cannot work until this is fixed.[/yellow]"
-            )
-        else:
-            # "memory", not "recall": an unbuilt multimodal llm costs ingest of
-            # images / PDFs / audio, which recall never sees either way.
-            console.print(
-                f"  [yellow]⚠ {' and '.join(memory.unbuilt)} is configured but unavailable, so memory "
-                "runs degraded.[/yellow]"
-            )
-        console.print(f"  [dim]Check the server log: {_server_log_hint()}[/dim]")
+    mark = {"ok": "[green]ok[/green]", "degraded": "[yellow]degraded[/yellow]", "missing": "[red]missing[/red]"}
+    for c in memory.health.checks:
+        hint = f"  [dim]{c.hint}[/dim]" if c.hint else ""
+        console.print(f"  {c.label + ':':<14}{mark[c.status]}{hint}")
+    if memory.faults:
+        console.print(f"\n  [yellow]Memory cannot work until this is fixed: {', '.join(memory.faults)}[/yellow]")
 
 
 def _render_tool_capabilities(tools: ToolsInfo) -> None:
@@ -838,26 +746,6 @@ def _render_tool_capabilities(tools: ToolsInfo) -> None:
     console.print(
         f"  [dim]{len(tools.unconfigured)} capability(s) available but not set up; the agent is not offered them.[/dim]"
     )
-
-
-def _degradation_note(section: str) -> str:
-    """What is lost by leaving an optional role unconfigured.
-
-    Stated per role rather than as one blanket "optional": they degrade
-    differently, and a user deciding whether to configure embedding needs to know
-    it costs semantic recall specifically.
-    """
-    return {
-        "embedding": "  (recall matches keywords, not meaning)",
-        "rerank": "  (agent-track recall uses the LLM lane instead of a cross-encoder)",
-        "multimodal": "  (images, PDFs and audio stay out of memory)",
-    }.get(section, "")
-
-
-def _server_log_hint() -> str:
-    from raven_everos.server import server_log_path
-
-    return str(server_log_path())
 
 
 def _describe_window(routing) -> str:
@@ -991,12 +879,6 @@ def _render_human_output(report: DoctorReport) -> None:
     if memory is not None and memory.backend:
         console.print("\n[bold]Memory[/bold]")
         console.print(f"  Backend:    {memory.backend}")
-        if memory.retrieval == "semantic":
-            console.print("  Retrieval:  semantic")
-        elif memory.retrieval:
-            console.print("  Retrieval:  [dim]keyword-only  (no embedding key)[/dim]")
-        elif not memory.owned:
-            console.print("  Retrieval:  [dim]unknown  (the server you run is not answering)[/dim]")
         _render_memory_capabilities(memory)
 
     if report.tools is not None:
