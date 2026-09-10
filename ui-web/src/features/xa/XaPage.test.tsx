@@ -586,7 +586,7 @@ describe('xa island', () => {
       const box = document.querySelector<HTMLInputElement>('#dBody .sukey input')!
       expect(box.type).toBe('password')
       box.value = '  sk-live  '
-      await click(document.querySelector('#dBody .sukey button'))
+      await click(document.querySelector('#dBody .sukey button.key'))
       expect(acts).toEqual([['connect', 'miro', { api_key: 'sk-live' }]])
     })
 
@@ -596,7 +596,7 @@ describe('xa island', () => {
       await openCard('miro')
       const box = document.querySelector<HTMLInputElement>('#dBody .sukey input')!
       box.value = 'sk-live'
-      await click(document.querySelector('#dBody .sukey button'))
+      await click(document.querySelector('#dBody .sukey button.key'))
       expect(acts).toEqual([['update', 'miro', { api_key: 'sk-live' }]])
     })
 
@@ -604,7 +604,7 @@ describe('xa island', () => {
       const { acts } = install([row({ name: 'miro', kind: 'openai', configured: false, has_api_key: false })])
       await mount()
       await openCard('miro')
-      await click(document.querySelector('#dBody .sukey button'))
+      await click(document.querySelector('#dBody .sukey button.key'))
       expect(acts).toEqual([])
     })
 

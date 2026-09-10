@@ -1,7 +1,13 @@
 import { ds, shell, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 
-import type { ProviderOp, SettingsSnapshot, SettingsSource, UsageStats } from './types'
+import type {
+  ModelCandidate,
+  ProviderOp,
+  SettingsSnapshot,
+  SettingsSource,
+  UsageStats,
+} from './types'
 
 /* Page state, outside React on purpose: the legacy shell drives this dialog
  * imperatively (the me button and Cmd+, open it, redrawAll repaints it on a
@@ -38,8 +44,19 @@ export interface SettingsState {
      the page (the demo's no-data note). */
   usageSession: string
   usage: UsageStats | null | undefined
+  /* The provider the pane is showing, or null before anything is picked --
+     the page resolves that to the first connected one rather than storing a
+     default, so a refresh that connects a provider moves the pane with it. */
   provOpen: string | null
-  provAll: boolean
+  /* The drawer over the settings dialog: which provider it is for, and whether
+     it is filling a model in by hand or showing what the provider serves.
+     Holding the slug rather than a boolean is what lets it name the provider it
+     will write to, and survive the redraw a save triggers. */
+  drawer: { slug: string; mode: 'add' | 'list' } | null
+  addErr: string
+  /* The fetched catalogue, kept beside the drawer rather than inside it: a
+     redraw must not drop three hundred rows that cost a network round trip. */
+  fetch: { busy: boolean; rows: ModelCandidate[]; status: string; error: string }
   provErr: string
   provBusy: boolean
   provFocus: boolean
@@ -59,7 +76,9 @@ const initial = (): SettingsState => ({
   usageSession: '',
   usage: undefined,
   provOpen: null,
-  provAll: false,
+  drawer: null,
+  addErr: '',
+  fetch: { busy: false, rows: [], status: '', error: '' },
   provErr: '',
   provBusy: false,
   provFocus: false,
@@ -126,7 +145,10 @@ export async function open(): Promise<void> {
 
 export function setTab(id: string): void {
   window.sTab = id
-  set({ tab: id, epoch: state.epoch + 1 })
+  /* The drawer belongs to the model page. Left open across a tab change it
+     would come back over whatever section is showing, addressed to a provider
+     nobody is looking at any more. */
+  set({ tab: id, drawer: null, epoch: state.epoch + 1 })
   if (id === 'usage') void usageLoad()
 }
 
@@ -177,13 +199,106 @@ export function advToggle(): void {
   set({ mdlAdv: !state.mdlAdv, epoch: state.epoch + 1 })
 }
 
-export function provToggle(id: string): void {
-  const open = state.provOpen === id
-  set({ provOpen: open ? null : id, provErr: '', provFocus: !open, epoch: state.epoch + 1 })
+/* Which provider the right-hand pane is showing. A selection, not a toggle:
+   the pane is always showing one, so clicking the row you are already on must
+   not empty it. */
+export function provSelect(id: string): void {
+  if (state.provOpen === id) return
+  /* No `epoch` bump. That counter remounts the whole panel so uncontrolled
+     fields restart from freshly loaded values, and a remounted rail is a new
+     element scrolled back to the top -- picking a provider near the bottom of
+     forty threw the list back to the first one. Nothing here needs the rebuild:
+     the pane is keyed by the provider it shows, so it remounts on its own and
+     its fields pick up the new section. */
+  set({ provOpen: id, provErr: '', provFocus: true })
 }
 
-export function provAllToggle(): void {
-  set({ provAll: !state.provAll, epoch: state.epoch + 1 })
+export function addModelOpen(slug: string): void {
+  set({ drawer: { slug, mode: 'add' }, addErr: '' })
+}
+
+export function addModelClose(): void {
+  if (state.drawer === null) return
+  set({ drawer: null, addErr: '' })
+}
+
+/* Open the catalogue drawer and ask, in that order: the panel has to be on
+   screen while the round trip happens, or a slow provider reads as a button
+   that did nothing. */
+export async function fetchModelsOpen(slug: string): Promise<void> {
+  /* Drawer state only, so no `epoch` bump: the drawer lives outside the keyed
+     panel and a rebuild would only cost the rail its scroll position. */
+  set({
+    drawer: { slug, mode: 'list' },
+    addErr: '',
+    fetch: { busy: true, rows: [], status: '', error: '' },
+  })
+  const ask = source().fetchModels
+  if (!ask) {
+    set({ fetch: { busy: false, rows: [], status: '', error: t('gui.set.not_live') } })
+    return
+  }
+  try {
+    const out = await ask(slug)
+    /* Dropped if the drawer moved on: a second provider's list must not land
+       under the first one's heading. */
+    if (state.drawer?.slug !== slug || state.drawer.mode !== 'list') return
+    set({ fetch: { busy: false, rows: out.models || [], status: out.status || '', error: out.error || '' } })
+  } catch (e) {
+    if (state.drawer?.slug !== slug) return
+    set({ fetch: { busy: false, rows: [], status: 'error', error: errText(e) } })
+  }
+}
+
+/* Add or drop one row of the fetched list, and flip that row where it stands.
+   The list is the drawer's own state, so a snapshot refresh does not touch it
+   -- without this the row a person just added still offers to add it. */
+export async function catalogueToggle(slug: string, row: ModelCandidate): Promise<void> {
+  const params: Record<string, unknown> = row.added
+    ? { slug, model: row.id }
+    : {
+        slug,
+        model: row.id,
+        ...(row.label && row.label !== row.id ? { label: row.label } : {}),
+        ...(row.capabilities?.length ? { capabilities: row.capabilities } : {}),
+        ...(row.input_modalities?.length ? { input_modalities: row.input_modalities } : {}),
+        ...(row.output_modalities?.length ? { output_modalities: row.output_modalities } : {}),
+      }
+  const before = row.added
+  await providerRun(before ? 'remove_model' : 'add_model', params)
+  if (state.provErr) return
+  set({
+    fetch: {
+      ...state.fetch,
+      rows: state.fetch.rows.map((r) => (r.id === row.id ? { ...r, added: !before } : r)),
+    },
+  })
+}
+
+/* Every row the list is currently showing, one call at a time. Sequential
+   because each write rewrites the config file: fired together they race, and
+   the last writer wins with a list missing everything the others added. */
+export async function catalogueAddAll(slug: string, rows: ModelCandidate[]): Promise<void> {
+  for (const row of rows) {
+    if (row.added) continue
+    await catalogueToggle(slug, row)
+    if (state.provErr) return
+  }
+}
+
+/* Add a model with what the person stated about it, and shut the drawer only
+   if it lands. A refusal -- a duplicate id, a provider that went away -- has to
+   stay in front of the form that caused it, with the fields still filled. */
+export async function addModelSave(params: Record<string, unknown>): Promise<void> {
+  if (state.provBusy) return
+  set({ provBusy: true, addErr: '' })
+  try {
+    const snap = await source().provider('add_model', params)
+    set({ snap, provBusy: false, drawer: null, addErr: '', epoch: state.epoch + 1 })
+  } catch (e) {
+    const msg = errText(e)
+    set({ provBusy: false, addErr: msg, epoch: state.epoch + 1 })
+  }
 }
 
 /* Validation refusals land where the legacy provErr did: in the open form. */
@@ -195,6 +310,13 @@ export function clearProvFocus(): void {
   state = { ...state, provFocus: false }
 }
 
+/* What a refused provider write says to the reader. Shared by the two callers
+   so a demo-mode refusal reads the same wherever it lands. */
+function errText(e: unknown): string {
+  const err = e as { data?: { detail?: string }; message?: string }
+  return isNotLive(e) ? t('gui.set.not_live') : (err.data && err.data.detail) || err.message || String(e)
+}
+
 export async function providerRun(op: ProviderOp, params: Record<string, unknown>): Promise<void> {
   if (state.provBusy) return
   set({ provBusy: true, provErr: '' })
@@ -202,9 +324,7 @@ export async function providerRun(op: ProviderOp, params: Record<string, unknown
     const snap = await source().provider(op, params)
     set({ snap, provBusy: false, epoch: state.epoch + 1 })
   } catch (e) {
-    const err = e as { data?: { detail?: string }; message?: string }
-    const msg = isNotLive(e) ? t('gui.set.not_live') : (err.data && err.data.detail) || err.message || String(e)
-    set({ provBusy: false, provErr: msg, epoch: state.epoch + 1 })
+    set({ provBusy: false, provErr: errText(e), epoch: state.epoch + 1 })
   }
 }
 
