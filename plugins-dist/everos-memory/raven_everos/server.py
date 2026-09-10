@@ -260,7 +260,7 @@ def _everos_executable() -> str:
     raven pins.
 
     POSIX only -- the EverOS path is gated off on native Windows by both
-    callers (``onboard_everos._step4_memory`` and ``EverosBackend.start``).
+    callers (``raven_everos.onboard._step4_memory`` and ``EverosBackend.start``).
     """
     sibling = Path(sys.executable).parent / "everos"
     if sibling.is_file() and os.access(sibling, os.X_OK):

@@ -6,6 +6,10 @@ instance, and pytest will run every cross-adapter contract assertion
 against it. This is how the design's promise "extensible in theory ->
 actually runs" turns into something CI can enforce.
 
+The assertions cover the full ``MemoryBackend`` Protocol, including
+``health()``: a backend may answer ``None`` (no diagnostics) or a
+``BackendHealth`` whose ``checks`` are all ``HealthCheck`` instances.
+
 Why a base class and not a fixture: subclassing keeps the test names
 visible to test runners (``test_recall_returns_memory_list``) and
 makes it obvious which backend a failure belongs to (e.g. the failure
