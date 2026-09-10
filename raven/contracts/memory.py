@@ -29,6 +29,14 @@ The Protocol is :func:`typing.runtime_checkable` so ``isinstance(x,
 MemoryBackend)`` works in tests — at the cost of accepting any class
 whose surface matches, including duck-typed mocks. That's the trade we
 want: contract tests don't have to inherit from a base class.
+
+Failure contract. The host wraps every call into a backend and treats a
+raise as the loss of that one call: ``recall`` counts as no hits, ``store``
+as not landed, ``start`` as no long-term memory for this session, ``feedback``
+and ``stop`` as logged and ignored. A backend that can classify its own
+failures (a timeout is not a refused connection) should catch and act on
+them, because the host cannot; what it does not understand it may let
+propagate.
 """
 
 from __future__ import annotations
@@ -115,9 +123,9 @@ class MemoryBackend(Protocol):
         use ``user_id`` and return ``[]`` for the ``agent_id`` call.
         Passing neither or both is a caller bug — return ``[]``.
 
-        Empty result is a valid response (no hits); raise on transport
-        errors, auth failures, etc. The host will fall back to other
-        sources via ``SkillForgeRouter._safe_search``.
+        Empty result is a valid response (no hits). A raise is tolerated by
+        the host and costs this call its hits; prefer returning ``[]`` for
+        failures the backend can recognise.
         """
         ...
 
@@ -168,8 +176,11 @@ class MemoryBackend(Protocol):
 
     async def start(self) -> None:
         """One-time / idempotent initialization (open connections,
-        warm caches, run migrations). The host awaits this exactly
-        once during agent boot; failures abort startup."""
+        warm caches, run migrations).
+
+        The host awaits this exactly once during agent boot. A raise leaves
+        the session without this backend; it does not abort the host.
+        """
         ...
 
     async def stop(self) -> None:
