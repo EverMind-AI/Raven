@@ -67,27 +67,80 @@ class _Shared:
         self._engines: dict[str, dict[str, Tool]] = {}
         self._hook: PptEngineHook | None = None
         self._image_search: PptImageSearchTool | None = None
+        # The loop's late-bound grants, kept for the engines assembled after the
+        # bind (every real one: a turn binds before the first deck call).
+        self.usage_recorder = None
 
     def _assemble(self, workspace: Path) -> dict[str, Tool]:
         from raven_ppt.tools.assembly import build_ppt_tools
 
         cfg = self.cfg
+        services = self._ctx.services
         return {
             tool.name: tool
             for tool in build_ppt_tools(
                 workspace,
                 profile=cfg.profile,
-                provider=self._ctx.services.provider,
+                provider=services.provider,
                 composer_model=cfg.composer_model or None,
                 render_dpi=cfg.render_dpi,
                 render_concurrency=cfg.render_concurrency,
                 views_per_call=cfg.views_per_call,
                 deck_name=cfg.deck_name,
-                web_proxy=cfg.web_proxy,
-                image_config=cfg.image,
+                web_proxy=self.web_proxy(),
+                image_config=self.image_config,
+                media_proxy=getattr(services, "media_proxy", None) or self.web_proxy(),
+                usage_recorder=self.usage_recorder,
                 reader_effort=cfg.reader_effort or None,
             )
         }
+
+    def bind(self, handles: object) -> None:
+        """Take the loop's late-bound grants; an engine assembled before this saw none."""
+        recorder = getattr(handles, "usage_recorder", None)
+        if recorder is not None and recorder is not self.usage_recorder:
+            self.usage_recorder = recorder
+            # The prototypes' engine is never a real deck's; the per-workdir engines
+            # are rebuilt on their next call so the generator reports its spend.
+            self._engines.clear()
+
+    def image_config(self):
+        """The host's image section, read live through the locator's grant.
+
+        The host's own ``image_generate`` reads the same grant, so the deck's
+        generator sees the key, base and model that Settings shows -- and is
+        withheld on the same terms when the deployment configured none. A
+        slice naming its own ``image`` section overrides the grant: the seat
+        for a host that grants nothing, or an operator who wants the deck on
+        another account than the host's pictures.
+        """
+        if self.cfg.image is not None:
+            return self.cfg.image
+        reader = getattr(self._ctx.services, "media_config", None)
+        return reader("image") if callable(reader) else None
+
+    def web(self):
+        reader = getattr(self._ctx.services, "web_config", None)
+        return reader() if callable(reader) else None
+
+    def web_proxy(self) -> str | None:
+        """The slice's proxy when it names one, else the host's ``tools.web.proxy``."""
+        if self.cfg.web_proxy:
+            return self.cfg.web_proxy
+        return getattr(self.web(), "proxy", None) or None
+
+    def image_search_key(self) -> str | None:
+        """The slice's Serper key when it names one, else the host's: the vendor slot
+        ``tools.web.providers.serper.apiKey`` first, the legacy ``tools.web.search.apiKey``
+        after it, the order the host's own ``web_search`` reads them in."""
+        if self.cfg.image_search_api_key:
+            return self.cfg.image_search_api_key
+        web = self.web()
+        vendor_key = getattr(web, "vendor_key", None)
+        if callable(vendor_key):
+            return vendor_key("serper") or None
+        search = getattr(web, "search", None)
+        return getattr(search, "api_key", None) or None
 
     def prototypes(self) -> dict[str, Tool]:
         if self._prototypes is None:
@@ -113,7 +166,7 @@ class _Shared:
         prototype = self.prototypes().get(name)
         if prototype is None:
             return None
-        return SessionTool(prototype, self.engine_for)
+        return SessionTool(prototype, self.engine_for, on_bind=self.bind)
 
     def image_search(self) -> PptImageSearchTool | None:
         """The D2 tool, or ``None`` without a key to search with.
@@ -124,7 +177,7 @@ class _Shared:
         the key resolves from either the slice or ``SERPER_API_KEY``.
         """
         if self._image_search is None:
-            tool = PptImageSearchTool(api_key=self.cfg.image_search_api_key, proxy=self.cfg.web_proxy)
+            tool = PptImageSearchTool(api_key=self.image_search_key(), proxy=self.web_proxy())
             if tool.api_key:
                 self._image_search = tool
         return self._image_search

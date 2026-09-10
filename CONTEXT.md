@@ -85,6 +85,22 @@ drives the LLM + tool-execution iterations, consolidates memory, and emits `Deli
 events via the Spine `emit` callback. Exposed to the Spine via `AgentTurnRunner`.
 _Avoid_: calling a single LLM call the "agent loop" — the loop spans all Iterations of one turn.
 
+**Harness Modules** (`agent/harness/`, paper `contracts/harness.py`):
+The four generation-scoped strategy roles the Agent Loop delegates to without giving up its
+Turn state machine: **Memory** assembles the window the model sees, **Planning** may prepare
+turn guidance, **Capability** picks the tool definitions one Iteration exposes, and **Action**
+produces one model response. The default set preserves what the loop did inline: Memory wraps
+this generation's Context Engine and adds the two turn decisions that were the shell's (which
+history slice is a candidate, and how much window the prompt may occupy), Planning passes
+messages through, Capability reports `ToolRegistry.get_definitions`, and Action dispatches the
+one streaming-or-retrying call.
+Frozen per Generation: the tool array is the prompt-cache prefix, so the set a turn runs on
+cannot move between two of its model calls.
+_Avoid_: treating the four as four architecture layers — they are L3 strategy roles the L2
+shell calls. And saying Action owns the loop: the shell keeps iteration accounting, hook
+phases, tool execution and approval, the three in-turn recoveries, persistence and event
+order. A replacement loop may name its own roles, which is why the paper is factory-loop tier.
+
 **Turn Runner**:
 The behavioural `Protocol` seam between Spine and an agent implementation:
 `async run(req, emit, drain) → TurnOutcome`. Spine never imports the agent side; the agent
@@ -100,7 +116,7 @@ injected messages and generation overrides for that one call); `before_iteration
 withhold tools for the iteration, the iteration phases may leave the model a harness note on
 the last message (`append_note`), and `before_user_inbound` may rewrite the inbound text
 (`modified_content`, chained through `inbound_content`). Multiple hooks chain via `CompositeHook`; the EvalEngine
-wires three concrete implementations, and a product steers the loop with its own.
+wires three concrete implementations, and an agent steers the loop with its own.
 _Avoid_: "callback" or "middleware" — neither captures the phase-specific, chain-aware semantics.
 
 **Session Mode** (`acp/modes.py`; declared under `acp.modes` in config):
@@ -109,7 +125,7 @@ session response carries the `SessionModeState`. A mode's own three knobs are th
 cap the loop enforces, the reasoning effort its model calls run at (`reasoningEffort`,
 passed as an explicit argument on every call of the turn; unset inherits the connection's
 own), and an `overlay` the loop hands the hook chain as `ctx.metadata["mode_overlay"]`
-without interpreting -- a product's own hooks read their own knobs from it. The shipped
+without interpreting -- an agent's own hooks read their own knobs from it. The shipped
 built-in catalogue (see **Session Tier**) leaves all three knobs at their defaults on all
 three of its modes; a deployment that declares its own catalogue is what actually moves
 them -- `raven-code` declares `medium`/`high`/`max` on the host's own ladder, each moving
@@ -186,7 +202,7 @@ carries (`owns`, `owns_watched_work`) is read once here, where the schema resolv
 spelling it has ever accepted, and travels on the row and its `AgentMeta`; a consumer that
 re-opened config or a folder manifest for itself would be a second reader free to disagree
 with the table being dispatched against.
-Three sources compose it, weakest first: **Product agent** rows discovered on the
+Three sources compose it, weakest first: **Discovered agent** rows found on the
 filesystem, then `builtin` package seeds, then config. `builtin` rows are package seeds
 (`agent/subagent/builtin_agents.py`): they exist whether or not config mentions them, and a
 config row of the same name is a field-level override -- of every field but `enabled`,
@@ -200,13 +216,14 @@ _Avoid_: "third-party registry" — the table holds raven's own agents as well, 
 point of it: `spawn` and a DAG node pick from one roster, so an agent reachable from one
 entry point and not the other is no longer a state that exists.
 
-**Product agent** (`agent/subagent/vendored_agents.py`):
-An agent row discovered under the `agents/` product tree rather than written anywhere —
-one of the shipped products, each a launcher (`run.py`) over the installed raven plus a
-`subagent.json` manifest. Materialized as a row on every table build, so a folder that is
-deleted stops being an agent and a manifest that changes is picked up without a stored
-copy to contradict it. The tree resolves through `agents_root()` — the raven home
-(`~/.raven/agents`, installed out of the wheel so a product's `.env` survives upgrades),
+**Discovered agent** (`agent/subagent/vendored_agents.py`):
+An agent row discovered under the `agents/` tree rather than written anywhere — a
+folder holding a launcher (`run.py`) over the installed raven plus a `subagent.json`
+manifest: the five shipped agents, and any folder `raven agents new` scaffolds
+(`agents/BUILDING.md` is the from-zero guide). Materialized as a row on every
+table build, so a folder that is deleted stops being an agent and a manifest
+that changes is picked up without a stored copy to contradict it. The tree resolves through `agents_root()` — the raven home
+(`~/.raven/agents`, installed out of the wheel so an agent's `.env` survives upgrades),
 then beside the package in a checkout, then the wheel's own `raven/agents`. Readiness
 (the launcher files its command names on disk, and its manifest-declared engine wheel
 importable where raven runs) decides `enabled`, not whether the row exists: an unready
@@ -228,9 +245,12 @@ answer, so a preset cannot arrive on the roster unproved either.
 Not deletable through config — removing one means removing its folder, or setting
 `"enabled": false` in its own `subagent.json`. On the RPC wire the row source is still
 spelled `vendored`; renaming that is a schema change.
-_Avoid_: "vendored agent" — the retired fork-tree (`subagents/`) meaning, whose rows
+_Avoid_: "product" / "product agent" — the retired category word (the ruling keeps
+*agent* for the thing, *harness* for the mechanism it rides, *subagent* for the
+protocol seat); code-level `product_*` spellings stay as API surface, prose does not
+follow them; "vendored agent" — the retired fork-tree (`subagents/`) meaning, whose rows
 carried venv and credential readiness; "third-party agent" — these are raven's own
-products, and nobody registered them; "builtin" — that is the in-process row, which has
+agents, and nobody registered them; "builtin" — that is the in-process row, which has
 no subprocess and no launcher.
 
 **Machine** (`raven/ops/connections.py`):
@@ -262,6 +282,21 @@ what can be delegated and so decides which candidate skills are dropped as alrea
 that copy omits the generic `builtin` row, which claims no capability bias and would read as
 covering everything. Pull discovery builds no skills segment, so it has no gate and drops
 nothing on these grounds.
+A row marked `hidden` (an acp manifest field) is enabled and on the table yet off the roster and
+the `enum`: the model cannot name it, but a task *routed* to it runs there. `routes` on a row
+makes its backend a **Routing entry** (`agent/subagent/backends/routing.py:RoutingBackend`): the
+table hands it back for the row, so every caller that resolves a backend by name -- `spawn`, a
+DAG node and its retries, a direct chat -- has the implementation picked on `run`, in one place.
+It reads the task as the model wrote it (`authored_task` on `SubagentBackend.run`; every lane
+hands it over through `optional_keyword`, so only a `run` that declares it or takes `**kwargs`
+receives it and a backend typed against the earlier paper keeps running; the rendered `task`
+only where a caller has no other text). The order is fixed:
+a reused instance handle continues where its transport bound it; a task whose wording, file
+references taken out, matches a route's `match` pattern goes there without a model call;
+otherwise the manager's classifier (the host's own model) picks between the targets' roster
+lines and the entry itself, and any other answer keeps the task on the entry. A fronting row is only as ready as its
+targets (readiness kind `route`): a missing, unready or switched-off target disables the row
+with the reason on it. Both fields are manifest facts, filled from the folder over a stored row.
 _Avoid_: treating it as the table — the roster is the enabled subset, formatted for a prompt.
 
 **Ownership** (`owns`, on a sub-agent's manifest and on any config entry, built-in included):
@@ -368,7 +403,7 @@ pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an 
 is a revocation rather than a miss; `web_fetch` is always offered, falling back to Jina,
 which reads pages without a key. The two sub-agent launchers inherit the host's selection
 differently: the in-process backend (`agent/subagent/backends/raven_loop.py`) takes it and
-then declines to *register* `web_search` when no key resolves, while the product launcher
+then declines to *register* `web_search` when no key resolves, while the agent launcher
 (`agents/raven-research/run.py`, and the retired fork before it -- its snapshot sits in
 `tests/fixtures/vendored_fork/`) refuses to start without a search key, because its gate
 exits rather than degrading. Most vendors take the key
@@ -642,6 +677,16 @@ Row (`providers/catalog.py`).
 _Avoid_: confusing it with what a model can *do*. Whether a request may carry
 `cache_control` blocks is a Prompt Cache Breakpoint question, not a Model Row one.
 
+**Model Tags**:
+What a model can do, as the closed set of names the pickers draw as icons -- capabilities
+plus what it reads and writes (`providers/registry_data.py`, three packaged files).
+Display only, like the Model Row that carries them, and specifically not the answer to
+"may this request carry an image": that is a Prompt Cache Breakpoint's sibling question,
+answered per wire and per model by `capabilities.supports_vision` and `ProviderSpec`.
+An absent tag means the registry publishes nothing, never that the model cannot.
+_Avoid_: reading a context window off them -- the registry deliberately carries none, and
+the window is a Token Rates question because it sizes the next request.
+
 **Model Overlay**:
 What a user states about a model no catalogue carries — a label and a description for a
 self-hosted deployment. Beats the catalogue for the fields it sets.
@@ -756,7 +801,7 @@ SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Memory`
 (host `user.md` ⊕ EverOS recall), `# Active Skills` (always-on) and `# Skills`
 (SkillForge-routed candidates — see SkillForge), and `# Curator Working State`
 (Segment 6). `context.dropSegments` names, by builder name, the host segments an agent does
-without — a product whose bootstrap files carry its own identity drops `identity`.
+without — an agent whose bootstrap files carry its own identity drops `identity`.
 _Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 
 **Inject Mode**:
@@ -944,7 +989,7 @@ resolved at that path and absent until a release adds a playbook there; the laye
 what lets a release carry a playbook, not a bundled catalogue — while `<agent_home>/playbooks/` (override:
 `playbooks.dir`) is
 where both creation entries — `raven playbook create` and the `create_playbook`
-tool — land their product, usable on arrival (`playbooks.disabled` holds one
+tool — land their result, usable on arrival (`playbooks.disabled` holds one
 back, and is read live); a user directory reusing a
 builtin's name shadows it, with a load warning. A generator's open questions and
 assumptions go into the body (its `## Open questions` section) for a human to
@@ -984,13 +1029,21 @@ conflating it with a sub-agent DAG run (`run_subagent_dag` executes one graph a
 model just wrote; a playbook stores one for reuse).
 
 **SkillPolicy** (`skill_hub/policy.py`):
-The install-time safety decision both Hub install paths consult before any
-`SkillHubClient.install()` — the segment builder's post-gate hydrate and the `use_skill`
-tool. `refusal_for_detail()` checks, in order: the operator blocklist
+The safety decision every Hub skill path consults, at two strengths.
+`refusal_for_detail()` is the install strength, taken before any
+`SkillHubClient.install()` by the segment builder's post-gate hydrate and the `use_skill`
+tool. It checks, in order: the operator blocklist
 (`skillForge.blocklist`, matched case-insensitively against name / slug / native id), the
 `min_safety` bar against the *detail*-level `score_safety` (the catalog payload omits the
 score; a missing or malformed score passes), and an external home-dotdir lint over the
-skill body (`~/.raven` is allowed; any other dotdir reference refuses the install). A hub
+skill body. `~/.raven` is allowed, and so is a generic root such as `~/.config` on its own
+or `~/.config/raven` under it; a dotdir naming another product refuses the install and is
+reported down to the segment that names it (`~/.config/openclaw`).
+`refusal_for_read()` is the read strength, taken by `read_skill`: blocklist and safety bar
+only. A read installs nothing and returns the body wrapped as untrusted data, and the
+scent menu advertises hub candidates on those same two checks — linting the read as well
+would put ids in front of the model that no call can resolve. The lint still runs on that
+path, as a note above the body naming the flagged paths. A hub
 candidate whose detail fetch fails is unvetted and dropped — it never reaches `install()`.
 Every install that passes is appended to a JSONL audit trail
 (`<workspace>/skills/hub/installs.jsonl`, `skill_hub/audit.py`).
@@ -1064,8 +1117,8 @@ A component declared by a `raven-plugin.toml` manifest (`[plugin]`: `id`, `versi
 each naming a `factory` (`module:callable`). The host passes the user's
 `plugins.config["<id>"]` dict verbatim to the factory as `PluginContext.config`. A `hooks`
 contribution returns an `AgentHook` the assembly root appends to the loop's chain: it is how
-product code steers the turn loop from a plugin directory (`<home>/plugins`, `./.raven/plugins`
-beside a product, a root named in `plugins.dirs`, or an entry point) instead of a fork. A factory
+agent code steers the turn loop from a plugin directory (`<home>/plugins`, `./.raven/plugins`
+beside an agent folder, a root named in `plugins.dirs`, or an entry point) instead of a fork. A factory
 may decline by returning `None` (a clean opt-out, logged, never fatal), and a contributed tool
 that needs what only the assembled loop owns declares `bind_runtime(handles)` and receives the
 frozen `RuntimeHandles` grants once the loop finishes assembling -- the register-first,
@@ -1120,9 +1173,10 @@ degrades to the full description catalog for that turn.
 
 **Admission** (`config/admission.py`, `plugins/registry.py:_admit`, `agent/tools/registry.py:admit_tool`):
 The declare-check-dispense pattern at a boundary: the owner declares its authored members
-(a manifest's `config_schema`, a tool's four authored members), the door checks the
-declaration once at entry, and dispenses a frozen result (an admitted config slice, a
-`ToolSpec`) that the machinery reads afterwards. An empty declaration keeps verbatim
+(a manifest's `config_schema`, a tool's four authored members and its optional
+`configured()` availability declaration), the door checks the declaration once at entry,
+and dispenses a frozen result (an admitted config slice, a `ToolSpec`) that the machinery
+reads afterwards. An empty declaration keeps verbatim
 pass-through. Failures name the owner and the key at the door, not deep inside a turn.
 
 **Config-with-cargo** (`channels/contract.py:ChannelSpec.config_schema`, `raven-plugin.toml [plugin.config_schema]`):
@@ -1242,7 +1296,7 @@ outside this paper and its implementers.
 An archive, not a promise: a plan describes the tree as it stood on its own
 date, and holding one to today's layout would make it lie about that date. A
 runnable snippet inside one is therefore not a public seam -- the public surface
-the agent products pin is read out of `agents/*/install.py` and the charter by
+the shipped agents pin is read out of `agents/*/install.py` and the charter by
 `tests/test_external_consumer_surface.py`, and the living-doc pointer guard
 deliberately skips this directory.
 _Avoid_: updating an old plan to match a rename -- fix the living document that
@@ -1274,7 +1328,7 @@ libraries consumed by surfaces, importing none themselves -- the edge is watched
 by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
 package for the repo-level `evolver/` tool (outside the wheel) that drives raven as a library,
 and a fifth import-linter contract keeps the runtime from importing it back. `agents/` is the
-same kind of non-seat: repo-level product definitions (the A/B pilots whose A side is the
+same kind of non-seat: repo-level agent definitions (the A/B pilots whose A side is the
 retired `subagents/` fork record) that consume installed raven over `raven acp`, with a sixth contract keeping
 the runtime out of them — the wheel carries the tree as data (`raven/agents`, mapped by
 `hatch_build.py`) for the roster's file-level discovery, which imports nothing from it;
@@ -1537,27 +1591,27 @@ _Avoid_: "workspace" unqualified — this term used to cover both agent-wide and
 storage; it now names only the agent-wide tree, so an unqualified "workspace" should be
 Agent home or Session workspace, whichever is meant.
 
-**Product state root** (`raven/config/product_render.py:product_state_root`):
-Where a product served over ACP keeps its WORK -- repos, instance buckets, flow stores,
-rendered configs -- never in the product's own folder: default
-`<raven home>/workspace/subagent_sessions/<product>`, overridden by the product's own
+**Agent state root** (`raven/config/product_render.py:product_state_root`):
+Where an agent served over ACP keeps its WORK -- repos, instance buckets, flow stores,
+rendered configs -- never in the agent's own folder: default
+`<raven home>/workspace/subagent_sessions/<agent>`, overridden by the agent's own
 state-root variable (the `raven-` prefix drops, dashes become underscores, the rest
 upper-cases: `raven-code` answers to `CODE_STATE_ROOT`). The engine's own Agent home is
-deliberately NOT here -- it goes through the Product ACP home (below). Work where the
+deliberately NOT here -- it goes through the Agent ACP home (below). Work where the
 work is, the home in the data directory.
 
-**Product ACP home** (`raven/config/product_render.py:product_acp_home`):
-The engine's own Agent home for a product served over ACP -- never inside the host's
+**Agent ACP home** (`raven/config/product_render.py:product_acp_home`):
+The engine's own Agent home for an agent served over ACP -- never inside the host's
 Agent home. The host hands a session's working directory to whatever it dispatches to,
 and a raven engine refuses a working directory that CONTAINS its own home (the per-turn
 checkpoint runs `add -A` over the working directory and would commit its config and
 provider tokens into a shadow repository) -- so homing an engine under the host Agent
 home made every dispatch fail while capability probing still passed. Default
-`<raven home>/subagent_sessions/<product>/acp`, checked against the CONFIGURED host
+`<raven home>/subagent_sessions/<agent>/acp`, checked against the CONFIGURED host
 Agent home (`agents.defaults.workspace`); when the default lands inside it, the engine
 is homed beside the host home instead, tagged per instance. A placement must also be
-creatable, and a refusal names the product's `*_ACP_HOME` override variable, which wins
-outright. The Product state root is untouched by all of this.
+creatable, and a refusal names the agent's `*_ACP_HOME` override variable, which wins
+outright. The Agent state root is untouched by all of this.
 
 **Subagent history** (`raven/agent/subagent/history.py`):
 The per-session audit trail of every delegation to a Subagent, inside that session's
@@ -2038,11 +2092,11 @@ back off the turn's last substantive assistant message once the turn has landed,
 loop_hooks paper's filing is the only seam a plugin needs - no plugin touches the wire, and
 a turn that filed nothing answers with its stop reason alone. Raven driving the agent side
 reads none of it: the table reaches the spawn record's `meta.json` and the DAG run's
-per-node entry through the same channel as the frame pointer, and a product's report
-arrives without the host knowing the product.
-_Avoid_: reading it in the host to make a decision - it is a product's record, not a
+per-node entry through the same channel as the frame pointer, and an agent's report
+arrives without the host knowing the agent.
+_Avoid_: reading it in the host to make a decision - it is an agent's record, not a
 protocol the orchestration acts on; "manifest" for the channel - the DAG run already has a
-`manifest.json` of its own, and this is any agent's table, not one product's.
+`manifest.json` of its own, and this is any agent's table, not one agent's.
 
 **Harness Manifest** (`agents/raven-code/plugins/code-flow/code_flow/manifest.py`):
 Raven-Code's workspace report, filed at the send of every prompt as the Response Meta entry

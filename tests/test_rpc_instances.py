@@ -76,6 +76,27 @@ def _factory(loop: Any) -> Any:
     return lambda: loop
 
 
+async def test_instances_lists_no_row_of_a_hidden_agent(_isolated_registry: Any) -> None:
+    """A routing entry sends a handle to a hidden target, whose transport binds
+    it under its own name. The list shows the entry's row for the handle and
+    not the target's: the user was never shown that agent."""
+    from types import SimpleNamespace
+
+    await _isolated_registry.upsert_spawn("s1", "Raven-Design", "h1", "running")
+    await _isolated_registry.commit("s1", "Raven-PPT", "h1", "acp-9", kind="acp")
+    manager = _FakeManager()
+    manager.registry = SimpleNamespace(
+        rows=lambda: [
+            SimpleNamespace(name="Raven-Design", hidden=False),
+            SimpleNamespace(name="Raven-PPT", hidden=True),
+        ]
+    )
+
+    result = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(manager)))
+
+    assert [(r["agent"], r["handle"]) for r in result["instances"]] == [("Raven-Design", "h1")]
+
+
 async def test_instances_lists_only_this_session(_isolated_registry: Any) -> None:
     await _isolated_registry.upsert_spawn("s1", "Raven-Code", "a", "completed")
     await _isolated_registry.upsert_spawn("s2", "Raven-Code", "b", "completed")

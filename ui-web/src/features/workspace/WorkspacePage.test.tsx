@@ -237,6 +237,87 @@ describe('workspace island', () => {
     expect(frame.getAttribute('sandbox')).toBe('')
   })
 
+  /* A deck is its own kind: the page cannot draw one, but the gateway can
+     render it as a PDF, and that is what the viewer frames. */
+  it('classifies a deck as its own kind and asks the file route for its PDF', () => {
+    expect(store.fileKind('/repo/out/deck.pptx')).toBe('pptx')
+    expect(store.fileKind('/repo/out/DECK.PPTX')).toBe('pptx')
+    expect(store.fileKind('/repo/out/deck.ppt')).toBe('bin')
+    expect(store.makeFile('/repo/out/deck.pptx').kind).toBe('pptx')
+    expect(store.renderURL('/repo/out/deck.pptx')).toBe('/file?path=%2Frepo%2Fout%2Fdeck.pptx&render=pdf')
+  })
+
+  const deckFile = { path: '/repo/deck.pptx', kind: 'pptx', raw: false, text: null, err: null, size: 9, loading: false }
+
+  it('says it is rendering while the gateway converts a deck', async () => {
+    install(emptyWs({ file: { ...deckFile } }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(await screen.findByText('gui.ws.file_rendering')).toBeTruthy()
+    expect(document.querySelector('.fview iframe')).toBeNull()
+    expect(screen.queryByText('gui.ws.file_binary')).toBeNull()
+  })
+
+  /* The render is asked for first and framed second; once the answer is good
+     the frame gets the same URL, without the sandbox attribute a PDF frame
+     must not carry, and the note about rendering stays up until it loads. */
+  it('frames the rendered PDF of a deck once the gateway has it', async () => {
+    install(emptyWs({ file: { ...deckFile } }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    const cancel = vi.fn()
+    const asked: Array<[string, RequestInit | undefined]> = []
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      asked.push([url, init])
+      return Promise.resolve({ ok: true, status: 200, statusText: 'OK', body: { cancel } })
+    })
+    await mount()
+    await act(async () => { await Promise.resolve() })
+    expect(asked.map((a) => a[0])).toEqual(['/file?path=%2Frepo%2Fdeck.pptx&render=pdf'])
+    expect(cancel).toHaveBeenCalled()
+    const frame = document.querySelector('.fview iframe') as HTMLIFrameElement
+    expect(frame).not.toBeNull()
+    expect(frame.getAttribute('src')).toBe('/file?path=%2Frepo%2Fdeck.pptx&render=pdf')
+    expect(frame.hasAttribute('sandbox')).toBe(false)
+    expect(screen.queryByText('gui.ws.file_rendering')).not.toBeNull()
+    await act(async () => { frame.dispatchEvent(new Event('load')) })
+    expect(screen.queryByText('gui.ws.file_rendering')).toBeNull()
+    /* The deck itself stays reachable from the header: its PDF in a tab, its
+       own bytes as a download. */
+    expect(screen.getByLabelText('gui.ws.file_newtab')).toBeTruthy()
+    const save = screen.getByLabelText('gui.ws.save_copy') as HTMLAnchorElement
+    expect(save.getAttribute('href')).toBe('/file?path=%2Frepo%2Fdeck.pptx')
+    expect(save.getAttribute('download')).toBe('deck.pptx')
+  })
+
+  it('prefers the delivery route for saving a delivered deck', async () => {
+    install(emptyWs({ file: { ...deckFile } }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    deliveries.seed([{ path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck',
+                       download_path: '/files/download?token=deck', size: 9 }])
+    await mount()
+    const save = screen.getByLabelText('gui.ws.save_copy') as HTMLAnchorElement
+    expect(save.getAttribute('href')).toBe('/files/download?token=deck')
+  })
+
+  /* A frame cannot say why its document did not come, so the answer to the
+     first request is what the viewer quotes, and the deck falls back to the
+     note it used to get. */
+  it('falls back to the note with the gateway\'s words when a deck does not render', async () => {
+    install(emptyWs({ file: { ...deckFile } }), {
+      canBrowse: true,
+      hostIsLocal: () => true,
+      openIn: async () => ({}),
+    }, { tab: 'file', open: true, picked: true })
+    vi.stubGlobal('fetch', () => Promise.resolve({
+      ok: false, status: 504, statusText: 'Gateway Timeout',
+      text: async () => 'LibreOffice took longer than 180s to render the deck and was stopped',
+    }))
+    await mount()
+    expect(await screen.findByText(/LibreOffice took longer than 180s/)).toBeTruthy()
+    expect(screen.getByText(/gui.ws.render_failed/)).toBeTruthy()
+    expect(screen.getByText('gui.ws.file_binary')).toBeTruthy()
+    expect(screen.getByText('gui.ws.open_with_host {"k":"PPTX"}')).toBeTruthy()
+    expect(document.querySelector('.fview iframe')).toBeNull()
+    expect(screen.queryByText('gui.ws.file_rendering')).toBeNull()
+  })
+
   /* A kind the page cannot render: the note offers the host's own application
      for it. Both actions run where the GATEWAY runs, which is why the offer is
      conditional -- see the withheld case below. */

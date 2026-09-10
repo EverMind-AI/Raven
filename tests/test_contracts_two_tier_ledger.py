@@ -134,7 +134,29 @@ LEDGER = {
         # says a session is gone, with the removal outcome.
         "SessionObserver",
     },
-    "factory_loop": {"AgentHook", "AgentHookContext", "FACTORY_LOOP_SURFACE_VERSION", "HookDecision", "McpHost"},
+    "factory_loop": {
+        "AgentHook",
+        "AgentHookContext",
+        "FACTORY_LOOP_SURFACE_VERSION",
+        "HookDecision",
+        "McpHost",
+        # The four strategy roles the loop delegates to (harness.py), and the
+        # carriers between them. Factory-loop tier for the reason the hook
+        # vocabulary is: a replacement loop may name its own strategy points,
+        # and the four here are this loop's. The roles themselves --
+        "ActionModule",
+        "CapabilityModule",
+        "MemoryModule",
+        "PlanningModule",
+        # -- the frozen set one generation runs on --
+        "HarnessModules",
+        # -- and what crosses each seam.
+        "ActionRequest",
+        "CapabilityRequest",
+        "CapabilitySelection",
+        "PlanningRequest",
+        "PlanningResult",
+    },
 }
 
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent / "raven" / "contracts"
@@ -237,7 +259,23 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("14", "2432283c0f232ae0f1b31c95b62d2ec087dcddcdbcba505e817087c840913047")
+PINNED_CONTRACT_SURFACE = ("16", "6d1df58409cee25a4f1764e1c4a70312dc672d5f8b7f8e586b2aee1459c99288")
+
+
+def _render(node) -> str:
+    """One AST rendering on every supported interpreter.
+
+    ``ast.dump`` on 3.13 omits optional fields that are None or empty by
+    default and grew ``show_empty`` to restore the earlier form; 3.12 always
+    shows them and has no such parameter. Asked for the full form wherever it
+    can be, the two agree byte for byte, so the pin below is one digest rather
+    than one per interpreter.
+    """
+    import ast
+    import inspect
+
+    full = {"show_empty": True} if "show_empty" in inspect.signature(ast.dump).parameters else {}
+    return ast.dump(node, **full)
 
 
 def contract_surface_digest(pkg_dir: Path) -> str:
@@ -285,7 +323,7 @@ def contract_surface_digest(pkg_dir: Path) -> str:
             if name is None and isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
                 name = node.target.id
             if name in exports:
-                chunks.append(f"{py.name}:{ast.dump(SurfaceOnly().visit(node))}")
+                chunks.append(f"{py.name}:{_render(SurfaceOnly().visit(node))}")
     assert chunks, "no contract-tier surface found; a digest of nothing pins nothing"
     return hashlib.sha256("\n".join(chunks).encode()).hexdigest()
 
@@ -305,6 +343,16 @@ def test_the_version_pin_matches_the_papers():
         "paper edits is the AST render changing, not the papers -- repin without "
         "a bump.)"
     )
+
+
+def test_the_render_shows_empty_fields_on_every_supported_python():
+    """The interpreter-independence the pin rests on: an empty optional field
+    (a function's decorator list) is spelled out, on 3.12 where that is the
+    only form and on 3.13 where it has to be asked for."""
+    import ast
+
+    rendered = _render(ast.parse("def f():\n    pass\n").body[0])
+    assert "decorator_list=[]" in rendered
 
 
 def test_the_digest_moves_when_a_signature_changes(tmp_path):

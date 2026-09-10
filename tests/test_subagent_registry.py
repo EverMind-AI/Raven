@@ -14,7 +14,7 @@ from typing import Any
 
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.registry import AgentRegistry
-from raven.config.schema import ThirdPartyCliSubagentConfig
+from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 
 
 def _registry() -> AgentRegistry:
@@ -105,3 +105,30 @@ class TestTheGenericRowsLimitReachesTheModel:
 
     def test_the_roster_says_it_cannot_call_sub_agents(self) -> None:
         assert "cannot call sub-agents" in _registry().roster_text()
+
+
+class TestAHiddenRowIsOffTheRosterButOnTheTable:
+    """A row another row routes to: the model must not be able to name it, and a
+    routed spawn must still find it under its own name."""
+
+    @staticmethod
+    def _table() -> AgentRegistry:
+        registry = AgentRegistry(build_builtin=lambda row, narrowed: ("backend", row.name))
+        registry.apply([ThirdPartyAcpSubagentConfig(name="Deck", command="deck-agent", hidden=True)])
+        return registry
+
+    def test_the_model_never_sees_it(self) -> None:
+        registry = self._table()
+
+        assert "Deck" not in registry.names()
+        assert "Deck" not in {m.name for m in registry.meta()}
+        assert "Deck" not in registry.roster_text()
+        assert "Deck" not in registry.descriptions()
+
+    def test_a_dispatch_by_name_still_resolves(self) -> None:
+        registry = self._table()
+
+        row = registry.get("Deck")
+        assert row is not None and row.enabled and row.hidden
+        assert registry.backend("Deck") is not None
+        assert "Deck" in registry.all_names()

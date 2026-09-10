@@ -21,6 +21,7 @@ from raven.agent.subagent.backends import (
     SubagentActionAbortedError,
     SubagentBackend,
 )
+from raven.agent.subagent.backends.base import optional_keyword
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.dag_store import ensure_node_claimed, index_guard, record_node_outcome
 from raven.agent.subagent.direct_chat import (
@@ -324,6 +325,7 @@ class SubagentManager:
         self._session_record_tasks: dict[str, set[asyncio.Task]] = {}
         self.registry = AgentRegistry()
         self.registry.set_builtin_builder(self.build_builtin_backend)
+        self.registry.set_router(self._classify)
         self._configs = list(agents or [])
         self.registry.apply(self._configs)
         # Bound at birth, not at first dispatch: a generation that only bound
@@ -464,6 +466,29 @@ class SubagentManager:
         wake = getattr(backend, "bind_unprompted_announcer", None)
         if callable(wake):
             wake(self.announce_unprompted_turn)
+
+    async def _classify(self, menu: list[tuple[str, str]], task: str, default: str) -> str | None:
+        """Pick between a routing entry's targets and its own implementation.
+
+        The classifier a ``RoutingBackend`` calls when neither a reused handle
+        nor a target's ``match`` pattern settled the task. One short call on the
+        host's own model, reading the targets' roster lines and the task; the
+        entry itself is the answer for "none of these", so its line -- written to
+        pull work toward it -- is not in the menu.
+        """
+        lines = "\n".join(f"- {name}: {description}" for name, description in menu)
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Pick the one specialist agent the task below is for, or answer "
+                    f"{default} when none of them fits. Answer with the agent's name only."
+                ),
+            },
+            {"role": "user", "content": f"Specialists:\n{lines}\n\nTask:\n{task}"},
+        ]
+        reply = await self.provider.chat(messages, model=self.model, max_tokens=64, temperature=0.0)
+        return (reply.content or "").strip().strip("`'\"") or None
 
     def _resolve_backend(self, agent: str) -> SubagentBackend:
         """The execution backend for one agent name.
@@ -1021,6 +1046,7 @@ class SubagentManager:
                             provider=self.provider,
                             model=self.model,
                             mode=self.resolve_mode(session_key, agent, handle),
+                            **optional_keyword(backend, "authored_task", text),
                             **kwargs,
                         )
                 except asyncio.CancelledError:
@@ -1519,6 +1545,7 @@ class SubagentManager:
                             provider=provider,
                             model=model,
                             mode=self.resolve_mode(session_key, agent, origin.get("instance")),
+                            **optional_keyword(backend, "authored_task", origin.get("authored_task")),
                             **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),
                             **state_kwargs,
                         )

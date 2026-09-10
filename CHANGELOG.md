@@ -4,6 +4,25 @@ All notable changes to Raven are documented here.
 
 ## Unreleased
 
+### Added
+
+- Two dark templates join the bundled catalogue, cut from user uploads: a
+  near-black circuit-board deck for product launches and a green aurora deck
+  for trend reports. Hidden vendor pages are gone, vendor marks are stripped,
+  and the roles each one lacked are borrowed from the light templates onto its
+  own dark masters. The template-selection prompt no longer refuses a dark
+  style outright: it takes one when the request asks for dark, black, night or
+  a technology register.
+
+### Changed
+
+- `ppt_generate_image` no longer answers a repeat ask from the file the last
+  ask wrote. The tool exists for "that picture is not what I wanted, do it
+  again", and that ask carries the same words as the first one, so the cache
+  handed back the picture the author had just rejected. A call generates; the
+  file name is unchanged so the new picture arrives without the page being
+  edited.
+
 ### Changed
 
 - The Raven-PPT launcher sizes the run's context window from the endpoint
@@ -78,6 +97,45 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- A slide deck opens in the WebUI file viewer as a PDF. Clicking a `.pptx`
+  asks the file route for `render=pdf`: the deck's own published `<stem>.pdf`
+  is served when it is beside the deck and current, otherwise LibreOffice
+  renders one into a cache under raven's state directory keyed by path, size
+  and mtime, one render at a time per deck. The viewer says it is rendering
+  until the frame loads, offers the PDF in a tab and the deck itself as a
+  download, and falls back to the open-with note with the gateway's words when
+  the host has no LibreOffice, the render times out, or nothing is produced.
+- The deck engine's `ppt_generate_image` rides the host's `image_generate`
+  transport: whichever image model, base and key the deployment configured under
+  `tools.media.image` serves the deck (gpt-image behind OpenRouter, a chat-routed
+  model such as Nano Banana, an OpenAI-compatible gateway), the spend is recorded
+  where the host records it, and a Settings edit lands on the next call. The tool
+  takes `references` (figure ids, source files or paths, up to six) to match or
+  vary, the host's eight aspect ratios, and reports the `width` and `height` that
+  came back; it is withheld while the host's section names neither a key nor a
+  model, and follows the section live in both directions. The PNG's name is the
+  caller's stem plus a digest of the effective inputs -- the model, the quality
+  the host actually sends (Settings' value where one is set), the ratio, the
+  references and the prompt -- so the same ask lands on the same name and the
+  page that already places that file needs no edit; nothing is answered from
+  disk, and every call generates over what the last ask left there. `quality` has
+  no default of the deck tool's own: unset, the host resolves it exactly as it
+  does for its own `image_generate`, which sends the
+  default model no quality at all; naming one on the call still overrules that. Plugins get three new `ServiceLocator` grants (`media_config`,
+  `media_proxy`, `web_config`), one `RuntimeHandles` grant (`usage_recorder`),
+  and may declare `configured()` on a contributed tool (checked at admission,
+  dispensed on the `ToolSpec`) to be withheld and offered on the same live lane
+  as the built-in media tools. The Raven-PPT launcher
+  inherits the host's whole image section and follows it live (`selectionConfig`),
+  with `PPT_IMAGE_API_KEY`, `PPT_IMAGE_API_BASE` and `PPT_IMAGE_MODEL` as the
+  product's own overrides; the ppt-engine slice's `webProxy` and
+  `imageSearch.apiKey` become overrides of the host's `tools.web`.
+  The ppt-engine slice's `image` key is an override of that grant, not the
+  channel it is read through. `CONTRACTS_VERSION` moves to 16. The default image model is now
+  `openai/gpt-image-2.5-sunburst` (Settings presets follow), and a chat-routed
+  image model (Nano Banana and its kind) is asked for the requested frame through
+  OpenRouter's `image_config.aspect_ratio`; before, it answered in its own default
+  frame whatever ratio the caller asked for.
 - The research agent's three modes are three stop rules rather than three sizes
   of one budget. `medium` may answer a settled general-knowledge question
   without searching: the first model call has the web tools withheld and a
@@ -107,6 +165,13 @@ All notable changes to Raven are documented here.
   inherits the host's vendor choice and keys when its own config names none and
   the key resolves for it; the in-repo research plugin keeps its own separate
   search key.
+
+### Fixed
+
+- A gpt-image deployment behind an OpenAI-compatible Images API is asked for one of
+  the three frames the family draws (`1536x1024`, `1024x1536`, `1024x1024`) instead
+  of a size such as `1536x864` that it refuses; other model families keep the
+  ratio table, and OpenRouter still takes `aspect_ratio`.
 
 ### Changed
 

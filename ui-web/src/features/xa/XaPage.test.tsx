@@ -106,6 +106,19 @@ const cardName = (): string | null => document.querySelector('#dBody .pmdmeta .l
 const wayIn = (): string | null => document.querySelector('#dBody .pmdmeta .l2')!.textContent
 const cardAct = (): Array<string | null> =>
   [...document.querySelectorAll('#dBody .pmdhead .dact button')].map((b) => b.textContent)
+const capsOnCard = (): Array<string | null> =>
+  [...document.querySelectorAll('#dBody .pmsec > .cap')].map((c) => c.textContent)
+/* The "whether it works" section, found by its caption rather than by position:
+   the card has three sections now and which of them are drawn depends on the
+   row. */
+const testSec = (): HTMLElement | null =>
+  [...document.querySelectorAll<HTMLElement>('#dBody .pmsec')].find(
+    (sec) => sec.querySelector('.cap')?.textContent === 'gui.agent.sec_test',
+  ) ?? null
+const testBtns = (): Array<string | null> => [...(testSec()?.querySelectorAll('.sutest button') ?? [])].map((b) => b.textContent)
+const testVerdict = (): string | null => testSec()?.querySelector('.vd')?.textContent ?? null
+const testDot = (): string | null => testSec()?.querySelector('.led')?.className ?? null
+const testProse = (): Array<string | null> => [...(testSec()?.querySelectorAll('.pmdesc') ?? [])].map((n) => n.textContent)
 
 /* Opening the card is clicking the row: the row is the door, and there is no
    second Configure button beside it. */
@@ -531,7 +544,8 @@ describe('xa island', () => {
       expect(body.querySelector('.pmsec .cap')!.textContent).toBe('gui.plug.sec_about')
       expect(body.querySelector('.pmdesc')!.textContent).toBe('Claude Code CLI')
       /* What it is not any more: editable name and description fields, a second
-         copy of the row's status line, a test verdict, a save button, a menu. */
+         copy of the row's status line, a save button, a menu. (The verdict came
+         back, in a section of its own -- see "the test in the card".) */
       expect(body.querySelector('.sufield')).toBeNull()
       expect(body.querySelector('textarea')).toBeNull()
       expect(body.querySelector('.sufoot')).toBeNull()
@@ -572,7 +586,10 @@ describe('xa island', () => {
       install([row({ name: 'codex', configured: false, description: '' })])
       await mount()
       await openCard('codex')
-      expect(document.querySelector('#dBody .pmsec')).toBeNull()
+      /* By caption, not by "no section at all": the card grew a second one
+         (whether it works), and an assertion that counted sections would pass
+         only for as long as this was the only thing on the card. */
+      expect(capsOnCard()).not.toContain('gui.plug.sec_about')
     })
 
     /* The credential is the only thing the card takes, and only from the agents
@@ -586,7 +603,7 @@ describe('xa island', () => {
       const box = document.querySelector<HTMLInputElement>('#dBody .sukey input')!
       expect(box.type).toBe('password')
       box.value = '  sk-live  '
-      await click(document.querySelector('#dBody .sukey button'))
+      await click(document.querySelector('#dBody .sukey button.key'))
       expect(acts).toEqual([['connect', 'miro', { api_key: 'sk-live' }]])
     })
 
@@ -596,7 +613,7 @@ describe('xa island', () => {
       await openCard('miro')
       const box = document.querySelector<HTMLInputElement>('#dBody .sukey input')!
       box.value = 'sk-live'
-      await click(document.querySelector('#dBody .sukey button'))
+      await click(document.querySelector('#dBody .sukey button.key'))
       expect(acts).toEqual([['update', 'miro', { api_key: 'sk-live' }]])
     })
 
@@ -604,7 +621,7 @@ describe('xa island', () => {
       const { acts } = install([row({ name: 'miro', kind: 'openai', configured: false, has_api_key: false })])
       await mount()
       await openCard('miro')
-      await click(document.querySelector('#dBody .sukey button'))
+      await click(document.querySelector('#dBody .sukey button.key'))
       expect(acts).toEqual([])
     })
 
@@ -693,6 +710,268 @@ describe('xa island', () => {
       await openCard('claude_code')
       expect(cardName()).toBe('claude_code')
       expect(document.getElementById('dBody')!.textContent).not.toContain('someone else')
+    })
+  })
+
+  /* Whether it works, which is a different question from whether it is
+     installed -- and the one the page could never answer before. */
+  describe('the test in the card', () => {
+    it('offers it for an agent the server can look up', async () => {
+      install([row()])
+      await mount()
+      await openCard('claude_code')
+      expect(testBtns()).toEqual(['gui.agent.test_do'])
+    })
+
+    it('leaves it off the built-in agent, which is this process', async () => {
+      /* `run_test` refuses one outright -- "a built-in agent runs in this
+         process; there is nothing to test" -- and records nothing, so the
+         button could only ever put a failure on a row that is working. */
+      install([row({ name: 'raven', kind: 'builtin', builtin: true, configured: false })])
+      await mount()
+      await openCard('raven')
+      expect(testSec()).toBeNull()
+    })
+
+    it('leaves it off a discovered folder, which neither lookup can reach', async () => {
+      /* `subagents.test` takes `config` or `preset`, and a vendored row is in
+         neither: no config entry to find, and never in the preset table. Both
+         answer `subagent_not_found`. */
+      install([row({ name: 'Raven-Research', preset: undefined, configured: false, vendored: true })])
+      await mount()
+      await openCard('Raven-Research')
+      expect(testSec()).toBeNull()
+    })
+
+    it('keeps it out of the row, which still carries two verbs and no third', async () => {
+      install([row()])
+      await mount()
+      expect(rowActs('claude_code')).toEqual(['gui.agent.disconnect'])
+    })
+
+    it('reports the last verdict and how long ago it was reached', async () => {
+      install([row({ last_test_ok: true, last_test_at_ms: Date.now() - 3 * 3600e3 })])
+      await mount()
+      await openCard('claude_code')
+      expect(testVerdict()).toContain('gui.agent.test_ok')
+      /* Through the catalogue, not as a bare "3h": the age is the half of this
+         sentence that would otherwise stay English beside a Chinese one. */
+      expect(testVerdict()).toContain('gui.time.ago_h')
+      expect(testDot()).toBe('led')
+    })
+
+    it('counts the age in minutes while it is fresh, and in days once it is old', async () => {
+      /* Under a minute is not "0m": a test that has just answered should read
+         as having just answered. */
+      install([row({ last_test_ok: true, last_test_at_ms: Date.now() - 20e3 })])
+      await mount()
+      await openCard('claude_code')
+      expect(testVerdict()).toContain('gui.time.ago_now')
+      cleanup()
+
+      install([row({ last_test_ok: true, last_test_at_ms: Date.now() - 4 * 60e3 })])
+      await mount()
+      await openCard('claude_code')
+      expect(testVerdict()).toContain('gui.time.ago_m')
+      cleanup()
+
+      install([row({ last_test_ok: true, last_test_at_ms: Date.now() - 50 * 3600e3 })])
+      await mount()
+      await openCard('claude_code')
+      expect(testVerdict()).toContain('gui.time.ago_d')
+    })
+
+    it('says a failure failed, and puts the reason under it', async () => {
+      install([
+        row({ last_test_ok: false, last_test_at_ms: Date.now() - 60e3, last_test_detail: 'exited 1: not logged in' }),
+      ])
+      await mount()
+      await openCard('claude_code')
+      expect(testVerdict()).toContain('gui.agent.test_bad')
+      expect(testDot()).toBe('led bad')
+      expect(testProse()).toContain('exited 1: not logged in')
+    })
+
+    it('keeps the detail off a pass, where it only repeats the verdict', async () => {
+      /* A passing cli test's detail is "the agent ran and replied", which the
+         line above it has already said in fewer words. */
+      install([row({ last_test_ok: true, last_test_at_ms: Date.now(), last_test_detail: 'the agent ran and replied' })])
+      await mount()
+      await openCard('claude_code')
+      expect(testProse()).not.toContain('the agent ran and replied')
+    })
+
+    it('says nothing was measured when nothing was', async () => {
+      install([row()])
+      await mount()
+      await openCard('claude_code')
+      expect(testVerdict()).toBe('gui.agent.test_never')
+      expect(testDot()).toBe('led off')
+    })
+
+    it('reads a verdict with no time on it as untested', async () => {
+      /* The two fields come off one record, so this is a row from a server
+         that no longer exists -- and printing "Worked, {ago}" with the
+         placeholder still in it is worse than saying nothing was measured. */
+      install([row({ last_test_ok: true, last_test_at_ms: null })])
+      await mount()
+      await openCard('claude_code')
+      expect(testVerdict()).toBe('gui.agent.test_never')
+    })
+
+    it('warns about the quota for the test that spends one', async () => {
+      install([row({ kind: 'cli' })])
+      await mount()
+      await openCard('claude_code')
+      expect(testProse()).toContain('gui.agent.test_note')
+    })
+
+    it('does not warn about a bill an acp handshake never sends', async () => {
+      /* acp reaches its verdict in the handshake and openai in the free
+         `/models` probe. Warning about a cost neither of them has is how a
+         reader learns to ignore the warning on the one that does. */
+      install([row({ kind: 'acp' })])
+      await mount()
+      await openCard('claude_code')
+      expect(testProse()).not.toContain('gui.agent.test_note')
+      cleanup()
+
+      install([row({ kind: 'openai', has_api_key: true })])
+      await mount()
+      await openCard('claude_code')
+      expect(testProse()).not.toContain('gui.agent.test_note')
+    })
+
+    it('sends the test through the source', async () => {
+      const { acts } = install([row()])
+      await mount()
+      await openCard('claude_code')
+      await click(testSec()!.querySelector('.sutest button'))
+      expect(acts).toEqual([['test', 'claude_code', {}]])
+    })
+
+    /* The call IS the test: `subagents.test` holds the connection open for the
+       whole run and answers with the verdict, so the rows it repaints from are
+       the first news of the test being over -- and nothing before them says it
+       began. A card that read only the row flag sat on "Run a test" for the
+       two minutes of the test it had itself started. */
+    it('says it is running from the click, not from the answer', async () => {
+      let settle = (): void => {}
+      const { acts } = install([row()], {
+        act: async (op, r, args) => {
+          acts.push([op, r.name, args || {}])
+          if (op === 'test') await new Promise<void>((res) => (settle = res))
+          return [row()]
+        },
+      })
+      await mount()
+      await openCard('claude_code')
+      await click(testSec()!.querySelector('.sutest button'))
+      expect(testBtns()).toEqual(['gui.agent.test_stop', 'gui.agent.test_running'])
+      await act(async () => {
+        settle()
+      })
+      expect(testBtns()).toEqual(['gui.agent.test_do'])
+    })
+
+    /* Against the store, not the button: the button is disabled while a test
+       runs, so a click cannot reach this. The guard is for the caller -- the
+       server refuses a second test for a name, and its refusal arrives as an
+       ordinary result, which would repaint the card as though the running test
+       had answered. */
+    it('drops a second call rather than sending one the server would refuse', async () => {
+      const acts: Array<[string, string, XaActArgs]> = []
+      let settle = (): void => {}
+      const only = row()
+      install([only], {
+        act: async (op, r, args) => {
+          acts.push([op, r.name, args || {}])
+          if (op === 'test') await new Promise<void>((res) => (settle = res))
+          return [only]
+        },
+      })
+      await mount()
+      await act(async () => {
+        void store.runTest(only)
+        void store.runTest(only)
+      })
+      await act(async () => {
+        settle()
+      })
+      expect(acts.filter(([op]) => op === 'test')).toHaveLength(1)
+    })
+
+    it('offers stop only while one is running, and cancels through it', async () => {
+      let settle = (): void => {}
+      const acts: Array<[string, string, XaActArgs]> = []
+      install([row()], {
+        act: async (op, r, args) => {
+          acts.push([op, r.name, args || {}])
+          if (op === 'test') await new Promise<void>((res) => (settle = res))
+          return [row()]
+        },
+      })
+      await mount()
+      await openCard('claude_code')
+      expect(testBtns()).toEqual(['gui.agent.test_do'])
+      await click(testSec()!.querySelector('.sutest button'))
+      await click(testSec()!.querySelector('.sutest button'))
+      expect(acts.map(([op]) => op)).toEqual(['test', 'test_cancel'])
+      await act(async () => {
+        settle()
+      })
+    })
+
+    it('stops saying it is running when the call fails', async () => {
+      /* The rejected call, which is the path the reader most wants to press
+         again from: `run` turns it into a toast, and the flag has to come off
+         all the same or the button stays disabled for the rest of the session.
+         (This drives `run`'s catch, not `runTest`'s `finally` -- nothing
+         throws through that today; see the comment there.) */
+      const { toasts } = install([row()], {
+        act: async () => {
+          throw { data: { detail: 'the gateway went away' } }
+        },
+      })
+      await mount()
+      await openCard('claude_code')
+      await click(testSec()!.querySelector('.sutest button'))
+      expect(testBtns()).toEqual(['gui.agent.test_do'])
+      expect(toasts[0]).toContain('the gateway went away')
+    })
+
+    /* The name is the only handle either side has on a running test: the
+       server keys `_RUNNING` by it, and the verdict store records against it.
+       A rename mid-run leaves the run alive with nothing pointing at it. */
+    it('does not let the name move while a test is in flight', async () => {
+      const only = row()
+      let settle = (): void => {}
+      install([only], {
+        act: async (op) => {
+          if (op === 'test') await new Promise<void>((res) => (settle = res))
+          return [only]
+        },
+      })
+      await mount()
+      await openCard('claude_code')
+      expect(document.querySelector('#dBody .pmdmeta .xaedit')).not.toBeNull()
+      await click(testSec()!.querySelector('.sutest button:last-of-type'))
+      expect(document.querySelector('#dBody .pmdmeta .xaedit')).toBeNull()
+      expect(cardName()).toBe('claude_code')
+      /* Positive half: only the name is held. The description does not key
+         anything, so taking it away would be a restriction with no reason. */
+      expect(document.querySelector('#dBody .pmdesc .xaedit')).not.toBeNull()
+      await act(async () => {
+        settle()
+      })
+      expect(document.querySelector('#dBody .pmdmeta .xaedit')).not.toBeNull()
+    })
+
+    it('shows a test another client started, which is only on the row', async () => {
+      install([row({ test_running: true })])
+      await mount()
+      await openCard('claude_code')
+      expect(testBtns()).toEqual(['gui.agent.test_stop', 'gui.agent.test_running'])
     })
   })
 
@@ -858,6 +1137,81 @@ describe('xa island', () => {
       await blur(field)
 
       expect(acts).toEqual([['update', 'Raven-Code', { description: 'the shipped coder' }]])
+    })
+  })
+
+  /* The mark is the agent's brand, and the preset is what picks it -- never the
+     row's name. A configured row's name is the reader's to change, so keying on
+     it would cost a renamed agent its identity, and would hand a brand to a
+     hand-written row that merely spells itself like a preset. The generic glyph
+     is what a row with no preset gets: one of the shipped products, or an agent
+     the reader wrote. A glyph rather than an initial in a coloured square,
+     which is what this page drew for every row before it had marks at all. */
+  describe('the brand mark', () => {
+    const markImg = (name: string): HTMLImageElement | null =>
+      rowNamed(name).querySelector<HTMLImageElement>('.agent-mark img')
+
+    it('draws each row its own brand, chosen by preset', async () => {
+      install([
+        row({ name: 'Coder', preset: 'claude_code' }),
+        row({ name: 'Writer', preset: 'codex' }),
+        row({ name: 'Researcher', preset: 'mirothinker', kind: 'openai', has_api_key: true }),
+      ])
+      await mount()
+
+      expect(markImg('Coder')!.getAttribute('src')).toBe('assets/agents/claudecode-color.svg')
+      expect(markImg('Writer')!.getAttribute('src')).toBe('assets/agents/codex-color.svg')
+      expect(markImg('Researcher')!.getAttribute('src')).toBe('assets/agents/miromind.svg')
+    })
+
+    /* The case the keying decision exists for: every preset row ships under a
+       name the reader may replace, and this repository's own roster has three
+       that were replaced. */
+    it('keeps the brand when the row has been renamed', async () => {
+      install([row({ name: 'my own helper', preset: 'claude_code' })])
+      await mount()
+
+      expect(markImg('my own helper')!.getAttribute('src')).toBe('assets/agents/claudecode-color.svg')
+    })
+
+    /* The other half of it. Spelling a name like a preset is not being that
+       preset, and a brand on such a row would be a claim about a command line
+       nobody verified. */
+    it('withholds the brand from a row that only shares a preset name', async () => {
+      install([row({ name: 'codex', preset: undefined })])
+      await mount()
+
+      /* Both halves, because "no brand" is also true of a page that draws no
+         marks at all: the slot has to be there, holding the generic glyph, or
+         this passes for the wrong reason. */
+      const slot = rowNamed('codex').querySelector('.agent-mark')
+      expect(slot).not.toBeNull()
+      expect(slot!.querySelector('svg')).not.toBeNull()
+      expect(markImg('codex')).toBeNull()
+    })
+
+    it('draws the generic glyph, never an initial, for a row with no preset', async () => {
+      install([row({ name: 'Raven-Code', preset: undefined, configured: false, vendored: true, kind: 'acp' })])
+      await mount()
+
+      const slot = rowNamed('Raven-Code').querySelector('.agent-mark')
+      expect(slot).not.toBeNull()
+      expect(slot!.querySelector('svg')).not.toBeNull()
+      expect(markImg('Raven-Code')).toBeNull()
+      expect(rowNamed('Raven-Code').querySelector('.pmtile')).toBeNull()
+    })
+
+    /* One identity, drawn the same in both places. The card headed itself with
+       an initial while the row beside it drew a brand. */
+    it('heads the card with the same mark the row draws', async () => {
+      install([row({ name: 'Coder', preset: 'claude_code' })])
+      await mount()
+      await openCard('Coder')
+
+      const head = document.querySelector<HTMLImageElement>('#dBody .pmdhead .agent-mark img')
+      expect(head).not.toBeNull()
+      expect(head!.getAttribute('src')).toBe('assets/agents/claudecode-color.svg')
+      expect(document.querySelector('#dBody .pmdhead .pmtile')).toBeNull()
     })
   })
 

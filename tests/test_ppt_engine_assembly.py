@@ -254,3 +254,26 @@ def test_a_view_budget_outside_the_range_is_refused_not_silently_clamped() -> No
     for bad in (0, -1, 13):
         with pytest.raises(ValueError):
             EngineConfig.from_slice({"viewsPerCall": bad})
+
+
+def test_the_image_generator_answers_configured_from_the_live_host_section(tmp_path: Path, monkeypatch) -> None:
+    """Same terms as the host's image_generate, asked live rather than at assembly:
+    the tool is always built, and `configured()` follows the section the reader
+    answers with now -- a key or a model offers it, an emptied section withdraws
+    it, and an ambient OPENROUTER_API_KEY alone does not offer it."""
+    from raven.config.schema import MediaToolConfig
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "ambient-chat-key")
+    section: dict[str, MediaToolConfig | None] = {"now": None}
+    tools = {t.name: t for t in build_ppt_tools(tmp_path, image_config=lambda: section["now"])}
+    generator = tools["ppt_generate_image"]
+    assert generator.configured() is False
+    section["now"] = MediaToolConfig()
+    assert generator.configured() is False, "an OpenRouter key set for chat must not switch on a tool that bills"
+    section["now"] = MediaToolConfig(api_key="k")
+    assert generator.configured() is True and generator.model == "openai/gpt-image-2.5-sunburst"
+    section["now"] = MediaToolConfig(model="qwen/qwen-image-2")
+    assert generator.configured() is True and generator.model == "qwen/qwen-image-2"
+    section["now"] = MediaToolConfig()
+    assert generator.configured() is False
+    assert "ppt_generate_image" in {t.name for t in build_ppt_tools(tmp_path)}, "built even with no reader lent"

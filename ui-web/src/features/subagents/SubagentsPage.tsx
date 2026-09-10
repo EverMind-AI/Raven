@@ -101,10 +101,15 @@ function Tags({ it }: { it: InstanceRow }): JSX.Element | null {
   )
 }
 
-export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = false }: {
+export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = false, preset }: {
   it: InstanceRow
   onOpen?: (row: InstanceRow) => void
   compact?: boolean
+  /* Which agent ran this, as a brand rather than a name. Only the flat list
+     passes it: the grouped variant hangs each row under an agent head that
+     already carries the mark, and a second copy on every child repeats what
+     the heading above it has said. */
+  preset?: string | null
 }): JSX.Element {
   /* Through the store, so this row and the conversation's graph card decide the
      same way: a row that is a node's status rather than a conversation opens the
@@ -140,6 +145,9 @@ export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = 
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open() }
       }}>
+      {/* Identity first, then state -- the order the roster head and every
+          setup row already read in. */}
+      <AgentMark preset={preset} />
       <Mark status={instanceMark(it.status ?? undefined)} />
       <div className="bd">
         <div className="nm" title={it.title || it.handle}>{it.title || it.nodeId || it.handle}</div>
@@ -185,9 +193,17 @@ export function AgentList({ s, onOpen, compact = false }: {
     )
   }
   if (!compact) {
+    /* The roster is what turns a row's agent name into a brand: an instance row
+       carries the name it was dispatched under and never the preset behind it.
+       A name the roster does not hold -- an agent switched off since the run,
+       or one this server no longer lists -- resolves to nothing and takes the
+       generic glyph, which is what a preset-less agent gets anyway. */
+    const brand = new Map(s.roster.map((row) => [row.name, row.preset]))
     return (
       <div className="salist">
-        {s.instances.map((it) => <InstanceRowView key={`${it.agent}:${it.handle}`} it={it} onOpen={onOpen} />)}
+        {s.instances.map((it) => (
+          <InstanceRowView key={`${it.agent}:${it.handle}`} it={it} onOpen={onOpen} preset={brand.get(it.agent)} />
+        ))}
       </div>
     )
   }
