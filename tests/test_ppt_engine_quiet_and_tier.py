@@ -123,6 +123,22 @@ def test_whole_builds_are_counted_on_disk(tmp_path: Path) -> None:
     assert tier.whole_builds_taken(project) == 2
 
 
+def test_a_lost_page_is_counted_against_its_own_bounded_allowance(tmp_path: Path) -> None:
+    """`CRASH_REPRIEVES` of them, and then a lost page costs a whole build like anything
+    else -- so the total is the tier's cap plus the allowance and not more, and a deck
+    cannot extend its run by crashing."""
+    project = _project(tmp_path)
+    assert tier.reprieves_taken(project) == 0
+    assert [tier.count_lost_build(project) for _ in range(tier.CRASH_REPRIEVES)] == [1, 2]
+    assert (tier.whole_builds_taken(project), tier.reprieves_taken(project)) == (0, 2)
+
+    assert tier.count_lost_build(project) is None, "the allowance is spent, so the caller counts it"
+    assert (tier.whole_builds_taken(project), tier.reprieves_taken(project)) == (0, 2)
+    # And the two counts do not overwrite each other on the one file they share.
+    assert tier.count_whole_build(project) == 1
+    assert tier.reprieves_taken(project) == 2
+
+
 def test_taste_kinds_are_answered_in_the_reply_and_not_carried(tmp_path: Path) -> None:
     project = _project(tmp_path)
     read = {
