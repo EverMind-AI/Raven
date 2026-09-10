@@ -32,7 +32,7 @@ def everos_root(tmp_path, monkeypatch):
     """
     root = tmp_path / "everos"
     root.mkdir()
-    monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: root)
+    monkeypatch.setattr("raven_everos.config.everos_root", lambda: root)
     # Set too, and to somewhere else on purpose: the read must not fall back to
     # it now that the recorded root is the answer.
     monkeypatch.setenv("EVEROS_ROOT", str(tmp_path / "not-this-one"))
@@ -372,7 +372,7 @@ def test_the_recorded_root_wins_over_the_environment(tmp_path, monkeypatch) -> N
     ambient.mkdir()
     _write(ambient, _FULL.replace("text-embedding-3-small", "wrong-model"))
 
-    monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: recorded)
+    monkeypatch.setattr("raven_everos.config.everos_root", lambda: recorded)
     monkeypatch.setenv("EVEROS_ROOT", str(ambient))
 
     config = load_embedding_config()

@@ -30,13 +30,13 @@ def _set_memory_backend(backend: Optional[str]) -> None:
 
 
 def _everos_section(section: str) -> dict[str, Any]:
-    from raven.config.update_everos import everos_section
+    from raven_everos.config import everos_section
 
     return everos_section(section)
 
 
 def _everos_role_configured(section: str) -> bool:
-    from raven.config.update_everos import everos_role_configured
+    from raven_everos.config import everos_role_configured
 
     return everos_role_configured(section)
 
@@ -795,7 +795,7 @@ def _reusable_creds(
 
     Two stores. The memory LLM's own section answers first for the roles
     configured after it, because a key typed into that step lives there and
-    nowhere else. Otherwise ``borrow_provider_credentials`` reads the provider
+    nowhere else. Otherwise ``lend_provider_credentials`` reads the provider
     section, which is the one place that knows the precedence a section can be
     written in -- ``endpoints``, then ``api_key_list``, then the flat pair. The
     origin only names which store answered, and separates the main chat model's
@@ -806,10 +806,10 @@ def _reusable_creds(
         key = llm_section.get("api_key")
         if key:
             return {"api_key": str(key), "base_url": str(llm_section.get("base_url") or "")}, "llm"
-    from raven.config.update_everos import borrow_provider_credentials
+    from raven.config.update_providers import lend_provider_credentials
 
     try:
-        lent = borrow_provider_credentials(provider)
+        lent = lend_provider_credentials(provider)
     except (KeyError, ValueError):
         return None, ""
     # rerank reaches a different service path on the same vendor, and a key
@@ -1053,7 +1053,7 @@ def _config_everos_role(
     required role (the caller then disables EverOS, leaving no long-term memory)."""
     questionary = oc._require_questionary()
     from raven.cli._styles import RAVEN_STYLE
-    from raven.config.update_everos import clear_everos_section, set_everos_section
+    from raven_everos.config import clear_everos_section, set_everos_section
 
     role = _EVEROS_ROLES[section]
     label = t(role["label"])
@@ -1809,7 +1809,7 @@ def _step4_memory(
             continue
 
         oc.console.print(t("  [dim]Looking for a memory directory Raven can take over...[/dim]"))
-        from raven.config.update_everos import applicable_legacy_root, default_everos_root, recorded_slice
+        from raven_everos.config import applicable_legacy_root, default_everos_root, recorded_slice
 
         # The wizard owns the candidate list: it reads the config record and the
         # host defaults and hands them to the cargo-side describer, which
@@ -1857,7 +1857,7 @@ def _step4_memory(
     # + ome.toml) BEFORE writing model sections — set_everos_section merges
     # into the template so default sections (memory/sqlite/lancedb/api) are
     # preserved. Also creates ome.toml which the runtime requires.
-    from raven.config.update_everos import configure_everos_env, ensure_everos_home, owned_everos_root
+    from raven_everos.config import configure_everos_env, ensure_everos_home, owned_everos_root
 
     # owned_everos_root, not everos_root: after a user declined to share theirs,
     # the recorded root is still theirs, and building there would adopt it.

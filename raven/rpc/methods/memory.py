@@ -211,7 +211,7 @@ def _esc(value: str) -> str:
 
 async def _delete_in_process(kind: str, mem_id: str) -> int:
     """Delete one row via EverOS's own repository layer (see module doc)."""
-    from raven.config.update_everos import configure_everos_env, ensure_everos_home
+    from raven_everos.config import configure_everos_env, ensure_everos_home
 
     configure_everos_env()
     ensure_everos_home()

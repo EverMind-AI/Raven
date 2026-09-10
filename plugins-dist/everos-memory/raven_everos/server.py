@@ -238,7 +238,7 @@ def _require_llm_configured() -> None:
     ``memory.backend`` defaults to ``"everos"`` in the schema while the
     everos.toml template ships ``[llm]`` with an empty ``api_key``.
     """
-    from raven.config.update_everos import everos_role_configured, get_everos_config_path
+    from raven_everos.config import everos_role_configured, get_everos_config_path
 
     if everos_role_configured("llm"):
         return
@@ -728,7 +728,7 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
     the backend talked to another. Writing it makes the root self-describing, and
     both the child and any later reader agree by construction.
     """
-    from raven.config.update_everos import everos_root, set_everos_api
+    from raven_everos.config import everos_root, set_everos_api
 
     everos = _everos_executable()
     root = everos_root()

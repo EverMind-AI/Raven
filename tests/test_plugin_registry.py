@@ -320,3 +320,16 @@ def test_build_onboard_step_rejects_an_unknown_name(tmp_path: Path) -> None:
             config={},
             services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
+
+
+def test_two_plugins_contribute_same_onboard_name() -> None:
+    _install_test_module("_test_onboard_a", {"make_onboard_step": lambda ctx: "a"})
+    _install_test_module("_test_onboard_b", {"make_onboard_step": lambda ctx: "b"})
+    reg = PluginRegistry()
+    with pytest.raises(PluginConflictError, match="onboard 'same'"):
+        reg.activate(
+            [
+                _make_discovered("alpha", onboard=[("same", "_test_onboard_a:make_onboard_step")]),
+                _make_discovered("beta", onboard=[("same", "_test_onboard_b:make_onboard_step")]),
+            ]
+        )

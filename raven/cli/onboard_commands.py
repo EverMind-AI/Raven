@@ -19,8 +19,8 @@ Steps:
   8. Done
 
 All writes go through the ``update_providers`` / ``update_channels`` /
-``update`` / ``update_everos`` ops libraries — this module owns the UX layer,
-not config-schema knowledge.
+``update`` ops libraries and the memory plugin's own config module — this
+module owns the UX layer, not config-schema knowledge.
 
 Navigation: questionary 2.1.1 has no first-class cross-screen "back", so the
 wizard is a screen state machine and back is expressed as a ``0) back``

@@ -71,7 +71,7 @@ def everos_config_path() -> Path:
     ``everos_root`` already covers the install that has never written the file:
     it falls back on its own.
     """
-    from raven.config.update_everos import everos_root
+    from raven_everos.config import everos_root
 
     return everos_root() / "everos.toml"
 

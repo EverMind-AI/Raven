@@ -171,8 +171,8 @@ def _install_fake_everos(monkeypatch, repos):
 
 @pytest.fixture
 def fake_everos_env(monkeypatch):
-    monkeypatch.setattr("raven.config.update_everos.configure_everos_env", lambda: None)
-    monkeypatch.setattr("raven.config.update_everos.ensure_everos_home", lambda: None)
+    monkeypatch.setattr("raven_everos.config.configure_everos_env", lambda: None)
+    monkeypatch.setattr("raven_everos.config.ensure_everos_home", lambda: None)
 
 
 @pytest.mark.asyncio
