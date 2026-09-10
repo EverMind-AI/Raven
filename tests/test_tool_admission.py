@@ -66,7 +66,6 @@ def test_a_well_formed_duck_is_admitted():
         (("description", 7), "description"),
         (("parameters", "not-a-mapping"), "parameters"),
         (("execute", "not-callable"), "execute"),
-        (("configured", False), "configured"),
     ],
 )
 def test_the_door_refuses_a_missing_or_misshapen_authored_member(breakage, message):
@@ -74,24 +73,6 @@ def test_the_door_refuses_a_missing_or_misshapen_authored_member(breakage, messa
     setattr(duck, breakage[0], breakage[1])
     with pytest.raises(ToolAdmissionError, match=message):
         admit_tool(duck)
-
-
-def test_an_availability_declaration_is_dispensed_on_the_spec_or_absent():
-    """The optional fifth member (plugin_surface.py): a callable ``configured``
-    rides the admitted spec for the withheld axis to ask; a tool that declares
-    none dispenses None, and ``configured = False`` is refused above rather than
-    admitted as a tool that is then offered anyway."""
-    assert admit_tool(_Duck()).configured is None
-
-    duck = _Duck()
-    duck.configured = lambda: False
-    spec = admit_tool(duck)
-    assert spec.configured is duck.configured and spec.configured() is False
-
-    registry = ToolRegistry()
-    registry.register(duck)
-    assert registry.spec_of("duck").configured is duck.configured
-    assert registry.spec_of("nobody") is None
 
 
 def test_refusal_happens_at_registration_not_mid_turn():

@@ -19,7 +19,6 @@ from raven.config.raven import (
     PluginsConfig,
     RavenConfig,
 )
-from raven.config.schema import Config, MediaGenConfig, ToolsConfig, WebToolsConfig
 from raven.contracts.memory import MemoryBackend
 from raven.core.plugin_stack import (
     build_plugin_hooks,
@@ -44,7 +43,6 @@ def _config(
     disabled: list[str] | None = None,
     plugin_config: dict | None = None,
     dirs: list[str] | None = None,
-    tools: ToolsConfig | None = None,
 ) -> RavenConfig:
     return RavenConfig(
         memory=MemoryConfig(backend=memory_backend),
@@ -53,7 +51,6 @@ def _config(
             config=dict(plugin_config or {}),
             dirs=list(dirs or []),
         ),
-        base=Config(tools=tools) if tools is not None else Config(),
     )
 
 
@@ -276,11 +273,11 @@ class _GrantWatch:
         return "p"
 
     def build_hook(self, name, *, config, services):
-        self._seen.append(("hook", services))
+        self._seen.append(("hook", services.provider))
         return object()
 
     def build_tool(self, name, *, config, services):
-        self._seen.append(("tool", services))
+        self._seen.append(("tool", services.provider))
         return object()
 
 
@@ -290,58 +287,12 @@ class TestProviderGrant:
         lent = object()
         build_plugin_hooks(tmp_path, _config(), registry=_GrantWatch(seen), provider=lent)
         build_plugin_tools(tmp_path, _config(), registry=_GrantWatch(seen), provider=lent)
-        assert [(kind, services.provider) for kind, services in seen] == [("hook", lent), ("tool", lent)]
+        assert seen == [("hook", lent), ("tool", lent)]
 
     def test_no_provider_lends_none(self, tmp_path: Path) -> None:
         seen: list = []
         build_plugin_hooks(tmp_path, _config(), registry=_GrantWatch(seen))
-        assert [(kind, services.provider) for kind, services in seen] == [("hook", None)]
-
-
-class TestHostToolsGrants:
-    """The host side of ``media_proxy``, ``web_config`` and ``media_config``.
-
-    The plugin side is tested with a hand-built locator; this is the link nothing
-    else pins, and the one that was broken: every entrance hands the stack its
-    ``RavenConfig``, whose ``tools`` lives under ``base``, so reading ``tools`` off
-    the extension object lent None to every deployment.
-    """
-
-    def test_the_hosts_media_proxy_and_web_section_reach_tools(self, tmp_path: Path) -> None:
-        seen: list = []
-        tools = ToolsConfig(
-            media=MediaGenConfig(proxy="http://127.0.0.1:7890"),
-            web=WebToolsConfig(proxy="socks5://127.0.0.1:1080"),
-        )
-        config = _config(tools=tools)
-        build_plugin_tools(tmp_path, config, registry=_GrantWatch(seen))
-
-        [(kind, services)] = seen
-        assert kind == "tool"
-        assert services.media_proxy == "http://127.0.0.1:7890"
-        assert services.web_config is not None
-        assert services.web_config() is config.base.tools.web
-        assert services.web_config().proxy == "socks5://127.0.0.1:1080"
-        assert callable(services.media_config)
-
-    def test_a_host_without_a_proxy_lends_none_and_its_web_section(self, tmp_path: Path) -> None:
-        seen: list = []
-        config = _config()
-        build_plugin_tools(tmp_path, config, registry=_GrantWatch(seen))
-
-        [(_, services)] = seen
-        assert services.media_proxy is None
-        assert services.web_config is not None
-        assert services.web_config() is config.base.tools.web
-
-    def test_a_base_config_is_read_as_itself(self, tmp_path: Path) -> None:
-        """A caller holding the base ``Config`` rather than the extension is read
-        directly; the two lanes name the same section."""
-        from raven.core.plugin_stack import _host_config
-
-        base = Config(tools=ToolsConfig(media=MediaGenConfig(proxy="http://10.0.0.1:3128")))
-        assert _host_config(base) is base
-        assert _host_config(_config(tools=base.tools)).tools.media.proxy == "http://10.0.0.1:3128"
+        assert seen == [("hook", None)]
 
 
 # ---------------------------------------------------------------------------

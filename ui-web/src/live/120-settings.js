@@ -95,6 +95,13 @@ async function loadSettings() {
   try { await loadProviders(); } catch { /* model options unavailable — keep the rows already shown */ }
 }
 
+/* Providers the page does not offer. `custom` reaches any OpenAI-compatible
+   endpoint with an address of your own, which is the whole of what vLLM/Local
+   was for -- two rows for one job, and the reader has to guess which. Hidden
+   here rather than dropped from the registry: a section already configured
+   under it keeps loading, keeps being served, and keeps routing. */
+const HIDDEN_PROVIDERS = new Set(['hosted_vllm']);
+
 let providersLive = [];
 let defaultModelLive = '';
 let defaultProviderLive = '';
@@ -116,10 +123,23 @@ async function loadProviders(sid, gen) {
   // of click order. A refresh keyed to a superseded view must not repaint the
   // page the reader has since moved to.
   if (ticket !== viewGen) return;
-  providersLive = (mo.providers || []).map((p) => ({
+  providersLive = (mo.providers || []).filter((p) => !HIDDEN_PROVIDERS.has(p.slug)).map((p) => ({
     id: p.slug, name: p.name, homepage: p.homepage || '', models: p.models || [], on: p.authenticated,
+    docs: p.docs || '',
+    // What the section actually lists, as against `models` above -- the picker's
+    // offer, which folds in a curated shortlist nobody added. The settings page
+    // manages the first and the composer chooses from the second.
+    configured: p.configured_models || [],
+    // What each model is called and what it can do, drawn as the picker's icon
+    // row. Keyed by the same id as `models`, so a miss is a model the registry
+    // knows nothing about rather than a model with nothing to show.
+    labels: p.model_labels || {},
     protocols: p.protocols || {}, protocolOverrides: p.protocol_overrides || {},
     kind: p.auth_type || 'api_key', needsBase: !!p.needs_api_base,
+    // Whether this one has a key field: false for an address-only local
+    // deployment, true for the local servers that can sit behind a token.
+    // Answered by the backend so the pane and the wizard cannot disagree.
+    acceptsKey: p.accepts_api_key !== false,
     apiBase: p.api_base || '', defaultApiBase: p.default_api_base || '',
     env: p.key_env || '', warn: p.warning || '',
     key: p.authenticated ? '已配置' : '',
@@ -185,6 +205,10 @@ DS.settings = {
     await loadProviders();
     return settingsSnapshot();
   },
+  /* A read, so no reload after it: the fetched list is the drawer's own state
+     and the page behind it has not changed. Adding a row from that list goes
+     through `provider` above, which does refresh. */
+  fetchModels: (slug) => rpc.call('model.fetch_models', { slug }),
   model: () => defaultModelLive,
   defaultProvider: () => defaultProviderLive,
   version: () => APP_VERSION,
