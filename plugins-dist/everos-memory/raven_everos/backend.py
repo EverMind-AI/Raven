@@ -656,6 +656,19 @@ class EverosBackend:
                 "then start a new session."
             )
             return
+
+        # Deferred from construction (make_backend) so that building a
+        # backend to ask health() -- raven doctor's path -- stays read-only.
+        # Runs here, once identity is known good, on every start path.
+        from raven_everos.config import configure_everos_env, ensure_everos_home, everos_owned, everos_root
+
+        root = everos_root()
+        configure_everos_env(root)
+        # See tools.py: a root the user manages is read-only, template files
+        # included.
+        if everos_owned():
+            ensure_everos_home(root)
+
         self._logger.info(
             "EverosBackend.start (adapter=%s)",
             type(self._adapter).__name__,
@@ -672,7 +685,6 @@ class EverosBackend:
                 self._adapter = _NoOpAdapter()
                 return
 
-            from raven_everos.config import everos_owned
             from raven_everos.server import (
                 EverosBinaryMissingError,
                 EverosNotConfiguredError,
@@ -1433,21 +1445,11 @@ def _flatten_profile_list(items: list[Any]) -> list[str]:
 
 def make_backend(ctx: PluginContext) -> EverosBackend:
     """Plugin entry-point factory. Called by :class:`PluginRegistry`
-    after manifest activation. Sync construction only — async setup
-    happens in ``EverosBackend.start()``."""
-    from raven_everos.config import (
-        configure_everos_env,
-        ensure_everos_home,
-        everos_owned,
-        everos_root,
-    )
-
-    root = everos_root()
-    configure_everos_env(root)
-    # See tools.py: a root the user manages is read-only, template files
-    # included.
-    if everos_owned():
-        ensure_everos_home(root)
+    after manifest activation. Sync construction only, and read-only:
+    ``raven doctor`` constructs a backend to call ``health()`` without ever
+    starting it, so nothing here may touch disk or the environment. Pointing
+    EverOS at its root and creating its config templates happens in
+    ``EverosBackend.start()`` instead."""
     return EverosBackend(ctx)
 
 

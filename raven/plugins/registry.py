@@ -372,6 +372,11 @@ class PluginRegistry:
         """Stable-ordered list of registered onboard-step names."""
         return sorted(self._onboard)
 
+    def onboard_plugin_id(self, name: str) -> str | None:
+        """Plugin id that contributed onboard step ``name``, or ``None``."""
+        entry = self._onboard.get(name)
+        return entry.plugin_id if entry is not None else None
+
     def get_onboard_factory(self, name: str) -> OnboardFactory:
         """Look up the factory for onboard step ``name``. Raises ``PluginNotFoundError``."""
         try:

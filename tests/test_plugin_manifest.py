@@ -174,6 +174,9 @@ class TestMemoryBackends:
                 [plugin]
                 id = "p"
                 version = "1"
+                [[plugin.contributes.memory_backends]]
+                name = "p"
+                factory = "mod.path:make_backend"
                 [[plugin.contributes.onboard]]
                 name = "p"
                 factory = "mod.path:make_onboard_step"
@@ -186,6 +189,9 @@ class TestMemoryBackends:
             [plugin]
             id = "x"
             version = "0.1"
+            [[plugin.contributes.memory_backends]]
+            name = "everos"
+            factory = "a.b:c"
             [[plugin.contributes.onboard]]
             name = "everos"
             factory = "a.b:c"
@@ -194,6 +200,52 @@ class TestMemoryBackends:
             factory = "a.b:d"
         """)
         with pytest.raises(ValidationError, match="duplicate onboard"):
+            PluginManifest.from_toml_str(toml)
+
+    def test_onboard_without_matching_backend_rejected(self) -> None:
+        """An onboard screen configures the backend it is named after; a
+        manifest with no memory_backend of that same name is refused."""
+        toml = textwrap.dedent("""
+            [plugin]
+            id = "x"
+            version = "0.1"
+            [[plugin.contributes.onboard]]
+            name = "shared"
+            factory = "a.b:c"
+        """)
+        with pytest.raises(ValidationError, match="no memory_backend of the same name"):
+            PluginManifest.from_toml_str(toml)
+
+    def test_onboard_matching_backend_in_same_manifest_accepted(self) -> None:
+        toml = textwrap.dedent("""
+            [plugin]
+            id = "x"
+            version = "0.1"
+            [[plugin.contributes.memory_backends]]
+            name = "shared"
+            factory = "a.b:c"
+            [[plugin.contributes.onboard]]
+            name = "shared"
+            factory = "a.b:d"
+        """)
+        mf = PluginManifest.from_toml_str(toml)
+        assert mf.contributes.onboard[0].name == "shared"
+
+    def test_onboard_matching_a_different_manifests_backend_still_rejected(self) -> None:
+        """The rule is checked within one manifest only -- naming another
+        plugin's backend is not enough, each manifest owns its own screen."""
+        toml = textwrap.dedent("""
+            [plugin]
+            id = "x"
+            version = "0.1"
+            [[plugin.contributes.memory_backends]]
+            name = "other"
+            factory = "a.b:c"
+            [[plugin.contributes.onboard]]
+            name = "shared"
+            factory = "a.b:d"
+        """)
+        with pytest.raises(ValidationError, match="no memory_backend of the same name"):
             PluginManifest.from_toml_str(toml)
 
     def test_multiple_contributions_different_names(self) -> None:
@@ -213,6 +265,42 @@ class TestMemoryBackends:
             "primary",
             "fallback",
         ]
+
+
+# ---------------------------------------------------------------------------
+# memory_backend name constraints -- the name is a skill-source namespace
+# (`<name>/<id>`, skill_hub.py), so it must be a bare token and must not
+# shadow the built-in `local` / `hub` sources.
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryBackendNameConstraints:
+    @staticmethod
+    def _manifest_toml(name: str) -> str:
+        return textwrap.dedent(f"""
+            [plugin]
+            id = "x"
+            version = "0.1"
+            [[plugin.contributes.memory_backends]]
+            name = "{name}"
+            factory = "a.b:c"
+        """)
+
+    def test_slash_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="skill-source namespace"):
+            PluginManifest.from_toml_str(self._manifest_toml("acme/v2"))
+
+    def test_reserved_hub_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="reserved"):
+            PluginManifest.from_toml_str(self._manifest_toml("hub"))
+
+    def test_reserved_local_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="reserved"):
+            PluginManifest.from_toml_str(self._manifest_toml("local"))
+
+    def test_alnum_dot_dash_underscore_accepted(self) -> None:
+        mf = PluginManifest.from_toml_str(self._manifest_toml("acme-mem_v2.1"))
+        assert mf.contributes.memory_backends[0].name == "acme-mem_v2.1"
 
 
 # ---------------------------------------------------------------------------

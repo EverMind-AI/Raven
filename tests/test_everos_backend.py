@@ -10,6 +10,7 @@ embedding services that the test environment doesn't have).
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -144,6 +145,41 @@ class TestConstruction:
     def test_make_backend_factory(self, tmp_path: Path) -> None:
         b = make_backend(_ctx(tmp_path))
         assert isinstance(b, EverosBackend)
+
+
+class TestMakeBackendIsReadOnly:
+    """``raven doctor`` constructs a backend only to call ``health()``,
+    never ``start()`` -- so ``make_backend`` must touch neither disk nor the
+    environment. Creating the EverOS home and pointing it at ``EVEROS_ROOT``
+    happens in ``start()`` instead, on every start path including one built
+    with a fake (non-HTTP) adapter.
+    """
+
+    def test_construction_creates_no_home_and_sets_no_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from raven.config.paths import get_data_dir
+
+        monkeypatch.delenv("EVEROS_ROOT", raising=False)
+
+        make_backend(_ctx(tmp_path))
+
+        assert not (get_data_dir() / "everos").exists()
+        assert "EVEROS_ROOT" not in os.environ
+
+    async def test_start_creates_the_home_with_the_fake_adapter_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from raven.config.paths import get_data_dir
+
+        monkeypatch.delenv("EVEROS_ROOT", raising=False)
+
+        b = _backend(tmp_path)
+        await b.start()
+
+        home = get_data_dir() / "everos"
+        assert os.environ["EVEROS_ROOT"] == str(home)
+        assert (home / "everos.toml").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -371,25 +407,36 @@ class TestAUserManagedRootIsReadOnly:
         assert b._state is ServiceState.READY
         assert NOTICES == []
 
-    def test_the_factory_drops_no_templates_into_it(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_the_factory_drops_no_templates_into_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         self._not_owned(monkeypatch)
         from raven_everos import config as ue
 
         seeded: list[int] = []
         monkeypatch.setattr(ue, "ensure_everos_home", lambda *_a, **_kw: seeded.append(1))
+        monkeypatch.setattr(
+            "raven_everos.server.probe_health",
+            lambda _u, **_kw: ProbeVerdict.REFUSED,
+        )
 
-        make_backend(_ctx(tmp_path))
+        b = EverosBackend(_ctx(tmp_path))
+        await b.start()
 
         assert seeded == [], "wrote template files into a root the user manages"
 
-    def test_an_owned_root_still_gets_its_templates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_an_owned_root_still_gets_its_templates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from raven_everos import config as ue
 
         monkeypatch.setattr(ue, "everos_owned", lambda: True)
         seeded: list[int] = []
         monkeypatch.setattr(ue, "ensure_everos_home", lambda *_a, **_kw: seeded.append(1))
 
-        make_backend(_ctx(tmp_path))
+        b = EverosBackend(_ctx(tmp_path))
+        with patch("raven_everos.server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
 
         assert seeded == [1]
 
