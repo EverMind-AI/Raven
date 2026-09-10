@@ -41,17 +41,26 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.config.agent_names import (
+    BUILTIN_AGENT_NAMES as BUILTIN_AGENT_NAMES,
+)
+from raven.config.agent_names import (
+    GENERIC_AGENT as GENERIC_AGENT,
+)
+from raven.config.agent_names import (
+    LEGACY_AGENT_ALIASES as LEGACY_AGENT_ALIASES,
+)
+from raven.config.agent_names import (
+    canonical_agent_name as canonical_agent_name,
+)
+from raven.config.agent_names import (
+    is_builtin_agent_name as is_builtin_agent_name,
+)
 from raven.config.loader import get_config_path
 
 if TYPE_CHECKING:
     from raven.config.schema import BuiltinAgentConfig
 
-# The generic in-process sub-agent. Also the historical identity: direct-chat
-# records under ``subagents/direct/<agent>/<handle>/`` and instance-registry rows
-# were written before there was a table, and this row is what they resolve against
-# now -- which is why the name is reserved rather than tidied into
-# ``general-raven``. Those records spell it lowercase, hence ``LEGACY_AGENT_ALIASES``.
-GENERIC_AGENT = "Raven"
 
 _SEEDS: tuple[dict[str, Any], ...] = (
     {
@@ -70,49 +79,6 @@ _SEEDS: tuple[dict[str, Any], ...] = (
         ),
     },
 )
-
-BUILTIN_AGENT_NAMES: frozenset[str] = frozenset(seed["name"] for seed in _SEEDS)
-"""Names the package seeds. Used to tell an override from an addition, and by the
-write paths that guard a seed row's transport: a seed may be redeclared as
-``acp`` (the host's own raven over ACP -- see :func:`merge_builtin_seeds`), but
-a cli / openai row may not claim one of these names.
-
-Match against it with :func:`is_builtin_agent_name`, never with ``in`` directly:
-a stored name may be a legacy alias, and a guard that misses one lets a config row
-be written under a seed's old name -- which lands on the table as a second agent
-rather than as the override it was meant to be."""
-
-LEGACY_AGENT_ALIASES: dict[str, str] = {"raven": GENERIC_AGENT}
-"""Names a seed used to answer to, mapped to the one it answers to now.
-
-The generic row was lowercase until it was capitalised to match the rest of the
-table, and by then thousands of instance-registry rows, direct-chat records and
-stored dag nodes had its old name written into them. Resolution consults this only
-*after* an exact match fails, so no other agent's name changes meaning, and the
-roster never advertises an alias -- it is for reading old data, not for the model
-to pick from."""
-
-
-def canonical_agent_name(name: str) -> str:
-    """The seed name an agent reference resolves to, or the name unchanged.
-
-    Answers "which seed, if any", from the package's own names alone -- it reads no
-    table, so it cannot tell that some *other* agent holds the name. Exactness at
-    the row level belongs to the caller holding the rows, which tries the literal
-    name before this one (see :meth:`AgentRegistry.get`); an agent that genuinely
-    holds an alias's spelling therefore still wins its own name.
-
-    A seed's current name maps to itself even if the alias table also lists it, so
-    a mistake there cannot make the row unreachable under the name it advertises.
-    """
-    if name in BUILTIN_AGENT_NAMES:
-        return name
-    return LEGACY_AGENT_ALIASES.get(name, name)
-
-
-def is_builtin_agent_name(name: str) -> bool:
-    """Whether a name refers to a package seed, under any name it has had."""
-    return canonical_agent_name(name) in BUILTIN_AGENT_NAMES
 
 
 def builtin_agent_seeds() -> list["BuiltinAgentConfig"]:

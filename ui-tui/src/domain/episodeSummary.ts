@@ -380,23 +380,12 @@ export const groupTools = (tools: EpisodeTool[]): EpisodeTool[][] => {
 // How many result rows a tool shows before the rest folds behind a "+N" row.
 // The view and the height estimator both read this; a mismatch reserves the
 // wrong number of rows and leaves stale cells in the transcript.
-//
-// Every settled card opens at this height now, so it is the whole transcript's
-// density knob rather than one card's: raise it and every stretch of work grows.
-// Seven fits an ordinary listing or a short traceback without the "+N" row, and
-// still leaves the turns around a card readable.
-export const TOOL_PREVIEW_ROWS = 7
+export const TOOL_PREVIEW_ROWS = 5
 
 // Every line of a call's result, for the detail block. Nothing is filtered for
 // being "redundant with the row above": a row carries a short label and the
 // block is the one place the raw output appears, so dropping a payload here
 // leaves the reader with an empty box and no way to see what came back.
-//
-// Relative indentation survives. Trimming each line was harmless while a result
-// reached the client clipped to a row's worth, where there was no structure left
-// to read; a card that shows a whole traceback or a stretch of source is the one
-// place that structure is the content. The shared prefix still comes off, so an
-// entirely indented payload does not spend the block's width on nothing.
 export const previewLines = (tool: EpisodeTool): string[] => {
   const raw = tool.resultPreview ?? ''
 
@@ -404,16 +393,14 @@ export const previewLines = (tool: EpisodeTool): string[] => {
     return []
   }
 
-  const kept = raw
-    .split('\n')
-    .map(l => l.trimEnd())
-    // A read_file preview keeps source line numbers, so a blank source line
-    // arrives as a non-empty "12|" that a plain emptiness check can't drop.
-    .filter(l => l.trim() && !/^\s*\d+\|\s*$/.test(l))
-
-  const shared = kept.reduce((n, l) => Math.min(n, l.length - l.trimStart().length), Infinity)
-
-  return Number.isFinite(shared) && shared > 0 ? kept.map(l => l.slice(shared)) : kept
+  return (
+    raw
+      .split('\n')
+      .map(l => l.trim())
+      // A read_file preview keeps source line numbers, so a blank source line
+      // arrives as a non-empty "12|" that a plain emptiness check can't drop.
+      .filter(l => l && !/^\d+\|\s*$/.test(l))
+  )
 }
 
 // Rows the preview occupies. `dense` is the inside-an-expanded-run view, where
@@ -428,108 +415,6 @@ export const foldedPreviewRows = (tool: EpisodeTool, dense = false): number => {
 
   return n > TOOL_PREVIEW_ROWS ? TOOL_PREVIEW_ROWS + 1 : n
 }
-
-// The ceiling on a fully expanded card. `previewLines` has no bound of its own:
-// what reaches the client is a character budget, and a result that spends all of
-// it on newlines would otherwise open to as many rows. High enough that an
-// ordinary traceback or file read opens whole, which is the point of the level;
-// low enough that one call cannot bury the turns around it.
-export const TOOL_FULL_ROWS = 200
-
-// A row shows a URL without its scheme and a needle inside quotes; both are the
-// same argument, so compare them stripped of those.
-const sameArgument = (rowDetail: string, argument: string) => {
-  const norm = (s: string) =>
-    s
-      .replace(/^https?:\/\//, '')
-      .replace(/\/+$/, '')
-      .trim()
-
-  return norm(rowDetail) === norm(argument)
-}
-
-/**
- * The row under a block's output, which moves it between levels.
- *
- * `count` is what the click is worth -- rows it reveals, or rows it takes back.
- * A level with nothing to offer has no row at all, so both the view and the
- * height estimator ask this rather than re-deriving it from `hidden`.
- */
-export interface MoreRow {
-  count: number
-  kind: 'collapse' | 'reveal'
-}
-
-/** What a call's detail block draws. `hidden` is the rows the level left behind. */
-export interface DetailBlockShape {
-  argument: string
-  hidden: number
-  more: MoreRow | null
-  output: string[]
-}
-
-/**
- * The block a call's card renders, or `null` when it renders none.
- *
- * One source for the view and the height estimator. Deciding it twice is how an
- * estimate comes to disagree with what is drawn, and a disagreement here is the
- * stale-cell symptom the estimator is careful about everywhere else.
- *
- * The block repeats the row only when the row is showing the same thing -- the
- * argument modulo a display transform (a stripped scheme, quotes). A containment
- * test is too loose: `ruff check` is a prefix of `ruff check raven/ ui-tui/` and
- * would have swallowed a real argument. Suppressed only when there is output to
- * show in its place: a call still running has none, and dropping the argument as
- * well is what opened an empty slab on the one call a reader most wants to look
- * inside.
- */
-export const detailBlockShape = (tool: EpisodeTool, full = false): DetailBlockShape | null => {
-  const lines = previewLines(tool)
-  const cap = full ? TOOL_FULL_ROWS : TOOL_PREVIEW_ROWS
-  const output = lines.length > cap ? lines.slice(0, cap) : lines
-  const rowDetail = toolParts(tool).detail.replace(/^"|"$/g, '')
-  const argument = toolArgument(tool)
-  const echoed = Boolean(rowDetail) && output.length > 0 && sameArgument(rowDetail, argument)
-  const body = echoed ? '' : argument
-
-  if (!body && output.length === 0) {
-    return null
-  }
-
-  const hidden = lines.length - output.length
-  // Revealed, the row turns around: it is what folds the card back to the cap.
-  // Collapsing through the block's own click instead would shut the card
-  // entirely, which is a level further than a reader who opened it wants to go.
-  const more: MoreRow | null =
-    !full && hidden > 0
-      ? { count: hidden, kind: 'reveal' }
-      : full && output.length > TOOL_PREVIEW_ROWS
-        ? { count: output.length - TOOL_PREVIEW_ROWS, kind: 'collapse' }
-        : null
-
-  return { argument: body, hidden, more, output }
-}
-
-/**
- * Whether a settled call's card opens without being asked.
- *
- * Anything that came back earns the space. Length is not the discriminator it
- * once was: the card caps at `TOOL_PREVIEW_ROWS` and hands the remainder to a
- * "+N" row of its own, so a thousand-line result costs the transcript the same
- * six rows a five-line one does. Gating on the whole result fitting the cap left
- * exactly the long calls -- a directory listing, a file read -- as the ones a
- * reader had to open by hand, which is backwards.
- *
- * A call that returned nothing still does not open. Its block would hold the
- * argument alone, which the row above is already showing, so it opens four rows
- * to repeat one. A failure opens regardless: there the argument is what the
- * reader needs, and the row truncates it.
- *
- * A reader's own decision still wins: `foldStore` holds closed ids as well as
- * open ones precisely so a default cannot override it.
- */
-export const cardDefaultOpen = (tool: EpisodeTool): boolean =>
-  callFailed(tool) || Boolean(tool.diff) || previewLines(tool).length > 0
 
 // Groups an episode's tools by name (consecutive runs) and joins the phrases:
 // "read 6 files, ran ls, edited notes.md". `budget` is the row's own width; it

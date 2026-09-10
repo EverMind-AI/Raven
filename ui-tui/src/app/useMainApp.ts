@@ -16,7 +16,6 @@ import type {
 } from '../gatewayTypes.js'
 import type { Msg, PanelSection, SlashCatalog } from '../types.js'
 
-import { messageFoldId, turnFoldScope } from '../components/episodeView.js'
 import { STARTUP_RESUME_ID } from '../config/env.js'
 import { FULL_RENDER_TAIL_ITEMS, MAX_HISTORY, WHEEL_SCROLL_STEP } from '../config/limits.js'
 import { dagRunsFromHistory } from '../domain/dagRun.js'
@@ -53,7 +52,6 @@ import {
 } from './directChatStore.js'
 import { bindInstanceRefresh, fetchDirectHistory, fetchInstances } from './directChatSync.js'
 import { bindDirectSender } from './directSend.js'
-import { $folds, callFolds, type CallFolds } from './foldStore.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import { type GatewayRpc, type RpcOptions, type TranscriptRow } from './interfaces.js'
 import { bindLiveAgentsRefresh, fetchLiveAgents } from './liveAgentsSync.js'
@@ -355,34 +353,10 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
   const dagOpen = useStore($dagOpenNodes)
   const spawnOverrides = useStore($spawnOpenOverrides)
-  // A card the reader opened or shut is only re-measured for real while its row
-  // is on screen. A resize drops every measured height (the cache buckets on
-  // cols), so without the folds here the rows below the fold come back at their
-  // default height and the transcript scrolls to the wrong place.
-  const folds = useStore($folds)
-  // Per message, because a fold key is only unique inside its own scope: the
-  // transport restarts its call ids per response, so the same `mi-1` names a
-  // card in every conversation. Cached per scope so a measuring pass over a
-  // long transcript rebuilds each scope's sets once, not once a row.
-  const foldsForScope = useMemo(() => {
-    const cache = new Map<string, CallFolds>()
-
-    return (scope: string): CallFolds => {
-      let here = cache.get(scope)
-
-      if (!here) {
-        here = callFolds(folds, scope)
-        cache.set(scope, here)
-      }
-
-      return here
-    }
-  }, [folds])
 
   const estimateRowHeight = useCallback(
     (index: number) =>
       estimatedMsgHeight(virtualRows[index]!.msg, cols, {
-        cardFolds: foldsForScope(turnFoldScope(viewKey, messageFoldId(virtualRows[index]!.msg))),
         compact: ui.compact,
         dagOpen,
         details: detailsVisible,
@@ -391,18 +365,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
         userPrompt: ui.theme.brand.prompt,
         withSeparator: virtualRows[index]!.msg.role === 'user' && firstUserIdx >= 0 && index > firstUserIdx
       }),
-    [
-      cols,
-      dagOpen,
-      detailsVisible,
-      firstUserIdx,
-      foldsForScope,
-      spawnOverrides,
-      ui.compact,
-      ui.theme.brand.prompt,
-      viewKey,
-      virtualRows
-    ]
+    [cols, dagOpen, detailsVisible, firstUserIdx, spawnOverrides, ui.compact, ui.theme.brand.prompt, virtualRows]
   )
 
   const syncHeightCache = useCallback(

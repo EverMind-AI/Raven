@@ -40,10 +40,9 @@ reading model.
 **Work Segment**:
 Every call made between two things the model said — so it spans episode boundaries.
 Folded it is one row ("listed .raven, read TOOLS.md, ran 4 commands (2.4s)"), plus a DAG
-Panel under any `run_subagent_dag` call it holds; opened, one row per call, each of which
-resolves its own Detail Block default. A single-call segment skips the middle depth, since
-its folded row already names the call -- so for one call the segment's fold IS the card's,
-and the predicate answers it.
+Panel under any `run_subagent_dag` call it holds; opened, one row per call; a call opens
+further into its Detail Block. A single-call segment skips the middle depth, since its
+folded row already names the call.
 _Avoid_: "run"/"tool group" — both were earlier, narrower constructs that this replaces.
 
 **Turn Artifact Shelf**:
@@ -72,18 +71,7 @@ vocabulary instead of Raven's, so `OVERRIDES` cannot match it either.
 **Detail Block**:
 A call's full argument and its output, rendered on a filled background (a `▏` rule below
 256 colors). The only place the raw command, path, or URL appears; rows above it carry
-short labels only. Three fold levels, not two: shut, capped at `TOOL_PREVIEW_ROWS` result
-rows with a `… +N` row for the remainder, and full (`TOOL_FULL_ROWS`). The `+N` row is a
-control of its own, and a two-way one -- it reveals the rest, then turns around and folds
-back to the cap, where the block's own click shuts the card outright. Riding inside the
-output array made the one row announcing there was more to see the row that collapsed the
-card. A
-settled call answers its own default (`cardDefaultOpen`): anything that came back opens
-unasked, because the cap is what bounds the cost -- a thousand-line result spends the rows
-a five-line one does. Only a call that returned nothing stays shut, its block being the
-argument the row above is already showing. A reader's own decision always wins.
-_Avoid_: "tool card" as a separate construct -- the Activity Row and the block it heads are
-one card, on one filled ground.
+short labels only.
 
 **Activity Row** (`ui-tui/src/components/episodeView.tsx`):
 A muted row naming machine work, with an inline duration and no fold glyph. Expandability
@@ -182,13 +170,8 @@ graphs still working, so a finished graph's header is rebuilt from the instance 
 `runId`/`runTitle` — same line, no tally — and the grouping survives.
 Clicking an instance row switches Direct Chat to it, the `Raven` row leading the strip is
 the way back to the main conversation, and Ctrl+Left / Ctrl+Right cycles main
-plus these same instances; the row whose conversation is on screen carries the **here bar**
-(`▌`) in the strip's own leftmost column, the same fact the right end of the composer's
-top border states as a name (`agent/handle`) - said there at the point of typing, said here
-against the list, so the name up there can be read back to a row. Nothing else draws in
-that column, so the bar reads as a position and the bullet beside it goes on saying status
-alone; the active row is exempt from every cap, so the bar always has a row to sit on. A
-line no click can switch to - a graph line, a loose spawn - never carries it. The loose spawns — running or queued only,
+plus these same instances; which one is *active* is said at the right end of the composer's
+top border (`agent/handle`), never by the strip. The loose spawns — running or queued only,
 with a ticking elapsed time, each one leaving as it settles — sit between the flat
 instances and the graphs. A non-instance agent line opens the Agents Overlay straight into that run's
 detail on click (`agentsFocusId`, consumed once), where its transcript streams as it works;

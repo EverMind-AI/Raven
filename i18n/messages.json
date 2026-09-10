@@ -763,17 +763,9 @@
       "en": "Connected",
       "zh": "已接入"
     },
-    "gui.agent.g_switch": {
-      "en": "Ready to enable",
-      "zh": "待启用"
-    },
-    "gui.agent.g_setup": {
-      "en": "Needs setup",
-      "zh": "待配置"
-    },
-    "gui.agent.g_install": {
-      "en": "Needs installing",
-      "zh": "待安装"
+    "gui.agent.g_off": {
+      "en": "Available",
+      "zh": "可接入"
     },
     "gui.agent.key": {
       "en": "API key",
@@ -1974,14 +1966,6 @@
     "gui.freq.week": {
       "en": "Weekly",
       "zh": "每周"
-    },
-    "gui.grp.hide": {
-      "en": "Hide",
-      "zh": "收起"
-    },
-    "gui.grp.show": {
-      "en": "Show",
-      "zh": "展开"
     },
     "gui.halted": {
       "en": "Stopped by user - the output above is kept",
@@ -4984,22 +4968,6 @@
       "en": "thinking",
       "zh": "思考中"
     },
-    "gui.time.ago_d": {
-      "en": "{n}d ago",
-      "zh": "{n} 天前"
-    },
-    "gui.time.ago_h": {
-      "en": "{n}h ago",
-      "zh": "{n} 小时前"
-    },
-    "gui.time.ago_m": {
-      "en": "{n}m ago",
-      "zh": "{n} 分钟前"
-    },
-    "gui.time.ago_now": {
-      "en": "just now",
-      "zh": "刚刚"
-    },
     "gui.time.dbyest": {
       "en": "2 days ago",
       "zh": "前天"
@@ -5775,42 +5743,6 @@
     "gui.agent.about_none": {
       "en": "No description yet",
       "zh": "还没有说明"
-    },
-    "gui.agent.sec_test": {
-      "en": "Check it works",
-      "zh": "检查是否可用"
-    },
-    "gui.agent.test_do": {
-      "en": "Run a test",
-      "zh": "测试一次"
-    },
-    "gui.agent.test_running": {
-      "en": "Testing...",
-      "zh": "正在测试..."
-    },
-    "gui.agent.test_stop": {
-      "en": "Stop",
-      "zh": "停止"
-    },
-    "gui.agent.test_note": {
-      "en": "Dispatches the agent once for real, which spends its own quota.",
-      "zh": "会真的派它跑一次,消耗它自己的额度。"
-    },
-    "gui.agent.test_ok": {
-      "en": "Worked, {ago}",
-      "zh": "可用,{ago}"
-    },
-    "gui.agent.test_bad": {
-      "en": "Failed, {ago}",
-      "zh": "失败,{ago}"
-    },
-    "gui.agent.test_never": {
-      "en": "Never tested",
-      "zh": "还没测过"
-    },
-    "gui.agent.tag_stale": {
-      "en": "moved",
-      "zh": "需迁移"
     },
     "gui.pb.back": {
       "en": "Playbooks",

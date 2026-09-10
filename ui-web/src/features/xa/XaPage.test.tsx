@@ -106,26 +106,6 @@ const cardName = (): string | null => document.querySelector('#dBody .pmdmeta .l
 const wayIn = (): string | null => document.querySelector('#dBody .pmdmeta .l2')!.textContent
 const cardAct = (): Array<string | null> =>
   [...document.querySelectorAll('#dBody .pmdhead .dact button')].map((b) => b.textContent)
-const capsOnCard = (): Array<string | null> =>
-  [...document.querySelectorAll('#dBody .pmsec > .cap')].map((c) => c.textContent)
-/* The "whether it works" section, found by its caption rather than by position:
-   the card has three sections now and which of them are drawn depends on the
-   row. */
-const testSec = (): HTMLElement | null =>
-  [...document.querySelectorAll<HTMLElement>('#dBody .pmsec')].find(
-    (sec) => sec.querySelector('.cap')?.textContent === 'gui.agent.sec_test',
-  ) ?? null
-const testBtns = (): Array<string | null> => [...(testSec()?.querySelectorAll('.sutest button') ?? [])].map((b) => b.textContent)
-const testVerdict = (): string | null => testSec()?.querySelector('.vd')?.textContent ?? null
-const testDot = (): string | null => testSec()?.querySelector('.led')?.className ?? null
-const testProse = (): Array<string | null> => [...(testSec()?.querySelectorAll('.pmdesc') ?? [])].map((n) => n.textContent)
-
-/* The catalogue group starts folded, so a test about a row inside it has to
-   open it first -- the same click the reader makes. */
-const expandGroup = async (label: string): Promise<void> => {
-  const grp = [...document.querySelectorAll('.sugrp')].find((g) => g.querySelector('.hd b')!.textContent === label)
-  await click(grp!.querySelector('.hd .gfold'))
-}
 
 /* Opening the card is clicking the row: the row is the door, and there is no
    second Configure button beside it. */
@@ -190,35 +170,23 @@ afterEach(() => {
 })
 
 describe('xa island', () => {
-  /* Four groups, one per answer to "what would it take to use this". Two of
-     them replaced a single "available" that held the switch worth one click
-     and the CLI this machine has never had, in one list. Provenance is still a
-     tag and not a section: a broken agent used to sit three groups below a
-     healthy built-in one. */
-  it('splits the page by what it would take to use each row', async () => {
+  /* Two verbs, two groups. Provenance is a tag, not a section: a broken agent
+     used to sit three groups below a healthy built-in one. */
+  it('splits the page into what is on duty and what can be connected', async () => {
     install([
       row(),
-      row({ name: 'off_one', configured: true, enabled: false }),
       row({ name: 'miro', kind: 'openai', configured: false, has_api_key: false }),
       row({ name: 'codex', configured: false, probe_status: 'missing', probe_detail: 'codex: command not found' }),
     ])
     await mount()
     expect(await screen.findByText('claude_code')).toBeTruthy()
     expect(groupOf('claude_code')).toBe('gui.agent.g_on')
-    expect(groupOf('off_one')).toBe('gui.agent.g_switch')
-    /* On the machine and missing only a credential: a question about Raven's
-       config, not about the machine. */
-    expect(groupOf('miro')).toBe('gui.agent.g_setup')
+    expect(groupOf('miro')).toBe('gui.agent.g_off')
+    expect(groupOf('codex')).toBe('gui.agent.g_off')
     expect([...document.querySelectorAll('.sugrp .hd b')].map((b) => b.textContent)).toEqual([
       'gui.agent.g_on',
-      'gui.agent.g_switch',
-      'gui.agent.g_setup',
-      'gui.agent.g_install',
+      'gui.agent.g_off',
     ])
-    /* And the last one is the machine's question, folded away until asked. */
-    expect(rowsOf().map((r) => r.querySelector('.nm b')!.textContent)).not.toContain('codex')
-    await expandGroup('gui.agent.g_install')
-    expect(groupOf('codex')).toBe('gui.agent.g_install')
   })
 
   /* Every verb on the page is one of two, whatever the row is underneath.
@@ -240,11 +208,10 @@ describe('xa island', () => {
     expect(rowsOf().every((r) => r.querySelectorAll('.suact button').length <= 1)).toBe(true)
   })
 
-  /* Most of what this ordering used to say is now said by which group the row
-     is in. What is left is the one distinction the groups do not draw: an entry
-     Raven writes on its own, before a credential the reader has to go and
-     find. */
-  it('orders a group by what connecting costs', async () => {
+  /* The addable group is ordered by what the click costs, the same question the
+     entrances page sorts on: a switch, an entry, a credential to go and find, or
+     several hundred megabytes. */
+  it('orders the addable group by what connecting costs', async () => {
     install([
       row({ name: 'unbuilt', vendored: true, configured: false, enabled: false, probe_status: 'missing' }),
       row({ name: 'needs_key', kind: 'openai', configured: false, has_api_key: false }),
@@ -252,17 +219,10 @@ describe('xa island', () => {
       row({ name: 'switched_off', configured: true, enabled: false }),
     ])
     await mount()
-    const named = (label: string): Array<string | null> =>
-      [
-        ...[...document.querySelectorAll('.sugrp')]
-          .find((g) => g.querySelector('.hd b')!.textContent === label)!
-          .querySelectorAll('.nm b'),
-      ].map((b) => b.textContent)
-    expect(named('gui.agent.g_switch')).toEqual(['switched_off'])
-    expect(named('gui.agent.g_setup')).toEqual(['preset', 'needs_key'])
-    expect(named('gui.agent.g_install')).toEqual([])
-    await expandGroup('gui.agent.g_install')
-    expect(named('gui.agent.g_install')).toEqual(['unbuilt'])
+    const off = [...document.querySelectorAll('.sugrp')]
+      .find((g) => g.querySelector('.hd b')!.textContent === 'gui.agent.g_off')!
+      .querySelectorAll('.nm b')
+    expect([...off].map((b) => b.textContent)).toEqual(['switched_off', 'preset', 'needs_key', 'unbuilt'])
   })
 
   it('prints no prose: no subtitle, no group hints, no descriptions on rows', async () => {
@@ -284,7 +244,7 @@ describe('xa island', () => {
     await mount()
     expect(await screen.findByText('claude_code')).toBeTruthy()
     expect([...document.querySelectorAll('#xaPage .sugrp .hd b')].map((b) => b.textContent)).toEqual([
-      'gui.agent.g_setup',
+      'gui.agent.g_off',
     ])
     expect(document.querySelector('#xaPage .empty-note')).toBeNull()
   })
@@ -299,20 +259,14 @@ describe('xa island', () => {
   })
 
   /* No re-check button: opening the page re-measures availability, which is
-     what that button was for. The one control a heading may carry is its own
-     visibility, so the claim is about action buttons, not about buttons --
-     asserting the latter passed only while no group on screen could fold. */
-  it('has no action button in any group heading', async () => {
-    /* Three groups on screen, one of them the folding one, so this cannot pass
-       by there being nothing that could have carried a button. */
-    install([
-      row(),
-      row({ name: 'codex', configured: false }),
-      row({ name: 'not_here', configured: false, probe_status: 'missing' }),
-    ])
+     what that button was for. */
+  it('has no button in any group heading', async () => {
+    /* Both groups on screen, so this cannot pass by there being only one: the
+       addable heading does carry a `.tool`, and it is the ordering note. */
+    install([row(), row({ name: 'codex', configured: false })])
     await mount()
-    expect(document.querySelectorAll('#xaPage .sugrp').length).toBe(3)
-    expect([...document.querySelectorAll('#xaPage .sugrp .hd button')].map((b) => b.className)).toEqual(['gfold'])
+    expect(document.querySelectorAll('#xaPage .sugrp').length).toBe(2)
+    expect(document.querySelector('#xaPage .sugrp .hd button')).toBeNull()
     expect(document.querySelector('#xaPage')!.textContent).not.toContain('gui.agent.probe')
   })
 
@@ -328,174 +282,6 @@ describe('xa island', () => {
   /* Health is the dot, not a sentence. The group heading says whether the agent
      is connected and the button says what to do about it; a third line
      repeating either in grey was the standing small print. */
-  describe('the four groups', () => {
-    /* The distinction the two-group page could not draw. Both of these are one
-       write to Raven's config away from being connected -- but writing an entry
-       for a command that is not on the machine connects nothing, and only the
-       probe knows which is which. */
-    it('separates a preset this machine has from one it has never had', async () => {
-      install([
-        row({ name: 'here', configured: false, probe_status: 'ready' }),
-        row({ name: 'not_here', configured: false, probe_status: 'missing' }),
-      ])
-      await mount()
-      expect(groupOf('here')).toBe('gui.agent.g_setup')
-      await expandGroup('gui.agent.g_install')
-      expect(groupOf('not_here')).toBe('gui.agent.g_install')
-    })
-
-    /* `attention` is "the binary answered and nothing has verified what it can
-       do". That is a row worth connecting and then testing, not one worth
-       filing under "you would have to install it". */
-    it('keeps an unverified binary out of the install group', async () => {
-      install([row({ name: 'unsure', configured: false, probe_status: 'attention' })])
-      await mount()
-      expect(groupOf('unsure')).toBe('gui.agent.g_setup')
-    })
-
-    it('puts a switched-off agent in its own group, not among the ones to set up', async () => {
-      install([row({ name: 'off_one', configured: true, enabled: false })])
-      await mount()
-      expect(groupOf('off_one')).toBe('gui.agent.g_switch')
-    })
-
-    /* A configured agent keeps its entry after its binary is removed, so "off"
-       is a state a missing executable can be in. The switch is not the answer
-       there: `subagents.toggle`'s enable gate probes the agent and refuses the
-       write when nothing answers, so "ready to enable" would promise the one
-       click that cannot work. The probe decides before the stage does. */
-    it('does not call a switched-off agent ready when its binary is gone', async () => {
-      install([
-        row({ name: 'gone_cli', kind: 'cli', configured: true, enabled: false, probe_status: 'missing' }),
-        row({ name: 'gone_acp', kind: 'acp', configured: true, enabled: false, probe_status: 'missing' }),
-        row({ name: 'here_off', kind: 'cli', configured: true, enabled: false, probe_status: 'ready' }),
-      ])
-      await mount()
-      expect(groupOf('here_off')).toBe('gui.agent.g_switch')
-      expect(rowsOf().map((r) => r.querySelector('.nm b')!.textContent)).toEqual(['here_off'])
-      await expandGroup('gui.agent.g_install')
-      expect(groupOf('gone_cli')).toBe('gui.agent.g_install')
-      expect(groupOf('gone_acp')).toBe('gui.agent.g_install')
-    })
-
-    /* An endpoint's probe says `missing` for "unreachable" -- a connection
-       error, a timeout -- which is a network fact with nothing to install
-       behind it, and the enable gate does not ping that kind. So the same probe
-       word that files a command-backed row under installing leaves an openai
-       row where its config state puts it: the switch when it is keyed and off,
-       the credential when it has none. */
-    it('keeps an unreachable openai endpoint out of the install group', async () => {
-      install([
-        row({ name: 'far_off', kind: 'openai', configured: true, enabled: false, has_api_key: true, probe_status: 'missing' }),
-        row({ name: 'far_keyless', kind: 'openai', configured: true, enabled: false, has_api_key: false, probe_status: 'missing' }),
-        row({ name: 'gone_cli', kind: 'cli', configured: true, enabled: false, probe_status: 'missing' }),
-      ])
-      await mount()
-      expect(groupOf('far_off')).toBe('gui.agent.g_switch')
-      expect(groupOf('far_keyless')).toBe('gui.agent.g_setup')
-      /* The command-backed row beside them still goes where it went, so this
-         cannot pass by the install branch having been deleted outright. */
-      expect(rowsOf().map((r) => r.querySelector('.nm b')!.textContent)).not.toContain('gone_cli')
-      await expandGroup('gui.agent.g_install')
-      expect(groupOf('gone_cli')).toBe('gui.agent.g_install')
-    })
-
-    it('counts a shipped folder by whether its venv was built, not by its origin', async () => {
-      install([
-        row({ name: 'built', vendored: true, configured: false, enabled: false, probe_status: 'ready' }),
-        row({ name: 'unbuilt', vendored: true, configured: false, enabled: false, probe_status: 'missing' }),
-      ])
-      await mount()
-      expect(groupOf('built')).toBe('gui.agent.g_switch')
-      await expandGroup('gui.agent.g_install')
-      expect(groupOf('unbuilt')).toBe('gui.agent.g_install')
-    })
-
-    it('leaves the built-in agent connected, where it always was', async () => {
-      install([row({ name: 'raven', kind: 'builtin', builtin: true, configured: false })])
-      await mount()
-      expect(groupOf('raven')).toBe('gui.agent.g_on')
-    })
-  })
-
-  describe('the catalogue folds', () => {
-    const fold = (label: string): Element | null =>
-      [...document.querySelectorAll('.sugrp')]
-        .find((g) => g.querySelector('.hd b')!.textContent === label)
-        ?.querySelector('.hd .gfold') ?? null
-
-    it('starts shut and opens on the heading control', async () => {
-      install([row({ name: 'not_here', configured: false, probe_status: 'missing' })])
-      await mount()
-      expect(fold('gui.agent.g_install')!.textContent).toBe('gui.grp.show')
-      expect(fold('gui.agent.g_install')!.getAttribute('aria-expanded')).toBe('false')
-      expect(rowsOf()).toEqual([])
-      await click(fold('gui.agent.g_install'))
-      expect(fold('gui.agent.g_install')!.textContent).toBe('gui.grp.hide')
-      expect(rowsOf().map((r) => r.querySelector('.nm b')!.textContent)).toEqual(['not_here'])
-      await click(fold('gui.agent.g_install'))
-      expect(rowsOf()).toEqual([])
-    })
-
-    /* Shut, not empty: the heading still counts what is behind it, or a reader
-       cannot tell a folded group from one that has nothing in it. */
-    it('still says how many are behind it', async () => {
-      install([
-        row({ name: 'a', configured: false, probe_status: 'missing' }),
-        row({ name: 'b', configured: false, probe_status: 'missing' }),
-      ])
-      await mount()
-      const grp = [...document.querySelectorAll('.sugrp')].find(
-        (g) => g.querySelector('.hd b')!.textContent === 'gui.agent.g_install',
-      )!
-      expect(grp.querySelector('.hd .n')!.textContent).toBe('2')
-    })
-
-    it('is the only group with a fold on it', async () => {
-      install([
-        row(),
-        row({ name: 'off_one', configured: true, enabled: false }),
-        row({ name: 'preset', configured: false }),
-        row({ name: 'not_here', configured: false, probe_status: 'missing' }),
-      ])
-      await mount()
-      expect(fold('gui.agent.g_on')).toBeNull()
-      expect(fold('gui.agent.g_switch')).toBeNull()
-      expect(fold('gui.agent.g_setup')).toBeNull()
-      expect(fold('gui.agent.g_install')).not.toBeNull()
-    })
-
-    /* A build is minutes of downloads with nothing at the end to announce it,
-       so the row carrying `building` is the one thing on this page a reader is
-       watching. Folding the group it sits in hides the progress behind the
-       click that started it. */
-    it('does not fold while something inside it is installing', async () => {
-      install([
-        row({ name: 'Raven-PPT', vendored: true, configured: false, building: true, enabled: false }),
-        row({ name: 'not_here', configured: false, probe_status: 'missing' }),
-      ])
-      await mount()
-      expect(fold('gui.agent.g_install')).toBeNull()
-      expect(rowsOf().map((r) => r.querySelector('.nm b')!.textContent)).toContain('Raven-PPT')
-    })
-  })
-
-  /* The one row in the setup group whose connect is not the group's verb: a
-     preset that changed transport is removed and added back, and the card asks
-     first. */
-  it('tags the row whose connect is a migration', async () => {
-    install([
-      row({ name: 'moved', configured: true, enabled: false, upgrade_to: 'acp' }),
-      row({ name: 'ordinary', configured: false }),
-    ])
-    await mount()
-    const tags = (name: string): Array<string | null> =>
-      [...rowNamed(name).querySelectorAll('.nm .kd')].map((k) => k.textContent)
-    expect(tags('moved')).toEqual(['gui.agent.kind_cli', 'gui.agent.tag_stale'])
-    expect(tags('ordinary')).toEqual(['gui.agent.kind_cli'])
-    expect(groupOf('moved')).toBe('gui.agent.g_setup')
-  })
-
   describe('the row says three things: who, how, and what to do', () => {
     it('carries no second line at all', async () => {
       install([
@@ -505,9 +291,6 @@ describe('xa island', () => {
         row({ name: 'broken', configured: false, probe_status: 'missing', probe_detail: 'codex: not found' }),
       ])
       await mount()
-      /* `broken` is in the folded group, and the claim is about every row on
-         the page, so it has to be on the page. */
-      await expandGroup('gui.agent.g_install')
       expect(rowsOf().map((r) => r.querySelector('.sufacts'))).toEqual([null, null, null, null])
       expect(subOf('broken')).toBeNull()
       expect(document.querySelector('#xaPage')!.textContent).not.toContain('codex: not found')
@@ -525,16 +308,15 @@ describe('xa island', () => {
       expect(dotOf('unsure')).toBe('led warn')
     })
 
-    /* Not-dispatchable is what every row outside the connected group is, so a
-       red dot there was an alarm about the group's own definition -- and the
-       clay stripe it drags along made an unconnected agent look broken. */
-    it('keeps the alarm colours out of every group but the connected one', async () => {
+    /* Not-dispatchable is what every row in the addable group is, so a red dot
+       there was an alarm about the group's own definition -- and the clay stripe
+       it drags along made an unconnected agent look broken. */
+    it('keeps the alarm colours out of the addable group', async () => {
       install([
         row({ name: 'needs_key', kind: 'openai', configured: false, has_api_key: false }),
         row({ name: 'unbuilt', vendored: true, configured: false, enabled: false, probe_status: 'missing' }),
       ])
       await mount()
-      await expandGroup('gui.agent.g_install')
       expect(dotOf('needs_key')).toBe('led off')
       expect(dotOf('unbuilt')).toBe('led off')
       expect([...document.querySelectorAll('#xaPage .surow.bad')]).toEqual([])
@@ -569,7 +351,6 @@ describe('xa island', () => {
         row({ name: 'Raven-PPT', vendored: true, configured: false, enabled: false, probe_status: 'missing' }),
       ])
       await mount()
-      await expandGroup('gui.agent.g_install')
       const button = rowNamed('Raven-PPT').querySelector('.suact button')!
       expect(button.getAttribute('title')).toBe('gui.agent.install_note')
       await click(button)
@@ -725,8 +506,8 @@ describe('xa island', () => {
     const button = rowNamed('Raven-PPT').querySelector('.suact button')!
     expect(button.textContent).toBe('gui.agent.installing')
     expect(button.hasAttribute('disabled')).toBe(true)
-    /* The button is what says it, and the dot stays neutral: the row is not
-       connected, and there a colour would be an alarm about nothing. */
+    /* The button is what says it, and the dot stays neutral: the row is in the
+       addable group, where a colour would be an alarm about nothing. */
     expect(dotOf('Raven-PPT')).toBe('led off')
   })
 
@@ -750,8 +531,7 @@ describe('xa island', () => {
       expect(body.querySelector('.pmsec .cap')!.textContent).toBe('gui.plug.sec_about')
       expect(body.querySelector('.pmdesc')!.textContent).toBe('Claude Code CLI')
       /* What it is not any more: editable name and description fields, a second
-         copy of the row's status line, a save button, a menu. (The verdict came
-         back, in a section of its own -- see "the test in the card".) */
+         copy of the row's status line, a test verdict, a save button, a menu. */
       expect(body.querySelector('.sufield')).toBeNull()
       expect(body.querySelector('textarea')).toBeNull()
       expect(body.querySelector('.sufoot')).toBeNull()
@@ -792,10 +572,7 @@ describe('xa island', () => {
       install([row({ name: 'codex', configured: false, description: '' })])
       await mount()
       await openCard('codex')
-      /* By caption, not by "no section at all": the card grew a second one
-         (whether it works), and an assertion that counted sections would pass
-         only for as long as this was the only thing on the card. */
-      expect(capsOnCard()).not.toContain('gui.plug.sec_about')
+      expect(document.querySelector('#dBody .pmsec')).toBeNull()
     })
 
     /* The credential is the only thing the card takes, and only from the agents
@@ -916,268 +693,6 @@ describe('xa island', () => {
       await openCard('claude_code')
       expect(cardName()).toBe('claude_code')
       expect(document.getElementById('dBody')!.textContent).not.toContain('someone else')
-    })
-  })
-
-  /* Whether it works, which is a different question from whether it is
-     installed -- and the one the page could never answer before. */
-  describe('the test in the card', () => {
-    it('offers it for an agent the server can look up', async () => {
-      install([row()])
-      await mount()
-      await openCard('claude_code')
-      expect(testBtns()).toEqual(['gui.agent.test_do'])
-    })
-
-    it('leaves it off the built-in agent, which is this process', async () => {
-      /* `run_test` refuses one outright -- "a built-in agent runs in this
-         process; there is nothing to test" -- and records nothing, so the
-         button could only ever put a failure on a row that is working. */
-      install([row({ name: 'raven', kind: 'builtin', builtin: true, configured: false })])
-      await mount()
-      await openCard('raven')
-      expect(testSec()).toBeNull()
-    })
-
-    it('leaves it off a discovered folder, which neither lookup can reach', async () => {
-      /* `subagents.test` takes `config` or `preset`, and a vendored row is in
-         neither: no config entry to find, and never in the preset table. Both
-         answer `subagent_not_found`. */
-      install([row({ name: 'Raven-Research', preset: undefined, configured: false, vendored: true })])
-      await mount()
-      await openCard('Raven-Research')
-      expect(testSec()).toBeNull()
-    })
-
-    it('keeps it out of the row, which still carries two verbs and no third', async () => {
-      install([row()])
-      await mount()
-      expect(rowActs('claude_code')).toEqual(['gui.agent.disconnect'])
-    })
-
-    it('reports the last verdict and how long ago it was reached', async () => {
-      install([row({ last_test_ok: true, last_test_at_ms: Date.now() - 3 * 3600e3 })])
-      await mount()
-      await openCard('claude_code')
-      expect(testVerdict()).toContain('gui.agent.test_ok')
-      /* Through the catalogue, not as a bare "3h": the age is the half of this
-         sentence that would otherwise stay English beside a Chinese one. */
-      expect(testVerdict()).toContain('gui.time.ago_h')
-      expect(testDot()).toBe('led')
-    })
-
-    it('counts the age in minutes while it is fresh, and in days once it is old', async () => {
-      /* Under a minute is not "0m": a test that has just answered should read
-         as having just answered. */
-      install([row({ last_test_ok: true, last_test_at_ms: Date.now() - 20e3 })])
-      await mount()
-      await openCard('claude_code')
-      expect(testVerdict()).toContain('gui.time.ago_now')
-      cleanup()
-
-      install([row({ last_test_ok: true, last_test_at_ms: Date.now() - 4 * 60e3 })])
-      await mount()
-      await openCard('claude_code')
-      expect(testVerdict()).toContain('gui.time.ago_m')
-      cleanup()
-
-      install([row({ last_test_ok: true, last_test_at_ms: Date.now() - 50 * 3600e3 })])
-      await mount()
-      await openCard('claude_code')
-      expect(testVerdict()).toContain('gui.time.ago_d')
-    })
-
-    it('says a failure failed, and puts the reason under it', async () => {
-      install([
-        row({ last_test_ok: false, last_test_at_ms: Date.now() - 60e3, last_test_detail: 'exited 1: not logged in' }),
-      ])
-      await mount()
-      await openCard('claude_code')
-      expect(testVerdict()).toContain('gui.agent.test_bad')
-      expect(testDot()).toBe('led bad')
-      expect(testProse()).toContain('exited 1: not logged in')
-    })
-
-    it('keeps the detail off a pass, where it only repeats the verdict', async () => {
-      /* A passing cli test's detail is "the agent ran and replied", which the
-         line above it has already said in fewer words. */
-      install([row({ last_test_ok: true, last_test_at_ms: Date.now(), last_test_detail: 'the agent ran and replied' })])
-      await mount()
-      await openCard('claude_code')
-      expect(testProse()).not.toContain('the agent ran and replied')
-    })
-
-    it('says nothing was measured when nothing was', async () => {
-      install([row()])
-      await mount()
-      await openCard('claude_code')
-      expect(testVerdict()).toBe('gui.agent.test_never')
-      expect(testDot()).toBe('led off')
-    })
-
-    it('reads a verdict with no time on it as untested', async () => {
-      /* The two fields come off one record, so this is a row from a server
-         that no longer exists -- and printing "Worked, {ago}" with the
-         placeholder still in it is worse than saying nothing was measured. */
-      install([row({ last_test_ok: true, last_test_at_ms: null })])
-      await mount()
-      await openCard('claude_code')
-      expect(testVerdict()).toBe('gui.agent.test_never')
-    })
-
-    it('warns about the quota for the test that spends one', async () => {
-      install([row({ kind: 'cli' })])
-      await mount()
-      await openCard('claude_code')
-      expect(testProse()).toContain('gui.agent.test_note')
-    })
-
-    it('does not warn about a bill an acp handshake never sends', async () => {
-      /* acp reaches its verdict in the handshake and openai in the free
-         `/models` probe. Warning about a cost neither of them has is how a
-         reader learns to ignore the warning on the one that does. */
-      install([row({ kind: 'acp' })])
-      await mount()
-      await openCard('claude_code')
-      expect(testProse()).not.toContain('gui.agent.test_note')
-      cleanup()
-
-      install([row({ kind: 'openai', has_api_key: true })])
-      await mount()
-      await openCard('claude_code')
-      expect(testProse()).not.toContain('gui.agent.test_note')
-    })
-
-    it('sends the test through the source', async () => {
-      const { acts } = install([row()])
-      await mount()
-      await openCard('claude_code')
-      await click(testSec()!.querySelector('.sutest button'))
-      expect(acts).toEqual([['test', 'claude_code', {}]])
-    })
-
-    /* The call IS the test: `subagents.test` holds the connection open for the
-       whole run and answers with the verdict, so the rows it repaints from are
-       the first news of the test being over -- and nothing before them says it
-       began. A card that read only the row flag sat on "Run a test" for the
-       two minutes of the test it had itself started. */
-    it('says it is running from the click, not from the answer', async () => {
-      let settle = (): void => {}
-      const { acts } = install([row()], {
-        act: async (op, r, args) => {
-          acts.push([op, r.name, args || {}])
-          if (op === 'test') await new Promise<void>((res) => (settle = res))
-          return [row()]
-        },
-      })
-      await mount()
-      await openCard('claude_code')
-      await click(testSec()!.querySelector('.sutest button'))
-      expect(testBtns()).toEqual(['gui.agent.test_stop', 'gui.agent.test_running'])
-      await act(async () => {
-        settle()
-      })
-      expect(testBtns()).toEqual(['gui.agent.test_do'])
-    })
-
-    /* Against the store, not the button: the button is disabled while a test
-       runs, so a click cannot reach this. The guard is for the caller -- the
-       server refuses a second test for a name, and its refusal arrives as an
-       ordinary result, which would repaint the card as though the running test
-       had answered. */
-    it('drops a second call rather than sending one the server would refuse', async () => {
-      const acts: Array<[string, string, XaActArgs]> = []
-      let settle = (): void => {}
-      const only = row()
-      install([only], {
-        act: async (op, r, args) => {
-          acts.push([op, r.name, args || {}])
-          if (op === 'test') await new Promise<void>((res) => (settle = res))
-          return [only]
-        },
-      })
-      await mount()
-      await act(async () => {
-        void store.runTest(only)
-        void store.runTest(only)
-      })
-      await act(async () => {
-        settle()
-      })
-      expect(acts.filter(([op]) => op === 'test')).toHaveLength(1)
-    })
-
-    it('offers stop only while one is running, and cancels through it', async () => {
-      let settle = (): void => {}
-      const acts: Array<[string, string, XaActArgs]> = []
-      install([row()], {
-        act: async (op, r, args) => {
-          acts.push([op, r.name, args || {}])
-          if (op === 'test') await new Promise<void>((res) => (settle = res))
-          return [row()]
-        },
-      })
-      await mount()
-      await openCard('claude_code')
-      expect(testBtns()).toEqual(['gui.agent.test_do'])
-      await click(testSec()!.querySelector('.sutest button'))
-      await click(testSec()!.querySelector('.sutest button'))
-      expect(acts.map(([op]) => op)).toEqual(['test', 'test_cancel'])
-      await act(async () => {
-        settle()
-      })
-    })
-
-    it('stops saying it is running when the call fails', async () => {
-      /* The rejected call, which is the path the reader most wants to press
-         again from: `run` turns it into a toast, and the flag has to come off
-         all the same or the button stays disabled for the rest of the session.
-         (This drives `run`'s catch, not `runTest`'s `finally` -- nothing
-         throws through that today; see the comment there.) */
-      const { toasts } = install([row()], {
-        act: async () => {
-          throw { data: { detail: 'the gateway went away' } }
-        },
-      })
-      await mount()
-      await openCard('claude_code')
-      await click(testSec()!.querySelector('.sutest button'))
-      expect(testBtns()).toEqual(['gui.agent.test_do'])
-      expect(toasts[0]).toContain('the gateway went away')
-    })
-
-    /* The name is the only handle either side has on a running test: the
-       server keys `_RUNNING` by it, and the verdict store records against it.
-       A rename mid-run leaves the run alive with nothing pointing at it. */
-    it('does not let the name move while a test is in flight', async () => {
-      const only = row()
-      let settle = (): void => {}
-      install([only], {
-        act: async (op) => {
-          if (op === 'test') await new Promise<void>((res) => (settle = res))
-          return [only]
-        },
-      })
-      await mount()
-      await openCard('claude_code')
-      expect(document.querySelector('#dBody .pmdmeta .xaedit')).not.toBeNull()
-      await click(testSec()!.querySelector('.sutest button:last-of-type'))
-      expect(document.querySelector('#dBody .pmdmeta .xaedit')).toBeNull()
-      expect(cardName()).toBe('claude_code')
-      /* Positive half: only the name is held. The description does not key
-         anything, so taking it away would be a restriction with no reason. */
-      expect(document.querySelector('#dBody .pmdesc .xaedit')).not.toBeNull()
-      await act(async () => {
-        settle()
-      })
-      expect(document.querySelector('#dBody .pmdmeta .xaedit')).not.toBeNull()
-    })
-
-    it('shows a test another client started, which is only on the row', async () => {
-      install([row({ test_running: true })])
-      await mount()
-      await openCard('claude_code')
-      expect(testBtns()).toEqual(['gui.agent.test_stop', 'gui.agent.test_running'])
     })
   })
 

@@ -1,13 +1,8 @@
-# code-flow: Raven-Code's coding conduct as a plugin over the kernel's general
-# seams -- the turn-frame hook, the session ledger, and the product's own tool
-# face under code_flow/tools/.
+# code-flow: Raven-Code's coding conduct as a plugin over the kernel's general seams.
 #
-# Config slice (plugins.config["code-flow"]): enabled controls flow notices
-# and workspace reports; tools.enabled controls the tool face. Both default
-# off (D6); the launcher enables them for its own renders.
-# The tool face has its own section in that slice (`tools`), so a product can
-# keep the flow and hand the tools back to the host, or the other way round.
-# Checklist binding and cleanup remain active whenever the tools are enabled.
+# Config slice (plugins.config["code-flow"]): enabled -- the product gate.
+# Absent or false means no surface is cast (the D6 shape); the launcher
+# (agents/raven-code/run.py render_config) flips it on for its own renders.
 #
 # config_schema stays empty on purpose: admission with an empty declaration is
 # verbatim pass-through, and the slice is validated by the plugin's own
@@ -22,8 +17,6 @@ enabled_by_default = true
 # The turn-frame hook (paper: raven/contracts/loop_hooks.py): the flow's one
 # loop seat. It books each session into the process ledger, tells a session
 # about the others mid-turn in its directory, and clears the mark at the send.
-# Its iteration hook adds repository instructions and concurrency notices
-# to the system message; the inbound query is left intact.
 # The registry serves hook names sorted, so the axis order is part of the
 # class, not the manifest.
 
@@ -37,47 +30,3 @@ factory = "code_flow.flow:make_flow_hook"
 [[plugin.contributes.session_observers]]
 name = "session_forget"
 factory = "code_flow.flow:make_session_observer"
-
-# The product's own tool face (code_flow/tools/). Four of these ride the
-# built-in names on purpose: plugin tools register last and a same-name
-# registration replaces the built-in instance, which is how this product
-# serves the fork's parameter spelling without touching raven/agent/tools/ or
-# the four other products that share it. ``glob`` is the one name that differs
-# from trunk's (``find``), and the launcher withholds ``find`` while this face
-# is served.
-
-[[plugin.contributes.tools]]
-name = "read_file"
-factory = "code_flow.tools.plugin:make_read_file"
-
-[[plugin.contributes.tools]]
-name = "write_file"
-factory = "code_flow.tools.plugin:make_write_file"
-
-[[plugin.contributes.tools]]
-name = "edit_file"
-factory = "code_flow.tools.plugin:make_edit_file"
-
-[[plugin.contributes.tools]]
-name = "list_dir"
-factory = "code_flow.tools.plugin:make_list_dir"
-
-[[plugin.contributes.tools]]
-name = "glob"
-factory = "code_flow.tools.plugin:make_glob"
-
-# The checklist: one tool, read and write, saved per session under Agent home
-# and restored into context by the flow hook when it has gone out of view.
-
-[[plugin.contributes.tools]]
-name = "todo"
-factory = "code_flow.tools.plugin:make_todo"
-
-# The shell, on the host's own ExecTool: a long timeout is clamped instead of
-# refused, a timed-out command keeps the output it produced, and an oversized
-# output is saved whole under Agent home. Served only when the sandbox backend
-# is none; under a sandbox the factory declines and the host's exec stays.
-
-[[plugin.contributes.tools]]
-name = "exec"
-factory = "code_flow.tools.plugin:make_exec"
