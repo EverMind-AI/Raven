@@ -169,6 +169,34 @@ class TestMemoryBackends:
         with pytest.raises(ValidationError, match="duplicate session_observer"):
             PluginManifest.from_toml_str(toml)
 
+    def test_onboard_contribution_parses(self) -> None:
+        mf = PluginManifest.from_toml_str(
+            textwrap.dedent("""
+                [plugin]
+                id = "p"
+                version = "1"
+                [[plugin.contributes.onboard]]
+                name = "p"
+                factory = "mod.path:make_onboard_step"
+            """)
+        )
+        assert mf.contributes.onboard[0].factory == "mod.path:make_onboard_step"
+
+    def test_duplicate_onboard_name_rejected(self) -> None:
+        toml = textwrap.dedent("""
+            [plugin]
+            id = "x"
+            version = "0.1"
+            [[plugin.contributes.onboard]]
+            name = "everos"
+            factory = "a.b:c"
+            [[plugin.contributes.onboard]]
+            name = "everos"
+            factory = "a.b:d"
+        """)
+        with pytest.raises(ValidationError, match="duplicate onboard"):
+            PluginManifest.from_toml_str(toml)
+
     def test_multiple_contributions_different_names(self) -> None:
         toml = textwrap.dedent("""
             [plugin]

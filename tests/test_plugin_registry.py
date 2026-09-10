@@ -13,6 +13,7 @@ from raven.plugins import (
     DiscoveredPlugin,
     ManifestOrigin,
     MemoryBackendContribution,
+    OnboardContribution,
     PluginConflictError,
     PluginContext,
     PluginFactoryImportError,
@@ -51,6 +52,7 @@ def _make_discovered(
     plugin_id: str,
     *,
     backends: list[tuple[str, str]] | None = None,
+    onboard: list[tuple[str, str]] | None = None,
     enabled: bool = True,
     bundled: bool = False,
 ) -> DiscoveredPlugin:
@@ -61,6 +63,7 @@ def _make_discovered(
         enabled_by_default=enabled,
         contributes=Contributes(
             memory_backends=[MemoryBackendContribution(name=n, factory=f) for n, f in (backends or [])],
+            onboard=[OnboardContribution(name=n, factory=f) for n, f in (onboard or [])],
         ),
     )
     return DiscoveredPlugin(
@@ -294,3 +297,26 @@ class TestLookup:
         mf = reg.manifest_for("plug")
         assert mf is not None
         assert mf.id == "plug"
+
+
+def test_build_onboard_step_calls_the_factory(tmp_path: Path) -> None:
+    _install_test_module("_test_onboard", {"make_onboard_step": lambda ctx: ("step", ctx.config)})
+    reg = PluginRegistry()
+    reg.activate([_make_discovered("plug", onboard=[("plug", "_test_onboard:make_onboard_step")])])
+    assert reg.onboard_names() == ["plug"]
+    step = reg.build_onboard_step(
+        "plug",
+        config={"k": 1},
+        services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
+    )
+    assert step == ("step", {"k": 1})
+
+
+def test_build_onboard_step_rejects_an_unknown_name(tmp_path: Path) -> None:
+    reg = PluginRegistry()
+    with pytest.raises(PluginNotFoundError):
+        reg.build_onboard_step(
+            "nobody",
+            config={},
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
+        )

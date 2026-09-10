@@ -1,0 +1,61 @@
+"""The seam through which a plugin contributes a screen to ``raven onboard``.
+
+The host owns the wizard shell (console, translation, prompt helpers, the
+back sentinel, the lender of an already-configured provider's credentials)
+and hands it over as one ``OnboardUI``. The plugin owns the screen's content.
+The plugin never writes ``memory.backend``: it returns a ``StepOutcome`` and
+the host records the choice, so the host's config key stays the host's.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Protocol
+
+
+class StepOutcome(Enum):
+    """What one onboard screen decided, for the host to record."""
+
+    CONFIGURED = "configured"
+    DISABLED = "disabled"
+    BACK = "back"
+
+
+@dataclass(frozen=True)
+class OnboardUI:
+    """The wizard shell, lent to a plugin's screen for the duration of one run."""
+
+    console: Any
+    t: Callable[[str], str]
+    require_questionary: Callable[[], Any]
+    qmark: str
+    back: object
+    step_header: Callable[[int, str], None]
+    failure_choice: Callable[..., str]
+    back_placeholder: Callable[..., Any]
+    prompt_api_key: Callable[..., Any]
+    style: Any
+    lend_provider_credentials: Callable[[str], dict[str, str]]
+
+
+class OnboardStep(Protocol):
+    """What a ``[[plugin.contributes.onboard]]`` factory returns."""
+
+    def run(
+        self,
+        ui: OnboardUI,
+        *,
+        step_no: int,
+        non_interactive: bool,
+        main_model: str | None,
+        warnings: list[str],
+        skip_test: bool,
+    ) -> StepOutcome: ...
+
+    def configured(self) -> bool: ...
+
+
+__tier__ = "contract"
+__all__ = ["OnboardStep", "OnboardUI", "StepOutcome"]

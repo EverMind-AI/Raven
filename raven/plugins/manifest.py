@@ -6,10 +6,10 @@ contribution points, and config schema — everything the registry needs
 to know without importing the plugin's code.
 
 The single root table is ``[plugin]``. Contribution arrays are
-``[[plugin.contributes.<kind>]]``; the six kinds consumed today are
-``memory_backends``, ``tools``, ``hooks``, ``services``, ``tool_gates`` and
-``session_observers``, and the model ignores kinds it does not know so a
-manifest written for a later host still loads.
+``[[plugin.contributes.<kind>]]``; the seven kinds consumed today are
+``memory_backends``, ``tools``, ``hooks``, ``services``, ``tool_gates``,
+``session_observers`` and ``onboard``, and the model ignores kinds it does
+not know so a manifest written for a later host still loads.
 
 Validation rules worth flagging:
 
@@ -182,12 +182,36 @@ class SessionObserverContribution(_ManifestBase):
         return v
 
 
+class OnboardContribution(_ManifestBase):
+    """One ``[[plugin.contributes.onboard]]`` entry.
+
+    ``factory`` is a ``module.path:callable`` resolving to a
+    ``Callable[[PluginContext], OnboardStep]`` -- it returns one object
+    satisfying :class:`~raven.contracts.onboard.OnboardStep`. ``raven
+    onboard`` lends the wizard shell as one ``OnboardUI`` and records the
+    returned ``StepOutcome``; the plugin never writes ``memory.backend``
+    itself (paper: contracts/onboard.py).
+    """
+
+    name: str = Field(min_length=1)
+    factory: str = Field(min_length=1)
+
+    @field_validator("factory")
+    @classmethod
+    def _factory_is_module_path(cls, v: str) -> str:
+        if not _FACTORY_REF_RE.match(v):
+            raise ValueError(
+                f"factory must be 'module.path:callable', got {v!r}",
+            )
+        return v
+
+
 class Contributes(_ManifestBase):
     """All contribution arrays for a single manifest.
 
-    ``memory_backends``, ``tools``, ``hooks``, ``services``, ``tool_gates``
-    and ``session_observers`` are consumed today; the model keeps extra
-    fields silently so future contribution types don't break older hosts
+    ``memory_backends``, ``tools``, ``hooks``, ``services``, ``tool_gates``,
+    ``session_observers`` and ``onboard`` are consumed today; the model keeps
+    extra fields silently so future contribution types don't break older hosts
     reading newer manifests.
     """
 
@@ -197,6 +221,7 @@ class Contributes(_ManifestBase):
     services: list[ServiceContribution] = Field(default_factory=list)
     tool_gates: list[ToolGateContribution] = Field(default_factory=list)
     session_observers: list[SessionObserverContribution] = Field(default_factory=list)
+    onboard: list[OnboardContribution] = Field(default_factory=list)
 
 
 class PluginManifest(_ManifestBase):
@@ -227,6 +252,7 @@ class PluginManifest(_ManifestBase):
             ("service", self.contributes.services),
             ("tool_gate", self.contributes.tool_gates),
             ("session_observer", self.contributes.session_observers),
+            ("onboard", self.contributes.onboard),
         ):
             names = [c.name for c in items]
             if len(names) != len(set(names)):
@@ -271,6 +297,7 @@ class PluginManifest(_ManifestBase):
 __all__ = [
     "Contributes",
     "MemoryBackendContribution",
+    "OnboardContribution",
     "PluginManifest",
     "ToolContribution",
 ]
