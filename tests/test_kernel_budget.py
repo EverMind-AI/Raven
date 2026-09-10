@@ -79,6 +79,14 @@ stopped: 9 lines.
 
 The count is 2,771, and the twenty above it is the same headroom this docstring
 argued for the first time, not room set aside to spend.
+
+2,791 -> 2,960 (2026-09-14): the memory seam grew two declared shapes.
+``contracts/memory.py`` gained ``health()`` with ``HealthCheck`` / ``BackendHealth``
+(what ``raven doctor`` and ``raven import`` read instead of the plugin's
+internals), and ``contracts/onboard.py`` is a new paper (``OnboardUI`` /
+``OnboardStep`` / ``StepOutcome``, the screen a memory plugin contributes to
+``raven onboard``). Measured at 2,938 on top of the ``CallRecord`` round
+above; the headroom is the same twenty-odd lines as above, for the same reason.
 """
 
 from __future__ import annotations
@@ -89,7 +97,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 2_791
+CONTRACTS_LINE_CEILING = 2_960
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 
