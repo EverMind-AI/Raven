@@ -145,9 +145,9 @@ def fallback_everos_root() -> Path:
 
     The legacy location when it holds a config, so an install from before the
     move keeps its memories; otherwise the current default. Derives its answer
-    without reading raven's config, which is what lets ``_migrate_config`` use it
-    while holding a config dict of its own -- calling :func:`everos_root` there
-    would re-read whatever path is globally current, not the file being migrated.
+    without reading raven's config so it can be asked before any config is on
+    disk -- a fresh install, or a root question asked ahead of onboarding
+    writing one.
     """
     legacy = applicable_legacy_root()
     if legacy is not None and (legacy / "everos.toml").is_file():

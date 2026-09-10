@@ -1390,6 +1390,95 @@ def test_sandbox_keep_current_first_option(tmp_env: Path, monkeypatch: pytest.Mo
 # --------------------------------------------------------------------------- memory step
 
 
+class _FakeMemoryStep:
+    """A minimal ``OnboardStep`` for exercising ``_step4_memory``'s loop
+    without a real plugin screen behind it."""
+
+    def __init__(self, outcome: Any) -> None:
+        self._outcome = outcome
+        self.run_calls = 0
+
+    def run(self, ui, *, step_no, non_interactive, main_model, warnings, skip_test):
+        self.run_calls += 1
+        return self._outcome
+
+    def configured(self) -> bool:
+        return False
+
+
+def test_step4_memory_first_configured_wins(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two memory plugins, first CONFIGURED: its name is recorded and the
+    second screen never runs -- a later DISABLED must not overwrite it."""
+    from raven.plugins import StepOutcome
+
+    step_a = _FakeMemoryStep(StepOutcome.CONFIGURED)
+    step_b = _FakeMemoryStep(StepOutcome.DISABLED)
+    monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", step_b)])
+    monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+
+    calls: list[str | None] = []
+    monkeypatch.setattr(
+        "raven.config.update.set_memory_backend",
+        lambda name: calls.append(name),
+    )
+
+    result = onboard_commands._step4_memory(
+        skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
+    )
+
+    assert result is None
+    assert calls == ["a"]
+    assert step_b.run_calls == 0
+
+
+def test_step4_memory_all_disabled_clears_backend(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every screen declines: the backend is recorded as ``None`` exactly once."""
+    from raven.plugins import StepOutcome
+
+    step_a = _FakeMemoryStep(StepOutcome.DISABLED)
+    step_b = _FakeMemoryStep(StepOutcome.DISABLED)
+    monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", step_b)])
+    monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+
+    calls: list[str | None] = []
+    monkeypatch.setattr(
+        "raven.config.update.set_memory_backend",
+        lambda name: calls.append(name),
+    )
+
+    result = onboard_commands._step4_memory(
+        skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
+    )
+
+    assert result is None
+    assert calls == [None]
+
+
+def test_step4_memory_back_returns_sentinel_without_writing(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first screen backs out: the wizard returns ``_BACK`` and nothing
+    is recorded, not even for the screen that never ran."""
+    from raven.plugins import StepOutcome
+
+    step_a = _FakeMemoryStep(StepOutcome.BACK)
+    step_b = _FakeMemoryStep(StepOutcome.CONFIGURED)
+    monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", step_b)])
+    monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+
+    calls: list[str | None] = []
+    monkeypatch.setattr(
+        "raven.config.update.set_memory_backend",
+        lambda name: calls.append(name),
+    )
+
+    result = onboard_commands._step4_memory(
+        skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
+    )
+
+    assert result is onboard_commands._BACK
+    assert calls == []
+    assert step_b.run_calls == 0
+
+
 def test_memory_giving_up_sets_backend_null(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

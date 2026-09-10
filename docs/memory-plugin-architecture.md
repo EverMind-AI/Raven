@@ -291,7 +291,9 @@ imported.
 - **Construction**: lazy — `make_backend(ctx)` runs only for the
   selected backend. `ctx` carries `config` (the `plugins.config` slice),
   `services`, `logger`.
-- **Lifecycle**: host awaits `start()` once at boot, `stop()` at
+- **Lifecycle**: host calls `start()` once at boot but may not await
+  it before the first turn -- `recall` and `store` must tolerate being
+  called while `start` is still running -- and calls `stop()` at
   shutdown.
 - **Failure contract** (`raven/contracts/memory.py`): a session host --
   the agent loop, the TUI, the gateway, `raven serve` -- wraps every call

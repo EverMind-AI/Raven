@@ -403,11 +403,11 @@ def set_memory_backend(
 ) -> str | None:
     """Patch ``memory.backend`` on the on-disk config. Returns previous value.
 
-    ``"everos"`` enables the EverOS backend; ``None`` disables backend-driven
-    memory entirely -- there is no second backend to fall back to, so recall and
-    storage simply stop happening. The onboarding wizard's
-    memory step writes the model sections to ``~/.everos/raven/everos.toml``
-    and flips this flag here.
+    The name is a ``memory_backends`` contribution name from an activated
+    plugin (e.g. ``"everos"``); ``None`` disables backend-driven memory --
+    recall and storage simply stop happening. The onboarding wizard's memory
+    step writes this from the plugin step's ``StepOutcome``: ``CONFIGURED``
+    records the contribution's own name, anything else clears it to ``None``.
     """
     path = config_path or get_config_path()
 
