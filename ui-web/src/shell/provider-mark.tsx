@@ -7,20 +7,30 @@ import { open as openUrl } from './open-url'
 import type { JSX } from 'react'
 
 const ICONS: Record<string, string> = {
+  ai302: 'ai302',
   aihubmix: 'aihubmix',
   anthropic: 'anthropic',
   azure_openai: 'azureai',
+  baichuan: 'baichuan',
+  baidu_cloud: 'baiducloud',
+  burncloud: 'burncloud',
+  cerebras: 'cerebras',
   dashscope: 'alibabacloud',
   deepseek: 'deepseek',
+  fireworks_ai: 'fireworks',
   gemini: 'gemini',
   github_copilot: 'githubcopilot',
   groq: 'groq',
   hosted_vllm: 'vllm',
+  huggingface: 'huggingface',
   lm_studio: 'lmstudio',
+  longcat: 'longcat',
   minimax: 'minimax',
   minimax_cn_api: 'minimax',
   minimax_cn: 'minimax',
   minimax_global: 'minimax',
+  mistral: 'mistral',
+  modelscope: 'modelscope',
   moonshot: 'moonshot',
   nvidia_nim: 'nvidia',
   ollama: 'ollama',
@@ -28,8 +38,19 @@ const ICONS: Record<string, string> = {
   openai: 'openai',
   openai_codex: 'codex',
   openrouter: 'openrouter',
+  perplexity: 'perplexity',
+  poe: 'poe',
+  ppio: 'ppio',
+  qiniu: 'qiniu',
   siliconflow: 'siliconcloud',
+  sophnet: 'sophnet',
+  stepfun: 'stepfun',
+  together_ai: 'together',
+  /* Tencent Cloud's product, and its mark is the one it ships under. */
+  tokenhub: 'tencentcloud',
   volcengine: 'volcengine',
+  xai: 'xai',
+  xiaomi_mimo: 'xiaomimimo',
   zai: 'zai',
 }
 
@@ -68,6 +89,36 @@ const VENDOR_ICONS: Record<string, string> = {
   'z-ai': 'zai',
   'zai': 'zai',
   'zai-org': 'zai',
+  /* Also the asset names `VENDOR_BY_NAME` answers with, because that table and
+     this one are read through the same lookup: a family recognised by its
+     model name arrives here as the asset it should wear, and every other value
+     that table produces happens to be spelled the same as a namespace. Without
+     these two, `gemini-3.1-pro` on any shelf but Gemini's own -- and any
+     `doubao`/`seed` off VolcEngine's -- resolved to nothing and wore the
+     gateway's mark instead of the model maker's. */
+  'gemini': 'gemini',
+  'volcengine': 'volcengine',
+  /* The namespaces the added shelves publish under. Hugging Face, Together,
+     Fireworks and Poe all file a model under whoever made it, so these are
+     what the id's middle segment actually says. */
+  'baidu': 'wenxin',
+  'cerebras': 'cerebras',
+  'longcat': 'longcat',
+  'meta': 'meta',
+  'meta-llama': 'meta',
+  'mistral': 'mistral',
+  'mistralai': 'mistral',
+  'perplexity': 'perplexity',
+  'stepfun': 'stepfun',
+  'stepfun-ai': 'stepfun',
+  'grok': 'grok',
+  'xai': 'xai',
+  'xiaomi': 'xiaomimimo',
+  'xiaomimimo': 'xiaomimimo',
+  'wenxin': 'wenxin',
+  /* Zhipu's own spelling of its namespace, which the snapshot uses and no
+     entry above covered -- `zai-org` and `z-ai` are the other two. */
+  'zhipuai': 'zai',
 }
 
 /* The asset tree's digest, appended to every asset URL.
@@ -113,6 +164,22 @@ const VENDOR_BY_NAME: ReadonlyArray<readonly [RegExp, string]> = [
   [/^glm/i, 'zai'],
   [/^nemotron/i, 'nvidia'],
   [/^(?:doubao|seed|skylark)/i, 'volcengine'],
+  /* Grok is xAI's product and has its own mark, the same split Kimi and
+     Moonshot have above: the company's mark is what the provider row wears. */
+  [/^grok/i, 'grok'],
+  /* Mistral ships six families under names that only rhyme -- Magistral,
+     Devstral, Pixtral, Voxtral, Ministral, Mixtral -- and none of them
+     contains "mistral", so a prefix on the company name alone would leave
+     most of its own shelf unmarked. */
+  [/^(?:mistral|magistral|devstral|pixtral|codestral|voxtral|ministral|mixtral|open-mi[sx]tral)/i, 'mistral'],
+  [/^sonar/i, 'perplexity'],
+  [/^step-/i, 'stepfun'],
+  [/^ernie/i, 'wenxin'],
+  [/^longcat/i, 'longcat'],
+  [/^mimo/i, 'xiaomimimo'],
+  /* Meta's mark, not LlamaIndex's: the id names the weights. Last of the
+     family rules, so a reseller's own prefix on a Llama still wins. */
+  [/^llama/i, 'meta'],
 ]
 
 export function vendorFromName(model: string): string {

@@ -28,7 +28,9 @@ import pytest
 from raven.config.schema import Config
 from raven.providers.registry import (
     PROVIDERS,
+    SHAPE_LOCAL,
     ProviderSpec,
+    auth_shape,
     canonical_provider_name,
     find_by_model,
     normalize_provider_name,
@@ -245,6 +247,39 @@ def test_each_gateway_puts_its_own_prefix_on_a_bare_model_id(spec: ProviderSpec)
     provider = LiteLLMProvider(api_key="K", provider_name=spec.name, default_model="probe-model")
     resolved = provider._resolve_model("probe-model")
     assert resolved.startswith(f"{spec.model_prefix}/"), f"{spec.name}: {resolved}"
+
+
+@pytest.mark.parametrize("spec", PROVIDERS, ids=lambda s: s.name)
+def test_a_borrowed_driver_is_never_servable_without_an_address(spec: ProviderSpec) -> None:
+    """Twenty-two providers speak OpenAI's API through OpenAI's driver.
+
+    For every one of them the wire prefix is `openai/`, so the model id alone
+    says nothing about where the request goes -- the address does, and LiteLLM's
+    default for that driver is api.openai.com. A spec that borrows a driver and
+    cannot supply an address would therefore post a Baichuan or GPUStack key to
+    OpenAI's endpoint and read the answer as the configured vendor's.
+
+    Two ways to be safe and a provider needs one of them: hand LiteLLM the
+    shipped default per call, or be reached by address at all -- where the
+    credential gate refuses to call the provider configured until one is set.
+    A shipped default that the reader would not serve counts as neither, which
+    is exactly what `usable_default_api_base` answers.
+    """
+    if spec.client:
+        pytest.skip("a client of our own owns the endpoint, so LiteLLM never resolves one")
+    if not spec.model_prefix:
+        pytest.skip("bypasses LiteLLM entirely and takes no route prefix")
+    if spec.model_prefix == spec.name:
+        pytest.skip("speaks for itself; LiteLLM's own driver knows where to send it")
+
+    # Reached by address, where the credential gate refuses to call the provider
+    # configured until one is set -- so there is no state in which a request
+    # goes out with the borrowed driver's default.
+    by_address = auth_shape(spec.name) == SHAPE_LOCAL
+    assert spec.usable_default_api_base or by_address, (
+        f"{spec.name}: reached through {spec.model_prefix}'s driver with no address of its own, "
+        f"so a request would go to that vendor's endpoint"
+    )
 
 
 @pytest.mark.parametrize("spec", PROVIDERS, ids=lambda s: s.name)

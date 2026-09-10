@@ -4,13 +4,34 @@
 import { cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ModelIcon, ProviderIcon, ProviderLink, ProviderStatus, providerIconPath } from './provider-mark'
+import {
+  ModelIcon,
+  ProviderIcon,
+  ProviderLink,
+  ProviderStatus,
+  providerIconPath,
+  vendorFromName,
+  vendorIconPath,
+} from './provider-mark'
 
 const BRANDED = [
   'azure_openai', 'openrouter', 'aihubmix', 'siliconflow', 'volcengine',
   'anthropic', 'openai', 'openai_codex', 'github_copilot', 'deepseek',
   'gemini', 'zai', 'dashscope', 'moonshot', 'minimax', 'minimax_cn_api', 'minimax_global',
   'minimax_cn', 'nvidia_nim', 'hosted_vllm', 'lm_studio', 'ollama_chat', 'groq',
+  'xai', 'mistral', 'together_ai', 'fireworks_ai', 'perplexity', 'cerebras',
+  'huggingface', 'poe', 'xiaomi_mimo', 'baichuan', 'baidu_cloud', 'stepfun',
+  'longcat', 'modelscope', 'qiniu',
+  'ai302', 'burncloud', 'ppio', 'sophnet', 'tokenhub',
+]
+
+/* Resale gateways with no license-compatible logo: lobe-icons carries none,
+   and Cherry Studio's own drawings are AGPL-3.0 against this project's
+   Apache-2.0. They render the fallback initial, which the mark component
+   supports deliberately -- pinned here so the state is a decision on record
+   rather than a line somebody forgot. */
+const UNBRANDED = [
+  'dmxapi', 'ocoolai', 'lanyun', 'alayanew', 'xirang', 'ph8', 'aionly', 'radeon_cloud',
 ]
 
 afterEach(cleanup)
@@ -18,6 +39,50 @@ afterEach(cleanup)
 describe('provider marks', () => {
   it('maps every branded provider in the backend catalog to a bundled asset', () => {
     for (const id of BRANDED) expect(providerIconPath(id), id).toMatch(/^assets\/providers\/.+\.svg$/)
+  })
+
+  /* One model id per family `VENDOR_BY_NAME` recognises. Written out rather
+     than read off that table, because a table that supplies both the input and
+     the expectation cannot say whether the two agree -- which is the whole of
+     the defect below. */
+  const FAMILY_IDS = [
+    'qwen-plus', 'qwq-32b', 'deepseek-v3', 'claude-opus-4.8', 'gpt-5.5', 'o3-mini',
+    'gemini-3.1-pro', 'gemma-4-31b', 'kimi-k2.5', 'moonshot-v1-128k', 'minimax-m2',
+    'glm-5.3', 'nemotron-3-super-120b-a12b', 'doubao-pro-32k', 'seed-1.8',
+    'grok-4.6', 'mistral-large-latest', 'magistral-medium-latest', 'devstral-latest',
+    'pixtral-large-latest', 'codestral-latest', 'voxtral-small-latest', 'ministral-8b-latest',
+    'mixtral-8x7b', 'sonar-pro', 'step-3.7-flash', 'ernie-5.1', 'longcat-2.0',
+    'mimo-v2.5', 'llama-3.3-70b-instruct',
+  ]
+
+  it('resolves an asset for every family it recognises by name', () => {
+    /* `vendorFromName` answers with an asset name and `vendorIconPath` reads a
+       table keyed by vendor namespace. Two key spaces behind one lookup, so a
+       family could be recognised and still resolve to nothing -- `gemini` and
+       `volcengine` both did, and a Gemini served by any gateway wore that
+       gateway's mark. Recognition without an asset is worse than no
+       recognition: it costs the provider fallback the row would have had. */
+    const unresolved = FAMILY_IDS.map((id) => [id, vendorFromName(id)] as const)
+      .filter(([, family]) => family !== '' && vendorIconPath(family) === null)
+
+    expect(unresolved).toEqual([])
+  })
+
+  it('gives a model its own family mark rather than the shelf it sits on', () => {
+    /* The regression this pins: both are served by a gateway whose own logo is
+       in the bundle, so the wrong answer looked like a logo rather than like a
+       missing one. */
+    const src_ = (vendor: string, model: string): string | null => {
+      const view = render(<ModelIcon vendor={vendor} model={model} provider="openrouter" name="OpenRouter" />)
+      return view.container.querySelector('img')?.getAttribute('src') ?? null
+    }
+
+    expect(src_('google', 'openrouter/google/gemini-3.1-pro')).toBe('assets/providers/gemini.svg')
+    expect(src_('bytedance', 'openrouter/bytedance/doubao-pro-32k')).toBe('assets/providers/volcengine.svg')
+  })
+
+  it('falls back to an initial for a provider no logo can be shipped for', () => {
+    for (const id of UNBRANDED) expect(providerIconPath(id), id).toBeNull()
   })
 
   it('uses an initial instead of a broken image for custom providers', () => {
