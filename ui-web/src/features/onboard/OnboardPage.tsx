@@ -3,8 +3,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../shell/bridge'
-import { KeyInput } from '../../shell/key-input'
-import { ModelTagDefs, ModelTags } from '../../shell/model-tags'
 import { ProviderIcon, ProviderLink, ProviderStatus } from '../../shell/provider-mark'
 import * as store from './store'
 
@@ -223,7 +221,6 @@ function Flow({ source }: { source: OnboardSource }): JSX.Element {
     )
   } else if (step === 'creds' && selected) {
     const local = selected.auth_type === 'local'
-    const acceptsApiKey = selected.accepts_api_key ?? !local
     const needsBase = local || selected.auth_type === 'endpoint' || !!selected.needs_api_base
     body = (
       <div className="ob-step">
@@ -258,12 +255,14 @@ function Flow({ source }: { source: OnboardSource }): JSX.Element {
           <>
             <div className="ob-s">{t(local ? 'gui.onb.local_s' : 'gui.onb.key_s')}</div>
             <div className="ob-form">
-              {acceptsApiKey ? (
-                <KeyInput
+              {!local ? (
+                <input
                   ref={keyInput}
                   className="ob-in"
+                  type="password"
                   placeholder={t('gui.onb.key_ph')}
-                  aria-label={t('gui.onb.key_ph')}
+                  autoComplete="off"
+                  spellCheck={false}
                   onInput={checkInputs}
                 />
               ) : null}
@@ -328,23 +327,17 @@ function Flow({ source }: { source: OnboardSource }): JSX.Element {
           />
         ) : null}
         <div className="ob-list">
-          <ModelTagDefs />
-          {shown.map(name => {
-            const facts = selected.model_labels?.[name]
-            return (
-              <button
-                key={name}
-                className="ob-row"
-                type="button"
-                data-sel={name === model ? '1' : undefined}
-                title={facts?.label ? `${name}${facts.description ? ` -- ${facts.description}` : ''}` : name}
-                onClick={() => setModel(name)}
-              >
-                <span className="nm">{facts?.label || name}</span>
-                <ModelTags facts={facts} />
-              </button>
-            )
-          })}
+          {shown.map(name => (
+            <button
+              key={name}
+              className="ob-row"
+              type="button"
+              data-sel={name === model ? '1' : undefined}
+              onClick={() => setModel(name)}
+            >
+              <span className="nm">{name}</span>
+            </button>
+          ))}
         </div>
         <button
           className="ob-btn"

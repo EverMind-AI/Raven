@@ -13,7 +13,6 @@ import os
 import threading
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -1493,9 +1492,7 @@ def test_the_loop_hands_the_verdict_to_the_context_engine(monkeypatch) -> None:
     class _Stop(Exception):
         pass
 
-    engine = _Engine()
-    loop.context_engine = engine
-    loop.harness = SimpleNamespace(memory=engine)
+    loop.context_engine = _Engine()
     monkeypatch.setattr(AgentLoop, "_context_messages_for_session", lambda self, s: [])
     monkeypatch.setattr(AgentLoop, "_make_token_budget", lambda self, s=None: None)
     loop._last_injected_skill_ids = None
@@ -1535,9 +1532,7 @@ def test_the_verdict_is_asked_of_the_routed_model_not_the_configured_one(monkeyp
         async def assemble(self, session_key, session_messages, budget, *, turn):
             raise _Stop
 
-    engine = _Engine()
-    loop.context_engine = engine
-    loop.harness = SimpleNamespace(memory=engine)
+    loop.context_engine = _Engine()
     monkeypatch.setattr(AgentLoop, "_context_messages_for_session", lambda self, s: [])
     monkeypatch.setattr(AgentLoop, "_make_token_budget", lambda self, s=None: None)
     loop._last_injected_skill_ids = None

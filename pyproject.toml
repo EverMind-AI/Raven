@@ -481,7 +481,7 @@ type = "forbidden"
 source_modules = [
     "raven.agent.tools", "raven.agent.subagent", "raven.acp_client",
     "raven.agent.context", "raven.agent.hook", "raven.agent.personalizer",
-    "raven.agent.workdir", "raven.agent.harness",
+    "raven.agent.workdir",
 ]
 forbidden_modules = ["raven.agent.loop"]
 
