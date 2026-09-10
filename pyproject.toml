@@ -398,6 +398,7 @@ output = "coverage.json"
 
 [dependency-groups]
 dev = [
+    "grimp>=3.16",
     "hatchling>=1.32.0",
     "import-linter>=2.14",
     "json-repair>=0.59.5",

@@ -3715,6 +3715,7 @@ tools = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "grimp" },
     { name = "hatchling" },
     { name = "import-linter" },
     { name = "json-repair" },
@@ -3803,6 +3804,7 @@ provides-extras = ["channel-telegram", "channel-slack", "channel-discord", "chan
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "grimp", specifier = ">=3.16" },
     { name = "hatchling", specifier = ">=1.32.0" },
     { name = "import-linter", specifier = ">=2.14" },
     { name = "json-repair", specifier = ">=0.59.5" },

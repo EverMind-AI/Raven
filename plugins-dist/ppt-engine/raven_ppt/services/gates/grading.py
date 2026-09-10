@@ -113,9 +113,6 @@ TIERS: Mapping[str, Tier] = {
     # Line count against box height from font metrics: `measure/fit.py` exists precisely
     # to answer this in the same round rather than one render later.
     "overset_copy": Tier.DECLARED,
-    # Its other half, off the same pass: the anchor and the boxes around it are declared
-    # too, so where the copy landed is answerable without a render.
-    "displaced_copy": Tier.DECLARED,
     # `measure/width.py` calls this the one check a render cannot see -- a stacked label
     # overlaps nothing -- and the registry wires the words in only as a veto.
     "wrapped_label": Tier.DECLARED,
@@ -230,7 +227,6 @@ BLOCKING_CHECKS = frozenset(
         "language",
         "literal_escape",
         "word_collision",
-        "displaced_copy",
         "house_style",
         "placeholder_copy",
         "template_underlay",
@@ -615,23 +611,9 @@ NOISE_FLOOR: Mapping[str, Floor] = {
     "render_drift": Floor(
         1.03,
         Unit.RATIO,
-        ("overset_copy", "displaced_copy"),
+        ("overset_copy",),
         "measure.fit.RENDER_DRIFT_HEADROOM",
         "3% of the width, about 20x the 0.14% drift measured between the measurer and LibreOffice 7.4",
-    ),
-    "displaced_graze": Floor(
-        3.0,
-        Unit.POINT,
-        ("displaced_copy",),
-        "measure.fit.DISPLACED_GRAZE_PT",
-        "half a line of 12pt copy at either end, because a line's ink is not its line box",
-    ),
-    "displaced_in_column": Floor(
-        0.5,
-        Unit.SHARE,
-        ("displaced_copy",),
-        "measure.fit.DISPLACED_IN_COLUMN",
-        "half the narrower box's width shared before displaced copy is over another's rather than beside it",
     ),
     "no_wrap_slack": Floor(
         1.02,
@@ -678,7 +660,7 @@ NOISE_FLOOR: Mapping[str, Floor] = {
     "overset_slack": Floor(
         1,
         Unit.LINES,
-        ("overset_copy", "displaced_copy"),
+        ("overset_copy",),
         "measure.fit.OVERSET_SLACK_LINES",
         "one whole line over the box's capacity before the copy is called overset",
     ),

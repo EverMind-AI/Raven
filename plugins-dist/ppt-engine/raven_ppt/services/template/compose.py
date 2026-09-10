@@ -7,10 +7,9 @@ content pages leave the template entirely.
 
 The operations here are the ones that let an author work the way the design
 actually supports: take the example page closest to what this page has to say,
-replace its words and its pictures, clear a space in it for something of your own,
-delete what is left over. Each is something python-pptx has no API for, and each
-has a way of going quietly wrong that a reader of the resulting file would not
-connect to its cause:
+replace its words and its pictures, delete what is left over. Each is something
+python-pptx has no API for, and each has a way of going quietly wrong that a
+reader of the resulting file would not connect to its cause:
 
 Cloning copies shape XML that refers to relationships by id. The new slide has no
 such relationships, so every picture on the copy resolves to nothing -- verified:
@@ -24,14 +23,6 @@ the existing frame keeps all of it.
 Replacing text by assigning to `.text` discards the run properties, so a heading
 comes back at the body size in the body colour. Writing into the first run and
 clearing the rest keeps what the template set.
-
-Drawing into a cloned page means clearing a space in it first, and for a while
-there was no way to say that here. A live program wrote its own two sweeps
-instead -- one keyed on whether a shape's text was Chinese, the other on whether
-the shape was bigger than 1.0x0.7in -- and against the page it ran on those kept
-every arrow, every number label and, because a rule has one zero dimension, every
-connector; two charts came out drawn on top of them. `clear_region` is that
-operation, and it names what it took.
 """
 
 # Where a template keeps its design, measured on twenty real templates: 85% of the
@@ -40,13 +31,12 @@ operation, and it names what it took.
 
 from __future__ import annotations
 
-import atexit
 import copy
 import io
 import re
 import warnings
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
@@ -225,224 +215,6 @@ def page_position(shape) -> tuple[float, float]:
     )
 
 
-class PageBox(NamedTuple):
-    """Where a shape is drawn, as two corners in page inches.
-
-    Two corners and not a corner-and-a-size, so it is the same reading as
-    `ppt_layout.Box` and drops straight into a call that wants a region:
-    `clear_region(slide, page_box(shape_at(slide, 3)))` clears exactly where that
-    shape was. The engine's own `services/measure/geometry.page_box` answers in the
-    same shape, and one page box meaning two different things in one codebase is
-    the mistake `Box` was given two named constructors to prevent.
-    """
-
-    x0: float
-    y0: float
-    x1: float
-    y1: float
-
-    @property
-    def w(self) -> float:
-        return self.x1 - self.x0
-
-    @property
-    def h(self) -> float:
-        return self.y1 - self.y0
-
-
-def page_box(shape) -> PageBox:
-    """Where `shape` is drawn and how big it is drawn, in page inches.
-
-    `page_position` with the extent as well, because a group scales what is inside
-    it: on a real template page a chart declared 6.80x2.64in is drawn 6.31x4.01in by
-    the group holding it. A rule written against the declared size is out by half the
-    height, which is how a region test passes over the thing it was aimed at -- and
-    two hand-written sweeps in one live program tested `shape.width` directly.
-    """
-    left = top = 0.0
-    scale_x = scale_y = 1.0
-    for parent, child in _group_chain(shape):
-        offset, extent = parent
-        child_offset, child_extent = child
-        step_x = extent[0] / child_extent[0] if child_extent[0] else 1.0
-        step_y = extent[1] / child_extent[1] if child_extent[1] else 1.0
-        left += (offset[0] - child_offset[0] * step_x) * scale_x
-        top += (offset[1] - child_offset[1] * step_y) * scale_y
-        scale_x *= step_x
-        scale_y *= step_y
-    x0 = left + (shape.left or 0) / EMU_PER_INCH * scale_x
-    y0 = top + (shape.top or 0) / EMU_PER_INCH * scale_y
-    return PageBox(
-        x0,
-        y0,
-        x0 + (shape.width or 0) / EMU_PER_INCH * scale_x,
-        y0 + (shape.height or 0) / EMU_PER_INCH * scale_y,
-    )
-
-
-# How much of the *box* has to lie in a shape before that shape is what the box
-# sits in rather than something in it. A template draws a chart inside a card, and
-# the card holds the page's arrangement: on the same five pages the card scores 0.97
-# to 1.00 of the box while covering 0.42 to 0.69 of itself, so the two readings
-# together separate the card from the chart, which covers 1.00 of both.
-THE_BOX_SITS_IN_IT = 0.9
-
-
-def shapes_in(container, box, *, share: float = 0.5, with_text: bool = False):
-    """Every shape drawn inside `box`, groups walked into, in reading order.
-
-    The plural of `shape_near`, and the finder the vocabulary was missing. `shape_near`
-    answers "the shape at this point" and `shape_saying` answers "the shape with these
-    words"; nothing answered "the shapes in this space", so an author that had to clear
-    room for a chart wrote its own sweep -- and a hand-written sweep tests what its
-    author thought to test. One live program keyed one sweep on whether the text was
-    Chinese and the other on whether the shape was bigger than 1.0x0.7in, and against
-    the page it ran on that kept every arrow (each 1.27x0.68in, under the height bar),
-    every number label ("01".."05", not Chinese) and, because a horizontal rule is
-    0.00in tall and a vertical one 0.00in wide, every connector. All of it came out
-    on top of the charts it had cleared room for.
-
-    `box` is a box that says which reading it is: a `ppt_layout.Box` -- `Box.corners(x0,
-    y0, x1, y1)` or `Box.at(x, y, w=, h=)` -- or the one `page_box(shape)` hands back.
-    Four bare numbers are refused, because the `(left, top, width, height)` a template
-    reference prints and the two corners a `Box` holds are the same four numbers and
-    nothing in them says which was meant.
-
-    `share` is how much of a shape has to lie in the box before the box is about that
-    shape. Half, because furniture straddles an edge, and half is measured rather than
-    picked: over the region a chart occupies on five template pages and the body region
-    a live deck drew into, what is inside the box scores 0.58 to 1.00 of itself and what
-    belongs to the rest of the page scores 0.05 to 0.42, and no page in the set puts
-    anything between 0.42 and 0.58.
-
-    A shape the box sits inside is not in the box: that is the card a template draws
-    its chart in, and it carries the arrangement the page was cloned for. It is left
-    where it is, and `clear_region` says that it did so.
-
-    `share=0` asks the other question -- everything that touches the box at all -- which
-    is what to ask of a band you mean to write in rather than empty.
-    """
-    region = _as_region(box)
-    found = []
-    for shape in _all_shapes(container.shapes):
-        if with_text and not (getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip()):
-            continue
-        if _inside(shape, region, share):
-            found.append(shape)
-    return found
-
-
-def _inside(shape, region, share: float) -> bool:
-    """Whether `shape` is drawn in `region` rather than merely near or around it."""
-    try:
-        drawn = page_box(shape)
-    except ValueError:
-        # Inside a flipped or rotated group, so it has no position to compare
-        # against -- see `_group_chain`. Left alone rather than guessed at.
-        return False
-    left, top, right, bottom = region
-    area = max(0.0, right - left) * max(0.0, bottom - top)
-    mine = _share_of_shape(drawn, region)
-    # `share=0` reads as "anything that touches this box at all", which is the question
-    # an author asks of a band it wants to write in rather than clear.
-    if mine <= 0.0 or mine < share:
-        return False
-    # The box covers this shape and this shape covers the box: they are the same
-    # rectangle, which is what a region taken off a chart's own box is, so it goes.
-    # A box inside a shape that reaches well past it is the card the box sits in, and
-    # that card is the arrangement the page was cloned for, so the card stays.
-    #
-    # Only when the caller is clearing. `share=0` is the other question -- what is over
-    # this band at all -- and there the card is part of the answer, not an exception to
-    # it: a foot that is the template's own is exactly what that call is looking for.
-    if share > 0 and area and _overlap(drawn, region) / area >= THE_BOX_SITS_IN_IT:
-        if mine < THE_BOX_SITS_IN_IT:
-            return False
-    return True
-
-
-# Said once, and it shows the two readings rather than asserting which is right, because
-# the whole point is that four numbers cannot be told apart. `ppt_layout.Box.at` refuses
-# positional numbers for this same reason and in nearly these same words.
-_A_REGION_SAYS_WHICH = (
-    "a region is a box that says which of its two readings it is -- a ppt_layout.Box, or the "
-    "PageBox that page_box(shape) hands back -- and this does not: {given}{spelled} Say which: "
-    "Box.corners(x0, y0, x1, y1) for two corners, Box.at(x, y, w=, h=) for a corner and a size, "
-    "or page_box(shape) for the box a shape is drawn in."
-)
-
-
-def _region_readings(given) -> str:
-    """The two rectangles four numbers could be, so the caller can see which it wanted."""
-    if len(given) != 4:
-        return ""
-    left, top, third, fourth = given
-    corners = f"({left:g}, {top:g}) to ({third:g}, {fourth:g})"
-    size = f"({left:g}, {top:g}) to ({left + third:g}, {top + fourth:g})"
-    return f" -- as corners that is the box {corners}, as a size the box {size}."
-
-
-def _as_region(box) -> tuple[float, float, float, float]:
-    """`box` as (left, top, right, bottom) in inches, from a box that says which it is.
-
-    Two conventions meet here and four bare numbers cannot say which: `ppt_layout.Box`
-    and `page_box` are two corners, while every python-pptx call in the same script --
-    and every box a template reference prints -- is a corner and a size. So an object
-    that knows is asked, and four bare numbers are refused rather than guessed at.
-
-    Guessing is what this did until it was measured. A bare tuple was read as corners
-    unless its last two numbers were smaller than the first two, on the stated theory
-    that a size always is. On a 13.33x7.5in canvas most sizes are larger than most
-    origins, so the reading treated as the exception was the common one: `(1, 1, 4, 3)`
-    meaning a corner and a size became the region (1,1)-(4,3) rather than (1,1)-(5,4).
-    A shape at (4.2, 3.2) was then invisible to `shapes_in`, so `clear_region` neither
-    removed it nor named it in `left_standing` -- the author was told the space was
-    clear, drew into it, and landed on the furniture anyway, which is the one failure
-    this pair of calls exists to prevent.
-
-    Refused rather than reported, because there is nothing to report: the size reading
-    always contains the corner reading, so "the other reading would have caught more"
-    is true of every bare tuple and separates nothing. The ambiguity can only be
-    removed at the call, which is why `Box` was given two named constructors.
-    """
-    if hasattr(box, "x0") and hasattr(box, "y1"):
-        return (float(box.x0), float(box.y0), float(box.x1), float(box.y1))
-    try:
-        values = tuple(float(value) for value in box)
-    except (TypeError, ValueError):
-        values = ()
-    raise ValueError(_A_REGION_SAYS_WHICH.format(given=values or repr(box), spelled=_region_readings(values)))
-
-
-def _overlap(drawn, region) -> float:
-    across = max(0.0, min(drawn[2], region[2]) - max(drawn[0], region[0]))
-    down = max(0.0, min(drawn[3], region[3]) - max(drawn[1], region[1]))
-    return across * down
-
-
-def _share_of_shape(drawn, region) -> float:
-    """How much of this shape the region covers, 0 to 1.
-
-    A connector is the reason this is not simply an area ratio. A horizontal rule is
-    0.00in tall and a vertical one 0.00in wide, so its area is zero, every area ratio
-    over it is zero or undefined, and it survives any region test written the obvious
-    way -- which is what left a leader line lying across a redrawn chart. A shape with
-    one live dimension is measured along that dimension.
-    """
-    x0, y0, x1, y1 = drawn
-    left, top, right, bottom = region
-    width, height = x1 - x0, y1 - y0
-    across = max(0.0, min(x1, right) - max(x0, left))
-    down = max(0.0, min(y1, bottom) - max(y0, top))
-    if width > 0 and height > 0:
-        return (across * down) / (width * height)
-    if width > 0:
-        return across / width if top <= y0 <= bottom else 0.0
-    if height > 0:
-        return down / height if left <= x0 <= right else 0.0
-    return 1.0 if (left <= x0 <= right and top <= y0 <= bottom) else 0.0
-
-
 def shape_near(container, left: float, top: float, tol: float = 0.08, *, with_text: bool = False):
     """The shape whose top-left corner is within `tol` inches of (`left`, `top`).
 
@@ -475,9 +247,7 @@ def shape_near(container, left: float, top: float, tol: float = 0.08, *, with_te
             if unplaceable
             else ""
         )
-        + "For every shape in a space rather than the one at a point, `shapes_in(container, box)`; to "
-        + "empty that space, `clear_region(container, box)` -- both take a ppt_layout.Box or a "
-        + "page_box(shape), not four bare numbers. The page holds: "
+        + "The page holds: "
         + "; ".join(_listed(index, shape) for index, shape in enumerate(every, start=1))
     )
 
@@ -1615,16 +1385,6 @@ def replace_text(target, text: str, new: str | None = None) -> None:
     colour and one word of it does not. Without this a cloned page could not emphasise
     anything: the plain-string path puts the whole line in run 0 and deletes the rest,
     and one run carries one colour. Pass a list of sequences for several paragraphs.
-
-    **The box keeps the geometry the template drew it with, and says so when the new
-    copy needs more of it.** Nothing here moves, grows or re-sizes a frame: longer copy
-    wraps to more lines in the same box, and where the box cannot show them the program
-    is told at the end of its run -- how many lines the box shows, how many this copy
-    needs, how many the copy it replaced took, and where the overflow goes (down the
-    page, up off the top of it where the frame is bottom-anchored, or into a type size
-    a step under the template's where the frame shrinks its text to fit). Answer it with
-    fewer words or with `place`; the deck's own checks report the consequences after the
-    render, which is a whole deck later.
     """
     shape = target
     if new is not None:
@@ -1647,10 +1407,6 @@ def replace_text(target, text: str, new: str | None = None) -> None:
     # A run sequence is one paragraph by construction: the breaks a string carries are
     # what splits it, and a sequence of runs states its pieces instead. A caller wanting
     # two emphasised paragraphs calls this twice, or passes a list of sequences.
-    # Before the write, because the copy the template put here is the measurement's
-    # other half and the next lines are what remove it. Judged at the end of the
-    # program rather than now -- see `_say_what_did_not_fit`.
-    _record_fit(shape, frame.text)
     lines = _paragraphs_of(text)
     paragraphs = frame.paragraphs
     for index, line in enumerate(lines):
@@ -1805,332 +1561,12 @@ def _write(paragraph, line) -> None:
         _restyle(run, piece, _rgb_of)
 
 
-# How much wider the width measurer reads a line than the render draws it. The
-# measurer never reads a string narrower than either FreeType or the export dialect
-# will draw it, which is the right bias for a check run over a finished file and
-# makes every reading here an upper bound. Measured two ways: over the ten bundled
-# templates' own renders, 182 single-line boxes with no autofit above them, the
-# overshoot is 1.13 at the median and 1.27 at the 99th percentile; over nine
-# unshrunk English lines off a delivered deck it runs 1.10 to 1.30. So a prediction
-# that spoke inside this band would be reporting the measurer and not the page --
-# `wrapped_labels` reached the same conclusion from the other side and left the
-# render to decide which of its candidates had really broken. Before the deck is
-# built there is no render, so the copy is wrapped at a column this much wider than
-# the real one and only an overflow that survives that is said out loud.
-MEASURED_WIDTH_OVERSHOOT = 1.35
-
-
-def _inherited_frames(shape):
-    """This shape, then the layout placeholder it inherits from, then the master's."""
-    yield shape
-    try:
-        if not shape.is_placeholder:
-            return
-        index = shape.placeholder_format.idx
-        slide = shape.part.slide
-        for holder in (slide.slide_layout, slide.slide_layout.slide_master):
-            for candidate in holder.placeholders:
-                if candidate.placeholder_format.idx == index:
-                    yield candidate
-                    break
-    except Exception:  # noqa: BLE001 -- a shape off a slide inherits nothing reachable
-        return
-
-
-def _anchor_of(shape) -> str:
-    """Where the copy is anchored in its frame: the shape's answer, else inherited.
-
-    The anchor is not on the shape that carries it. Every text frame on the closing
-    page of `black_circuit_tech_launch` answers `vertical_anchor is None`;
-    `anchor="b"` is written on the layout's title placeholder, and that one
-    attribute is the difference between copy that grows down the page and copy that
-    grows up off the top of it. Read from the shape alone, a four-line 72pt headline
-    is reported as running low -- and the page that headline actually made had its
-    first line cut off by the top edge of the slide.
-    """
-    for holder in _inherited_frames(shape):
-        properties = holder.text_frame._txBody.find(f"{{{_A}}}bodyPr")
-        if properties is not None and properties.get("anchor") is not None:
-            return properties.get("anchor")
-    return "t"
-
-
-def _shrinks_to_fit(shape) -> bool:
-    """Whether this frame will really shrink its type rather than spill.
-
-    The shape's own `bodyPr` and not the layout's, because that is the difference
-    the renderer makes. Both are measured on one file: the card labels of
-    `black_circuit_tech_launch` carry `normAutofit` on the shapes themselves, and a
-    live deck's copy in them came back at 17pt where the template set 20pt. Its
-    closing-page headline inherits `normAutofit` from the layout and nothing else,
-    and a four-line replacement was drawn at the full 72pt and clipped by the top
-    edge of the slide. So an inherited autofit is not a shrink, and reading the
-    inheritance chain here would have promised one on the page that lost a line.
-    """
-    properties = shape.text_frame._txBody.find(f"{{{_A}}}bodyPr")
-    return properties is not None and properties.find(f"{{{_A}}}normAutofit") is not None
-
-
-def _grows_itself(shape) -> bool:
-    """Whether this frame resizes itself to its copy instead of keeping its height.
-
-    The third outcome, and the one neither of the other two describes. `spAutoFit` is
-    16% of the bundled templates' boxes and the majority behaviour on
-    `gold_panel_year_end_summary` -- 109 of its 177, with no `normAutofit` anywhere in
-    the file -- so a frame read as shrinking-or-spilling is read wrongly there six
-    times out of ten.
-
-    The shape's own `bodyPr`, for the same reason `_shrinks_to_fit` reads it there.
-    """
-    properties = shape.text_frame._txBody.find(f"{{{_A}}}bodyPr")
-    return properties is not None and properties.find(f"{{{_A}}}spAutoFit") is not None
-
-
-def _plain_lines(text) -> list[str]:
-    """A string, a list of them, or run sequences, as the plain lines they will set."""
-    lines = []
-    for line in _paragraphs_of(text):
-        pieces = _emphasis(line)
-        lines.append("".join(str(piece.text) for piece in pieces) if pieces is not None else str(line))
-    return lines
-
-
-def _shortened(text: str, limit: int = 34) -> str:
-    """One line of `text`, short enough to sit inside a sentence."""
-    flat = " ".join(str(text).split())
-    return flat if len(flat) <= limit else flat[: limit - 1] + "..."
-
-
-def _copy_fit(shape, old: str, new) -> dict | None:
-    """What the box shows, what `new` needs in it, and how far past the box that is.
-
-    None when there is nothing to say: no run states a size (the case `overset_copy`
-    skips too, and for the same reason -- a size read off the master is not the size
-    a run will paint), wrapping is off, the box has no room, or the copy fits.
-
-    The prototype's own copy is the second half of the answer and the half a check
-    run over the finished file cannot have. A box's height in lines is arithmetic on
-    an assumed line-height factor; how many lines the template's designer put in it
-    is a fact. Where the two disagree the fact wins, so a box the template filled
-    past what the arithmetic allows still counts as holding what it was drawn
-    holding -- and writing the template's own copy back into the template's own box
-    can never report anything, whatever the arithmetic says.
-    """
-    from raven_ppt.services.assets.text_metrics import measurer
-    from raven_ppt.services.measure.fit import LineOverflowError, capacity_lines, needed_height_px, wrap
-
-    frame = shape.text_frame
-    if frame.word_wrap is False:
-        return None
-    sizes = [
-        run.font.size.pt
-        for para in frame.paragraphs
-        for run in para.runs
-        if run.font.size is not None and run.text.strip()
-    ]
-    if not sizes:
-        return None
-    size_pt = max(sizes)
-    width_in = ((shape.width or 0) - (frame.margin_left or 0) - (frame.margin_right or 0)) / EMU_PER_INCH
-    height_in = ((shape.height or 0) - (frame.margin_top or 0) - (frame.margin_bottom or 0)) / EMU_PER_INCH
-    if width_in <= 0 or height_in <= 0:
-        return None
-    words = "\n".join(_plain_lines(new))
-    if not words.strip():
-        return None
-    bold = any(run.font.bold for para in frame.paragraphs for run in para.runs)
-    font_px = int(round(size_pt * 96 / 72))
-    gauge = measurer()
-
-    def rows(text: str, room_in: float) -> int:
-        try:
-            return len(wrap(text.replace("\x0b", "\n"), room_in * 96, font_px, bold=bold, measurer=gauge))
-        except LineOverflowError:
-            return 1
-
-    # Both sides wrapped at a column wider than the real one: the number reported is
-    # then one the measurer's own overshoot cannot have invented, and the prototype's
-    # own copy measured the same way makes writing it back into its own box silent by
-    # construction rather than by a threshold that happens to hold.
-    room_in = width_in * MEASURED_WIDTH_OVERSHOOT
-    took = rows(old, room_in)
-    shows = max(capacity_lines(height_in * 96, font_px), took)
-    needs = rows(words, room_in)
-    if needs <= shows:
-        return None
-    return {
-        "size_pt": size_pt,
-        "width_in": width_in,
-        "height_in": height_in,
-        "needs": needs,
-        "shows": shows,
-        "took": took,
-        "needs_in": needed_height_px(needs, font_px) / 96,
-    }
-
-
-def _growth_note(shape, fit: dict) -> str:
-    """Where the lines the box cannot show end up, on this page, in inches.
-
-    Three outcomes, and the author can act on none of them without being told which
-    one this box has. A frame that shrinks its text to fit keeps its geometry and
-    loses the size the template set, so one box in a repeated row comes back smaller
-    than its neighbours. Every other frame keeps its type, and then the anchor decides
-    where the copy it cannot show goes: a top-anchored frame grows down, into whatever
-    the template drew under it, and a bottom-anchored one grows *up*, at display size
-    off the top of the canvas -- the case that destroys a page rather than spoiling it,
-    and the one that reading the box's own geometry does not predict. The third
-    outcome rides on those as a clause, because it changes what travels rather than
-    where: a frame with `spAutoFit` takes its own fill and outline along.
-    """
-    if _shrinks_to_fit(shape):
-        # How far it shrinks is the renderer's arithmetic and not worth predicting: a
-        # first version put the scale at shows/needs and said "near 10pt" where the
-        # render came back at 17pt. That it shrinks at all is the finding, because a
-        # repeated row is read across and one card a step down is visible.
-        return (
-            "The frame shrinks its text to fit, so this box comes back under the "
-            f"{fit['size_pt']:g}pt its neighbours keep."
-        )
-    _, top = page_position(shape)
-    frame = shape.text_frame
-    bottom = top + (shape.height or 0) / EMU_PER_INCH
-    canvas_height = _canvas_of_shape(shape)[1]
-    anchor = _anchor_of(shape)
-    # The third outcome, and a clause rather than a branch of its own: rendered, a
-    # `spAutoFit` frame grows in exactly the direction its anchor says, so the sentences
-    # below still hold and this adds the part they cannot. Three boxes drawn 0.50in tall
-    # at 3.00in and filled with copy needing 1.20in came back as fills of 3.00-4.20
-    # anchored top, 2.30-3.50 anchored bottom, and centred on the box's own centre. So
-    # the copy is not clipped by its box -- but a card's own background travels with it,
-    # which is a different edit from shortening the copy, and the page edge is no kinder
-    # to a frame that grew than to copy that spilled.
-    grown = (
-        " The frame grows itself rather than clipping, so its own fill and outline travel with the copy."
-        if _grows_itself(shape)
-        else ""
-    )
-    if anchor == "b":
-        starts = bottom - (frame.margin_bottom or 0) / EMU_PER_INCH - fit["needs_in"]
-        past = (
-            f"{-starts:.2f}in above the top of the slide, and its first line is cut off"
-            if starts < 0
-            else f"{top - starts:.2f}in above the frame, over whatever is drawn there"
-        )
-        return f"Bottom-anchored: it grows upward, beginning {past}.{grown}"
-    if anchor == "ctr":
-        return f"Centre-anchored, so it grows {(fit['needs_in'] - fit['height_in']) / 2:.2f}in past each edge.{grown}"
-    ends = top + (frame.margin_top or 0) / EMU_PER_INCH + fit["needs_in"]
-    past = (
-        f"{ends - canvas_height:.2f}in past the bottom edge of the slide"
-        if ends > canvas_height
-        else f"{ends - bottom:.2f}in below the frame, over whatever is drawn there"
-    )
-    return f"It grows downward: the copy ends {past}.{grown}"
-
-
-def _canvas_of_shape(shape) -> tuple[float, float]:
-    """The page's (width, height) in inches, off the presentation this shape sits on."""
-    try:
-        return _canvas_of(shape.part.slide)
-    except Exception:  # noqa: BLE001 -- a shape off a slide answers the default canvas
-        return (13.333, 7.5)
-
-
-# Every box this program has written into, with the copy the template had in it.
-# Kept until the program ends rather than judged as it is written, because a page is
-# not finished when its words go in: a live cover wrote three lines of headline and
-# then set the runs to 44pt, and measured at the 72pt in force during the write it
-# reported a first line cut off by the top of a slide the render shows to be fine.
-# The copy that ships is the copy at the end of the program, and so is the type size,
-# and so is the frame -- an author may `place` it wider afterwards.
-_WRITTEN: list = []
-
-
-def _record_fit(shape, old: str) -> None:
-    """Remember this box and the copy the template put in it, once."""
-    for held, _ in _WRITTEN:
-        if held._element is shape._element:
-            # The first write is the one that had the template's own copy in front of
-            # it; a second write over the author's own first draft measures nothing.
-            return
-    _WRITTEN.append((shape, old))
-
-
-def _say_what_did_not_fit() -> None:
-    """At the end of the program, the boxes whose copy the page cannot show.
-
-    Registered with `atexit` because there is no other end: this module is projected
-    beside the author's program as a file it imports, the program's last line is its
-    own `prs.save`, and nothing here is called again afterwards.
-
-    Drains what it reports, so calling it twice does not say everything twice.
-    """
-    written, _WRITTEN[:] = list(_WRITTEN), []
-    for shape, old in written:
-        try:
-            if shape._element.getparent() is None:
-                # The block that drew this page raised and the runner dropped its
-                # slides, standing a placeholder in for them.
-                continue
-            _report_fit(shape, old, shape.text_frame.text)
-        except Exception:  # noqa: BLE001 -- a measurement is not worth a build over
-            continue
-
-
-def _report_fit(shape, old: str, new) -> None:
-    """Say what this box holds when the copy in it needs more than that.
-
-    Said at all because here is the only place both halves are known: the box, and
-    the copy the template had in it, which the first write removes. The checks that
-    run over the built deck see the overflow and its consequences -- copy outside its
-    box, words over words, a rule struck through, one card's type a step smaller than
-    the four beside it -- but they see them after a whole deck has been written and
-    rendered, and by then the author is answering fourteen pages at once.
-    """
-    try:
-        fit = _copy_fit(shape, old, new)
-    except Exception:  # noqa: BLE001 -- a measurement is not worth losing a page over
-        return
-    if fit is None:
-        return
-    # The page rather than the call site: an author writes its pages through helpers of
-    # its own, and `stacklevel` then lands inside `card_page` for nine of the fourteen.
-    # A live build's warnings all pointed at one line of one helper.
-    page = _page_of(shape)
-    where = f"page {page}: " if page else ""
-    warnings.warn(
-        f"{where}{_shortened(' '.join(_plain_lines(new)))!r} needs {fit['needs']} lines at "
-        f"{fit['size_pt']:g}pt in this {fit['width_in']:.2f}in column and the box shows {fit['shows']} -- "
-        f"the copy it replaces took {fit['took']}. "
-        + _growth_note(shape, fit)
-        + " Written as asked; fewer words, or place() the frame first.",
-        stacklevel=3,
-    )
-
-
-def _page_of(shape) -> int | None:
-    """This shape's page number, counting from 1, or None off a slide."""
-    try:
-        slide = shape.part.slide
-        return list(slide.part.package.presentation_part.presentation.slides).index(slide) + 1
-    except Exception:  # noqa: BLE001 -- a shape off a slide has no page to name
-        return None
-
-
-atexit.register(_say_what_did_not_fit)
-
-
 def drop_shape(shape) -> None:
     """Remove an element the page does not need. The commonest edit after text.
 
     A shape on a layout is refused: it is the template's design, shared by every page
     on that layout, and a live cover deleted the whole of it to make room for a washed
     photograph. The picture in it is changed with `replace_picture(layout_pictures(slide)[0], ...)`.
-
-    One shape. To make room for a chart or a panel of your own, `clear_region(slide,
-    box)` takes every shape drawn in that box and says which ones those were -- the
-    template's chart is never alone in the space it occupies.
     """
     if getattr(shape.part, "slide", None) is None:
         raise ValueError(
@@ -2140,165 +1576,6 @@ def drop_shape(shape) -> None:
             "shape of the page's own; do not remove it"
         )
     shape._element.getparent().remove(shape._element)
-
-
-class Cleared(tuple):
-    """What `clear_region` took out, and what it decided to leave.
-
-    A tuple of the descriptions it removed, so `len(...)` is the count and printing
-    it reads as a list, with `left_standing` beside it for the shapes that touch the
-    box and stayed. Both halves are the point: the sweep this replaces removed things
-    silently, and the author found out from the render three builds later.
-    """
-
-    # No __slots__: a variable-length builtin subtype cannot have non-empty slots, and
-    # the two extra fields have to live somewhere.
-    def __new__(cls, removed, left_standing=(), region=(0.0, 0.0, 0.0, 0.0)):
-        made = super().__new__(cls, tuple(removed))
-        made.left_standing = tuple(left_standing)
-        made.region = tuple(region)
-        return made
-
-    def __str__(self) -> str:
-        left, top, right, bottom = self.region
-        said = f"cleared ({left:g}, {top:g})-({right:g}, {bottom:g}): "
-        said += f"removed {len(self)} -- {'; '.join(self)}" if self else "nothing was in it"
-        if self.left_standing:
-            said += f". Still over it: {'; '.join(self.left_standing)}"
-        return said
-
-
-def clear_region(container, box, *, share: float = 0.5, keep=()) -> Cleared:
-    """Make room in `box` for something of your own, and say what that cost.
-
-    `drop_shape` for every shape `shapes_in` finds there. Drawing into a cloned page
-    means clearing a space in it first, and until this existed there was no supported
-    way to say that -- so a program wrote its own sweep, missed the arrows, the number
-    labels and every connector, and drew two charts on top of them.
-
-    `keep` spares a shape by the words it shows, in `shape_saying`'s prefix reading, or
-    by the `# [n]` ordinal a template reference prints: the heading and the source line
-    of a page are usually inside the region an author wants cleared under them.
-
-    What it leaves alone: the shape the box sits inside, because on a template that is
-    the card the chart was drawn in and it carries the arrangement the page was cloned
-    for; anything in a group the template flipped or rotated, which has no position to
-    compare against; and anything a layout owns, which `drop_shape` refuses.
-
-    Loud on both sides. The return value names every shape removed, and a shape that
-    overlaps the box at all and was not removed is named in `left_standing` and in a
-    warning -- because "it looked clear and it was not" is the failure this replaces,
-    and the number that decides it (`share`, half by default) is one an author may
-    have to lower once it has seen what stayed.
-    """
-    region = _as_region(box)
-    spare_words = tuple(str(word) for word in keep if not isinstance(word, int))
-    spare_numbers = {int(word) for word in keep if isinstance(word, int)}
-    # One walk, and the ordinals come off it. Two walks cannot be joined up: both
-    # `_all_shapes` and lxml hand out a fresh proxy for the same node every time, so
-    # neither the shape nor its element is the same object twice and every line of
-    # this report came out numbered [0]. The numbers are the page's as the author
-    # read it -- a reference's `# [n]` -- and after the clear they have shifted, so
-    # the durable handle in each line is the position, which `shape_near` takes.
-    walked = list(enumerate(_all_shapes(container.shapes), start=1))
-    removed: list[str] = []
-    spared: list[str] = []
-    said_already: set[int] = set()
-    for ordinal, shape in walked:
-        if not _inside(shape, region, share):
-            continue
-        said = _named(shape, ordinal)
-        text = _copy_of(shape)
-        if ordinal in spare_numbers or (spare_words and any(text.startswith(word) for word in spare_words)):
-            spared.append(said + " -- kept, you named it")
-            said_already.add(ordinal)
-            continue
-        try:
-            drop_shape(shape)
-        except ValueError as refused:
-            spared.append(f"{said} -- {refused}")
-            said_already.add(ordinal)
-            continue
-        removed.append(said)
-    # Everything that still lies over the box after the clear, so a region that only
-    # looks empty says so here rather than in a render three builds later.
-    # Deduplicated on the ordinal rather than on the sentence: a shape `keep` spared
-    # is named with a reason on the end, and matching those strings listed it twice.
-    over = [
-        _named(shape, ordinal)
-        for ordinal, shape in walked
-        if ordinal not in said_already and _still_on_the_page(shape) and _touches(shape, region)
-    ]
-    left = tuple(spared) + tuple(over)
-    if left:
-        warnings.warn(
-            f"clear_region({', '.join(f'{value:g}' for value in region)}) left {len(left)} shape(s) over that "
-            f"box: {'; '.join(left)}. Look at the render; drawing there puts your content on top of them. "
-            f"Lower `share` to take in what only partly overlaps, or name one and call drop_shape yourself",
-            stacklevel=2,
-        )
-    return Cleared(removed, left, region)
-
-
-def _named(shape, ordinal: int) -> str:
-    """One line of the clear's report: the ordinal, what the shape is, where it is.
-
-    The position and the size are the drawn ones, not the declared ones, because a
-    shape inside a group declares neither and this line is read against a render.
-    Its own kind word rather than `_describe`'s: that one reports a drawing as the
-    size of the whole group it belongs to, and two different sizes on one line about
-    one shape is a line nobody can act on.
-    """
-    words = _copy_of(shape)
-    if getattr(shape, "has_chart", False):
-        kind = "a chart"
-    elif shape._element.tag.endswith("}cxnSp"):
-        kind = "a connector"
-    elif getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE or _blip_fill(shape) is not None:
-        kind = "a picture"
-    elif words:
-        kind = f"text {words[:26]!r}" if len(words) <= 26 else f"text {words[:25] + chr(8230)!r}"
-    elif _is_drawing(shape):
-        kind = "a drawing"
-    else:
-        kind = "a shape"
-    try:
-        drawn = page_box(shape)
-        return f"[{ordinal}] {kind} at ({drawn.x0:.2f}, {drawn.y0:.2f}) {drawn.w:.2f}x{drawn.h:.2f}in"
-    except ValueError:
-        return f"[{ordinal}] {kind}, inside a flipped or rotated group"
-
-
-def _copy_of(shape) -> str:
-    """The words a shape shows, or "" -- `keep` matches on these."""
-    if not getattr(shape, "has_text_frame", False):
-        return ""
-    return " ".join(shape.text_frame.text.split())
-
-
-# Below this much overlap a shape is not what the author is asking about: a template's
-# full-width background band reaches into every region on the page, and naming it in
-# every clear would bury the shape that does matter. Both readings, because a corner
-# poking into a big box and a small box sitting on a corner are both real.
-WORTH_SAYING = 0.1
-
-
-def _still_on_the_page(shape) -> bool:
-    """Whether this shape survived the clear -- the walk it came from predates it."""
-    return shape._element.getparent() is not None
-
-
-def _touches(shape, region) -> bool:
-    """Whether this shape overlaps `region` by enough to be worth naming."""
-    try:
-        drawn = page_box(shape)
-    except ValueError:
-        return False
-    left, top, right, bottom = region
-    area = max(0.0, right - left) * max(0.0, bottom - top)
-    if _share_of_shape(drawn, region) >= WORTH_SAYING:
-        return True
-    return bool(area) and _overlap(drawn, region) / area >= WORTH_SAYING
 
 
 def adapt(presentation, prototype, texts=None, pictures=None, drop=(), keep=(), items=None, title=None, subtitle=None):
@@ -3332,26 +2609,14 @@ def _pick(key, by_index, by_text):
     alternative -- counting text frames for `texts`, pictures for `pictures` -- gives
     three numberings for one page, so `texts={15: ...}` read off the reference lands on
     a page whose text frames stop at fourteen.
-
-    Where several shapes hold the key, the one whose whole copy *is* the key takes it and
-    position decides the rest. The walk reaches a group's members before the top-level
-    shape drawn over them, so taking the first match handed `自动化与人工智能` to an arrow
-    label reading `自动化与人工智能助力产业升级` and left the page's title -- that string
-    and nothing else, last in the z-order because it sits on top -- saying what the
-    template shipped. A shape the key names completely is not the near miss.
     """
     if isinstance(key, int):
         return by_index[key - 1] if 1 <= key <= len(by_index) else None
     wanted = str(key).strip()
-    partial = None
     for shape in by_text:
-        if not (getattr(shape, "has_text_frame", False) and wanted in shape.text_frame.text):
-            continue
-        if shape.text_frame.text.strip() == wanted:
+        if getattr(shape, "has_text_frame", False) and wanted in shape.text_frame.text:
             return shape
-        if partial is None:
-            partial = shape
-    return partial
+    return None
 
 
 def helper_source() -> str:

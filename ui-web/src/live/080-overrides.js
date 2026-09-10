@@ -44,26 +44,7 @@ rpc.onReconnect = async () => {
   const current = sessionCurrent();
   if (current && !draft) {
     turn.dispatch({ type: 'idle' });
-    /* End the editor before reading anything it can change. The teardown
-       inside openLiveSession is too late for THIS caller: it is the only one
-       that builds a detached { id, title } instead of handing over the live
-       row, so a title read here and committed there gets painted stale over
-       the heading the commit had just restored. Every other caller passes the
-       row itself and is immune by construction.
-
-       And the row is what carries the title; the heading is only where it is
-       drawn. Reading the heading FIRST died here with an editor open --
-       h1#title does not exist while the input stands in its place, so the
-       handler threw on this line and the conversation was never reloaded,
-       never re-subscribed and never told the reader it was back. It is the
-       wrong first source twice over besides: it holds the plain form with any
-       leading icon stripped, and it holds nothing at all while a name is being
-       generated. It stays as the last resort for the one thing the row cannot
-       answer -- a current conversation that is not in the list. */
-    RavenIslands.rail.endRename();
-    const open = sess(current);
-    const heading = $('#title');
-    const title = (open && open.title) || (heading && heading.textContent) || '';
+    const title = $('#title').textContent;
     await sessionOpen({ id: current, title });
     showStatus(T('gui.reconnected'));
     setTimeout(killStatus, 2500);
@@ -187,13 +168,6 @@ function resetView() {
 }
 
 function startDraft() {
-  /* Before anything reaches for h1#title -- here and in openLiveSession, the
-     two paths that change which conversation is open. An open title editor
-     stands IN PLACE OF that heading, so leaving it up would take the heading
-     away for the life of the tab. Ending it commits, which is where a name
-     typed there belongs: the conversation it was typed over, not the one
-     being opened. */
-  RavenIslands.rail.endRename();
   viewGen += 1;
   const gen = viewGen;
   parkTurn();
@@ -219,7 +193,6 @@ function startDraft() {
 }
 
 async function openLiveSession(s) {
-  RavenIslands.rail.endRename();
   viewGen += 1;
   const gen = viewGen;
   parkTurn();
