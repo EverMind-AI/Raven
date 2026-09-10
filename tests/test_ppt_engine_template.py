@@ -1464,67 +1464,6 @@ def test_a_hidden_page_keeps_its_number_but_is_not_offered(tmp_path) -> None:
     assert "hidden in the file" in listing[1].line()
 
 
-def test_the_layout_the_template_named_outranks_what_the_page_happens_to_say() -> None:
-    """The precedence that decides which page a deck closes on.
-
-    Read heading-first, `gold_panel` page 14 -- "annual reflections and thanks" on a
-    layout called `Section Header` -- was that template's closing page, and page 25, on
-    a layout called `Closing`, was never offered as one. `roles()` takes the first
-    match, so the wrong page won by sitting eleven pages earlier.
-    """
-    from raven_ppt.services.template.menu import AGENDA, CLOSING, COVER, SECTION, _role
-
-    assert _role(14, "Section Header", "年度感悟与感谢", blocks=3, longest=22) == SECTION
-    assert _role(25, "Closing", "演示结束", blocks=3, longest=13) == CLOSING
-    assert _role(1, "Title Slide", "A deck about something", blocks=4, longest=30) == COVER
-    assert _role(2, "Title and Content", "Agenda", blocks=6, longest=20, says=("Agenda",)) == AGENDA
-    # Position still beats the shape of the page: a first page on an unnamed layout
-    # carrying one short line is the cover, not a divider.
-    assert _role(1, "Blank", "Something", blocks=1, longest=9) == COVER
-
-
-def test_a_page_that_thanks_the_reader_over_six_cards_is_a_content_page() -> None:
-    """`gold_panel` page 18 is a six-card content page headed "thanks and outlook".
-
-    The words alone made it the closing page, which took it out of the offered content
-    list -- and seven of the measured answers named it anyway, off the render. A closing
-    page carries a farewell and little else, so the shape decides.
-    """
-    from raven_ppt.services.template.menu import _CLOSING_BLOCKS, CLOSING, _role
-
-    assert _role(18, "Title Only", "感谢与展望", blocks=25, longest=40) == ""
-    assert _role(18, "Title Only", "感谢与展望", blocks=_CLOSING_BLOCKS, longest=40) == CLOSING
-
-
-def test_an_agenda_names_itself_somewhere_other_than_its_first_line(tmp_path: Path) -> None:
-    """Two templates reported no agenda page, for two versions of the same reason.
-
-    `_heading` takes the first text line in document order: on `beige_geometric` page 2
-    that is "01" and the word "Agenda" is in the last shape on the page. `gold_panel`
-    page 2 sets the same word to wrap, so it arrives as "AG" and "ENDA" and no substring
-    test finds it. Both pages are the template's agenda.
-    """
-    from raven_ppt.services.template.menu import AGENDA, _role, _says
-
-    class _Frame:
-        def __init__(self, text: str) -> None:
-            self.text = text
-
-    class _Shape:
-        def __init__(self, text: str) -> None:
-            self.text_frame = _Frame(text)
-
-    listed = [_Shape("01"), _Shape("Review of the work content"), _Shape("Agenda")]
-    wrapped = [_Shape("<"), _Shape("年度回顾与成长"), _Shape("AG\nENDA")]
-
-    assert _role(2, "Blank", "01", blocks=13, longest=46, says=_says(listed)) == AGENDA
-    assert _role(2, "Blank", "<", blocks=15, longest=36, says=_says(wrapped)) == AGENDA
-    # And the line that nearly made it an agenda for the wrong reason: body copy is not
-    # what a page calls itself, so a long line is not read for role words.
-    assert "Review of the work content" not in _says(listed)
-    assert _role(4, "Title Only", "Something", blocks=9, longest=46, says=_says(listed[:2])) == ""
-
-
 def _unit_page(tmp_path: Path, name: str, build) -> Path:
     """A page of repeated units laid out by `build(group, index)`, saved and returned."""
     from pptx import Presentation

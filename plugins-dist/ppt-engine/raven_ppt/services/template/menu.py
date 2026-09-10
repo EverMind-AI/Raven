@@ -55,20 +55,6 @@ _SECTION_WORDS = ("section", "divider", "transition", "章节", "过渡", "part 
 # where content pages start.
 _SECTION_BLOCKS = 2
 _SECTION_CHARS = 24
-# What a closing page may carry and still be one. A farewell page in the bundled
-# templates holds three blocks -- the words, a presenter line and a vendor URL -- and a
-# page that says thank you over six cards of copy is a content page whose heading
-# happens to thank someone: gold_panel page 18 carries 25 text blocks in 6 repeating
-# units, and calling it the closing page took it out of the offered content list
-# entirely. Seven of the measured answers named it anyway, off the render, which is the
-# offer this listing was refusing to make.
-_CLOSING_BLOCKS = 6
-# How long a line can be and still be something the page calls itself rather than
-# something it says. The same length `_heading` treats as a title, and the reason the
-# role words are matched against short lines only: `beige_geometric` page 2 has a body
-# line reading "Review of the work content", and one more letter on it would have made
-# the page an agenda for the wrong reason.
-_TITLE_CHARS = 24
 
 
 @dataclass(frozen=True)
@@ -219,89 +205,36 @@ def _menu(path: Path, unwritable: dict[int, tuple[str, ...]] | None = None) -> t
                     _heading(texts),
                     blocks=len(texts),
                     longest=max((len(s.text_frame.text.strip()) for s in texts), default=0),
-                    says=_says(texts),
                 ),
             )
         )
     return tuple(entries)
 
 
-def _role(number: int, layout: str, heading: str, blocks: int = 0, longest: int = 0, says: tuple = ()) -> str:
+def _role(number: int, layout: str, heading: str, blocks: int = 0, longest: int = 0) -> str:
     """What this page is for, from what it says about itself.
 
-    Its layout's name first, then its own words, and position only for the cover --
-    position is the weakest signal and the one a template full of variants breaks. A
-    page that matches nothing is a content page, which most of them are.
-
-    The layout leads because it is the template's own declaration of what the page is
-    for, and a heading is only what this page happens to say. Read the other way round,
-    `gold_panel` page 14 -- headed "annual reflections and thanks" on a layout called
-    `Section Header` -- became that template's closing page, and page 25, on a layout
-    called `Closing`, was never offered as one; three of that template's 25 pages left
-    the content menu between them.
-
-    `says` is the page's own short lines, which is where an agenda names itself when
-    its title is not the first shape in document order: `beige_geometric` page 2 leads
-    with "01" and carries "Agenda" in the last shape on the page, `gold_panel` page 2
-    breaks the same word across a line, so it arrives as "AG" and "ENDA", and both
-    agenda page at all. Passed in rather than read here so the caller walks the shapes
-    once.
+    The page's own words first, then its layout's name, and position only for the
+    cover -- position is the weakest signal and the one a template full of variants
+    breaks. A page that matches nothing is a content page, which most of them are.
     """
-    named = layout.lower()
-    if any(word in named for word in _COVER_LAYOUTS):
-        return COVER
-    if any(word in named for word in _CLOSING_WORDS):
-        return CLOSING
-    if any(word in named for word in _AGENDA_WORDS):
+    said = f"{heading} {layout}".lower()
+    if any(word in said for word in _AGENDA_WORDS):
         return AGENDA
+    if any(word in said for word in _CLOSING_WORDS):
+        return CLOSING
+    if any(word in layout.lower() for word in _COVER_LAYOUTS) or number == 1:
+        return COVER
     # A section divider, which a deck of any length needs and which is the one
     # structural page a template does not name in its own words: this template calls
     # its page 3 "Section Header" on the layout and "单击此处添加章节标题" on the page,
-    # and both say it.
-    if any(word in named for word in _SECTION_WORDS):
-        return SECTION
-    lines = tuple(line.lower() for line in says)
-    if any(word in line for line in lines for word in _AGENDA_WORDS):
-        return AGENDA
-    said = heading.lower()
-    # Gated on the shape, because a thank-you in a heading is not a farewell page. The
-    # words alone made a six-card content page the closing one.
-    if blocks <= _CLOSING_BLOCKS and any(word in said for word in _CLOSING_WORDS):
-        return CLOSING
-    # Position, and only for the cover: it is the weakest signal and the one a template
-    # full of variants breaks, but it still outranks the shape of the page below -- a
-    # first page whose layout is not named for a cover and whose title is one short line
-    # is a cover, not a divider.
-    if number == 1:
-        return COVER
+    # and both say it. The shape of the page is the fallback -- one or two blocks of
+    # short text and nothing else is not a content page.
     if any(word in said for word in _SECTION_WORDS):
         return SECTION
-    # The shape of the page is the last fallback -- one or two blocks of short text and
-    # nothing else is not a content page.
     if blocks and blocks <= _SECTION_BLOCKS and longest and longest <= _SECTION_CHARS:
         return SECTION
     return ""
-
-
-def _says(texts: list) -> tuple[str, ...]:
-    """The page's own short lines: what it calls itself, not what it says.
-
-    Each line of each text block, plus each block with its whitespace taken out -- the
-    second because a title set to wrap mid-word arrives as two lines and is one word
-    to every reader but a substring test. Long lines are left out: they are body copy,
-    and matching a role word inside one names the page after a sentence in it.
-    """
-    found: list[str] = []
-    for shape in texts:
-        whole = shape.text_frame.text
-        for part in whole.splitlines():
-            line = part.strip()
-            if line and len(line) <= _TITLE_CHARS:
-                found.append(line)
-        packed = "".join(whole.split())
-        if packed and len(packed) <= _TITLE_CHARS:
-            found.append(packed)
-    return tuple(dict.fromkeys(found))
 
 
 def _slots(slide: Any) -> int:
