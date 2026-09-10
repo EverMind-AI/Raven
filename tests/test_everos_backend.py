@@ -667,6 +667,21 @@ class TestUserSearchConversion:
         scores = [h.score for h in hits]
         assert scores == sorted(scores, reverse=True)
 
+    async def test_top_k_truncation_keeps_the_profile(self, tmp_path: Path) -> None:
+        adapter = _FakeAdapter(
+            search_response=_user_search_data(
+                episodes=[
+                    SimpleNamespace(id=f"e{i}", session_id="s", summary=f"fact {i}", episode="", score=0.5)
+                    for i in range(5)
+                ],
+                profiles=[SimpleNamespace(id="prof1", profile_data={"name": "Alice"}, score=None)],
+            )
+        )
+        b = _backend(tmp_path, adapter=adapter)
+        hits = await b.recall("q", user_id="alice", top_k=2)
+        assert len(hits) == 2
+        assert [h.metadata["type"] for h in hits] == ["profile", "episode"]
+
 
 # ---------------------------------------------------------------------------
 # _flatten_profile — rendering a profile dict for prompt injection
