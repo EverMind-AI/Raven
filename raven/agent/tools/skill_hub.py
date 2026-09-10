@@ -64,8 +64,10 @@ def lookup_on_disk(registry: "SkillRegistry | None", source: str, native: str):
     The two carry different vocabularies and must be translated, not passed
     through: ``local`` is a router namespace spanning every on-disk layer
     (``workspace`` / ``builtin`` / ``external`` / ``mirror/*``) and is never
-    itself a layer, so it resolves to the layer-priority winner. ``everos`` is
-    both a namespace and a layer, and keeps its exact compound-key lookup.
+    itself a layer, so it resolves to the layer-priority winner. Any other
+    source (the configured memory backend, which writes its extracted skills
+    into a layer of the same name) is both a namespace and a layer, and keeps
+    its exact compound-key lookup.
     """
     if registry is None:
         return None
@@ -139,7 +141,7 @@ class ReadSkillTool(Tool):
         if is_blocked(self._policy.blocklist, native):
             return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
 
-        if source in ("local", "everos"):
+        if source != "hub":
             meta = lookup_on_disk(self._registry, source, native)
             if meta is None:
                 return (
@@ -249,14 +251,12 @@ class UseSkillTool(Tool):
         if is_blocked(self._policy.blocklist, native):
             return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be used."
 
-        if source in ("local", "everos"):
-            return self._use_on_disk(source, native)
         if source == "hub":
             return await self._use_hub(native)
-        return f"Error: unknown skill source {source!r} in {skill_id!r} (expected one of local/everos/hub)."
+        return self._use_on_disk(source, native)
 
     def _use_on_disk(self, source: str, native: str) -> str:
-        """Resolve an already-materialized local/everos skill dir."""
+        """Resolve an already-materialized on-disk skill dir."""
         meta = lookup_on_disk(self._registry, source, native)
         if meta is None:
             return (

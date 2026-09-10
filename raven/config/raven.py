@@ -1151,7 +1151,7 @@ class MemoryConfig(_Base):
 
     agent_id: str = "default"
     """Bare agent identity passed as ``backend.recall(agent_id=...)`` by
-    ``EverosSkillSource`` for agent-track skill recall."""
+    ``BackendSkillSource`` for agent-track skill recall."""
 
     memory_top_k: int = 5
     """Top-K passed to ``backend.recall(user_id=user_id)`` per turn for

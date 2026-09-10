@@ -7,7 +7,7 @@ otherwise exercises — but here without an LLM, so it runs in normal CI.
 
 One channel turn must, in order:
   1. recall on BOTH lanes during context assembly
-     (``user_id`` for the # Memory segment, ``agent_id`` for EverosSkillSource);
+     (``user_id`` for the # Memory segment, ``agent_id`` for BackendSkillSource);
   2. inject the recalled user memory + everos skill into the prompt the LLM sees;
   3. after the turn, ``backend.store(session_key, turn_slice)``;
   4. after the turn, ``backend.feedback`` with the injected everos native ids only.
@@ -110,7 +110,7 @@ class _FakeBackend:
             raise self.feedback_raises
 
 
-def _make_agent(workspace: Path, *, backend=None) -> AgentLoop:
+def _make_agent(workspace: Path, *, backend=None, memory_config=None) -> AgentLoop:
     from raven.config.raven import SkillForgeConfig
 
     return AgentLoop(
@@ -121,7 +121,11 @@ def _make_agent(workspace: Path, *, backend=None) -> AgentLoop:
         # everos skill body landing in the prompt); pull renders a menu only.
         policy=TurnPolicy(max_iterations=2),
         tools=ToolWiring(restrict_to_workspace=True),
-        engine=EngineWiring(backend=backend, skill_forge_config=SkillForgeConfig(discovery="push")),
+        engine=EngineWiring(
+            backend=backend,
+            memory_config=memory_config,
+            skill_forge_config=SkillForgeConfig(discovery="push"),
+        ),
     )
 
 
@@ -210,3 +214,33 @@ async def test_feedback_failure_does_not_break_turn(tmp_path: Path) -> None:
     out = await agent._process_message(_msg())
     assert out is not None  # best-effort telemetry; failure isolated
     assert len(backend.feedback_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# The forwarded prefix is whatever ``memory.backend`` names
+# ---------------------------------------------------------------------------
+
+
+async def test_feedback_forwards_the_configured_backend_prefix(tmp_path: Path) -> None:
+    from raven.config.raven import MemoryConfig
+
+    backend = _FakeBackend()
+    agent = _make_agent(tmp_path, backend=backend, memory_config=MemoryConfig(backend="acme"))
+
+    await agent._dispatch_backend_feedback("s1", ["acme/x", "everos/y", "local/z"], ["acme/x"])
+
+    assert len(backend.feedback_calls) == 1
+    sig = backend.feedback_calls[0]
+    assert sig["injected"] == ["x"]
+    assert sig["used"] == ["x"]
+
+
+async def test_feedback_noops_when_no_backend_is_configured(tmp_path: Path) -> None:
+    from raven.config.raven import MemoryConfig
+
+    backend = _FakeBackend()
+    agent = _make_agent(tmp_path, backend=backend, memory_config=MemoryConfig(backend=None))
+
+    await agent._dispatch_backend_feedback("s1", ["everos/y", "acme/x"])
+
+    assert backend.feedback_calls == []

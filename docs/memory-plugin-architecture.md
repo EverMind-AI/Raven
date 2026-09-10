@@ -50,7 +50,7 @@ Contract rules:
 
 - `recall` takes **exactly one** of `user_id` / `agent_id` (XOR). The
   caller knows the track statically: the `# Memory` segment always
-  passes `user_id`; `EverosSkillSource` always passes `agent_id`.
+  passes `user_id`; `BackendSkillSource` always passes `agent_id`.
   Neither/both set → return `[]`.
 - Ids are **bare, backend-native strings** — no `user:` / `agent:`
   prefix parsing. Dual-track backends (EverOS) route the set field to
@@ -387,7 +387,7 @@ because the default moved in code rather than in `default_ome.toml` an
 existing `~/.everos/ome.toml` does not opt out of the change; re-enable
 it per install. Agent-skill extraction works for the first time —
 before `1.2.3` a cascade race meant it produced zero `SKILL.md` files —
-so `EverosSkillSource` starts contributing real skills to the prompt
+so `BackendSkillSource` starts contributing real skills to the prompt
 instead of nothing.
 
 **Two known gaps, not addressed here.** On exhausting a supervised

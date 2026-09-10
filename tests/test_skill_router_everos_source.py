@@ -1,4 +1,4 @@
-"""EverosSkillSource wraps MemoryBackend.recall + emits RouterHit."""
+"""BackendSkillSource wraps MemoryBackend.recall + emits RouterHit."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pytest
 
 from raven.contracts.memory import Memory
 from raven.memory_engine.skill_forge import (
-    EverosSkillSource,
+    BackendSkillSource,
     ForgeSkillSource,
 )
 
@@ -57,8 +57,8 @@ def backend() -> _FakeBackend:
 
 
 @pytest.fixture
-def source(backend) -> EverosSkillSource:
-    return EverosSkillSource(backend=backend, agent_id="agent:default")
+def source(backend) -> BackendSkillSource:
+    return BackendSkillSource(backend=backend, agent_id="agent:default", name="everos")
 
 
 # ---------------------------------------------------------------------------
@@ -219,3 +219,20 @@ class TestErrorPropagation:
         backend.recall_raises = RuntimeError("backend down")
         with pytest.raises(RuntimeError, match="backend down"):
             await source.search("q", history=[], k=5)
+
+
+# ---------------------------------------------------------------------------
+# Source name comes from config, not a literal
+# ---------------------------------------------------------------------------
+
+
+async def test_qualified_id_uses_the_configured_name() -> None:
+    class _B:
+        async def recall(self, query, *, agent_id, top_k):
+            return [Memory(text="skill body", metadata={"id": "abc", "name": "s"})]
+
+    src = BackendSkillSource(backend=_B(), agent_id="a", name="acme")
+    hits = await src.search("q", history=[], k=3)
+    assert src.name == "acme"
+    assert hits[0].qualified_id == "acme/abc"
+    assert hits[0].meta["source"] == "acme"
