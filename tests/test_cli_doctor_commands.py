@@ -279,6 +279,15 @@ def test_a_backend_without_diagnostics_says_so(healthy_config, monkeypatch) -> N
     assert "no diagnostics" in result.stdout
 
 
+def test_an_off_contract_answer_is_reported_as_a_fault(healthy_config, monkeypatch) -> None:
+    """A backend that answers something other than ``BackendHealth`` is as
+    broken as one that raises: everything downstream reads ``.ready``."""
+    _health_backend(monkeypatch, "nope")
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 2, result.stdout
+    assert "not BackendHealth" in result.stdout
+
+
 def test_memory_section_reaches_the_json_output(healthy_config, monkeypatch) -> None:
     from raven.contracts.memory import BackendHealth, HealthCheck
 
