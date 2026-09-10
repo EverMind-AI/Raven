@@ -728,7 +728,8 @@ class GatewayConfig(Base):
 class WebSearchConfig(Base):
     """Web search tool configuration."""
 
-    api_key: str = ""  # Serper API key
+    provider: Literal["serper", "serply"] = "serper"
+    api_key: str = ""  # API key for the chosen provider
     max_results: int = 5
 
 

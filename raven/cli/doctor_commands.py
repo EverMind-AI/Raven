@@ -338,6 +338,7 @@ def _gather_tools(config: "Config") -> ToolsInfo:
         CAPABILITIES,
         borrowable_credential,
         configured_from,
+        for_deployment,
         has_credential,
         is_configured,
         is_disabled,
@@ -360,7 +361,7 @@ def _gather_tools(config: "Config") -> ToolsInfo:
                 obtain_from=cap.obtain_from,
                 cost_note=cap.cost_note,
             )
-            for cap in CAPABILITIES
+            for cap in (for_deployment(c, config) for c in CAPABILITIES)
         ]
     )
 

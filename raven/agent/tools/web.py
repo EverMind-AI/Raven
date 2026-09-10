@@ -3,6 +3,7 @@
 import json
 import os
 from typing import Any
+from urllib.parse import quote_plus
 
 import httpx
 from loguru import logger
@@ -12,7 +13,7 @@ from raven.security.network import validate_url_target
 
 
 class WebSearchTool(Tool):
-    """Search the web using Serper."""
+    """Search the web using Serper or Serply."""
 
     name = "web_search"
     description = "Search the web. Returns titles, URLs, and snippets."
@@ -25,27 +26,47 @@ class WebSearchTool(Tool):
         "required": ["query"],
     }
 
-    def __init__(self, api_key: str | None = None, max_results: int = 5, proxy: str | None = None):
+    #: Provider name -> (environment variable standing in for its key, where a key is obtained).
+    PROVIDERS = {
+        "serper": ("SERPER_API_KEY", "https://serper.dev"),
+        "serply": ("SERPLY_API_KEY", "https://serply.io"),
+    }
+
+    def __init__(
+        self, api_key: str | None = None, max_results: int = 5, proxy: str | None = None, provider: str = "serper"
+    ):
         self._init_api_key = api_key
         self.max_results = max_results
         self.proxy = proxy
+        self.provider = provider
+
+    @classmethod
+    def env_var(cls, provider: str = "serper") -> str:
+        """The environment variable accepted instead of ``provider``'s configured key."""
+        return cls.PROVIDERS[provider][0]
+
+    @classmethod
+    def key_source(cls, provider: str = "serper") -> str:
+        """Where a deployer obtains a key for ``provider``."""
+        return cls.PROVIDERS[provider][1]
 
     @property
     def api_key(self) -> str:
         """Resolve API key at call time so env/config changes are picked up."""
-        return self._init_api_key or os.environ.get("SERPER_API_KEY", "")
+        return self._init_api_key or os.environ.get(self.env_var(self.provider), "")
 
     @classmethod
-    def is_configured(cls, config_key: str | None) -> bool:
+    def is_configured(cls, config_key: str | None, provider: str = "serper") -> bool:
         """Whether a search key resolves, from the config value or the
         environment.
 
         Asked of the tool rather than of the config because those are two
         sources and only the tool consults both: a deployment that exports
         ``SERPER_API_KEY`` and configures nothing is configured, and a caller
-        reading ``tools.web.search.apiKey`` alone would say otherwise.
+        reading ``tools.web.search.apiKey`` alone would say otherwise. Only the
+        chosen provider's variable counts.
         """
-        return bool(cls(api_key=config_key or None).api_key)
+        return bool(cls(api_key=config_key or None, provider=provider).api_key)
 
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         if not self.api_key:
@@ -56,8 +77,8 @@ class WebSearchTool(Tool):
             from raven.config.loader import get_config_path
 
             return (
-                f"Error: Serper API key not configured. Set it in {get_config_path()} "
-                "under tools.web.search.apiKey (or export SERPER_API_KEY), "
+                f"Error: {self.provider.capitalize()} API key not configured. Set it in {get_config_path()} "
+                f"under tools.web.search.apiKey (or export {self.env_var(self.provider)}), "
                 "then restart the gateway."
             )
 
@@ -65,20 +86,10 @@ class WebSearchTool(Tool):
             n = min(max(count or self.max_results, 1), 10)
             logger.debug("WebSearch: {}", "proxy enabled" if self.proxy else "direct connection")
             async with httpx.AsyncClient(proxy=self.proxy) as client:
-                r = await client.post(
-                    "https://google.serper.dev/search",
-                    json={"q": query, "num": n},
-                    headers={
-                        "Accept": "application/json",
-                        "Content-Type": "application/json",
-                        "X-API-KEY": self.api_key,
-                    },
-                    timeout=10.0,
-                )
-                r.raise_for_status()
-
-            data = r.json()
-            results = data.get("organic", [])[:n]
+                if self.provider == "serply":
+                    data, results = await self._search_serply(client, query, n)
+                else:
+                    data, results = await self._search_serper(client, query, n)
             if not results:
                 return f"No results for: {query}"
 
@@ -105,6 +116,36 @@ class WebSearchTool(Tool):
         except Exception as e:
             logger.error("WebSearch error: {}", e)
             return f"Error: {e}"
+
+    async def _search_serper(self, client: httpx.AsyncClient, query: str, n: int) -> tuple[dict, list[dict]]:
+        r = await client.post(
+            "https://google.serper.dev/search",
+            json={"q": query, "num": n},
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "X-API-KEY": self.api_key,
+            },
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data, data.get("organic", [])[:n]
+
+    async def _search_serply(self, client: httpx.AsyncClient, query: str, n: int) -> tuple[dict, list[dict]]:
+        # Serply has no answer box or knowledge graph, so only the organic
+        # results come back, in the shape the Serper branch produces.
+        r = await client.get(
+            f"https://api.serply.io/v1/search/q={quote_plus(query)}&num={n}",
+            headers={"Accept": "application/json", "X-Api-Key": self.api_key},
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        results = [
+            {"title": item.get("title", ""), "link": item.get("link", ""), "snippet": item.get("description", "")}
+            for item in r.json().get("results", [])[:n]
+        ]
+        return {}, results
 
 
 class WebFetchTool(Tool):

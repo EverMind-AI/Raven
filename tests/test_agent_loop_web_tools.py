@@ -52,9 +52,10 @@ def workspace():
 
 @pytest.fixture(autouse=True)
 def _no_ambient_serper_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The tool falls back to ``SERPER_API_KEY``, so a developer who exports one
-    would otherwise see these tests pass for the wrong reason."""
-    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    """The tool falls back to the provider's variable, so a developer who
+    exports one would otherwise see these tests pass for the wrong reason."""
+    for var in ("SERPER_API_KEY", "SERPLY_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
 
 
 def _loop(workspace: Path, **kw) -> AgentLoop:
@@ -150,3 +151,57 @@ async def test_the_unconfigured_error_names_the_config_actually_in_force(tmp_pat
 
     assert str(chosen) in out
     assert "~/.raven/config.json" not in out
+
+
+def test_a_serply_deployment_registers_web_search_from_its_own_env_var(
+    workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the chosen provider's variable counts: a Serper deployment does not
+    pick up a Serply key, and a Serply one does not pick up a Serper key."""
+    monkeypatch.setenv("SERPLY_API_KEY", "sk-serply")
+
+    assert _loop(workspace, web_search_provider="serply").tools.has("web_search")
+    assert not _loop(workspace).tools.has("web_search")
+
+
+@pytest.mark.asyncio
+async def test_the_unconfigured_error_names_the_chosen_provider() -> None:
+    out = await WebSearchTool(provider="serply").execute(query="anything")
+
+    assert "Serply API key" in out
+    assert "SERPLY_API_KEY" in out
+    assert "SERPER_API_KEY" not in out
+
+
+@pytest.mark.asyncio
+async def test_serply_is_queried_with_its_key_header_and_rendered_like_serper(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    seen: dict = {}
+
+    class _Client:
+        def __init__(self, **kw) -> None:  # noqa: ANN003
+            seen["client"] = kw
+
+        async def __aenter__(self):  # noqa: ANN204
+            return self
+
+        async def __aexit__(self, *exc) -> None:  # noqa: ANN002
+            return None
+
+        async def get(self, url, **kw):  # noqa: ANN001, ANN003, ANN202
+            seen["url"] = url
+            seen.update(kw)
+            body = {"results": [{"title": "Raven", "link": "https://example.test/raven", "description": "A harness"}]}
+            return httpx.Response(200, json=body, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", _Client)
+
+    out = await WebSearchTool(api_key="sk-serply", provider="serply", proxy="http://proxy.test").execute(
+        query="raven harness", count=1
+    )
+
+    assert seen["client"] == {"proxy": "http://proxy.test"}
+    assert seen["url"] == "https://api.serply.io/v1/search/q=raven+harness&num=1"
+    assert seen["headers"]["X-Api-Key"] == "sk-serply"
+    assert out == "Results for: raven harness\n\n1. Raven\n   https://example.test/raven\n   A harness"

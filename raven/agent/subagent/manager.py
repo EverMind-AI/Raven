@@ -40,6 +40,7 @@ class SubagentManager:
         workspace: Path,
         model: str | None = None,
         brave_api_key: str | None = None,
+        web_search_provider: str = "serper",
         web_proxy: str | None = None,
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
@@ -60,6 +61,7 @@ class SubagentManager:
         self._submit = None
         self._fallback = ModelBinding(provider, model or provider.get_default_model())
         self.brave_api_key = brave_api_key
+        self.web_search_provider = web_search_provider
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
@@ -205,7 +207,9 @@ class SubagentManager:
             # Withheld without a key, same as the main loop: a sub-agent that
             # reaches for a search it cannot run reports the failure to its
             # caller, and that text ends up in the parent turn.
-            web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
+            web_search = WebSearchTool(
+                api_key=self.brave_api_key, proxy=self.web_proxy, provider=self.web_search_provider
+            )
             if web_search.api_key:
                 tools.register(web_search)
             tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))

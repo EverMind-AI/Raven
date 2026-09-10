@@ -64,7 +64,7 @@ def _no_ambient_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     asserting that nothing was available to borrow silently stops testing that
     on any machine that exports it.
     """
-    for var in ("SERPER_API_KEY", "OPENROUTER_API_KEY"):
+    for var in ("SERPER_API_KEY", "SERPLY_API_KEY", "OPENROUTER_API_KEY"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -154,6 +154,25 @@ def test_the_env_var_alone_agrees_on_both_sides(workspace, tmp_path: Path, monke
     cap = next(c for c in CAPABILITIES if c.tool == "web_search")
     assert is_configured(cap, config) and loop.tools.has("web_search")
     assert configured_from(cap, config) == "SERPER_API_KEY"
+
+
+def test_the_chosen_provider_decides_which_env_var_counts(
+    workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Serply deployment that exports only the Serper variable is not
+    configured, and the table must say so on the same terms as the loop."""
+    config = _config(tmp_path)
+    config.tools.web.search.provider = "serply"
+    cap = next(c for c in CAPABILITIES if c.tool == "web_search")
+
+    monkeypatch.setenv("SERPER_API_KEY", "sk-serper")
+    assert not is_configured(cap, config)
+    assert not _loop(workspace, config, web_search_provider="serply").tools.has("web_search")
+
+    monkeypatch.setenv("SERPLY_API_KEY", "sk-serply")
+    assert is_configured(cap, config)
+    assert _loop(workspace, config, web_search_provider="serply").tools.has("web_search")
+    assert configured_from(cap, config) == "SERPLY_API_KEY"
 
 
 @pytest.mark.parametrize(

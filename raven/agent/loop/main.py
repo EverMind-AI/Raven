@@ -267,6 +267,7 @@ class AgentLoop:
         max_iterations: int = 40,
         context_window_tokens: int | None = None,
         brave_api_key: str | None = None,
+        web_search_provider: str = "serper",
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
         ask_user_config: AskUserToolConfig | None = None,
@@ -373,6 +374,7 @@ class AgentLoop:
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
         self.brave_api_key = brave_api_key
+        self.web_search_provider = web_search_provider
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
         from raven.config.schema import DeepResearchToolConfig, MediaGenConfig
@@ -523,6 +525,7 @@ class AgentLoop:
             workspace=workspace,
             model=self._default_binding.model,
             brave_api_key=brave_api_key,
+            web_search_provider=web_search_provider,
             jina_api_key=jina_api_key,
             web_proxy=web_proxy,
             exec_config=self.exec_config,
@@ -848,14 +851,14 @@ class AgentLoop:
                 extra_deny_patterns=self.exec_config.extra_deny_patterns,
             )
         )
-        # web_search needs a Serper key it does not have by default, and offering
+        # web_search needs a search key it does not have by default, and offering
         # it anyway is worse than withholding it: the model reaches for it, the
         # call fails, and the error text -- naming a config file and an env var --
         # gets relayed to whoever is on the other end of the channel. Ask the tool
         # rather than the config, because it resolves the key at call time from
         # either source; gating on `brave_api_key` alone would withdraw the tool
-        # from a deploy that only exports SERPER_API_KEY.
-        web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
+        # from a deploy that only exports the provider's variable.
+        web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy, provider=self.web_search_provider)
         if web_search.api_key:
             self.tools.register(web_search)
         # web_fetch is unconditional by contrast: it works without a key, and the

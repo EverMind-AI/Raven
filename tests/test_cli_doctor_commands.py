@@ -933,7 +933,7 @@ def _no_ambient_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     media family falls back to, so exporting it turns the "nothing to borrow"
     rows into "borrowing from the environment" rows.
     """
-    for var in ("SERPER_API_KEY", "OPENROUTER_API_KEY"):
+    for var in ("SERPER_API_KEY", "SERPLY_API_KEY", "OPENROUTER_API_KEY"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -1031,6 +1031,27 @@ def test_tool_capabilities_reach_the_json_output(healthy_config: Path) -> None:
     assert by_name["image_generate"]["key_path"] == "tools.media.image.apiKey", (
         "the key path is not the model path this row switches on"
     )
+
+
+def test_the_web_search_row_follows_the_chosen_provider(tmp_config: Path, tmp_path: Path) -> None:
+    """A deployment that picked Serply must not be sent to serper.dev for a key."""
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    cfg.tools.web.search.provider = "serply"
+    save_config(cfg)
+
+    result = runner.invoke(app, ["doctor", "--json"])
+    row = next(c for c in json.loads(result.stdout)["tools"]["capabilities"] if c["tool"] == "web_search")
+
+    assert row["configured"] is False
+    assert row["env_var"] == "SERPLY_API_KEY"
+    assert row["obtain_from"] == "https://serply.io"
+
+    text = runner.invoke(app, ["doctor"]).stdout
+    assert "serply.io" in text and "SERPLY_API_KEY" in text
+    assert "serper.dev" not in text
 
 
 def test_a_config_path_is_never_split_across_lines(healthy_config: Path) -> None:

@@ -35,6 +35,10 @@ export SERPER_API_KEY="..."
 export JINA_API_KEY="..."
 ```
 
+`web_search` uses Serper by default. To search through Serply instead, set
+`tools.web.search.provider` to `"serply"` and supply a Serply key
+(`tools.web.search.apiKey` or `SERPLY_API_KEY`).
+
 You can also put the same values in `~/.raven/config.json`:
 
 ```json

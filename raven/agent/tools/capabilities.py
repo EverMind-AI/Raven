@@ -39,7 +39,7 @@ and its tool is going away.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -171,7 +171,24 @@ def is_configured(cap: Capability, config: "Config") -> bool:
 
     from raven.agent.tools.web import WebSearchTool
 
-    return WebSearchTool.is_configured(config.tools.web.search.api_key)
+    search = config.tools.web.search
+    return WebSearchTool.is_configured(search.api_key, search.provider)
+
+
+def for_deployment(cap: Capability, config: "Config") -> Capability:
+    """The row as this deployment's choices shape it.
+
+    ``web_search`` takes its key from whichever provider
+    ``tools.web.search.provider`` names, and the variable and signup URL follow
+    that choice. Reporting the default provider's for a deployment that picked
+    the other one sends the deployer to the wrong account.
+    """
+    if cap.need is Need.NOTHING or cap.media_attr:
+        return cap
+    from raven.agent.tools.web import WebSearchTool
+
+    provider = config.tools.web.search.provider
+    return replace(cap, env_var=WebSearchTool.env_var(provider), obtain_from=WebSearchTool.key_source(provider))
 
 
 def is_disabled(cap: Capability, config: "Config") -> bool:
@@ -248,7 +265,8 @@ def configured_from(cap: Capability, config: "Config") -> str:
             return f"borrowed: {_OPENROUTER_KEY}"
     elif config.tools.web.search.api_key:
         return cap.key_path
-    return cap.env_var if os.environ.get(cap.env_var) else ""
+    env_var = for_deployment(cap, config).env_var
+    return env_var if os.environ.get(env_var) else ""
 
 
 def borrowable_credential(cap: Capability, config: "Config") -> str:
