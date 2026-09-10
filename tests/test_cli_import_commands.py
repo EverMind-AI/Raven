@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from raven.cli._theme import POINTER, QMARK
@@ -25,6 +26,7 @@ from raven.cli.import_commands import (
     import_app,
 )
 from raven.config.schema import Config
+from raven.contracts.memory import BackendHealth, HealthCheck
 from raven.importer.hermes_user_md import ImportedSections
 from raven.importer.orchestrator import ImportSummary
 from raven.importer.skills import DiscoveredSkill, SkillOrigin
@@ -763,6 +765,39 @@ class TestBuildAndRunHermesOrdering:
         assert result.summary is summary
         assert "bad byte" in result.profile_error
         assert calls == ["start", "run_import", "stop"]
+
+
+class TestBuildAndRunReadinessGate:
+    async def test_a_backend_that_is_not_ready_still_gets_stopped(self, tmp_path: Path) -> None:
+        """The readiness check has to sit inside the ``try``: it exits the
+        command, and a backend that was started and never stopped leaves its
+        connections behind.
+        """
+        calls: list[str] = []
+
+        class _FakeBackend:
+            async def start(self) -> None:
+                calls.append("start")
+
+            async def stop(self) -> None:
+                calls.append("stop")
+
+            async def health(self) -> BackendHealth:
+                return BackendHealth(ready=False, checks=[HealthCheck("server", "missing", "not running")])
+
+        async def _fake_run_import(*_args: object, **_kwargs: object) -> ImportSummary:
+            calls.append("run_import")
+            raise AssertionError("run_import must not be reached when the backend is not ready")
+
+        state = ImportState(path=tmp_path / "state.json")
+        with (
+            patch("raven.cli.import_commands.maybe_build_memory_backend", return_value=_FakeBackend()),
+            patch("raven.cli.import_commands.run_import", new=_fake_run_import),
+            pytest.raises(typer.Exit),
+        ):
+            await _build_and_run([], state)
+
+        assert calls == ["start", "stop"], calls
 
 
 class TestInstallHermesSkills:

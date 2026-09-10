@@ -37,10 +37,11 @@ loss of that one call: ``recall`` counts as no hits, ``store`` as not landed,
 as logged and ignored. The import CLI (``raven import``) is the deliberate
 exception: nothing wraps ``start`` or ``stop`` there, so a raise in either ends
 the command, and a ``store`` that raises or returns ``False`` fails that one
-source and leaves it unsubmitted for a retry (see
-``raven/importer/orchestrator.py`` around lines 139 and 205-208) rather than
-passing as not landed -- a bulk import that runs against nothing would consume
-the source list while writing nothing.
+source and leaves it unsubmitted for a retry rather than passing as not landed:
+``run_import`` catches per source, and a ``False`` becomes the
+``MemoryWriteDroppedError`` that ``_feed_session`` raises into that same
+``except``. A bulk import that runs against nothing would consume the source
+list while writing nothing.
 
 A backend that can classify its own failures (a timeout is not a refused
 connection) should catch and act on them, because the host cannot; what it
@@ -155,7 +156,7 @@ class MemoryBackend(Protocol):
        belonging to this backend.
     4. :meth:`start` / :meth:`stop` — lifecycle, awaited by the host.
     5. :meth:`health` — asked by ``raven doctor`` and ``raven import``,
-       off the turn path and before ``start``.
+       off the turn path, before or after ``start``.
     """
 
     async def recall(
@@ -254,8 +255,9 @@ class MemoryBackend(Protocol):
         """Whether the backend can work now, and what a person should look at
         when it cannot.
 
-        Callable before ``start``: ``raven doctor`` asks an instance it never
-        started. ``ready`` is the import gate (a write now would land);
+        Callable before or after ``start``: ``raven doctor`` asks an instance
+        it never started, ``raven import`` asks after starting one. ``ready``
+        is the import gate (a write now would land);
         ``checks`` is what doctor prints, verbatim, one line each. Only a real
         fault is ``"missing"``; a server that starts on demand and is not
         running yet is ``"ok"`` with a hint. ``None`` means this backend
