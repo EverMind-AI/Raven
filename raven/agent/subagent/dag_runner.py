@@ -49,6 +49,7 @@ from raven.agent.subagent_memory import (
     record_memories,
     trace_session_id,
 )
+from raven.context_engine.segments.render import dispatch_language_line
 
 # In-context cap for terminal outputs returned to the main agent; the on-disk
 # .out.md always holds the full text.
@@ -1587,7 +1588,11 @@ async def _run_node(
                     )
                     try:
                         result = await agent_backend.run(
-                            prompt,
+                            # The graph's own dispatch route: `spawn` goes
+                            # through the manager and never reaches here, so
+                            # the language has to be stated on both or an acp
+                            # node still narrates in English.
+                            dispatch_language_line(prompt),
                             task_id=node.id,
                             workspace=Path(workdir),
                             executor=sandbox,
