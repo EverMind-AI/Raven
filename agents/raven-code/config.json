@@ -28,8 +28,7 @@
       "backend": "none"
     },
     "exec": {
-      "timeout": 600,
-      "maxTimeout": 1200
+      "timeout": 600
     },
     "web": {
       "search": {
@@ -72,7 +71,19 @@
         "base_url": "http://localhost:18791"
       },
       "code-flow": {
-        "enabled": true
+        "enabled": true,
+        "tools": {
+          "enabled": true,
+          "restrictToWorkspace": false,
+          "exec": {
+            "maxTimeout": 1200
+          }
+        },
+        "projectFiles": [
+          "AGENTS.md",
+          "CLAUDE.md",
+          "CONTEXT.md"
+        ]
       }
     },
     "disabled": [

@@ -81,10 +81,9 @@ class Injectable:
 
 @dataclass(frozen=True)
 class Route:
-    """One redirect a row declares: the target's name and the task pattern that takes it outright."""
+    """One candidate target offered to the host's route classifier."""
 
     to: str
-    match: str = ""
 
 
 @dataclass(frozen=True)
@@ -169,7 +168,7 @@ def _row_for(cfg: Any) -> AgentRow:
 
 def _route_for(declared: Any) -> Route:
     read = declared.get if isinstance(declared, dict) else lambda key, default="": getattr(declared, key, default)
-    return Route(to=str(read("to", "") or ""), match=str(read("match", "") or ""))
+    return Route(to=str(read("to", "") or ""))
 
 
 class AgentRegistry:
@@ -301,7 +300,7 @@ class AgentRegistry:
                     row.name,
                 )
                 continue
-            targets.append((route.to, route.match, rows[route.to].description, backends[route.to]))
+            targets.append((route.to, rows[route.to].description, backends[route.to]))
         if not targets:
             return backends[row.name]
         entry = RoutingBackend(row.name, backends[row.name], targets, instances=get_registry())

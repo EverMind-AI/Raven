@@ -53,7 +53,12 @@ from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.utils.workspace import sync_workspace_templates
 from raven_ppt.plugin import ledger, materials
 from raven_ppt.services import tier
-from raven_ppt.services.publish.deliver import last_refusal, published_digests, published_original
+from raven_ppt.services.publish.deliver import (
+    last_refusal,
+    published_digests,
+    published_original,
+    unrecorded_deliveries,
+)
 
 MATERIALS_DIRNAME = "materials"
 OUT_DIRNAME = "out"
@@ -103,6 +108,20 @@ COPY_NUDGE = (
     "one and why, and end with that."
 )
 REFUSED_UNRECORDED = "Run ppt_build again and read its findings: they are what stands in the way."
+# The other way a deck under out/ fails to be the one the record names, and the one the
+# copy nudge above misdiagnoses. A live run's author, wanting one more change in a deck
+# it had already delivered, ran `python3 - # Apply the same fix to the published deck
+# (out/deck.pptx) in place` and rewrote the delivery where it lay: the build directory
+# and the staged copy both still held the recorded bytes, so nothing had been copied
+# anywhere -- the deliverable itself had been edited outside every gate. Told apart from
+# a copy because the fix is different: a copy is answered by publishing properly, this by
+# putting the edit in the program.
+TAMPERED_NUDGE = (
+    "The deck at {names} is not the one ppt_build published: its bytes changed after publication, so the "
+    "change went through no gate and no reading, and the user is holding a deck nobody checked. Editing "
+    "the delivered file is never the way to change a page. Put the change in the program that draws it and "
+    "run ppt_build, which republishes and re-checks; then reply with the path it returns."
+)
 # What a reply that legitimately ends a turn without a deck says: it asks the user
 # something, or it says the work cannot be done. Anything else with no deck behind it
 # is a thought that leaked into the answer slot.
@@ -407,8 +426,14 @@ class PptEngineHook(AgentHook):
             # copy and asks a question in the same breath. Once; a second such reply
             # falls through to the unfinished nudges below.
             meta["copy_nudged"] = True
-            nudge = COPY_NUDGE.format(
-                names=", ".join(str(path) for path in named), reason=_refused_because(root / "deck" / "state")
+            listed = ", ".join(str(path) for path in named)
+            # A file the publish step's own record names is not a copy of anything --
+            # it is the delivery, edited after the fact. Two conditions, two fixes.
+            tampered = unrecorded_deliveries(root / "deck" / "state")
+            nudge = (
+                TAMPERED_NUDGE.format(names=listed)
+                if tampered
+                else COPY_NUDGE.format(names=listed, reason=_refused_because(root / "deck" / "state"))
             )
             return HookDecision(
                 rollback=True,
@@ -439,17 +464,24 @@ class PptEngineHook(AgentHook):
         if deck is None:
             copied = materials.unpublished_decks(out_dir, before, published)
             if copied:
-                # A deck under out/ that the publish step never wrote: the model copied
-                # its build there after a refused build and said it was delivered.
+                # A deck under out/ that the publish step never wrote: either the model
+                # copied its build there after a refused build and said it was
+                # delivered, or it edited the delivery in place. The record tells them
+                # apart -- a path the record names was published, whatever its bytes say
+                # now -- and they want opposite things said about them.
                 names = ", ".join(path.name for path in copied)
-                return HookDecision(
-                    modified_content=reply
-                    + (
+                tampered = unrecorded_deliveries(Path(bound) / "deck" / "state")
+                note = (
+                    f"\n\nThe deck under {out_dir} is not the one ppt_build published: " + tampered[0]
+                    if tampered
+                    else (
                         f"\n\nNo deck was published this turn. {names} under {out_dir} was not written by "
                         "ppt_build, so it did not pass the checks and is not the deliverable; the deck is "
-                        f"delivered only when ppt_build publishes it. {_refused_because(Path(bound) / 'deck' / 'state')}"
+                        f"delivered only when ppt_build publishes it. "
+                        f"{_refused_because(Path(bound) / 'deck' / 'state')}"
                     )
                 )
+                return HookDecision(modified_content=reply + note)
             if "MEDIA:" in reply:
                 return HookDecision(
                     modified_content=reply
@@ -530,6 +562,7 @@ def _hands_back(text: str) -> bool:
 
 __all__ = [
     "COPY_NUDGE",
+    "TAMPERED_NUDGE",
     "DELIVERED_NUDGE",
     "IDENTITY_SEATS",
     "MATERIALS_DIRNAME",

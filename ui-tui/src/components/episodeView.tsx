@@ -14,10 +14,10 @@ import { $directChat, viewKeyOf } from '../app/directChatStore.js'
 import { $folds, toggleFold } from '../app/foldStore.js'
 import {
   callFailed,
+  cardDefaultOpen,
+  detailBlockShape,
   failureNote,
-  previewLines,
   segmentTurn,
-  TOOL_PREVIEW_ROWS,
   toolArgument,
   toolParts,
   toolsSummary,
@@ -46,6 +46,11 @@ import { Spinner } from './thinking.js'
 const INDENT = transcriptGutterWidth('assistant', '')
 const STEP = 2
 const MIN_TAIL = 12
+
+// The part of a click a fold control needs. Declared structurally rather than
+// imported: the fork does not export its ClickEvent, and appLayout.tsx already
+// names its own slice of the same event this way.
+type FoldClick = { stopImmediatePropagation?: () => void }
 
 // A detail block paints a background so the argument and its output read as one
 // object rather than more transcript rows. Below 256 colors there is no shade
@@ -86,18 +91,6 @@ const durationLabel = (ms: number | undefined, running: boolean): string | undef
   return `${fmtDuration(ms)}${running ? '…' : ''}`
 }
 
-// A row shows a URL without its scheme and a needle inside quotes; both are the
-// same argument, so compare them stripped of those.
-const sameArgument = (rowDetail: string, argument: string) => {
-  const norm = (s: string) =>
-    s
-      .replace(/^https?:\/\//, '')
-      .replace(/\/+$/, '')
-      .trim()
-
-  return norm(rowDetail) === norm(argument)
-}
-
 // The expanded payload of one call: its full argument, then its output. No tree
 // rails inside -- the block's own ground already scopes it, and the two are told
 // apart by weight (argument in text color, output dim).
@@ -105,6 +98,7 @@ const DetailBlock = memo(function DetailBlock({
   argument,
   compact,
   indent,
+  more,
   onToggle,
   output,
   t,
@@ -117,6 +111,12 @@ const DetailBlock = memo(function DetailBlock({
    *  row does: the two are one card, and a slab starting four columns in under
    *  a row starting at zero reads as two. */
   indent: number
+  /** The row that moves the card between its capped and full levels, on a row of
+   *  its own. It rode inside the output array once, which gave it the block's own
+   *  click -- so the one row announcing there was more to see was the row that
+   *  collapsed the card. Revealed, it turns around and folds back to the cap;
+   *  the block's own click is still the way out to a single row. */
+  more?: { label: string; onToggle: () => void }
   onToggle?: () => void
   output: string[]
   t: Theme
@@ -172,6 +172,30 @@ const DetailBlock = memo(function DetailBlock({
           </Box>
         </Box>
       ))}
+
+      {more ? (
+        <Box
+          onClick={(e: FoldClick) => {
+            // A click bubbles up through every ancestor handler (see
+            // dispatchClick), and this row sits inside the block whose own
+            // handler collapses the card. Without this, moving a level and
+            // folding the card away both fire on the same click.
+            e.stopImmediatePropagation?.()
+            more.onToggle()
+          }}
+        >
+          {fill ? null : (
+            <NoSelect fromLeftEdge>
+              <Text color={t.color.border}>{'▏'}</Text>
+            </NoSelect>
+          )}
+          <Box width={body}>
+            <Text color={t.color.accent} wrap="truncate-end">
+              {more.label}
+            </Text>
+          </Box>
+        </Box>
+      ) : null}
     </Box>
   )
 })
@@ -433,6 +457,15 @@ const ActivityRow = memo(function ActivityRow({
   )
 })
 
+// What a card's fold would be if the reader had never touched it. `toggleFold`
+// flips against this, so passing a flat `false` here would make the first click
+// on an already-open card a no-op: it would "open" what is open.
+const cardToggleDefault = (tools: EpisodeTool[], id: string): boolean => {
+  const tool = tools.find(t => t.id === id)
+
+  return tool !== undefined && Boolean(tool.done) && cardDefaultOpen(tool)
+}
+
 // A stretch of work between two things the model said. Three depths:
 //   folded  -- one row: "listed .raven/, read TOOLS.md, ran 4 commands (2.4s)"
 //   open    -- one row per call
@@ -441,26 +474,36 @@ const ActivityRow = memo(function ActivityRow({
 // call, so an identical row underneath would just be the same sentence twice.
 // A dag call is the one exception to "folded is one row" -- see dagFor below.
 const WorkSegment = memo(function WorkSegment({
+  closedCalls,
   compact,
   defaultOpen,
   isOpen,
   live,
   now,
   openCalls,
+  openFull,
   t,
   toggleCall,
+  toggleFull,
   toggleSelf,
   tools,
   width
 }: {
+  /** Cards the reader shut. Held apart from `openCalls` for the same reason
+   *  `foldStore` holds both sets: without it, "shut" and "never touched" are one
+   *  value, and a card that defaults open reopens itself the moment its row is
+   *  rebuilt mid-turn. */
+  closedCalls: ReadonlySet<string>
   compact?: boolean
   defaultOpen: boolean
   isOpen: boolean
   live: boolean
   now: number
   openCalls: ReadonlySet<string>
+  openFull: ReadonlySet<string>
   t: Theme
   toggleCall: (id: string) => void
+  toggleFull: (id: string) => void
   toggleSelf: () => void
   tools: EpisodeTool[]
   width: number
@@ -469,6 +512,18 @@ const WorkSegment = memo(function WorkSegment({
   const failure = failureNote(tools)
   const summaryRoom = Math.max(8, width - INDENT)
   const solo = tools.length === 1
+
+  // One call's card, resolved the way `foldStore` resolves any fold: an explicit
+  // decision either way wins, and only an untouched card falls through to the
+  // predicate.
+  //
+  // Gated on the call having landed, not on the turn having ended. A call that
+  // is done is not going to change again, so opening it costs no churn -- and
+  // reading the stretch's own live flag here made a finished call sit under its
+  // check mark for the rest of the turn, opening a second or two later when the
+  // row committed. What must not open is a call still running.
+  const cardOpen = (tool: EpisodeTool) =>
+    openCalls.has(tool.id) ? true : closedCalls.has(tool.id) ? false : Boolean(tool.done) && cardDefaultOpen(tool)
 
   // A dag call has no row of its own: its panel is a titled box carrying the
   // call, the graph and the tally, and the row above it said the first of those
@@ -527,37 +582,39 @@ const WorkSegment = memo(function WorkSegment({
       </Box>
     ) : null
 
+  // Three levels, not two: the card shows a capped preview, the `full` fold shows
+  // what the cap left behind, and either one folds back to the row. The shape
+  // comes from the domain layer so the height estimator measures the same block
+  // this draws -- deciding it in both places is how the two drift apart.
   const detailFor = (tool: EpisodeTool, depth: number, onCollapse: () => void) => {
-    const lines = previewLines(tool)
-    const shown = lines.length > TOOL_PREVIEW_ROWS ? lines.slice(0, TOOL_PREVIEW_ROWS) : lines
-    const hidden = lines.length - shown.length
-    const argument = toolArgument(tool)
-    const rowDetail = toolParts(tool).detail.replace(/^"|"$/g, '')
-    // The block repeats the row only when the row is showing the same thing --
-    // the argument modulo a display transform (a stripped scheme, quotes). A
-    // containment test is too loose here: `ruff check` is a prefix of `ruff
-    // check raven/ ui-tui/` and would have swallowed a real argument.
-    //
-    // Suppressed only when there is output to show in its place: a call still
-    // running has none, and dropping the argument as well is what opened an
-    // empty slab on the one call a reader most wants to look inside. The row
-    // truncates to its width where the block wraps, so even an echoed argument
-    // is more than the row was showing.
-    const echoed = Boolean(rowDetail) && shown.length > 0 && sameArgument(rowDetail, argument)
-    const body = echoed ? '' : argument
+    const full = openFull.has(tool.id)
+    const shape = detailBlockShape(tool, full)
 
-    if (!body && !shown.length) {
+    if (!shape) {
       return null
     }
 
     return (
       <Box key={`d:${tool.id}`}>
         <DetailBlock
-          argument={body}
+          argument={shape.argument}
           compact={compact}
           indent={depth}
+          more={
+            shape.more
+              ? {
+                  label:
+                    shape.more.kind === 'reveal'
+                      ? `… +${shape.more.count} lines`
+                      : // A result long enough to outrun TOOL_FULL_ROWS is clipped
+                        // even here, and this row is the only place that can say so.
+                        `… -${shape.more.count} lines${shape.hidden > 0 ? ` (+${shape.hidden} still hidden)` : ''}`,
+                  onToggle: () => toggleFull(tool.id)
+                }
+              : undefined
+          }
           onToggle={onCollapse}
-          output={hidden > 0 ? [...shown, `… +${hidden}`] : shown}
+          output={shape.output}
           t={t}
           width={width}
         />
@@ -610,7 +667,7 @@ const WorkSegment = memo(function WorkSegment({
         />
         {isOpen ? (
           tools.map(tool => {
-            const detail = openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null
+            const detail = cardOpen(tool) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null
 
             return (
               <Box flexDirection="column" key={tool.id}>
@@ -638,7 +695,7 @@ const WorkSegment = memo(function WorkSegment({
             )}
             {dagFor(latest, INDENT + STEP)}
             {spawnFor(latest, INDENT + STEP)}
-            {openCalls.has(latest.id) ? detailFor(latest, INDENT + STEP, () => toggleCall(latest.id)) : null}
+            {cardOpen(latest) ? detailFor(latest, INDENT + STEP, () => toggleCall(latest.id)) : null}
           </>
         )}
       </Box>
@@ -677,7 +734,7 @@ const WorkSegment = memo(function WorkSegment({
       />
       {isOpen
         ? tools.map(tool => {
-            const detail = openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null
+            const detail = cardOpen(tool) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null
 
             return (
               <Box flexDirection="column" key={tool.id}>
@@ -765,7 +822,14 @@ export const EpisodeView = memo(function EpisodeView({
   const width = cols ? Math.max(20, cols - 4) : 116
   const proseWidth = Math.max(20, width - INDENT)
   const liveIndex = live ? episodes[lastIdx]?.index : undefined
-  const openCalls = new Set([...seeded.open].filter(k => k.startsWith('call:')).map(k => k.slice(5)))
+  const idsFor = (keys: Iterable<string>, prefix: string) =>
+    new Set([...keys].filter(k => k.startsWith(prefix)).map(k => k.slice(prefix.length)))
+  const openCalls = idsFor(seeded.open, 'call:')
+  // `seeded.open` already merges the store's own open ids; `closed` is read from
+  // both sources at the point of use (see foldOpen), so the card sets merge it
+  // here instead.
+  const closedCalls = idsFor([...seeded.closed, ...(stored[scope]?.closed ?? [])], 'call:')
+  const openFull = idsFor(seeded.open, 'full:')
 
   // The model's prose carries the same reply marker `messageLine` draws in its
   // gutter (`ROLE.assistant`). Drawn here because this view owns the live turn:
@@ -851,20 +915,32 @@ export const EpisodeView = memo(function EpisodeView({
     // itself, and folding it by hand still leaves the panel.
     const hasPanel = seg.tools.some(tool => tool.dag || tool.spawn)
     // A solo stretch has no "expanded" depth of its own: its fold state gates the
-    // detail block directly (WorkSegment's solo branch above), so defaulting that
-    // state open would auto-expand the detail block, not just draw the graph
-    // (which renders unconditionally there regardless). Only a multi-call
-    // stretch's fold state means "show one row per call," which a dag call
-    // should still default open.
+    // detail block directly (WorkSegment's solo branch above), so for one call
+    // this state IS the card's own fold, and the card's predicate is what answers
+    // it. A multi-call stretch's fold state means "show one row per call" -- a
+    // different question, left as it was: the summary row is the compression, and
+    // each card inside it resolves its own default once the stretch is open.
     //
-    // Never while the stretch is still running, though: in flight that state
-    // also decides whether every call gets a row, and a stretch that unfolds
-    // itself as the calls land is the churn the compressed live view exists to
-    // avoid. A reader's own open still stands -- `foldOpen` reads it first.
-    const detailDefaultOpen = hasPanel && seg.tools.length > 1 && !seg.live
+    // A solo panel call keeps the old answer. Its graph renders unconditionally
+    // at every depth, so opening the fold would add a detail block under a panel
+    // that already is the result, not reveal one.
+    //
+    // For one call this waits on the call, not on the turn: `WorkSegment` already
+    // leaves the in-flight branch the moment the call is done, and holding the
+    // block back until the row committed is what put a second or two between the
+    // check mark and the card. A multi-call stretch still waits out the turn --
+    // there this state decides whether every call gets a row, and a stretch that
+    // unfolds itself as the calls land is the churn the compressed live view
+    // exists to avoid. A reader's own open still stands -- `foldOpen` reads it
+    // first.
+    const detailDefaultOpen =
+      seg.tools.length === 1
+        ? !hasPanel && Boolean(seg.tools[0]!.done) && cardDefaultOpen(seg.tools[0]!)
+        : hasPanel && !seg.live
 
     return (
       <WorkSegment
+        closedCalls={closedCalls}
         compact={compact}
         defaultOpen={hasPanel}
         isOpen={foldOpen(`seg:${seg.key}`, detailDefaultOpen)}
@@ -872,8 +948,10 @@ export const EpisodeView = memo(function EpisodeView({
         live={seg.live}
         now={now}
         openCalls={openCalls}
+        openFull={openFull}
         t={t}
-        toggleCall={id => toggle(`call:${id}`)}
+        toggleCall={id => toggleFold(scope, `call:${id}`, cardToggleDefault(seg.tools, id))}
+        toggleFull={id => toggle(`full:${id}`)}
         toggleSelf={() => toggleFold(scope, `seg:${seg.key}`, detailDefaultOpen)}
         tools={seg.tools}
         width={width}
@@ -946,7 +1024,7 @@ let foldSeq = 0
  * mid-turn is lost the moment the turn lands. */
 export const turnFoldScope = (viewKey: string, turnId: string): string => `${viewKey}:${turnId}`
 
-const messageFoldId = (msg: Msg): string => {
+export const messageFoldId = (msg: Msg): string => {
   if (msg.foldId !== undefined) {
     return msg.foldId
   }

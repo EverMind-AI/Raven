@@ -25,12 +25,10 @@
       "outputSubdir": "generated"
     },
     "disabledTools": [
-      "ask_user",
       "create_playbook",
       "cron",
       "deep_research",
       "deliver_files",
-      "find_skill",
       "hub",
       "load_playbook",
       "message",
@@ -38,10 +36,11 @@
       "run_subagent_dag",
       "spawn",
       "text_to_speech",
-      "tool_call",
-      "tool_search",
       "video_generate"
-    ]
+    ],
+    "toolSearch": {
+      "enabled": true
+    }
   },
   "context": {
     "curator_model": ""

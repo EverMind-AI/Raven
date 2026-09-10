@@ -37,6 +37,7 @@ that changes the length and never invents a regression that did not happen.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -142,11 +143,19 @@ def record(
     findings: Iterable[Finding],
     blocking_kinds: frozenset[str] | Iterable[str],
     pages: int,
+    deck_file: Path | None = None,
 ) -> None:
     """Make this build the one the next build is compared against.
 
     Every measured page, not only the ones the reply showed: a page nobody looked
     at can still be broken by an edit to a page somebody did.
+
+    `deck_file` is the file these findings were measured on, and its sha256 is written
+    beside them. Nothing here reads it back -- it is what makes "the gates, the
+    publication record and the delivered file describe the same bytes" a thing that
+    can be checked off disk at the end of a run rather than assumed. A live run's
+    delivery was edited in place after publication and all three records went on
+    agreeing with each other about a file that no longer existed.
     """
     blocks = seen.blocks_of(script, sources)
     if not blocks:
@@ -159,6 +168,7 @@ def record(
             {
                 "schema": SCHEMA,
                 "pages": pages,
+                **({"deck": digest} if (digest := _digest_of(deck_file)) else {}),
                 "blocking": {
                     str(page): {"code": digest, "kinds": list(now.get(page, ()))}
                     for page, digest in sorted(blocks.items())
@@ -169,6 +179,15 @@ def record(
         ),
         encoding="utf-8",
     )
+
+
+def _digest_of(deck: Path | None) -> str | None:
+    if deck is None:
+        return None
+    try:
+        return hashlib.sha256(deck.read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 def forget(project) -> None:

@@ -36,7 +36,15 @@ def test_the_manifest_declares_the_hook_and_the_observer():
     assert [h.name for h in mf.contributes.hooks] == ["code_flow"]
     assert [o.name for o in mf.contributes.session_observers] == ["session_forget"]
     assert mf.contributes.tool_gates == [], "the write gate retired with worktree isolation"
-    assert mf.contributes.tools == []
+    assert [t.name for t in mf.contributes.tools] == [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_dir",
+        "glob",
+        "todo",
+        "exec",
+    ], "the product's own tool face rides this plugin (code_flow/tools/)"
 
 
 def test_the_registry_builds_the_hook_from_the_real_factory_string(tmp_path):
