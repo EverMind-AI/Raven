@@ -40,6 +40,13 @@ from pydantic import (
 # any non-empty identifier-ish suffix.
 _FACTORY_REF_RE = re.compile(r"^[A-Za-z_][\w.]*:[A-Za-z_]\w*$")
 
+# A memory-backend name is also a skill-source namespace: skill_hub.py
+# splits a qualified skill id as ``<name>/<id>`` at the first slash, so a
+# slash in the name would break that split, and ``local`` / ``hub`` already
+# name the two built-in skill sources.
+_BACKEND_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_RESERVED_BACKEND_NAMES = frozenset({"local", "hub"})
+
 
 class _ManifestBase(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
@@ -50,6 +57,21 @@ class MemoryBackendContribution(_ManifestBase):
 
     name: str = Field(min_length=1)
     factory: str = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def _name_is_a_valid_skill_namespace(cls, v: str) -> str:
+        if not _BACKEND_NAME_RE.match(v):
+            raise ValueError(
+                f"memory_backend name must match {_BACKEND_NAME_RE.pattern!r} "
+                f"-- it becomes the '<name>/<id>' skill-source namespace, got {v!r}",
+            )
+        if v in _RESERVED_BACKEND_NAMES:
+            raise ValueError(
+                f"memory_backend name {v!r} is reserved for a built-in skill "
+                f"source ({sorted(_RESERVED_BACKEND_NAMES)}) and cannot be reused",
+            )
+        return v
 
     @field_validator("factory")
     @classmethod
@@ -258,6 +280,23 @@ class PluginManifest(_ManifestBase):
                 dupes = sorted({n for n in names if names.count(n) > 1})
                 raise ValueError(
                     f"duplicate {kind} name(s) in manifest {self.id!r}: {dupes}",
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _onboard_matches_own_backend(self) -> "PluginManifest":
+        # An onboard screen configures the backend it is named after; a
+        # manifest cannot contribute a screen for a backend it does not
+        # own. This also keeps build_onboard_steps' plugin-id lookup
+        # correct: an onboard entry's owning plugin is the same plugin
+        # that owns the backend of the same name.
+        backend_names = {c.name for c in self.contributes.memory_backends}
+        for step in self.contributes.onboard:
+            if step.name not in backend_names:
+                raise ValueError(
+                    f"onboard {step.name!r} in manifest {self.id!r} has no "
+                    f"memory_backend of the same name in this manifest "
+                    f"(backends here: {sorted(backend_names)})",
                 )
         return self
 

@@ -375,11 +375,17 @@ def build_onboard_steps(
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
     )
+    slices = config.plugins.config
     steps = []
     for name in registry.onboard_names():
-        # An onboard contribution shares its name with the backend it
-        # configures, so the backend slice resolver answers for it too.
-        plugin_slice = _resolve_plugin_config_slice(registry, config, name)
+        # Resolved from the onboard entry's own plugin id, not the
+        # memory_backends reverse-lookup: two different plugins can
+        # contribute onboard/backend pairs with the same name (they only
+        # collide, and fail activation, when the SAME name lands twice in
+        # the SAME slot), so answering through the backend side would let
+        # one plugin's onboard step receive another plugin's config slice.
+        plugin_id = registry.onboard_plugin_id(name)
+        plugin_slice = (plugin_id and slices.get(plugin_id)) or slices.get(name) or {}
         try:
             steps.append((name, registry.build_onboard_step(name, config=plugin_slice, services=services)))
         except Exception as e:

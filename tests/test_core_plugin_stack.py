@@ -438,6 +438,9 @@ class _OnboardReg:
     def onboard_names(self):
         return ["everos"]
 
+    def onboard_plugin_id(self, name):
+        return None
+
     def activated_ids(self):
         return []
 
@@ -463,3 +466,71 @@ def test_build_onboard_steps_skips_a_raising_factory(tmp_path, caplog):
     with caplog.at_level("WARNING"):
         assert build_onboard_steps(tmp_path, _config(), registry=_OnboardReg(RuntimeError("boom"))) == []
     assert "boom" in caplog.text
+
+
+def test_build_onboard_steps_hands_each_plugin_its_own_config_slice(tmp_path):
+    """[mrbot] Two plugins, differently named: A owns backend 'a-backend'
+    (no onboard screen), B owns both backend and onboard 'b-backend'. B's
+    onboard step must receive plugins.config['B'], never A's slice --
+    exercises the fix (resolve via the onboard entry's own plugin id)
+    directly, independent of the cross-owner case activation now refuses."""
+    import sys as _sys
+    import types
+
+    from raven.core.plugin_stack import build_onboard_steps
+    from raven.plugins import (
+        Contributes,
+        DiscoveredPlugin,
+        ManifestOrigin,
+        MemoryBackendContribution,
+        OnboardContribution,
+        PluginManifest,
+        PluginRegistry,
+    )
+
+    mod = types.ModuleType("_test_onboard_slice_owner")
+    mod.make_backend_a = lambda ctx: "a"
+    mod.make_backend_b = lambda ctx: "b"
+    mod.make_onboard_step_b = lambda ctx: ("step-b", ctx.config)
+    _sys.modules["_test_onboard_slice_owner"] = mod
+    try:
+        mf_a = PluginManifest(
+            id="A",
+            version="0.1",
+            contributes=Contributes(
+                memory_backends=[
+                    MemoryBackendContribution(name="a-backend", factory="_test_onboard_slice_owner:make_backend_a"),
+                ],
+            ),
+        )
+        mf_b = PluginManifest(
+            id="B",
+            version="0.1",
+            contributes=Contributes(
+                memory_backends=[
+                    MemoryBackendContribution(name="b-backend", factory="_test_onboard_slice_owner:make_backend_b"),
+                ],
+                onboard=[
+                    OnboardContribution(name="b-backend", factory="_test_onboard_slice_owner:make_onboard_step_b"),
+                ],
+            ),
+        )
+        reg = PluginRegistry()
+        reg.activate(
+            [
+                DiscoveredPlugin(manifest=mf_a, source=ManifestOrigin.USER, location=None),
+                DiscoveredPlugin(manifest=mf_b, source=ManifestOrigin.USER, location=None),
+            ]
+        )
+        cfg = _config(
+            plugin_config={
+                "A": {"marker": "a-slice"},
+                "B": {"marker": "b-slice"},
+            }
+        )
+        steps = build_onboard_steps(tmp_path, cfg, registry=reg)
+        assert [name for name, _ in steps] == ["b-backend"]
+        _step_name, received_config = steps[0][1]
+        assert received_config == {"marker": "b-slice"}
+    finally:
+        _sys.modules.pop("_test_onboard_slice_owner", None)

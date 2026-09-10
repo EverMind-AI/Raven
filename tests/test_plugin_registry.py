@@ -297,10 +297,25 @@ class TestLookup:
 
 
 def test_build_onboard_step_calls_the_factory(tmp_path: Path) -> None:
-    _install_test_module("_test_onboard", {"make_onboard_step": lambda ctx: ("step", ctx.config)})
+    _install_test_module(
+        "_test_onboard",
+        {
+            "make_onboard_step": lambda ctx: ("step", ctx.config),
+            "make_backend": lambda ctx: "backend",
+        },
+    )
     reg = PluginRegistry()
-    reg.activate([_make_discovered("plug", onboard=[("plug", "_test_onboard:make_onboard_step")])])
+    reg.activate(
+        [
+            _make_discovered(
+                "plug",
+                backends=[("plug", "_test_onboard:make_backend")],
+                onboard=[("plug", "_test_onboard:make_onboard_step")],
+            )
+        ]
+    )
     assert reg.onboard_names() == ["plug"]
+    assert reg.onboard_plugin_id("plug") == "plug"
     step = reg.build_onboard_step(
         "plug",
         config={"k": 1},
@@ -320,13 +335,26 @@ def test_build_onboard_step_rejects_an_unknown_name(tmp_path: Path) -> None:
 
 
 def test_two_plugins_contribute_same_onboard_name() -> None:
-    _install_test_module("_test_onboard_a", {"make_onboard_step": lambda ctx: "a"})
-    _install_test_module("_test_onboard_b", {"make_onboard_step": lambda ctx: "b"})
+    """mrbot's cross-owner scenario: plugin A owns backend 'shared'; plugin
+    B, to satisfy the manifest rule that its onboard name matches its own
+    backend name, must also contribute a backend named 'shared'. That
+    backend collides with A's before either onboard step registers, so
+    activation refuses -- B can never receive A's config slice because B
+    never activates at all."""
+    _install_test_module("_test_onboard_a", {"make_backend": lambda ctx: "a"})
+    _install_test_module(
+        "_test_onboard_b",
+        {"make_backend": lambda ctx: "b", "make_onboard_step": lambda ctx: "b"},
+    )
     reg = PluginRegistry()
-    with pytest.raises(PluginConflictError, match="onboard 'same'"):
+    with pytest.raises(PluginConflictError, match="memory_backend 'shared'"):
         reg.activate(
             [
-                _make_discovered("alpha", onboard=[("same", "_test_onboard_a:make_onboard_step")]),
-                _make_discovered("beta", onboard=[("same", "_test_onboard_b:make_onboard_step")]),
+                _make_discovered("alpha", backends=[("shared", "_test_onboard_a:make_backend")]),
+                _make_discovered(
+                    "beta",
+                    backends=[("shared", "_test_onboard_b:make_backend")],
+                    onboard=[("shared", "_test_onboard_b:make_onboard_step")],
+                ),
             ]
         )

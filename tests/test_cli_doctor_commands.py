@@ -104,6 +104,16 @@ def test_doctor_default_healthy_exit0(healthy_config: Path) -> None:
     assert "Configuration looks healthy" in r.stdout or "All checks passed" in r.stdout
 
 
+def test_doctor_does_not_create_the_everos_home(healthy_config: Path, tmp_path: Path) -> None:
+    """``doctor`` (no ``--fix``) is read-only: constructing the default
+    everos backend to ask ``health()`` must not seed ``everos/`` under the
+    data dir -- that write belongs to ``EverosBackend.start()``, which
+    doctor never calls."""
+    r = runner.invoke(app, ["doctor"])
+    assert r.exit_code == 0, r.stdout
+    assert not (tmp_path / "everos").exists()
+
+
 def test_doctor_unresolved_routing_exit1(tmp_config: Path) -> None:
     """Model that no configured provider can serve → exit 1."""
     cfg = Config()
