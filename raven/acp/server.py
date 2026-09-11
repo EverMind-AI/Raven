@@ -174,7 +174,7 @@ def _ask_before_external_effects() -> None:
     sub-agent's task inherits -- so ``git push`` from a sub-agent reaches the
     editor's permission request exactly as the main agent's does.
     """
-    from raven.agent.tools.shell_policy import DELETE_MATCHERS, EXTERNAL_EFFECT_MATCHERS, set_surface_approval_families
+    from raven.permissions.shell_policy import DELETE_MATCHERS, EXTERNAL_EFFECT_MATCHERS, set_surface_approval_families
 
     families = DELETE_MATCHERS + EXTERNAL_EFFECT_MATCHERS
     set_surface_approval_families(families)

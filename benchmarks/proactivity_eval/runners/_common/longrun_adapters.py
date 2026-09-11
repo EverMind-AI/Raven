@@ -1216,7 +1216,7 @@ class HermesAdapter(AgentAdapter):
             self._session_id = payload["session_id"]
         return payload.get("response", "") or ""
 
-    async def tick_to(
+    async def tick_to(  # noqa: C901 (cc 41: pre-existing, above the ceiling)
         self,
         target_fake_now: datetime,
         *,
