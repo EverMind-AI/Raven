@@ -420,6 +420,8 @@ def test_a_v1_artifact_is_still_copied_byte_for_byte(state, workspace, tmp_path)
     bundle_dir = tbundle.collect_bundle("trace-1", out_dir=tmp_path / "out", state_dir=state, workspace=workspace)
 
     assert (bundle_dir / "artifacts" / "v1.json").read_text(encoding="utf-8") == raw
+
+
 def test_bundle_tolerates_non_string_legacy_id(state, workspace):
     """save by trace id still bundles when the span carries a list attempt.id
     (unvalidated history must degrade, not crash the collector)."""
