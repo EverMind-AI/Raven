@@ -11,6 +11,8 @@ registry (``pins.json`` in the trace state dir) records that promise; any
 future purge tooling MUST keep every span whose ``traceId``, legacy
 ``attempt.id``, owning definition id, or any of that definition's aliases is
 pinned, and must keep every artifact such a span references.
+:func:`is_pinned` is that predicate: the promise `raven trajectory pin` writes
+is redeemed by calling it, not by re-deriving the rule.
 
 Attempt definitions
 -------------------
