@@ -337,6 +337,6 @@ integrations.
 
 Issues and pull requests are welcome. Start with the [developer workflow](docs/dev.md), follow [AGENTS.md](AGENTS.md) for repository rules, and use [GitHub Discussions](https://github.com/EverMind-AI/Raven/discussions) for design conversations.
 
-## License
+## Licensejgq
 
 [Apache License 2.0](LICENSE)
