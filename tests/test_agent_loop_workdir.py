@@ -208,7 +208,7 @@ async def test_turn_checkpoint_commits_the_session_working_directory(tmp_path: P
 def test_sandbox_mounts_the_root_covering_every_session(tmp_path: Path, monkeypatch) -> None:
     recorded: dict = {}
 
-    def _fake_build_executor(cfg, workspace, owned_ids=None, extra_volumes=(), *, sandbox_dir=None):
+    def _fake_build_executor(cfg, workspace, owned_ids=None, extra_volumes=()):
         recorded["workspace"] = workspace
         recorded["extra_volumes"] = list(extra_volumes)
 
@@ -235,7 +235,7 @@ def test_sandbox_skips_the_home_volume_when_the_mount_already_covers_it(tmp_path
     directory."""
     recorded: dict = {}
 
-    def _fake_build_executor(cfg, workspace, owned_ids=None, extra_volumes=(), *, sandbox_dir=None):
+    def _fake_build_executor(cfg, workspace, owned_ids=None, extra_volumes=()):
         recorded["workspace"] = workspace
         recorded["extra_volumes"] = list(extra_volumes)
 

@@ -502,17 +502,6 @@ source_modules = [
 forbidden_modules = ["raven.agent.loop"]
 
 [[tool.importlinter.contracts]]
-# Two hubs, one trust vocabulary. It used to live in market/vetting.py, so the
-# skill hub client imported the plugin market to reach it; it now sits in
-# raven/security/urls.py, which both read. The sanctioned direction is the other
-# one -- a PlugHub catalogue entry can contribute a workspace skill, and
-# market/install.py installs it through the hub client.
-name = "the skill hub client does not import the plugin market"
-type = "forbidden"
-source_modules = ["raven.skill_hub"]
-forbidden_modules = ["raven.market"]
-
-[[tool.importlinter.contracts]]
 name = "channel adapters are independent cargo"
 type = "independence"
 modules = [

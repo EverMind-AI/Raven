@@ -104,6 +104,20 @@ class DeckViews:
 
     def __post_init__(self) -> None:
         self._gate = asyncio.Semaphore(self.concurrency)
+        # Rasterising gets a gate of its own, and it is one. `pdf()` spends its time in
+        # LibreOffice, a subprocess per call with a profile of its own, so width there
+        # costs nothing and buys wall clock. `pages_of` spends its time in pypdfium2,
+        # where two callers at once is what PDFium forbids.
+        #
+        # The serialisation that makes that safe is `render.capabilities.PDFIUM_LOCK`,
+        # not this gate: a second `DeckViews`, or a direct call to the render service,
+        # reaches PDFium without passing through any one object's semaphore. This one is
+        # about the thread pool instead. `asyncio.to_thread` draws from a single executor
+        # of min(32, cpu + 4) workers that `pdf()` draws from too, so rasterisations
+        # queued on a lock they cannot hold would park those workers and starve the
+        # conversions that could have been running; keeping one in flight leaves the
+        # waiting on the event loop, where it costs nothing.
+        self._raster_gate = asyncio.Semaphore(1)
 
     async def pdf(self, pptx: Path, out_dir: Path) -> Path | None:
         """The deck as one PDF, or None when nothing here can convert it.
@@ -142,7 +156,7 @@ class DeckViews:
 
     async def pages_of(self, pdf: Path, out_dir: Path, numbers: Sequence[int] | None = None) -> dict[int, Path]:
         wanted = list(numbers) if numbers else None
-        async with self._gate:
+        async with self._raster_gate:
             try:
                 pngs = await asyncio.to_thread(self.renderer.to_pngs, pdf, out_dir, self.dpi, wanted)
             except RenderError:

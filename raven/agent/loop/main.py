@@ -578,8 +578,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # The check is not dead: under LAUNCH_DIR the root is wherever the user
         # started raven, and launching from ``~`` puts agent home inside it. A
         # second mount of a directory already covered is what this avoids.
-        from raven.config.paths import get_sandbox_dir
-
         mount_root = self._workdir_resolver.mount_root() if self._workdir_resolver else workspace
         home_volume = () if workdir.is_within(workspace, mount_root) else ((str(workspace), "/agent-home", "rw"),)
         self._executor: SandboxExecutor = (
@@ -587,7 +585,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             # home-volume derivation belong to the builder alone.
             executor
             if executor is not None
-            else build_executor(sandbox_config, mount_root, self._owned_ids, home_volume, sandbox_dir=get_sandbox_dir)
+            else build_executor(sandbox_config, mount_root, self._owned_ids, home_volume)
         )
         self._executor_stack: AsyncExitStack | None = None
         self._executor_started: bool = False
@@ -721,7 +719,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             )
             return
         try:
-            from raven.config.paths import get_data_dir, get_sandbox_dir
+            from raven.config.paths import get_data_dir
             from raven.sandbox.debug_server import SandboxDebugServer
 
             socket_path = SandboxDebugServer.resolve_socket_path(cfg.debug.socket, get_data_dir())
@@ -729,7 +727,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 socket_path=socket_path,
                 owned_ids=self._owned_ids,
                 max_message_bytes=cfg.debug.max_message_bytes,
-                sandbox_home=get_sandbox_dir("boxlite"),
             )
             await server.start()
             self._debug_server = server

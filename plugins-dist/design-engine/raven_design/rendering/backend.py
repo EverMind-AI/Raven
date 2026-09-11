@@ -221,7 +221,6 @@ class BoxLiteRenderBackend:
         }
 
     def _executor(self, job_root: Path):
-        from raven.config.paths import get_sandbox_dir
         from raven.sandbox.boxlite_executor import BoxliteExecutor
 
         if self.config.allow_network:
@@ -236,7 +235,6 @@ class BoxLiteRenderBackend:
             allow_net=allow_net,
             default_timeout=self.config.timeout_seconds,
             create_timeout=self.create_timeout_seconds,
-            sandbox_home=get_sandbox_dir("boxlite"),
         )
 
     @staticmethod

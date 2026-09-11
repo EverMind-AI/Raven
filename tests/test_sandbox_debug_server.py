@@ -26,14 +26,6 @@ from raven.sandbox.debug_server import (
     SandboxDebugServerError,
 )
 
-# The boxlite runtime is mocked in every test below, so this path is inert data:
-# it names where a real backend would keep its state, and is never touched.
-_TEST_SANDBOX_HOME = Path(tempfile.gettempdir()) / "raven-test-boxlite-home"
-
-
-def _test_sandbox_dir(backend: str) -> Path:
-    return _TEST_SANDBOX_HOME / backend
-
 
 @pytest.fixture(autouse=True)
 def _boxlite_importable():
@@ -124,7 +116,7 @@ class TestServerLifecycle:
     @pytest.mark.asyncio
     async def test_start_creates_socket_file(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
         try:
             assert path.exists()
@@ -134,7 +126,7 @@ class TestServerLifecycle:
     @pytest.mark.asyncio
     async def test_socket_permissions_are_0600(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
         try:
             mode = stat.S_IMODE(os.stat(path).st_mode)
@@ -145,7 +137,7 @@ class TestServerLifecycle:
     @pytest.mark.asyncio
     async def test_stop_removes_socket_file(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
         await server.stop()
         assert not path.exists()
@@ -154,7 +146,7 @@ class TestServerLifecycle:
     async def test_stale_socket_removed_on_start(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
         path.touch()  # simulate stale file
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
         try:
             assert path.exists()  # new socket created
@@ -164,7 +156,7 @@ class TestServerLifecycle:
     @pytest.mark.asyncio
     async def test_stop_is_idempotent(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
         await server.stop()
         await server.stop()  # should not raise
@@ -179,7 +171,7 @@ class TestFraming:
     @pytest.mark.asyncio
     async def test_invalid_json_returns_error(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
         try:
             reader, writer = await asyncio.open_unix_connection(str(path))
@@ -197,7 +189,7 @@ class TestFraming:
     @pytest.mark.asyncio
     async def test_unknown_cmd_returns_error(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
         try:
             resp = await _client(path, {"cmd": "ping"})
@@ -209,7 +201,7 @@ class TestFraming:
     @pytest.mark.asyncio
     async def test_missing_cmd_returns_error(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
         try:
             resp = await _client(path, {"foo": "bar"})
@@ -221,7 +213,7 @@ class TestFraming:
     @pytest.mark.asyncio
     async def test_oversized_line_returns_error(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), max_message_bytes=32, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set(), max_message_bytes=32)
         await server.start()
         try:
             reader, writer = await asyncio.open_unix_connection(str(path))
@@ -239,7 +231,7 @@ class TestFraming:
     @pytest.mark.asyncio
     async def test_concurrent_connections_handled(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
         try:
             results = await asyncio.gather(
@@ -280,7 +272,7 @@ class TestListHandler:
     async def test_list_owned_annotation(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
         owned = {"owned-box"}
-        server = SandboxDebugServer(path, owned, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, owned)
         await server.start()
 
         box_owned = _make_box_info(id="owned-box")
@@ -303,7 +295,7 @@ class TestListHandler:
     @pytest.mark.asyncio
     async def test_list_empty_runtime(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
 
         mock_runtime = MagicMock()
@@ -321,7 +313,7 @@ class TestListHandler:
     @pytest.mark.asyncio
     async def test_list_boxlite_not_installed(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
 
         import builtins
@@ -344,7 +336,7 @@ class TestListHandler:
     @pytest.mark.asyncio
     async def test_list_runtime_error_returns_error(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
 
         mock_runtime = MagicMock()
@@ -362,7 +354,7 @@ class TestListHandler:
     @pytest.mark.asyncio
     async def test_list_vm_fields_populated(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, {"b1"}, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, {"b1"})
         await server.start()
 
         box = _make_box_info(id="b1", name="my-vm", status="running", image="alpine:latest", cpus=4, memory_mib=1024)
@@ -396,7 +388,7 @@ class TestVmResolution:
 
     def _setup(self, sock_dir: Path, owned: set[str]) -> tuple:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, owned, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, owned)
         return path, server
 
     def _box(self, id: str, name: str | None = None, status: str = "running") -> MagicMock:
@@ -518,7 +510,7 @@ class TestExecHandler:
         import base64
 
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, {"b1"}, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, {"b1"})
         await server.start()
 
         box_info = MagicMock()
@@ -578,7 +570,7 @@ class TestShellHandler:
     @pytest.mark.asyncio
     async def test_shell_empty_path_returns_error(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, {"b1"}, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, {"b1"})
         await server.start()
 
         mock_runtime = MagicMock()
@@ -595,7 +587,7 @@ class TestShellHandler:
     async def test_shell_sends_ready_then_exit(self, sock_dir: Path) -> None:
 
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, {"b1"}, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, {"b1"})
         await server.start()
 
         box_info = MagicMock()
@@ -647,7 +639,7 @@ class TestShellHandler:
     async def test_shell_resize_forwarded(self, sock_dir: Path) -> None:
 
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, {"b1"}, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, {"b1"})
         await server.start()
 
         box_info = MagicMock()
@@ -708,7 +700,7 @@ class TestShellHandler:
     async def test_shell_resize_ignores_zero_values(self, sock_dir: Path) -> None:
         """resize with rows=0 or cols=0 must be silently ignored."""
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, {"b1"}, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, {"b1"})
         await server.start()
 
         box_info = MagicMock()
@@ -784,10 +776,10 @@ class TestStartLifecycle:
     @pytest.mark.asyncio
     async def test_start_refuses_when_existing_socket_is_alive(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        srv1 = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        srv1 = SandboxDebugServer(path, set())
         await srv1.start()
         try:
-            srv2 = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+            srv2 = SandboxDebugServer(path, set())
             with pytest.raises(SandboxDebugServerError) as exc_info:
                 await srv2.start()
             assert "already in use" in str(exc_info.value)
@@ -802,7 +794,7 @@ class TestStartLifecycle:
         # A regular file with no listener — must be treated as stale.
         path = sock_dir / "debug.sock"
         path.touch()
-        srv = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        srv = SandboxDebugServer(path, set())
         await srv.start()
         try:
             assert path.exists()
@@ -819,7 +811,7 @@ class TestSingleClientGuard:
     async def test_second_client_during_shell_is_rejected(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
         owned = {"b1"}
-        server = SandboxDebugServer(path, owned, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, owned)
         await server.start()
 
         box_info = MagicMock()
@@ -878,7 +870,7 @@ class TestSingleClientGuard:
     @pytest.mark.asyncio
     async def test_new_client_accepted_after_previous_disconnects(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, set(), sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, set())
         await server.start()
         try:
             # Two sequential single-client connections both succeed.
@@ -897,7 +889,7 @@ class TestExecDisconnectKillsExecution:
     @pytest.mark.asyncio
     async def test_long_running_exec_disconnect_triggers_kill(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, {"b1"}, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, {"b1"})
         await server.start()
 
         box_info = MagicMock()
@@ -976,7 +968,7 @@ class TestExecHandlesFutureWait:
         import base64
 
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, {"b1"}, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, {"b1"})
         await server.start()
 
         box_info = MagicMock()
@@ -1049,7 +1041,7 @@ class TestShellDisconnectKillsExecution:
     @pytest.mark.asyncio
     async def test_idle_shell_client_disconnect_triggers_kill(self, sock_dir: Path) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, {"b1"}, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, {"b1"})
         await server.start()
 
         box_info = MagicMock()
@@ -1123,7 +1115,7 @@ class TestShellDrainsStdoutBeforeExit:
         import base64
 
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, {"b1"}, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, {"b1"})
         await server.start()
 
         box_info = MagicMock()
@@ -1211,7 +1203,7 @@ class TestShellResizeTaskCleanup:
         sock_dir: Path,
     ) -> None:
         path = sock_dir / "debug.sock"
-        server = SandboxDebugServer(path, {"b1"}, sandbox_home=_TEST_SANDBOX_HOME)
+        server = SandboxDebugServer(path, {"b1"})
         await server.start()
 
         box_info = MagicMock()

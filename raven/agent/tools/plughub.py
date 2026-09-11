@@ -199,7 +199,7 @@ class PluginTool(Tool):
     # ── actions ────────────────────────────────────────────────────
 
     async def _find(self, query: str) -> str:
-        from raven.security.urls import HubTrustError
+        from raven.market.vetting import HubTrustError
 
         query = (query or "").strip()
         try:
@@ -242,7 +242,7 @@ class PluginTool(Tool):
             install_and_connect,
             installed_names,
         )
-        from raven.security.urls import HubTrustError
+        from raven.market.vetting import HubTrustError
 
         name = (name or "").strip()
         if not name:

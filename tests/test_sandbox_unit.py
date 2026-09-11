@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-import tempfile
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -26,15 +25,6 @@ from raven.sandbox import (
     build_executor,
 )
 from raven.sandbox.boxlite_executor import BoxliteExecutor
-
-# The boxlite runtime is mocked in every test below, so this path is inert data:
-# it names where a real backend would keep its state, and is never touched.
-_TEST_SANDBOX_HOME = Path(tempfile.gettempdir()) / "raven-test-boxlite-home"
-
-
-def _test_sandbox_dir(backend: str) -> Path:
-    return _TEST_SANDBOX_HOME / backend
-
 
 # ---------------------------------------------------------------------------
 # Helpers: mock executors
@@ -198,64 +188,27 @@ class TestSandboxConfigValidators:
 
 class TestBuildExecutor:
     def test_none_config_returns_direct(self, tmp_path):
-        e = build_executor(None, tmp_path, sandbox_dir=_test_sandbox_dir)
+        e = build_executor(None, tmp_path)
         assert isinstance(e, DirectExecutor)
 
     def test_backend_none_returns_direct(self, tmp_path):
-        e = build_executor(SandboxConfig(backend="none"), tmp_path, sandbox_dir=_test_sandbox_dir)
+        e = build_executor(SandboxConfig(backend="none"), tmp_path)
         assert isinstance(e, DirectExecutor)
 
     def test_backend_auto_without_boxlite_raises(self, tmp_path):
         with patch.dict("sys.modules", {"boxlite": None}):
             with pytest.raises(SandboxInitError, match="No sandbox backend available"):
-                build_executor(SandboxConfig(backend="auto"), tmp_path, sandbox_dir=_test_sandbox_dir)
+                build_executor(SandboxConfig(backend="auto"), tmp_path)
 
     def test_backend_boxlite_without_boxlite_raises(self, tmp_path):
         with patch.dict("sys.modules", {"boxlite": None}):
             with pytest.raises(SandboxInitError, match="No sandbox backend available"):
-                build_executor(SandboxConfig(backend="boxlite"), tmp_path, sandbox_dir=_test_sandbox_dir)
+                build_executor(SandboxConfig(backend="boxlite"), tmp_path)
 
     def test_unknown_backend_raises(self, tmp_path):
         cfg = SandboxConfig.model_construct(backend="unknown")  # bypass validator
         with pytest.raises(SandboxInitError, match="Unknown sandbox backend"):
-            build_executor(cfg, tmp_path, sandbox_dir=_test_sandbox_dir)
-
-    def test_the_sandbox_home_stays_unresolved_for_a_backend_that_has_none(self, tmp_path):
-        """Resolving one creates it, and 'none' is the default backend -- an eager
-        path would leave every install a boxlite home it never uses."""
-        asked: list[str] = []
-
-        def _resolver(backend: str) -> Path:
-            asked.append(backend)
-            return tmp_path / backend
-
-        build_executor(SandboxConfig(backend="none"), tmp_path, sandbox_dir=_resolver)
-
-        assert asked == []
-
-    def test_the_home_the_executor_was_given_is_the_one_the_runtime_gets(self, tmp_path, monkeypatch):
-        """The whole point of the parameter: the sandbox package no longer reads
-        raven's configuration to find out where its state lives."""
-        from raven.sandbox import _runtime as rt_mod
-
-        seen: list[Path] = []
-        fake_runtime = MagicMock()
-        fake_runtime.remove = AsyncMock()
-
-        def _capture(home: Path):
-            seen.append(home)
-            return fake_runtime
-
-        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", _capture)
-
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=tmp_path / "vm-home")
-        box = MagicMock()
-        box.id = "vm-1"
-        box.stop = AsyncMock()
-        executor._box = box
-        asyncio.run(executor._cleanup_box())
-
-        assert seen == [tmp_path / "vm-home"]
+            build_executor(cfg, tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -768,7 +721,6 @@ class TestBoxliteTranslateCwd:
         return BoxliteExecutor(
             image="ubuntu:22.04",
             workspace=workspace,
-            sandbox_home=_TEST_SANDBOX_HOME,
         )
 
     def test_none_returns_workspace_mount(self, tmp_path):
@@ -798,7 +750,6 @@ class TestBoxliteTranslateCwd:
             image="ubuntu:22.04",
             workspace=workspace,
             extra_volumes=[[str(home), "/agent-home", "rw"]],
-            sandbox_home=_TEST_SANDBOX_HOME,
         )
         assert e._translate_cwd(str(home)) == "/agent-home"
 
@@ -811,7 +762,6 @@ class TestBoxliteTranslateCwd:
             image="ubuntu:22.04",
             workspace=workspace,
             extra_volumes=[[str(home), "/agent-home", "rw"]],
-            sandbox_home=_TEST_SANDBOX_HOME,
         )
         assert e._translate_cwd(str(home / "skills")) == "/agent-home/skills"
 
@@ -824,7 +774,6 @@ class TestBoxliteTranslateCwd:
             image="ubuntu:22.04",
             workspace=workspace,
             extra_volumes=[[str(home), "/agent-home", "rw"]],
-            sandbox_home=_TEST_SANDBOX_HOME,
         )
         assert e._translate_cwd("/completely/outside") == "/workspace"
 
@@ -889,9 +838,7 @@ def _make_mock_execution(stdout_lines=None, stderr_lines=None):
 class TestBoxliteExecTimeout:
     async def test_timeout_kills_and_returns_minus_one(self, tmp_path):
         """exec() times out: execution.kill() is called, exit_code=-1 returned."""
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04", workspace=tmp_path, default_timeout=0.05, sandbox_home=_TEST_SANDBOX_HOME
-        )
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=0.05)
 
         mock_box = MagicMock()
         execution = _make_mock_execution()
@@ -909,9 +856,7 @@ class TestBoxliteExecTimeout:
 
     async def test_exec_timeout_execution_kill_called(self, tmp_path):
         """When execution handle is obtained before timeout, kill() must be called."""
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04", workspace=tmp_path, default_timeout=0.05, sandbox_home=_TEST_SANDBOX_HOME
-        )
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=0.05)
 
         execution = _make_mock_execution()
         execution.stdout.return_value = _infinite_stream()
@@ -935,9 +880,7 @@ class TestBoxliteExecTimeout:
 class TestBoxliteExecCancel:
     @staticmethod
     def _wedged_executor(tmp_path):
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04", workspace=tmp_path, default_timeout=60, sandbox_home=_TEST_SANDBOX_HOME
-        )
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=60)
         execution = _make_mock_execution()
         execution.stdout.return_value = _infinite_stream()
         execution.stderr.return_value = _infinite_stream()
@@ -1015,9 +958,7 @@ class TestBoxliteVerifyTimeout:
         mock_box = MagicMock()
         mock_box.exec = AsyncMock(return_value=execution)
 
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04", workspace=tmp_path, verify_timeout=0.05, sandbox_home=_TEST_SANDBOX_HOME
-        )
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, verify_timeout=0.05)
         with pytest.raises(SandboxInitError, match="timed out"):
             await executor._verify(mock_box)
         execution.kill.assert_awaited_once()
@@ -1026,7 +967,7 @@ class TestBoxliteVerifyTimeout:
 class TestBoxliteStop:
     async def test_stop_kills_executions_and_cancels_tasks(self, tmp_path):
         """stop() kills each stored execution and cancels each stored task."""
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path)
 
         exec1 = MagicMock()
         exec1.kill = AsyncMock()
@@ -1060,7 +1001,6 @@ class TestBoxliteCleanupOrdering:
             image="ubuntu:22.04",
             workspace=tmp_path,
             owned_ids=owned,
-            sandbox_home=_TEST_SANDBOX_HOME,
         )
 
         mock_box = MagicMock()
@@ -1081,7 +1021,7 @@ class TestBoxliteCleanupOrdering:
 
         fake_runtime = MagicMock()
         fake_runtime.remove = AsyncMock()
-        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda home: fake_runtime)
+        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda: fake_runtime)
 
         await executor._cleanup_box()
 
@@ -1104,7 +1044,6 @@ class TestBoxliteStartFailureCleanup:
             image="ubuntu:22.04",
             workspace=tmp_path,
             owned_ids=owned,
-            sandbox_home=_TEST_SANDBOX_HOME,
         )
 
         mock_box = MagicMock()
@@ -1124,7 +1063,7 @@ class TestBoxliteStartFailureCleanup:
 
         from raven.sandbox import _runtime as rt_mod
 
-        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda home: fake_runtime)
+        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda: fake_runtime)
 
         # Patch boxlite.BoxOptions so we can construct it without the real package.
         import sys
@@ -1149,7 +1088,6 @@ class TestBoxliteStartFailureCleanup:
             image="ubuntu:22.04",
             workspace=tmp_path,
             owned_ids=owned,
-            sandbox_home=_TEST_SANDBOX_HOME,
         )
 
         fake_runtime = MagicMock()
@@ -1157,7 +1095,7 @@ class TestBoxliteStartFailureCleanup:
 
         from raven.sandbox import _runtime as rt_mod
 
-        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda home: fake_runtime)
+        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda: fake_runtime)
 
         import sys
 
@@ -1183,7 +1121,6 @@ class TestBoxliteStartFailureCleanup:
             workspace=tmp_path,
             owned_ids=owned,
             verify_timeout=0.05,
-            sandbox_home=_TEST_SANDBOX_HOME,
         )
 
         mock_box = MagicMock()
@@ -1213,7 +1150,7 @@ class TestBoxliteStartFailureCleanup:
 
         from raven.sandbox import _runtime as rt_mod
 
-        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda home: fake_runtime)
+        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda: fake_runtime)
 
         import sys
 
@@ -1239,7 +1176,7 @@ class TestBoxliteStartProcessBridges:
         mcp_types = pytest.importorskip("mcp.types", reason="mcp not installed")
         from mcp.shared.message import SessionMessage
 
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path)
         mock_box = MagicMock()
 
         # Real boxlite yields chunks with trailing \n (lines)
@@ -1278,7 +1215,7 @@ class TestBoxliteStartProcessBridges:
         pytest.importorskip("mcp", reason="mcp not installed")
         from mcp.types import JSONRPCMessage
 
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path)
         mock_box = MagicMock()
 
         json_line = '{"jsonrpc":"2.0","id":1,"method":"ping"}\n'
@@ -1312,7 +1249,7 @@ class TestBoxliteStartProcessBridges:
         """JSONRPCMessage sent to write stream is forwarded to ExecStdin.send_input()."""
         JSONRPCMessage = pytest.importorskip("mcp.types", reason="mcp not installed").JSONRPCMessage
 
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path)
         mock_box = MagicMock()
 
         stdin_mock = MagicMock()
@@ -1758,7 +1695,7 @@ class TestSubagentSandboxLifecycle:
 
         original = subagent_mod.build_executor
 
-        def _patched_build(cfg, workspace, owned_ids=None, extra_volumes=(), *, sandbox_dir=None):
+        def _patched_build(cfg, workspace, owned_ids=None, extra_volumes=()):
             return TrackingExecutor()
 
         subagent_mod.build_executor = _patched_build
@@ -1868,7 +1805,7 @@ def test_build_executor_warns_when_backend_none(monkeypatch, tmp_path):
     msgs: list[str] = []
     sink = logger.add(lambda m: msgs.append(str(m)), level="WARNING")
     try:
-        build_executor(SandboxConfig(backend="none"), tmp_path, sandbox_dir=_test_sandbox_dir)
+        build_executor(SandboxConfig(backend="none"), tmp_path)
     finally:
         logger.remove(sink)
     assert any("no isolation" in m for m in msgs)

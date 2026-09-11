@@ -41,12 +41,9 @@ class SandboxDebugServer:
         socket_path: Path,
         owned_ids: set[str],
         max_message_bytes: int = 1048576,
-        *,
-        sandbox_home: Path,
     ) -> None:
         self._socket_path = socket_path
         self._owned_ids = owned_ids
-        self._sandbox_home = sandbox_home
         self._max_message_bytes = max_message_bytes
         self._server: asyncio.AbstractServer | None = None
         self._active_client: asyncio.StreamWriter | None = None
@@ -211,7 +208,7 @@ class SandboxDebugServer:
         from raven.sandbox._runtime import get_boxlite_runtime
 
         try:
-            runtime = get_boxlite_runtime(self._sandbox_home)
+            runtime = get_boxlite_runtime()
             boxes = await runtime.list_info()
         except Exception as exc:
             await _send(writer, {"type": "error", "message": f"Failed to list VMs: {exc}"})
@@ -306,7 +303,7 @@ class SandboxDebugServer:
         from raven.sandbox._runtime import get_boxlite_runtime
 
         try:
-            runtime = get_boxlite_runtime(self._sandbox_home)
+            runtime = get_boxlite_runtime()
             boxes = await runtime.list_info()
         except Exception as exc:
             await _send(writer, {"type": "error", "message": f"Failed to list VMs: {exc}"})

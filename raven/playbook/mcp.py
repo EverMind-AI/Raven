@@ -44,7 +44,6 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.config.paths import get_sandbox_dir
 from raven.config.schema import MCPServerConfig
 from raven.playbook.params import fill_param_refs, param_refs, secret_param_names
 
@@ -195,7 +194,7 @@ async def preflight_mcp_source(
         return credential_scope if name in carried else None
 
     manager = MCPConnectionManager(registry, allow_auth_park=False, credential_scope=scope_of)
-    sandbox = build_executor(sandbox_config, workspace, sandbox_dir=get_sandbox_dir)
+    sandbox = build_executor(sandbox_config, workspace)
 
     async def executor_provider():
         return sandbox

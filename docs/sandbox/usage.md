@@ -168,7 +168,6 @@ If boxlite is missing or the platform is unsupported, `SandboxInitError` is rais
 ```python
 import asyncio
 from pathlib import Path
-from raven.config.paths import get_sandbox_dir
 from raven.sandbox import build_executor, SandboxConfig
 
 async def main():
@@ -183,10 +182,7 @@ async def main():
 
     # build_executor() returns BoxliteExecutor for backend="auto"/"boxlite"
     # __aenter__ creates and verifies the working VM; raises SandboxInitError if unavailable
-    # sandbox_dir tells the sandbox where a backend keeps its state. It is the
-    # resolver, not a path: resolving one creates the directory, and this call
-    # only reaches it when the backend is not "none".
-    async with build_executor(sandbox_cfg, workspace, sandbox_dir=get_sandbox_dir) as executor:
+    async with build_executor(sandbox_cfg, workspace) as executor:
         result = await executor.exec("echo hello from the VM")
         print(result.as_text())
         # → "hello from the VM\n\nExit code: 0"
@@ -218,14 +214,12 @@ class ExecResult:
 **Lifecycle — explicit start/stop:**
 
 ```python
-from raven.config.paths import get_sandbox_dir
 from raven.sandbox import SandboxInitError
 from raven.sandbox.boxlite_executor import BoxliteExecutor
 
 executor = BoxliteExecutor(
     image="ubuntu:22.04",
     workspace=Path("/tmp/ws"),
-    sandbox_home=get_sandbox_dir("boxlite"),
 )
 
 try:
@@ -244,9 +238,7 @@ await executor.stop()    # tears down the working VM
 from raven.sandbox import SandboxInitError
 
 try:
-    async with BoxliteExecutor(
-        image="ubuntu:22.04", workspace=Path("/tmp/ws"), sandbox_home=get_sandbox_dir("boxlite")
-    ) as executor:
+    async with BoxliteExecutor(image="ubuntu:22.04", workspace=Path("/tmp/ws")) as executor:
         result = await executor.exec("uname -r")
         print(result.stdout)
 except SandboxInitError as e:
@@ -287,15 +279,13 @@ async with DirectExecutor() as executor:
 `build_executor()` returns a `DirectExecutor` when `backend` is `"none"` or when `sandbox_cfg` is `None`:
 
 ```python
-from raven.config.paths import get_sandbox_dir
 from raven.sandbox import build_executor, SandboxConfig
 
 # No config — returns DirectExecutor
-executor = build_executor(None, workspace, sandbox_dir=get_sandbox_dir)
+executor = build_executor(None, workspace)
 
-# Explicit "none" — also returns DirectExecutor (no probe, no VM).
-# sandbox_dir is never called on this path, so no boxlite home is created.
-executor = build_executor(SandboxConfig(backend="none"), workspace, sandbox_dir=get_sandbox_dir)
+# Explicit "none" — also returns DirectExecutor (no probe, no VM)
+executor = build_executor(SandboxConfig(backend="none"), workspace)
 ```
 
 ---
@@ -306,14 +296,13 @@ executor = build_executor(SandboxConfig(backend="none"), workspace, sandbox_dir=
 
 ```python
 from pathlib import Path
-from raven.config.paths import get_sandbox_dir
 from raven.sandbox import build_executor, SandboxConfig
 from raven.agent.tools.shell import ExecTool
 
 sandbox_cfg = SandboxConfig(backend="boxlite")
 workspace = Path("/tmp/ws")
 
-executor = build_executor(sandbox_cfg, workspace, sandbox_dir=get_sandbox_dir)
+executor = build_executor(sandbox_cfg, workspace)
 await executor.start()   # creates and verifies the working VM; raises SandboxInitError if unavailable
 
 tool = ExecTool(
@@ -432,7 +421,7 @@ manager = SubagentManager(
 handle = await manager.spawn(task="run the test suite and report failures")
 ```
 
-Internally, `_run_subagent()` calls `build_executor(self._sandbox_config, self.workspace, sandbox_dir=get_sandbox_dir)` and wraps the mini agent loop in `async with executor:`, so the VM is started when the sub-agent begins and torn down when it finishes — regardless of whether the task succeeds or raises.
+Internally, `_run_subagent()` calls `build_executor(self._sandbox_config, self.workspace)` and wraps the mini agent loop in `async with executor:`, so the VM is started when the sub-agent begins and torn down when it finishes — regardless of whether the task succeeds or raises.
 
 Each subagent VM incurs its own cold-start (~2–5 s). For workloads that spawn many subagents concurrently, consider pre-pulling the image (`pip install raven[sandbox]` + running the integration tests once) to eliminate the image-pull component of that cost.
 

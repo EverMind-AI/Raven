@@ -30,7 +30,7 @@ from typing import Any
 
 from raven_ppt.contracts.rendered import PageSize, WordBox
 from raven_ppt.services.render import process
-from raven_ppt.services.render.capabilities import pdfium
+from raven_ppt.services.render.capabilities import PDFIUM_LOCK, pdfium
 from raven_ppt.services.render.errors import RenderError, RenderUnavailableError
 
 # 144dpi renders a 16:9 slide at exactly 1920x1080, which is what a vision pass
@@ -58,11 +58,12 @@ def page_count(pdf: Path, *, pdftotext: str | None = None, timeout_s: float = DE
     module = pdfium()
     if module is None:
         return len(page_sizes(pdf, pdftotext=pdftotext, timeout_s=timeout_s))
-    document = _open(module, Path(pdf))
-    try:
-        return len(document)
-    finally:
-        document.close()
+    with PDFIUM_LOCK:
+        document = _open(module, Path(pdf))
+        try:
+            return len(document)
+        finally:
+            document.close()
 
 
 def page_sizes(
@@ -74,19 +75,20 @@ def page_sizes(
     """Each page's paper size in points, keyed by 1-based page number."""
     module = pdfium()
     if module is not None:
-        document = _open(module, Path(pdf))
-        try:
-            sizes = {}
-            for index in range(len(document)):
-                page = document[index]
-                try:
-                    width, height = page.get_size()
-                finally:
-                    page.close()
-                sizes[index + 1] = PageSize(width_pt=float(width), height_pt=float(height))
-            return sizes
-        finally:
-            document.close()
+        with PDFIUM_LOCK:
+            document = _open(module, Path(pdf))
+            try:
+                sizes = {}
+                for index in range(len(document)):
+                    page = document[index]
+                    try:
+                        width, height = page.get_size()
+                    finally:
+                        page.close()
+                    sizes[index + 1] = PageSize(width_pt=float(width), height_pt=float(height))
+                return sizes
+            finally:
+                document.close()
     sizes, _ = _parse_bbox_xml(_bbox_xml(Path(pdf), pdftotext, timeout_s))
     return sizes
 
@@ -115,7 +117,8 @@ def to_pngs(
     destination.mkdir(parents=True, exist_ok=True)
     module = pdfium()
     if module is not None:
-        return _pdfium_pngs(module, source, destination, int(dpi), pages)
+        with PDFIUM_LOCK:
+            return _pdfium_pngs(module, source, destination, int(dpi), pages)
     binary = pdftoppm or shutil.which("pdftoppm")
     if binary is None:
         raise RenderUnavailableError(
@@ -155,10 +158,11 @@ def words_by_page(pdf: Path) -> dict[int, str]:
     module = pdfium()
     if module is None or not Path(pdf).is_file():
         return {}
-    try:
-        found = _pdfium_words(module, Path(pdf))
-    except Exception:  # noqa: BLE001 -- a PDF that will not open answers nothing, not an error
-        return {}
+    with PDFIUM_LOCK:
+        try:
+            found = _pdfium_words(module, Path(pdf))
+        except Exception:  # noqa: BLE001 -- a PDF that will not open answers nothing, not an error
+            return {}
     return {number: " ".join(box.text for box in boxes) for number, boxes in found.items()}
 
 
@@ -237,19 +241,24 @@ def word_boxes(
         raise RenderError(f"there is no PDF to measure at {source}")
     module = pdfium()
     if module is not None:
-        try:
-            return _pdfium_words(module, source)
-        except _RotatedPageError as exc:
-            # PDFium reports text in unrotated page space, so the flip below would
-            # be wrong for a rotated page. Poppler applies the rotation itself, so
-            # hand the job over rather than returning numbers that look fine.
-            if (poppler := pdftotext or shutil.which("pdftotext")) is None:
-                raise RenderError(
-                    f"page {exc.page} is rotated, which this reader cannot measure; "
-                    "install poppler-utils (pdftotext) to measure rotated pages"
-                ) from exc
-            _, words = _parse_bbox_xml(_bbox_xml(source, poppler, timeout_s))
-            return words
+        rotated: _RotatedPageError | None = None
+        with PDFIUM_LOCK:
+            try:
+                return _pdfium_words(module, source)
+            except _RotatedPageError as exc:
+                rotated = exc
+        # PDFium reports text in unrotated page space, so the flip below would be
+        # wrong for a rotated page. Poppler applies the rotation itself, so hand the
+        # job over rather than returning numbers that look fine. Handed over with the
+        # lock released: it is a subprocess and seconds long, and every other reader
+        # in the process waits on that lock.
+        if (poppler := pdftotext or shutil.which("pdftotext")) is None:
+            raise RenderError(
+                f"page {rotated.page} is rotated, which this reader cannot measure; "
+                "install poppler-utils (pdftotext) to measure rotated pages"
+            ) from rotated
+        _, words = _parse_bbox_xml(_bbox_xml(source, poppler, timeout_s))
+        return words
     _, words = _parse_bbox_xml(_bbox_xml(source, pdftotext, timeout_s))
     return words
 

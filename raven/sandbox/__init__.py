@@ -12,7 +12,6 @@ Public API (import everything from here, not from sub-modules):
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
 from loguru import logger
@@ -40,8 +39,6 @@ def build_executor(
     workspace: Path,
     owned_ids: set[str] | None = None,
     extra_volumes: tuple[tuple[str, str, str], ...] = (),
-    *,
-    sandbox_dir: Callable[[str], Path],
 ) -> SandboxExecutor:
     """Synchronously construct the executor for the given config.
 
@@ -56,13 +53,6 @@ def build_executor(
     extra_volumes: additional (host_path, guest_path, mode) mounts appended to
     ``sandbox_cfg.extra_volumes``, e.g. keeping agent home reachable inside
     the VM when the mounted workspace does not already cover it.
-
-    sandbox_dir: backend name -> the directory that backend keeps its state in,
-    normally ``raven.config.paths.get_sandbox_dir``. Passed as the resolver
-    rather than an already-resolved path because resolving one creates it, and
-    the default backend is 'none' -- an eager path would leave every install a
-    boxlite home it never uses. This package is told where its data lives so
-    that it does not have to read raven's configuration to find out.
     """
     backend = sandbox_cfg.backend if sandbox_cfg else "none"
 
@@ -99,7 +89,6 @@ def build_executor(
             verify_timeout=sandbox_cfg.verify_timeout,
             create_timeout=sandbox_cfg.create_timeout,
             owned_ids=owned_ids,
-            sandbox_home=sandbox_dir("boxlite"),
         )
 
     raise SandboxInitError(f"Unknown sandbox backend: {backend!r}. Valid values: 'none', 'auto', 'boxlite'.")
