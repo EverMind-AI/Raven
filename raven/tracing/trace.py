@@ -267,9 +267,6 @@ def span(
         channel = channel if channel is not None else (cur.channel if cur else None)
         chat_id = chat_id if chat_id is not None else (cur.chat_id if cur else None)
         surface = surface if surface is not None else (cur.surface if cur else None)
-        # file its fresh trace under the dispatching turn's attempt and group two
-        # unrelated turns as one trajectory. A root resolves from its own session's
-        # open attempt, else this trace is a single-turn attempt.
         span_id = _ctx.new_span_id()
         handle = Span(
             name,
