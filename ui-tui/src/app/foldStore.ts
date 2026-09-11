@@ -56,5 +56,66 @@ export const toggleFold = (scope: string, key: string, defaultOpen = false): voi
   })
 }
 
+/** One scope's fold decisions, split by the key kind that carries them. */
+export interface CallFolds {
+  callClosed: ReadonlySet<string>
+  callOpen: ReadonlySet<string>
+  full: ReadonlySet<string>
+  segClosed: ReadonlySet<string>
+  segOpen: ReadonlySet<string>
+}
+
+export const EMPTY_CALL_FOLDS: CallFolds = {
+  callClosed: new Set(),
+  callOpen: new Set(),
+  full: new Set(),
+  segClosed: new Set(),
+  segOpen: new Set()
+}
+
+/**
+ * One scope's folds, for the height estimator, which draws no rows of its own
+ * and so has to be told which transcript view and turn it is measuring.
+ *
+ * Both the scope and the key kind have to survive this read. A transport call
+ * id is unique only inside the response that minted it -- `OpenAIStepReader`
+ * restarts its counter per response, so `mi-1` recurs across conversations --
+ * and `seg:<firstToolCallId>` reuses its stretch's first call id, so a card and
+ * the stretch around it can carry the same string under different kinds.
+ * Flattening either axis lets one reader's decision estimate another card.
+ */
+export const callFolds = (all: Record<string, Scope>, scope: string): CallFolds => {
+  const callClosed = new Set<string>()
+  const callOpen = new Set<string>()
+  const full = new Set<string>()
+  const segClosed = new Set<string>()
+  const segOpen = new Set<string>()
+  const here = all[scope]
+
+  if (!here) {
+    return { callClosed, callOpen, full, segClosed, segOpen }
+  }
+
+  for (const key of here.open) {
+    if (key.startsWith('full:')) {
+      full.add(key.slice(5))
+    } else if (key.startsWith('call:')) {
+      callOpen.add(key.slice(5))
+    } else if (key.startsWith('seg:')) {
+      segOpen.add(key.slice(4))
+    }
+  }
+
+  for (const key of here.closed) {
+    if (key.startsWith('call:')) {
+      callClosed.add(key.slice(5))
+    } else if (key.startsWith('seg:')) {
+      segClosed.add(key.slice(4))
+    }
+  }
+
+  return { callClosed, callOpen, full, segClosed, segOpen }
+}
+
 /** Test seam, and what a session switch uses to forget last session's folds. */
 export const resetFolds = (): void => $folds.set({})

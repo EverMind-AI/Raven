@@ -8,6 +8,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
+from raven.config.agent_names import THIRD_PARTY_PRESET_NAMES
 from raven.contracts.path_policy import WORKSPACE_DEFAULT_SENTINEL
 from raven.sandbox.config import SandboxConfig
 
@@ -303,10 +304,22 @@ class ModelOverlay(Base):
     all. What has no knob either is a *price* for an endpoint no catalogue
     prices; such a deployment reports unknown spend rather than borrowing a
     hosted model's rate. Adding one is a separate ask.
+
+    The tags are the same closed vocabulary the registry publishes
+    (`providers/registry_data.py`), and they are read for display only -- the
+    surfaces draw them as icons. Stating one here is how a model no catalogue
+    carries gets an icon row at all; an empty list means nothing was stated,
+    which every surface renders as no icon rather than as a denial. What a
+    request may actually carry is still decided by `capabilities.supports_vision`
+    and `ProviderSpec`, which is why a wrong tag here costs a wrong picture of a
+    model and never a wrong call.
     """
 
     label: str = ""
     description: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+    input_modalities: list[str] = Field(default_factory=list)
+    output_modalities: list[str] = Field(default_factory=list)
 
 
 class ProviderEndpoint(Base):
@@ -1210,14 +1223,13 @@ def _resolve_preset_provenance(name: str, preset: str | None) -> str | None:
     it an upgrade. Gating on kind would instead read it as hand-written, hide the
     upgrade, and offer the preset again as unconfigured.
 
-    The preset name set is imported inside this function, not at module
-    level: ``raven.agent.subagent.presets`` imports ``SubagentsConfig`` from
-    this module (deferred inside ``_normalized``), and importing back here at
-    module level would put both sides of that cycle at module-init time.
+    Matched against the name vocabulary (``raven.config.agent_names``), not the
+    preset table: this needs to know which names are legal, never what they run.
+    The table stays in ``raven.agent.subagent.presets``, which reads config
+    downward; the two spellings of the name set are pinned equal by
+    tests/test_subagent_name_vocabulary.py.
     """
-    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
-
-    presets = THIRD_PARTY_SUBAGENT_PRESETS
+    presets = THIRD_PARTY_PRESET_NAMES
     if preset is None:
         return name if name in presets else None
     if preset not in presets:
@@ -1277,6 +1289,39 @@ class SubagentEverosConfig(Base):
         if self.source == "trace" and not (self.user_id and self.agent_id):
             raise ValueError("everos source 'trace' needs both userId and agentId")
         return self
+
+
+class SubagentEngineConfig(Base):
+    """The engine wheel a folder-discovered agent declares, as
+    ``{"package": "<import name>", "wheel": "<distribution name>"}``.
+
+    Declared by the folder's ``subagent.json`` (the ``raven agents new
+    --engine-wheel`` scaffold writes it); readiness probes the package where
+    raven runs and lists the row disabled, naming the wheel, until it imports.
+    Carried on the config row so a pinned copy of the manifest round-trips the
+    declaration instead of silently dropping it -- discovery itself keeps
+    reading the manifest fresh (``vendored_agents._declared_engine``), so this
+    field changes no merge or readiness semantics.
+    """
+
+    package: str = ""
+    wheel: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _malformed_reads_as_empty(cls, data: Any) -> Any:
+        """A malformed declaration reads as no declaration, mirroring
+        ``vendored_agents._declared_engine``: the launcher still refuses at
+        dispatch, so a manifest typo degrades to a late loud failure rather
+        than a rejected row."""
+        if not isinstance(data, (dict, cls)):
+            return {}
+        if isinstance(data, dict):
+            return {
+                "package": str(data.get("package") or "").strip(),
+                "wheel": str(data.get("wheel") or "").strip(),
+            }
+        return data
 
 
 class ThirdPartyCliSubagentConfig(Base):
@@ -1393,6 +1438,11 @@ class ThirdPartyCliSubagentConfig(Base):
     everos: SubagentEverosConfig | None = None
     """This agent's everos identity, or ``None`` for an agent that writes no
     everos memory. Declaring it is what turns the Memory record on."""
+    engine: SubagentEngineConfig | None = None
+    """The engine wheel this folder's manifest declares, or ``None`` for an
+    agent whose whole capability is raven's own. Round-trip retention only:
+    readiness keeps probing the manifest's own declaration, and the merge
+    reads nothing from this field."""
 
     @model_validator(mode="after")
     def _check_stateful_matches_resume(self) -> "ThirdPartyCliSubagentConfig":
@@ -1603,15 +1653,9 @@ ACP_PROMPT_PLACEHOLDERS: tuple[str, ...] = ("{prompt}", "{prompt_file}", "{agent
 
 
 class SubagentRouteConfig(Base):
-    """One row a spawn addressed to the declaring row may be redirected to.
-
-    ``match`` is a regular expression searched in the task text (case-insensitive);
-    a hit routes there without a model call. Empty, the target is offered to the
-    host's classifier only.
-    """
+    """One candidate target offered to the host's route classifier."""
 
     to: str
-    match: str = ""
 
 
 class ThirdPartyAcpSubagentConfig(Base):
@@ -1762,6 +1806,11 @@ class ThirdPartyAcpSubagentConfig(Base):
     memory for. Not in :data:`ACP_UNSUPPORTED_FIELDS` because it declares nothing
     about the agent -- it is how the *host* addresses that agent's memories, which
     no ``initialize`` handshake reports."""
+    engine: SubagentEngineConfig | None = None
+    """The engine wheel this folder's manifest declares, or ``None`` for an
+    agent whose whole capability is raven's own. Round-trip retention only:
+    readiness keeps probing the manifest's own declaration, and the merge
+    reads nothing from this field."""
 
     @model_validator(mode="before")
     @classmethod

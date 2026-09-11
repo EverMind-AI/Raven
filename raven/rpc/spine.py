@@ -174,27 +174,23 @@ class RpcTurnRunner(AgentTurnRunner):
         cid = conversation_id(req)
         tools = getattr(self._loop, "tools", None)
 
-        # Approval capability is rebound for every turn, inside the task that
-        # runs it. Only USER origin receives the TUI responder; CRON and other
-        # background origins can share this process but must still fail closed
-        # as non-interactive. The IDs bind any response to this exact
-        # conversation and turn.
+        # One gate for approval and ask, rebound per turn inside its task: a USER
+        # turn always, a SUBAGENT relay when a surface watches the conversation,
+        # any other origin never. Split, a person could pick "continue" and watch
+        # the tool that continues be refused as unattended.
+        watched = req.origin is Origin.USER or (req.origin is Origin.SUBAGENT and self._emitter.has_subscribers(cid))
+
         async def _on_review(phase: str, tool_name: str) -> None:
             # The smart-mode reviewer runs inside the tool dispatch, so without
             # this the surface shows an unexplained pause on the running tool.
             await self._emitter.emit(cid, {"type": "permission.review", "payload": {"phase": phase, "tool": tool_name}})
 
         start_permission_turn(
-            self._approval_responder if req.origin is Origin.USER else None,
+            self._approval_responder if watched else None,
             conversation_id=cid,
             turn_id=req.turn_id or "",
-            on_review=_on_review if req.origin is Origin.USER else None,
+            on_review=_on_review if watched else None,
         )
-        # Same rebinding as the shell approval above but a wider gate: a USER
-        # turn binds always, and a SUBAGENT relay binds when its conversation
-        # has a live watcher. A CRON or otherwise background turn has no
-        # reader, and an ACP sub-agent's question there must decline rather
-        # than wait on nobody.
         # Function-level on purpose: the acp client family is future shelf
         # cargo and must not be named at this module's import time
         # (binding-time debt).
@@ -205,9 +201,7 @@ class RpcTurnRunner(AgentTurnRunner):
         # A SUBAGENT relay re-enters the user's own conversation, so whether a
         # human can answer its sub-agents' questions is not about the turn's
         # origin but about whether a surface is watching that conversation.
-        interactive = isinstance(ask_tool, SupportsDirectAsk) and (
-            req.origin is Origin.USER or (req.origin is Origin.SUBAGENT and self._emitter.has_subscribers(cid))
-        )
+        interactive = watched and isinstance(ask_tool, SupportsDirectAsk)
         start_ask_turn(
             AskViaTool(ask_tool) if interactive else None,
             Autofill(
@@ -633,8 +627,10 @@ def build_rpc_spine(
     private map when cron is not wired (e.g. tests).
 
     ``approval_responder`` is an interactive capability, not a process-wide
-    permission. The runner binds it only to USER-origin turns and explicitly
-    revokes it for background origins."""
+    permission. The runner binds it per turn on the same gate the asker uses: a
+    USER turn always, a SUBAGENT relay when a surface is watching its
+    conversation, and no other origin -- a CRON or otherwise unattended turn is
+    refused at the ask tier."""
     hub = DeliveryHub()
     if direct_targets is None:
         direct_targets = {}

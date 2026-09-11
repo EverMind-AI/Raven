@@ -368,6 +368,13 @@ def _scan_folders(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
     python = _resolved_python()
     for manifest in sorted(root.glob("*/subagent.json")):
         folder = manifest.parent
+        # pathlib's glob matches dot-directories, and a hidden folder here is
+        # never a legitimate agent (every real folder name starts with a
+        # letter) -- it is crash residue, most likely a scaffold staging
+        # directory a SIGKILL orphaned mid-write. Advertising one puts an
+        # invisible-to-ls row on the roster.
+        if folder.name.startswith("."):
+            continue
         try:
             entry = json.loads(manifest.read_text(encoding="utf-8"))
             if not isinstance(entry, dict):
