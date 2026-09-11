@@ -87,6 +87,17 @@ class ProviderSpec:
     #: Read through `display_api_base`, never directly.
     shown_api_base: str = ""
     native_api_bases: tuple[tuple[str, str], ...] = ()
+    #: Addresses one vendor serves the same account model from, where the choice
+    #: is the reader's rather than a default we could pick for them: DMXAPI sells
+    #: a CNY platform, an international one and an enterprise one, and an account
+    #: on each is a separate signup. Given as (label, api_base, signup_url), the
+    #: first being what a fresh install starts on.
+    #:
+    #: Distinct from `native_api_bases`, which is one vendor's addresses keyed by
+    #: the protocol spoken to them and never a question anyone is asked. A
+    #: provider that states these is offered the list instead of a free-text
+    #: host field -- there is nothing to type when the answer is one of three.
+    platforms: tuple[tuple[str, str, str], ...] = ()
     passes_default_api_base: bool = False  # send the shipped default as a per-call api_base
     strip_api_base_trailing_slash: bool = False
 
@@ -397,6 +408,23 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_gateway=True,
         detect_by_base_keyword="dmxapi",
         default_api_base="https://www.dmxapi.cn/v1",
+        # Three storefronts, three signups, one key format. Which one a key was
+        # issued by is not discoverable from the key, so it is asked rather than
+        # detected -- and the address follows from the answer, which is why this
+        # provider offers no host field.
+        platforms=(
+            ("www.DMXAPI.cn (CNY)", "https://www.dmxapi.cn/v1", "https://www.dmxapi.cn/register"),
+            (
+                "www.DMXAPI.com (International)",
+                "https://www.dmxapi.com/v1",
+                "https://www.dmxapi.com/register",
+            ),
+            (
+                "ssvip.DMXAPI.com (Enterprise)",
+                "https://ssvip.dmxapi.com/v1",
+                "https://ssvip.dmxapi.com/register",
+            ),
+        ),
         strip_model_prefix=False,
     ),
     ProviderSpec(

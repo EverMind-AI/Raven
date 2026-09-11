@@ -1230,6 +1230,92 @@ describe('settings island', () => {
     })
   })
 
+  /* A provider that sells the same models from several storefronts is asked
+     which one, because the key does not say and the accounts are separate. */
+  describe('a provider with platforms to choose between', () => {
+    const PLATFORMS = [
+      { label: 'www.DMXAPI.cn (CNY)', api_base: 'https://www.dmxapi.cn/v1', signup_url: 'https://www.dmxapi.cn/register' },
+      { label: 'www.DMXAPI.com (International)', api_base: 'https://www.dmxapi.com/v1', signup_url: 'https://www.dmxapi.com/register' },
+      { label: 'ssvip.DMXAPI.com (Enterprise)', api_base: 'https://ssvip.dmxapi.com/v1', signup_url: 'https://ssvip.dmxapi.com/register' },
+    ]
+
+    const withPlatforms = (over: Partial<{ apiBase: string }> = {}) =>
+      snap({
+        providers: [{
+          id: 'dmxapi',
+          name: 'DMXAPI',
+          homepage: 'https://www.dmxapi.cn/',
+          models: [],
+          on: false,
+          kind: 'api_key',
+          defaultApiBase: 'https://www.dmxapi.cn/v1',
+          platforms: PLATFORMS,
+          ...over,
+        }],
+        curProvider: 'dmxapi',
+      })
+
+    const openPane = async (fixture = withPlatforms()) => {
+      const harness = install(fixture)
+      await mount()
+      await act(async () => {
+        screen.getByText('gui.set.pg.model').click()
+      })
+      return harness
+    }
+
+    const rows = () => [...document.querySelectorAll<HTMLElement>('.mplatrow')]
+
+    it('offers the platforms instead of a host field', async () => {
+      await openPane()
+
+      expect(document.querySelector('[data-sec="platform"]')).not.toBeNull()
+      /* Nothing to type when the answer is one of three, and a free-text host
+         beside the list would be a second way to say the same thing. */
+      expect(document.querySelector('[data-sec="host"]')).toBeNull()
+      expect(rows().map((r) => r.querySelector('.nm')?.textContent)).toEqual(PLATFORMS.map((p) => p.label))
+    })
+
+    it('gives each platform its own signup, and drops the single one', async () => {
+      await openPane()
+
+      expect(rows().map((r) => r.querySelector('a')?.getAttribute('href'))).toEqual(
+        PLATFORMS.map((p) => p.signup_url),
+      )
+      /* A key from one storefront works on none of the others, so one link
+         beside the field would send some readers to the wrong signup. */
+      expect(document.querySelector('[data-sec="key"] .mdocs')).toBeNull()
+    })
+
+    it('starts on the platform the stored address belongs to', async () => {
+      await openPane(withPlatforms({ apiBase: 'https://ssvip.dmxapi.com/v1' }))
+
+      /* Matched, not remembered: the config holds an address and no choice, so
+         a section written by the CLI has to land on the right row here too. */
+      expect(rows().map((r) => r.querySelector('input')!.checked)).toEqual([false, false, true])
+    })
+
+    it('sends the chosen address even when it is the one shipped', async () => {
+      const { calls } = await openPane()
+      const field = document.querySelector<HTMLInputElement>('[data-sec="key"] input')!
+      await act(async () => {
+        fireEvent.input(field, { target: { value: 'sk-probe' } })
+      })
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-sec="key"] button.mini')!.click()
+      })
+
+      /* The host field is only sent when it differs from the default, because
+         several of those defaults are labels a save must not turn into an
+         override. A platform is not a label: picking the first row is still
+         picking, and the address has to be written for the key to reach it. */
+      expect(calls).toContainEqual(['provider', {
+        op: 'save_key',
+        params: { slug: 'dmxapi', api_key: 'sk-probe', api_base: 'https://www.dmxapi.cn/v1' },
+      }])
+    })
+  })
+
   it('puts provider branding first and connection state at the far edge', async () => {
     install()
     await mount()

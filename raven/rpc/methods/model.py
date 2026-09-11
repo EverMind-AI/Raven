@@ -391,6 +391,11 @@ def _build_provider_entry(
         # demand what the gate does not.
         "needs_api_base": kind == SHAPE_LOCAL
         or (kind == SHAPE_ENDPOINT and not (spec and spec.usable_default_api_base)),
+        # Offered as a list, so the pane asks instead of leaving a host to type.
+        "platforms": [
+            {"label": label, "api_base": base, "signup_url": signup}
+            for label, base, signup in (spec.platforms if spec else ())
+        ],
         # Whether to draw a key field. Answered here so the settings pane and
         # the wizard cannot disagree about it.
         "accepts_api_key": _accepts_api_key(slug, kind),

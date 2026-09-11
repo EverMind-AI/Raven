@@ -1490,20 +1490,37 @@ function ProvPanel({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Elemen
      the pane and the wizard came to disagree about the second such provider. */
   const acceptsApiKey = pv.acceptsKey ?? pv.kind !== 'local'
   const initialBase = pv.apiBase || pv.defaultApiBase || ''
+  const platforms = pv.platforms ?? []
+  /* Which storefront the stored address belongs to, matched rather than
+     remembered: the config holds an address, not a choice, so a section written
+     by the CLI or by hand lands on the right row here too. Falls to the first,
+     which is what a provider with no address yet is served by. */
+  const [platform, setPlatform] = useState(
+    () => platforms.find((p) => p.api_base === initialBase)?.api_base ?? platforms[0]?.api_base ?? '',
+  )
   /* An address this provider cannot be reached without: the credential gate
      wants it in every submission, default or not. */
   const baseRequired = pv.needsBase || pv.kind === 'endpoint'
   const save = (): void => {
     const params: Record<string, unknown> = { slug: pv.id }
     if (acceptsApiKey) params.api_key = key.current?.value.trim() ?? ''
-    const typedBase = base.current?.value.trim() ?? ''
+    /* A chosen platform is the address, so it always travels. The rule below
+       is for a field a person may have left on a shipped default they never
+       touched; here there is no default to leave -- picking the first row is
+       still picking, and a key issued by that storefront works nowhere else. */
+    const typedBase = platforms.length ? platform : (base.current?.value.trim() ?? '')
+    if (platforms.length && typedBase) {
+      params.api_base = typedBase
+    }
     /* Only what the person actually chose gets written. A shipped default is
        shown so the pane can answer "where does this go", but several of them
        are display-only on purpose -- dashscope's compatible-mode address is
        one LiteLLM's own driver must not be handed -- so saving the field
        unchanged would silently turn a label into an override and break the
        route it was only describing. */
-    if (typedBase && (baseRequired || typedBase !== initialBase)) params.api_base = typedBase
+    if (!platforms.length && typedBase && (baseRequired || typedBase !== initialBase)) {
+      params.api_base = typedBase
+    }
     if (pv.kind === 'local' && !params.api_base) {
       store.provSay(t('gui.model.need_base'))
       return
@@ -1551,7 +1568,10 @@ function ProvPanel({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Elemen
               <div className="msec" data-sec="key">
                 <div className="mhead">
                   <div className="t">{t('gui.model.api_key')}</div>
-                  {pv.homepage && (
+                  {/* One link is wrong where the signups are separate: a key
+                      from the CNY storefront works on none of the others, so
+                      the link belongs on the row that names the platform. */}
+                  {!platforms.length && pv.homepage && (
                     <a
                       className="mdocs"
                       href={pv.homepage}
@@ -1596,6 +1616,39 @@ function ProvPanel({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Elemen
                 done the job with another tool, which is the wrong way round --
                 and `gui.model.base_ph`, "for your own gateway", is written for
                 exactly the providers it was hidden from. */}
+            {platforms.length ? (
+              <div className="msec" data-sec="platform">
+                <div className="mhead">
+                  <div className="t">{t('gui.model.select_platform')}</div>
+                </div>
+                <div className="mplat" role="radiogroup" aria-label={t('gui.model.select_platform')}>
+                  {platforms.map((entry) => (
+                    <label className="mplatrow" key={entry.api_base}>
+                      <input
+                        type="radio"
+                        name={`platform-${pv.id}`}
+                        value={entry.api_base}
+                        checked={platform === entry.api_base}
+                        onChange={() => setPlatform(entry.api_base)}
+                      />
+                      <span className="nm">{entry.label}</span>
+                      <a
+                        className="mdocs"
+                        href={entry.signup_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(event) => {
+                          event.preventDefault()
+                          openUrl(entry.signup_url)
+                        }}
+                      >
+                        {t('gui.model.get_key')}
+                      </a>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : (
             <div className="msec" data-sec="host">
               <div className="mhead">
                 <div className="t">{t('gui.model.api_host')}</div>
@@ -1622,6 +1675,7 @@ function ProvPanel({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Elemen
                 </button>
               </div>
             </div>
+            )}
           </>
         )}
         <ModelList pv={pv} s={s} />

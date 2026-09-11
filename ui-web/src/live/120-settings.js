@@ -151,6 +151,10 @@ async function loadProviders(sid, gen) {
     labels: p.model_labels || {},
     protocols: p.protocols || {}, protocolOverrides: p.protocol_overrides || {},
     kind: p.auth_type || 'api_key', needsBase: !!p.needs_api_base,
+    // Addresses to choose between. A provider that has them is asked which
+    // storefront the key came from instead of being handed a host field --
+    // the key does not say, and the three are separate accounts.
+    platforms: p.platforms || [],
     // Whether this one has a key field: false for an address-only local
     // deployment, true for the local servers that can sit behind a token.
     // Answered by the backend so the pane and the wizard cannot disagree.

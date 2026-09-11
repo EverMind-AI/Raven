@@ -2583,6 +2583,10 @@
       "en": "No models yet. Add one by id below.",
       "zh": "还没有模型，可在下方按 id 添加。"
     },
+    "gui.model.select_platform": {
+      "en": "Select the platform",
+      "zh": "选择平台"
+    },
     "gui.model.soon": {
       "en": "Not wired up yet",
       "zh": "功能尚未接入"
