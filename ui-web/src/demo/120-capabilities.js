@@ -164,11 +164,6 @@ DS.xa ??= {
     /* A preset that moved transport: removed and added back, which is what
        clears `upgrade_to`. Switching `enabled` never did. */
     if (op === 'migrate') { row.kind = row.upgrade_to || row.kind; row.upgrade_to = ''; row.enabled = true; }
-    /* Instant here too, and it passes: with no gateway there is no agent to
-       dispatch, so the fixture answers the shape of a verdict rather than
-       inventing a failure the reader would go looking for the cause of. */
-    if (op === 'test') { row.last_test_ok = true; row.last_test_at_ms = Date.now(); row.last_test_detail = ''; }
-    if (op === 'test_cancel') { row.test_running = false; }
     return XA_FIXTURE;
   },
 };

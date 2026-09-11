@@ -129,15 +129,6 @@ class ProviderSpec:
     # which needs an address but no key.
     requires_api_base: bool = False
 
-    # A local deployment that will also take a key. Reached by address like any
-    # other `is_local` provider, but its server can be put behind a token --
-    # Ollama's remote mode and LM Studio's server setting both do this -- and a
-    # deployment on someone else's machine usually is. Declared here rather than
-    # matched by name at each surface: the settings pane, the wizard and the
-    # save handler all have to agree on it, and three copies of one list is how
-    # the second such provider gets the key field in one place and not another.
-    accepts_optional_api_key: bool = False
-
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
@@ -464,20 +455,13 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
         default_model="zai/glm-4.6",
     ),
-    # Alibaba Cloud: Qwen models over DashScope, which is the service and the
-    # name every id and config section is written with -- so the section stays
-    # `dashscope` while the shelf it appears on says who runs it.
+    # DashScope: Qwen models, needs "dashscope/" prefix.
     ProviderSpec(
         name="dashscope",
         keywords=("qwen", "dashscope"),
         env_key="DASHSCOPE_API_KEY",
-        display_name="Alibaba Cloud",
+        display_name="DashScope",
         homepage="https://www.aliyun.com/product/bailian",
-        # The OpenAI-compatible endpoint, shown as the address to talk to and
-        # probed for the catalogue. Not `passes_default_api_base`: LiteLLM's own
-        # driver already knows where to send a dashscope call, and handing it a
-        # second answer is how a working route breaks.
-        default_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1/",
         skip_prefixes=("dashscope/", "openrouter/"),
         env_extras=(),
         is_gateway=False,
@@ -619,7 +603,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         env_extras=(),
         is_gateway=False,
         is_local=True,
-        accepts_optional_api_key=True,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
         default_api_base="http://localhost:1234/v1",
@@ -638,7 +621,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         env_extras=(),
         is_gateway=False,
         is_local=True,
-        accepts_optional_api_key=True,
         detect_by_key_prefix="",
         detect_by_base_keyword="11434",
         default_api_base="http://localhost:11434",

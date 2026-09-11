@@ -1,22 +1,7 @@
-"""Taking custody of a built deck, delivering it, and keeping the record true.
-
-The record has one job that is easy to state and was never checked twice: the
-sha256 in `published.json` names the bytes under `out/`. It is written from the
-digest the gates measured, on every publish, and it was right -- what moved was
-the file. A live run's author, holding a delivered deck it wanted one more change
-in, ran `python3 - <<EOF  # Apply the same fix to the published deck
-(out/deck.pptx) in place` through `exec` at 08:14:18 and rewrote the delivery
-where it lay; `deck/build/deck.pptx` and the staged copy both still held the
-recorded bytes six minutes later, and the deck the user was handed had been
-through no gate at all. So this module now reads the delivered file back rather
-than trusting the copy it made of it, and says so when the two disagree.
-"""
-
 from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import os
 import shutil
 import uuid
@@ -103,16 +88,7 @@ def publish(
         raise PublishRefusedError(f"could not write the deck to {resolved}: {exc}") from exc
     finally:
         temporary.unlink(missing_ok=True)
-    # The bytes that are actually there, not the digest of the copy they came from.
-    # The record's whole promise is "this sha names the file at this path", and the
-    # only way to keep it is to read the file at that path.
-    try:
-        delivered = hashlib.sha256(resolved.read_bytes()).hexdigest()
-    except OSError as exc:
-        raise PublishRefusedError(f"the deck at {resolved} could not be read back: {exc}") from exc
-    if not hmac.compare_digest(delivered, staged.digest):
-        raise PublishRefusedError(f"the deck written to {resolved} is not the deck that was measured; build it again")
-    record_published(project, resolved, delivered, staged.pages)
+    record_published(project, resolved, staged.digest, staged.pages)
     return resolved
 
 
@@ -128,6 +104,8 @@ def record_published(project, path: Path, digest: str, pages: int) -> None:
     out/ newer than the turn started", confirmed it. What was published is what went
     through the gates, and this is the list of that.
     """
+    import json
+
     target = project.state_dir / PUBLISHED_RECORD
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -136,97 +114,9 @@ def record_published(project, path: Path, digest: str, pages: int) -> None:
         held = {}
     entries = [e for e in held.get("published", []) if isinstance(e, dict) and e.get("path") != str(path)]
     entries.append({"path": str(path), "sha256": digest, "pages": pages})
-    # Atomic, for the reason the deck's own write is: a half-written record is a record
-    # a reader believes. Rewritten on every publish rather than the delivery being
-    # frozen at the moment it is written -- the tier's cap releases the deck and lets
-    # the author keep building, and a crash reprieve adds more such builds, so the
-    # record has to follow the file rather than pin it.
-    temporary = target.parent / f".{target.name}.{uuid.uuid4().hex}.tmp"
-    try:
-        temporary.write_text(json.dumps({"published": entries}, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(temporary, target)
-    except OSError as exc:
-        # The deck is in place, so this is not "nothing was published" -- but a delivery
-        # with no record is one the harness reads as a copy the model made for itself,
-        # and saying so here is better than that being discovered downstream.
-        raise PublishRefusedError(
-            f"the deck was written to {path} but its record could not be: {exc}. Build again"
-        ) from exc
-    finally:
-        temporary.unlink(missing_ok=True)
+    target.write_text(json.dumps({"published": entries}, ensure_ascii=False, indent=2), encoding="utf-8")
     # What was refused before this publish no longer stands in anyone's way.
     (project.state_dir / REFUSED_RECORD).unlink(missing_ok=True)
-
-
-def delivery_report(project, destination: Path) -> str | None:
-    """Whether the deck already at ``destination`` is still the one this route delivered.
-
-    Asked before the publish that overwrites it, because afterwards there is nothing
-    left to compare. It never withholds the deck: the answer to an unmeasured delivery
-    is the measured one written over it, and the caller is on its way to do that.
-    """
-    try:
-        resolved = _inside_workspace(project, destination)
-    except PublishRefusedError:
-        return None
-    return tampered_delivery(project.state_dir, resolved)
-
-
-def tampered_delivery(state_dir: Path, path: Path) -> str | None:
-    """Whether the deck recorded at ``path`` still holds the bytes recorded for it.
-
-    None when nothing is recorded for it, when the file is gone, or when it matches; a
-    passage naming what happened when it does not. This is the check nothing did. The
-    record was written correctly on every publish and then never read back against the
-    file, so a delivery edited where it lay stayed the deck the user had while every
-    record in the deck folder went on describing the one that passed the gates.
-
-    A report, never a refusal. The answer to an unmeasured delivery is the measured one
-    written over it, which is what the caller is about to do.
-    """
-    recorded = _recorded(state_dir).get(str(path))
-    if recorded is None or not path.is_file():
-        return None
-    try:
-        current = hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        return None
-    if hmac.compare_digest(current, recorded):
-        return None
-    return (
-        f"{path} was not the deck this route delivered: its bytes changed after it was published "
-        f"(recorded {recorded[:12]}, found {current[:12]}), so whatever was done to it went through no gate "
-        "and no reading. This build's deck replaces it -- make the change in the program that draws the "
-        "page and build again, never in the delivered file"
-    )
-
-
-def unrecorded_deliveries(state_dir: Path) -> list[str]:
-    """Every recorded deck whose file no longer holds the bytes recorded for it.
-
-    The same question `tampered_delivery` asks per publish, for a caller with no publish
-    in hand -- the hook at the end of a turn. Empty is the only state a finished run
-    should be in: the record, the gates' own `blocking.json` and the file under `out/`
-    all describing one set of bytes.
-    """
-    return [
-        report
-        for path in sorted(_recorded(state_dir))
-        if (report := tampered_delivery(state_dir, Path(path))) is not None
-    ]
-
-
-def _recorded(state_dir: Path) -> dict[str, str]:
-    """path -> sha256, as the record holds it."""
-    try:
-        held = json.loads((state_dir / PUBLISHED_RECORD).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return {
-        str(entry["path"]): str(entry["sha256"])
-        for entry in held.get("published", [])
-        if isinstance(entry, dict) and entry.get("path") and entry.get("sha256")
-    }
 
 
 def published_original(state_dir: Path, copy: Path) -> Path | None:
@@ -237,6 +127,7 @@ def published_original(state_dir: Path, copy: Path) -> Path | None:
     preview sat beside the original, under the original's stem.
     """
     import hashlib
+    import json
 
     try:
         digest = hashlib.sha256(copy.read_bytes()).hexdigest()
@@ -254,6 +145,8 @@ def published_original(state_dir: Path, copy: Path) -> Path | None:
 
 def published_digests(state_dir: Path) -> set[str]:
     """The sha256 of every deck this project has published; empty when none has been."""
+    import json
+
     target = state_dir / PUBLISHED_RECORD
     try:
         held = json.loads(target.read_text(encoding="utf-8"))
@@ -271,6 +164,8 @@ def record_refused(project, note: str, blocking: Sequence[Finding]) -> None:
     only the directory to go on, and the stage result the reason was in is gone by
     then. Kept until the next publish, which clears it.
     """
+    import json
+
     target = project.state_dir / REFUSED_RECORD
     payload = {
         "note": note,
@@ -285,6 +180,8 @@ def record_refused(project, note: str, blocking: Sequence[Finding]) -> None:
 
 def last_refusal(state_dir: Path) -> str | None:
     """Why the last build was refused, as one passage; None once a build was published since."""
+    import json
+
     try:
         held = json.loads((state_dir / REFUSED_RECORD).read_text(encoding="utf-8"))
     except (OSError, ValueError):

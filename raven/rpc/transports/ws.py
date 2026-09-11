@@ -446,25 +446,6 @@ def build_app(
         assets = static_dir / "assets"
         if assets.is_dir():
             app.router.add_static("/assets", assets)
-
-            async def revalidate(_request: web.Request, response: web.StreamResponse) -> None:
-                """Make the browser ask before reusing an asset it already has.
-
-                These files are served from one unversioned path each, so a
-                rebuilt icon lands at the URL its predecessor is cached under.
-                Without a directive the browser is free to guess a lifetime from
-                the last-modified date and keep the old drawing for hours -- a
-                provider logo replaced in the bundle went on rendering as the
-                one it replaced.
-
-                ``no-cache`` is not "do not store": the copy is kept and offered
-                back with its etag, so an unchanged file costs a 304 and no
-                bytes. Only the guessing is switched off.
-                """
-                if _request.path.startswith("/assets/"):
-                    response.headers.setdefault("Cache-Control", "no-cache")
-
-            app.on_response_prepare.append(revalidate)
     else:
 
         async def placeholder(_request: web.Request) -> web.Response:

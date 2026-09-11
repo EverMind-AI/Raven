@@ -10,8 +10,6 @@
 import { ds, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 
-import { offered } from './types'
-
 import type { ApiProtocol, ModelSource, Provider } from './types'
 
 export interface OpenAt {
@@ -77,17 +75,11 @@ export function setCurrent(model: string): void {
    settings button can both be reached while a picker is up. */
 export function open(anchor?: HTMLElement | null, after?: () => void, marked?: string): void {
   if (!installed()) return
-  const accounts = source()
+  const authed = source()
     .providers()
-    .filter((p) => p.on)
-  const authed = accounts.filter((p) => offered(p).length)
+    .filter((p) => p.on && p.models.length)
   if (!authed.length) {
-    /* Two different dead ends, and telling them apart is the whole value of
-       the message: nothing connected is a credential to go and add, while
-       connected with nothing added is a list to go and build. Saying "no
-       account" to somebody whose keys all work sends them to fix what is not
-       broken. */
-    toast(t(accounts.length ? 'gui.picker.no_models' : 'gui.picker.no_account'))
+    toast(t('gui.picker.no_account'))
     return
   }
   const host = anchor || document.getElementById('modelChip')
@@ -107,7 +99,7 @@ export function close(): void {
 
 /* Only providers with an account and something to offer. Exported because the
    list decides both columns and the initial selection. */
-export const authed = (): Provider[] => source().providers().filter((p) => p.on && offered(p).length)
+export const authed = (): Provider[] => source().providers().filter((p) => p.on && p.models.length)
 
 export const protocolFor = (provider: Provider, model: string): ApiProtocol => {
   const configured = provider.protocols?.[model]

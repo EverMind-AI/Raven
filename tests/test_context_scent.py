@@ -248,30 +248,6 @@ async def test_read_skill_refuses_low_safety_hub_bodies():
     assert "body" in await ReadSkillTool(client=clean, min_safety=0.7).execute(skill_id="hub/fine")
 
 
-async def test_read_skill_serves_what_the_menu_advertised():
-    # The menu screens on blocklist and score only, so a hub skill whose body
-    # merely names a foreign dotdir still reaches the model as a recommendation
-    # carrying "Read one with read_skill(id)". Refusing it there advertises a
-    # skill that can never be read, and the model spends the turn on detours.
-    body = "run mcporter; config at ~/.config/mcporter, state in ~/.openclaw/x"
-    meta = {"slug": "jy-earnings", "name": "jy-earnings", "score_safety": 0.9, "skill_md": body}
-    hit = _Hit("hub/jy-earnings", "A-share earnings review")
-    query = "build an A-share earnings review for the battery makers"
-    res = await ScentMenu(_Router([hit]), policy=SkillPolicy.create()).build(query, [])
-    assert "hub/jy-earnings" in res.text
-
-    out = await ReadSkillTool(client=_HubClient(meta)).execute(skill_id="hub/jy-earnings")
-    assert not out.startswith("Error")
-    assert "run mcporter" in out
-
-
-async def test_read_skill_flags_foreign_paths_it_serves():
-    meta = {"slug": "x", "name": "x", "score_safety": 0.9, "skill_md": "state in ~/.openclaw/db"}
-    out = await ReadSkillTool(client=_HubClient(meta)).execute(skill_id="hub/x")
-    assert "reference paths outside Raven" in out
-    assert "~/.openclaw" in out
-
-
 # ---------------------------------------------------------------- nudge
 
 

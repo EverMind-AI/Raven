@@ -112,21 +112,6 @@ DS.xa = {
         name: row.name,
         description: row.description || undefined,
       });
-    } else if (op === 'test') {
-      /* The one call here that spends the agent's own quota: it dispatches the
-         real backend once. That is why nothing runs it on page load -- the free
-         `probe` is what fills the rows -- and why it is only reached from the
-         card, by a click.
-
-         The verdict is recorded server-side and comes back on the refetched
-         rows (`last_test_ok` / `last_test_at_ms` / `last_test_detail`), so
-         nothing here has to hold it. */
-      await rpc.call('subagents.test', { name: row.name, source: row.configured ? 'config' : 'preset' });
-    } else if (op === 'test_cancel') {
-      /* Kills the agent's process group server-side. The test's own call is
-         still open on another connection and answers `cancelled: true` from
-         there, so this one has nothing to report and only has to arrive. */
-      await rpc.call('subagents.test_cancel', { name: row.name });
     } else if (op === 'build') {
       /* Returns as soon as the build is under way, not when it is done: it is a
          few hundred MB of downloads. The row's `building` flag is what says it is

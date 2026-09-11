@@ -66,7 +66,7 @@ from raven_ppt.services.gates.quiet import quiet
 from raven_ppt.services.measure.geometry import iter_shapes, open_deck, picture_blob, shows_picture
 from raven_ppt.services.measure.type_size import census, rendered_spans
 from raven_ppt.services.publish import PublishRefusedError, publish, stage, strip_vendor_marks
-from raven_ppt.services.publish.deliver import delivery_report, published_digests, record_refused
+from raven_ppt.services.publish.deliver import published_digests, record_refused
 from raven_ppt.services.template import house_style, prepared_path
 
 # Default for `BuildStage.views_per_call`, which is how many page renders one reply
@@ -193,12 +193,6 @@ class BuildStage:
             return StageResult(ok=False, findings=tuple(findings), data=data, note=note)
 
         already = bool(published_digests(project.state_dir))
-        # Asked here and not inside `publish`: once the file is overwritten there is
-        # nothing left to compare it against, and this is the last moment the deck the
-        # user currently holds still exists.
-        changed = delivery_report(project, self.destination(project))
-        if changed is not None:
-            data["delivery_changed"] = changed
         try:
             staged = stage(project, outcome.pptx_path, pages=outcome.pages)
             delivered = publish(

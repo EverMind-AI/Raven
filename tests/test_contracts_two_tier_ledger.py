@@ -134,29 +134,7 @@ LEDGER = {
         # says a session is gone, with the removal outcome.
         "SessionObserver",
     },
-    "factory_loop": {
-        "AgentHook",
-        "AgentHookContext",
-        "FACTORY_LOOP_SURFACE_VERSION",
-        "HookDecision",
-        "McpHost",
-        # The four strategy roles the loop delegates to (harness.py), and the
-        # carriers between them. Factory-loop tier for the reason the hook
-        # vocabulary is: a replacement loop may name its own strategy points,
-        # and the four here are this loop's. The roles themselves --
-        "ActionModule",
-        "CapabilityModule",
-        "MemoryModule",
-        "PlanningModule",
-        # -- the frozen set one generation runs on --
-        "HarnessModules",
-        # -- and what crosses each seam.
-        "ActionRequest",
-        "CapabilityRequest",
-        "CapabilitySelection",
-        "PlanningRequest",
-        "PlanningResult",
-    },
+    "factory_loop": {"AgentHook", "AgentHookContext", "FACTORY_LOOP_SURFACE_VERSION", "HookDecision", "McpHost"},
 }
 
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent / "raven" / "contracts"

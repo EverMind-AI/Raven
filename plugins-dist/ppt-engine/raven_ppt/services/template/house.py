@@ -30,7 +30,6 @@ from typing import Any
 
 from raven_ppt.services.measure.geometry import EMU_PER_INCH, EMU_PER_POINT, PICTURE, iter_shapes
 from raven_ppt.services.measure.type_size import rendered_spans, slots
-from raven_ppt.services.template.capacity import row_band
 from raven_ppt.services.template.menu import PageEntry, menu
 
 # The top of the page, where a title row lives. Measured over the example pages of
@@ -55,15 +54,6 @@ _ALIGNS = {"l": "left", "ctr": "center", "r": "right", "just": "left", "dist": "
 # what `ppt_layout.write` does when the caller names neither.
 _DEFAULT_ANCHOR = "top"
 _DEFAULT_ALIGN = "left"
-# Which way copy past the upper bound leaves a row written at this anchor. Bottom is
-# the one that destroys the page rather than spoiling it: at title size the copy grows
-# up and its first line goes off the top of the canvas, and 10% of the bundled
-# templates' boxes are anchored there while three of the ten anchor none.
-_SPILLS_TO = {
-    "top": ", and more spills below it",
-    "middle": ", and more spills past both edges",
-    "bottom": ", and more spills upward off the top",
-}
 
 
 @dataclass(frozen=True)
@@ -90,16 +80,6 @@ class Row:
     composed ones at y=23px, the same 29px glyph height on both."""
     pages: int = 1
     """How many of the template's content pages put this row in the same place."""
-    capacity: str = ""
-    """How much copy the row takes at this size, from `capacity.row_band`.
-
-    The line reported the box, the size, the face, the alignment and the anchor and
-    stopped one number short of the one an author needs before writing into it: the
-    11.88x0.98in row eight of the bundled templates share is 56-75 Latin characters at
-    the 28pt its pages render, and nothing above said so. A written box never shrinks
-    (`ppt_layout.write` sets `auto_size` to none), so past the upper bound the copy
-    spills the way `anchor` says it will -- and this row is anchored bottom, which is
-    upward, off the top of the slide."""
 
     def line(self) -> str:
         left, top, width, height = self.box
@@ -114,8 +94,6 @@ class Row:
             parts.append(f"{self.align}-aligned")
         if self.anchor:
             parts.append(f"anchored {self.anchor}")
-        if self.capacity:
-            parts.append(self.capacity + _SPILLS_TO[self.anchor or _DEFAULT_ANCHOR])
         return ", ".join(parts)
 
 
@@ -163,56 +141,39 @@ class House:
         return (round(left, 2), round(top, 2), round(width, 2), round(max(height, 0.0), 2))
 
     def brief(self) -> dict[str, Any]:
-        """The house style as an author reads it: every box in corners, and a line to paste.
+        """The house style as an author reads it: boxes, sizes, and a line to paste.
 
-        Two corners throughout, the reading `ppt_layout.Box` takes, because every call an
-        author makes with these numbers is a `ppt_layout` one -- `Box.columns`, `.rows`,
-        `.grid`, `plane()`, `write()`, `clear_region` -- and all of them take a box rather
-        than a size. This used to report `(left, top, width, height)` one line above a
-        paste-able `Box.corners(...)` built from the same rectangle, which is two silently
-        different readings of it a line apart: one live run read the whole call by the two
-        numbers they share and wrote a size into a box of its own. An author that wants the
-        python-pptx size has `Box.at`, `.w`, `.h` and `.pptx()` to get it from a box; an
-        author holding a bare size has no safe way back to a box, which is why the box is
-        what ships.
+        The paste-able line exists because the two vocabularies differ by one
+        subtraction -- this reports (left, top, width, height) and `ppt_layout.Box`
+        takes (x0, y0, x1, y1) -- and a model doing that subtraction in its head is a
+        page half an inch off the grid the template keeps.
         """
         payload: dict[str, Any] = {"canvas_in": [round(self.canvas[0], 2), round(self.canvas[1], 2)]}
         if self.layout:
             payload["layout_for_a_page_you_draw"] = self.layout
         if self.title:
             payload["title_row"] = self.title.line()
-            payload["title_row_box_corners_in"] = _corners(self.title.box)
+            payload["title_row_box_in"] = list(self.title.box)
             payload["title_row_on_pages"] = self.title.pages
             payload["title_row_as_code"] = _as_code("TITLE_ROW", self.title)
         if self.subtitle and self.subtitle.pages >= _AGREEMENT:
             payload["subtitle_row"] = self.subtitle.line()
-            payload["subtitle_row_box_corners_in"] = _corners(self.subtitle.box)
+            payload["subtitle_row_box_in"] = list(self.subtitle.box)
             payload["subtitle_row_as_code"] = _as_code("SUBTITLE_ROW", self.subtitle)
         if self.scale:
             payload["type_pt"] = dict(self.scale)
         if self.faces.get("text"):
             payload["face"] = self.faces["text"]
         if self.safe:
-            payload["safe_area_corners_in"] = _corners(self.safe)
+            payload["safe_area_in"] = list(self.safe)
         body = self.body_area
         if body:
-            payload["body_area_corners_in"] = _corners(body)
+            payload["body_area_in"] = list(body)
             payload["body_area_as_code"] = (
                 f"from ppt_layout import Box; body = Box.corners({body[0]:g}, {body[1]:g}, "
                 f"{body[0] + body[2]:g}, {body[1] + body[3]:g})"
             )
         return payload
-
-
-def _corners(box: tuple[float, float, float, float]) -> list[float]:
-    """One measured `(left, top, width, height)` as the two corners a box is given in.
-
-    The subtraction lives here rather than in the reader: a model doing it in its head is
-    a page half an inch off the grid the template keeps, and a model not realising it was
-    owed is a rectangle of the wrong size entirely.
-    """
-    left, top, width, height = box
-    return [round(left, 2), round(top, 2), round(left + width, 2), round(top + height, 2)]
 
 
 def _as_code(name: str, row: Row) -> str:
@@ -483,10 +444,6 @@ def _row(shape, on_page: dict[tuple[int, int], float], slide=None) -> Row:
             else (_align(slide, shape) if slide is not None else None)
         ),
         anchor=title_anchor(slide, shape) if slide is not None else None,
-        # The rendered size and not the declared one: a template's title placeholder
-        # usually declares none, and a band computed off a layout's 24pt for a row the
-        # page draws at 28pt is 14% of a headline out.
-        capacity=row_band(shape, _set_at(shape, on_page)),
         pages=1,
     )
 
