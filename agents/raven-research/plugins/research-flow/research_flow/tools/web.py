@@ -213,6 +213,13 @@ SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
         # ``/v1/search`` documents no result-offset parameter.
         paginates=False,
     ),
+    "serply": SearchProviderSpec(
+        vendor="serply",
+        label="Serply",
+        env_var="SERPLY_API_KEY",
+        # ``start`` is a result offset like SerpApi's, so page N is start=(N-1)*num.
+        paginates=True,
+    ),
 }
 
 
@@ -1167,6 +1174,17 @@ class WebSearchTool(Tool):
                 },
                 timeout=10.0,
             )
+        if self.provider == "serply":
+            # ``start`` is an offset in results, omitted at page 1 like SerpApi's.
+            params = {"q": query, "num": n}
+            if page > 1:
+                params["start"] = (page - 1) * n
+            return await client.get(
+                "https://api.serply.io/v1/search",
+                params=params,
+                headers={"Accept": "application/json", "X-Api-Key": self.api_key},
+                timeout=10.0,
+            )
         # AnySearch.
         return await client.post(
             "https://api.anysearch.com/v1/search",
@@ -1237,6 +1255,9 @@ class WebSearchTool(Tool):
             if data.get("success") is False:
                 raise ValueError(f"Firecrawl: {data.get('error') or 'search failed'}")
             return {"organic": _rows(data.get("data"), url="url", snippet="description")}
+        if self.provider == "serply":
+            # Google SERP rows under ``results``; the snippet is ``description``.
+            return {"organic": _rows(data.get("results"), url="link", snippet="description")}
         # AnySearch publishes the request shape but not the response. Parse
         # tolerantly: results may sit at the top level or inside the
         # ``{code, message, data}`` envelope its auth endpoint uses, and an item

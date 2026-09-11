@@ -74,6 +74,7 @@ SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
     "firecrawl": SearchProviderSpec(
         "firecrawl", "Firecrawl", WEB_VENDOR_ENV_VARS["firecrawl"], "https://firecrawl.dev"
     ),
+    "serply": SearchProviderSpec("serply", "Serply", WEB_VENDOR_ENV_VARS["serply"], "https://serply.io"),
 }
 
 FETCH_PROVIDERS: dict[str, FetchProviderSpec] = {
@@ -319,6 +320,13 @@ class WebSearchTool(Tool):
                 },
                 timeout=10.0,
             )
+        if self.provider == "serply":
+            return await client.get(
+                "https://api.serply.io/v1/search",
+                params={"q": query, "num": n},
+                headers={"Accept": "application/json", "X-Api-Key": self.api_key},
+                timeout=10.0,
+            )
         return await client.post(
             "https://api.anysearch.com/v1/search",
             json={"query": query, "max_results": n},
@@ -375,6 +383,9 @@ class WebSearchTool(Tool):
             if data.get("success") is False:
                 raise ValueError(f"Firecrawl: {data.get('error') or 'search failed'}")
             return {"organic": _rows(data.get("data"), url="url", snippet="description")}
+        if self.provider == "serply":
+            # Google SERP rows under ``results``; the snippet is ``description``.
+            return {"organic": _rows(data.get("results"), url="link", snippet="description")}
         # AnySearch publishes the request shape but not the response: results may
         # sit at the top level or inside a ``{code, message, data}`` envelope, and
         # an item spells the URL ``url`` or ``link``, the text ``snippet`` or
