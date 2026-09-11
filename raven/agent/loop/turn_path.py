@@ -25,6 +25,7 @@ from raven.agent.loop._shared import (
     _TOOL_DURATION_MS_KEY,
     _TOOL_METADATA_KEY,
     _TOOL_PREVIEW_MAX_CHARS,
+    OUTPUT_LIMIT_NUDGE,
     POST_TOOL_NUDGE,
     SKIPPED_AFTER_BLOCKED_CALL,
     Any,
@@ -894,6 +895,10 @@ class TurnPathMixin:
         # only to tell a reader why the elisions that follow are all this turn
         # has left; the retry budget itself is ``compress_retries``.
         head_summary_failures = 0
+        # Said once per turn, not once per retry: three identical copies
+        # of it in one transcript are noise, and the escalation for advice
+        # that did not work is `loop_break_nudge`, not repetition.
+        output_limit_told = False
         # The watch-work judgement's state, owned by this turn: the loop is a
         # singleton and turns from other sessions run concurrently, so anything
         # on `self` here would let one session's dispatch silence another's
@@ -1914,6 +1919,25 @@ class TurnPathMixin:
                             call_reasoning_effort or "unstated",
                             lowered,
                         )
+                        if response.truncated and not output_limit_told:
+                            # The descent above changes how much thinking the next
+                            # call may buy, which is nothing to a model that does no
+                            # reasoning and nothing to a write whose payload is the
+                            # thing that overran. Neither case leaves a tool call for
+                            # `Tool.truncation_hint` to ride, so this is the only
+                            # channel that reaches the model at all.
+                            # Read off `response.truncated`, not `finish_reason`: the
+                            # contract has one field for "stopped at the ceiling" and
+                            # says an upstream may claim success instead.
+                            # Same assistant-then-user shape as the nudge above, for
+                            # the same reason: a bare tool->user pair is a 400 on most
+                            # APIs, and the prefill may have left an assistant last.
+                            output_limit_told = True
+                            messages = self.context.add_assistant_message(messages, "(empty)")
+                            messages[-1]["_recovery_synthetic"] = True
+                            messages.append(
+                                {"role": "user", "content": OUTPUT_LIMIT_NUDGE, "_recovery_synthetic": True}
+                            )
                         prev_had_tool_calls = False
                         continue
                 if action is RecoveryAction.FAIL:

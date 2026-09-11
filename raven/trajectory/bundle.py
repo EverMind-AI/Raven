@@ -14,7 +14,12 @@ and being copied to another machine::
 
 Artifact references inside ``spans.jsonl`` are rewritten to bundle-relative
 paths (``artifacts/<name>``) so the bundle reads offline; missing artifact
-files are skipped and listed in the manifest rather than failing the pack.
+files are skipped and listed in the manifest rather than failing the pack. An
+``audit.artifact.v2`` artifact is resolved on the way in - its message
+references are replaced by the messages themselves - so a bundle carries no
+dependency on the live message store, and an address whose blob is gone
+becomes a labelled placeholder listed under the manifest's
+``missing_messages``.
 A trace id addressing a multi-turn attempt is resolved to the canonical
 attempt id first, so the bundle always holds the whole trajectory. The
 bundle is built in a staging directory and swapped in whole, so a re-pack
@@ -33,6 +38,7 @@ from typing import Any
 
 from raven import __version__
 from raven.config.paths import get_workspace_path
+from raven.tracing import artifact_v2
 from raven.tracing import config as tracing_config
 from raven.trajectory.store import iter_spans, pin, resolve_attempt_id
 from raven.trajectory.verdict import read_verdicts
@@ -42,18 +48,47 @@ BUNDLE_FORMAT_VERSION = 1
 _ARTIFACTS_DIR = "artifacts"
 
 
+def _copy_resolved(src: Path, target: Path, store_artifacts: Path, missing_messages: list[str]) -> bool:
+    """Write ``src`` to ``target`` resolved; False when it is not a v2 shell.
+
+    Unreadable or unparseable input answers False so the caller falls back to
+    a byte copy: a file this cannot understand is still worth packing.
+    """
+    try:
+        payload = json.loads(src.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not artifact_v2.is_v2(payload):
+        return False
+
+    def record(sha1: str) -> dict[str, str]:
+        if sha1 not in missing_messages:
+            missing_messages.append(sha1)
+        return artifact_v2.placeholder(sha1)
+
+    resolved = artifact_v2.resolve_payload(payload, store_artifacts, on_missing=record)
+    target.write_text(json.dumps(resolved, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True
+
+
 def _import_artifact(
     source: str,
     artifacts_dir: Path,
     copied: dict[str, str],
     missing: list[str],
     names: dict[str, str],
+    store_artifacts: Path,
+    missing_messages: list[str],
 ) -> str | None:
     """Copy one referenced file into the bundle; return its relative path.
 
     Deduped per source path. Distinct sources sharing a basename get a
     counter prefix so neither overwrites the other. Returns None (and records
     the source in ``missing``) when the file no longer exists.
+
+    A v2 shell is resolved on the way in, so the bundle holds v1-shaped
+    artifacts and stays readable on a machine that has no message store. That
+    is the bundle's whole promise; keeping references here would break it.
     """
     if source in copied:
         return copied[source]
@@ -69,7 +104,9 @@ def _import_artifact(
         name = f"{counter}-{src.name}"
         counter += 1
     names[name] = source
-    shutil.copy2(src, artifacts_dir / name)
+    target = artifacts_dir / name
+    if not _copy_resolved(src, target, store_artifacts, missing_messages):
+        shutil.copy2(src, target)
     rel = f"{_ARTIFACTS_DIR}/{name}"
     copied[source] = rel
     return rel
@@ -134,6 +171,7 @@ def collect_bundle(
 
         copied: dict[str, str] = {}
         missing: list[str] = []
+        missing_messages: list[str] = []
         names: dict[str, str] = {}
         rewritten = 0
         out_spans: list[dict[str, Any]] = []
@@ -152,7 +190,15 @@ def collect_bundle(
             for key, value in attrs.items():
                 if not key.endswith(".artifact_path") or not isinstance(value, str) or not value:
                     continue
-                rel = _import_artifact(value, artifacts_dir, copied, missing, names)
+                rel = _import_artifact(
+                    value,
+                    artifacts_dir,
+                    copied,
+                    missing,
+                    names,
+                    resolved_state / "logs" / "audit-artifacts",
+                    missing_messages,
+                )
                 if rel is not None:
                     attrs[key] = rel
                     rewritten += 1
@@ -183,6 +229,7 @@ def collect_bundle(
             "artifact_count": len(copied),
             "rewritten_artifact_paths": rewritten,
             "missing_artifacts": missing,
+            "missing_messages": missing_messages,
             "session_included": session_included,
             "verdict_count": len(verdicts),
             "raven_version": __version__,

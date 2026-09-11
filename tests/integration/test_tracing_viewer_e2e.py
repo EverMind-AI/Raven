@@ -467,3 +467,149 @@ def test_appended_span_reaches_a_later_poll(tmp_path):
             time.sleep(0.5)
 
     assert seen == {"first-session", "second-session"}
+
+
+def _v2_shell(state_dir, messages, *, extra_messages=()):
+    """A v2 shell plus its message blobs under the viewer's state dir."""
+    from raven.tracing import artifact_v2 as v2
+
+    artifacts = state_dir / "logs" / "audit-artifacts"
+    refs = []
+    for message in messages:
+        sha1 = v2.message_sha1(message)
+        blob = v2.message_path(artifacts, sha1)
+        blob.parent.mkdir(parents=True, exist_ok=True)
+        blob.write_text(v2.message_text(message), encoding="utf-8")
+        refs.append(v2.make_ref(sha1))
+    payload = {
+        "artifactFormat": v2.ARTIFACT_FORMAT,
+        "provider": "openrouter",
+        "model": "openrouter/x",
+        "systemPrompt": refs[0],
+        "prompt": refs[-1],
+        "messages": [*refs, *extra_messages],
+        "tools": [{"function": {"name": "grep"}}],
+    }
+    path = artifacts / "llm.input" / "2026-08-01" / "in.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path, payload
+
+
+def test_the_viewer_resolves_a_v2_artifact_to_v1_shape(tmp_path):
+    messages = [
+        {"role": "system", "content": "you are raven"},
+        {"role": "user", "content": [{"type": "text", "text": "latest"}]},
+    ]
+    shell, _ = _v2_shell(tmp_path, messages)
+
+    with _viewer(tmp_path) as port:
+        got = _get(port, f"/api/artifact?path={shell}")
+
+    assert got["parsed"]["messages"] == messages
+    assert got["parsed"]["systemPrompt"] == "you are raven"
+    assert isinstance(got["parsed"]["prompt"], str), "app.js calls .match() on this"
+    assert got["parsed"]["prompt"] == '[{"type":"text","text":"latest"}]'
+    assert "artifactFormat" not in got["parsed"]
+
+
+def test_the_viewer_renders_a_placeholder_for_a_message_blob_that_is_gone(tmp_path):
+    from raven.tracing import artifact_v2 as v2
+
+    messages = [
+        {"role": "system", "content": "you are raven"},
+        {"role": "user", "content": "hi"},
+    ]
+    shell, _ = _v2_shell(tmp_path, messages)
+    gone = v2.message_sha1(messages[1])
+    v2.message_path(tmp_path / "logs" / "audit-artifacts", gone).unlink()
+
+    with _viewer(tmp_path) as port:
+        got = _get(port, f"/api/artifact?path={shell}")
+
+    resolved = got["parsed"]["messages"]
+    assert len(resolved) == 2, "position is preserved; a message is never dropped"
+    assert gone in resolved[1]["content"]
+
+
+def test_the_viewer_leaves_a_reference_that_is_not_a_sha1_alone(tmp_path):
+    from raven.tracing import artifact_v2 as v2
+
+    artifacts = tmp_path / "logs" / "audit-artifacts"
+    shell = artifacts / "llm.input" / "2026-08-01" / "in.json"
+    shell.parent.mkdir(parents=True, exist_ok=True)
+    shell.write_text(
+        json.dumps(
+            {
+                "artifactFormat": v2.ARTIFACT_FORMAT,
+                "messages": [{"$msg": "../../../etc/passwd"}, {"$msg": "0" * 39}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with _viewer(tmp_path) as port:
+        got = _get(port, f"/api/artifact?path={shell}")
+
+    assert got["parsed"]["messages"] == [
+        {"$msg": "../../../etc/passwd"},
+        {"$msg": "0" * 39},
+    ], "an invalid reference is data, not an address: pass it through untouched"
+
+
+def test_a_v1_artifact_is_returned_unchanged(tmp_path):
+    artifacts = tmp_path / "logs" / "audit-artifacts"
+    shell = artifacts / "llm.input" / "2026-08-01" / "v1.json"
+    shell.parent.mkdir(parents=True, exist_ok=True)
+    v1 = {"messages": [{"role": "user", "content": "hi"}], "systemPrompt": "sys"}
+    shell.write_text(json.dumps(v1, ensure_ascii=False), encoding="utf-8")
+
+    with _viewer(tmp_path) as port:
+        got = _get(port, f"/api/artifact?path={shell}")
+
+    assert got["parsed"] == v1
+
+
+def test_python_and_the_viewer_resolve_a_shell_identically(tmp_path):
+    """The one gate on 'one rule, two implementations, two languages'.
+
+    Includes non-string content on purpose: Python's default JSON separators
+    carry spaces and JavaScript's do not, so a text field built from a
+    multimodal message is where the two would first disagree.
+    """
+    from raven.tracing import artifact_v2 as v2
+
+    artifacts = tmp_path / "logs" / "audit-artifacts"
+    messages = [
+        {"role": "system", "content": "you are raven"},
+        {"role": "user", "content": "plain"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "1", "name": "grep"}]},
+        {"role": "user", "content": [{"type": "text", "text": "latest"}, {"type": "image"}]},
+    ]
+    refs = []
+    for message in messages:
+        blob = v2.message_path(artifacts, v2.message_sha1(message))
+        blob.parent.mkdir(parents=True, exist_ok=True)
+        blob.write_text(v2.message_text(message), encoding="utf-8")
+        refs.append(v2.make_ref(v2.message_sha1(message)))
+    inlined = {"role": "user", "content": "this one was never addressed"}
+    shell_payload = {
+        "artifactFormat": v2.ARTIFACT_FORMAT,
+        "provider": "openrouter",
+        "model": "openrouter/x",
+        "systemPrompt": refs[0],
+        "prompt": refs[3],
+        "messages": [*refs, inlined, {"$msg": "not-a-sha1"}],
+        "tools": [{"function": {"name": "grep"}}],
+    }
+    shell = artifacts / "llm.input" / "2026-08-01" / "in.json"
+    shell.parent.mkdir(parents=True, exist_ok=True)
+    shell.write_text(json.dumps(shell_payload, ensure_ascii=False), encoding="utf-8")
+
+    from_python = v2.resolve_payload(shell_payload, artifacts)
+    with _viewer(tmp_path) as port:
+        from_viewer = _get(port, f"/api/artifact?path={shell}")["parsed"]
+
+    assert json.dumps(from_python, ensure_ascii=False, sort_keys=True) == json.dumps(
+        from_viewer, ensure_ascii=False, sort_keys=True
+    )

@@ -448,9 +448,15 @@ same thinking-only turn takes NUDGE after a tool, else RETRY, and no request han
 ends on an assistant message. RETRY descends the effort ladder by what a rung *sends*, not by
 its label: the provider is asked (`LLMProvider.reasoning_wire_keys`) and a rung whose request
 this wire cannot tell apart from the one that failed is skipped -- when none is left, the
-turn has nothing to change and FAILs rather than paying for the same call twice.
+turn has nothing to change and FAILs rather than paying for the same call twice. A retry
+after a turn cut at the output ceiling also carries `OUTPUT_LIMIT_NUDGE`, once per turn. The
+descent changes what the request asks *for*; the nudge is the only thing that tells the model
+its last turn was cut and that a payload too large to finish has to be split -- which no
+effort rung can do, and which `Tool.truncation_hint` cannot reach because a turn cut before
+any call produced no tool result to carry it.
 _Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes; and reading
-FAIL as a fourth mode — it is the answer given when there is nothing left to try.
+FAIL as a fourth mode — it is the answer given when there is nothing left to try;
+`OUTPUT_LIMIT_NUDGE` rides RETRY rather than being the NUDGE mode.
 
 **Call Record** (`contracts/llm_provider.py`, `providers/call_record.py`):
 What the transport did on one model call, carried on `LLMResponse.call_record` and stored
@@ -1572,14 +1578,44 @@ _Avoid_: confusing with JudgeVerdict (the EvalEngine's completed/failed/unknown)
 **Trajectory Pin** (`raven/trajectory/store.py`):
 The retention promise for an Attempt or trace id, recorded in `pins.json` in the trace
 state dir: pinned ids are corpus, not diagnostics — purge tooling must never delete
-their spans or the artifacts those spans reference.
+their spans or the artifacts those spans reference, nor anything those artifacts
+reference in turn. An `audit.artifact.v2` shell holds no messages of its own, so
+deleting a Message Blob it addresses destroys the pinned trajectory while leaving
+the artifact file in place.
 
 **Trajectory Bundle** (`raven/trajectory/bundle.py`):
 The self-contained offline directory `collect_bundle` / `raven trajectory save` packs
 for one Attempt: `manifest.json` + `spans.jsonl` (artifact references rewritten to
 bundle-relative paths) + `artifacts/` + the session's conversation record + its
-verdicts. Bundling declares the trajectory corpus, so the id is auto-pinned.
+verdicts. An `audit.artifact.v2` artifact is resolved on the way in, so a bundle
+depends on no Message Blob and reads on a machine that has none; a blob that is gone
+becomes a labelled placeholder at its own index and its sha1 is listed under the
+manifest's `missing_messages`. Bundling declares the trajectory corpus, so the id is
+auto-pinned.
 _Avoid_: "archive" — that names the tracing store's rotated-log directory.
+
+**Message Blob** (`raven/tracing/artifact_v2.py`):
+One model-input message stored once, at
+`<state_dir>/logs/audit-artifacts/_messages/<sha1[:2]>/<sha1>.json`, addressed by the
+sha1 of `json.dumps(message, ensure_ascii=False, default=str)` — key order
+preserved, since sorting would make resolution hand back a reordered copy. Beside
+`_blobs/` and never inside it: `raven.tracing.compact` sweeps a blob whose link count
+is 1, and a Message Blob's is permanently 1 because a shell references it from its
+JSON text rather than by hard link. `compact` names both stores in
+`_CONTENT_STORES` and walks neither as an artifact tree -- their layout is
+indistinguishable from `<kind>/<day>/<file>`, so a store left in the walk is rehashed
+whole on every run and hard-linked into `_blobs/`, breaking this boundary. No reclaim path yet; growth is bounded only by use.
+_Avoid_: storing one under `_blobs/` — that directory holds whole-artifact
+payloads, and `compact` sweeps any member of it whose link count is 1.
+
+**Artifact Shell** (`raven/observability/semconv.py`):
+An `llm.input` artifact in `audit.artifact.v2` form: the call's identity plus one
+`{"$msg": "<sha1>"}` reference per message, with `systemPrompt` and `prompt` aliasing
+their own element rather than restating its text. Resolving a shell reproduces the v1
+payload exactly, which is the invariant the format rests on. The envelope is a dict so
+a reader ignoring `artifactFormat` fails loudly instead of rendering a sha1 as prompt
+text, and so one shell can mix references with a message inlined because its blob
+could not be written.
 
 **Trajectory Redaction** (`raven/trajectory/redact.py`):
 The three-layer sanitization `redact_bundle` applies to a **copy** of a Trajectory

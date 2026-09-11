@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import artifact_v2
+
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024
 
 _KIND_FILES = {
@@ -82,6 +84,7 @@ class TraceStore:
         self.logs_dir = self.state_dir / "logs"
         self.artifacts_dir = self.logs_dir / "audit-artifacts"
         self.blobs_dir = self.artifacts_dir / BLOBS_DIR_NAME
+        self.messages_dir = artifact_v2.messages_dir(self.artifacts_dir)
         self.archive_dir = self.logs_dir / "archive"
         self.max_bytes = max_bytes or int(os.environ.get("TRACE_LOG_MAX_BYTES", DEFAULT_MAX_BYTES))
         self._verified_blobs: dict[str, tuple[int, int, int]] = {}
@@ -276,6 +279,31 @@ class TraceStore:
             }
         except OSError as exc:
             return {"kind": kind, "path": None, "sha1": None, "bytes": None, "preview": "", "error": str(exc)}
+
+    def address_items(self, items: list[Any]) -> list[Any]:
+        """Publish each item under ``_messages/``; return ``{"$msg": sha1}`` refs.
+
+        An item whose blob cannot be written comes back verbatim, so one
+        filesystem failure costs that item its sharing rather than the record.
+        The published blob is never hard-linked: it is the only file holding
+        that content, and the shell references it by name from its JSON text.
+        That is why these live beside ``_blobs/`` and not inside it -
+        :mod:`raven.tracing.compact` sweeps a blob whose link count is 1.
+        """
+        refs: list[Any] = []
+        for item in items:
+            try:
+                text = artifact_v2.message_text(item)
+                sha1 = artifact_v2.message_sha1(item)
+                blob = artifact_v2.message_path(self.artifacts_dir, sha1)
+                if not blob.exists():
+                    self._publish_blob(blob, text, sha1)
+                if blob.exists() and not self._blob_is_intact(blob, sha1):
+                    self._repair_blob(blob, text, sha1)
+                refs.append(artifact_v2.make_ref(sha1))
+            except OSError:
+                refs.append(item)
+        return refs
 
     @staticmethod
     def artifact_attributes(prefix: str, artifact: dict[str, Any] | None) -> dict[str, Any]:
