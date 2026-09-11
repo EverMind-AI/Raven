@@ -240,7 +240,31 @@ const PB_FIXTURE = [
 /* A row is the list's view of a playbook; a detail is the whole thing. The
    fixture keeps one object per playbook and answers both from it, so the two
    calls cannot drift apart in demo mode. */
+/* The credentials tab against the fixtures: what is "set" lives in memory for
+   the page's lifetime, and authorizing flips a server to authorized after a
+   beat, so the tab's every state is reachable with no engine behind it. */
+const PB_CREDS = { params: {}, oauth: {} };
 DS.playbooks ??= {
+  credentials: async (name) => {
+    const p = PB_FIXTURE.find((x) => x.name === name);
+    if (!p) throw new Error('no playbook named ' + name);
+    const secret = Object.entries(p.params || {}).filter(([, v]) => v.type === 'secret');
+    const servers = Object.entries(p.mcp_servers || {});
+    return {
+      params: secret.map(([k, v]) => ({ name: k, set: !!PB_CREDS.params[name + '/' + k], description: v.description || '' })),
+      servers: servers.map(([k, v]) => ({
+        name: k, auth: v.auth || 'none', enabled: v.enabled !== false,
+        authorized: !!PB_CREDS.oauth[name + '/' + k], shadows_host: false,
+      })),
+    };
+  },
+  setSecret: async (name, param) => { PB_CREDS.params[name + '/' + param] = true; },
+  clearSecret: async (name, param) => { delete PB_CREDS.params[name + '/' + param]; },
+  authorize: async (name, server) => {
+    setTimeout(() => { PB_CREDS.oauth[name + '/' + server] = true; }, 1500);
+    return { server, state: 'auth_required', auth_url: 'https://example.invalid/authorize?demo=1', error: null };
+  },
+  clearOauth: async (name, server) => { delete PB_CREDS.oauth[name + '/' + server]; },
   list: async () => PB_FIXTURE.map((p) => ({
     name: p.name,
     description: p.description,

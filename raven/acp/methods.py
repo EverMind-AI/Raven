@@ -1141,7 +1141,9 @@ class AcpMethods:
         from raven.mcp.manager import MCPConnectionManager
 
         held = ToolRegistry()
-        manager = MCPConnectionManager(held)
+        # 45s against the host's 60s session/new budget: a wedged upstream must
+        # cost this session one server, not the whole session on the host's clock.
+        manager = MCPConnectionManager(held, handshake_timeout=45.0)
         self._session_mcp[session_key] = manager
         try:
             # No executor provider: the endpoint is a unix socket on this host,

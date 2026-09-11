@@ -1,11 +1,14 @@
 import { renderSync } from '@hermes/ink'
 import React from 'react'
 import { PassThrough } from 'stream'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
 import type { DagRunNode, DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
 import type { EpisodeTool, Msg } from '../types.js'
 
+import { $directChat, viewKeyOf } from '../app/directChatStore.js'
+import { $folds, callFolds, resetFolds, toggleFold } from '../app/foldStore.js'
+import { turnFoldScope } from '../components/episodeView.js'
 import { MessageLine } from '../components/messageLine.js'
 import { DAG_TRACE_BOX_ROWS } from '../config/limits.js'
 import { layoutDagGraph } from '../lib/dagGraphLayout.js'
@@ -277,6 +280,102 @@ describe('estimatedMsgHeight covers quoted prose', () => {
 
     expect(estimate({ role: 'assistant', text: `> ${prose}` }, 80)).toBeGreaterThan(
       estimate({ role: 'assistant', text: prose }, 80)
+    )
+  })
+})
+
+
+// A settled card opens on its own predicate now, so the estimator can no longer
+// treat a stretch of work as one row. Same contract as the quoted-prose suite
+// above: the estimate may sit high, never low.
+describe('estimatedMsgHeight covers an open tool card', () => {
+  const cardMsg = (resultPreview: string, summary = 'ls -la'): Msg => ({
+    episodes: [{ index: 0, tools: [{ done: true, id: 'c1', name: 'exec', ok: true, resultPreview, summary }] }],
+    foldId: 't1',
+    kind: 'episodes',
+    role: 'assistant',
+    text: ''
+  })
+
+  beforeEach(resetFolds)
+
+  it('reserves the rows a card that opened itself actually draws', async () => {
+    const msg = cardMsg('total 42\ndrwxr-xr-x  4 admin  staff  128 Aug 28 12:00 .')
+
+    expect(estimatedMsgHeight(msg, 80, BASE)).toBeGreaterThanOrEqual(await renderedRows(msg, 80))
+  })
+
+  it('measures a result line wrapped, not counted', async () => {
+    // `foldedPreviewRows` counts logical lines and the block draws them with
+    // wrap="wrap", so one long line is one row there and many here. Counting
+    // instead of measuring is exactly the under-count that leaves stale cells.
+    const msg = cardMsg('x'.repeat(400))
+
+    expect(estimatedMsgHeight(msg, 80, BASE)).toBeGreaterThanOrEqual(await renderedRows(msg, 80))
+  })
+
+  it('reserves the capped rows a long result opens to, then one row once the reader shuts it', async () => {
+    const msg = cardMsg(Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n'))
+
+    expect(estimatedMsgHeight(msg, 80, BASE)).toBeGreaterThanOrEqual(await renderedRows(msg, 80))
+
+    const scope = turnFoldScope(viewKeyOf($directChat.get().active), 't1')
+
+    toggleFold(scope, 'seg:c1', true)
+
+    expect(estimatedMsgHeight(msg, 80, { ...BASE, cardFolds: callFolds($folds.get(), scope) })).toBe(1)
+  })
+
+  it('costs nothing for a call that returned nothing', () => {
+    // Its block would hold the argument alone, which the row already shows.
+    expect(estimatedMsgHeight(cardMsg(''), 80, BASE)).toBe(1)
+  })
+
+  it('reserves the rows a fully revealed card draws', async () => {
+    const msg = cardMsg(Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n'))
+    const scope = turnFoldScope(viewKeyOf($directChat.get().active), 't1')
+
+    toggleFold(scope, 'seg:c1', false)
+    toggleFold(scope, 'full:c1', false)
+
+    const withFolds = { ...BASE, cardFolds: callFolds($folds.get(), scope) }
+
+    expect(estimatedMsgHeight(msg, 80, withFolds)).toBeGreaterThanOrEqual(await renderedRows(msg, 80))
+    // And the third level is the reason it grew past the capped one.
+    expect(estimatedMsgHeight(msg, 80, withFolds)).toBeGreaterThan(estimatedMsgHeight(msg, 80, BASE))
+  })
+
+  it('leaves an untouched card in another transcript at its default', async () => {
+    // A transport call id is unique only inside the response that minted it:
+    // `OpenAIStepReader` restarts its counter per response, so two direct chats
+    // ordinarily both carry `c1`. Reading folds across scopes let the shut one
+    // estimate the untouched one at a single row, and a resize then reserved
+    // too few rows for a card that draws open -- the stale-cell symptom the
+    // estimator's fold-awareness exists to prevent.
+    const msg = cardMsg(Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n'))
+    const here = turnFoldScope(viewKeyOf($directChat.get().active), 't1')
+    const elsewhere = turnFoldScope('agent:other#1', 't1')
+
+    toggleFold(elsewhere, 'seg:c1', true)
+
+    const untouched = estimatedMsgHeight(msg, 80, { ...BASE, cardFolds: callFolds($folds.get(), here) })
+
+    expect(untouched).toBe(estimatedMsgHeight(msg, 80, BASE))
+    expect(untouched).toBeGreaterThanOrEqual(await renderedRows(msg, 80))
+    // The scope that owns the decision still gets it.
+    expect(estimatedMsgHeight(msg, 80, { ...BASE, cardFolds: callFolds($folds.get(), elsewhere) })).toBe(1)
+  })
+
+  it('keeps a shut stretch from shutting the card that shares its id', () => {
+    // `seg:<firstToolCallId>` reuses the stretch's first call id, so `seg:c1`
+    // and `call:c1` are the same string under two kinds.
+    const msg = cardMsg(Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n'))
+    const scope = turnFoldScope(viewKeyOf($directChat.get().active), 't1')
+
+    toggleFold(scope, 'call:c1', true)
+
+    expect(estimatedMsgHeight(msg, 80, { ...BASE, cardFolds: callFolds($folds.get(), scope) })).toBe(
+      estimatedMsgHeight(msg, 80, BASE)
     )
   })
 })

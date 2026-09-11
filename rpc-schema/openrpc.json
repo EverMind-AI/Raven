@@ -5149,6 +5149,205 @@
       }
     },
     {
+      "name": "playbooks.credentials.get",
+      "summary": "Which of a playbook's secret params and carried OAuth servers this machine holds credentials for. Names and booleans only, never a value.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ],
+      "result": {
+        "name": "PlaybooksCredentialsGetResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "params": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/PlaybookCredentialParam"
+              }
+            },
+            "servers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/PlaybookCredentialServer"
+              }
+            }
+          },
+          "required": [
+            "params",
+            "servers"
+          ]
+        }
+      }
+    },
+    {
+      "name": "playbooks.credentials.set",
+      "summary": "Store one secret param's value for a playbook on this machine (0600, under the playbook's own credential scope). Refused for a param the spec does not declare `secret`.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "param",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "value",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ],
+      "result": {
+        "name": "PlaybooksCredentialsSetResult",
+        "schema": {
+          "$ref": "#/components/schemas/OkResult"
+        }
+      }
+    },
+    {
+      "name": "playbooks.credentials.clear",
+      "summary": "Forget one stored secret param of a playbook.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "param",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ],
+      "result": {
+        "name": "PlaybooksCredentialsClearResult",
+        "schema": {
+          "$ref": "#/components/schemas/OkResult"
+        }
+      }
+    },
+    {
+      "name": "playbooks.oauth.authorize",
+      "summary": "Start the browser OAuth flow for a server the playbook carries, under the playbook's own credential scope. Answers within a few seconds with the state reached and the authorization URL the flow parked on, if any; the flow continues behind the answer.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "server",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ],
+      "result": {
+        "name": "PlaybooksOauthAuthorizeResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "server": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "auth_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "server",
+            "state"
+          ]
+        }
+      }
+    },
+    {
+      "name": "playbooks.oauth.clear",
+      "summary": "Forget the OAuth tokens this machine holds for a server the playbook carries.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "server",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ],
+      "result": {
+        "name": "PlaybooksOauthClearResult",
+        "schema": {
+          "$ref": "#/components/schemas/OkResult"
+        }
+      }
+    },
+    {
       "name": "approval.respond",
       "summary": "Answer a pending approval request.",
       "params": [
@@ -9501,7 +9700,10 @@
         "description": "The smart-mode permission reviewer started or finished looking at one tool call. Presentational only: it lets a surface name the pause on the running tool row instead of showing an unexplained stall; decisions never depend on it.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "payload"],
+        "required": [
+          "type",
+          "payload"
+        ],
         "properties": {
           "type": {
             "type": "string",
@@ -9510,7 +9712,10 @@
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["phase", "tool"],
+            "required": [
+              "phase",
+              "tool"
+            ],
             "properties": {
               "phase": {
                 "type": "string",
@@ -11173,6 +11378,73 @@
         },
         "type": "object",
         "description": "One MCP server the playbook itself carries, as the file declares it. Carries every field the runtime reads to decide what the server is and whether it runs. `env` and `headers` are declarations rather than resolved values: a carried server references a credential through `{{ params.X }}` and the run supplies it, so nothing here is ever a secret's value, and `has_oauth_config` says only whether the file declares OAuth endpoints, never what they are."
+      },
+      "PlaybookCredentialParam": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One `secret` param of a playbook and whether this machine holds a value for it. Never the value.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "set": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "set",
+          "description"
+        ]
+      },
+      "PlaybookCredentialServer": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One server the playbook carries, as the credentials tab needs it: its auth kind, whether this machine holds OAuth tokens for it under the playbook's scope, and whether the same name exists among the host's own servers (the carried definition wins for this playbook's runs).",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "auth": {
+            "type": "string",
+            "enum": [
+              "none",
+              "apikey",
+              "oauth"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "authorized": {
+            "type": "boolean"
+          },
+          "shadows_host": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "auth",
+          "enabled",
+          "authorized",
+          "shadows_host"
+        ]
+      },
+      "OkResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ]
       }
     },
     "errors": {

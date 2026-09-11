@@ -2638,7 +2638,7 @@ def register(app: typer.Typer) -> None:
         search_api_key: Optional[str] = typer.Option(
             None,
             "--search-api-key",
-            help="Key for the web_search vendor (the one --search-provider names, or the configured one)",
+            help="Key for the web_search vendor (the one --search-provider names, or the configured one); checked with one real search",
         ),
         fetch_api_key: Optional[str] = typer.Option(
             None,

@@ -973,20 +973,39 @@ def _patch_table(monkeypatch, table: dict, *, info=_litellm_miss):
     monkeypatch.setattr(litellm, "get_model_info", info)
 
 
-def test_a_claude_model_the_catalogue_does_not_know_falls_back_to_the_claude_ceiling(monkeypatch):
-    """Anthropic requires max_tokens on every request, so the Anthropic transport
-    carries whatever this answers. 16384 is a guess for OpenAI-compatible servers
-    that clamp; a claude model cut at 16384 loses the rest of the file. The
-    smallest ceiling among the current claude models is what an unknown one gets."""
+def _seed_catalog(monkeypatch, table: dict) -> None:
+    """Put rows in the in-process OpenRouter catalogue, without a fetch."""
+    rates.reset_openrouter_cache()
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE", table, raising=False)
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0, raising=False)
+
+
+def test_a_model_the_catalogue_does_not_know_gets_the_one_fallback(monkeypatch):
+    """One number for every unknown model, claude or not.
+
+    The fallback used to be two: 16384 for OpenAI-compatible servers that clamp
+    and 64000 for claude, whose vendor cuts the answer at exactly what was
+    asked. 64000 for everyone retires the distinction -- a model cut at 16384
+    loses the rest of the file whoever serves it, which is what a measured deck
+    run spent 18m33s and 81920 output tokens proving, and the endpoint it ran
+    against accepts 64000 without refusing.
+
+    A model whose window is unknown too keeps ``MIN_PROMPT_TOKENS`` back for the
+    prompt, because the two fallbacks are otherwise free to collide: 64000 of
+    ceiling inside 65536 of window left 1536 for the prompt.
+    """
     _patch_table(monkeypatch, {})
 
-    assert rates.resolve_max_output_tokens("anthropic/claude-opus-5") == rates.CLAUDE_MAX_OUTPUT_TOKENS == 64000
-    assert rates.resolve_max_output_tokens("openrouter/anthropic/claude-sonnet-5", allow_fetch=False) == 64000
-    assert rates.resolve_max_output_tokens("probe/unknown") == rates.DEFAULT_MAX_OUTPUT_TOKENS
+    assert rates.DEFAULT_MAX_OUTPUT_TOKENS == 64_000
+    assert not hasattr(rates, "CLAUDE_MAX_OUTPUT_TOKENS"), "the claude half of the fallback is gone, not renamed"
+    assert (
+        rates.resolve_max_output_tokens("probe/unknown")
+        == rates.DEFAULT_CONTEXT_WINDOW_TOKENS - rates.MIN_PROMPT_TOKENS
+    )
 
 
 def test_a_row_filing_its_window_as_the_ceiling_is_not_trusted(monkeypatch):
-    """Measured on the pinned LiteLLM: 984 of 3040 rows carry
+    """Measured on the pinned LiteLLM: 1036 of 2708 rows carry
     ``max_output_tokens >= max_input_tokens``, and one of them is the id this
     repo documents as an example -- ``openrouter/anthropic/claude-sonnet-4.5``
     reports 1000000 for both where Anthropic's real ceiling is 64000.
@@ -1009,18 +1028,21 @@ def test_the_same_row_shape_is_rejected_at_the_second_lookup_too(monkeypatch):
     assert rates.resolve_max_output_tokens("probe/big") == rates.DEFAULT_MAX_OUTPUT_TOKENS
 
 
-def test_a_small_suspicious_row_keeps_its_own_number(monkeypatch):
-    """The rule rejects a row only when it is at least as large as what would
-    replace it, which is what makes it safe rather than merely suspicious.
+def test_a_small_suspicious_row_is_not_raised_past_its_own_number(monkeypatch):
+    """The shape 123 rows of the pinned table carry, and the reason the guard
+    needs no size condition to be safe.
 
-    Without that second condition, 252 rows (``4096/4096`` shapes among them)
-    are raised past their real ceiling -- one refused request traded for
-    another. Here the row is equally suspect and the fallback is larger, so
-    the row stands.
+    The row is rejected like any other that files a window as a ceiling, and
+    the fallback that replaces it is then bounded by the same 4096-token
+    window -- so what a request carries is smaller than the row claimed, not
+    larger. Below twice the reserve the split is even, which is the only one
+    that leaves both sides something: 4096 of output inside a 4096 window is a
+    request with no room for the prompt it answers.
     """
     _patch_table(monkeypatch, {"probe/small": {"max_input_tokens": 4096, "max_output_tokens": 4096}})
 
-    assert rates.resolve_max_output_tokens("probe/small") == 4096
+    assert rates.declared_max_output_tokens("probe/small") is None, "a window filed twice declares nothing"
+    assert rates.resolve_max_output_tokens("probe/small") == 2048
 
 
 def test_a_row_whose_ceiling_sits_below_its_window_is_left_alone(monkeypatch):
@@ -1031,8 +1053,8 @@ def test_a_row_whose_ceiling_sits_below_its_window_is_left_alone(monkeypatch):
 
 
 def test_an_explicit_pin_is_still_the_caller_s_to_make(monkeypatch):
-    """The escape hatch for a caller that really does want a long single answer,
-    and the one the share bound points at. Bounded by the model, not the share.
+    """The escape hatch for a caller that really does want a long single answer.
+    Bounded by what the model accepts, not by the pin.
     """
     _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 200_000, "max_output_tokens": 64_000}})
 
@@ -1040,19 +1062,85 @@ def test_an_explicit_pin_is_still_the_caller_s_to_make(monkeypatch):
     assert send_max_tokens(None, "probe/roomy", pinned=999_999) == 64_000
 
 
-def test_the_share_no_longer_bounds_what_a_request_asks_for(monkeypatch):
-    """The share bound moves back to the budget, which is the only side that
-    needs it once requests stop volunteering a ceiling.
+def test_the_ceiling_leaves_the_prompt_room_inside_the_window(monkeypatch):
+    """The bound that keeps two numbers addable: the prompt grows into
+    ``window - reserved`` while the request asks for the ceiling, and both walls
+    a request can hit are stated as the sum.
 
-    It existed to keep two numbers addable: the prompt was allowed to grow into
-    `window - reserved` while the request asked for the full ceiling, and the
-    sum had to fit. A request that names no ceiling has nothing to add, so the
-    reservation becomes a margin like LiteLLM's 0.75 and OpenClaw's 0.7 rather
-    than a guarantee -- which is the posture every surveyed agent takes.
+    Measured as a reserve rather than a fraction. A blanket half clamped 30.5%
+    of the OpenRouter rows and 33.1% of the LiteLLM rows whose declarations are
+    honoured -- ``x-ai/grok-4.3`` declares 900000 of a 1000000 window, which is
+    a vendor's own answer and not an implausible one, and half cut it to
+    500000.
     """
-    _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 200_000, "max_output_tokens": 64_000}})
+    _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 1_000_000, "max_output_tokens": 900_000}})
+    assert send_max_tokens(None, "probe/roomy") == 900_000, "the window has room for both, so the declaration stands"
 
-    assert send_max_tokens(None, "probe/roomy") == 64_000, "the model's own ceiling, unbounded"
+    _patch_table(monkeypatch, {"probe/snug": {"max_input_tokens": 65_536, "max_output_tokens": 64_000}})
+    assert send_max_tokens(None, "probe/snug") == 65_536 - rates.MIN_PROMPT_TOKENS, (
+        "declared 64000 would leave 1536 for the prompt, so the reserve bounds it"
+    )
+
+    _patch_table(monkeypatch, {"probe/tiny": {"max_input_tokens": 8_192, "max_output_tokens": 8_000}})
+    assert send_max_tokens(None, "probe/tiny") == 4_096, (
+        "below twice the reserve there is none to take, so the split is even"
+    )
+
+
+def test_a_declaration_above_the_fallback_is_honoured(monkeypatch):
+    """The direction the ceiling decision turns on, and it turned. A row that
+    states a ceiling below its window is stating the ceiling, so that is what a
+    request carries -- clamping it to our constant had a 131072-token endpoint
+    asked for 64000 on every call.
+
+    What keeps this from resurrecting the absurd figures is the guard, not a
+    constant: measured over the whole pinned table, honouring declarations
+    moves 284 of 2708 rows up, none down, and none of the 1036 rows that file a
+    window as a ceiling at all.
+    """
+    _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 2_000_000, "max_output_tokens": 131_072}})
+
+    assert rates.declared_max_output_tokens("probe/roomy") == 131_072
+    assert rates.resolve_max_output_tokens("probe/roomy") == 131_072
+    assert send_max_tokens(None, "probe/roomy") == 131_072, "the declaration is the ceiling, not our constant"
+
+
+def test_a_row_filing_its_window_as_a_ceiling_still_gets_the_fallback(monkeypatch):
+    """Honouring declarations does not honour this shape, which is the whole
+    reason the fallback is not raised to meet it.
+
+    ``openrouter/anthropic/claude-sonnet-4.5`` files 1000000 for both where
+    Anthropic's real ceiling is 64000, and a request carrying that classifies
+    as ``invalid_request`` -- not retryable, so the turn dies. The fallback
+    answers instead, and its own value is this guard's threshold: at 131072,
+    386 of those 1036 rows would stop being rejected and this model would be
+    asked for 131072.
+    """
+    _patch_table(
+        monkeypatch, {"probe/window_as_ceiling": {"max_input_tokens": 1_000_000, "max_output_tokens": 1_000_000}}
+    )
+
+    assert rates.declared_max_output_tokens("probe/window_as_ceiling") is None
+    assert rates.resolve_max_output_tokens("probe/window_as_ceiling") == 64_000
+    assert rates.DEFAULT_MAX_OUTPUT_TOKENS == 64_000, "raising this raises what those rows are sent"
+
+
+def test_an_endpoint_declaring_less_than_the_bound_lowers_it(monkeypatch):
+    """Why the catalogue is read at all. 137 of the 435 models OpenRouter lists
+    declare an output ceiling below the fallback, so a fixed constant asks them
+    for more than they accept -- and too large for a small model is a 400.
+
+    Read from ``top_provider.max_completion_tokens`` in the catalogue row this
+    module already fetches for prices, so no second fetch and no second cache.
+    """
+    _patch_table(monkeypatch, {})
+    _seed_catalog(monkeypatch, {"vendor/tiny": {"context_length": 262_144, "max_completion_tokens": 4096}})
+
+    assert rates.declared_max_output_tokens("openrouter/vendor/tiny", allow_fetch=False) == 4096
+    assert rates.resolve_max_output_tokens("openrouter/vendor/tiny", allow_fetch=False) == 4096
+    assert rates.declared_max_output_tokens("hosted_vllm/vendor/tiny", allow_fetch=False) is None, (
+        "an id that does not name OpenRouter must not read OpenRouter's row"
+    )
 
 
 # --- Hyphen/dot version spellings (OpenRouter files what vendors hyphenate) ---

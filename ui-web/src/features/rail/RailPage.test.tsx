@@ -457,6 +457,32 @@ describe('rail island', () => {
     expect(sizer.dataset.value).toBe('a much longer name than that one')
   })
 
+  /* The box a name is edited in and the line it goes back to being occupy the
+     same child slot, so React reconciles them onto ONE node and resets every
+     prop -- but scroll offset is not a prop, it is state the browser keeps on
+     the element. The editing box is a scroll container on purpose (`.sess .t
+     span` clips, and a long name scrolls inside itself), so focusing the field
+     scrolls it to the caret; the finished title then inherited that offset and
+     was drawn 300px to the left of its own box, which under `text-overflow:
+     ellipsis` paints nothing -- an empty row where a long name had been, on
+     any exit from the editor and whether or not the name changed.
+
+     Distinct keys are the fix, and node identity is what this can assert:
+     there is no layout here, so scrollLeft reads 0 either way and only the
+     browser can show the pixels. */
+  it('draws the finished title in a fresh element, not the rename box', () => {
+    const long = 'the reconciliation job misfired on the day the clocks changed, audit it end to end'
+    install({ rows: [row({ id: 'b', title: long })], cur: 'b' })
+    const host = mount()
+    fireEvent.doubleClick(rowByTitle(host, long))
+    const box = host.querySelector<HTMLElement>('.rensize')!
+    fireEvent.keyDown(host.querySelector<HTMLInputElement>('input.ren')!, { key: 'Enter' })
+
+    const line = host.querySelector<HTMLElement>('.sess .t span')!
+    expect(line.textContent).toBe(long)
+    expect(line).not.toBe(box)
+  })
+
   /* A source that can delete gets the whole action, and the island does none
      of the local work -- no splice, no undo, no moving off the row. */
   it('hands the delete to a source that can do it', () => {
@@ -555,6 +581,58 @@ describe('rail island', () => {
       inp.value = 'offline rename'
       expect(() => key(inp, 'Enter')).not.toThrow()
       expect(h.state.rows[1]!.title).toBe('offline rename')
+    })
+
+    /* Committing with Enter takes the focused input out of the document, and
+       whether that fires a blur is the browser's business -- Chrome's does.
+       The commit then ran a second time on a node no longer in the tree: the
+       server was told twice, and the second `replaceWith` threw where the
+       first had already put the heading back, so recovering was down to which
+       of the two won. One commit per editor closes all of it. */
+    it('ignores the blur that committing with Enter itself causes', () => {
+      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      const said = wire()
+      const inp = edit(h)
+      inp.value = 'named once'
+      key(inp, 'Enter')
+
+      expect(() => act(() => inp.dispatchEvent(new FocusEvent('blur')))).not.toThrow()
+      expect(said).toEqual([['b', 'named once']])
+      expect(document.querySelectorAll('#title').length).toBe(1)
+      expect(document.getElementById('title')!.textContent).toBe('named once')
+      expect((document.getElementById('renameBtn') as HTMLButtonElement).hidden).toBe(false)
+    })
+
+    /* The editor stands IN PLACE OF h1#title, so while it is open that id
+       resolves to nothing -- and the live layer reaches the heading through it
+       on both paths that change which conversation is open, plus on the
+       reconnect that reloads the open one. With an editor up, the reconnect
+       handler died on the first of those reads: the input was left in the top
+       bar for the life of the tab, and the session was never reloaded, never
+       re-subscribed, and never told the reader it was back.
+
+       So switching conversations ends the editor first, and ending it commits
+       -- the name was typed for the conversation this editor belongs to, which
+       is the row it captured, not whichever one is being opened. */
+    it('hands the heading back when a conversation switch needs it', () => {
+      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      const said = wire()
+      const inp = edit(h)
+      inp.value = 'named on the way out'
+      expect(document.getElementById('title')).toBeNull()
+
+      act(() => store.endRename())
+
+      expect(document.getElementById('title')!.textContent).toBe('named on the way out')
+      expect(document.querySelector('input.titin')).toBeNull()
+      expect((document.getElementById('renameBtn') as HTMLButtonElement).hidden).toBe(false)
+      expect(said).toEqual([['b', 'named on the way out']])
+      expect(h.state.rows[1]!.title).toBe('named on the way out')
+
+      /* Idempotent, and quiet with no editor open: every session switch calls
+         it, and almost none of them have one to end. */
+      expect(() => act(() => store.endRename())).not.toThrow()
+      expect(said).toEqual([['b', 'named on the way out']])
     })
   })
 

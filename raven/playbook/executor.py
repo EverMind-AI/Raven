@@ -38,8 +38,9 @@ from pydantic import ValidationError
 
 from raven.agent.subagent.prompt_placeholders import iter_placeholders
 from raven.playbook.agent_profiles import AgentProfileSource, validate_node_capabilities
+from raven.playbook.credentials import credential_scope, stored_secret_params
 from raven.playbook.llm_result import ProviderResponseError, RequiredToolError, required_tool_arguments
-from raven.playbook.mcp import playbook_mcp_servers
+from raven.playbook.mcp import playbook_mcp_servers, servers_missing_a_credential
 from raven.playbook.params import fill_param_refs_without_secrets, resolve_params, secret_param_names
 from raven.playbook.prompt import COMPOSE_TOOL_NAME, build_compose_prompt, compose_tool
 from raven.playbook.types import NodeSpec, PlaybookSpec
@@ -120,6 +121,34 @@ def _gap_reply(spec: PlaybookSpec, missing: list[tuple[str, str]], blanks: list[
         "not yours to change and will be refused."
     )
     return "\n".join(lines)
+
+
+def _credential_reminders(spec: PlaybookSpec, values: Mapping[str, str]) -> str:
+    """One line per unset secret param and per carried OAuth server this machine
+    has not authorized.
+
+    Said at load rather than discovered at the node: the run degrades without
+    the server (the pre-flight rule that a carried server costs the run only
+    itself), so without this the reader learns of the missing credential from a
+    node that answered with no tools. Neither is a gap: a gap is filled through
+    the conversation, which is the one place a secret may not pass.
+    """
+    from raven.playbook.credentials import has_oauth_tokens
+
+    lines = [
+        f"secret param {name!r} is not set on this machine; servers filled from it run without it until it is "
+        f"set on the playbook's Credentials tab (or `raven playbook secret set {spec.name} {name}`)."
+        for name in sorted(secret_param_names(spec))
+        if not values.get(name)
+    ]
+    for name, cfg in (spec.mcp_servers or {}).items():
+        if cfg.auth == "oauth" and cfg.enabled and not has_oauth_tokens(name, spec.name):
+            lines.append(
+                f"MCP server {name!r} (carried by this playbook) is not authorized on this machine; nodes "
+                f"naming it run without its tools until it is authorized on the playbook's Credentials tab "
+                f"(or `raven playbook auth {spec.name} {name}`)."
+            )
+    return ("\n" + "\n".join(lines)) if lines else ""
 
 
 def _wire_name(field_name: str) -> str:
@@ -384,7 +413,18 @@ class PlaybookExecutor:
         path sets it now that no funnel asks ahead of the turn; it stays because
         an entry point that *does* ask must be able to say so.
         """
-        values, missing = resolve_params(spec, params)
+        # A stored credential stands in for a secret the caller did not supply:
+        # the playbook page (or `raven playbook secret set`) wrote it under this
+        # playbook's scope, and it never travels through the conversation. Only
+        # names the spec declares as ``secret`` are read back, and a value the
+        # caller did supply still wins over the stored one.
+        supplied = {k: v for k, v in (params or {}).items() if v is not None}
+        values, missing = resolve_params(spec, {**stored_secret_params(spec), **supplied})
+        # A gap is closed through the conversation, and a secret must never travel
+        # that way: an unset one is said at load (``_credential_reminders``) and
+        # the run goes ahead without the server it fills.
+        secrets = secret_param_names(spec)
+        missing = [m for m in missing if m[0] not in secrets]
         if self._dag_tool is None:
             return ExecutionPlan(
                 kind="questions",
@@ -406,7 +446,7 @@ class PlaybookExecutor:
                     + "; ".join(compose_errors[:3])
                     + "); describe the task directly and I will handle it ad hoc.",
                 )
-            return await self._dispatch(spec, nodes, confirmed=confirmed, values=values)
+            return await self._dispatch(spec, nodes, confirmed=confirmed, values=values, supplied=frozenset(supplied))
 
         nodes, fill_errors = _apply_fills(spec.nodes or [], fills or {})
         if fill_errors:
@@ -423,7 +463,7 @@ class PlaybookExecutor:
             # caller told about the params, asked again, and then told about the
             # blank fields would spend two round trips learning one thing.
             return ExecutionPlan(kind="gaps", reply=_gap_reply(spec, missing, blanks))
-        return await self._dispatch(spec, nodes, confirmed=confirmed, values=values)
+        return await self._dispatch(spec, nodes, confirmed=confirmed, values=values, supplied=frozenset(supplied))
 
     async def _compose(self, spec: PlaybookSpec, values: dict[str, str]) -> tuple[list[NodeSpec] | None, list[str]]:
         """prompt mode: one LLM call assembles the graph; same validation,
@@ -475,6 +515,7 @@ class PlaybookExecutor:
         *,
         confirmed: bool = False,
         values: dict[str, str] | None = None,
+        supplied: frozenset[str] = frozenset(),
     ) -> ExecutionPlan:
         """Hand the filled nodes to the DAG tool's own entry.
 
@@ -524,7 +565,29 @@ class PlaybookExecutor:
             tool_nodes,
             task_summary=spec.task_summary,
             background=self._background,
-            mcp_servers=playbook_mcp_servers(spec, values or {}),
+            # A callable, re-read on every dispatch: a secret stored after the run
+            # started reaches a node that is continued, not only the next run. The
+            # stored values are read fresh each time and outrank the ones folded
+            # into ``values`` at load; what the caller supplied outranks both.
+            mcp_servers=lambda: playbook_mcp_servers(
+                spec,
+                {
+                    **(values or {}),
+                    **stored_secret_params(spec),
+                    **{k: (values or {})[k] for k in supplied if k in (values or {})},
+                },
+            ),
+            mcp_scope=credential_scope(spec.name) if spec.mcp_servers else None,
+            # Re-read with the definitions: a credential stored after the run
+            # started closes the gap for a node that is continued.
+            mcp_credential_gaps=lambda: servers_missing_a_credential(
+                spec,
+                {
+                    **(values or {}),
+                    **stored_secret_params(spec),
+                    **{k: (values or {})[k] for k in supplied if k in (values or {})},
+                },
+            ),
             # The gate. With the passive funnel gone, nothing asks ahead of this,
             # so a playbook's ``confirm: true`` lands here or nowhere -- which is
             # why the graph-level parameter had to exist before the funnel could
@@ -550,7 +613,7 @@ class PlaybookExecutor:
             )
         else:
             reply = text
-        return ExecutionPlan(kind="dag", reply=reply)
+        return ExecutionPlan(kind="dag", reply=reply + _credential_reminders(spec, values))
 
 
 def _parse_nodes(args: dict[str, Any]) -> tuple[list[NodeSpec] | None, list[str]]:

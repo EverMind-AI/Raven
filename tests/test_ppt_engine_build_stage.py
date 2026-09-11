@@ -817,3 +817,28 @@ async def test_a_released_build_publishes_past_its_blocking_findings_and_names_t
     assert Path(result.data["pptx_path"]).is_file()
     assert result.data["released"] == ["word_collision"]
     assert any(f.kind == "word_collision" for f in result.findings), "released, not forgotten"
+
+
+@pytest.mark.asyncio
+async def test_a_delivery_edited_in_place_is_reported_by_the_build_that_replaces_it(project: Project) -> None:
+    """Asked before the publish, because afterwards there is nothing left to compare.
+
+    A live run's author edited `out/deck.pptx` where it lay through `exec`; the record
+    and the gates went on describing the build, and the deck the user held had been
+    through neither. The repair is the publish itself -- the measured deck written over
+    the edited one -- so this reads and never withholds anything.
+    """
+    stage = _stage(project)
+    first = await stage.run(project)
+    assert "delivery_changed" not in first.data
+
+    delivered = Path(first.data["pptx_path"])
+    delivered.write_bytes(delivered.read_bytes() + b"EDITED-IN-PLACE")
+
+    second = await stage.run(project)
+
+    assert "was not the deck this route delivered" in second.data["delivery_changed"]
+    assert "never in the delivered file" in second.data["delivery_changed"]
+    assert Path(second.data["pptx_path"]).read_bytes() == (project.build_dir / "deck.pptx").read_bytes()
+    # And it is said once, by the build that repaired it, not on every build after.
+    assert "delivery_changed" not in (await stage.run(project)).data

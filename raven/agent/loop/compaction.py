@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from raven.agent.loop.recovery import REASONING_EFFORT_LADDER
+
 SUMMARY_MARKER = "[Context summary — earlier steps were compacted to fit the context window]"
 
 # Room the trigger leaves for the model's reply: the configured reserve, else
@@ -37,7 +39,43 @@ _TAIL_CAP = 8_000
 _TAIL_FLOOR = 2_000
 _TAIL_FRACTION = 0.25
 
-SUMMARY_MAX_TOKENS = 2_000
+# Output budget for the summary call: a ceiling on what the model may write,
+# not a length it aims at. Generous on purpose -- the failure being fixed is a
+# summary that had no room at all, and headroom costs nothing unless a summary
+# actually runs into it.
+#
+# It was 2000, which is a fair size for the brief and no size at all for a
+# thinking model: a reasoning model spends its thinking from this same budget,
+# and two measured summary calls (107 head messages / 45264 chars, then 112 /
+# 54248) came back with an empty body having spent all of it before the brief
+# began. Measured against a real head in that same band -- 158 messages, 46860
+# chars -- the brief this produces is 1466 completion tokens behind 25
+# reasoning tokens, so the model's own stopping point decides the length and
+# 32000 is about twenty times what it reaches for.
+#
+# The other thing headroom buys is that a brief is never cut mid-sentence,
+# which is worse than an empty one: a cut brief is non-empty, so it is accepted
+# and replaces the head it was meant to summarize. That is now checked on the
+# way back (the caller reads ``finish_reason``) rather than only bought here.
+#
+# This is a ceiling on a request that has room. What the request may actually
+# ask for is ``summary_output_budget`` below, because at the compaction trigger
+# there is no room by construction.
+SUMMARY_MAX_TOKENS = 32_000
+
+# Slack the summary request leaves below the window. Its prompt side is a local
+# tiktoken estimate while the provider counts with its own tokenizer, so a
+# budget computed to the last token goes over on a disagreement of one; 5% of
+# the prompt is what the bound gives up to that. Being under costs the brief
+# nothing until the room falls near what a brief actually reaches for, which was
+# measured at 1466 tokens.
+_SUMMARY_ESTIMATE_SLACK = 0.05
+
+# A handoff brief is mechanical: read the transcript, list what it says. The
+# floor of ``recovery.REASONING_EFFORT_LADDER`` rather than the turn's own
+# effort, which is what the two failures above were run at.
+SUMMARY_REASONING_EFFORT = REASONING_EFFORT_LADDER[-1]
+
 # Per-message ceiling when rendering the head into the summary request. The
 # head already fits the window (the trigger fires below it), this only guards
 # against pathological single messages.
@@ -90,6 +128,33 @@ def should_compact(context_used: int, limit: int, reserved: int, trigger_ratio: 
     if trigger_ratio is not None and 0 < trigger_ratio < 1:
         threshold = min(threshold, int(trigger_ratio * limit))
     return context_used >= threshold
+
+
+def summary_output_budget(limit: int, prompt_tokens: int, ceiling: int) -> int:
+    """What the summary call may ask for, given the request it is about to send.
+
+    ``SUMMARY_MAX_TOKENS`` is a ceiling on a request with room, and ``ceiling``
+    guards the other case the caller already handled -- a small model refusing a
+    large ``max_tokens``. Neither is the constraint that binds at the compaction
+    trigger: the head being summarized is precisely what did not fit, so the
+    request already sits near the window, and what a provider measures against
+    the window is ``prompt + max_tokens``. With compaction left at its derived
+    defaults that came to 4000 over -- a 400000 window, a trigger at 380000, an
+    8000 tail that the request drops, and 32000 asked for on top of the 372000
+    that remained. Over by the same amount for any window, since both sides of
+    the subtraction move with it.
+
+    Measured from the request rather than derived from the trigger, because the
+    two differ by more than the tail: ``render_transcript`` caps each message at
+    ``_TRANSCRIPT_MSG_CAP``, so a head of large tool results renders far smaller
+    than it counted in the window it overflowed, and the room is correspondingly
+    larger. Zero means the request cannot be made at all, and the caller skips
+    rather than paying for a call the provider can only refuse.
+    """
+    if limit <= 0:
+        return min(SUMMARY_MAX_TOKENS, ceiling)
+    room = limit - int(prompt_tokens * (1 + _SUMMARY_ESTIMATE_SLACK))
+    return max(0, min(SUMMARY_MAX_TOKENS, ceiling, room))
 
 
 def protected_prefix_end(messages: list[dict]) -> int | None:

@@ -6,12 +6,12 @@ import pytest
 
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
-from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
 from raven.config.schema import PermissionsConfig
 from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
 from raven.contracts.tool import Continuation
 from raven.permissions.builtin import BuiltinRulings
 from raven.permissions.gate import PermissionGate
+from raven.permissions.shell_policy import CommandDecision, ShellCommandPolicy
 from raven.permissions.turn import start_permission_turn
 from raven.sandbox import ExecResult, SandboxExecutor
 
@@ -31,7 +31,7 @@ def asking_policy() -> ShellCommandPolicy:
     The terminal ships no asking families -- deletes answer to the tiers -- but
     the matcher's reach still matters wherever a surface declares it.
     """
-    from raven.agent.tools.shell_policy import DELETE_MATCHERS
+    from raven.permissions.shell_policy import DELETE_MATCHERS
 
     policy = ShellCommandPolicy(deny_patterns=[r"\b(mkfs|diskpart)\b"])
     for name, matcher in DELETE_MATCHERS:
@@ -517,7 +517,7 @@ class TestExternalEffectFamilies:
 
     @pytest.fixture
     def asking(self) -> ShellCommandPolicy:
-        from raven.agent.tools.shell_policy import DELETE_MATCHERS, EXTERNAL_EFFECT_MATCHERS
+        from raven.permissions.shell_policy import DELETE_MATCHERS, EXTERNAL_EFFECT_MATCHERS
 
         policy = ShellCommandPolicy(deny_patterns=[])
         for name, matcher in DELETE_MATCHERS:
@@ -665,7 +665,7 @@ class TestExternalEffectFamilies:
         it through real shell quoting takes five alternating quote levels that no
         command has. What the bound buys is termination: without it a crafted
         string could recurse until the stack ran out."""
-        from raven.agent.tools.shell_policy import _MAX_EMBEDDED_SHELL_DEPTH, _iter_argv
+        from raven.permissions.shell_policy import _MAX_EMBEDDED_SHELL_DEPTH, _iter_argv
 
         shallow = list(_iter_argv("sh -c 'git push'"))
         at_bound = list(_iter_argv("sh -c 'git push'", _depth=_MAX_EMBEDDED_SHELL_DEPTH))
@@ -679,7 +679,7 @@ class TestExternalEffectFamilies:
     ) -> None:
         """Ordering is security-sensitive: a matcher must never turn an
         unconditionally forbidden command into an approvable one."""
-        from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS
+        from raven.permissions.shell_policy import EXTERNAL_EFFECT_MATCHERS
 
         policy = ShellCommandPolicy(deny_patterns=[r"\bmkfs\b"])
         for name, matcher in EXTERNAL_EFFECT_MATCHERS:
@@ -710,7 +710,7 @@ async def test_the_prompt_names_the_family_that_fired(tmp_path) -> None:
     """The description was a constant before the families existed -- it read
     "Delete files using a shell command" for whatever was being asked about,
     which was accurate only while deletion was the one registered family."""
-    from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS
+    from raven.permissions.shell_policy import EXTERNAL_EFFECT_MATCHERS
 
     executor = _RecordingExecutor(sandboxed=False)
     responder = _ApprovalResponder([True])
@@ -752,7 +752,7 @@ class TestAGlobalOptionValueIsNotASubcommand:
 
     @pytest.fixture
     def asking(self) -> ShellCommandPolicy:
-        from raven.agent.tools.shell_policy import DELETE_MATCHERS, EXTERNAL_EFFECT_MATCHERS
+        from raven.permissions.shell_policy import DELETE_MATCHERS, EXTERNAL_EFFECT_MATCHERS
 
         policy = ShellCommandPolicy(deny_patterns=[])
         for name, matcher in DELETE_MATCHERS:
@@ -822,7 +822,7 @@ class TestAGlobalOptionValueIsNotASubcommand:
         option table would not have touched this: the command never reached the
         table as one command.
         """
-        from raven.agent.tools.shell_policy import _iter_argv
+        from raven.permissions.shell_policy import _iter_argv
 
         argvs = list(_iter_argv("aws --query '{}' --cli-binary-format raw s3 cp ./x s3://b/x"))
 
@@ -904,7 +904,7 @@ class TestSandboxingDoesNotRelaxClassification:
     contains still reach host data through that mount."""
 
     def _asking(self) -> ShellCommandPolicy:
-        from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS
+        from raven.permissions.shell_policy import EXTERNAL_EFFECT_MATCHERS
 
         policy = ShellCommandPolicy(deny_patterns=[r"\bmkfs\b"])
         for name, matcher in EXTERNAL_EFFECT_MATCHERS:

@@ -28,6 +28,7 @@ from raven.agent.loop.recovery import (
     has_inline_thinking,
     has_thinking,
     limits_from_defaults,
+    lower_reasoning_effort,
 )
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
@@ -105,6 +106,11 @@ def test_classify_visible_text_completes():
 
 
 def test_classify_disabled_completes():
+    """Recovery switched off is not an exhausted ladder.
+
+    No budget was spent, so there is nothing to have run out of, and the turn
+    ends the way it always has. FAIL is reserved for a ladder that was climbed.
+    """
     limits = RecoveryLimits(enabled=False)
     assert _classify(LLMResponse(content=None), "", limits=limits) is RecoveryAction.COMPLETE
 
@@ -133,7 +139,9 @@ def test_classify_thinking_takes_priority_over_nudge():
 def test_classify_plain_empty_retries_until_budget():
     resp = LLMResponse(content=None)
     assert _classify(resp, "", empty_retries=2) is RecoveryAction.RETRY
-    assert _classify(resp, "", empty_retries=3) is RecoveryAction.COMPLETE
+    # Budget spent with nothing ever returned: FAIL, not COMPLETE. A turn that
+    # never produced a token must not be reported as one that finished.
+    assert _classify(resp, "", empty_retries=3) is RecoveryAction.FAIL
 
 
 def test_classify_always_reasoning_model_still_retries_after_prefill():
@@ -141,7 +149,7 @@ def test_classify_always_reasoning_model_still_retries_after_prefill():
     # blocked from plain retry once prefill is exhausted (load-bearing clause).
     resp = LLMResponse(content=None, reasoning_content="hmm")
     assert _classify(resp, "", prefill_retries=2, empty_retries=0) is RecoveryAction.RETRY
-    assert _classify(resp, "", prefill_retries=2, empty_retries=3) is RecoveryAction.COMPLETE
+    assert _classify(resp, "", prefill_retries=2, empty_retries=3) is RecoveryAction.FAIL
 
 
 def test_limits_from_defaults_maps_fields():
@@ -430,6 +438,7 @@ class _AlwaysEmptyProvider(LLMProvider):
     def __init__(self):
         super().__init__(api_key="test")
         self.calls = 0
+        self.efforts: list[str | None] = []
 
     async def chat(
         self,
@@ -442,6 +451,7 @@ class _AlwaysEmptyProvider(LLMProvider):
         tool_choice=None,
     ):
         self.calls += 1
+        self.efforts.append(reasoning_effort)
         return LLMResponse(content="", finish_reason="stop")
 
     def get_default_model(self) -> str:
@@ -449,7 +459,7 @@ class _AlwaysEmptyProvider(LLMProvider):
 
 
 @pytest.mark.asyncio
-async def test_persistently_empty_is_bounded_then_falls_back(workspace):
+async def test_persistently_empty_is_bounded_then_reports_a_failed_turn(workspace):
     limits = RecoveryLimits()
     provider = _AlwaysEmptyProvider()
     agent = _make_agent(workspace, provider, limits=limits)
@@ -464,9 +474,144 @@ async def test_persistently_empty_is_bounded_then_falls_back(workspace):
     )
 
     assert out is not None
-    # plain-empty budget -> 1 initial call + N retries, then give up.
-    assert provider.calls == 1 + limits.empty_content_max_retries
-    assert "no response" in out[0].lower()
+    # plain-empty budget -> 1 initial call + a retry per rung the effort descent
+    # still has, then give up. From an unstated effort that is low and minimal,
+    # so the budget's third retry is never sent: it could only repeat the second.
+    assert provider.calls <= 1 + limits.empty_content_max_retries
+    assert provider.calls == 3
+    # Not the canned "no response to give" filler, which reads as an answer and
+    # let a measured DAG node file a dead turn as a finished one. The reply names
+    # the failure and how many attempts went into it -- three, the calls actually
+    # sent, not the budget's full allowance.
+    reply = out[0]
+    assert "no answer" in reply.lower()
+    assert "failed call" in reply.lower()
+    assert f"{provider.calls} attempt" in reply
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_recovery_ends_the_turn_with_error_status(workspace):
+    """The status the caller reads, which used to say ``completed``.
+
+    ``LoopOutcome.status`` is the loop's own word on whether the turn produced
+    anything; the neighbouring provider-error exit sets ``"error"`` and this one
+    used to leave the initialised ``"completed"`` in place.
+    """
+    provider = _AlwaysEmptyProvider()
+    agent = _make_agent(workspace, provider, limits=RecoveryLimits())
+
+    _final, _used, messages, outcome = await agent._run_agent_loop([{"role": "user", "content": "hi"}])
+
+    assert outcome.status == "error"
+    # Like the provider-error exit beside it, the failure text is not persisted
+    # into history: an error reply in the transcript poisons the next request.
+    assert not any(m.get("role") == "assistant" for m in messages)
+
+
+def test_the_effort_ladder_descends_one_rung_and_stops(monkeypatch):
+    """The descent, on its own. ``None`` in is a turn that named no effort and
+    let the backend pick, so the first rung down is the lowest effort this repo
+    documents in config -- a stated request, which an unstated one is not."""
+    assert lower_reasoning_effort(None) == "low"
+    assert lower_reasoning_effort("high") == "medium"
+    assert lower_reasoning_effort("low") == "minimal"
+    assert lower_reasoning_effort("minimal") is None, "the floor, so a later retry cannot invent a rung"
+    assert lower_reasoning_effort("HIGH ") == "medium", "an effort is a config string, not a keyword"
+    assert lower_reasoning_effort("enthusiastic") is None, "a value we cannot place has no rung below it"
+
+
+def test_a_rung_the_wire_cannot_tell_apart_is_skipped_not_sent():
+    """A retry only pays for itself if the request it re-sends differs.
+
+    Reviewer, 2026-09-10: on the Anthropic Messages wire ``_ADAPTIVE_EFFORTS``
+    maps both ``minimal`` and ``low`` onto ``low``, so descending by label alone
+    produced ``output_config.effort: low`` twice for an adaptive model and
+    ``reasoning.effort: low`` twice otherwise -- the second retry was the first
+    failure again at full price, which is the defect the ladder exists to
+    remove. Asked of the provider, the collapsed rung is skipped, and when every
+    rung below collapses onto this one there is nothing left to change.
+    """
+    from raven.agent.loop.turn_path import _reasoning_wire_keys
+    from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
+
+    for model in ("claude-opus-4-5", "claude-opus-5"):
+        provider = AnthropicMessagesProvider(api_key="k", default_model=model)
+        wire = _reasoning_wire_keys(provider, model)
+        assert wire is not None
+        assert wire("low") == wire("minimal"), f"{model}: the two rungs really are one request"
+        assert lower_reasoning_effort("low", wire) is None, "so there is no rung below low here"
+        assert lower_reasoning_effort("medium", wire) == "low"
+        assert lower_reasoning_effort(None, wire) == "low"
+        # And the descent from the top still gets a distinct request each step.
+        efforts, effort = [], "max"
+        while effort is not None:
+            efforts.append(effort)
+            effort = lower_reasoning_effort(effort, wire)
+        assert efforts == ["max", "xhigh", "high", "medium", "low"]
+        assert len({wire(e) for e in efforts}) == len(efforts), "every rung sent is its own request"
+
+
+def test_a_wire_that_sends_the_label_verbatim_keeps_every_rung():
+    """The chat and responses wires send the effort as the caller named it, so
+    the labels stand on their own and nothing is skipped."""
+    from raven.providers.base import LLMProvider
+
+    wire = LLMProvider.reasoning_wire_keys
+    shape = lambda effort: repr(wire(None, "m", effort))  # noqa: E731 - one expression, read once
+
+    assert shape("low") != shape("minimal")
+    assert lower_reasoning_effort("low", shape) == "minimal"
+    assert lower_reasoning_effort("minimal", shape) is None
+
+
+def test_a_provider_that_cannot_answer_leaves_the_descent_on_the_labels():
+    """A test double or an older adapter: no method, no shape, previous behaviour."""
+    from raven.agent.loop.turn_path import _reasoning_wire_keys
+
+    assert _reasoning_wire_keys(SimpleNamespace(), "m") is None
+    assert lower_reasoning_effort("low", None) == "minimal"
+
+    def raises(_effort):
+        raise RuntimeError("no")
+
+    broken = _reasoning_wire_keys(SimpleNamespace(reasoning_wire_keys=lambda *a: raises(a)), "m")
+    assert broken is not None
+    assert lower_reasoning_effort("low", broken) == "minimal", "an unanswerable question is not a same request"
+
+
+@pytest.mark.asyncio
+async def test_the_plain_empty_retry_asks_for_less_reasoning_than_the_call_that_failed(workspace):
+    """A retry that resends the same bytes is not a retry.
+
+    Measured: three ``plain empty retry`` steps, each behind a call truncated at
+    exactly the output ceiling, each re-sent unchanged -- so three identical
+    failures were guaranteed before the first one was sent. An empty body with
+    reasoning behind it is a call whose thinking spent the ceiling before the
+    answer began, so the request that has to change is the one saying how much
+    of the ceiling thinking may take.
+
+    The descent is sticky across the turn's retries: read afresh each time it
+    would hand back the value that just came up empty.
+    """
+    limits = RecoveryLimits()
+    provider = _AlwaysEmptyProvider()
+    agent = _make_agent(workspace, provider, limits=limits)
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+    )
+
+    assert provider.efforts == [None, "low", "minimal"]
+    assert provider.calls == 3, "the fourth call had no rung left to change, so it was not paid for"
+    retried = provider.efforts[1:]
+    assert all(effort != provider.efforts[index] for index, effort in enumerate(retried)), (
+        "every retry differs from the call it is retrying"
+    )
 
 
 @pytest.mark.asyncio
@@ -696,7 +841,7 @@ def test_prefill_refused_retries_once_the_nudge_budget_is_spent():
     assert action is RecoveryAction.RETRY
 
 
-def test_prefill_refused_completes_once_every_budget_is_spent():
+def test_prefill_refused_fails_once_every_budget_is_spent():
     limits = RecoveryLimits()
     r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
     action = _classify(
@@ -707,7 +852,7 @@ def test_prefill_refused_completes_once_every_budget_is_spent():
         nudges_done=limits.post_tool_empty_max_nudges,
         empty_retries=limits.empty_content_max_retries,
     )
-    assert action is RecoveryAction.COMPLETE
+    assert action is RecoveryAction.FAIL
 
 
 def test_prefill_refused_never_consumes_the_prefill_budget():

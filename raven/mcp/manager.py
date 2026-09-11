@@ -164,11 +164,27 @@ class MCPConnectionManager:
         on_state_change: Callable[[dict], None] | None = None,
         on_oauth_event: Callable[[str, dict], None] | None = None,
         allow_auth_park: bool = True,
+        credential_scope: str | Callable[[str], str | None] | None = None,
+        handshake_timeout: float | None = None,
     ) -> None:
         self._registry = registry
         self._post_connect = post_connect
         self.on_state_change = on_state_change
         self.on_oauth_event = on_oauth_event
+        # Where this manager's OAuth providers keep their tokens. None is the
+        # host's own store; a manager built to authorize a playbook-carried
+        # server passes that playbook's scope, so the carried server and a host
+        # server of the same name never share a token file. A callable answers
+        # per server name, for a manager that dials host and carried servers
+        # side by side (the playbook pre-flight).
+        self._credential_scope = credential_scope
+        # A sub-agent connecting a session's servers inside ``session/new`` runs
+        # under the host's ``readyTimeoutMs`` budget; its own bound has to be the
+        # smaller one, or a wedged upstream fails the whole session on the host's
+        # clock instead of costing this session that one server. None means the
+        # module bound, read when the watchdog runs rather than bound here, so a
+        # test that narrows ``_HANDSHAKE_TIMEOUT`` still reaches every manager.
+        self._handshake_timeout = handshake_timeout
         # A manager owned by a short-lived batch (a playbook pre-flight) cannot
         # hold its caller for a browser round-trip: nobody is standing by to
         # finish one, and the run must not pay the flow timeout per server.
@@ -820,9 +836,10 @@ class MCPConnectionManager:
         self._handshakes.add(task)
         task.add_done_callback(self._handshakes.discard)
         deadline = asyncio.get_running_loop().time() + _AUTH_PARK_MAX
+        bound = self._handshake_timeout if self._handshake_timeout is not None else _HANDSHAKE_TIMEOUT
         while True:
             try:
-                return await asyncio.wait_for(asyncio.shield(task), timeout=_HANDSHAKE_TIMEOUT)
+                return await asyncio.wait_for(asyncio.shield(task), timeout=bound)
             except asyncio.TimeoutError:
                 from raven.mcp.oauth import auth_wait_servers
 
@@ -969,7 +986,12 @@ class MCPConnectionManager:
                 self.on_oauth_event(event, payload)
 
         return await provider_for(
-            conn.name, cfg, notify=notify, interactive=interactive, can_park=self._allow_auth_park
+            conn.name,
+            cfg,
+            notify=notify,
+            interactive=interactive,
+            can_park=self._allow_auth_park,
+            scope=self._credential_scope(conn.name) if callable(self._credential_scope) else self._credential_scope,
         )
 
     @staticmethod

@@ -14,7 +14,7 @@ from typing import Any
 import json_repair
 from loguru import logger
 
-from raven.providers import prompt_cache
+from raven.providers import call_record, prompt_cache
 from raven.providers.base import (
     ChatDelta,
     ErrorClassification,
@@ -24,6 +24,13 @@ from raven.providers.base import (
     RunMeta,
     ToolCallRequest,
     format_llm_error,
+    send_max_tokens,
+)
+from raven.providers.first_byte import (
+    BOUND_NAME,
+    FirstByteTimeoutError,
+    httpx_timeout,
+    stream_first_byte_budget,
 )
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.reasoning import split_orphan_think
@@ -39,6 +46,7 @@ from raven.providers.transport_failure import (
     flag_transport_failure,
     native_finish_reason,
     prompt_chars,
+    said_nothing,
     transport_failure_message,
 )
 from raven.providers.usage import merge_usage, reported_cost, token_count
@@ -153,6 +161,20 @@ def _cache_tokens(usage: Any) -> tuple[int | None, int | None]:
             _usage_field(usage, "_cache_creation_input_tokens") or None,
         ),
     )
+
+
+def _reasoning_tokens(usage: Any) -> int | None:
+    """How much of the output the model spent thinking, when the protocol says so.
+
+    Absent is not zero: a turn whose reasoning text never arrived is only
+    distinguishable from a turn that did not think by this count.
+    """
+    details = _usage_field(usage, "completion_tokens_details")
+    for key in ("reasoning_tokens", "thinking_tokens"):
+        count = token_count(_usage_field(details, key))
+        if count is not None:
+            return count
+    return None
 
 
 class LiteLLMProvider(LLMProvider):
@@ -566,11 +588,18 @@ class LiteLLMProvider(LLMProvider):
             "model": model,
             "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
             "temperature": temperature,
-            # Per-read httpx cap forwarded to the underlying client. This alone
-            # cannot bound a backend that trickles bytes forever (the read timer
-            # resets on every chunk), so the awaited call is also wrapped in an
-            # asyncio.wait_for wall-clock cap below.
-            "timeout": self.generation.timeout,
+            # Per-phase httpx caps forwarded to the underlying client: connect,
+            # write and pool get the first-byte budget, the read keeps the whole
+            # call's. Only the read has to stay wide -- a non-streaming
+            # completion sends no body until the answer is finished, so its
+            # first response byte and its last are the same byte and a tight
+            # read cap would kill every long generation rather than every stall.
+            # What is separable is everything before the model starts: a route
+            # that never connects used to cost the whole call budget. This alone
+            # still cannot bound a backend that trickles bytes forever (the read
+            # timer resets on every chunk), so the awaited call is also wrapped
+            # in an asyncio.wait_for wall-clock cap below.
+            "timeout": httpx_timeout(self.generation) or self.generation.timeout,
         }
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
@@ -616,6 +645,10 @@ class LiteLLMProvider(LLMProvider):
                 content=format_llm_error(e, classification, provider=head),
                 finish_reason="error",
                 error_classification=classification,
+                # The status and the body, before `format_llm_error` renders the
+                # exception into a sentence: the category it keeps is enough to
+                # pick a recovery and not enough to diagnose one afterwards.
+                call_record=call_record.from_exception(e, status=self._extract_status_code(e)),
             )
 
     async def chat_stream(
@@ -674,10 +707,13 @@ class LiteLLMProvider(LLMProvider):
             # when usage is explicitly requested; without it the stream carries
             # no token counts and downstream cost / context tracking sees zero.
             "stream_options": {"include_usage": True},
-            "timeout": self.generation.timeout,
+            "timeout": httpx_timeout(self.generation) or self.generation.timeout,
         }
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max(1, max_tokens)
+        # Named even when nobody pinned: a silent request is bounded by the far
+        # side, at a number this repo can neither report nor move. See
+        # ``send_max_tokens``.
+        ceiling = send_max_tokens(self.generation, self.wire_model_id(original_model), pinned=max_tokens)
+        kwargs["max_tokens"] = max(1, ceiling)
 
         self._apply_model_overrides(model, kwargs)
 
@@ -715,9 +751,6 @@ class LiteLLMProvider(LLMProvider):
                 kwargs["tools"] = stripped
             return True
 
-        async def _open():
-            return (await asyncio.wait_for(acompletion(**kwargs), self.generation.stream_idle_timeout)).__aiter__()
-
         async def _close(target: Any) -> None:
             aclose = getattr(target, "aclose", None)
             if aclose is not None:
@@ -726,7 +759,9 @@ class LiteLLMProvider(LLMProvider):
         # Per-chunk idle cap: the timer resets on every chunk, so a long but
         # steadily-progressing generation is fine while a mid-stream stall (no
         # bytes for `stream_idle_timeout` seconds) raises TimeoutError instead
-        # of hanging for the whole-call budget.
+        # of hanging for the whole-call budget. Getting started has its own,
+        # shorter budget below -- a stream that never began is not a stream that
+        # stopped mid-answer, and it is recognisable sooner.
         # Everything from the open onward sits inside the one try/finally, so the
         # underlying HTTP stream is closed deterministically on any exit -- a
         # first-chunk timeout included, which is the most likely one there is
@@ -737,28 +772,74 @@ class LiteLLMProvider(LLMProvider):
         # response silently -- which is not what the loop did before.
         done = object()
 
+        first_byte = stream_first_byte_budget(self.generation)
         stream: Any = None
+
+        async def _open_and_first() -> Any:
+            """Open the stream and take its first chunk under one first-byte deadline.
+
+            One deadline over both awaits rather than one each: an OpenAI-shaped
+            route issues the request at the open and a gateway that defers it
+            issues the request at the first pull, so budgeting them separately
+            would let a single stall spend the bound twice. ``stream`` is bound
+            the moment the open returns, so the caller's ``finally`` can still
+            close the connection when the first chunk is what never came.
+            """
+            nonlocal stream
+            loop = asyncio.get_running_loop()
+            started = loop.time()
+            phase = "opening the stream"
+            try:
+                stream = (await asyncio.wait_for(acompletion(**kwargs), first_byte)).__aiter__()
+                phase = "waiting for the first chunk"
+                return await asyncio.wait_for(stream.__anext__(), max(0.0, started + first_byte - loop.time()))
+            except StopAsyncIteration:
+                return done
+            except TimeoutError as exc:
+                waited = loop.time() - started
+                logger.warning(
+                    "LLM first byte: nothing from {} after {:.1f}s while {} (bound {}={:g}s); "
+                    "giving the call up as stalled so the retry ladder can ask again",
+                    self._provider_name or (self._gateway.name if self._gateway else "provider"),
+                    waited,
+                    phase,
+                    BOUND_NAME,
+                    first_byte,
+                )
+                raise FirstByteTimeoutError(phase=phase, budget=first_byte, waited=waited) from exc
+
         try:
             # The open and the first pull are one unit, and the `except` has to
             # cover both: an OpenAI-shaped route raises at the open, and a gateway
             # that defers the request until the first pull raises there instead.
             try:
-                stream = await _open()
-                first = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
-            except StopAsyncIteration:
-                first = done
+                first = await _open_and_first()
             except Exception as exc:
                 if not _retry_without_breakpoints(exc):
                     raise
                 # The refused stream is finished with; closing it before opening
                 # the replacement keeps at most one live at a time. It is None
-                # when the open itself was what failed.
+                # when the open itself was what failed, and cleared so a second
+                # failure's `finally` does not close the same object twice.
                 await _close(stream)
-                stream = await _open()
-                try:
-                    first = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
-                except StopAsyncIteration:
-                    first = done
+                stream = None
+                first = await _open_and_first()
+
+            # The transport facts, read off the wrapper while it still holds
+            # them: the accumulator that turns these deltas into a response never
+            # sees this object, and once the stream has ended the headers have
+            # gone with it -- which is why a measured empty-200 stream left a
+            # record with no status, no serving backend and no request id to ask a
+            # gateway about. They ride the deltas below rather than one of their
+            # own, because an extra element would change a sequence every consumer
+            # of this generator reads positionally. A stream that yields no delta
+            # at all therefore carries no record; that case is already a transport
+            # failure by the time the accumulator is done with it.
+            # The first chunk goes in with the wrapper: the wrapper's own
+            # provider/model are the request's, and a gateway that names its
+            # serving backend does it in the chunk body.
+            record = call_record.from_stream(stream, None if first is done else first)
+            record_sent = False
 
             # LiteLLM rebuilds its final usage and drops API monetary fields.
             # Its retained chunks precede that rebuild and contain reported usage.
@@ -776,6 +857,7 @@ class LiteLLMProvider(LLMProvider):
                 return usage
 
             chunk = first
+            delivered = False
             while chunk is not done:
                 delta = self._normalize_stream_chunk(chunk)
                 if sdk_stream:
@@ -783,7 +865,7 @@ class LiteLLMProvider(LLMProvider):
                     if delta is not None:
                         delta.usage = usage
                     elif usage is not None:
-                        delta = ChatDelta(usage=usage)
+                        delta = ChatDelta(content=None, usage=usage)
                 if delta is not None:
                     # LiteLLM's stream wrapper answers an upstream that closed the
                     # connection without a terminal chunk by making up a final
@@ -793,12 +875,25 @@ class LiteLLMProvider(LLMProvider):
                     # reply cut mid-thought must not read as a finished one.
                     if delta.finish_reason and _finish_was_made_up(stream):
                         delta.finish_synthesized = True
+                    delivered = delivered or bool(delta.content or delta.tool_call_delta)
+                    # The terminal delta of a stream that delivered nothing is the
+                    # one failure the deltas cannot describe: every field they
+                    # would have carried is absent. What the upstream did put on
+                    # the wire is in the chunks the wrapper retained, so that delta
+                    # takes them -- and only that one, since a delivered answer
+                    # needs no second copy of itself.
+                    if delta.finish_reason and not delivered:
+                        delta.call_record = call_record.with_body(record, call_record.stream_body(stream))
+                        record_sent = True
+                    elif not record_sent:
+                        delta.call_record = record
+                        record_sent = True
                     yield delta
                 try:
                     chunk = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
                 except StopAsyncIteration:
                     if sdk_stream and (usage := reported_usage()) is not None:
-                        yield ChatDelta(usage=usage)
+                        yield ChatDelta(content=None, usage=usage, call_record=None if record_sent else record)
                     break
         finally:
             await _close(stream)
@@ -815,6 +910,9 @@ class LiteLLMProvider(LLMProvider):
             result["cache_read_input_tokens"] = read
         if write is not None:
             result["cache_creation_input_tokens"] = write
+        reasoning = _reasoning_tokens(usage)
+        if reasoning is not None:
+            result["reasoning_tokens"] = reasoning
         result["prompt_tokens_include_cache"] = True
         cost = reported_cost(_usage_field(usage, "cost"))
         if cost is not None:
@@ -984,6 +1082,10 @@ class LiteLLMProvider(LLMProvider):
             usage=usage,
             sent_chars=sent_chars,
         )
+        # Asked once, before either exit: a response that delivered nothing is
+        # the one whose body has to be kept, and both exits below are that case.
+        record = call_record.from_response(response, usable=not said_nothing(content, tool_calls))
+
         if evidence:
             logger.warning("upstream reported a failed call as a normal end: {}", evidence)
             return LLMResponse(
@@ -998,6 +1100,7 @@ class LiteLLMProvider(LLMProvider):
                     retryable=True,
                     should_fallback=True,
                 ),
+                call_record=record,
             )
 
         return LLMResponse(
@@ -1007,6 +1110,7 @@ class LiteLLMProvider(LLMProvider):
             usage=usage,
             reasoning_content=reasoning_content,
             thinking_blocks=thinking_blocks,
+            call_record=record,
         )
 
     @property

@@ -193,7 +193,7 @@ class DailyPlanProducer(AttentionProducer):
 
     _PLAN_CADENCE = timedelta(hours=20)
     _PLAN_TEMPERATURE = 0.3
-    _PLAN_MAX_TOKENS = 1024
+    _PLAN_MAX_TOKENS = 2048
 
     def __init__(
         self,

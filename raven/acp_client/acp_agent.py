@@ -604,7 +604,7 @@ class _TurnCollector:
         )
 
 
-async def _bridged_auth(name: str, cfg: Any) -> Any:
+async def _bridged_auth(name: str, cfg: Any, *, scope: str | None = None) -> Any:
     """The credential the host uses for ``name``, for the endpoint's own upstream.
 
     The endpoint dials the real server once per downstream connection, so it
@@ -625,7 +625,7 @@ async def _bridged_auth(name: str, cfg: Any) -> Any:
     from raven.mcp.oauth import provider_for
 
     try:
-        return await provider_for(name, cfg, can_park=False)
+        return await provider_for(name, cfg, can_park=False, scope=scope)
     except Exception as exc:  # noqa: BLE001 - an unusable credential costs this server, not the turn
         logger.warning("acp: no credential for bridged MCP server {!r}: {}", name, exc)
         return None
@@ -1009,7 +1009,10 @@ class AcpAgentBackend:
             paths = {
                 server.name: str(
                     await endpoints.open(
-                        node_id, server.name, server.config, http_auth=await _bridged_auth(server.name, server.config)
+                        node_id,
+                        server.name,
+                        server.config,
+                        http_auth=await _bridged_auth(server.name, server.config, scope=server.scope),
                     )
                 )
                 for server in grant.granted

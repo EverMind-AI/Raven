@@ -291,8 +291,7 @@ It reads the task as the model wrote it (`authored_task` on `SubagentBackend.run
 hands it over through `optional_keyword`, so only a `run` that declares it or takes `**kwargs`
 receives it and a backend typed against the earlier paper keeps running; the rendered `task`
 only where a caller has no other text). The order is fixed:
-a reused instance handle continues where its transport bound it; a task whose wording, file
-references taken out, matches a route's `match` pattern goes there without a model call;
+a reused instance handle continues where its transport bound it;
 otherwise the manager's classifier (the host's own model) picks between the targets' roster
 lines and the entry itself, and any other answer keeps the task on the entry. A fronting row is only as ready as its
 targets (readiness kind `route`): a missing, unready or switched-off target disables the row
@@ -439,18 +438,58 @@ _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it pro
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
 The opt-in policy for when the model returns no text: re-feed its reasoning (PREFILL),
 inject a nudge after a tool call (NUDGE), or plain RETRY — each bounded by
-`RecoveryLimits`; otherwise the turn COMPLETEs. PREFILL is asked of the provider first
+`RecoveryLimits`. A response with text in it, or recovery switched off, COMPLETEs;
+spending every budget with nothing ever returned is FAIL, and the Agent Loop ends the turn
+with status `error` and a reply naming the failure. PREFILL is asked of the provider first
 (`LLMProvider.supports_assistant_prefill`): the Anthropic family rejects a trailing
 assistant message while thinking is on, and through a gateway that rejection can arrive as
 a stream that never yields a byte, so a provider that answers no never gets PREFILL -- the
 same thinking-only turn takes NUDGE after a tool, else RETRY, and no request handed to it
-ends on an assistant message.
-_Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes.
+ends on an assistant message. RETRY descends the effort ladder by what a rung *sends*, not by
+its label: the provider is asked (`LLMProvider.reasoning_wire_keys`) and a rung whose request
+this wire cannot tell apart from the one that failed is skipped -- when none is left, the
+turn has nothing to change and FAILs rather than paying for the same call twice.
+_Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes; and reading
+FAIL as a fourth mode — it is the answer given when there is nothing left to try.
+
+**Call Record** (`contracts/llm_provider.py`, `providers/call_record.py`):
+What the transport did on one model call, carried on `LLMResponse.call_record` and stored
+under `call` in the `llm.output` audit artifact: HTTP status, the backend that served it and
+the model it served, each only where the *response* named one (`served_by`, `served_model`
+-- a stream names no model at all, because the client library substitutes the request's),
+the upstream's generation id, the response headers, and the response body when the call
+delivered nothing. Built only by
+`providers/call_record.py`, which owns the caps (`MAX_BODY_CHARS`, `MAX_HEADERS`,
+`MAX_HEADER_VALUE_CHARS`), replaces the value of any credential-named header, and scrubs
+the body. The request half is not in it: `observability/semconv.request_facts` derives the
+messages+tools payload's size and a picture count from the messages, on the `llm.input`
+side -- the conversation as the provider received it, not the body the client serialized.
+_Avoid_: "transport failure" for this — that is the *verdict*
+(`providers/transport_failure.py`) reached about a call; a Call Record is the evidence, and
+is written for every call whether or not any verdict was reached.
+
+**No-Progress Ladder** (`agent/loop/no_progress.py`):
+The three bounded steps `NoProgressGuard` takes against a call that keeps working and keeps
+answering the same thing: append a nudge to the working result (`_NO_PROGRESS_THRESHOLD`
+identical answers), refuse the call without running it (`_NO_PROGRESS_REFUSE`), then end the
+turn (`_NO_PROGRESS_REFUSALS_MAX` chances spent). Keyed on the call *and* its
+answer, so a poll whose answer moves is never a repeat; the refusal additionally requires that
+nothing else answered anything new in between, which is what keeps a wait loop's identical
+`sleep` alive **while the check beside it answers something new** -- a poll answering
+byte-identically satisfies neither half, and freezes with the sleep. The freeze is evidence
+rather than a verdict: it stores the novelty count that established it, and `check` runs the
+pair again once that count has moved, so intervening real work rescues a call the model needs.
+Each rescue spends from the same `_NO_PROGRESS_REFUSALS_MAX` budget the refusals spend, so a
+turn producing one new answer per `_NO_PROGRESS_REFUSE` repeats is still bounded. The turn is
+the largest thing it stops -- it never ends the run.
+_Avoid_: "loop break" — that is the sibling guard for a call that keeps *failing*
+(`agent/loop/failure_streak.py`), and it counts consecutively where this counts per turn.
 
 **Synthesis**:
-The tools-disabled final LLM call the Agent Loop makes when a turn hits `max_iterations`
-(default 40): it summarizes progress and returns partial results, and the turn ends with
-status `interrupted`.
+The tools-disabled final LLM call the Agent Loop makes when a turn has to stop early — it hit
+`max_iterations` (default 40), or the No-Progress Ladder ended it: it summarizes progress and
+returns partial results, and the turn ends with status `interrupted`. The prompt names which
+reason, because a model told the wrong one summarizes the wrong thing.
 _Avoid_: "timeout" — Synthesis is iteration-bounded, not time-bounded.
 
 **Personalizer** (`agent/personalizer/`):
@@ -1029,13 +1068,21 @@ conflating it with a sub-agent DAG run (`run_subagent_dag` executes one graph a
 model just wrote; a playbook stores one for reuse).
 
 **SkillPolicy** (`skill_hub/policy.py`):
-The install-time safety decision both Hub install paths consult before any
-`SkillHubClient.install()` — the segment builder's post-gate hydrate and the `use_skill`
-tool. `refusal_for_detail()` checks, in order: the operator blocklist
+The safety decision every Hub skill path consults, at two strengths.
+`refusal_for_detail()` is the install strength, taken before any
+`SkillHubClient.install()` by the segment builder's post-gate hydrate and the `use_skill`
+tool. It checks, in order: the operator blocklist
 (`skillForge.blocklist`, matched case-insensitively against name / slug / native id), the
 `min_safety` bar against the *detail*-level `score_safety` (the catalog payload omits the
 score; a missing or malformed score passes), and an external home-dotdir lint over the
-skill body (`~/.raven` is allowed; any other dotdir reference refuses the install). A hub
+skill body. `~/.raven` is allowed, and so is a generic root such as `~/.config` on its own
+or `~/.config/raven` under it; a dotdir naming another product refuses the install and is
+reported down to the segment that names it (`~/.config/openclaw`).
+`refusal_for_read()` is the read strength, taken by `read_skill`: blocklist and safety bar
+only. A read installs nothing and returns the body wrapped as untrusted data, and the
+scent menu advertises hub candidates on those same two checks — linting the read as well
+would put ids in front of the model that no call can resolve. The lint still runs on that
+path, as a note above the body naming the flagged paths. A hub
 candidate whose detail fetch fails is unvetted and dropped — it never reaches `install()`.
 Every install that passes is appended to a JSONL audit trail
 (`<workspace>/skills/hub/installs.jsonl`, `skill_hub/audit.py`).
@@ -1413,6 +1460,26 @@ lands on one, and is recorded on the call's tool.call span as
 (`contracts/tool_gate.py`): the gate is platform authority, runs first, can
 wait on a human, and answers with a full ToolResult.
 _Avoid_: "tool gate" for this -- that name is the plugin paper's.
+
+**Credential scope**:
+Which credential store an MCP server's secrets are read from and written to.
+`None` is the host's own -- `<credentials>/mcp/<server>.json` for OAuth tokens,
+`tools.mcpServers` for everything else. A playbook that carries its own servers
+passes `playbooks/<playbook>` (`raven.playbook.credentials.credential_scope`),
+so its tokens land in `<credentials>/playbooks/<playbook>/mcp/<server>.json` and
+its `secret` params in `params.json` beside them, both 0600. It travels as
+`scope=` on `credentials_path` / `FileTokenStorage` / `provider_for` /
+`has_stored_tokens` / `delete_credentials`, as `credential_scope` on
+`MCPConnectionManager` (a name, or a callable answering per server when one
+manager dials host and carried servers side by side), and as `scope` on
+`McpServerView` / `GrantedServer` / `MissingServer` so a grant hands the bridge
+endpoint the scope its upstream was dialled under. Exists because a carried
+server may shadow a host server of the same name: keyed by name alone, a
+carried `sentry` would read and overwrite the host's `sentry.json`.
+_Avoid_: "OAuth scope" for this. That is the permission list an authorization
+server grants (`oauth.scopes`, `scopes_supported` in `mcp/oauth.py`) and is a
+different axis entirely -- a credential scope says *where the token is kept*, an
+OAuth scope says *what the token may do*.
 
 **Permission Mode**:
 How the gate reads the ask tier, and only the ask tier: `ask` prompts a human
@@ -2110,9 +2177,72 @@ false there by construction, never a fact about the tree.
 _Avoid_: reading a `shared` report as one session's work - it is the shared tree's, and
 `baseCommit..HEAD` cannot tell whose.
 
+**Coding Conduct** (`agents/raven-code/plugins/code-flow/prompts/CODE_CONDUCT_*.md`,
+`agents/raven-code/run.py`):
+The working rules a coding product seeds into its workspace as
+`agent_memory/profile/agent.md`, which bootstrap renders right after the host identity:
+tone, the project's own conventions, the phased discipline for changing code (understand,
+implement, verify) and the tool policy for the face this product actually serves. One
+variant per model family, since an instruction that helps one family can hurt another; a
+partition still carrying the other variant is reseeded, and anything an operator tuned in
+place is left alone. Small sibling digest receipts recognize untouched prompt seeds across
+product updates; known pristine legacy tool guides are migrated without replacing operator edits.
+Avoid writing an evaluation harness's vocabulary into it - no benchmark, no grader, no
+completion token; a conduct reads the same to a model on a real task and to one under
+measurement.
+Avoid promising a tool or a behaviour the served face does not have - the model acts on
+the promise and the failure looks like the model's mistake.
+
+**Repository Instructions** (`agents/raven-code/plugins/code-flow/code_flow/flow.py`,
+`code_flow/config.py`):
+The working directory's own instruction files - `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, the
+slice's `projectFiles` - which code-flow appends to the system message in its existing
+`before_iteration` hook, capped per file and read anew each turn. The hook preserves the host's
+system prefix and transcript, sizes its addition against the remaining prompt allowance with
+the active model's full reply ceiling reserved, and labels truncation. If even the notice
+cannot fit, the turn reports insufficient context instead of sending an oversized request.
+Repeated iterations replace the hook's own addition. Resolved paths must remain inside the
+resolved bound directory; aliases resolving to one file are read once.
+They are the project's standing instructions to whoever works in it, so they are not fenced as untrusted data; they
+are read from the bound working directory only, never from the agent's own home, and an empty
+list (the launcher's `CODE_PROJECT_FILES=off`) reads none. File names do not select message
+roles: every configured instruction file enters system context. The inbound query and the
+session record keep the user's own words, including slash commands.
+_Avoid_: confusing them with the bootstrap files - those are the agent's own (`soul.md`,
+`agent.md`, `TOOLS.md`, read from Agent home by the host); these are the checkout's.
+
+**Read Ledger** (`agents/raven-code/plugins/code-flow/code_flow/tools/read_state.py`):
+The resolved file versions observed by one session in one Raven-Code runtime. The flow hook
+binds its own store before each model iteration, including subagent turns and when flow
+notices are disabled. File tools consume that binding; instances and sessions never share
+read permission. Successful reads and full writes establish a record. An append preserves
+one only when the previous content was current or the file is new. Enforced edits reject
+unbound, unread, or externally changed content. Session deletion and runtime replacement
+discard the affected records; a new session has its own records. This is an edit precondition, not a file
+lock or a mandatory read-before-overwrite check on the public tools.
+
+**Checklist** (`agents/raven-code/plugins/code-flow/code_flow/tools/todo.py`, `code_flow/flow.py`):
+The model's own plan for a multi-step task, kept by Raven-Code's `todo` tool: `read` shows it,
+`write` replaces the whole list. Saved under Agent home (`todos/<channel>/<chat_id>.json`) before
+the write is acknowledged, so it outlives the rest of the tool batch and the process; the saved
+record is the source of truth, never the transcript. The hook binds the store at inbound and
+checks the actual session before the first model call, covering turns that skip inbound or
+select another session. Binding and cleanup stay active while the tools are enabled, even
+when flow notices and reports are disabled. An unbound tool returns an error. New tasks use
+new session IDs: ACP callers create a session, and CLI callers use a new `--session` value.
+Resuming an existing session restores its plan; deleting it removes the plan. The host's
+in-place `/new` command retains the session key and does not clear this separate product
+state. The product neither intercepts that command nor adds a shared reset hook.
+Before a model call, the hook appends one restore
+snapshot to the last message only while no message in the window still shows the current
+revision -- a durable transcript entry, not a per-request reminder.
+Avoid treating a `completed` status as verified - the plan is the model's, and an item it
+marks done is a claim, not evidence.
+Avoid reading a pasted `<system-reminder>` as a plan - only the saved record decides.
+
 **Concurrency Notice** (`agents/raven-code/plugins/code-flow/code_flow/flow.py`,
 `code_flow/sessions.py`):
-The paragraph the code-flow hook puts in front of a Raven-Code turn's prompt when other
+The paragraph code-flow contributes to the volatile part of the system message when other
 sessions of the same process are mid-turn in the same working directory - the parallel
 nodes of one DAG, which the host serves through one connection and one session each - and
 only then; a lone session hears nothing. It replaces the lock: re-read before every write,

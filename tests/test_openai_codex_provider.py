@@ -250,10 +250,17 @@ def test_convert_messages_wires_tool_output_into_function_call_output():
 
 
 def _capture_body(monkeypatch) -> list[dict]:
-    """Run ``chat`` without a network call or a credential, keeping the body."""
+    """Run ``chat`` without a network call or a credential, keeping the body.
+
+    The budgets this stand-in does not read arrive as ``**kwargs`` on purpose.
+    ``chat`` reports a failed call as an ``LLMResponse``, so a stand-in that
+    refuses an argument the real ``_request_codex`` grew fails here as an empty
+    ``bodies`` -- which reads as "no request was issued" rather than as the
+    signature mismatch it is.
+    """
     bodies: list[dict] = []
 
-    async def fake_request(url, headers, body, verify, timeout, idle_timeout=None):
+    async def fake_request(url, headers, body, **kwargs):
         bodies.append(body)
 
         return "", [], "stop"
@@ -419,14 +426,21 @@ async def test_the_codex_sse_watchdog_runs_on_the_stream_idle_budget_not_the_cal
     """`streamIdleTimeout` is what a silent stream is given up after; the call
     budget is what the whole request may take. This adapter fed the call budget
     to its per-line watchdog, so with llmCallTimeout 600 and streamIdleTimeout
-    180 a silent Codex stream still waited 600 s and the setting did nothing."""
+    180 a silent Codex stream still waited 600 s and the setting did nothing.
+
+    Three budgets reach the request now, so each is asserted by value rather
+    than by the call not raising: the call budget arrives as per-phase httpx
+    caps and is carried by the read phase, the watchdog gets the idle budget,
+    and the wait for the first event gets the first-byte bound. ``first_byte``
+    defaults to None here so that chat dropping it fails rather than reading as
+    the adapter's own default."""
     from raven.contracts.llm_provider import GenerationSettings, LLMResponse  # noqa: F401
     from raven.providers import openai_codex_provider as mod
 
     seen: list[dict] = []
 
-    async def fake_request(url, headers, body, *, verify, timeout, idle_timeout=None):
-        seen.append({"timeout": timeout, "idle_timeout": idle_timeout})
+    async def fake_request(url, headers, body, *, verify, timeout, idle_timeout=None, first_byte=None, **kwargs):
+        seen.append({"timeout": timeout, "idle_timeout": idle_timeout, "first_byte": first_byte})
         return "ok", [], "stop"
 
     monkeypatch.setattr(mod, "_request_codex", fake_request)
@@ -436,7 +450,10 @@ async def test_the_codex_sse_watchdog_runs_on_the_stream_idle_budget_not_the_cal
 
     await provider.chat([{"role": "user", "content": "hi"}])
 
-    assert seen and seen[0]["timeout"] == 600 and seen[0]["idle_timeout"] == 7
+    assert seen, "chat reports a failed call as a response, so an empty list means no request went out"
+    assert seen[0]["idle_timeout"] == 7
+    assert seen[0]["timeout"].read == 600
+    assert seen[0]["first_byte"] == 120
 
 
 def test_a_replayed_assistant_message_carries_its_annotations() -> None:

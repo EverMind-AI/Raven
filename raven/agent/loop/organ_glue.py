@@ -13,6 +13,7 @@ from raven.agent.loop._shared import (
     image_placeholder_text,
     logger,
     semconv,
+    send_max_tokens,
     supports_image_tool_result,
     trace,
     vision_verdict,
@@ -137,6 +138,28 @@ class OrganGlueMixin:
     def _context_messages_for_session(self, session: Session) -> list[dict[str, Any]]:
         """The candidate message view, asked of the Memory role that owns it."""
         return self.harness.memory.candidate_messages(session)
+
+    def _wire_output_ceiling(self, model: str | None = None) -> int:
+        """The output ceiling a request for ``model`` will actually carry.
+
+        The turn path's reservations go through here so they read the id the
+        request goes out under rather than the one it is configured with. The
+        two differ -- ``z-ai/glm-5.3-flash`` against
+        ``openrouter/z-ai/glm-5.3-flash`` -- and only the second reaches the
+        OpenRouter tier, so resolving from the configured name had every
+        reservation answer 32768 (half the default window, for a model nothing
+        could be found for) against a request that carried 64000.
+
+        ``allow_fetch=False`` for the same reason construction passes it (see
+        ``__init__``): this runs per turn on the loop's own thread, and it only
+        needs a number to reserve -- not the one a request will carry. The
+        fallback under-reserves at worst; the importing tier costs seconds.
+        """
+        return send_max_tokens(
+            getattr(self.provider, "generation", None),
+            getattr(self.provider, "wire_model_id", lambda m: m)(model or self.model),
+            allow_fetch=False,
+        )
 
     def _make_token_budget(self, selected_skills: list[Any] | None = None) -> TokenBudget:
         """The per-turn prompt budget, asked of the Memory role that owns it."""
