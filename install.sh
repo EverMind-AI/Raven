@@ -468,18 +468,22 @@ install_office() {
         warn "LibreOffice not found; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
         return 0
       fi
-      printf 'Install LibreOffice for deck preview (needs sudo)? [y/N] '
+      # Default yes: for the deck lane this is the one dependency that matters
+      # (the whole render-truth capability is soffice being present), and the
+      # macOS path already installs it without asking. sudo's own password
+      # prompt still stands between Enter and any change.
+      printf 'Install LibreOffice for deck preview (needs sudo)? Without it a deck still builds, but no page is ever rendered, measured or checked. [Y/n] '
       answer=""
       read -r answer < /dev/tty || answer=""
       case "$answer" in
-        y|Y)
+        n|N)
+          warn "Skipping LibreOffice; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+          ;;
+        *)
           # sudo's password prompt also reads stdin: give it the tty too.
           # shellcheck disable=SC2024  # input redirect on purpose; opening /dev/tty needs no elevation.
           sudo apt-get install -y libreoffice < /dev/tty \
             || warn "LibreOffice install failed; deck preview stays off. Retry later with: sudo apt-get install -y libreoffice"
-          ;;
-        *)
-          warn "Skipping LibreOffice; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
           ;;
       esac
       ;;

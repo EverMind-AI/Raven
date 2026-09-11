@@ -1360,6 +1360,15 @@ def test_no_env_falls_back_to_the_user_cache(tmp_path: Path) -> None:
     assert Path.home() in root.parents
 
 
+def _wide_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Assertions on literal path fragments must not depend on where Rich
+    wraps: xdist's longer tmp paths cross the 80-column default and split a
+    token like pw-cache mid-word."""
+    from rich.console import Console
+
+    monkeypatch.setattr(doctor_commands, "console", Console(width=400))
+
+
 def _fake_playwright(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, markers: tuple[str, ...]) -> Path:
     """Install a fake playwright package dir plus a cache holding ``markers``."""
     package_dir = tmp_path / "playwright"
@@ -1401,6 +1410,7 @@ def test_doctor_reports_an_undownloaded_chromium_with_the_command_that_installs_
 def test_doctor_names_the_browser_cache_it_found(
     healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    _wide_console(monkeypatch)
     _fake_playwright(tmp_path, monkeypatch, markers=("chromium-1234", "chromium_headless_shell-1234"))
 
     result = runner.invoke(app, ["doctor"])
@@ -1499,6 +1509,7 @@ def test_install_summary_browser_row_names_the_download_when_only_the_binary_is_
 def test_install_summary_browser_row_ticks_a_complete_download(
     tmp_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    _wide_console(monkeypatch)
     _fake_playwright(tmp_path, monkeypatch, markers=("chromium-1234", "chromium_headless_shell-1234"))
 
     r = runner.invoke(app, ["doctor", "--install-summary"])

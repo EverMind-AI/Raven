@@ -31,7 +31,7 @@ _VM_PATTERN_GROUPS = (
 # bundle; older caches still carry the pre-CfT Chromium.app layout, so
 # every pattern must end at the executable the config will exec.
 _CACHE_PATTERN_GROUPS = (
-    ("chromium-*/chrome-linux/chrome",),
+    ("chromium-*/chrome-linux/chrome", "chromium-*/chrome-linux64/chrome"),
     ("chromium-*/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",),
     ("chromium-*/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",),
     ("chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium",),

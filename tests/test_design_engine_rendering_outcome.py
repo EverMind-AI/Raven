@@ -479,6 +479,21 @@ def test_the_vm_root_outranks_the_user_caches(tmp_path: Path, monkeypatch: pytes
     assert _discover_chromium(roots) == str(from_vm)
 
 
+def test_the_current_linux_cache_layout_is_discovered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """playwright 1.62 installs Linux chromium under chrome-linux64, the layout
+    the VM group already knew; the user cache must know it too, or doctor says
+    green while this discovery hands the renderer nothing."""
+    from raven_design.rendering.models import _discover_chromium
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    env_root = tmp_path / "browsers"
+    executable = _stage_chromium(env_root, "chromium-1234/chrome-linux64/chrome")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(env_root))
+
+    assert _discover_chromium() == str(executable)
+
+
 def test_the_legacy_chromium_app_layout_is_still_discovered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from raven_design.rendering.models import _discover_chromium
 

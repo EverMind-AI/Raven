@@ -503,8 +503,10 @@ function Install-Office {
         Write-Warn "LibreOffice not found; deck preview stays off. Install it later with: winget install TheDocumentFoundation.LibreOffice"
         return
     }
-    $answer = Read-Host "Install LibreOffice for deck preview (may raise a UAC prompt)? [y/N]"
-    if ($answer -notmatch "^[yY]$") {
+    # Default yes, matching install.sh: for the deck lane this is the one
+    # dependency that matters, and macOS installs it without asking.
+    $answer = Read-Host "Install LibreOffice for deck preview (may raise a UAC prompt)? Without it a deck still builds, but no page is ever rendered, measured or checked. [Y/n]"
+    if ($answer -match "^[nN]") {
         Write-Warn "Skipping LibreOffice; deck preview stays off. Install it later with: winget install TheDocumentFoundation.LibreOffice"
         return
     }
