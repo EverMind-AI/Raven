@@ -295,7 +295,15 @@ a reused instance handle continues where its transport bound it;
 otherwise the manager's classifier (the host's own model) picks between the targets' roster
 lines and the entry itself, and any other answer keeps the task on the entry. A fronting row is only as ready as its
 targets (readiness kind `route`): a missing, unready or switched-off target disables the row
-with the reason on it. Both fields are manifest facts, filled from the folder over a stored row.
+with the reason on it. A route is admitted the way everything else at a boundary is
+(**Admission**): it declares what its target's pipeline spends (`needs`, from the closed
+`ROUTE_REQUIREMENTS` vocabulary) and the lowest tier it may open at (`minTier`), and the
+entry checks only what was declared -- a route declaring neither is dispatched as routes
+were before the gate, since an empty declaration is verbatim pass-through. The readiness
+probe answers for the *routed target's* lane, reading that product folder's own settings
+first and falling back to what its launcher would inherit from the host; the host's own
+credentials answer for the host loop and are a different question.
+Both fields are manifest facts, filled from the folder over a stored row.
 _Avoid_: treating it as the table — the roster is the enabled subset, formatted for a prompt.
 
 **Ownership** (`owns`, on a sub-agent's manifest and on any config entry, built-in included):

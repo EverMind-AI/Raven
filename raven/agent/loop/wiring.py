@@ -42,6 +42,8 @@ from raven.agent.tools.ask_user import DEFAULT_TIMEOUT_S
 from raven.contracts.token_strategy import UsageSnapshot
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from raven.agent.tools.deliverables import DeliverableStore
     from raven.config.schema import PlaybookConfig, SkillForgeRouterConfig
     from raven.contracts.asking import QuestionResponder
@@ -241,6 +243,112 @@ class WiringMixin:
 
         cfg = media_tool_config(self._live_config, kind)
         return resolve_media_selection(fallback, kind) if cfg is None else cfg
+
+    def _routed_target_ready(self, target: str, needs: "Sequence[str]") -> bool:
+        """Whether ``target``'s own lane can spend what its route declared it spends.
+
+        Answers for the routed product, not for this loop. A lane is configured
+        from its product folder first and inherits from the host only where the
+        folder is silent, so a host credential is the wrong thing to measure in
+        both directions: a lane equipped by its own ``.env`` would be refused on
+        a host that holds nothing, and a host equipped for something the lane
+        cannot use would open a route into a pipeline that has no key for the
+        surface it actually calls.
+
+        ``needs`` is the route's own declaration (:data:`ROUTE_REQUIREMENTS`);
+        an empty one never reaches here, because a route that declares nothing
+        is not probed at all. A requirement this raven does not have a question
+        for is warned about and treated as met -- a manifest written for a later
+        version must not silently lose its route on an older one.
+
+        Re-read per dispatch, so a key pasted into Settings or into the
+        product's ``.env`` opens the route without a restart.
+
+        The Jina reader key is deliberately not counted: ``web_fetch`` is
+        registered with or without one (see ``WebFetchConfig``), so it says
+        something about extraction quality and nothing about whether a lane can
+        search.
+        """
+        for need in needs:
+            if need == "image_generation":
+                if not self._lane_generates_images(target):
+                    return False
+            elif need == "image_search":
+                if not self._lane_searches_images(target):
+                    return False
+            else:
+                logger.warning(
+                    "A route to {!r} declares the requirement {!r}, which this raven cannot measure; "
+                    "treating it as met",
+                    target,
+                    need,
+                )
+        return True
+
+    def _lane_generates_images(self, target: str) -> bool:
+        """Whether ``target`` has a picture generator: its own key, else the host's.
+
+        ``product_image_key`` is the whole folder side, including the branch an
+        explicit image key hides: with no image key anywhere and an OpenRouter
+        endpoint, the launcher lets the key paying for the lane's words pay for
+        its pictures, so a folder holding only its own LLM key can still draw.
+
+        The fallback is the inheritance the product launchers perform -- a
+        folder supplying nothing is configured from the host's
+        ``tools.media.image`` -- so the two readers cannot disagree about a lane
+        that was going to inherit anyway.
+        """
+        from raven.agent.subagent.vendored_agents import product_image_key
+        from raven.agent.tools.media_gen import _OpenRouterMediaTool
+
+        if product_image_key(target):
+            return True
+        return _OpenRouterMediaTool.has_key(self._live_media_config("image", self.media_config.image))
+
+    def _lane_searches_images(self, target: str) -> bool:
+        """Whether ``target`` can search for pictures: its own Serper key, else the host's.
+
+        Serper specifically, and not :meth:`_live_web_search_key`. That reader
+        answers for this loop's own ``web_search``, which is truthy on whichever
+        vendor the host selected; a lane's image search speaks to Serper's image
+        endpoint alone, so a host on another vendor holds nothing the lane can
+        spend and a Serper key the host did not select is still the lane's to
+        spend.
+
+        The bare ``SERPER_API_KEY`` closes the chain because the lane's own
+        tool ends there too, and a launched product inherits this environment:
+        stopping one link earlier would refuse a deployment whose only key is
+        exported, which the lane would have searched with.
+        """
+        import os
+
+        from raven.agent.subagent.vendored_agents import product_secret
+
+        return bool(
+            product_secret(target, "SERPER_API_KEY")
+            or self._live_vendor_key("serper")
+            or os.environ.get("SERPER_API_KEY", "")
+        )
+
+    def _live_vendor_key(self, vendor: str) -> str:
+        """One named web vendor's key the file holds now, whatever the host selected.
+
+        The selection-free half of :meth:`_live_web_search_key`, resolved in the
+        same order: the canonical vendor slot, then the pre-vendor leaf that is
+        Serper's alone, then the boot value.
+        """
+        from raven.config.live import web_provider_key, web_search_key
+
+        slot = web_provider_key(self._live_config, vendor)
+        if slot:
+            return slot
+        if vendor == "serper":
+            leaf = web_search_key(self._live_config)
+            if leaf is not None:
+                return leaf
+        if slot == "":
+            return ""
+        return self._web_key(vendor) or ""
 
     @property
     def provider(self) -> LLMProvider:

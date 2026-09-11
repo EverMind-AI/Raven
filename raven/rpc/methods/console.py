@@ -1264,6 +1264,7 @@ async def fs_list(params: dict, *, agent_loop_factory=None) -> dict:
     return {"root": str(root), "path": rel, "entries": entries}
 
 
+_FS_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 _UPLOAD_DIR = "uploads"
 
 
@@ -1305,8 +1306,6 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
     """
     import base64
 
-    from raven.rpc.files import MAX_UPLOAD_BYTES
-
     root = _upload_root()
     raw = params.get("content_b64") or ""
     try:
@@ -1315,8 +1314,8 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
         raise ConfigValidationError("content_b64 is not valid base64") from None
     if not data:
         raise ConfigValidationError("empty file")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise ConfigValidationError(f"file exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
+    if len(data) > _FS_MAX_UPLOAD_BYTES:
+        raise ConfigValidationError(f"file exceeds {_FS_MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
 
     target_dir = root / _UPLOAD_DIR
     try:
