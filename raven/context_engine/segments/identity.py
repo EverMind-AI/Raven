@@ -9,6 +9,33 @@ from raven.context_engine.segments import render
 from raven.contracts.context import AssemblyContext, Segment
 
 
+def _charter_brief() -> str:
+    """What this dispatch's charter adds to the identity, if anything.
+
+    Appended, never substituted. The text above carries the runtime facts a
+    turn cannot work without -- the working directory, the platform policy, the
+    rule about untrusted content -- so a brief that replaced it would buy a
+    narrower job at the cost of the agent knowing where it is standing.
+
+    Imported inside the call: a charter belongs to the dispatch layer and the
+    context engine is reached from places that must not pull it in.
+    """
+    try:
+        from raven.agent.subagent.charter import current_charter
+    except Exception:  # noqa: BLE001 - no charter support is not a reason to lose the identity
+        return ""
+    charter = current_charter()
+    if charter is None or not (charter.prompt or charter.stop_when):
+        return ""
+    lines = ["", "## This task", ""]
+    if charter.prompt:
+        lines.append(charter.prompt)
+    if charter.stop_when:
+        lines.append("")
+        lines.append(f"Done when: {charter.stop_when}")
+    return "\n".join(lines) + "\n"
+
+
 class IdentitySegmentBuilder:
     name = "identity"
     order = 1
@@ -56,10 +83,9 @@ class IdentitySegmentBuilder:
         # nowhere else: one resident surface, where the parameter table lives,
         # where it can be narrowed per turn, and where the model is standing
         # when it has to choose. A second listing here would drift against it.
-        return Segment(
-            text=render.identity_text(
-                self._workspace,
-                specialists=self._specialists(),
-                dispatch_tools=render.live_dispatch_tools(self._get_tool_definitions),
-            )
+        text = render.identity_text(
+            self._workspace,
+            specialists=self._specialists(),
+            dispatch_tools=render.live_dispatch_tools(self._get_tool_definitions),
         )
+        return Segment(text=text + _charter_brief())

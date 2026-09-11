@@ -631,6 +631,40 @@ async def _bridged_auth(name: str, cfg: Any, *, scope: str | None = None) -> Any
         return None
 
 
+def _prompt_deadline(configured: int | None) -> int | None:
+    """How long this prompt may run: the tighter of the config and the brief.
+
+    Every shipped worker configures ``None`` here, and deliberately -- a long
+    job is a long job, and a fixed ceiling would cut the ones this roster exists
+    to run. A brief, unlike a config, knows what *this* dispatch is, so it may
+    name a deadline the config could not have known to set. It may only tighten.
+    """
+    try:
+        from raven.agent.subagent.charter import narrowed_timeout
+
+        return narrowed_timeout(configured)
+    except Exception:  # noqa: BLE001 - a brief that cannot be read sets no deadline
+        return configured
+
+
+def _prompt_meta(skey: Any) -> dict[str, Any]:
+    """The ``_meta`` one prompt carries.
+
+    The usage context always; a charter only when this dispatch brought one, so
+    a turn with no playbook in play puts exactly the bytes on the wire it put
+    before charters existed. The receiving side drops a key it does not know,
+    which is what lets a newer host talk to an older worker.
+    """
+    from raven.agent.subagent.delegate import outbound_charter
+    from raven.token_wise import usage_context
+
+    meta: dict[str, Any] = {"raven.usage": usage_context.delegation(skey)}
+    charter = outbound_charter()
+    if charter:
+        meta["raven.playbook"] = dict(charter)
+    return meta
+
+
 class AcpAgentBackend:
     """Runs a task as one ``session/prompt`` against a pooled ACP connection."""
 
@@ -1096,7 +1130,6 @@ class AcpAgentBackend:
                 # the pool answered a second binding by closing the first binding's
                 # connection -- mid-turn, if one was running. Kept separate, each
                 # binding gets a connection of its own and the two coexist.
-                from raven.token_wise import usage_context
 
                 binding: dict[str, str] = {}
                 if model:
@@ -1185,7 +1218,7 @@ class AcpAgentBackend:
                             "session/prompt",
                             {
                                 "sessionId": session_id,
-                                "_meta": {"raven.usage": usage_context.delegation(skey)},
+                                "_meta": _prompt_meta(skey),
                                 # The attachments ride as resource links beside the
                                 # text, the block an editor sends for an @-mentioned
                                 # file; see raven.agent.subagent.attachments.
@@ -1194,7 +1227,7 @@ class AcpAgentBackend:
                                     *attachment_blocks(media, root=_uploads_root()),
                                 ],
                             },
-                            timeout=self.timeout,
+                            timeout=_prompt_deadline(self.timeout),
                             cancel_session=session_id,
                         )
                     except asyncio.CancelledError:

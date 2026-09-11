@@ -171,6 +171,55 @@ def _received_tail(params: dict[str, Any]) -> str:
     return f" Received: {raw[:400]}" + ("..." if len(raw) > 400 else "")
 
 
+def _charter_withheld(tools: "Mapping[str, Tool]") -> frozenset[str]:
+    """What this turn's charter, if any, takes off the table.
+
+    Imported inside the call rather than at module level: a charter belongs to
+    the dispatch layer, and the registry is reached from places that must not
+    pull that in. The import is a cached lookup after the first turn.
+    """
+    try:
+        from raven.agent.subagent.charter import current_charter, narrowed_tools
+    except Exception:  # noqa: BLE001 - no charter support is not a reason to lose tools
+        return frozenset()
+    # Asked before the names are materialised. This runs on every
+    # ``withheld_names`` read, which is every ``execute`` and every schema
+    # render, so a turn with no charter must not pay a tuple of every tool name
+    # for an answer that is always the empty set.
+    if current_charter() is None:
+        return frozenset()
+    return narrowed_tools(tuple(tools))
+
+
+def _charter_refusals(name: str, params: dict[str, Any]) -> list[str]:
+    """Why this turn's charter refuses this call, or an empty list.
+
+    Lazily imported for the reason ``_charter_withheld`` is, and quiet on any
+    failure: a charter that cannot be judged must not be able to stop a turn
+    the install would otherwise have run.
+    """
+    try:
+        from raven.agent.subagent.charter import judge, prior_calls
+
+        return judge(name, params, prior_calls())
+    except Exception:  # noqa: BLE001 - a brief that cannot be read is not a refusal
+        return []
+
+
+def _record_call(name: str, params: dict[str, Any]) -> None:
+    """Remember a call that ran and did not fail.
+
+    After dispatch, never before: a rule that asks for a prior ``read_file``
+    is asking whether the file was read, and a read that errored read nothing.
+    """
+    try:
+        from raven.agent.subagent.charter import record_call
+
+        record_call(name, params)
+    except Exception:  # noqa: BLE001 - bookkeeping must not cost the call its result
+        pass
+
+
 def call_failed(result: Any) -> bool:
     """Whether one tool call went wrong, by the registry's own convention.
 
@@ -342,13 +391,19 @@ class ToolRegistry:
         tighten mid-turn still land on this very read.
         """
         frozen = self._turn_withheld.get() or frozenset()
+        # A dispatch's charter narrows this turn the same way an off switch
+        # does, and joins by union for the same reason: every source here may
+        # take a tool away and none may hand one back. That is what makes a
+        # charter safe to accept from another process -- the worst a bad one
+        # can do is leave this turn with fewer tools than it would have had.
+        charter = _charter_withheld(self._tools)
         if self._withheld is None:
-            return frozen
+            return frozen | charter
         try:
-            return self._withheld() | frozen
+            return self._withheld() | frozen | charter
         except Exception:  # noqa: BLE001 - a bad read must not cost the turn its tools
             logger.warning("tools: could not read the disabled-tool list; offering everything")
-            return frozen
+            return frozen | charter
 
     def hide_from_schema(self, *names: str) -> None:
         """Keep tools registered and callable, but out of the provider's tool schema.
@@ -825,6 +880,12 @@ class ToolRegistry:
             params = cast_params(tool.parameters, tool.cast_params(params))
 
             errors = validate_params(tool.parameters, params) + tool.validate_params(params)
+            # This turn's charter, judged where a schema error is judged and for
+            # the same reason: the refusal reaches the model as this call's
+            # result, so the next attempt can be right. Ahead of the permission
+            # gate, which is about what a person allows rather than what this
+            # dispatch was briefed to do.
+            errors += _charter_refusals(name, params)
             if errors:
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
 
@@ -885,6 +946,21 @@ class ToolRegistry:
                 blocks = None
                 diff = None
                 file_change = None
+            # Remembered once the verdict is in, and only when it is good. A
+            # rule that asks for a prior ``read_file`` is asking whether the
+            # file was read; a read that errored read nothing, and letting it
+            # satisfy the rule would hand the next call exactly the permission
+            # the rule exists to withhold. Judged by ``call_failed`` rather than
+            # by ``ok`` alone, for the reason that function was written: a tool
+            # answering with a bare error string carries no ``ok`` to read.
+            #
+            # The result itself, not its text: ``call_failed`` reads ``ok``
+            # first and falls back to the text only when there is no ``ok`` to
+            # read, so handing it the unwrapped string is what would lose the
+            # verdict -- a ``run_shell`` that exited non-zero says so through
+            # ``ok`` and its output rarely begins with the word Error.
+            if not call_failed(result):
+                _record_call(name, params)
 
             if model_text.startswith("Error"):
                 # ``Error:`` describes presentation, not retry semantics.

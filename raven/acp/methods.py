@@ -719,6 +719,14 @@ class AcpMethods:
                         stored = sessions.get_or_create(session.session_key)
                         stored.metadata["usage_owner"] = owner
                         sessions.save(stored)
+                # The charter this dispatch brought, staged for the turn below.
+                # Held on the loop rather than in session metadata: it describes
+                # one dispatch, and metadata survives the process.
+                if self._agent_loop is not None:
+                    meta = params.get("_meta")
+                    binder = getattr(self._agent_loop, "bind_session_charter", None)
+                    if callable(binder) and isinstance(meta, dict):
+                        binder(session.session_key, meta.get("raven.playbook"))
                 self._apply_mode(session)
                 # channel and chat_id are the pair that rebuilds this session key
                 # (``<channel>:<chat_id>``). Tools record them as the turn's live

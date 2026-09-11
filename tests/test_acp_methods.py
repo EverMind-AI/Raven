@@ -2109,3 +2109,62 @@ def test_turn_meta_reads_only_what_hooks_filed():
     messages = [{"role": "assistant", "content": "x", "observers": {"acp_meta": {"vendor.k": 1}}}]
     sessions = _MetaSessions(messages, {"output_limit_turn_at": 0})
     assert AcpMethods._turn_meta(sessions, "k", 0) == {"vendor.k": 1}
+
+
+class TestPlaybookCharter:
+    """The worker end of a dispatch's charter: ``_meta`` off the wire, staged
+    for the session whose turn is about to run.
+
+    The staging itself is tested beside the loop. What is only true here is
+    that the handler accepting a dispatch actually reaches for the key -- a
+    charter the host wrote and the worker never looked for is indistinguishable
+    from one that was never sent.
+    """
+
+    async def _staged(self, rig, meta, *, bind=True):
+        """Drive one dispatch far enough to see what it staged.
+
+        ``session/prompt`` does not return until the turn does, so it is driven
+        as a task and closed out, the way the cancellation test above drives
+        it. The staging happens before the turn is submitted, which is the
+        whole point of it -- the handler cannot open the turn's scope itself.
+        """
+        staged: list[tuple] = []
+        if bind:
+            rig.engine.bind_session_charter = lambda key, payload: staged.append((key, payload))
+        await rig.handshake()
+        session_id = await rig.new_session()
+        params = {"sessionId": session_id, "prompt": [{"type": "text", "text": "hi"}]}
+        if meta is not None:
+            params["_meta"] = meta
+        task = asyncio.create_task(rig.call("session/prompt", params))
+        for _ in range(4):
+            await asyncio.sleep(0)
+        await rig.call("session/close", {"sessionId": session_id})
+        result = await task
+        return staged, session_id, result
+
+    async def test_a_charter_on_the_wire_is_staged_for_that_session(self, rig):
+        payload = {"prompt": "only A", "tools": ["grep"]}
+
+        staged, session_id, _ = await self._staged(rig, {"raven.playbook": payload})
+
+        assert staged == [(session_id, payload)]
+
+    async def test_a_dispatch_with_no_charter_stages_none(self, rig):
+        """The clearing call matters as much as the setting one: a pooled worker
+        serves one session over many dispatches, and a charter left standing
+        would hold the next one to a brief written for the last."""
+        staged, session_id, _ = await self._staged(rig, {"raven.usage": {"owner": "someone"}})
+
+        assert staged == [(session_id, None)]
+
+    async def test_a_worker_that_cannot_stage_a_charter_still_serves_the_turn(self, rig):
+        """An older build has no ``bind_session_charter``. It must answer the
+        dispatch rather than fail it -- which is what lets a newer host talk to
+        a worker that has not been upgraded."""
+        assert not hasattr(rig.engine, "bind_session_charter")
+
+        _, _, result = await self._staged(rig, {"raven.playbook": {"prompt": "only A"}}, bind=False)
+
+        assert result["result"] == {"stopReason": "cancelled"}

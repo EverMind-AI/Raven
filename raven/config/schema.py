@@ -2093,6 +2093,22 @@ class PlaybookConfig(Base):
 
     router: PlaybookRouterConfig = Field(default_factory=PlaybookRouterConfig)
 
+    agent_harness: Literal["default", "generate"] = "default"
+    """Whether each turn writes itself a worker table before it starts.
+
+    ``default`` is the flow this repo has always run: nothing is generated and
+    no new code is on the request path. ``generate`` spends one model call per
+    turn deciding which sub-agents the question needs and what each one's brief
+    is, then offers those workers -- rather than the bare roster -- to the
+    dispatching model.
+
+    What it does not do is configure the main agent: it keeps every tool it had
+    and decides for itself who to hand work to. The brief travels as a preamble
+    on the task a worker is given, so it shapes what a worker is told, not what
+    it is permitted -- narrowing what a model is shown was never a permission
+    in Raven, and the enforcement point is ``ToolRegistry.execute``.
+    """
+
 
 class SubagentsConfig(Base):
     """The one table of agents raven can dispatch to.

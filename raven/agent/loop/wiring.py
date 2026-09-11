@@ -37,6 +37,7 @@ from raven.agent.loop._shared import (
     resolve_vendor_key,
     workdir,
 )
+from raven.agent.subagent import charter as charter_mod
 from raven.agent.subagent.role import is_subagent_process
 from raven.agent.tools.ask_user import DEFAULT_TIMEOUT_S
 from raven.contracts.token_strategy import UsageSnapshot
@@ -44,6 +45,8 @@ from raven.contracts.token_strategy import UsageSnapshot
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from raven.agent.subagent.charter import Charter
+    from raven.agent.subagent.delegate import DelegateTable
     from raven.agent.tools.deliverables import DeliverableStore
     from raven.config.schema import PlaybookConfig, SkillForgeRouterConfig
     from raven.contracts.asking import QuestionResponder
@@ -629,6 +632,100 @@ class WiringMixin:
         """
         self._image_tool_result_ok.clear()
         self._vision_ok.clear()
+
+    def bind_session_charter(self, session_key: str, payload: Any) -> None:
+        """Hold the charter a dispatch brought, for that session's next turn.
+
+        Held aside rather than applied here, for the reason
+        ``ToolRegistry.bind_session_tools`` gives: the handler that accepts a
+        dispatch cannot open the turn's scope, because it submits the turn and
+        the turn runs on a task that inherits nothing from it. One process
+        serves every session on a connection, so this is keyed by session and
+        never global.
+        """
+        charter = charter_mod.parse(payload)
+        if charter is None:
+            self._session_charters.pop(session_key, None)
+            return
+        # The worker-side counterpart of the host's "N worker(s) for this turn".
+        # Without it the only record that a brief crossed the process boundary
+        # is the behaviour it produced, and a charter that was dropped on the
+        # way looks exactly like one that was never written.
+        logger.info(
+            "agent playbook: charter staged for this session ({} tool(s), {} check(s){})",
+            "all" if charter.tools is None else len(charter.tools),
+            len(charter.checks),
+            ", judge" if charter.code else "",
+        )
+        self._session_charters[session_key] = charter
+
+    def _take_session_charter(self, session_key: str) -> "Charter | None":
+        """The charter staged for this session, consumed.
+
+        Consumed rather than read: a charter describes one dispatch. Leaving it
+        would hold the next turn of the same session to a brief written for the
+        last one, and a resumable instance takes many turns on one session.
+        """
+        return self._session_charters.pop(session_key, None)
+
+    async def _write_worker_table(self, req: Any, session_key: str, binding: Any) -> "DelegateTable | None":
+        """This turn's worker table, or ``None`` to run it unconfigured.
+
+        ``None`` on every path that is not a deliberate, successful generation:
+        the feature off, a sub-agent process (a worker writing its own workers
+        would be the third level the two-level rule forbids), a direct chat with
+        one sub-agent, an empty roster, or a generation that failed. A turn that
+        dies because its setup step failed is strictly worse than one that runs
+        without it.
+
+        The binding is handed in rather than resolved here. It has to be the
+        turn's own pair, because this runs *before* ``use_binding`` opens and
+        ``self.provider`` still answers with the loop's default; and it has to
+        be resolved once for both, because this call awaits a model and a
+        session that switched while it was in flight would otherwise split the
+        turn across two pairs.
+
+        The tool names handed over are the registry's current view, taken
+        outside the turn's freeze for the same reason. They are a vocabulary for
+        the brief, not the array the turn will run on, so a session-overlay tool
+        missing from them costs a word the generator could have used and
+        nothing else.
+        """
+        cfg = self._playbook_config
+        if cfg is None or getattr(cfg, "agent_harness", "default") != "generate":
+            return None
+        if is_subagent_process():
+            return None
+        # A direct chat with one sub-agent returns through ``subagents.chat``
+        # without ever rendering or executing ``spawn``, so a table written for
+        # it is never read. Guarded before the call rather than after: the cost
+        # of generating one is a model round trip (two, when the table needs a
+        # repair round), paid on every direct turn for nothing.
+        if getattr(req, "direct_target", None) is not None:
+            return None
+        try:
+            from raven.playbook.agent_generator import WorkerTableGenerator, roster_note
+
+            metas = list(self.subagents.list_agents())
+            agents = [a.name for a in metas]
+            if not agents:
+                return None
+            # What each agent is for, in the registry's own words and its own
+            # advertised capabilities. Without them the generating model is
+            # handed a list of bare names and, on a roster that is not the
+            # shipped one, cannot tell which agent the task wants -- not even
+            # when only one of them can read the local files it is about.
+            notes = {a.name: roster_note(a) for a in metas}
+            tools = sorted((d.get("function", d) or {}).get("name", "") for d in self.tools.get_definitions())
+            table = await WorkerTableGenerator(binding.provider, binding.model).generate(
+                getattr(req, "text", "") or "", agents, [t for t in tools if t], notes
+            )
+        except Exception:  # noqa: BLE001 - setup must not cost the turn
+            logger.opt(exception=True).warning("agent playbook: worker table failed; running unconfigured")
+            return None
+        if table:
+            logger.info("agent playbook: {} worker(s) for this turn: {}", len(table.workers), table.labels())
+        return table
 
     def set_default_binding(self, binding: ModelBinding) -> None:
         """Change what new sessions start on.
