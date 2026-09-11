@@ -122,6 +122,8 @@ def _decide_all(suspected_action=treview.ACTION_KEPT):
         "note (see below)/srv/raven/keys.json end",
         "[ref]/opt/secret/key.pem",
         '{"a":1}/opt/secret/key.pem',
+        "GET https://x.com/a?f=/var/folders/9z/T/tmp8ab/session_secrets.json",
+        "see https://x.com/a#/etc/shadow now",
     ],
     ids=[
         "tmp",
@@ -141,6 +143,8 @@ def _decide_all(suspected_action=treview.ACTION_KEPT):
         "after-parens",
         "after-bracket",
         "after-brace",
+        "in-url-query",
+        "in-url-fragment",
     ],
 )
 def test_parser_hits_absolute_paths(text):
@@ -181,6 +185,22 @@ def test_a_path_glued_to_a_url_does_not_ride_out_in_an_export(tmp_path):
     written = (tmp_path / "log.json").read_text(encoding="utf-8")
     assert "/etc/raven/license.key" not in written
     assert tsan.PATH_PLACEHOLDER in written
+
+
+def test_a_url_path_used_as_a_query_value_is_redacted_too():
+    """The accepted cost of ending the URL run at "?".
+
+    A query value that is a legitimate URL path reads as an absolute path and
+    goes the same way as a real one. The alternative is exempting query values,
+    which cannot be combined with the export's clean claim:
+    ``scan_absolute_paths`` is a hard stop, not a warning, so a package that
+    carried such a path would either fail to build or ship under a sentence
+    that is not true of it.
+    """
+    assert (
+        tsan.sanitize_text("go https://x.com/a?redirect=/login now")
+        == "go https://x.com/a?redirect=[REDACTED:path] now"
+    )
 
 
 def test_a_parenthesised_url_segment_loses_its_tail():

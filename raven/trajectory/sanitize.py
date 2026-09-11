@@ -46,7 +46,7 @@ PATH_PLACEHOLDER = "[REDACTED:path]"
 # PATH_PLACEHOLDER ends with one, and the redacted form keeps the basename
 # ("[REDACTED:path]/report.png"), so the placeholder's own tail must not read as
 # a fresh path.
-_BOUNDARY = set("\"'`=:([{,<>)}]")
+_BOUNDARY = set("\"'`=:([{,<>)}]?#")
 _QUOTES = ('"', "'", "`")
 # Where a bare (unquoted) token ends. Quotes end a bare token too — a path
 # glued to a closing quote was not part of the quoted string.
@@ -62,7 +62,14 @@ _BARE_END = set("\"'`)]},;:<>|")
 # comma, and a run that swallows the quote reads that path as part of the URL --
 # exempting from redaction exactly what has to be redacted. ":" stays inside the
 # run so a port (https://host:8080/p) does not split it.
-_URL_RUN = "".join(re.escape(c) for c in _BARE_END if c != ":")
+# "?" and "#" end the run too: what follows them is a query or a fragment, and
+# a value there that looks like an absolute path is a path on this machine --
+# a logged request line is exactly where one turns up. The cost is that a
+# legitimate URL path used as a query value (?redirect=/login) is redacted as
+# well; that direction loses a URL inside a report, the other loses a path out
+# of one, and scan_absolute_paths is a hard stop rather than a warning, so the
+# export cannot both exempt these and claim to carry no local paths.
+_URL_RUN = "".join(re.escape(c) for c in sorted(_BARE_END | {"?", "#"}) if c != ":")
 _URL_BEFORE = re.compile(rf"([A-Za-z][A-Za-z0-9+.\-]*)://[^\s{_URL_RUN}]*$")
 _URL_SCHEME = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*):$")
 _URL_WINDOW = 512
@@ -121,7 +128,12 @@ def find_absolute_paths(text: str) -> list[tuple[int, int]]:
             continue
         if ch == "/":
             if _in_url(text, i):
-                i = _token_end(text, i, "")
+                # Stop the skip where the run stops. _token_end alone runs to
+                # whitespace, which would step over the very query this is
+                # meant to leave exposed.
+                end = _token_end(text, i, "")
+                cut = min((p for p in (text.find(c, i, end) for c in "?#") if p != -1), default=end)
+                i = max(cut, i + 1)
                 continue
             end = _token_end(text, i, prev)
             if text[i:end].strip("/"):
