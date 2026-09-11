@@ -36,13 +36,14 @@ What one agent directory carries:
   Two manifest fields shape how the row is reached rather than what it runs:
   `"hidden": true` keeps the row off the roster the dispatching model reads
   (and off the WebUI's sub-agent page) while a task routed to it still runs
-  there; `"routes": [{"to": "<name>"}, ...]` makes this
+  there; `"routes": [{"to": "<name>", "match": "<regex>"}, ...]` makes this
   row's backend a routing entry (`agent/subagent/backends/routing.py`): every
   caller -- `spawn`, a DAG node, a direct chat -- runs the row, and the entry
   picks the implementation on `run`, reading the task as the model wrote it
   (`authored_task`), never the rendering with file contents inlined. A reused
-  instance handle stays where its transport bound it; otherwise the host's
-  own model picks between the targets' roster
+  instance handle stays where its transport bound it; a task whose wording
+  (file references taken out) matches a route's `match` goes there without a
+  model call; otherwise the host's own model picks between the targets' roster
   lines and this row. A fronting row is only as ready as its targets: a route
   to a folder that is missing, unready or switched off disables the row with
   the reason on it, so a half-installed agent does not run the missing
@@ -70,49 +71,17 @@ What one agent directory carries:
   operator's `plugins.disabled` list.
   Prompt assets ride with the plugin whose conduct they teach, under
   `plugins/<id>/prompts/`: the workspace guide `run.py` seeds once
-  (oncall's TOOLS.md section, code's whole-file TOOLS.md) lives there.
-  `raven-code` also seeds its identity as `soul.md` (beside `run.py`, the
-  raven-research shape) and a coding conduct as `agent.md` (one variant per
-  model family, the fork's split; a partition still carrying the other
-  variant or older managed seed is refreshed, an operator's edit never is),
-  and its code-flow hook
-  contributes the working directory's own instruction files (`AGENTS.md` /
-  `CLAUDE.md` / `CONTEXT.md`, the slice's `projectFiles`) to each turn's
-  system message through the context assembler, without rewriting the query.
-  The same plugin carries one more surface:
-  - `code-flow/code_flow/tools/` -- the product's own tool face, contributed
-    by the same plugin: the fork's spelling (`file_path` / `old_string`, with
-    the host's names accepted as aliases), `glob`, `todo`. Four of them
-    ride the built-in names, which is how a product serves its own file tools
-    without touching `raven/agent/tools/` or the four other products that
-    share it: plugin tools register last and a same-name registration
-    replaces the built-in instance, so the model is only ever shown this one.
-    Disabling the built-in name instead is not the same thing -- withholding
-    is by name and would take the replacement with it. The face is a section
-    of the flow slice (`tools`), with its own switch and a
-    `restrictToWorkspace` the launcher renders from the product's `tools`
-    block: a plugin factory cannot read that field, and a replacement built
-    without it is fenceless whatever the product asked for.
-  The ask tier is decided per hosting, not product-wide: the ACP hosting
-  keeps trunk's `ask` (raven dispatching a sub-agent answers those prompts
-  itself, and a person in an editor should still be asked), and the one-turn
-  CLI hosting renders `permissions.mode: full` because that hosting has no
-  channel to ask on -- with the default it refused every write and the model
-  reported the task incomplete.
+  (oncall's TOOLS.md section, code's whole-file TOOLS.md) lives there,
+  byte-pinned to its fork's template by the launcher tests.
 - `soul.md` + the contract the plugin renders into `agent.md` -- optional:
   the agent's own identity, seeded into the workspace once, for an agent
   that replaces the host identity (research does; its `context.dropSegments`
   keeps the host's own identity segment out of the prompt). An agent whose
   vendored twin served the host-generic identity carries no `soul.md` and
-  keeps the host identity segment -- oncall and design: each of those forks'
-  SOUL.md is byte-identical to trunk's own template, its ACP path never
-  seeded it into a workspace, so an added identity file would change the
-  very prompt face the parity tests pin. `raven-code` is the exception with
-  a reason: its one-turn CLI hosting runs `raven agent`, whose workspace
-  sync writes trunk's template `soul.md` -- a personal assistant with a
-  personality -- in front of the coding conduct, while its ACP hosting (no
-  sync) read none; seeding its own `soul.md` first gives both hostings one
-  identity and keeps the host identity segment. `raven-ppt` also carries no
+  keeps the host identity segment -- oncall, code and design: each of those
+  forks' SOUL.md is byte-identical to trunk's own template, its ACP path
+  never seeded it into a workspace, so an added identity file would change
+  the very prompt face the parity tests pin. `raven-ppt` also carries no
   `soul.md`, for a different reason: its fork's SOUL.md is its own, and it
   rides byte-for-byte at the engine wheel's prompts home
   (`raven_ppt/prompts/`), seeded into the pinned home by the engine plugin's

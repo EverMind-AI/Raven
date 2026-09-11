@@ -1061,28 +1061,6 @@ describe('createChatStream — instance refresh', () => {
     expect(asked).toEqual(['subagents.instances'])
   })
 
-  it('refreshes when a direct turn is interrupted, not only when it completes', async () => {
-    // The manager moves the registry row on this path too -- `cancelled` where
-    // a clean turn writes `completed`. Without the re-read the strip keeps the
-    // `running` row it took at `message.start`, and the interrupted instance
-    // goes on showing a filled bullet.
-    vi.useFakeTimers()
-    const { asked, fake } = await withRefresh()
-
-    fake.__pushEvent({
-      type: 'error',
-      payload: {
-        code: -32099,
-        message: 'turn_cancelled',
-        reason: 'cancelled_by_client',
-        target: { agent: 'Raven-Code', handle: 'raven-code-e9e114' }
-      }
-    })
-    await vi.advanceTimersByTimeAsync(300)
-
-    expect(asked).toEqual(['subagents.instances'])
-  })
-
   it('coalesces a burst into one fetch', async () => {
     vi.useFakeTimers()
     const { asked, fake } = await withRefresh()

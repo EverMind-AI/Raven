@@ -88,29 +88,19 @@ def test_the_body_area_is_the_safe_area_under_the_title(tmp_path: Path) -> None:
 
 
 def test_the_brief_hands_the_author_a_line_it_can_paste(tmp_path: Path) -> None:
-    """A box takes (x0, y0, x1, y1) and the measurement is (left, top, width, height): one
-    subtraction, done here, because a model doing it in its head is a page half an inch off
-    the grid. It is done for every box in the brief and not only for the paste-able line:
-    reporting the size one line above a `Box.corners(...)` built from the same rectangle put
-    two silently different readings of it a line apart, and one live run read the whole call
-    by the two numbers they share and then wrote a size into a box of its own."""
+    """A box takes (x0, y0, x1, y1) and this reports (left, top, width, height): one
+    subtraction, done here, because a model doing it in its head is a page half an
+    inch off the grid. The line names `Box.corners` rather than the bare constructor,
+    because the two numbers it shares with `body_area_in` are what one live run read
+    the whole call by -- and then wrote a size into a box of its own."""
     house = house_style(_template(tmp_path / "t.pptx"))
 
     assert house is not None
     brief = house.brief()
-    assert brief["title_row_box_corners_in"] == [0.72, 0.4, 12.62, 1.3], "two corners, not a size"
+    assert brief["title_row_box_in"] == [0.72, 0.4, 11.9, 0.9]
     assert brief["face"] == "Arial"
-    corners = brief["body_area_corners_in"]
-    assert f"Box.corners({corners[0]:g}, {corners[1]:g}, {corners[2]:g}, {corners[3]:g})" in brief["body_area_as_code"]
-    left, top, width, height = house.body_area
-    assert corners == [left, top, round(left + width, 2), round(top + height, 2)], (
-        "the far corner, the subtraction already done"
-    )
-    row = brief["title_row_box_corners_in"]
-    assert row[2] > row[0] and row[3] > row[1], "a far corner reads past its origin, a size need not"
-    assert not any(key.endswith("_box_in") or key in {"safe_area_in", "body_area_in"} for key in brief), (
-        f"no bare size ships beside the corners: {sorted(brief)}"
-    )
+    left, top, width, height = brief["body_area_in"]
+    assert f"Box.corners({left:g}, {top:g}, {left + width:g}, {top + height:g})" in brief["body_area_as_code"]
 
 
 def _anchored_template(path: Path) -> Path:

@@ -668,7 +668,7 @@ class TurnPathMixin:
             )
             self.context.add_tool_result(messages, call_id, autofill_resolver.TOOL_NAME, row.get("summary", ""))
 
-    async def _run_agent_loop(
+    async def _run_agent_loop(  # noqa: C901 (cc 100: pre-existing, above the ceiling)
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
@@ -1810,7 +1810,7 @@ class TurnPathMixin:
     @trace.instrument(
         "session.turn", root=True, seed=semconv.turn_seed, on_open=semconv.turn_open, extract=semconv.turn
     )
-    async def _process_message(
+    async def _process_message(  # noqa: C901 (cc 47: pre-existing, above the ceiling)
         self,
         req: TurnRequest,
         session_key: str | None = None,
@@ -2518,7 +2518,7 @@ class TurnPathMixin:
             session.record(entry)
         session.updated_at = self._now_fn()
 
-    async def _run_turn(
+    async def _run_turn(  # noqa: C901 (cc 41: pre-existing, above the ceiling)
         self,
         req: TurnRequest,
         emit: Emit,

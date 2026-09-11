@@ -46,19 +46,9 @@ def make_repo(path: Path) -> str:
     ).stdout.strip()
 
 
-async def _system(hook: CodeFlowHook, key: str, cwd: Path, text: str = "do the task") -> str:
-    ctx = AgentHookContext(
-        session_key=key,
-        messages=[{"role": "system", "content": ""}, {"role": "user", "content": text}],
-        context_window_tokens=8192,
-    )
+async def _inbound(hook: CodeFlowHook, key: str, cwd: Path, text: str = "do the task") -> HookDecision:
     with workdir.bind(cwd):
-        inbound = AgentHookContext(session_key=key, inbound_content=text)
-        assert (await hook.before_user_inbound(inbound)).modified_content is None
-        assert inbound.inbound_content == text
-        decision = await hook.before_iteration(ctx)
-        assert decision.short_circuit_result is None
-        return ctx.messages[0]["content"]
+        return await hook.before_user_inbound(AgentHookContext(session_key=key, inbound_content=text))
 
 
 async def _sent(hook: CodeFlowHook, key: str, cwd: Path) -> HookDecision:
@@ -69,45 +59,45 @@ async def _sent(hook: CodeFlowHook, key: str, cwd: Path) -> HookDecision:
 @pytest.mark.asyncio
 async def test_a_lone_session_gets_no_notice(tmp_path):
     hook = CodeFlowHook(ledger=SessionLedger(clock=_Clock()))
-    text = await _system(hook, "s1", tmp_path)
-    assert text == ""
+    decision = await _inbound(hook, "s1", tmp_path)
+    assert decision.modified_content is None
 
 
 @pytest.mark.asyncio
 async def test_a_second_session_on_the_same_directory_is_told_about_the_first(tmp_path):
     hook = CodeFlowHook(ledger=SessionLedger(clock=_Clock()))
-    await _system(hook, "s1", tmp_path)
-    text = await _system(hook, "s2", tmp_path, "fix the parser")
-    assert text != ""
-    assert text.startswith("# Workspace concurrency")
-    assert "1 other Raven-Code session" in text
-    assert "fix the parser" not in text, "the task stays in the user message"
+    await _inbound(hook, "s1", tmp_path)
+    decision = await _inbound(hook, "s2", tmp_path, "fix the parser")
+    assert decision.modified_content is not None
+    assert decision.modified_content.startswith("# Workspace concurrency")
+    assert "1 other Raven-Code session" in decision.modified_content
+    assert decision.modified_content.endswith("fix the parser"), "the task itself stays intact, after the notice"
 
 
 @pytest.mark.asyncio
 async def test_the_notice_counts_every_other_session_in_flight(tmp_path):
     hook = CodeFlowHook(ledger=SessionLedger(clock=_Clock()))
-    await _system(hook, "s1", tmp_path)
-    await _system(hook, "s2", tmp_path)
-    text = await _system(hook, "s3", tmp_path)
-    assert "2 other Raven-Code sessions" in text
+    await _inbound(hook, "s1", tmp_path)
+    await _inbound(hook, "s2", tmp_path)
+    decision = await _inbound(hook, "s3", tmp_path)
+    assert "2 other Raven-Code sessions" in decision.modified_content
 
 
 @pytest.mark.asyncio
 async def test_sessions_on_different_directories_do_not_hear_about_each_other(tmp_path):
     hook = CodeFlowHook(ledger=SessionLedger(clock=_Clock()))
-    await _system(hook, "s1", tmp_path / "one")
-    text = await _system(hook, "s2", tmp_path / "two")
-    assert text == ""
+    await _inbound(hook, "s1", tmp_path / "one")
+    decision = await _inbound(hook, "s2", tmp_path / "two")
+    assert decision.modified_content is None
 
 
 @pytest.mark.asyncio
 async def test_a_session_that_finished_its_turn_no_longer_counts(tmp_path):
     hook = CodeFlowHook(ledger=SessionLedger(clock=_Clock()))
-    await _system(hook, "s1", tmp_path)
+    await _inbound(hook, "s1", tmp_path)
     await _sent(hook, "s1", tmp_path)
-    text = await _system(hook, "s2", tmp_path)
-    assert text == ""
+    decision = await _inbound(hook, "s2", tmp_path)
+    assert decision.modified_content is None
 
 
 @pytest.mark.asyncio
@@ -117,20 +107,20 @@ async def test_a_session_that_never_reported_back_expires_after_the_ttl(tmp_path
     about a ghost."""
     clock = _Clock()
     hook = CodeFlowHook(ledger=SessionLedger(clock=clock, ttl_s=60.0))
-    await _system(hook, "s1", tmp_path)
+    await _inbound(hook, "s1", tmp_path)
     clock.now += 61.0
-    text = await _system(hook, "s2", tmp_path)
-    assert text == ""
+    decision = await _inbound(hook, "s2", tmp_path)
+    assert decision.modified_content is None
 
 
 @pytest.mark.asyncio
 async def test_a_deleted_session_is_forgotten(tmp_path):
     ledger = SessionLedger(clock=_Clock())
     hook = CodeFlowHook(ledger=ledger)
-    await _system(hook, "s1", tmp_path)
+    await _inbound(hook, "s1", tmp_path)
     make_session_forget(ledger).on_session_deleted("s1", True)
-    text = await _system(hook, "s2", tmp_path)
-    assert text == ""
+    decision = await _inbound(hook, "s2", tmp_path)
+    assert decision.modified_content is None
     assert ledger.record("s1") is None
 
 
@@ -139,9 +129,9 @@ async def test_the_notice_does_not_need_a_git_repository(tmp_path):
     """Nothing here reads git to decide: two sessions in a plain directory
     are as concurrent as two in a checkout."""
     hook = CodeFlowHook(ledger=SessionLedger(clock=_Clock()))
-    await _system(hook, "s1", tmp_path)
-    text = await _system(hook, "s2", tmp_path)
-    assert text != ""
+    await _inbound(hook, "s1", tmp_path)
+    decision = await _inbound(hook, "s2", tmp_path)
+    assert decision.modified_content is not None
 
 
 @pytest.mark.asyncio
@@ -152,15 +142,15 @@ async def test_the_ledger_pins_a_sessions_base_commit_at_its_first_turn(tmp_path
     head = make_repo(repo)
     ledger = SessionLedger(clock=_Clock())
     hook = CodeFlowHook(ledger=ledger)
-    await _system(hook, "s1", repo)
+    await _inbound(hook, "s1", repo)
     assert ledger.record("s1").base_commit == head
     (repo / "b.py").write_text("y = 2\n")
     subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-qm", "more"], check=True)
     await _sent(hook, "s1", repo)
-    await _system(hook, "s1", repo)
+    await _inbound(hook, "s1", repo)
     assert ledger.record("s1").base_commit == head, "the base does not move with the session's own commits"
-    await _system(hook, "plain", tmp_path / "plain")
+    await _inbound(hook, "plain", tmp_path / "plain")
     assert ledger.record("plain").base_commit is None
 
 
@@ -173,9 +163,9 @@ async def test_the_ledger_pins_a_sessions_base_commit_at_its_first_turn(tmp_path
 async def test_sessions_that_coexist_on_a_directory_name_each_other_as_peers_for_life(tmp_path):
     ledger = SessionLedger(clock=_Clock())
     hook = CodeFlowHook(ledger=ledger)
-    await _system(hook, "s1", tmp_path)
+    await _inbound(hook, "s1", tmp_path)
     assert ledger.record("s1").shared is False
-    await _system(hook, "s2", tmp_path)
+    await _inbound(hook, "s2", tmp_path)
     assert ledger.record("s1").peers == {"s2"} and ledger.record("s2").peers == {"s1"}
     await _sent(hook, "s1", tmp_path)
     await _sent(hook, "s2", tmp_path)
@@ -186,8 +176,8 @@ async def test_sessions_that_coexist_on_a_directory_name_each_other_as_peers_for
 async def test_sessions_on_different_directories_are_not_peers(tmp_path):
     ledger = SessionLedger(clock=_Clock())
     hook = CodeFlowHook(ledger=ledger)
-    await _system(hook, "s1", tmp_path / "a")
-    await _system(hook, "s2", tmp_path / "b")
+    await _inbound(hook, "s1", tmp_path / "a")
+    await _inbound(hook, "s2", tmp_path / "b")
     assert ledger.record("s1").shared is False and ledger.record("s2").shared is False
 
 
@@ -197,10 +187,10 @@ async def test_a_session_arriving_after_its_predecessor_was_deleted_is_not_share
     newcomer's base anyway, so the newcomer's report stays its own."""
     ledger = SessionLedger(clock=_Clock())
     hook = CodeFlowHook(ledger=ledger)
-    await _system(hook, "s1", tmp_path)
+    await _inbound(hook, "s1", tmp_path)
     await _sent(hook, "s1", tmp_path)
     make_session_forget(ledger).on_session_deleted("s1", True)
-    await _system(hook, "s2", tmp_path)
+    await _inbound(hook, "s2", tmp_path)
     assert ledger.record("s2").shared is False
 
 
@@ -210,9 +200,9 @@ async def test_a_predecessor_still_on_the_ledger_counts_as_having_shared(tmp_pat
     deleted may speak again, so the newcomer is shared with it."""
     ledger = SessionLedger(clock=_Clock())
     hook = CodeFlowHook(ledger=ledger)
-    await _system(hook, "s1", tmp_path)
+    await _inbound(hook, "s1", tmp_path)
     await _sent(hook, "s1", tmp_path)
-    await _system(hook, "s2", tmp_path)
+    await _inbound(hook, "s2", tmp_path)
     assert ledger.record("s2").peers == {"s1"}
 
 
@@ -223,12 +213,12 @@ async def test_a_long_turn_that_keeps_iterating_stays_counted_past_the_ttl(tmp_p
     longer than the ttl is still announced to a newcomer."""
     clock = _Clock()
     hook = CodeFlowHook(ledger=SessionLedger(clock=clock, ttl_s=60.0))
-    await _system(hook, "s1", tmp_path)
+    await _inbound(hook, "s1", tmp_path)
     clock.now += 50.0
     await hook.before_iteration(AgentHookContext(session_key="s1"))
     clock.now += 50.0
-    text = await _system(hook, "s2", tmp_path)
-    assert text != "", "100s after its start the still-iterating s1 was forgotten"
+    decision = await _inbound(hook, "s2", tmp_path)
+    assert decision.modified_content is not None, "100s after its start the still-iterating s1 was forgotten"
 
 
 @pytest.mark.asyncio
@@ -238,7 +228,7 @@ async def test_an_iteration_of_an_unknown_or_finished_session_refreshes_nothing(
     hook = CodeFlowHook(ledger=ledger)
     await hook.before_iteration(AgentHookContext(session_key="ghost"))
     assert ledger.record("ghost") is None
-    await _system(hook, "s1", tmp_path)
+    await _inbound(hook, "s1", tmp_path)
     await _sent(hook, "s1", tmp_path)
     clock.now += 10.0
     await hook.before_iteration(AgentHookContext(session_key="s1"))

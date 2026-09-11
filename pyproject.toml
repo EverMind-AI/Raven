@@ -254,8 +254,23 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "S101", "S105", "S106", "S107", "S506", "S605", "S607"]
+select = ["C901", "E", "F", "I", "N", "W", "S101", "S105", "S106", "S107", "S506", "S605", "S607"]
 ignore = ["E501"]
+
+[tool.ruff.lint.mccabe]
+# Cyclomatic complexity is the count of linearly independent paths through a
+# function, so it is also the floor on how many cases a test suite needs to walk
+# them all. The ceiling is not a claim that 39 is fine: it is where a function
+# stops being complex and starts being untestable, since nobody writes forty
+# cases for one function and the paths nobody wrote are first executed in
+# production.
+#
+# Set from the measured distribution rather than from McCabe's 10, which would
+# flag 253 functions here and be switched off in a week. At 40 it flags the
+# eight that already exist, each carrying a `noqa: C901` naming it as debt, so
+# the gate binds new code from the day it lands and blocks nobody's normal work.
+# Tighten by lowering this number, which is a reviewed edit to this file.
+max-complexity = 40
 
 [tool.ruff.lint.per-file-ignores]
 # Test conventions: asserts, hardcoded creds in fixtures, naming, redefinition,
@@ -398,7 +413,6 @@ output = "coverage.json"
 
 [dependency-groups]
 dev = [
-    "grimp>=3.16",
     "hatchling>=1.32.0",
     "import-linter>=2.14",
     "json-repair>=0.59.5",
