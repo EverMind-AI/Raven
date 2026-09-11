@@ -32,8 +32,6 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
     from raven.contracts.mcp_host import McpHost
 
 CONNECT_WAIT = 8.0
@@ -357,40 +355,6 @@ async def remove(name: Any, loop: "McpHost | None") -> dict:
     return result
 
 
-async def await_authorization(manager: Any, name: str, connect: "Callable[[], Awaitable[dict]]") -> dict | None:
-    """Run one authorizing connect, wait out the window, and report what it reached.
-
-    The shape every explicit authorization needs, in one place: the host's own
-    servers (:func:`authorize`) and a playbook's carried ones
-    (``playbooks.oauth.authorize``) differ only in which manager and which
-    config they hand over.
-
-    Retrieving the exception of a connect that finished inside the window is not
-    optional: unretrieved, a sandbox failure is only an asyncio warning on
-    shutdown and the caller is told the server merely did not come up. A connect
-    still running is parked on a person -- nobody awaits it, so it reports for
-    itself through the log.
-    """
-    from raven.sandbox import SandboxInitError
-
-    before = _state_of(manager, name)[1]
-    baseline = _park_baseline(name)
-    task = asyncio.create_task(connect())
-    snap = await _await_focus(manager, name, before=before, window=CONNECT_WAIT, task=task, park_baseline=baseline)
-    if task.done() and not task.cancelled():
-        exc = task.exception()
-        if isinstance(exc, SandboxInitError):
-            # The sandbox could not start, so a stdio server has nowhere to run.
-            # That is a condition of this machine the caller can act on, not a
-            # raven fault to report with a traceback tail.
-            raise PlugConnectError(f"the sandbox could not start: {exc}", data={"field": "name", "name": name}) from exc
-        if exc is not None:
-            raise exc
-    elif not task.done():
-        task.add_done_callback(_log_connect_outcome)
-    return snap
-
-
 async def authorize(name: Any, loop: "McpHost | None", *, interactive: bool = True) -> dict:
     """Force-reconnect one configured server: the explicit (re-)authorize path.
 
@@ -404,6 +368,7 @@ async def authorize(name: Any, loop: "McpHost | None", *, interactive: bool = Tr
     the link instead.
     """
     from raven.config.loader import load_config
+    from raven.sandbox import SandboxInitError
 
     name = server_name(name)
     if loop is None or not hasattr(loop, "mcp_manager"):
@@ -420,11 +385,29 @@ async def authorize(name: Any, loop: "McpHost | None", *, interactive: bool = Tr
         raise PlugConnectError("server is disabled; enable it first", data={"field": "name", "name": name})
 
     manager = loop.mcp_manager
-    snap = await await_authorization(
-        manager,
-        name,
-        lambda: manager.connect(name, cfg, executor_provider=loop.mcp_executor_provider, interactive=interactive),
+    before = _state_of(manager, name)[1]
+    baseline = _park_baseline(name)
+    task = asyncio.create_task(
+        manager.connect(name, cfg, executor_provider=loop.mcp_executor_provider, interactive=interactive)
     )
+    snap = await _await_focus(manager, name, before=before, window=CONNECT_WAIT, task=task, park_baseline=baseline)
+    if task.done() and not task.cancelled():
+        # A connect that finished inside the window may have finished by raising.
+        # Retrieving it here is not optional: unretrieved, the sandbox failure
+        # below is only an asyncio warning on shutdown, and the caller is told
+        # the server merely did not come up.
+        exc = task.exception()
+        if isinstance(exc, SandboxInitError):
+            # The sandbox could not start, so a stdio server has nowhere to run.
+            # That is a condition of this machine the caller can act on, not a
+            # raven fault to report with a traceback tail.
+            raise PlugConnectError(f"the sandbox could not start: {exc}", data={"field": "name", "name": name}) from exc
+        if exc is not None:
+            raise exc
+    elif not task.done():
+        # Still running: it is parked on the user, or on a slow handshake. Nobody
+        # awaits it now, so it has to report for itself.
+        task.add_done_callback(_log_connect_outcome)
     logger.debug("plug authorize: returning for '{}' with state {}", name, (snap or {}).get("state"))
     return {"name": name, "mcp": snap}
 

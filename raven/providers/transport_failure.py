@@ -142,7 +142,7 @@ def _stripped(text: str | None) -> str:
     return out.strip()
 
 
-def _said_nothing(content: str | None, tool_calls: list["ToolCallRequest"]) -> bool:
+def said_nothing(content: str | None, tool_calls: list["ToolCallRequest"]) -> bool:
     """Whether this response carries no reply for anyone.
 
     Deliberately does not consult ``reasoning_content``: a prompt billed at a
@@ -235,7 +235,7 @@ def flag_transport_failure(
       for a worse one.
 
     ``reasoning_content`` is not weighed either way -- see
-    :func:`_said_nothing`. When the two signals disagree the accounting is the
+    :func:`said_nothing`. When the two signals disagree the accounting is the
     truthful one, because a prompt that was never read cannot have been
     reasoned about.
 
@@ -253,7 +253,7 @@ def flag_transport_failure(
     """
     if finish_reason != "stop":
         return None
-    if not _said_nothing(content, tool_calls):
+    if not said_nothing(content, tool_calls):
         return None
     if native_finish_reason and native_finish_reason not in _NORMAL_STOP_ALIASES:
         # No corroboration asked for, and none needed: this is not an inference
@@ -281,4 +281,4 @@ def transport_failure_message(evidence: str) -> str:
     )
 
 
-__all__ = ["flag_transport_failure", "prompt_chars", "transport_failure_message"]
+__all__ = ["flag_transport_failure", "prompt_chars", "said_nothing", "transport_failure_message"]

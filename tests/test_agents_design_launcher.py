@@ -143,7 +143,9 @@ def test_the_roster_row_carries_the_forks_identity_verbatim():
         "rendered three times a turn; procedure belongs in the engine's Skills, not here"
     )
     assert [route["to"] for route in ours["routes"]] == ["Raven-PPT"]
-    assert ours["routes"] == [{"to": "Raven-PPT"}]
+    assert ours["routes"][0]["match"], (
+        "a deck names its deliverable; the match pattern is what makes that route certain"
+    )
     assert "recommendedLlm" not in ours and "recommendedLlm" in fork
     assert ours["command"] == "{PYTHON} {SUBAGENT_DIR}/run.py --acp"
     assert ours["cwd"] == "{SUBAGENT_DIR}"

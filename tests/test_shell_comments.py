@@ -23,12 +23,12 @@ from __future__ import annotations
 import pytest
 
 from raven.agent.tools.shell import ExecTool
-from raven.permissions.shell_policy import CommandDecision, ShellCommandPolicy
+from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
 
 
 @pytest.fixture
 def policy() -> ShellCommandPolicy:
-    from raven.permissions.shell_policy import DELETE_MATCHERS
+    from raven.agent.tools.shell_policy import DELETE_MATCHERS
 
     policy = ShellCommandPolicy(deny_patterns=[r"\b(mkfs|diskpart)\b", r"\bdd\s+if="])
     for name, matcher in DELETE_MATCHERS:

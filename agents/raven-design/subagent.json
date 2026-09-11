@@ -6,7 +6,8 @@
   "enabled": true,
   "routes": [
     {
-      "to": "Raven-PPT"
+      "to": "Raven-PPT",
+      "match": "\\.pptx\\b|\\bppt\\b|\\bslide ?deck\\b|\\bslides?\\b|\\bpresentation\\b|\\bkeynote\\b|\\bpowerpoint\\b"
     }
   ],
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py --acp",

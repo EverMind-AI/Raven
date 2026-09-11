@@ -1265,8 +1265,8 @@ async def test_direct_glm_picker_agrees_with_native_transport(fake_home, overrid
     )
     entry = _entry(await model_options({}), "zai")
     provider = make_provider(load_config())
-    assert entry["protocols"]["zai/glm-4.6"] == provider.api_protocol == "anthropic"
-    assert provider.api_base == "https://api.z.ai/api/anthropic"
+    assert entry["protocols"]["zai/glm-4.6"] == provider.api_protocol == (override or "chat")
+    assert provider.api_base == ("https://api.z.ai/api/anthropic" if override else None)
     assert not entry["warning"]
 
 

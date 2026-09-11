@@ -1963,46 +1963,6 @@ export interface PlaybookMcpServer {
   has_oauth_config?: boolean;
 }
 /**
- * One `secret` param of a playbook and whether this machine holds a value for it. Never the value.
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybookCredentialParam".
- */
-export interface PlaybookCredentialParam {
-  name: string;
-  set: boolean;
-  description: string;
-}
-/**
- * One server the playbook carries, as the credentials tab needs it: its auth kind, whether this machine holds OAuth tokens for it under the playbook's scope, and whether the same name exists among the host's own servers (the carried definition wins for this playbook's runs).
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybookCredentialServer".
- */
-export interface PlaybookCredentialServer {
-  name: string;
-  auth: 'none' | 'apikey' | 'oauth';
-  enabled: boolean;
-  authorized: boolean;
-  shadows_host: boolean;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "OkResult".
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksCredentialsSetResult".
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksCredentialsClearResult".
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksOauthClearResult".
- */
-export interface OkResult {
-  ok: boolean;
-}
-/**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionListParams".
  */
@@ -4130,64 +4090,6 @@ export interface PlaybooksGetResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksCredentialsGetParams".
- */
-export interface PlaybooksCredentialsGetParams {
-  name: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksCredentialsGetResult".
- */
-export interface PlaybooksCredentialsGetResult {
-  params: PlaybookCredentialParam[];
-  servers: PlaybookCredentialServer[];
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksCredentialsSetParams".
- */
-export interface PlaybooksCredentialsSetParams {
-  name: string;
-  param: string;
-  value: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksCredentialsClearParams".
- */
-export interface PlaybooksCredentialsClearParams {
-  name: string;
-  param: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksOauthAuthorizeParams".
- */
-export interface PlaybooksOauthAuthorizeParams {
-  name: string;
-  server: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksOauthAuthorizeResult".
- */
-export interface PlaybooksOauthAuthorizeResult {
-  server: string;
-  state: string;
-  auth_url?: string | null;
-  error?: string | null;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "PlaybooksOauthClearParams".
- */
-export interface PlaybooksOauthClearParams {
-  name: string;
-  server: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ApprovalRespondParams".
  */
 export interface ApprovalRespondParams {
@@ -5151,9 +5053,6 @@ export type BrowserManageResult = StubResult;
 export type CliDispatchResult = CliResult;
 export type CommandsCatalogResult = CommandsCatalogResponse;
 export type ImageAttachResult = StubResult;
-export type PlaybooksCredentialsClearResult = OkResult;
-export type PlaybooksCredentialsSetResult = OkResult;
-export type PlaybooksOauthClearResult = OkResult;
 export type ProcessStopResult = StubResult;
 export type PromptBackgroundResult = StubResult;
 export type PromptSubmitResult = StubResult;

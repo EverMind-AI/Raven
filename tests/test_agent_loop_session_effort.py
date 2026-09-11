@@ -179,10 +179,21 @@ def _seeded_transcript(rounds: int = 6) -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_the_compaction_summary_runs_at_the_sessions_effort(tmp_path):
-    """Across the context limit: a turn that overruns the compaction line pays
-    for a head summary, and that summary is a model call of the same turn, so
-    it asks for the session's effort like the ReAct steps around it."""
+async def test_the_compaction_summary_opts_out_of_the_sessions_effort(tmp_path):
+    """The one model call of a turn that does not take the session's effort.
+
+    It used to, on the reasoning that a head summary is a model call of the
+    same turn like the ReAct steps around it. They are not alike: a step thinks
+    in order to decide, a handoff brief is a transcript read back, and a
+    reasoning model pays for thinking out of the same budget as the brief.
+    Measured, two summary calls at the session's effort came back with an empty
+    body having spent the whole budget before the brief began, and compaction
+    degraded to blind elision for the rest of that run.
+
+    Deliberately narrow: the ReAct steps still run at the session's effort, and
+    so does the watch-work judgement below, which is a judgement rather than a
+    transcription.
+    """
     provider = _CompactingProvider()
     loop = AgentLoop(
         provider=provider,
@@ -201,12 +212,19 @@ async def test_the_compaction_summary_runs_at_the_sessions_effort(tmp_path):
     final, _used, _messages, outcome = await loop._run_agent_loop(_seeded_transcript(), session_key="acp:s1")
 
     assert final == "answer after compaction" and outcome.status == "completed"
-    assert provider.summary_efforts == ["max"], "the head summary did not ask for the session's effort"
-    assert set(provider.main_efforts) == {"max"}
+    assert provider.summary_efforts == [compaction.SUMMARY_REASONING_EFFORT], (
+        "a max session must not spend the summary's budget on thinking"
+    )
+    assert set(provider.main_efforts) == {"max"}, "only the summary opts out"
 
 
 @pytest.mark.asyncio
-async def test_the_compaction_summary_passes_nothing_when_the_policy_names_no_effort(tmp_path):
+async def test_the_compaction_summary_names_the_floor_even_with_no_policy_effort(tmp_path):
+    """Unstated is not the same as little. The run this fix comes from named no
+    effort at all, so the backend picked -- and what it picked spent the whole
+    summary budget. The floor is stated outright rather than left open, which
+    does override a provider default configured for the turn's own calls.
+    """
     provider = _CompactingProvider()
     loop = AgentLoop(
         provider=provider,
@@ -224,7 +242,7 @@ async def test_the_compaction_summary_passes_nothing_when_the_policy_names_no_ef
 
     await loop._run_agent_loop(_seeded_transcript(), session_key="acp:s1")
 
-    assert provider.summary_efforts == [None], "an explicit value would override the provider's default"
+    assert provider.summary_efforts == [compaction.SUMMARY_REASONING_EFFORT]
 
 
 @pytest.mark.asyncio

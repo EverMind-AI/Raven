@@ -27,7 +27,6 @@ from typing import Any
 from loguru import logger
 from pydantic.alias_generators import to_camel
 
-from raven.config.agent_names import is_builtin_agent_name
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import SubagentsConfig
 
@@ -170,6 +169,8 @@ def reject_builtin_transport_changes(entries: list[dict], *, existing: list[dict
     A *removal* needs no check here -- writing no row for a seed is exactly how
     "use the package's default" is spelled, so it is not a delete.
     """
+    from raven.agent.subagent.builtin_agents import is_builtin_agent_name
+
     held = {(e.get("name"), e.get("kind")) for e in (existing or []) if isinstance(e, dict)}
     for entry in entries:
         if not isinstance(entry, dict):

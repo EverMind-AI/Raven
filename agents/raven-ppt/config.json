@@ -8,7 +8,8 @@
       "llmCallTimeout": 1800,
       "maxToolIterations": 600,
       "maxConcurrentSubagents": 2,
-      "reasoningEffort": "medium",
+      "reasoningEffort": "high",
+      "temperature": 0.95,
       "modelOverrides": {
         "grok": {
           "extra_body": {

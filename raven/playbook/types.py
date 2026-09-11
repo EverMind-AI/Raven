@@ -39,10 +39,6 @@ directory name, so everything that writes must hold values to this shape --
 the schema alone cannot (``model_copy`` skips validators, and the tool
 argument validator has no ``pattern`` support)."""
 _NAME_RE = NAME_RE
-MCP_SERVER_NAME_RE = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
-"""A carried server's name is a segment of its credential path
-(``<credentials>/playbooks/<playbook>/mcp/<server>.json``), so it is admitted
-only as a plain filename: no separators, not dot-only, not leading with a dot."""
 _NODE_ID_RE = r"^[A-Za-z0-9_-]+$"
 
 NodeSpec = DagNodeSpec
@@ -191,13 +187,6 @@ class PlaybookSpec(CamelBase):
         for pname in self.params:
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", pname):
                 raise ValueError(f"param name {pname!r} must be an identifier")
-        return self
-
-    @model_validator(mode="after")
-    def _mcp_server_names_are_path_safe(self) -> "PlaybookSpec":
-        for sname in self.mcp_servers:
-            if not re.match(MCP_SERVER_NAME_RE, sname):
-                raise ValueError(f"mcpServers name {sname!r} must match {MCP_SERVER_NAME_RE}")
         return self
 
     def block_dump(self) -> dict[str, Any]:

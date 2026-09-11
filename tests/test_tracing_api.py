@@ -157,6 +157,63 @@ def test_artifact_reference_attached(trace_dir):
     assert "llm.input.artifact_path" in spans[0]["attributes"]
 
 
+def test_llm_span_records_what_the_call_asked_for(trace_dir):
+    """A trace kept the conversation and nothing about the request, so a truncated
+    turn could not be attributed to a ceiling, an effort or a backend pin. The
+    scalars go on the span so the question is a grep, and the artifact keeps the
+    reasoning shape beside them. Credentials are in neither."""
+    from raven.observability import semconv
+
+    class _Provider:
+        _SENTINEL = object()
+        api_key = "sk-or-v1-secret"
+        api_base = "https://openrouter.ai/api/v1"
+
+        def request_generation(self, **asked):
+            assert "temperature" not in asked and asked["reasoning_effort"] == "high"
+            return {
+                "max_tokens": 16384,
+                "temperature": 0.95,
+                "reasoning_effort": "high",
+                "reasoning": {"effort": "high"},
+                "provider_fence": {"order": ["Z.AI"], "allow_fallbacks": False},
+            }
+
+    provider = _Provider()
+    bound = {
+        "self": provider,
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": None,
+        "model": "z-ai/glm-5.3-flash",
+        "max_tokens": _Provider._SENTINEL,
+        "reasoning_effort": "high",
+    }
+    with trace.span("llm.call") as span:
+        semconv.llm_call(span, bound, None, None)
+
+    written = next(x for x in _spans_written(trace_dir) if x["name"] == "llm.call")
+    attrs = written["attributes"]
+    assert attrs["llm.request.max_tokens"] == 16384
+    assert attrs["llm.request.reasoning_effort"] == "high"
+    assert attrs["llm.request.temperature"] == 0.95
+    assert attrs["llm.request.effort_sent"] == "reasoning.effort=high"
+    assert "Z.AI" in attrs["llm.request.provider_fence"]
+    payload = json.loads(Path(attrs["llm.input.artifact_path"]).read_text(encoding="utf-8"))
+    assert payload["generation"]["reasoning"] == {"effort": "high"}
+    assert "secret" not in json.dumps(attrs) and "openrouter.ai" not in json.dumps(attrs)
+
+
+def test_a_provider_that_answers_nothing_leaves_the_llm_span_as_it_was(trace_dir):
+    """The record is best-effort: a duck-typed provider with no
+    ``request_generation`` (test stubs, thin adapters) must not lose its span."""
+    from raven.observability import semconv
+
+    with trace.span("llm.call") as span:
+        semconv.llm_call(span, {"self": object(), "messages": [], "tools": None, "model": "m"}, None, None)
+    attrs = next(x for x in _spans_written(trace_dir) if x["name"] == "llm.call")["attributes"]
+    assert attrs["llm.model"] == "m" and not [k for k in attrs if k.startswith("llm.request.")]
+
+
 def test_custom_node_uses_explicit_kind(trace_dir):
     with trace.span("raven.sentinel.tick", {"sentinel.reason": "x"}, kind="plugin"):
         pass
@@ -520,6 +577,52 @@ def test_standard_span_required_attributes(trace_dir):
     assert by["tool.call"]["attributes"]["tool.name"] == "grep"
     output_path = Path(by["llm.call"]["attributes"]["llm.output.artifact_path"])
     assert json.loads(output_path.read_text(encoding="utf-8"))["thinking_blocks"] == _Resp.thinking_blocks
+
+
+def test_llm_span_carries_the_request_size_and_the_transport_facts(trace_dir):
+    """Both halves of a call are greppable from the span, not only the artifact.
+
+    Answering "how big was the request, and who served it" used to mean opening
+    one artifact per call and stat-ing the file -- and the artifact's own size is
+    not the request's, since the payload repeats the system prompt and the latest
+    user message beside the full messages list.
+    """
+    from raven.observability import semconv
+    from raven.providers.base import CallRecord, LLMResponse
+    from raven.utils.images import image_block
+
+    messages = [
+        {"role": "user", "content": "look at this"},
+        {"role": "tool", "content": [image_block("data:image/png;base64," + "A" * 400)]},
+    ]
+    response = LLMResponse(
+        content="",
+        finish_reason="stop",
+        usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        call_record=CallRecord(http_status=200, served_by="Z.AI", response_id="gen-1", body='{"choices": []}'),
+    )
+
+    with trace.span("llm.call") as s:
+        semconv.llm_call(
+            s, {"self": None, "messages": messages, "tools": None, "model": "openrouter/z-ai/glm"}, response, None
+        )
+
+    attrs = _spans_written(trace_dir)[0]["attributes"]
+    assert attrs["llm.http_status"] == 200
+    assert attrs["llm.served_by"] == "Z.AI"
+    assert attrs["llm.response_id"] == "gen-1"
+    assert attrs["llm.request_images"] == 1
+    assert attrs["llm.request_image_bytes"] == 300
+    assert attrs["llm.request_bytes"] > 400
+
+    input_payload = json.loads(Path(attrs["llm.input.artifact_path"]).read_text(encoding="utf-8"))
+    assert input_payload["request"] == {
+        "bytes": attrs["llm.request_bytes"],
+        "images": 1,
+        "imageBytes": 300,
+    }
+    output_payload = json.loads(Path(attrs["llm.output.artifact_path"]).read_text(encoding="utf-8"))
+    assert output_payload["call"]["body"] == '{"choices": []}'
 
 
 def test_tracing_disabled_is_passthrough(monkeypatch):
