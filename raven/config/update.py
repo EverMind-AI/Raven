@@ -59,32 +59,6 @@ def update_cron_config(
     return prev
 
 
-def allow_exec_pattern(pattern: str, *, config_path: Path | None = None) -> bool:
-    """Add one ``permissions.tools.exec`` allow rule on disk.
-
-    Returns False when the pattern was already there. Raises ``ValueError``
-    when ``exec`` is set to a plain tier string rather than a table: that is
-    the user's own setting, a prompt does not overwrite it, and the caller has
-    to know nothing was written.
-    """
-    path = config_path or get_config_path()
-
-    def _apply(_text: str | None) -> tuple[str, bool]:
-        data = read_raw_or_raise(path)
-        tools = data.setdefault("permissions", {}).setdefault("tools", {})
-        table = tools.setdefault("exec", {})
-        if not isinstance(table, dict):
-            raise ValueError(f"permissions.tools.exec is {table!r}, a tier for the whole tool, not a table of patterns")
-        added = table.get(pattern) != "allow"
-        table[pattern] = "allow"
-        return json.dumps(data, indent=2, ensure_ascii=False), added
-
-    added = atomic_update(path, _apply)
-    if added:
-        logger.info("config/update: permissions.tools.exec[{!r}] = allow", pattern)
-    return added
-
-
 def reset_cron_config(*, config_path: Path | None = None) -> None:
     """Remove the entire ``cron`` section from on-disk config.
 

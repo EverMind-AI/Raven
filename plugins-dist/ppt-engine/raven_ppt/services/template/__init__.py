@@ -22,10 +22,15 @@ loop bound.
 `compose` is the part the code cannot reach. Two thirds of real template pages
 hold something python-pptx has no way to write -- custom geometry, a gradient, a
 fill at 60% opacity -- so for those pages the only route into a deck is to clone
-the page and edit it: `clone_page`, then `replace_text` and `replace_picture` to
-put this deck's content in it, then `drop_shape` for what is left over. Each is
-an operation python-pptx does not offer and each has a way of going quietly
-wrong, which is why they are here rather than in an author's program.
+the page and edit it. That route is `clone_page` and then `replace_text` keyed on
+the words the page holds now, one call per line, with `replace_picture` for its
+figures and `drop_shape` or `remove_unit` for what is left over. Each is an
+operation python-pptx does not offer and each has a way of going quietly wrong,
+which is why they are here rather than in an author's program. There was a second
+route, `adapt`, that took a whole page in one call and emptied every text frame it
+was not given a value for; two doors onto the same page cost more than they
+bought -- a live deck picked one, wrote a helper that assumed the other, and
+shipped eight blank pages -- so only the copying one is left.
 
 Two things were measured here rather than assumed, and both changed the design.
 A master's or a layout's own decoration does not travel onto a slide, so the band
@@ -40,7 +45,6 @@ hold, which is the opposite of what a program-writing author needs.
 from raven_ppt.services.template.bands import bands_of, bands_path, read_bands, write_bands
 from raven_ppt.services.template.bind import BoundTemplate, bind, bound
 from raven_ppt.services.template.compose import (
-    adapt,
     add_unit,
     arrangement,
     backdrop,
@@ -101,7 +105,6 @@ __all__ = [
     "House",
     "Row",
     "house_style",
-    "adapt",
     "prototype",
     "shape_at",
     "units",

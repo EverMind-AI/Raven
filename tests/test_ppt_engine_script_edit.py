@@ -58,15 +58,13 @@ BLOCKS_TEXT = "one = new_slide()\ntitle(one, 'x')\ntwo = new_slide()\ntitle(two,
 
 
 def test_a_page_cloned_from_the_template_counts_as_a_page() -> None:
-    """`adapt` and `clone_page` create a slide -- through `add_slide`, inside -- and the
-    text scan could not see that. With the structural pages cloned, the block that draws
-    slide 1 holds an `adapt` call and no `add_slide`, so the whole design pass refused:
+    """`clone_page` creates a slide -- through `add_slide`, inside -- and the text scan
+    could not see that. With the structural pages cloned, the block that draws slide 1
+    holds a `clone_page` call and no `add_slide`, so the whole design pass refused:
     measured across two live runs, every finished build, which is the pass the deck was
     counting on for its layout."""
     lines = (
-        PRELUDE
-        + "\n# SLIDE 1\nslide = adapt(prs, prototype(tpl, 1), texts={1: 'title'})\n"
-        + "\n# SLIDE 2\nslide = new_slide()\n"
+        PRELUDE + "\n# SLIDE 1\nslide = clone_page(prs, prototype(tpl, 1))\n" + "\n# SLIDE 2\nslide = new_slide()\n"
     ).splitlines(keepends=True)
     blocks = page_blocks(lines)
 
@@ -84,7 +82,7 @@ def test_the_ordinary_way_to_make_a_page_is_a_method_call() -> None:
     lines = (
         PRELUDE
         + "\n# SLIDE 1\nslide = prs.slides.add_slide(LAY)\ntitle(slide, 'drawn')\n"
-        + "\n# SLIDE 2\nslide = adapt(prs, prototype(tpl, 2), items=[['01', 'cloned']])\n"
+        + "\n# SLIDE 2\nslide = clone_page(prs, prototype(tpl, 2))\n"
     ).splitlines(keepends=True)
     blocks = page_blocks(lines)
 

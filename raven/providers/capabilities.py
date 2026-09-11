@@ -266,12 +266,23 @@ def image_placeholder_text(
     *,
     blind: bool = False,
     describe_tool: str | None = None,
+    tool_text: str = "",
 ) -> str:
     """Text standing in for images the model will not receive.
 
     Keeps the tool's own text (it already names the file and its geometry) and
     appends a line per dropped image so the model knows a picture exists and
     where it came from, rather than silently seeing nothing.
+
+    ``tool_text`` is the result's ``model_text``, which is not in ``blocks`` and
+    was being dropped: a tool whose substance is that string and whose blocks are
+    per-image captions arrived as captions alone on every endpoint that cannot put
+    an image in a tool result. Measured on a 14-page deck run, where the reply
+    naming the template's 27 content prototypes and 36 borrowable pages reached the
+    author as 34 one-line captions with the roster, the borrow offer and the
+    next step all absent -- and it planned 8 of its 14 pages onto one prototype.
+    Skipped when a block already carries the same string, so a tool that puts its
+    text in both places is not quoted twice.
 
     Two different reasons, and the model has to be told them apart. By default
     the transport cannot put an image in a tool result, so the picture follows
@@ -287,6 +298,9 @@ def image_placeholder_text(
     """
     texts = [b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"]
     images = sum(1 for b in blocks if isinstance(b, dict) and b.get("type") == "image_url")
+    lead = tool_text.strip()
+    if lead and lead not in {t.strip() for t in texts}:
+        texts = [lead, *texts]
     body = "\n".join(t for t in texts if t)
     if images:
         noun = "image" if images == 1 else "images"

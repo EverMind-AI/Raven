@@ -20,6 +20,13 @@ repos:
       - id: check-toml
       - id: check-added-large-files
         args: [--maxkb=1024]
+        # The ten bundled deck templates are tracked with the maintainer's
+        # explicit approval (AGENTS.md section 7): a clone that cannot build a
+        # deck is not an install, and seven of them clear the ceiling. The gate
+        # CI enforces is scripts/check_large_files.py, which allows these by
+        # pinned name out of its own PINNED_DECK_TEMPLATES roster rather than by
+        # directory, so an unpinned .pptx dropped here is still refused there.
+        exclude: ^plugins-dist/ppt-engine/raven_ppt/assets/templates/[^/]+\.pptx$
       - id: check-merge-conflict
       - id: detect-private-key
         # The match is a bare header line with no key body, written as a

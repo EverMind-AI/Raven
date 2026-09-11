@@ -24,9 +24,9 @@ and table helpers, and the measurements that answer before anything is drawn),
 `ppt_charts.py` (the charts, drawn as shapes), `ppt_shapes.py` (Office presets, and
 the process and timeline layouts built on them), `ppt_theme.py` (palettes and `rgb`),
 `ppt_icons.py` (`add_icon`, `find_icons`, `ICON_NAMES`), and `ppt_template.py`
-(`prototype` and `adapt` to clone a page and fill it, `fill` for a second run on
-the same page, `units`, `boxes` and `place` to re-flow one, `drop_shape` to remove
-one) when a template is bound. `deck/build/references/` beside them holds the tables,
+(`prototype` and `clone_page` to copy a page in, `replace_text` and `replace_picture`
+to write this deck's content into it, `units`, `boxes` and `place` to re-flow a
+repeating run, `drop_shape` to remove a shape) when a template is bound. `deck/build/references/` beside them holds the tables,
 charts, icons, shapes and formulas documents in full: read those rather than the
 modules, whose source is an order of magnitude longer than the documents that
 describe it. **Do not write a module into the build directory whose name shadows a

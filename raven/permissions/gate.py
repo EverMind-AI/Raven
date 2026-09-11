@@ -7,15 +7,6 @@ and the mapping onto a ``ToolResult`` the registry can answer the call with.
 Every refusal continues the turn (``Continuation.CONTINUE``); the one path that
 ends it is a human choosing "deny and stop" in the approval prompt.
 
-Two grants outlast the click. "For this session" remembers the action's keys
-on the conversation (``raven.permissions.session``), and a later call whose
-every still-asking part was granted runs without a prompt. "Don't ask again"
-writes the prefix rule the human confirmed into ``permissions.tools.exec``,
-after the same validation the prompt's suggestion went through; the gate reads
-config live, so the rule holds from the next call. A pattern that fails
-validation still grants this once and this session -- the human did say yes --
-and the reason it was not written is logged.
-
 ``allow_ask`` is fixed per gate, not read from the turn: a sub-agent's task
 inherits the parent turn's context by asyncio's own rule, so a gate built for
 an unattended registry must refuse to ask even when a responder is visible in
@@ -30,7 +21,6 @@ from typing import Any
 from loguru import logger
 
 from raven.config.schema import PermissionsConfig
-from raven.config.update import allow_exec_pattern
 from raven.contracts.permissions import (
     Allow,
     ApprovalChoice,
@@ -42,10 +32,10 @@ from raven.contracts.permissions import (
     Tier,
 )
 from raven.contracts.tool import PARSE_RETRY_INSTRUCTION, STOP_RETRY_INSTRUCTION, Continuation, ToolResult
-from raven.permissions.builtin import BuiltinRulings, action_digest, action_line, session_keys
+from raven.permissions.builtin import BuiltinRulings, action_digest, action_line
 from raven.permissions.judge import review
-from raven.permissions.rules import default_tier, exec_approval_shape, user_tier, validate_exec_pattern
-from raven.permissions.session import remember_allowed, session_allows, session_mode
+from raven.permissions.rules import default_tier, user_tier
+from raven.permissions.session import session_mode
 from raven.permissions.turn import current_tool_call_id, current_turn
 from raven.tracing import trace
 
@@ -93,20 +83,11 @@ class PermissionGate:
         if tier is Tier.ALLOW:
             return Allow(source=DecisionSource.USER_ALLOW)
         if tier is None:
-            tier = default_tier(tool_name, params)
+            tier = default_tier(tool_name)
             if tier is Tier.ALLOW:
                 return Allow(source=DecisionSource.DEFAULT)
         if mode is PermissionMode.FULL:
             return Allow(source=DecisionSource.MODE)
-        suggested_pattern = ""
-        ask_segments: tuple[str, ...] = ()
-        if tool_name == "exec" and isinstance(params.get("command"), str):
-            exec_rules = cfg.tools.get("exec")
-            shape = exec_approval_shape(params["command"], exec_rules if isinstance(exec_rules, dict) else {})
-            ask_segments, suggested_pattern = shape.ask_segments, shape.suggested_pattern
-        keys = session_keys(tool_name, params, ask_segments)
-        if session_allows(current_turn().conversation_id, keys):
-            return Allow(source=DecisionSource.SESSION)
         # Deliberately NOT auto-allowing a sandboxed exec here: the Boxlite VM
         # mounts the real workspace at /workspace read-write (plus any
         # configured rw volumes), so "the sandbox holds it" is false for host
@@ -143,16 +124,12 @@ class PermissionGate:
                     description=description,
                     digest=digest,
                     family=described.family if described else "",
-                    session_keys=keys,
-                    suggested_pattern=suggested_pattern,
                 )
         return NeedsApproval(
             reason=described.reason if described else "This call requires user approval (ask tier)",
             description=description,
             digest=digest,
             family=described.family if described else "",
-            session_keys=keys,
-            suggested_pattern=suggested_pattern,
         )
 
     async def enforce(self, tool_name: str, params: dict[str, Any]) -> ToolResult | None:
@@ -197,7 +174,6 @@ class PermissionGate:
                 tool_call_id=current_tool_call_id(),
                 command=action_line(tool_name, params),
                 description=decision.description,
-                suggested_pattern=decision.suggested_pattern,
             )
         except Exception as exc:  # noqa: BLE001 - a broken transport must refuse, not execute
             logger.exception("permissions: approval transport failed for {}", tool_name)
@@ -211,11 +187,7 @@ class PermissionGate:
                 "permission.approval.answered": outcome.answered,
             }
         )
-        if outcome.approved:
-            if outcome.choice is not ApprovalChoice.ALLOW:
-                remember_allowed(turn.conversation_id, decision.session_keys)
-            if outcome.choice is ApprovalChoice.ALLOW_ALWAYS:
-                self._persist(tool_name, outcome.pattern)
+        if outcome.choice is ApprovalChoice.ALLOW:
             return None
         turn.denied_digests.add(digest)
         if not outcome.answered:
@@ -240,27 +212,6 @@ class PermissionGate:
                 "around it."
             )
         return self._refusal("Error: User denied this action." + feedback)
-
-    def _persist(self, tool_name: str, pattern: str) -> None:
-        """Write the confirmed prefix as an allow rule; the grant already stands."""
-        pattern = pattern.strip()
-        why = "only exec patterns can be persisted" if tool_name != "exec" else validate_exec_pattern(pattern)
-        if why is not None:
-            logger.warning("permissions: not persisting {!r}: {}", pattern, why)
-            self._annotate({"permission.persisted": False, "permission.persist.refused": why})
-            return
-        try:
-            added = allow_exec_pattern(pattern)
-        except ValueError as exc:
-            logger.warning("permissions: not persisting {!r}: {}", pattern, exc)
-            self._annotate({"permission.persisted": False, "permission.persist.refused": str(exc)})
-            return
-        except Exception:  # noqa: BLE001 - the config file is the user's; a failed write is theirs to hear about
-            logger.exception("permissions: could not write allow rule {!r}", pattern)
-            self._annotate({"permission.persisted": False})
-            return
-        logger.info("permissions: {} exec allow rule {!r}", "added" if added else "kept", pattern)
-        self._annotate({"permission.persisted": True, "permission.persist.pattern": pattern})
 
     @staticmethod
     def _annotate(attributes: dict) -> None:

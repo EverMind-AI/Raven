@@ -77,7 +77,12 @@ SCRIPT_AUTHOR = Profile(
     # say and filled in the rest itself, so seventeen different compositions
     # still read as one template.
     capabilities=Capabilities(raw_script=True),
-    blocking_kinds=_PROVENANCE | _AGREED | {"unmapped_page", "house_style"},
+    # `emptied_page` is this route's own condition: it is the only route that clones a
+    # template page and fills it from a program, so it is the only one that can hand back
+    # a page holding its design, its title and nothing else. `house_style` was here too
+    # and is not any more (D52): a route may not call fatal a kind the check itself only
+    # reports, and that check now reports.
+    blocking_kinds=_PROVENANCE | _AGREED | {"unmapped_page", "emptied_page"},
     skill="ppt-script-authoring",
 )
 

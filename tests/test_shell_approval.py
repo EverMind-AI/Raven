@@ -211,7 +211,6 @@ async def test_direct_delete_executes_once_after_approval(tmp_path) -> None:
             "tool_call_id": "",
             "command": "rm file.txt",
             "description": "Approve this action: rm file.txt",
-            "suggested_pattern": "",
         }
     ]
 

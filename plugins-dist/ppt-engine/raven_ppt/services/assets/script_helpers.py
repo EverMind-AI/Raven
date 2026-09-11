@@ -76,7 +76,8 @@ _CATALOG_ACCESS = '["ink-graphite"]          # one of THEME_NAMES, kept for ever
 
 _SINGLE_NOTE = """A deck is built inside a template, and the build writes that template's palette in
 here as the single entry -- named after the template's own file. So take it by
-iteration; a theme id typed into `THEMES[...]` is a KeyError."""
+iteration; a theme id typed into `THEMES[...]` is a KeyError that names the one
+entry there is."""
 
 _CATALOG_NOTE = """This deck has no template, so `THEMES` holds the ten reviewed themes keyed by name
 and `THEME_NAMES` lists them. Pick one by name and keep that one for every page. A
@@ -107,7 +108,25 @@ from pathlib import Path
 
 from pptx.dml.color import RGBColor
 
-THEMES = json.loads((Path(__file__).parent / "themes.json").read_text(encoding="utf-8"))
+
+class _Themes(dict):
+    """The palettes by name, whose miss says which names there are.
+
+    A run wanted a dark palette, typed a theme id that is not in here, and read a
+    bare KeyError with nothing in it but the id it had just written; it then edited
+    themes.json to make the key exist, which the next build wrote back over.
+    """
+
+    def __missing__(self, key):
+        raise KeyError(
+            f"{key!r} is not a palette in this build directory. What is in here: {sorted(self)}. "
+            "Editing themes.json does not add one -- every helper beside the build script is "
+            "written fresh on each build. A palette of your own is a copy with the fields you "
+            "want changed: T = {**THEMES[next(iter(THEMES))], 'background': '#0B1020'}"
+        )
+
+
+THEMES = _Themes(json.loads((Path(__file__).parent / "themes.json").read_text(encoding="utf-8")))
 THEME_NAMES = sorted(THEMES)
 
 
@@ -490,9 +509,9 @@ def swap_icon(slide, shape, name, colour=None):
     """Replace an icon the template drew with `name`, in its box and its colour.
 
     The one graphic on a cloned page that has to change with the content, and the one
-    `adapt` cannot reach: a template's icon is a freeform path (or a small group of
-    them) holding no text, so `texts=` and `items=` pass it by and a page about supply
-    chains keeps the trophy the template shipped. `shape` is what `shape_near(slide, x,
+    `replace_text` cannot reach: a template's icon is a freeform path (or a small group
+    of them) holding no text, so a call keyed on words passes it by and a page about
+    supply chains keeps the trophy the template shipped. `shape` is what `shape_near(slide, x,
     y)` or `shape_at(slide, n)` found -- the path itself, or the group of paths it is
     drawn as; a group's parts are taken together.
 

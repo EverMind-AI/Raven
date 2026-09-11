@@ -37,7 +37,7 @@ import os
 import re
 import shutil
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 
 MATERIAL_SUFFIXES = {
@@ -302,7 +302,25 @@ def stage(materials_dir: Path, sources: list[str], taken: set[str]) -> list[tupl
     return staged
 
 
-def describe(staged: list[tuple[str, Path]], materials_dir: Path, out_dir: Path) -> str:
+DESTINATION_LEAD = (
+    " If the task names where the file should go, state that once as ppt_build's deliver_to: every build "
+    "that publishes then writes the deck there as well, and the MEDIA line names that path."
+)
+"""One sentence past the fork's text, for the one request the fork could not meet.
+
+A task that names the file's destination was met by a `cp` after the build -- a copy the
+verification then called out. The engine now takes the destination itself, and the prompt
+says where to put it, because the tool description is read only once the model has
+reached for the tool.
+"""
+
+
+def describe(
+    staged: list[tuple[str, Path]],
+    materials_dir: Path,
+    out_dir: Path,
+    standing: Sequence[Path] = (),
+) -> str:
     """The block appended to the prompt naming what was staged and where to build.
 
     Word for word what the fork's two entry points produced for the same inputs
@@ -319,7 +337,40 @@ def describe(staged: list[tuple[str, Path]], materials_dir: Path, out_dir: Path)
     Built from the staging pairing rather than re-derived from the source paths, so
     the agent is told where each file actually is: a collision-suffixed copy has a
     name the source does not.
+
+    ``standing`` is the deck this folder has already published, and it is the one
+    input the fork never had. Without it the block ended the same way on every turn
+    of a session -- compile the deck and end the reply with a MEDIA line -- so the
+    turn after a delivery, where the user says the deck is fine, was instructed to
+    publish it again, and it did.
+
+    What replaces that instruction is a statement of what is on the record: the
+    published deck's path, that changing it means another build, and where the MEDIA
+    line comes from. Nothing here decides whether this turn is deck work, because
+    nothing here can: the model reads the user's message, and a fixed rule guessing
+    at it from the staging book was wrong on the ordinary source-backed deck, whose
+    first turn's material is still in the book on every later turn. The material
+    listing is unchanged and composes with this: a turn that does build needs its
+    sources whether or not a deck already stands.
+
+    The gathering advice does not compose with it. "Nothing was named, so this deck's
+    material has to be gathered -- web_search, ppt_image_search, web_fetch, ppt_fetch"
+    is written for a deck that has none, and a deck on the publish record has already
+    taken it: on that turn the text is not merely redundant but stale. So a standing
+    deck with nothing staged gets the statement alone. That turns on the same fact the
+    statement itself turns on, which is the record rather than a reading of the turn.
+    With no deck standing, both branches keep their text word for word, because those
+    are the two inputs the fork was measured on.
     """
+    if standing:
+        published = Path(standing[-1])
+        stands = (
+            f"\n\n# The deck this session published\n{published} stands as published, and it is what the user "
+            "already has. A change to it is another ppt_build that publishes; the MEDIA line comes from a "
+            "publish and from nothing else."
+        )
+        if not staged:
+            return stands
     if staged:
         listing = "\n".join(f"- {Path(source).name} (from {source}) -> {target}" for source, target in staged)
         text = (
@@ -338,7 +389,11 @@ def describe(staged: list[tuple[str, Path]], materials_dir: Path, out_dir: Path)
             "checks cannot see, and on a run with no staged material that is everything. "
             "What you still cannot verify is a guess, and it is presented as one."
         )
-    return text + (f" Compile the deck under {out_dir}/ and end your final reply with the MEDIA line naming it.")
+    if standing:
+        return text + stands
+    return text + (
+        f" Compile the deck under {out_dir}/ and end your final reply with the MEDIA line naming it.{DESTINATION_LEAD}"
+    )
 
 
 def slide_count(deck: Path) -> int:
@@ -360,12 +415,18 @@ def slide_count(deck: Path) -> int:
         return 0
 
 
-def deck_mtimes(out_dir: Path) -> dict[Path, float]:
-    """Every pptx under ``out_dir`` with its mtime, for the before/after compare."""
+def deck_mtimes(out_dir: Path, also: Iterable[Path] = ()) -> dict[Path, float]:
+    """Every pptx under ``out_dir`` with its mtime, for the before/after compare.
+
+    ``also`` names files outside ``out_dir`` the compare has to cover as well: the
+    destination the user named is delivered to on every publish, so a turn that
+    published nothing must not find last week's delivery there and announce it as
+    this turn's.
+    """
     found: dict[Path, float] = {}
-    if not out_dir.is_dir():
-        return found
-    for path in out_dir.rglob("*.pptx"):
+    candidates = list(out_dir.rglob("*.pptx")) if out_dir.is_dir() else []
+    candidates.extend(path for path in also if path.is_file())
+    for path in candidates:
         try:
             found[path] = path.stat().st_mtime
         except OSError:
@@ -374,7 +435,11 @@ def deck_mtimes(out_dir: Path) -> dict[Path, float]:
 
 
 def verified_deck(
-    out_dir: Path, reply: str, before: dict[Path, float], published: set[str] | None = None
+    out_dir: Path,
+    reply: str,
+    before: dict[Path, float],
+    published: set[str] | None = None,
+    delivered: Iterable[Path] = (),
 ) -> tuple[Path | None, int]:
     """The deck this turn published, or ``(None, 0)``.
 
@@ -384,8 +449,16 @@ def verified_deck(
     exactly that after a refused build, and the reply then told the user the deck was
     delivered. Passing ``None`` keeps the older reading for a caller with no record.
 
+    ``delivered`` names the paths outside ``out/`` the publish step itself wrote -- the
+    destination the user asked for, read off the publish record. Those stand as
+    candidates on the same terms as the files under ``out/``: written this turn, a deck,
+    and on the record. Any other path outside ``out/`` is not looked at here; it is a
+    copy the publish step never made, whatever it holds.
+
     Every valid deck this turn wrote or rewrote is a candidate; the announcement
-    only chooses between them, and the newest wins when it names none of them.
+    only chooses between them, and the newest wins when it names none of them. The
+    whole path is matched before the bare name, because a delivery keeps the deck's
+    own name unless the user chose one, and ``deck.pptx`` would then pick out/.
 
     Scoped to this turn rather than to the directory, which is what ``before`` is
     for: one session's job directory accumulates every turn's decks, so accepting
@@ -395,7 +468,7 @@ def verified_deck(
     """
     candidates = [
         (path, count)
-        for path, mtime in sorted(deck_mtimes(out_dir).items())
+        for path, mtime in sorted(deck_mtimes(out_dir, delivered).items())
         if mtime > before.get(path, -1.0) and (count := slide_count(path))
     ]
     if published is not None:
@@ -408,9 +481,10 @@ def verified_deck(
     # intermediates next to the deck, and both names appear somewhere in the text,
     # so anything wider than the announcement picks between them by luck.
     for scope in ([reply[marker:]] if marker >= 0 else []) + [reply]:
-        for path, count in candidates:
-            if path.name in scope:
-                return path, count
+        for named in (str, lambda path: path.name):
+            for path, count in candidates:
+                if named(path) in scope:
+                    return path, count
     return max(candidates, key=lambda item: item[0].stat().st_mtime)
 
 
@@ -423,6 +497,17 @@ def _digest(path: Path) -> str:
         return ""
 
 
+def published_decks(out_dir: Path, published: set[str]) -> list[Path]:
+    """Every deck under ``out/`` the publish step recorded, oldest first.
+
+    The turn's own before/after compare cannot answer this one: what matters here is
+    not what this turn wrote but whether anything stands from an earlier one.
+    """
+    return [
+        path for path, _ in sorted(deck_mtimes(out_dir).items(), key=lambda item: item[1]) if _digest(path) in published
+    ]
+
+
 def unpublished_decks(out_dir: Path, before: dict[Path, float], published: set[str]) -> list[Path]:
     """Decks this turn wrote under ``out/`` that the publish step never recorded."""
     return [
@@ -433,6 +518,7 @@ def unpublished_decks(out_dir: Path, before: dict[Path, float], published: set[s
 
 
 __all__ = [
+    "DESTINATION_LEAD",
     "MATERIAL_SUFFIXES",
     "StagingError",
     "deck_mtimes",
@@ -442,6 +528,7 @@ __all__ = [
     "rehydrate",
     "slide_count",
     "stage",
+    "published_decks",
     "unpublished_decks",
     "unique_sources",
     "unstaged",

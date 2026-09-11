@@ -13,10 +13,11 @@ would not do -- a template can ship one master called "Office Theme" like everyo
 else -- and comparing the canvas would not either, since an author that sets
 13.333in by hand gets that right while getting everything else wrong.
 
-Blocking, and in the same group as the language check rather than with the layout
-warnings. A deck in somebody else's colours is not a deck the user asked for, and
-it is not answerable by rearranging a page: the fix is one line at the top of the
-program.
+Reported. A deck in somebody else's colours is not a deck the user asked for and
+is not answerable by rearranging a page, which argued for a refusal and got one --
+but nothing measured this check against a template and a deck really built inside
+it, and the whole predicate is exact equality of every theme slot, so an author who
+repainted the theme itself would be told it never opened the template (D52).
 """
 
 from __future__ import annotations
@@ -52,7 +53,7 @@ def house_style_findings(pptx_path: Path, template: Path | None) -> list[Finding
     return [
         Finding(
             kind="house_style",
-            severity=Severity.BLOCKING,
+            severity=Severity.WARNING,
             message=(
                 f"this deck's theme is not {Path(template).name}'s, so it was not built inside the template "
                 f"the user gave: {'; '.join(differing[:_SHOWN])}. Open the deck with "

@@ -98,8 +98,8 @@ def _stated(prototypes: Path | None) -> set[tuple[float, float, float, float]]:
     for it. Measured with a 3.0x0.8in probe swept across `gold_panel_year_end_summary`
     under the overlap reading: its boxes excused 88% of the positions on the canvas,
     the excuse routinely being a cover title from page 1 with nothing to do with the
-    page being judged. Positions and not text boxes only, because `adapt` may empty a
-    cloned block and a block whose copy the author supplied is still the template's.
+    page being judged. Positions and not text boxes only, because a block whose copy the
+    author supplied is still standing where the template put it.
     """
     if prototypes is None or not Path(prototypes).is_file():
         return set()

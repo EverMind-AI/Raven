@@ -20,7 +20,6 @@ its tests and its surface-registration hook keep their one home.
 from __future__ import annotations
 
 import json
-import os
 import re
 from collections.abc import Callable
 from hashlib import sha256
@@ -94,43 +93,6 @@ def action_digest(tool_name: str, params: dict[str, Any]) -> str:
     else:
         material = json.dumps(params, sort_keys=True, ensure_ascii=False, default=str)
     return sha256(f"{tool_name}\x00{material}".encode()).hexdigest()
-
-
-def session_keys(tool_name: str, params: dict[str, Any], ask_segments: tuple[str, ...] = ()) -> tuple[str, ...]:
-    """What a "for this session" grant remembers, one key per part still asking.
-
-    For exec that is each segment no rule covers, keyed with the machine and
-    the directory it runs in -- the same command text in another directory is
-    another action, so a grant never travels; the directory is the one the
-    call named, else the turn's binding, else the construction-time default
-    (stable for a conversation, so leaving it empty still distinguishes). The
-    two builtin file writers are keyed by path and directory: the content
-    changes every call, the path is what the human looked at, and a relative
-    path names another file once the directory is rebound. Every other tool
-    keys the exact call -- a `path` field on an unknown tool says nothing about
-    what its other fields do.
-    """
-    if tool_name == "exec" and ask_segments:
-        working_dir = params.get("working_dir")
-        cwd = (working_dir.strip() if isinstance(working_dir, str) else "") or _bound_workdir()
-        machine = _exec_machine(params)
-        return tuple(
-            sha256(f"exec\x00{segment}\x00cwd:{cwd}\x00on:{machine}".encode()).hexdigest() for segment in ask_segments
-        )
-    path = params.get("path")
-    if tool_name in PATH_KEYED_TOOLS and isinstance(path, str) and path.strip():
-        material = f"{tool_name}\x00path:{os.path.normpath(path.strip())}\x00cwd:{_bound_workdir()}"
-        return (sha256(material.encode()).hexdigest(),)
-    return (action_digest(tool_name, params),)
-
-
-PATH_KEYED_TOOLS: frozenset[str] = frozenset({"edit_file", "write_file"})
-
-
-def _bound_workdir() -> str:
-    from raven.agent.workdir import current as current_workdir
-
-    return str(current_workdir() or "")
 
 
 def action_line(tool_name: str, params: dict[str, Any]) -> str:

@@ -85,8 +85,16 @@ if record or blocks:
 
 def _drop_last(slides, count):
     listing = slides._sldIdLst
-    for entry in list(listing)[-count:] if count else []:
-        slides.part.drop_rel(entry.rId)
+    # Clamped, and a missing relationship is not fatal. Both guard the same thing:
+    # taking one page back must not be able to end the build. A count larger than
+    # the deck would have made `[-count:]` the whole list and dropped pages that
+    # drew, and `drop_rel` on a relationship the block already removed raises.
+    count = max(0, min(count, len(listing)))
+    for entry in list(listing)[len(listing) - count:] if count else []:
+        try:
+            slides.part.drop_rel(entry.rId)
+        except KeyError:
+            pass
         listing.remove(entry)
 
 
@@ -98,16 +106,26 @@ def _stand_in(slides, number, error):
     layouts = prs.slide_layouts
     layout = layouts[6] if len(layouts) > 6 else layouts[len(layouts) - 1]
     slide = slides.add_slide(layout)
-    box = slide.shapes.add_textbox(Inches(0.6), Inches(0.6), prs.slide_width - Inches(1.2), prs.slide_height - Inches(1.2))
-    frame = box.text_frame
-    frame.word_wrap = True
-    frame.text = f"Page {number} did not draw"
-    head = frame.paragraphs[0].runs[0].font
-    head.size, head.bold, head.color.rgb = Pt(28), True, RGBColor(0xB0, 0x00, 0x20)
-    body = frame.add_paragraph()
-    body.text = error
-    body.runs[0].font.size = Pt(14)
-    body.runs[0].font.color.rgb = RGBColor(0x40, 0x40, 0x40)
+    # The page first, what it says second. Writing on it needs a slide size and a
+    # layout the deck may not have, and a raise in here would leave the loop through
+    # the `except` it is running in -- one page's placeholder costing every page after
+    # it, which is the whole thing this loop exists to prevent. The page is what keeps
+    # page and block paired by position; the record names the failure either way.
+    try:
+        box = slide.shapes.add_textbox(
+            Inches(0.6), Inches(0.6), prs.slide_width - Inches(1.2), prs.slide_height - Inches(1.2)
+        )
+        frame = box.text_frame
+        frame.word_wrap = True
+        frame.text = f"Page {number} did not draw"
+        head = frame.paragraphs[0].runs[0].font
+        head.size, head.bold, head.color.rgb = Pt(28), True, RGBColor(0xB0, 0x00, 0x20)
+        body = frame.add_paragraph()
+        body.text = error
+        body.runs[0].font.size = Pt(14)
+        body.runs[0].font.color.rgb = RGBColor(0x40, 0x40, 0x40)
+    except Exception:  # noqa: BLE001 -- a blank page still holds the place
+        sys.stderr.write(traceback.format_exc())
 
 
 def _slides():
@@ -133,6 +151,7 @@ def run(start, end):
     exec(compile("\\n" * start + "".join(lines[start:end]), target, "exec"), namespace)
 
 
+finished = [False]
 try:
     if not blocks:
         # Through `run` rather than `runpy.run_path`: a script whose pages cannot be
@@ -174,20 +193,36 @@ try:
                     standing_in[0] = None
                 failed.append({"page": number, "error": error, "traceback": text[-4000:]})
         run(blocks[-1][2], len(lines))
+    finished[0] = True
 finally:
     # The pages that were drawn, whatever happened to the rest. `prs.save` is the last
     # line of the author's file, so anything that escapes the loop above -- a prelude
     # that raises, a tail that raises, a KeyboardInterrupt -- skips it and the build
     # reports "wrote no deck" over a deck that was mostly finished. Saving here costs a
     # file write on a path that already had to be written for the build to succeed.
-    if not os.path.exists(os.environ.get("PPT_OUTPUT", "")):
+    #
+    # On "the script did not reach its own save" and not on "there is no file at
+    # PPT_OUTPUT": a script grown page by page keeps the `prs.save` it had when it was
+    # shorter, and a live 16-page run did. That intermediate save made the file exist
+    # from page 8 on, so the rescue stood down and the eight-page deck it wrote was
+    # kept as the record of a run that had drawn ten -- two pages thrown away by the
+    # line that was supposed to save them. A build that finished is not written again.
+    if not finished[0]:
         try:
-            from pptx.presentation import Presentation as _Presentation
+            # The presentation the pages went into, when a page went in at all: a script
+            # that opens the template beside the deck has two of them in its namespace,
+            # and now that the rescue writes over whatever is already at PPT_OUTPUT it
+            # must not be able to write the template there.
+            deck = slides_seen[0].part.presentation if slides_seen[0] is not None else None
+            if deck is None:
+                from pptx.presentation import Presentation as _Presentation
 
-            for _value in list(namespace.values()):
-                if isinstance(_value, _Presentation) and len(_value.slides):
-                    _value.save(os.environ["PPT_OUTPUT"])
-                    break
+                for _value in list(namespace.values()):
+                    if isinstance(_value, _Presentation) and len(_value.slides):
+                        deck = _value
+                        break
+            if deck is not None and len(deck.slides):
+                deck.save(os.environ["PPT_OUTPUT"])
         except Exception:  # noqa: BLE001 -- a rescue that fails leaves the original failure
             pass
     if record:

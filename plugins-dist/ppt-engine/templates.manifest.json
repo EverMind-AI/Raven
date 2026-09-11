@@ -1,15 +1,15 @@
 {
-  "purpose": "Per-file sha256 pins for the 10 bundled deck templates the ppt engine offers when a task brings no template of its own. The pins are the tracked truth; the .pptx payload stays out of git (see the destination directory's .gitignore) and out of PRs: it is hosted as a generic package in the project's GitLab package registry and rides the built ppt-engine wheel as package data.",
+  "purpose": "Per-file sha256 pins for the 10 bundled deck templates the ppt engine offers when a task brings no template of its own. The payload itself is tracked in git beside this file, under the destination below: an install that cannot build a deck is not an install, and the private package registry an outside user cannot read was the reason a fresh clone got an empty catalogue and the ppt-engine wheel shipped 0 templates. Git is the source of truth for the bytes; these pins are what the release gate, the large-file allowance and fetch_templates.py --verify hold the tracked payload against, and what a re-cut must rewrite.",
   "endpoint": {
     "url": "https://gitlab.com/api/v4/projects/84258686/packages/generic/ppt-templates/2026.09.09",
     "status": "NAMED",
     "package": "ppt-templates 2026.09.09, generic package registry of gitlab.com/npc-work/aic/ai/raven (project 84258686)",
     "auth": "the project is private: fetch_templates.py sends PRIVATE-TOKEN from $GITLAB_TOKEN (any token that can read the repository), or JOB-TOKEN from $CI_JOB_TOKEN inside CI",
     "owner": "maintainer + raven-ppt product team, jointly (ppt verdict C4)",
-    "note": "a new template cut is a new package version: upload the files, rewrite the pins, bump this url; the old version stays downloadable for older checkouts"
+    "note": "NAMED means the url is a real place, not that anyone must visit it: the payload ships in git and in the wheel, so no install needs a token. The registry is the archive of what shipped and the lane fetch_templates.py pulls a new cut down through; a new cut is a new package version (upload, rewrite the pins, bump this url, commit the new bytes)."
   },
   "destination": "raven_ppt/assets/templates",
-  "source_of_truth": "GitLab generic package ppt-templates/2026.09.09 (project 84258686), the version this file's pins identify and the endpoint above serves: the eight re-cut light templates, corrected for a lone-punctuation text box and for card titles that collided when wrapped, plus two dark templates cut from user uploads (hidden vendor pages removed, reference pages from the other templates borrowed onto their own layouts, vendor marks stripped). The earlier 2026.09.03 version carries only the eight-file payload and a gold template that no longer matches these pins; it stays downloadable for older checkouts. The retired fork kept its own twelve and was never the payload (its record: git history at the subagents/ removal commit)",
+  "source_of_truth": "The tracked payload under raven_ppt/assets/templates, whose bytes these pins sign: the eight re-cut light templates, corrected for a lone-punctuation text box and for card titles that collided when wrapped, plus two dark templates cut from user uploads (hidden vendor pages removed, reference pages from the other templates borrowed onto their own layouts, vendor marks stripped). This is the same payload the registry serves as ppt-templates 2026.09.09 (project 84258686). The earlier 2026.09.03 version carries only the eight-file payload and a gold template that no longer matches these pins; it stays downloadable for older checkouts. The retired fork kept its own twelve and was never the payload (its record: git history at the subagents/ removal commit)",
   "files": [
     {
       "name": "amber_wave_quarterly_summary.pptx",

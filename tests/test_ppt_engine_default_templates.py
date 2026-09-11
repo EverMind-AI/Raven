@@ -204,7 +204,7 @@ def test_the_reference_pages_that_carry_house_coloured_drawings_are_named() -> N
     assert reference_artwork("no_such_template", 1) == 0
 
 
-def test_the_ratio_at_which_white_stops_reading_is_the_measurement_packages_own() -> None:
+def test_the_ratio_at_which_a_borrowed_label_stops_reading_is_the_measurement_packages_own() -> None:
     """Two modules state it and only one may decide it.
 
     `defaults` cannot import the measurement package -- it is read where python-pptx is
@@ -212,35 +212,42 @@ def test_the_ratio_at_which_white_stops_reading_is_the_measurement_packages_own(
     drift would be silent: the gate would refuse a page the offer had just called safe.
     """
     from raven_ppt.services.measure.contrast import UNREADABLE_RATIO
-    from raven_ppt.services.template.defaults import ACCENT_READS_WHITE
+    from raven_ppt.services.template.defaults import BORROWED_INK_READS
 
-    assert ACCENT_READS_WHITE == UNREADABLE_RATIO
+    assert BORROWED_INK_READS == UNREADABLE_RATIO
 
 
-def test_only_the_template_whose_accent_is_pale_asks_for_dark_labels() -> None:
-    """Measured over the 252 cross-template clones, and the one exception it found.
+def test_every_bundled_template_is_told_which_of_its_colours_wash_a_borrowed_label_out() -> None:
+    """Measured over 486 clones of the 54 reference pages into the ten bundled templates.
 
-    Seven of the eight bundled templates have an accent1 dark enough to label in white,
-    which is why every reference page labels its cards that way. The eighth does not,
-    and 19 of the 31 pages borrowed into it came back with copy under the ratio. So the
-    note has to fire for that one and stay silent for the other seven -- a note on a
-    template that carries white fine is what teaches an author to read past the notes.
+    89 of those pages came back with copy under the ratio, in every one of the ten hosts.
+    The question this replaces asked whether white reads on `accent1`, which is true of
+    nine of the ten, so nine hosts were told nothing -- the dark one 17 of the failures
+    are in among them. What each host owes now is the pairs its own palette cannot show,
+    and the two the measurement weighs most are the pale-accent host, whose `accent1`
+    renders white at 1.88:1, and the dark one, whose `accent2` renders it at 1.91:1 and
+    whose 60/40 tint of it renders it at 1.5:1.
     """
     from raven_ppt.services.template.defaults import templates_dir
     from raven_ppt.services.template.inventory import inspect_template
-    from raven_ppt.services.template.theme import borrow_ink_note, white_on_accent
+    from raven_ppt.services.template.theme import borrow_ink_note, unreadable_grounds
 
     said = {}
     for path in sorted(templates_dir().glob("*.pptx")):
         inventory = inspect_template(path)
         assert inventory is not None
-        said[path.stem] = white_on_accent(inventory)
+        said[path.stem] = unreadable_grounds(inventory)
 
-    pale = {stem: found for stem, found in said.items() if found is not None}
-    assert list(pale) == ["warm_bauhaus_quarterly_review"], f"expected one pale template, got {list(pale)}"
-    slot, ratio = pale["warm_bauhaus_quarterly_review"]
-    assert slot == "accent1"
-    assert 1.8 < ratio < 1.95
+    silent = [stem for stem, found in said.items() if not found]
+    assert not silent, f"these hosts are told nothing and 89 measured failures say otherwise: {silent}"
+
+    pale = said["warm_bauhaus_quarterly_review"]
+    assert any(one.fill == "accent1" and 1.8 < one.ratio < 1.95 for one in pale), pale
+
+    dark = said["black_circuit_tech_launch"]
+    assert any(one.fill == "accent2" for one in dark), dark
+    # The tint and not only the swatch: 22 of the 89 landed on a tint of a stated colour.
+    assert any(one.tint != (1.0, 0.0) for one in dark), dark
 
     path = templates_dir() / "warm_bauhaus_quarterly_review.pptx"
     note = borrow_ink_note(inspect_template(path), path)
@@ -249,8 +256,85 @@ def test_only_the_template_whose_accent_is_pale_asks_for_dark_labels() -> None:
     # ink" without one leaves the author to invent the alternative.
     assert re.search(r"own page \d+ does", note), note
 
-    other = templates_dir() / "beige_geometric_general_report.pptx"
-    assert borrow_ink_note(inspect_template(other), other) == ""
+    other = templates_dir() / "black_circuit_tech_launch.pptx"
+    assert borrow_ink_note(inspect_template(other), other), "the dark host carries 17 of the 89"
+
+
+def test_a_hosts_own_pages_are_not_what_the_borrow_note_speaks_about() -> None:
+    """The other half of the question, and the half a ratio alone cannot answer.
+
+    Two of the 54 reference pages carry copy under the ratio in their own template's
+    colours -- `green_aurora` page 4 at 1.80:1 and `mint_memphis` page 6 at 1.78:1 -- and
+    `measure.contrast` reports both as warnings rather than refusals, because the shape
+    sits where that template's own page puts one and so the design is the designer's. A
+    note that spoke about a host's native pages would be arguing with that, so it cannot
+    reach them: what it speaks about is the borrow offer, and the offer is every reference
+    page except the bound template's own.
+    """
+    from raven_ppt.services.template.defaults import REFERENCE_PAGES, reference_pages, templates_dir
+
+    for path in sorted(templates_dir().glob("*.pptx")):
+        offered = reference_pages(except_stem=path.stem)
+        assert offered, f"{path.stem} is offered nothing to borrow"
+        assert all(stem != path.stem for stem, _ in offered), path.stem
+        assert len(offered) == sum(len(pages) for stem, pages in REFERENCE_PAGES.items() if stem != path.stem)
+
+
+# What share of a label's box a card has to cover to be the card it sits on. Whole
+# containment rather than a share of it: a label reaching past its card is the case
+# `measure.contrast` reads a render for.
+_CARD_HOLDS = 0.9
+
+
+def test_every_pinned_label_pair_is_one_the_reference_pages_really_write() -> None:
+    """The evidence half, run rather than asserted: open the pages and find the pair.
+
+    The pinned pairs are a measurement, and a measurement nobody re-runs is a number
+    someone will edit. Each pair says a run of one colour sits on a card of another, so
+    each is looked for where it was read: a shape's own fill, or the card whose box
+    contains it.
+    """
+    from pptx import Presentation
+
+    from raven_ppt.services.measure.geometry import ink_box, iter_shapes, page_box
+    from raven_ppt.services.template.defaults import (
+        BORROWED_LABEL_PAIRS,
+        REFERENCE_PAGES,
+        bundled_path,
+    )
+    from raven_ppt.services.template.theme import _card_fills, _label_inks
+
+    found: set[tuple[str, str, float, float, float]] = set()
+    for stem, pages in REFERENCE_PAGES.items():
+        source = bundled_path(stem)
+        if source is None:
+            continue
+        presentation = Presentation(str(source))
+        for number in pages:
+            shapes = list(iter_shapes(presentation.slides[number - 1].shapes))
+            cards = [(page_box(shape), _card_fills(shape)) for shape in shapes]
+            cards = [(box, fills) for box, fills in cards if box is not None and box.area > 0 and fills]
+            for shape in shapes:
+                inks = _label_inks(shape)
+                if not inks:
+                    continue
+                own = _card_fills(shape)
+                if own:
+                    painted = own
+                else:
+                    where = ink_box(shape)
+                    if where is None or where.area <= 0:
+                        continue
+                    inside = [
+                        (box.area, fills) for box, fills in cards if box.overlap(where) / where.area >= _CARD_HOLDS
+                    ]
+                    if not inside:
+                        continue
+                    painted = min(inside)[1]
+                found.update((ink,) + card for ink in inks for card in painted if ink != card[0])
+
+    missing = [pair[:5] for pair in BORROWED_LABEL_PAIRS if pair[:5] not in found]
+    assert not missing, f"pinned pairs no reference page writes: {missing}"
 
 
 def test_the_page_named_as_the_example_really_sets_dark_ink_on_that_accent() -> None:

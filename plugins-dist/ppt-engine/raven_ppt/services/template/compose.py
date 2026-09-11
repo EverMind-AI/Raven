@@ -43,10 +43,12 @@ from __future__ import annotations
 import atexit
 import copy
 import io
+import math
 import re
 import warnings
+from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
@@ -57,20 +59,6 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 # what a live page did to Figure 2. Past this ratio the page needs rearranging, and only
 # the author can decide how.
 FIT_RATIO_LIMIT = 2.0
-
-# The three ways a layout can say "this box is the page's title".
-_TITLE_SLOTS = (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE, PP_PLACEHOLDER.VERTICAL_TITLE)
-
-# How close under the title a line has to start, and how nearly aligned with it, to be
-# the second half of one heading block: 8% of the page's height and 1% of its width.
-# Both numbers come off one measurement of the bundled templates, and both are
-# load-bearing. A section divider's line sits between 0% and 4.5% under its title and at
-# exactly the title's left edge. A closing page carries the same kind of placeholder
-# holding "Presenter name", and the nearest of those is either 13.7% of the page below
-# the title or 4.8% of its width off the left edge -- so loosening either number writes
-# the author's subtitle onto the presenter's name.
-_BLOCK_GAP = 0.08
-_BLOCK_LEFT = 0.01
 
 # Attributes that name a relationship inside copied shape XML.
 _REL_ATTRS = (
@@ -87,8 +75,8 @@ def clone_page(presentation, prototype, *rest):
     every relationship its shapes refer to is carried across and re-pointed, which
     is the part that breaks when this is written by hand.
 
-    **The copy arrives carrying the prototype's words.** Replace them --
-    `replace_text` per shape, or `adapt` for the page at once -- and do not add a text
+    **The copy arrives carrying the prototype's words.** Replace them with
+    `replace_text`, one call per line the page says, and do not add a text
     box over the top: the prototype's own placeholder copy stays underneath yours, so
     the page reads "单击此处添加长一点的副标题" under your own text.
     `placeholder_copy` and `template_underlay` refuse that at the gate.
@@ -174,17 +162,17 @@ page = prototype
 
 
 def shape_at(slide, number: int):
-    """The slide's shape `number`, in the numbering the reference and `adapt` print.
+    """The slide's shape `number`, in the numbering the reference prints.
 
-    One numbering, three spellings of it: `# [5]` above a shape in the reference,
-    `texts={5: ...}` in an `adapt` call, and `shape_at(slide, 5)` afterwards all mean
-    the same shape -- counting from 1 over every shape on the page, groups walked into.
+    One numbering, two spellings of it: `# [5]` above a shape in the reference and
+    `shape_at(slide, 5)` on the cloned page mean the same shape -- counting from 1 over
+    every shape on the page, groups walked into.
 
-    It exists because a template page is a starting point rather than a form. `adapt`
-    returns the slide and the next thing an author wants is usually an adjustment to
-    it -- move the frame a landscape figure went into, close the hole two deleted
-    units left, take a panel out from over a picture -- and each of those needs a
-    handle on one shape.
+    It exists because a template page is a starting point rather than a form.
+    `clone_page` returns the slide and the next thing an author wants is usually an
+    adjustment to it -- move the frame a landscape figure went into, close the hole two
+    deleted units left, take a panel out from over a picture -- and each of those needs
+    a handle on one shape.
     """
     every = list(_all_shapes(slide.shapes))
     if not 1 <= number <= len(every):
@@ -456,7 +444,8 @@ def shape_near(container, left: float, top: float, tol: float = 0.08, *, with_te
     """
     every = list(_all_shapes(container.shapes))
     unplaceable = 0
-    for shape in every:
+    considered = []
+    for index, shape in enumerate(every, start=1):
         if with_text and not (getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip()):
             continue
         at = _where(shape)
@@ -465,10 +454,13 @@ def shape_near(container, left: float, top: float, tol: float = 0.08, *, with_te
             continue
         if abs(at[0] - left) <= tol and abs(at[1] - top) <= tol:
             return shape
+        considered.append((index, shape, at))
     raise KeyError(
         f"no shape within {tol:g}in of ({left:g}, {top:g}) on this page"
         + (" carrying text" if with_text else "")
-        + ". Positions are on the page, groups resolved -- `shape.left` inside a group is not one. "
+        + "."
+        + _nearby(left, top, tol, considered)
+        + " Positions are on the page, groups resolved -- `shape.left` inside a group is not one. "
         + (
             f"{unplaceable} of them sit in a group the template flipped or rotated and have no position "
             "to compare against; take those by their copy with `shape_saying`. "
@@ -499,12 +491,18 @@ def _listed(index: int, shape) -> str:
 def shape_saying(container, prefix: str):
     """The first shape whose copy starts with `prefix`, groups walked into.
 
-    `adapt(texts={...})` matches the same way for a whole page at once; this is the
-    single handle for the adjustment that comes after. Its refusal lists the copy the
-    page actually holds, because the string an author is matching against is usually
-    the template's and usually not quite what it remembered.
+    `replace_text(slide, old, new)` finds a block by the same words; this is the single
+    handle for the adjustment that comes after. Its refusal lists the copy the page
+    actually holds, because the string an author is matching against is usually the
+    template's and usually not quite what it remembered.
+
+    Reaching for it at all is usually the wrong move: `replace_text` writes the words
+    without ever handing the shape back, and a second pass over the page is a second
+    place for it to go wrong. What this is for is the adjustment `replace_text` has no
+    argument for -- moving, resizing or dropping the block whose words it knows.
     """
     said = []
+    holders = []
     for shape in _all_shapes(container.shapes):
         if not getattr(shape, "has_text_frame", False):
             continue
@@ -514,8 +512,15 @@ def shape_saying(container, prefix: str):
         if text.startswith(prefix):
             return shape
         said.append(text[:40])
+        holders.append(shape)
     raise KeyError(
-        f"no shape on this page starts with {prefix!r}. Its copy reads: " + "; ".join(repr(one) for one in said)
+        f"no shape on this page starts with {prefix!r}."
+        + _near_says([(prefix, holders)], head=True)
+        + " Its copy reads: "
+        + "; ".join(repr(one) for one in said)
+        + ". A prefix has to match from the first character of the block, accents and spacing included; name the"
+        " block with `replace_text(slide, old, new)` keyed on the words it holds now rather than looking"
+        " for it here"
     )
 
 
@@ -787,6 +792,7 @@ def replace_picture(
     if not targets:
         raise ValueError("nothing to replace: `replace_picture` was handed an empty list")
     if len(targets) > 1 or _blip_fill(targets[0]) is None:
+        _refuse_what_is_not_a_picture(targets)
         return _picture_in_place_of(targets, image, fit, anchor=anchor, trim=trim, zoom=zoom, alpha=alpha, box=box)
     shape = targets[0]
     if box is not None:
@@ -830,7 +836,7 @@ def replace_picture(
         _fill_crop(shape, fill, image, anchor, trim, zoom)
 
 
-# What a drawing made of shapes may be, for `adapt(pictures=...)` to put a picture in
+# What a drawing made of shapes may be, for `replace_picture` to put a picture in
 # its place: a group, a hand-drawn outline, a preset shape. A text box or a placeholder
 # is neither -- an index that lands on one is a miscount, not an illustration.
 _DRAWN = frozenset({MSO_SHAPE_TYPE.GROUP, MSO_SHAPE_TYPE.FREEFORM, MSO_SHAPE_TYPE.AUTO_SHAPE, MSO_SHAPE_TYPE.LINE})
@@ -870,6 +876,35 @@ def _holds_text(element) -> bool:
     if any((node.text or "").strip() for node in element.iter(f"{{{_A}}}t")):
         return True
     return any(node.get("txBox") == "1" for node in element.iter(f"{{{_P}}}cNvSpPr"))
+
+
+def _refuse_what_is_not_a_picture(targets) -> None:
+    """Refuse a target that is neither a picture nor a drawing a picture may replace.
+
+    The check used to sit in the call that resolved a shape by number, and went with it
+    when that call was removed (D41): a numbered target reached here unexamined, so an
+    index off by one turned a card's body copy into a photograph and said nothing. The
+    numbering is what makes this worth a refusal rather than a caller's problem -- two
+    models each aimed at a page's third shape when the picture was its second.
+    """
+    wrong = [one for one in targets if _blip_fill(one) is None and not _is_drawing(one)]
+    if not wrong:
+        return
+    named = "; ".join(_describe(one) for one in wrong)
+    page = ""
+    try:
+        every = list(_all_shapes(targets[0].part.slide.shapes))
+    except Exception:  # noqa: BLE001 -- not on a slide, so there is no page to list
+        every = []
+    if every:
+        page = " The page holds: " + "; ".join(
+            f"[{index}] {_describe(one)}" for index, one in enumerate(every, start=1)
+        )
+    raise ValueError(
+        f"a picture cannot stand in for {named}: it holds no image and it is not an illustration -- a text box, "
+        "a placeholder or a panel with words in it is a miscount, not a drawing. Name the frame or the drawing "
+        f"the page actually has, or add a picture of your own with `slide.shapes.add_picture`.{page}"
+    )
 
 
 def _picture_in_place_of(targets, image: Path, fit: str, *, anchor, trim, zoom, alpha, box):
@@ -1098,8 +1133,8 @@ def _check_shape(shape, image: Path, how: str, trim=None) -> None:
         + f" ({picture:.2f} wide-to-tall) and this frame is "
         f"{shape.width / 914400:.2f}x{shape.height / 914400:.2f}in ({frame:.2f}) -- {off:.1f}x apart. "
         f"{'Contained' if how == 'contain' else 'Cropped'}, it {what}. Placed as asked; look at the render. "
-        "If the figure matters, give the frame the box it needs -- pictures={n: (image, (left, top, width, "
-        "height))} in inches, or place(shape_at(slide, n), box) after adapt returns -- or adapt a prototype "
+        "If the figure matters, give the frame the box it needs -- replace_picture(shape, image, box=(left, "
+        "top, width, height)) in inches, or place(shape_at(slide, n), box) afterwards -- or clone a prototype "
         "whose picture slot runs the other way, or drop this frame and add a picture of your own."
         + _frames_on_page(shape),
         stacklevel=3,
@@ -1187,7 +1222,7 @@ def _check_cut_out(shape, image: Path) -> None:
         f"({(shape.width or 0) / 914400:.1f}x{(shape.height or 0) / 914400:.1f}in at {left:.2f}, {top:.2f}), and "
         f"{image.name} is an opaque picture: in the cut-out's box it lands on whatever the drawing floated over "
         "-- a title row, a band. Either give the photograph a box of its own, clear of the copy "
-        "(pictures={n: (image, (left, top, width, height))} or place(shape, box)), or fill the slot with a "
+        "(replace_picture(shape, image, box=(left, top, width, height)) or place(shape, box)), or fill the slot with a "
         "cut-out: ppt_generate_image(..., transparent=true).",
         stacklevel=3,
     )
@@ -1243,7 +1278,7 @@ def layout_pictures(slide) -> list:
     A template's photograph is not always on the page: several bundled templates carry
     the cover's, the section page's and the closing page's on the *layout*, so every
     page built on it shows the same picture and nothing on the page itself can be
-    handed to `replace_picture` -- `pictures={...}` on the cloned page never reaches
+    handed to `replace_picture` -- a swap on the cloned page never reaches
     it, and a live deck shipped with the template's photographs on every section page
     for that reason. These are those shapes. `replace_picture(layout_pictures(slide)[0],
     image, "cover")` changes the picture for every page on that layout at once, which
@@ -1526,7 +1561,7 @@ def _saturated(rgb) -> bool:
 def wash(shape, alpha: float):
     """Set a picture's transparency: `alpha` is the picture's share of itself.
 
-    Any picture on the page -- a frame the template drew, one `adapt(pictures=...)`
+    Any picture on the page -- a frame the template drew, one `replace_picture`
     filled, one `add_picture` placed, a rounded panel filled with a photograph -- and
     the same share `backdrop` and `replace_picture(alpha=...)` take: 1 is the picture as
     it is (under a scrim, the way a cover carries one), 0.12 or under is texture behind
@@ -1628,17 +1663,22 @@ def replace_text(target, text: str, new: str | None = None) -> None:
     """
     shape = target
     if new is not None:
-        frames = [s for s in _all_shapes(target.shapes) if getattr(s, "has_text_frame", False)]
+        every = list(_all_shapes(target.shapes))
+        frames = [s for s in every if getattr(s, "has_text_frame", False)]
         shape = _pick(text, frames, frames)
         if shape is None:
             raise KeyError(
-                f"no text on this page matches {text!r}. The page holds: "
-                + "; ".join(f"[{index}] {_describe(s)}" for index, s in enumerate(_all_shapes(target.shapes), start=1))
+                f"no text on this page matches {text!r}."
+                + _near_says([(text, frames)], every)
+                + _elsewhere([(text, frames)], _bound_template())
+                + " The page holds: "
+                + "; ".join(f"[{index}] {_describe(s)}" for index, s in enumerate(every, start=1))
             )
         text = new
     if not getattr(shape, "has_text_frame", False):
         raise ValueError("that shape holds no text")
     frame = shape.text_frame
+    _ensure_paragraph(frame)
     # `\x0b` counts as a break as much as `\n` does: it is what PowerPoint's format uses
     # for a soft one, so it is what `.text` hands back from a template's own placeholder
     # and what an author writes after reading one. Passed through, XML cannot carry it
@@ -1756,6 +1796,40 @@ def _rgb_of(value):
     if len(text) != 6:
         raise ValueError(f"a colour is #RRGGBB, not {value!r}")
     return RGBColor(int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16))
+
+
+def _ensure_paragraph(frame) -> None:
+    """A frame with no `<a:p>` at all given the one the format says it must have.
+
+    `<p:txBody>` is `bodyPr, lstStyle?, p+` -- a text body carries at least one
+    paragraph -- but eight shapes across the bundled templates carry none:
+    `black_circuit_tech_launch` page 25 and `green_aurora_tech_trends` page 20 each
+    hold four rounded rectangles named `Text` whose whole body is an `<a:bodyPr/>` and
+    an empty `<a:lstStyle/>`, byte for byte the same shape on both pages down to its
+    creation id. They are the two pages' card panels: the dark plate a pill heading and
+    a paragraph of body copy sit on top of. Writing into one went looking for the last
+    paragraph to copy the template's list style from, found no last paragraph, and
+    `replace_text` raised `IndexError` -- and a build is one program, so the raise took
+    every page after it with it.
+
+    Skipping the frame instead would be worse: an author asked for words and would get
+    silence on a page that still looks finished. The paragraph is added bare, with no
+    `pPr` and no run, because nothing here knows better than the file does and a run
+    invented with properties would carry this function's typography instead of the
+    template's. What a bare paragraph inherits is the file's own answer for a shape
+    that states nothing: the presentation's `<p:defaultTextStyle>` first level,
+    `sz="1800"` filled `tx1`, over the face and colour the shape's own
+    `<p:style><a:fontRef idx="minor"><a:schemeClr val="lt1"/>` names. Not a layout or a
+    master placeholder -- these are plain autoshapes inside a group and inherit from no
+    placeholder at all. Read back off the render of both pages: 18.0pt, `#FFFFFF`, the
+    Arial substitute, against the `#2F2F2F` plate, beside the template's own 14pt body
+    copy. Which is one step larger than that body copy, and centred where it already
+    sits: an author who writes into the plate rather than into the box on top of it
+    gets words over words, and the render's `word_collision` check is what says so.
+    Writing the frame's own (empty) copy back changes not one pixel of either page.
+    """
+    if not frame.paragraphs:
+        frame._txBody.add_p()
 
 
 def _write(paragraph, line) -> None:
@@ -2301,208 +2375,6 @@ def _touches(shape, region) -> bool:
     return bool(area) and _overlap(drawn, region) / area >= WORTH_SAYING
 
 
-def adapt(presentation, prototype, texts=None, pictures=None, drop=(), keep=(), items=None, title=None, subtitle=None):
-    """Clone `prototype` and fill it in, in one call.
-
-    The four operations above are the vocabulary; this is the sentence an author
-    actually wants to write. Fifteen lines of clone, walk the shapes, match them up
-    and replace is more work than drawing a rectangle, so the rectangle wins and the
-    template's design goes with it.
-
-    `texts` maps a shape's current text -- or its 1-based index over every shape on the
-    page, groups opened and counted whether or not it holds text, which is the number
-    `ppt_template` prints above each shape as `# [n]` -- to what should replace it. One
-    numbering serves `texts`, `pictures`, `drop` and `keep`; counting only the shapes
-    that hold text gives three numberings for one page.
-    `pictures` maps the same keys to image paths, or to `(image, box)` to reshape the
-    frame first, where the box is `(left, top, width, height)` in inches -- a size, as
-    `place` takes, and not the two corners a `ppt_layout.Box` holds, though a Box may be
-    passed and is converted. The key may name a drawing rather than a picture frame --
-    the cartoon on a section page is often a group of freeforms with no image behind
-    it -- and the picture then takes the drawing's box and its place in the z-order,
-    the drawing removed (a group member takes the wordless group around it, the whole
-    cartoon; see `replace_picture`).
-    A tuple of keys, `pictures={(5, 6, 7): image}`, gives several loose shapes way to
-    one picture together. `drop` names shapes to remove, by the same keys.
-
-    **Text this call does not name is emptied, and shapes are otherwise left alone.**
-    A shape is the design; the words in it are the template's example copy. Keeping
-    everything not named leaves the template's own placeholders on every page it did
-    not touch:
-
-        单击此处添加文本单击此处添加文本单击此处添加文本单击此处添加文本
-        单击此处添加长一点的副标题
-        单击添加小标题
-
-    -- mostly hidden behind the copy and the figures the author did write, and some of
-    them showing: one at subtitle size in the middle of a page, one reduced to its last
-    character behind a photograph. Emptied rather than deleted
-    because the box may be part of the design (a tinted panel, a numbered circle),
-    and an empty box shows nothing while a deleted one takes its panel with it.
-
-    `items` fills the page's repeating unit -- its card row, its agenda list -- one
-    entry per unit, and **deletes the units left over**. Six items on a page that
-    ships eight slots leaves six, with the other two gone rather than emptied. Each
-    entry is a list positional over the unit's text shapes (`None` keeps one as it is)
-    or a dict keyed by the text a shape holds now. This is the operation these pages
-    exist for: most template example pages are built out of a repeated unit.
-
-    `title` and `subtitle` write the page's heading rows without needing to know which
-    shape they are. Filling a page with `items` alone empties its header, because text
-    this call does not name is emptied, and writing the heading back as new boxes over
-    the clone is the one construction `template_underlay` refuses. The title is the
-    page's own title placeholder wherever the template put it -- a cover's is centred
-    in the page, not at the top of it -- and on a page the template left unlabelled,
-    the topmost line in the top third, which is what a reader would point at. A page
-    with no row to take the value says so rather than guessing.
-
-    `keep` names text to leave exactly as the template wrote it, by the same keys --
-    for the step number in a circle, or a label the template owns.
-
-    Groups are looked inside, which matters more than it sounds: a template page
-    typically has two or three shapes at the top level and everything else one group
-    down. A key that matches nothing raises, listing what the page does hold: skipped
-    in silence, it leaves the placeholders the author had named still on the page.
-
-    Returns the new slide, so a caller can still reach into it for anything this
-    does not cover.
-    """
-    slide = clone_page(presentation, prototype)
-    # The XML elements this call has spoken for, held as objects rather than as ids.
-    # lxml builds an element proxy on demand and drops it when nothing refers to it, so
-    # `id(shape._element)` goes stale -- and gets reused -- the moment the shape falls out
-    # of scope. That cost an afternoon: the items were written, then emptied again by the
-    # pass below, in a pattern that looked like every other one surviving.
-    spoken = []
-    # Numbered before anything is added or removed, because an integer key counts the
-    # shapes the reference printed. `items` deletes the units it does not fill, and doing
-    # that first renumbered everything after them -- a live program asked for
-    # `pictures={2: ...}` and the picture had become shape 3.
-    every = list(_all_shapes(slide.shapes))
-    with_text = [shape for shape in every if getattr(shape, "has_text_frame", False)]
-    frames = [shape for shape in with_text if shape.text_frame.text.strip()]
-    # A template's photograph is as often a rounded rectangle filled with one as a
-    # picture frame, and to an author reading the render both are "the picture".
-    images = [shape for shape in every if shape.shape_type == MSO_SHAPE_TYPE.PICTURE or _blip_fill(shape) is not None]
-    missed = []
-
-    # Everything is resolved first and written afterwards. Resolving as it wrote meant a
-    # refusal listed the page half-replaced -- the shape the author's key no longer
-    # matched had already become the new text, so the message contradicted itself -- and
-    # it meant a key that failed late left the earlier ones applied.
-    words: list[tuple[Any, list[tuple[int, str]]]] = []
-    heads = _heading_rows(slide, presentation)
-    for role, value in (("title", title), ("subtitle", subtitle)):
-        if value is None:
-            continue
-        shape = heads.get(role)
-        if shape is None:
-            missed.append(role)
-            continue
-        words.append((shape, [(-1, str(value))]))
-    for key, value in (texts or {}).items():
-        shape = _pick(key, every, with_text)
-        if shape is None or not getattr(shape, "has_text_frame", False):
-            missed.append(key)
-            continue
-        where = shape.text_frame.text.find(str(key)) if not isinstance(key, int) else -1
-        for held, values in words:
-            if held._element is shape._element:
-                values.append((where, str(value)))
-                break
-        else:
-            words.append((shape, [(where, str(value))]))
-
-    swaps: list[tuple[Any, Path, tuple[float, float, float, float] | None, str]] = []
-    for key, value in (pictures or {}).items():
-        image, box, how = _picture_spec(value)
-        if isinstance(key, tuple):
-            # Several shapes that make one drawing -- the dozen freeforms of a cartoon --
-            # give way to one picture together; a key that misses fails the whole tuple.
-            found = [_pick(part, every, images) for part in key]
-            if any(shape is None or not (_blip_fill(shape) is not None or _is_drawing(shape)) for shape in found):
-                missed.append(key)
-                continue
-            swaps.append((found, image, box, how))
-            continue
-        shape = _pick(key, every, images)
-        if shape is None or not (_blip_fill(shape) is not None or _is_drawing(shape)):
-            # A page with exactly one picture leaves no room for doubt about which frame
-            # was meant, so an index landing elsewhere is read as that one: two models
-            # each wrote `pictures={2: ...}` against a page whose picture was shape 3.
-            # Two frames and the index has to be right.
-            if isinstance(key, int) and len(images) == 1:
-                shape = images[0]
-            else:
-                missed.append(key)
-                continue
-        swaps.append((shape, image, box, how))
-
-    for key in keep:
-        shape = _pick(key, every, with_text)
-        if shape is None:
-            missed.append(key)
-            continue
-        spoken.append(shape._element)
-
-    doomed = []
-    for key in drop:
-        shape = _pick(key, every, every)
-        if shape is None:
-            missed.append(key)
-            continue
-        doomed.append(shape)
-
-    if missed:
-        raise KeyError(
-            f"nothing usable on this page matches {missed!r}."
-            + _advice(missed, texts, pictures, images, frames)
-            + " These are the numbers ppt_template prints above each shape as `# [n]`: counting from 1, and"
-            " counting every shape whether or not it holds text. The page holds: "
-            + "; ".join(f"[{index}] {_describe(shape)}" for index, shape in enumerate(every, start=1))
-        )
-
-    for shape, values in words:
-        # Two keys on one block are two halves of one paragraph -- a template subtitle
-        # wraps to two lines in the render, and three times across two models an author
-        # read those lines as two boxes and named both.
-        replace_text(shape, values[0][1] if len(values) == 1 else " ".join(v for _, v in sorted(values)))
-        spoken.append(shape._element)
-    for shape, path, box, how in swaps:
-        # Reshaped before it is filled, because a frame's proportions decide what
-        # fitting the picture can even have: contain shrinks the frame to the picture
-        # inside the box it was given, so the box is the author's decision about where
-        # the figure goes and the fit is arithmetic afterwards.
-        replace_picture(shape, path, how, box=box)
-    for shape in doomed:
-        spoken.append(shape._element)
-        drop_shape(shape)
-    if items is not None:
-        runs = units(slide)
-        if not runs:
-            raise ValueError("nothing repeats on this page, so `items` has nothing to fill -- use `texts`")
-        # The longest run is the page's content row; a page with two runs has a row of
-        # cards and something smaller like a pair of labels, and the cards are what an
-        # author means by "the items on this page".
-        spoken.extend(shape._element for shape in fill(max(runs, key=len), items))
-    for shape in frames:
-        if not any(shape._element is element for element in spoken):
-            replace_text(shape, "")
-    return slide
-
-
-def _slot(shape):
-    """The role the layout gave this shape, or None for a box the author drew.
-
-    Read as an enum member rather than by matching its name, because the names overlap
-    where it matters: `"TITLE" in str(type)` is true of a SUBTITLE placeholder, and a
-    cover whose subtitle sits above its title would then answer `title=` with it.
-    """
-    if not getattr(shape, "is_placeholder", False):
-        return None
-    return getattr(getattr(shape, "placeholder_format", None), "type", None)
-
-
 # Why the template's own naming is read before geometry, measured on the sixteen
 # templates that shipped when this was written: `title=` came back holding "Presenter
 # name" on two covers and nothing at all on a third, and `subtitle=` raised KeyError on
@@ -2510,91 +2382,6 @@ def _slot(shape):
 # Re-measured on the twelve that ship now, `title` resolves on all 197 example pages
 # and `subtitle` on 180, the seventeen it does not being closing pages carrying a
 # presenter row and six pages between.
-def _heading_rows(slide, presentation):
-    """The page's title and subtitle shapes, as a reader would point at them.
-
-    What the template named, wherever it put it, before anything is inferred from
-    where it sits. Inferring first is what the top-third rule did, and it fails on
-    exactly the pages a deck opens and divides with: a cover's title is centred in the
-    page, anywhere from 1.24in to 4.76in on a 7.5in canvas, so its top third holds the
-    presenter and date lines instead -- `title=` comes back holding "Presenter name" --
-    and a section divider's one line under the title sits at 3.09in, out of the band
-    altogether.
-
-    Geometry still decides the rest, and there it is unchanged: a page that names a title
-    placeholder and nothing else takes its subtitle from the topmost line in the top
-    third, as before. Two fallbacks sit under that band,
-    for the pages whose heading is not at the top of the page at all: the line that
-    forms one block with the title, and then `_largest_row`.
-    """
-    height = presentation.slide_height or 0
-    width = presentation.slide_width or 0
-    band = height * 0.35
-    rows = sorted(
-        (
-            shape
-            for shape in _all_shapes(slide.shapes)
-            if getattr(shape, "has_text_frame", False) and shape.top is not None and shape.text_frame.text.strip()
-        ),
-        key=lambda shape: (shape.top, -(shape.width or 0)),
-    )
-    title = next((shape for shape in rows if _slot(shape) in _TITLE_SLOTS), None)
-    if title is None:
-        title = next((shape for shape in rows if shape.top <= band), None)
-    if title is None:
-        return {}
-
-    under = [shape for shape in rows if shape._element is not title._element and shape.top > title.top]
-    column = [shape for shape in under if abs((shape.left or 0) - (title.left or 0)) <= width * _BLOCK_LEFT]
-    # Anywhere on the page rather than under the title: a kicker set above the title is
-    # still the row the template called its subtitle. The element guard is what keeps
-    # that from answering both roles with one shape on a page whose title was inferred.
-    subtitle = next(
-        (shape for shape in rows if shape._element is not title._element and _slot(shape) == PP_PLACEHOLDER.SUBTITLE),
-        None,
-    )
-    if subtitle is None:
-        subtitle = next((shape for shape in under if shape.top <= band), None)
-    if subtitle is None:
-        floor = title.top + (title.height or 0)
-        subtitle = next((shape for shape in column if shape.top - floor <= height * _BLOCK_GAP), None)
-    if subtitle is None:
-        subtitle = _largest_row(column)
-    found = {"title": title}
-    if subtitle is not None:
-        found["subtitle"] = subtitle
-    return found
-
-
-def _largest_row(rows):
-    """The one line set larger than every other line in the title's column.
-
-    The last thing tried, and narrow on purpose. A page whose subtitle sits halfway
-    down -- under a photograph, over a row of cards -- is out of reach of both the band
-    and the heading block, and the only thing left that says "heading" is the type size.
-    Most template copy declares no size at all, inheriting one from the layout, so this
-    answers on the few pages that do state it, and a tie is a refusal: an agenda page's
-    eight numbered slots are all set at one size, and any of them would put the author's
-    subtitle inside slot 01.
-    """
-    sized = []
-    for shape in rows:
-        largest = None
-        for paragraph in shape.text_frame.paragraphs:
-            for run in paragraph.runs:
-                size = run.font.size or paragraph.font.size
-                if size is not None and (largest is None or size > largest):
-                    largest = size
-        if largest is not None:
-            sized.append((largest, shape))
-    if not sized:
-        return None
-    biggest = max(size for size, _ in sized)
-    if sum(1 for size, _ in sized if size == biggest) > 1:
-        return None
-    return next(shape for size, shape in sized if size == biggest)
-
-
 # How much of a template is repeating units, measured across 119 real templates and
 # their 1563 example pages: every single template ships pages built this way, 75% of
 # all example pages have at least one repeating unit, 77% have groups at all, and the
@@ -2791,17 +2578,28 @@ def fill(run, items):
     template it came from. The zero padding is the template's own: 01 stays two digits,
     1 stays one.
 
-    Returns the shapes it wrote, which is what `adapt` needs to know they are spoken
-    for -- without it, the pass that empties unnamed text would empty these too.
+    A shape no entry addresses is left as the template wrote it, as everywhere else on
+    a cloned page: what stands there is the template's example copy, and
+    `placeholder_copy` refuses to publish it.
+
+    Returns the shapes it wrote.
     """
     written = []
+    slots = len(run)
     if len(items) > len(run):
         # Grown rather than refused. Ten builds across the measured runs died on this
         # refusal, nine of them one or two items over; the authors then wrote their own
         # `clone_panel` -- deepcopy the element, hang it on the tree, set a box -- which is
         # `add_unit` without the re-flow. A run that follows no grid still refuses, with
         # the slot counts the template menu now prints as the way out.
-        run = list(run) + add_unit(run, len(items) - len(run))
+        try:
+            run = list(run) + add_unit(run, len(items) - len(run))
+        except ValueError as refusal:
+            # Re-raised rather than chained, because `add_unit` is answering a question
+            # about the page and the author asked one about their content: two live runs
+            # read "it cannot take 5" off a page whose slot count they had not counted,
+            # and had no way to see which five things they had handed over.
+            raise ValueError(f"{refusal}. {_entries_given(items)}") from None
     # In the order a reader meets them, not the order the file stores them. The author
     # counts items off the render -- top row first, left to right -- and the file's
     # order is whatever the designer drew last. Measured on one reference page: the
@@ -2823,14 +2621,10 @@ def fill(run, items):
             # see every frame; only this positional walk skips them, because it is the
             # only caller that asks the author to count.
             spoken = [shape for shape in frames if (shape.text_frame.text or "").strip()]
-            # Only while the prototype's own words are still there. An empty frame reads
-            # as a spacer because the ones beside it hold text; `adapt` empties every
-            # text it was not told about, so on the second run of a page it has already
-            # adapted -- the sequence this function is documented for -- every frame is
-            # empty, the filter has nothing to tell them apart by, and leaving it on
-            # raised "0 text shape(s)" against the count the author could see. One live
-            # run answered that by editing its program nineteen times and shipping no
-            # page.
+            # Only while some frame still holds words. An empty frame reads as a spacer
+            # because the ones beside it hold text, so on a run whose every frame is
+            # blank the filter has nothing to tell them apart by and would raise
+            # "0 text shape(s)" against the count the author can see on the render.
             if spoken:
                 frames = spoken
         if isinstance(item, dict):
@@ -2838,7 +2632,10 @@ def fill(run, items):
                 shape = _pick(key, frames, frames)
                 if shape is None:
                     raise KeyError(
-                        f"no text in this unit matches {key!r}; it holds " + ", ".join(repr(_head(f)) for f in frames)
+                        f"no text in this unit matches {key!r}."
+                        + _near_says([(key, frames)])
+                        + " It holds "
+                        + ", ".join(repr(_head(f)) for f in frames)
                     )
                 replace_text(shape, value)
                 written.append(shape)
@@ -2857,13 +2654,21 @@ def fill(run, items):
             # this function's call to make: the first sets body copy at heading size, the
             # second guesses where the new shape goes, and both were tried and made the
             # page worse. What each unit holds is stated here so the author can choose --
-            # a prototype with more slots, one fewer point, or a shape of their own after
-            # `adapt` returns.
+            # a prototype with more slots, one fewer point, or a shape of their own added
+            # to the cloned page.
             raise ValueError(
-                f"a unit on this page holds {len(frames)} text shape(s) and {len(item)} values were given"
-                + (": " + ", ".join(repr(_head(shape)) for shape in frames) if frames else "")
-                + ". Give one value per shape (None keeps one as it is), pick a prototype whose units hold "
-                "more, or add your own shape to the slide after adapt returns"
+                f"entry [{position}] of the {len(items)} you gave holds {len(item)} value(s), "
+                f"{len(item) - len(frames)} more than the {len(frames)} text shape(s) a unit on this page holds. "
+                f"The page repeats {slots} unit(s)"
+                + (
+                    f", and this unit's {len(frames)} shape(s) still say "
+                    + ", ".join(repr(_head(shape)) for shape in frames)
+                    + " -- the template's own words, not yours"
+                    if frames
+                    else ""
+                )
+                + f". {_entries_given(items)} Give one value per shape (None keeps one as it is), pick a "
+                "prototype whose units hold more, or add your own shape to the cloned slide"
             )
         # A list as long as the unit addresses every shape, one to one. A shorter list
         # is read against the shapes that are not the unit's number: the number sits
@@ -2876,12 +2681,6 @@ def fill(run, items):
         addressed = len(values) == len(frames)
         cursor = 0
         for shape in frames:
-            # Short of the unit's shapes means "I have nothing to say about the rest",
-            # not "empty them". The zip that used to be here stopped at the shorter
-            # list and left the remainder unclaimed, so the pass that empties unnamed
-            # text emptied them: a real template's agenda unit holds a title box, the
-            # folder shape and its number, an author gave two values, and all eight
-            # numbers came off the page.
             ordinal = _renumbered(shape.text_frame.text, position)
             value = values[cursor] if cursor < len(values) else None
             index = cursor
@@ -2898,26 +2697,14 @@ def fill(run, items):
                 continue
             cursor += 1
             if value is None:
-                # Claimed even though nothing is written: `adapt` empties every text
-                # it was not told about, so a shape left out of `written` is a shape
-                # emptied a moment later -- which made `None` do exactly what "" did.
-                # A live author tried `["...", "01"]`, `["...", None]` and `["...", ""]`
-                # in three consecutive requests looking for the one that kept the
-                # template's number, and none of the three did.
-                #
-                # A *short list* is the one case where claiming it is wrong. An
-                # explicit None says "this shape is the template's"; running off the
-                # end of the list says nothing at all, and what it left standing was
-                # "单击添加小标题" on four cards of a delivered page, refused by
-                # `placeholder_copy` at the gate after ten builds spent elsewhere. The
-                # number is the exception the agenda case is about, and it is already
-                # recognisable: `_renumbered` answers for a shape that holds one, which
-                # is the same line `placeholder_copy` draws when it skips pure digits.
-                if index >= len(values) and ordinal is None:
-                    continue
-                if index >= len(values):
+                # Nothing is written either way: an explicit None and a list that runs
+                # out both mean "this shape is the template's". The one thing a unit
+                # moved to a new position cannot keep is its old number, so a shape past
+                # the end of a short list that holds one is restated -- a template's
+                # agenda numbers 01 to 08 and a run cut to six has to read 01 to 06.
+                if index >= len(values) and ordinal is not None:
                     replace_text(shape, ordinal)
-                written.append(shape)
+                    written.append(shape)
                 continue
             if not str(value).strip() and ordinal is not None:
                 replace_text(shape, ordinal)
@@ -3100,7 +2887,7 @@ def add_unit(target, count: int = 1):
 
     `target` is a run from `units(slide)`, or the slide itself for its longest run. The
     copies are the last unit again -- its shapes, its words, its icon -- inserted after
-    it in the same container, so `fill` and `adapt(items=...)` treat them as slots like
+    it in the same container, so `fill` and `replace_text` treat them as slots like
     any other. The run is then laid out again (`_reflow`): a row closes its gutters and
     then shrinks its units uniformly to fit the width it had, a grid gains a row at its
     own pitch, and a run that follows no grid refuses, because where a seventh pill on
@@ -3182,9 +2969,9 @@ def remove_unit(unit) -> None:
     """Take one unit out of its run and close the gap it leaves.
 
     `drop_shape` removes and leaves the hole; this is the call for a slot the content
-    does not fill when `adapt(items=...)` was not the way the page was written. The
-    survivors are laid out again the way `add_unit` and `fill` lay theirs out; a unit
-    that repeats along no grid is removed and nothing else moves.
+    does not fill on a page written line by line with `replace_text`. The survivors are
+    laid out again the way `add_unit` and `fill` lay theirs out; a unit that repeats
+    along no grid is removed and nothing else moves.
     """
     slide = _slide_of(unit)
     run = _run_holding(slide, unit)
@@ -3233,32 +3020,126 @@ def _renumbered(current: str, position: int) -> str | None:
     return f"{position:0{len(match.group(1))}d}"
 
 
-def _picture_spec(value):
-    """A `pictures` value: an image, or an image with the box its frame should take.
+# The three ways a layout can say "this box is the page's title".
+_TITLE_SLOTS = (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE, PP_PLACEHOLDER.VERTICAL_TITLE)
 
-    `pictures={4: fig("fig2")}` fills the frame as the template drew it, which is the
-    common case. `pictures={4: (fig("fig2"), (0.8, 1.6, 7.4, 4.2))}` reshapes the frame
-    to that box first, and exists because the escape the refusal below names --
-    `place(shape, box)` -- needs a shape `adapt` has not handed back yet, so from
-    inside one call a landscape figure in a full-height portrait frame otherwise has
-    no way out.
 
-    The box is `(left, top, width, height)` in inches, in that order -- the same size
-    `place` takes, not the two corners a `ppt_layout.Box` holds. A Box may be passed and
-    is converted; four numbers are read as a size.
+# How close under the title a line has to start, and how nearly aligned with it, to be
+# the second half of one heading block: 8% of the page's height and 1% of its width.
+# Both numbers come off one measurement of the bundled templates, and both are
+# load-bearing. A section divider's line sits between 0% and 4.5% under its title and at
+# exactly the title's left edge. A closing page carries the same kind of placeholder
+# holding "Presenter name", and the nearest of those is either 13.7% of the page below
+# the title or 4.8% of its width off the left edge -- so loosening either number writes
+# the author's subtitle onto the presenter's name.
+_BLOCK_GAP = 0.08
 
-    A third element is the fit ("contain", "cover", "stretch") for the rare frame that
-    wants cropping rather than shrinking.
+
+_BLOCK_LEFT = 0.01
+
+
+def _slot(shape):
+    """The role the layout gave this shape, or None for a box the author drew.
+
+    Read as an enum member rather than by matching its name, because the names overlap
+    where it matters: `"TITLE" in str(type)` is true of a SUBTITLE placeholder, and a
+    cover whose subtitle sits above its title would then answer `title=` with it.
     """
-    if isinstance(value, (tuple, list)):
-        if len(value) not in (2, 3):
-            raise ValueError(
-                f"a picture is an image, (image, box) or (image, box, fit), not {len(value)} values. "
-                "A box is (left, top, width, height) in inches"
-            )
-        box = _as_size(value[1], "a picture's box")
-        return Path(value[0]), box, str(value[2]) if len(value) == 3 else "contain"
-    return Path(value), None, "contain"
+    if not getattr(shape, "is_placeholder", False):
+        return None
+    return getattr(getattr(shape, "placeholder_format", None), "type", None)
+
+
+# Why the template's own naming is read before geometry, measured on the sixteen
+# templates that shipped when this was written: `title=` came back holding "Presenter
+# name" on two covers and nothing at all on a third, and `subtitle=` raised KeyError on
+# ten of the sixteen covers and on every one of the sixteen section dividers.
+# Re-measured on the twelve that ship now, `title` resolves on all 197 example pages
+# and `subtitle` on 180, the seventeen it does not being closing pages carrying a
+# presenter row and six pages between.
+def _heading_rows(slide, presentation):
+    """The page's title and subtitle shapes, as a reader would point at them.
+
+    What the template named, wherever it put it, before anything is inferred from
+    where it sits. Inferring first is what the top-third rule did, and it fails on
+    exactly the pages a deck opens and divides with: a cover's title is centred in the
+    page, anywhere from 1.24in to 4.76in on a 7.5in canvas, so its top third holds the
+    presenter and date lines instead -- `title=` comes back holding "Presenter name" --
+    and a section divider's one line under the title sits at 3.09in, out of the band
+    altogether.
+
+    Geometry still decides the rest, and there it is unchanged: a page that names a title
+    placeholder and nothing else takes its subtitle from the topmost line in the top
+    third, as before. Two fallbacks sit under that band,
+    for the pages whose heading is not at the top of the page at all: the line that
+    forms one block with the title, and then `_largest_row`.
+    """
+    height = presentation.slide_height or 0
+    width = presentation.slide_width or 0
+    band = height * 0.35
+    rows = sorted(
+        (
+            shape
+            for shape in _all_shapes(slide.shapes)
+            if getattr(shape, "has_text_frame", False) and shape.top is not None and shape.text_frame.text.strip()
+        ),
+        key=lambda shape: (shape.top, -(shape.width or 0)),
+    )
+    title = next((shape for shape in rows if _slot(shape) in _TITLE_SLOTS), None)
+    if title is None:
+        title = next((shape for shape in rows if shape.top <= band), None)
+    if title is None:
+        return {}
+
+    under = [shape for shape in rows if shape._element is not title._element and shape.top > title.top]
+    column = [shape for shape in under if abs((shape.left or 0) - (title.left or 0)) <= width * _BLOCK_LEFT]
+    # Anywhere on the page rather than under the title: a kicker set above the title is
+    # still the row the template called its subtitle. The element guard is what keeps
+    # that from answering both roles with one shape on a page whose title was inferred.
+    subtitle = next(
+        (shape for shape in rows if shape._element is not title._element and _slot(shape) == PP_PLACEHOLDER.SUBTITLE),
+        None,
+    )
+    if subtitle is None:
+        subtitle = next((shape for shape in under if shape.top <= band), None)
+    if subtitle is None:
+        floor = title.top + (title.height or 0)
+        subtitle = next((shape for shape in column if shape.top - floor <= height * _BLOCK_GAP), None)
+    if subtitle is None:
+        subtitle = _largest_row(column)
+    found = {"title": title}
+    if subtitle is not None:
+        found["subtitle"] = subtitle
+    return found
+
+
+def _largest_row(rows):
+    """The one line set larger than every other line in the title's column.
+
+    The last thing tried, and narrow on purpose. A page whose subtitle sits halfway
+    down -- under a photograph, over a row of cards -- is out of reach of both the band
+    and the heading block, and the only thing left that says "heading" is the type size.
+    Most template copy declares no size at all, inheriting one from the layout, so this
+    answers on the few pages that do state it, and a tie is a refusal: an agenda page's
+    eight numbered slots are all set at one size, and any of them would put the author's
+    subtitle inside slot 01.
+    """
+    sized = []
+    for shape in rows:
+        largest = None
+        for paragraph in shape.text_frame.paragraphs:
+            for run in paragraph.runs:
+                size = run.font.size or paragraph.font.size
+                if size is not None and (largest is None or size > largest):
+                    largest = size
+        if largest is not None:
+            sized.append((largest, shape))
+    if not sized:
+        return None
+    biggest = max(size for size, _ in sized)
+    if sum(1 for size, _ in sized if size == biggest) > 1:
+        return None
+    return next(shape for size, shape in sized if size == biggest)
 
 
 def _all_shapes(shapes):
@@ -3267,9 +3148,9 @@ def _all_shapes(shapes):
     A template's content is mostly inside groups: a card page has two shapes at the
     top level and fourteen with text one group down -- the four cards, their numbers,
     their headings and their body copy. `slide.shapes` does not descend, so without
-    this `adapt` cannot see thirteen of the fourteen placeholders, replaces none of
-    them, and says nothing about it, leaving "单击此处添加文本" on a page whose own
-    `texts={...}` named exactly those strings.
+    this `replace_text` cannot see thirteen of the fourteen placeholders and every one
+    of an author's calls raises, against a page whose copy says exactly the strings it
+    is keyed on.
     """
     for shape in shapes:
         if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
@@ -3278,29 +3159,220 @@ def _all_shapes(shapes):
             yield shape
 
 
-def _advice(missed, texts, pictures, images, frames):
-    """The sentence that turns a listing into a fix.
+# How alike the key and a shape's copy have to be before the failure offers one as the
+# other's near miss, and the shortest key it will offer one for. Both measured over the
+# 865 distinct strings the ten bundled templates hold, each corrupted three ways -- one
+# glyph substituted, one dropped, and a quarter of them rewritten. At 0.55 the two
+# classes that model the live evidence are named correctly 1292/1292 and 1184/1184,
+# the rewritten class 1134/1292, and 421 strings real runs wrote that appear in no
+# template draw no hint at all. Below four characters the measure stops working rather
+# than degrading: a three-character key would be offered a hint 121 times over the same
+# corpus and name the wrong shape in 10 of them, because a page's 35%/38%/68%/95% row
+# scores 0.5 against every member of itself -- and a hint that points at the wrong shape
+# costs more than the silence it replaces. Not an edit distance: one glyph is a whole
+# morpheme in CJK and a typo in English, so the threshold has to be a ratio of the
+# length rather than a count of edits.
+NEAR_MISS = 0.55
+NEAR_MISS_CHARS = 4
 
-    Two cases the listing alone cannot answer: `pictures={2: ...}` on a page with no
-    picture frame anywhere, where the listing says "[2] shape" twenty-two times and
-    never says the obvious thing; and `''` passed to each of four agenda slots, which
-    clears their text and leaves four numbered bubbles on the page.
+
+# How far from the point asked for a shape may sit and still be offered as the nearest
+# thing to it; how nearly a shape has to share one of the two coordinates before the
+# failure calls it the same row or column; and how far out it may be on the other axis.
+# Measured over the 3362 placed shapes of the ten bundled templates, asking for points
+# 0.3in to 3.0in off each of them: past 1.0in the shape a point was offset from is never
+# the nearest one any more, so `nearest` stops meaning anything and saying it would
+# point across the page -- and holding it to 1.0in is what makes a hint impossible for a
+# point sitting in empty space, where 0/103189 grid points more than 1.5in from every
+# shape draw one. The axis pair is the other half: 0.10in covers an author who copied
+# the two-decimal position the reference prints (both live failures were 0.00in and
+# 0.06in off on x), and 2.0in of slack on the other axis names the shape in 66% of
+# single-axis misses while 1 grid point in 10000 more than 2in from anything gets a
+# clause at all.
+NEAR_POINT = 1.0
+NEAR_AXIS = 0.10
+NEAR_AXIS_OUT = 2.0
+
+
+def _nearby(left, top, tol, considered):
+    """The `nearest is` clause a failed position lookup opens with.
+
+    Up to two clauses, because they are two different answers and only sometimes the
+    same shape. The nearest shape is what an author who mistyped a coordinate wants. A
+    shape sitting on one of the two coordinates asked for while being out on the other
+    is a row or column counted one off, which names the mistake rather than just the
+    shape -- and that is what both live failures were. Only one of the two was also the
+    nearest: asked for (7.39, 2.3), the nearest shape is a drawing 0.72in away and the
+    one the author meant is the text box 0.87in away, on exactly the x it asked for.
+
+    `considered` holds the shapes the lookup actually compared -- numbered as the
+    inventory numbers them, `with_text` already applied, and the ones with no position
+    already counted out -- so the clause can never offer a shape the lookup would not
+    have accepted.
     """
-    said = []
-    if pictures and any(key in pictures for key in missed) and not images:
-        said.append(
-            " This page holds no picture frame at all, so `pictures` has nowhere to put one -- name a drawing "
-            "listed below and the picture takes its place, or add it after adapt returns with "
-            "`slide.shapes.add_picture(path, left, top, width=...)`."
+    if not considered:
+        return ""
+    window = min(NEAR_AXIS, tol)
+    nearest = min((math.hypot(at[0] - left, at[1] - top), index, shape) for index, shape, at in considered)
+    if nearest[0] > NEAR_POINT:
+        nearest = None
+    rows = []
+    for index, shape, at in considered:
+        if abs(at[0] - left) <= window and abs(at[1] - top) > tol:
+            rows.append((abs(at[1] - top), index, shape, "x", "row"))
+        elif abs(at[1] - top) <= window and abs(at[0] - left) > tol:
+            rows.append((abs(at[0] - left), index, shape, "y", "column"))
+    row = min(rows) if rows else None
+    if row is not None and row[0] > NEAR_AXIS_OUT:
+        row = None
+    if nearest is not None and row is not None and nearest[1] == row[1]:
+        return (
+            f" Nearest is {_listed(nearest[1], nearest[2])}, {nearest[0]:.2f}in away, on the {row[3]} you"
+            f" asked for -- a {row[4]} counted one off."
         )
-    blanks = sum(1 for value in (texts or {}).values() if isinstance(value, str) and not value.strip())
-    if blanks >= 2:
+    said = []
+    if nearest is not None:
+        said.append(f" Nearest is {_listed(nearest[1], nearest[2])}, {nearest[0]:.2f}in away.")
+    if row is not None:
         said.append(
-            f" You are also passing '' to {blanks} keys: that empties their text and leaves the shapes -- a "
-            "numbered bubble with nothing beside it. Use `items=[...]` with one entry per unit you are keeping "
-            "and the spare units are deleted instead."
+            f" {_listed(row[1], row[2])} is on the {row[3]} you asked for and {row[0]:.2f}in out"
+            f" -- a {row[4]} counted one off."
         )
     return "".join(said)
+
+
+def _near_miss(wanted, pool, *, head=False):
+    """The shape whose copy `wanted` was most likely a slip of, or None.
+
+    `head=True` for `shape_saying`, which matches a prefix: the key is compared against
+    each candidate's opening of the same length, since scoring a six-character prefix
+    against a whole paragraph would find nothing.
+
+    Where two shapes score the same, the one closest in length wins and the earlier on
+    the page breaks what is left, so one page always produces one answer.
+    """
+    wanted = " ".join(str(wanted).split())
+    if len(wanted) < NEAR_MISS_CHARS:
+        return None
+    best = None
+    for shape in pool:
+        if not getattr(shape, "has_text_frame", False):
+            continue
+        text = " ".join(shape.text_frame.text.split())
+        # A template page is mostly drawings and empty boxes -- 13 of the 27 shapes on
+        # the page that raised this four times running -- and an empty string scores
+        # against anything short.
+        if not text:
+            continue
+        score = SequenceMatcher(None, wanted, text[: len(wanted)] if head else text).ratio()
+        if score < NEAR_MISS:
+            continue
+        rank = (score, -abs(len(text) - len(wanted)))
+        if best is None or rank > best[0]:
+            best = (rank, shape)
+    return None if best is None else best[1]
+
+
+def _near_says(asked, every=None, *, head=False):
+    """The `did you mean` clause a failed lookup opens with, or an empty string.
+
+    Before the inventory rather than after it, because the inventory is what the author
+    reads past: four consecutive builds of one live deck died naming '数字健康崛起'
+    against a page whose shape 25 held '数字健康兴起' -- one glyph apart, same meaning --
+    with the answer sitting at position 25 of 27 in a message the author re-read and
+    re-submitted each time. Each attempt was a different program, so the author was
+    editing between them and never that line: nothing in the message pointed at it.
+
+    `every` is the page's shapes in the numbering the failure prints, so the clause can
+    name the shape the same way the inventory below it does; without it the clause names
+    the copy alone, which is how `fill` and `shape_saying` address a shape anyway.
+    """
+    said = []
+    for key, pool in asked:
+        found = _near_miss(key, pool, head=head)
+        if found is None:
+            continue
+        number = next((index for index, one in enumerate(every or (), start=1) if one is found), None)
+        where = f"[{number}] " if number else ""
+        said.append(f" Did you mean {where}{_head(found, 60)!r}? (you asked for {' '.join(str(key).split())!r}).")
+        if len(said) == 3:
+            break
+    return "".join(said)
+
+
+def _elsewhere(asked, prototype):
+    """The template page a key names word for word, when it is not the page being adapted.
+
+    The other half of the same live run: two builds died naming
+    '新技术、新产品及新服务在行业中的应用', which is shape 3 of the template's page 18
+    while the call was adapting page 16. Nothing on page 16 is near it -- the closest
+    scores 0.20 -- so the near-miss clause correctly says nothing, and the author is
+    left with an inventory that cannot explain a string it never held.
+
+    Word for word only. The page number is either right or there is no clause.
+    """
+    said = []
+    pages = here = None
+    for key, pool in asked:
+        wanted = str(key).strip()
+        if not wanted or _near_miss(key, pool) is not None:
+            continue
+        if pages is None:
+            pages, here = _template_pages(prototype)
+        for number, slide in enumerate(pages, start=1):
+            if number == here:
+                continue
+            if not any(
+                getattr(shape, "has_text_frame", False) and wanted in shape.text_frame.text
+                for shape in _all_shapes(slide.shapes)
+            ):
+                continue
+            said.append(
+                f" {wanted!r} is on page {number} of this template"
+                + (f", not this page {here}." if here else ", not this one.")
+            )
+            break
+        if len(said) == 2:
+            break
+    return "".join(said)
+
+
+def _bound_template():
+    """The template this build was bound to, or None, read where the runner puts it.
+
+    `_elsewhere` walks the pages of the file a clone came out of. The only raiser that
+    held that file was `adapt`, which the copy route replaced: `replace_text` is handed
+    a page already cloned into the deck being built, and that page's package is the
+    deck. The runner sets `PPT_TEMPLATE_SOURCE` to the original in the environment of
+    the very process the program runs in -- the only place the shapes python-pptx cannot
+    redraw can be reached at all -- and this module already reads that environment for
+    `bundled()`. Never raises: it only decorates a failure that is being raised anyway,
+    so a template that cannot be opened is one clause fewer, not a second error.
+    """
+    import os
+
+    source = os.environ.get("PPT_TEMPLATE_SOURCE", "")
+    if not source:
+        return None
+    try:
+        from pptx import Presentation
+
+        return Presentation(source)
+    except Exception:
+        return None
+
+
+def _template_pages(prototype):
+    """The pages of the file `prototype` came from, and which of them it is.
+
+    An empty pair for anything that does not answer as a slide of a presentation, since
+    this only ever decorates a failure that is being raised either way.
+    """
+    try:
+        pages = list(prototype.part.package.presentation_part.presentation.slides)
+    except AttributeError:
+        return [], None
+    return pages, next((number for number, page in enumerate(pages, start=1) if page is prototype), None)
 
 
 def _describe(shape, limit=26):
@@ -3324,13 +3396,48 @@ def _head(shape, limit=30):
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _given(value, limit=24):
+    """One value a caller passed, as a refusal should show it back."""
+    if value is None:
+        return "None"
+    text = " ".join(str(value).split())
+    return repr(text if len(text) <= limit else text[: limit - 1] + "…")
+
+
+# Enough entries to recognise the list by, and a bound so a forty-item run does not
+# bury the sentence that says what to do.
+_ENTRIES_SHOWN = 12
+
+
+def _entries_given(items):
+    """The entries handed to `fill`, counted and quoted back to the caller.
+
+    The refusal above this used to quote `frames` -- the prototype's own shapes -- on
+    both sides of "N values were given", so an author who passed `['a', 'b', 'c']` read
+    the template's example Chinese back at them and could not tell which entry the count
+    was about, nor that the quoted words were not their own. Three live builds died on
+    that message and the author's next call changed the prototype rather than the list.
+    """
+    shown = []
+    for position, item in enumerate(items[:_ENTRIES_SHOWN], start=1):
+        if isinstance(item, dict):
+            body = ", ".join(f"{_given(key)}: {_given(value)}" for key, value in item.items())
+            shown.append(f"[{position}] a dict of {len(item)}: {body}")
+        else:
+            body = ", ".join(_given(value) for value in item)
+            shown.append(f"[{position}] {len(item)} value(s): {body}")
+    if len(items) > _ENTRIES_SHOWN:
+        shown.append(f"and {len(items) - _ENTRIES_SHOWN} more")
+    return f"The {len(items)} entries you gave: " + "; ".join(shown) + "."
+
+
 def _pick(key, by_index, by_text):
     """A shape named by its 1-based place on the page, or by the text it holds now.
 
     One numbering for every argument, and it is the page's own: shape N is the Nth
     shape `decompile` prints, groups opened, whether or not it holds text. The
     alternative -- counting text frames for `texts`, pictures for `pictures` -- gives
-    three numberings for one page, so `texts={15: ...}` read off the reference lands on
+    three numberings for one page, so a fifteenth read off the reference lands on
     a page whose text frames stop at fourteen.
 
     Where several shapes hold the key, the one whose whole copy *is* the key takes it and

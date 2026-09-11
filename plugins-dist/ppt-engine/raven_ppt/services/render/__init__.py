@@ -38,7 +38,7 @@ caller changes.
 
 from raven_ppt.services.render.capabilities import RenderCapabilities, available
 from raven_ppt.services.render.errors import RenderError, RenderTimeoutError, RenderUnavailableError
-from raven_ppt.services.render.office import DEFAULT_CONVERT_TIMEOUT_S, to_pdf
+from raven_ppt.services.render.office import DEFAULT_CONVERT_TIMEOUT_S, default_concurrency, to_pdf
 from raven_ppt.services.render.pdf import (
     DEFAULT_DPI,
     MAX_DPI,
@@ -68,6 +68,7 @@ __all__ = [
     "RenderUnavailableError",
     "available",
     "contact_sheet",
+    "default_concurrency",
     "is_page_render",
     "page_count",
     "page_number",

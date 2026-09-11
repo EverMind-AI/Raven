@@ -25,10 +25,98 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from raven_ppt.contracts import Finding, Severity
+from raven_ppt.services.publish.destination import sidecar_for
 
 
 class PublishRefusedError(RuntimeError):
     """Delivery declined. The message is addressed to the model."""
+
+
+class DeliveryError(RuntimeError):
+    """The deck is published under out/ but the copy to the stated destination failed."""
+
+
+DELIVERY_ROLE = "delivery"
+
+
+@dataclass(frozen=True)
+class Delivered:
+    """One copy of a published deck at the place the user named, with its record."""
+
+    path: Path
+    digest: str
+    pages: int
+    preview: Path | None = None
+    preview_kept_back: str = ""
+    """Why no preview was written beside the deck, in words the model can pass on.
+
+    Empty where one was written, or where the publish step rendered none. `preview`
+    is the file this delivery wrote and nothing else: pointing it at a `.pdf` that
+    was already there would name someone else's file as the deck's preview.
+    """
+
+
+def deliver(project, published: Path, digest: str, pages: int, *, destination: Path, preview: Path | None) -> Delivered:
+    """Put the deck `publish` just wrote where the user asked for it, and record that.
+
+    After `publish`, never instead of it: the bytes copied are the published file's,
+    checked against the digest the gates passed, so nothing reaches the destination
+    that did not first reach out/. A refused build never gets here, which is what keeps
+    the destination holding the last good deck rather than a half-built one; and the
+    write is atomic for the same reason the publish is -- a user has the file open.
+
+    The PDF the publish put beside the deck rides along when there is one; the web
+    surface previews a PDF and only downloads a .pptx, and a copy is what it costs.
+    It rides along only where its own name is free (`destination.sidecar_for`, which
+    derives both paths and answers that one question): the deliverable is the file the user named and replacing it
+    is the request, while the preview is this engine's convenience and an existing
+    `intro.pdf` beside a delivered `intro.pptx` is a file the user has. Nothing on
+    the record says whether we wrote it, and this module's rule is that nothing here
+    deletes a file the user has -- so the preview stays under `out/`, where the
+    publish step already put it, and `preview_kept_back` says so for the reply.
+    """
+    try:
+        current = hashlib.sha256(published.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise DeliveryError(f"the published deck could not be read back: {exc.strerror or exc}") from None
+    if not hmac.compare_digest(current, digest):
+        raise DeliveryError("the published deck changed before it could be copied; build again")
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _replace_with(published, destination)
+        copied = hashlib.sha256(destination.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise DeliveryError(f"could not write {destination}: {exc.strerror or exc}") from None
+    if not hmac.compare_digest(copied, digest):
+        raise DeliveryError(f"{destination} does not hold the bytes that were published; build again")
+    record_published(project, destination, digest, pages, role=DELIVERY_ROLE)
+    beside: Path | None = None
+    kept_back = ""
+    if preview is not None and preview.is_file():
+        paths = sidecar_for(destination)
+        if not paths.free:
+            kept_back = (
+                f"the PDF preview stayed at {preview} because {paths.sidecar} already holds a file, "
+                "which this build will not replace"
+            )
+        else:
+            try:
+                _replace_with(preview, paths.sidecar)
+            except OSError:
+                beside = None
+            else:
+                beside = paths.sidecar
+    return Delivered(path=destination, digest=digest, pages=pages, preview=beside, preview_kept_back=kept_back)
+
+
+def _replace_with(source: Path, target: Path) -> None:
+    """Copy `source` over `target` so a reader sees the old file or the new one, never a part."""
+    temporary = target.parent / f".{target.name}.{uuid.uuid4().hex}.tmp"
+    try:
+        shutil.copyfile(source, temporary)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -120,13 +208,17 @@ PUBLISHED_RECORD = "published.json"
 REFUSED_RECORD = "refused.json"
 
 
-def record_published(project, path: Path, digest: str, pages: int) -> None:
+def record_published(project, path: Path, digest: str, pages: int, *, role: str | None = None) -> None:
     """Note what this route published, so the harness can tell it from a copy.
 
     Two live runs answered a refused build by `cp deck/build/deck.pptx out/...` and
     told the user the deck was delivered; the hook, which only knew "a valid deck under
     out/ newer than the turn started", confirmed it. What was published is what went
     through the gates, and this is the list of that.
+
+    `role` marks an entry that is not the out/ file: the copy at the destination the
+    user named carries `DELIVERY_ROLE`, so a later turn can read where the deck was
+    delivered and the harness can count that path among the ones it verifies.
     """
     target = project.state_dir / PUBLISHED_RECORD
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -135,7 +227,10 @@ def record_published(project, path: Path, digest: str, pages: int) -> None:
     except (OSError, ValueError):
         held = {}
     entries = [e for e in held.get("published", []) if isinstance(e, dict) and e.get("path") != str(path)]
-    entries.append({"path": str(path), "sha256": digest, "pages": pages})
+    entry: dict[str, object] = {"path": str(path), "sha256": digest, "pages": pages}
+    if role:
+        entry["role"] = role
+    entries.append(entry)
     # Atomic, for the reason the deck's own write is: a half-written record is a record
     # a reader believes. Rewritten on every publish rather than the delivery being
     # frozen at the moment it is written -- the tier's cap releases the deck and lets
@@ -227,6 +322,27 @@ def _recorded(state_dir: Path) -> dict[str, str]:
         for entry in held.get("published", [])
         if isinstance(entry, dict) and entry.get("path") and entry.get("sha256")
     }
+
+
+def delivered_decks(state_dir: Path) -> list[Path]:
+    """Every path outside out/ the publish step delivered the deck to, in record order.
+
+    The harness verifies a reply against files it can see written, and until now those
+    were the ones under out/. A destination the user named is wherever they named, so
+    the record is the only thing that says which other paths a publish wrote.
+    """
+    try:
+        held = json.loads((state_dir / PUBLISHED_RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    found: list[Path] = []
+    for entry in held.get("published", []):
+        if not isinstance(entry, dict) or entry.get("role") != DELIVERY_ROLE:
+            continue
+        text = str(entry.get("path") or "")
+        if text and Path(text) not in found:
+            found.append(Path(text))
+    return found
 
 
 def published_original(state_dir: Path, copy: Path) -> Path | None:

@@ -43,6 +43,7 @@ what is reported is the count, and the author reads it and decides.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import uuid
 from collections.abc import Callable, Sequence
@@ -65,9 +66,21 @@ from raven_ppt.services import seen
 from raven_ppt.services.gates.quiet import quiet
 from raven_ppt.services.measure.geometry import iter_shapes, open_deck, picture_blob, shows_picture
 from raven_ppt.services.measure.type_size import census, rendered_spans
-from raven_ppt.services.publish import PublishRefusedError, publish, stage, strip_vendor_marks
+from raven_ppt.services.publish import (
+    DeliveryError,
+    PublishRefusedError,
+    deliver,
+    pdf_without_pages,
+    publish,
+    read_destination,
+    stage,
+    strip_vendor_marks,
+    without_pages,
+)
 from raven_ppt.services.publish.deliver import delivery_report, published_digests, record_refused
 from raven_ppt.services.template import house_style, prepared_path
+
+log = logging.getLogger(__name__)
 
 # Default for `BuildStage.views_per_call`, which is how many page renders one reply
 # carries. The effective number is the stage's field, set from `tools.ppt.viewsPerCall`,
@@ -150,7 +163,12 @@ class BuildStage:
         # about to be.
         outcome = _with_deck_house(project, outcome)
         pending = _unseen_pages(project, outcome)
-        if draft:
+        if draft and not release:
+            # `not release`, because the tier's cap binds a draft too: a run that never
+            # passes `draft: false` would otherwise never reach the publish path at all,
+            # and the cap exists so that a deck with problem pages still gets published.
+            # The build that reaches the cap delivers whatever the call asked for.
+            #
             # A program still being written is an accepted intermediate state, and the
             # previous engine learned this the same way: requiring a whole deck in one
             # submission meant "tens of thousands of tokens that took minutes and that
@@ -199,8 +217,11 @@ class BuildStage:
         changed = delivery_report(project, self.destination(project))
         if changed is not None:
             data["delivery_changed"] = changed
+        source, delivered_pages, dropped = _as_delivered(project, outcome, released="released" in data)
+        if dropped:
+            data["dropped_pages"] = list(dropped)
         try:
-            staged = stage(project, outcome.pptx_path, pages=outcome.pages)
+            staged = stage(project, source, pages=delivered_pages)
             delivered = publish(
                 project,
                 staged,
@@ -216,9 +237,26 @@ class BuildStage:
             # A deck published once already: this is a revision of a delivered deck,
             # which the reading policy treats differently from a first delivery.
             data["republished"] = True
-        preview = _pdf_beside(project, outcome.pptx_path, delivered)
+        preview = _pdf_beside(project, outcome.pptx_path, delivered, dropped=dropped)
         if preview is not None:
             data["pdf_path"] = str(preview)
+        # After the publish and only then: the destination the user named gets the
+        # bytes out/ just got, so a refused build above leaves the last good deck
+        # standing there rather than a half-built one.
+        stated = read_destination(project)
+        if stated is not None:
+            try:
+                copy = deliver(project, delivered, staged.digest, staged.pages, destination=stated, preview=preview)
+            except DeliveryError as exc:
+                data["delivery_failed"] = f"{stated}: {exc}"
+            else:
+                data["delivered_to"] = str(copy.path)
+                if copy.preview is not None:
+                    data["delivered_pdf"] = str(copy.preview)
+                if copy.preview_kept_back:
+                    # The one file this delivery did not write, said where the model
+                    # can pass it on: the reply is the only place the user hears it.
+                    data["delivered_pdf_kept_back"] = copy.preview_kept_back
         return StageResult(ok=True, findings=tuple(findings), data=data)
 
     def _showing(self, pages: int, slides: Sequence[int] | None, page_from: int, pending) -> list[int]:
@@ -241,7 +279,36 @@ def _deck_title(project: Project) -> str | None:
     return topic or None
 
 
-def _pdf_beside(project: Project, built: Path, delivered: Path) -> Path | None:
+def _as_delivered(project: Project, outcome: BuildOutcome, *, released: bool) -> tuple[Path, int, tuple[int, ...]]:
+    """The file to publish, its page count, and the pages left out of it.
+
+    The build cap is the one route that publishes past a page the runner stood in
+    for, and what it is for is a deck that exists rather than another round of
+    fixes. It is not for delivering the runner's furniture: a page reading "Page 11
+    did not draw" was never written, and the pages that were are what "publish what
+    is there" means. So the copy that goes out has those pages taken out.
+
+    The built deck keeps them. It is what the next edit is repaired against, what
+    every finding's page number counts against, and what the second reader reads --
+    renumbering any of that to match the delivery would move the one mapping the
+    whole route stands on. The delivered file is short instead, and the reply says
+    which pages are not in it.
+    """
+    if not released or outcome.pptx_path is None:
+        return outcome.pptx_path, outcome.pages, ()
+    dropped = tuple(sorted({int(entry["page"]) for entry in page_failures(project)}))
+    if not dropped:
+        return outcome.pptx_path, outcome.pages, ()
+    trimmed = project.state_dir / "staging" / "released.pptx"
+    try:
+        pages = without_pages(outcome.pptx_path, dropped, trimmed)
+    except Exception as exc:  # noqa: BLE001 -- a deck with the plate in it beats no deck at all
+        log.warning("could not drop the stand-in pages %s (%s); publishing the deck as built", dropped, exc)
+        return outcome.pptx_path, outcome.pages, ()
+    return trimmed, pages, dropped
+
+
+def _pdf_beside(project: Project, built: Path, delivered: Path, *, dropped: Sequence[int] = ()) -> Path | None:
     """Put the render this build was measured from beside the delivered deck, as a PDF.
 
     A .pptx is a download and nothing else on the web surface, which previews PDFs and
@@ -249,6 +316,11 @@ def _pdf_beside(project: Project, built: Path, delivered: Path) -> Path | None:
     measurement already rendered the deck to `review_dir/<stem>.pdf`, so the PDF costs
     nothing more than a copy -- taken only when it is at least as new as the deck it
     stands for, because a stale render beside a fresh deck is a wrong preview.
+
+    `dropped` is the pages the delivery left out, and the render has them: it was made
+    from the built deck. They come out of this copy too, because a preview one page
+    longer than the file it sits beside previews a deck nobody has. If they cannot come
+    out there is no preview, which is the same rule as a stale one.
     """
     import shutil
 
@@ -258,7 +330,12 @@ def _pdf_beside(project: Project, built: Path, delivered: Path) -> Path | None:
             return None
         target = delivered.with_suffix(".pdf")
         temporary = target.parent / f".{target.name}.{uuid.uuid4().hex}.tmp"
-        shutil.copy2(rendered, temporary)
+        if dropped:
+            if not pdf_without_pages(rendered, dropped, temporary):
+                temporary.unlink(missing_ok=True)
+                return None
+        else:
+            shutil.copy2(rendered, temporary)
         os.replace(temporary, target)
         return target
     except OSError:
@@ -552,7 +629,7 @@ def _unplaced_figure_findings(project: Project, outcome: BuildOutcome) -> list[F
         # A page can carry its figure without owning a shape: several templates keep the
         # cover's, the section page's and the closing page's picture on the *layout*,
         # and `replace_picture` on the layout is then the only place a page can put one
-        # -- `pictures={...}` on the cloned page never reaches it. So a figure swapped
+        # -- a `replace_picture` on the cloned page never reaches it. So a figure swapped
         # in there is placed, and this check said it was not: a live run spent six
         # builds on its cover, the layout holding the deck's own cover art byte for
         # byte while the finding said the page had been built without a picture on it.

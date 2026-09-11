@@ -40,6 +40,18 @@ decks are at 15pt, more than at any other size, and `type_floor` reports none of
 So the division of labour is the floor itself. Under it, `type_floor` already says
 "bring it up" about the same box; between the floor and `BODY_PT`, at a size the ramp
 does not have, nothing said anything at all.
+
+Two more readings sit here, both about a page the author cloned rather than drew, and
+both asking about a *pair* of boxes rather than one. `drift_findings` above groups one
+slot's copies deck-wide and measures each against the size the slot was drawn at, which
+answers "did this box shrink" and not "do the boxes beside each other agree" -- on one
+delivered page it named the four card headings that came out at 16.8pt as the outliers
+and treated the lone 20.0pt as the house style, and on the page after it reported all
+five members of a row that renders uniformly at 17.4pt, where a reader sees nothing
+wrong at all. The row's own rendered spread is the missing question, not a missing
+input, and `row_findings` asks it. `outranked_findings` asks the other one: whether the
+page's title still outranks the line under it, which on a cloned page is a number the
+author was never shown.
 """
 
 from __future__ import annotations
@@ -65,6 +77,16 @@ from raven_ppt.services.measure.geometry import (
     open_deck,
     shape_rect_pt,
 )
+
+# How this repo already answers "which shapes on this page are siblings" and "which of
+# them is the title". Both are private and imported anyway, for the reason `_matches` is:
+# `units` is the operation a template page exists for -- `fill` writes through it, so the
+# groups it returns are the groups the author counted off the render -- and `_heading_rows`
+# resolves a title on all 197 example pages of the twelve templates by reading what the
+# template named before inferring anything from where it sits. A second answer to either
+# would disagree with the one the author is working from.
+from raven_ppt.services.template.compose import _all_shapes, _heading_rows, units
+from raven_ppt.services.template.decompile import inherited_size, page_design
 
 # Body copy has to hold up projected, not just on the screen the deck was made
 # on. BODY_FLOOR_PT is the floor for the size a page mostly runs at;
@@ -598,6 +620,7 @@ def drift_findings(pptx_path: Path, spans: Sequence[Span] | None) -> list[Findin
                     detail={
                         "page": page,
                         "slot_in": [width, height],
+                        "boxes": _boxes(here),
                         "declared_pt": declared,
                         "house_pt": house,
                         "sizes_pt": [slot.rendered_pt for slot in here],
@@ -606,6 +629,394 @@ def drift_findings(pptx_path: Path, spans: Sequence[Span] | None) -> list[Findin
                 )
             )
     return findings
+
+
+# Why the pair readings below are held to a tie rather than to any inequality, measured
+# over the ten bundled templates writing their own copy into their own boxes: four pages
+# set the line under the title *deliberately* larger -- a 54pt "662+" statistic, a 72pt
+# section numeral, a 40pt "04", a 38.8pt pull-quote over a 28pt page title -- and every
+# one of them is a design idiom rather than a defect. Nobody chooses "exactly the size of
+# the thing above it" on purpose, and on a cloned page nobody can: the title states no
+# size and resolves through the master. The audit that named this says the same thing from
+# the other end -- the old decks carried flat hierarchies but never an inverted one.
+HEADING_TIE = 1.02
+# And how much of the title's own width the line under it has to span before the two are
+# two heading rows rather than a heading and a label beside it. A template's contents page
+# stacks a 259pt-wide English gloss under an 846pt-wide two-character title at one size, and
+# read as a tie that is a false positive: the render shows one bilingual heading pair, not
+# two headings.
+# The four pages this does report are all the same full-width box repeated -- 11.88in over
+# 11.88in, which is a template that drew two title rows.
+HEADING_ROW_WIDTH = 0.8
+
+
+def outranked_findings(pptx_path: Path, spans: Sequence[Span] | None, template: Path | None = None) -> list[Finding]:
+    """Pages whose title came out at the same size as the line under it.
+
+    The state a reader describes as two competing headings, and on the page that named
+    it the caption was the longer of the two, so the caption won the eye. What makes it
+    a measurement rather than taste is that both numbers are in the render: one
+    delivered page has its title and its chart caption at 28.01pt each, the title 37
+    characters and the caption 57.
+
+    Read off the render for the same reason everything else here is. The file says the
+    caption is 28pt and says nothing at all about the title, and on the page before it
+    the same 28pt caption came back at 20.6pt because its copy was longer -- so the file
+    reports a tie the renderer had already resolved, and would miss the reverse.
+
+    Three things have to hold together, and the message states all three, so each one
+    is a guard rather than a filter: the two are at one size, the second is *under* the
+    title, and it is the *longer* of the two. Under and longer are the mechanism -- at
+    one size the eye goes to the longer line, and a line above the title or shorter than
+    it does not take the heading off it. `_heading_rows` answers the role and not the
+    relation: its named-placeholder branch deliberately returns a SUBTITLE wherever the
+    template put it, a kicker set above the title included.
+
+    `template` decides what the finding *asks for*, and it is the difference between
+    right and wrong advice rather than a filter. Where the box carrying the stated size
+    sits at one of the template's own coordinates, that size is the template's: the
+    prototype already tied, cloning it inherited the tie, and telling the author to
+    change the number is telling it to abandon the template. Where the author drew the
+    box, the two numbers are its own and cost nothing to separate.
+    """
+    if not spans:
+        return []
+    presentation = open_deck(pptx_path)
+    measured = {_where(slot.page, slot.box): slot for slot in slots(pptx_path, spans)}
+    theirs = _template_boxes(template)
+    findings: list[Finding] = []
+    for number, slide in enumerate(presentation.slides, start=1):
+        rows = _heading_rows(slide, presentation)
+        title, under = rows.get("title"), rows.get("subtitle")
+        if title is None or under is None:
+            continue
+        above = measured.get(_where(number, shape_rect_pt(title)))
+        below = measured.get(_where(number, shape_rect_pt(under)))
+        if above is None or below is None or above.rendered_pt is None or below.rendered_pt is None:
+            continue
+        # A heading is set above the size the deck calls body. Without this the reading
+        # answered on a page that has no title at all: an author that stopped cloning
+        # and drew its own page left `_heading_rows` to infer a title from the topmost
+        # line in the top third, which on that page was a 12pt chart footnote sitting
+        # 0.04in above the 12pt caption under it. Two 12pt lines are not a hierarchy.
+        if above.rendered_pt <= BODY_PT:
+            continue
+        title_box, under_box = shape_rect_pt(title), shape_rect_pt(under)
+        # Under the title in the sense `_heading_rows` itself uses wherever it reads
+        # geometry -- `shape.top > title.top`. Its first branch reads the template's own
+        # naming instead, and answers with a SUBTITLE placeholder wherever the template
+        # put it, which is on purpose: a kicker set above the title is still the row the
+        # template called its subtitle. It is not the line under it, though, and a kicker
+        # is where a tie is least likely to be a defect. Without this a full-width
+        # two-character "Q3" over a title read as the line under it, and the message said
+        # so while its own numbers said the opposite.
+        if under_box.y0 <= title_box.y0:
+            continue
+        if under_box.width < HEADING_ROW_WIDTH * title_box.width:
+            continue
+        if not above.rendered_pt <= below.rendered_pt <= above.rendered_pt * HEADING_TIE:
+            continue
+        # And the longer of the two, which is the rest of the mechanism rather than a
+        # detail of the wording: at one size the eye goes to the longer line, so a title
+        # that is itself the longer line has not been outranked by anything. Two pages of
+        # the evidence tree tie with an 83-character title over a 51-character caption.
+        if below.chars <= above.chars:
+            continue
+        stated = _declared_pt(under)
+        inherited = None if _declared_pt(title) is not None else inherited_size(title, page_design(presentation, slide))
+        cloned = _matches(_inches(under_box), theirs)
+        findings.append(_outranked(number, above, below, stated, inherited, cloned))
+    return findings
+
+
+def _outranked(
+    page: int, above: Slot, below: Slot, stated: float | None, inherited: float | None, cloned: bool
+) -> Finding:
+    size = above.rendered_pt or 0
+    if inherited is not None:
+        seen = (
+            f"The title box states no size of its own -- it resolves to {inherited:g}pt through the layout and "
+            f"the master, which is why nothing in your program shows you the number the caption matched"
+        )
+    else:
+        seen = f"Both sizes are stated on the page: the title at {_declared_pt_text(above)} and the caption below it"
+    if cloned:
+        fix = (
+            "The caption box is the template's own, and so is the size in it -- the prototype ties too, so this "
+            "came with the page rather than from your program. Set the caption explicitly a step down "
+            "(`size=LABEL_PT`, or `BODY_PT`), or shorten it until it reads as a caption; do not touch the title"
+        )
+    else:
+        fix = (
+            "You drew this box and chose this size, so step it down: `size=BODY_PT` for a line under a title, "
+            f"or `size=LABEL_PT`. Anything below {size:g}pt separates them and nothing on the page has to move"
+        )
+    return Finding(
+        kind="outranked_title",
+        severity=Severity.WARNING,
+        page=page,
+        message=(
+            f"this page's title and the line under it both came out at {size:g}pt, and the line under it is the "
+            f"longer of the two ({below.chars} characters against {above.chars}) -- so a reader meets the caption "
+            f"as the heading: '{above.head}' over '{below.head}'. {seen}. {fix}"
+        ),
+        detail={
+            "page": page,
+            "title_pt": above.rendered_pt,
+            "under_pt": below.rendered_pt,
+            "title_chars": above.chars,
+            "under_chars": below.chars,
+            "stated_pt": stated,
+            "inherited_pt": inherited,
+            "under_is_the_templates_box": cloned,
+        },
+    )
+
+
+def _declared_pt_text(slot: Slot) -> str:
+    return f"{slot.declared_pt:g}pt" if slot.declared_pt is not None else "no size of its own"
+
+
+# How far apart two members of one repeating row may render before the row reads as
+# uneven. Calibrated over the ten bundled templates writing their own copy into their own
+# boxes: 332 repeating rows carry a render, and their spread is 1.000 at the median, 1.000
+# at the 95th and 1.045 at the 99th -- a designer filling a row keeps it even, so almost
+# any gap at all is the author's. The two rows over this line are `green_aurora`'s pages
+# 10 and 11, and both were rendered and looked at: four card headings at 16.2 / 16.2 /
+# 12.2 / 13.3pt and five at 18 / 18 / 18 / 15.1 / 14.2pt, visibly uneven on the page.
+# They are true positives in a shipped template, not noise to tune away.
+# (327 before a level was identified by where it sits in the unit as well as by its shape;
+# the five it gained are levels that had been merged with another of the same shape, and
+# every quantile and both reporting rows came back the same.)
+ROW_DRIFT = 1.10
+# A row is two boxes at least. Everything narrower than that is not a row.
+_ROW_MEMBERS = 2
+# One slot of a repeating unit: where it sits in the unit, and the box and stated size it
+# was drawn with. The place comes first because it is what says *which* slot -- the shape
+# alone does not, and two levels of one card are routinely drawn the same.
+Level = tuple[int, float, float, float | None]
+
+
+def row_findings(pptx_path: Path, spans: Sequence[Span] | None) -> list[Finding]:
+    """Repeating rows whose members came back at different sizes.
+
+    The finding is the row, not the box. Every member of the row is behaving correctly:
+    each holds more copy than its height can show at the stated size, each shrinks its
+    own type to fit, and each arrives at its own answer -- so a per-box reading can look
+    at all of them and see nothing. What a reader sees is one card at 17pt beside four at
+    20pt.
+
+    Measured across the ten bundled templates, 270 of 402 repeating rows have every
+    member set to shrink and only 7 mix shrinking with non-shrinking, so *which* members
+    shrink says almost nothing at row level. The discriminating fact is by how much, and
+    only the render knows that: autofit has happened by the time a span is painted.
+
+    Siblings come from `units`, which is the same grouping `fill` writes through, so a
+    row named here is a row the author addressed as one. The level within it is one slot
+    of the unit -- where it sits in the unit, at what size, drawn at what stated size --
+    which is `drift_findings`' group key narrowed from the whole deck to one row of one
+    page, and that narrowing is the point: a row that renders uniformly small is a row a
+    reader has no complaint about.
+    """
+    if not spans:
+        return []
+    presentation = open_deck(pptx_path)
+    measured = {_where(slot.page, slot.box): slot for slot in slots(pptx_path, spans)}
+    findings: list[Finding] = []
+    for number, slide in enumerate(presentation.slides, start=1):
+        for row, level, here in _rows(slide, number, measured):
+            sizes = sorted(slot.rendered_pt or 0 for slot in here)
+            if not sizes[0] or sizes[-1] / sizes[0] < ROW_DRIFT:
+                continue
+            findings.append(_uneven(number, row, level, here))
+    return findings
+
+
+def _rows(slide: Any, page: int, measured: dict) -> list[tuple[int, Level, list[Slot]]]:
+    """Every level of every repeating unit on this page, with the size each member came out at.
+
+    A level is one slot of the unit, and where it sits in the unit is part of saying
+    which slot: two levels of one unit can be drawn to the same size and stated at the
+    same number, and a card whose heading and body are both 3x0.6in at 20pt is the
+    ordinary case rather than a corner of one. Keyed on shape alone, all four boxes of a
+    two-card run merged into one level and reported a 1.429 spread over a run where
+    neither row drifts at all -- the headings agreeing with each other at 20pt and the
+    bodies agreeing with each other at 14pt is the deck behaving.
+
+    Where it sits is its rank down the page among the unit's slots -- `_slots_of` decides
+    which frames those are and `_place` reads the box off the page and orders on it, top
+    to bottom and then left to right. The rank is fixed over the slots and only then are
+    the frames this reading cannot use dropped, which is the difference between a
+    structural position and a position in the copy that happens to be there: an option
+    one unit left unspoken must not shift the ordinal of every slot under it in that unit
+    alone. Ranking the frames that hold words did exactly that -- two cards with an
+    optional label over an identical body slot, the label supplied on the second card
+    only, put the two bodies at ranks 1 and 2 and stopped comparing them, so a row
+    running 20pt against 14pt reported nothing.
+
+    Not `_reading_order`, which is how `fill` addresses the slots of a unit and is right
+    for writing into one and wrong as an identity. It bands shapes into rows so a number
+    beside a heading is met before it; the band grows as shapes join it, so its membership
+    turns on the order they were scanned in, and that order comes off `shape.top`, which a
+    grouped shape states in its own group's coordinate space. Two units of one run
+    therefore number their slots differently. Measured on the templates: one deck's
+    three-card run stores the card number first in one unit and third in the other two,
+    and `_reading_order` puts the heading second in that unit and first in the others -- a
+    3-card row read as 2 cards and 1.
+    """
+    found = []
+    for run in units(slide):
+        levels: dict[Level, list[Slot]] = {}
+        for unit in run:
+            for position, shape in enumerate(_slots_of(unit, _slot_shapes(run)), start=1):
+                # Everything from here down drops a frame from the row without moving the
+                # rank of anything under it, which is why the rank is taken first.
+                if not (shape.text_frame.text or "").strip():
+                    continue
+                slot = measured.get(_where(page, shape_rect_pt(shape)))
+                if slot is None or slot.rendered_pt is None or slot.chars < _SLOT_CHARS:
+                    continue
+                stated = _declared_pt(shape)
+                # Autofit only ever shrinks, so a member reading larger than the size its
+                # own runs state cannot have got there from this box: it is a span from
+                # something stacked over it that `slots` had nowhere tighter to put. One
+                # delivered page's 14pt body box read 30pt off the number tile beside it.
+                if stated is not None and slot.rendered_pt > stated:
+                    continue
+                levels.setdefault((position, *_drawn(shape), stated), []).append(slot)
+        for level, members in levels.items():
+            if len(members) >= _ROW_MEMBERS:
+                found.append((len(run), level, members))
+    return found
+
+
+def _slot_shapes(run: Sequence[Any]) -> set[tuple[float, float]]:
+    """The drawn shapes this run puts copy in, anywhere across its units.
+
+    Which frames of a unit count as slots, decided by the run rather than by the unit,
+    and this is the load-bearing definition of the reading above. A built page cannot ask
+    the prototype: `adapt` empties every frame it was not told about, so an icon's
+    container and a body slot the author had nothing to say about arrive at this function
+    looking the same -- both empty, both still standing. The run is what can tell them
+    apart. A shape that holds copy in some unit is a slot, and its emptiness in another
+    unit is an option that unit declined; a shape empty in every unit of the run is
+    furniture -- an icon container, a spacer, a rule -- and never had a position to hold.
+
+    It is `fill`'s own rule read across the run instead of within one unit. `fill` calls a
+    frame a spacer because the frames beside it in that unit hold text; a sibling unit
+    that filled the same shape is strictly better evidence than that, and it is the
+    evidence that decides the case `fill` cannot see, where the option is the *first*
+    slot of the unit and its absence shifts everything after it.
+
+    Stable across the units of one run because it is computed once for the run: every
+    unit ranks against the same set, and whether a frame belongs to it turns on the run's
+    copy rather than on which unit is being read.
+
+    Measured all three ways over the ten bundled templates and the nine decks. Counting
+    every text frame instead costs a true positive its whole row: `green_aurora`'s zigzag
+    timeline draws the icon container above the heading in one of five units and below it
+    in the other four, so the odd card falls out and page 11 reports four of five.
+    Counting only the frames that hold copy is the false silence this replaces, and it is
+    in the delivered corpus as well as in the synthetic case -- `v13_warm` page 5 has a
+    4.45x0.7in slot whose two copies were never compared, because one unit left an
+    earlier option unspoken. This definition keeps both: the templates come back
+    unchanged at 332 rows with page 11 whole, and the decks gain that one pair.
+    """
+    return {
+        _drawn(shape)
+        for unit in run
+        for shape in _all_shapes(unit.shapes)
+        if getattr(shape, "has_text_frame", False) and (shape.text_frame.text or "").strip()
+    }
+
+
+def _slots_of(unit: Any, shapes: set[tuple[float, float]]) -> list[Any]:
+    """One unit's slots, in the order a reader comes down the page."""
+    return sorted(
+        (
+            shape
+            for shape in _all_shapes(unit.shapes)
+            if getattr(shape, "has_text_frame", False) and _drawn(shape) in shapes
+        ),
+        key=_place,
+    )
+
+
+def _drawn(shape: Any) -> tuple[float, float]:
+    """A shape's own width and height in inches, rounded the way clones of a slot agree."""
+    return (round((shape.width or 0) / EMU_PER_INCH, 2), round((shape.height or 0) / EMU_PER_INCH, 2))
+
+
+def _uneven(page: int, row: int, level: Level, here: list[Slot]) -> Finding:
+    position, width, height, stated = level
+    biggest = max(slot.rendered_pt or 0 for slot in here)
+    ordered = sorted(here, key=lambda slot: slot.rendered_pt or 0)
+    sizes = ", ".join(f"{slot.rendered_pt:g}pt ('{slot.head}')" for slot in ordered)
+    drawn = f"{stated:g}pt" if stated is not None else f"{biggest:g}pt, which no run states"
+    return Finding(
+        kind="row_type_drift",
+        severity=Severity.WARNING,
+        page=page,
+        message=(
+            f"this page repeats one unit {row} times and the {_ordinal(position)} slot down each unit -- the "
+            f"{width:g}x{height:g}in box -- is drawn at {drawn}, "
+            f"but its {len(here)} copies came out at different sizes: {sizes}. Each box shrank its own copy to fit, "
+            f"so every one of them is behaving and the row is what reads wrong -- a reader meets "
+            f"{ordered[0].rendered_pt:g}pt beside {biggest:g}pt. Even out how much the units hold, or set that slot "
+            f"one size explicitly so they agree; giving one box more height fixes one card and leaves the row uneven"
+        ),
+        detail={
+            "page": page,
+            "slot_in": [width, height],
+            "slot_at": position,
+            "boxes": _boxes(here),
+            "declared_pt": stated,
+            "units": row,
+            "members": len(here),
+            "sizes_pt": [slot.rendered_pt for slot in ordered],
+            "spread": round(biggest / (ordered[0].rendered_pt or 1), 3),
+        },
+    )
+
+
+def _place(shape: Any) -> tuple[float, float]:
+    """Where a shape sits on the page, for ranking the slots of one unit against each other.
+
+    On the page and not as declared: a shape inside a group states its own numbers in the
+    group's coordinate space, and two units of one run do not share that space.
+    """
+    box = shape_rect_pt(shape)
+    return (round(box.y0, 1), round(box.x0, 1))
+
+
+def _ordinal(position: int) -> str:
+    if position % 100 not in (11, 12, 13) and position % 10 in (1, 2, 3):
+        return f"{position}{('st', 'nd', 'rd')[position % 10 - 1]}"
+    return f"{position}th"
+
+
+def _boxes(here: Sequence[Slot]) -> list[list[float]]:
+    """The boxes a type finding is about, in the coordinates `_where` keys them by.
+
+    The one identity the row reading and the deck-wide one can both state, and `quiet`
+    needs one: a level here is a slot inside a unit and `drift_findings`' group is a
+    shape repeated anywhere in the deck, so neither side's own key means anything to the
+    other. Sharing `[width, height]` instead let a row on one level of a page silence
+    `type_drift` on a different level of the same page that happened to be drawn the
+    same size, which is the reading it was supposed to leave standing.
+    """
+    return [list(_where(slot.page, slot.box)[1:]) for slot in sorted(here, key=lambda slot: (slot.box.y0, slot.box.x0))]
+
+
+def _where(page: int, box: Rect) -> tuple[int, float, float, float, float]:
+    """One box's place on one page, as the key `slots` and a shape walk both arrive at.
+
+    `slots` hands back the box and not the shape it came from, and `shape_rect_pt` is
+    what put it there, so calling it again on the same shape lands on the same numbers.
+    Keyed rather than re-derived so the two readings above share one attribution of
+    spans to boxes with `type_floor` and `type_drift` instead of writing a fourth.
+    """
+    return (page, round(box.x0, 1), round(box.y0, 1), round(box.x1, 1), round(box.y1, 1))
 
 
 # The two steps of `ppt_layout`'s ramp this measurement is about: the size the deck

@@ -341,6 +341,65 @@ def _published(own: Path, deck: Path) -> None:
     )
 
 
+def test_the_turn_after_a_delivery_is_not_pushed_into_another_build(tmp_path: Path) -> None:
+    """A session does not end at the delivery. The turn where the user says the deck
+    is fine used to arrive carrying "compile the deck under out/ and end your final
+    reply with the MEDIA line", which is an instruction to publish again."""
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+
+    async def run() -> tuple:
+        with workdir.bind(wd):
+            first = await hook.before_user_inbound(AgentHookContext(session_key="s1", inbound_content="make me a deck"))
+            own = Path(workdir.current())
+            deck = _pptx(own / "out" / "deck.pptx", slides=3)
+            _published(own, deck)
+            after = await hook.before_user_inbound(
+                AgentHookContext(session_key="s1", inbound_content="looks good, thanks")
+            )
+        return first, after, own, deck
+
+    first, after, own, deck = asyncio.run(run())
+    assert f"Compile the deck under {own / 'out'}/" in first.modified_content
+    assert f"Compile the deck under {own / 'out'}/" not in after.modified_content
+    assert str(deck) in after.modified_content
+    assert "stands as published" in after.modified_content
+
+
+def test_a_source_staged_on_the_first_turn_does_not_hold_the_next_one_to_a_build(tmp_path: Path) -> None:
+    """The ordinary deck: a source on turn one, "looks good, thanks" on turn two. The
+    staging book is kept for the whole session, so any rule reading it to decide what
+    this turn is answers the second turn with the first turn's material -- which is
+    why nothing here decides that. The compile instruction goes when a deck stands,
+    and the book's listing stays."""
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    source = tmp_path / "notes.md"
+    source.write_text("the numbers\n", encoding="utf-8")
+
+    async def run() -> tuple:
+        with workdir.bind(wd):
+            first = await hook.before_user_inbound(
+                AgentHookContext(session_key="s1", inbound_content=f"make me a deck from {source}")
+            )
+            own = Path(workdir.current())
+            deck = _pptx(own / "out" / "deck.pptx", slides=3)
+            _published(own, deck)
+            after = await hook.before_user_inbound(
+                AgentHookContext(session_key="s1", inbound_content="looks good, thanks")
+            )
+        return first, after, own, deck
+
+    first, after, own, deck = asyncio.run(run())
+    assert "# Material staged for this run" in first.modified_content, "turn one staged the source"
+    assert f"Compile the deck under {own / 'out'}/" in first.modified_content
+    assert f"Compile the deck under {own / 'out'}/" not in after.modified_content
+    assert "# Material staged for this run" in after.modified_content, "the book is the session's, not the turn's"
+    assert str(deck) in after.modified_content and "stands as published" in after.modified_content
+
+
 def test_the_hook_stages_rewrites_and_announces(tmp_path: Path) -> None:
     """The fork's per-prompt frame (stage -> describe -> verify -> announce),
     end to end on the hook's two phases inside one workdir bind."""
@@ -995,6 +1054,186 @@ def test_a_reply_that_ends_the_turn_without_a_deck_is_rolled_back_with_a_nudge(t
     assert not working.rollback, "an iteration with tool calls is not an ending"
 
 
+def test_a_turn_that_began_with_a_standing_deck_is_not_sent_back_to_publish_it_again(tmp_path: Path) -> None:
+    """The other side of D38. The inbound phase tells this turn its deck stands and
+    gives it no compile instruction, but the guard knew only whether this turn had
+    published: the plain answer to "looks good, thanks" was rolled back twice with
+    "continue: build ... and publish", and only the two-nudge cap let the third reply
+    end. A turn that began with a deck on the record and built none of its own has
+    nothing it failed to publish. A build this turn wrote that the record does not
+    hold is still unfinished, standing deck or not."""
+    from raven_ppt.plugin.hook import UNFINISHED_NUDGE
+
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(AgentHookContext(session_key="s1", inbound_content="make me a deck"))
+            own = Path(workdir.current())
+            deck = _pptx(own / "out" / "deck.pptx", slides=3)
+            _published(own, deck)
+
+            settled = AgentHookContext(session_key="s1", inbound_content="looks good, thanks", metadata={})
+            inbound = await hook.before_user_inbound(settled)
+            settled.response = _reply("Glad it works -- that is the deck you already have.")
+            replies = [await hook.after_iteration(settled) for _ in range(3)]
+
+            revising = AgentHookContext(session_key="s1", inbound_content="add a page on pricing", metadata={})
+            await hook.before_user_inbound(revising)
+            _pptx(own / "out" / "deck-v2.pptx", slides=4)
+            revising.response = _reply("I have put the new page together; the numbers still need a source.")
+            unfinished = await hook.after_iteration(revising)
+        return inbound, replies, unfinished
+
+    inbound, replies, unfinished = asyncio.run(run())
+    assert "stands as published" in inbound.modified_content
+    assert "Compile the deck under" not in inbound.modified_content
+    assert not any(reply.rollback for reply in replies), "the settled turn is not sent back at all"
+    assert not any(reply.rollback_inject for reply in replies)
+    assert unfinished.rollback and unfinished.rollback_inject == [{"role": "user", "content": UNFINISHED_NUDGE}], (
+        "a build this turn wrote that the publish record does not hold is still unfinished"
+    )
+
+
+def _refused(own: Path, note: str = "not published: 1 blocking finding(s) on page 3") -> None:
+    """Record a refusal the way `record_refused` does."""
+    import json
+
+    state = own / "deck" / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "refused.json").write_text(
+        json.dumps(
+            {"note": note, "blocking": [{"page": 3, "kind": "overflow", "message": "the body runs past the frame"}]}
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_a_refused_build_is_not_a_turn_that_built_none(tmp_path: Path) -> None:
+    """The shape a real refused build leaves, which reading out/ could not see.
+
+    `BuildStage.run` returns on blocking findings before `stage()` and `publish()`,
+    so the candidate stays under `deck/build/` and out/ is untouched. With a deck
+    already on the record, the standing-deck exemption then read "this turn built
+    none" off an empty out/ and let the reply end -- the premature ending the
+    unfinished nudge exists to stop, on an ordinary revision turn. The earlier
+    control hand-wrote a deck under out/, which is not this filesystem shape.
+    """
+    from raven_ppt.plugin.hook import UNFINISHED_NUDGE
+
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(AgentHookContext(session_key="s1", inbound_content="make me a deck"))
+            own = Path(workdir.current())
+            _published(own, _pptx(own / "out" / "deck.pptx", slides=3))
+
+            revising = AgentHookContext(session_key="s1", inbound_content="add a page on pricing", metadata={})
+            await hook.before_user_inbound(revising)
+            # What a refused build leaves: a candidate under deck/build and a refusal
+            # on the record. Nothing under out/, because publish was never reached.
+            _pptx(own / "deck" / "build" / "deck.pptx", slides=4)
+            _refused(own)
+            revising.response = _reply("The pricing page is updated.")
+            return await hook.after_iteration(revising)
+
+    decision = asyncio.run(run())
+    assert decision.rollback, "a turn whose build was refused has not finished"
+    assert decision.rollback_inject == [{"role": "user", "content": UNFINISHED_NUDGE}]
+
+
+def test_a_draft_build_is_not_a_turn_that_built_none(tmp_path: Path) -> None:
+    """The second path the premise was wrong on. A draft returns `ok=True` with
+    "draft: not published" and never publishes, so it too leaves out/ as it found
+    it -- and it leaves no refusal behind either, so a remedy that only looked for
+    a refused build would let this one through."""
+    from raven_ppt.plugin.hook import UNFINISHED_NUDGE
+
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(AgentHookContext(session_key="s1", inbound_content="make me a deck"))
+            own = Path(workdir.current())
+            _published(own, _pptx(own / "out" / "deck.pptx", slides=3))
+
+            revising = AgentHookContext(session_key="s1", inbound_content="redo the cover", metadata={})
+            await hook.before_user_inbound(revising)
+            _pptx(own / "deck" / "build" / "deck.pptx", slides=3)
+            revising.response = _reply("Here is how the cover reads now.")
+            return await hook.after_iteration(revising)
+
+    decision = asyncio.run(run())
+    assert decision.rollback, "a draft is work in progress, not a finished turn"
+    assert decision.rollback_inject == [{"role": "user", "content": UNFINISHED_NUDGE}]
+
+
+def test_a_build_whose_script_failed_is_not_a_turn_that_built_none(tmp_path: Path) -> None:
+    """The third path: the script crashed, so there is no candidate and no refusal
+    -- the runner keeps the failed script under review/build_failures instead. A
+    turn that ran a build and got nothing is the clearest case of unfinished."""
+    from raven_ppt.plugin.hook import UNFINISHED_NUDGE
+
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(AgentHookContext(session_key="s1", inbound_content="make me a deck"))
+            own = Path(workdir.current())
+            _published(own, _pptx(own / "out" / "deck.pptx", slides=3))
+
+            revising = AgentHookContext(session_key="s1", inbound_content="fix the chart", metadata={})
+            await hook.before_user_inbound(revising)
+            kept = own / "deck" / "review" / "build_failures" / "failure-001"
+            kept.mkdir(parents=True)
+            (kept / "stderr.txt").write_text("Traceback: the chart helper raised", encoding="utf-8")
+            revising.response = _reply("The chart should be right now.")
+            return await hook.after_iteration(revising)
+
+    decision = asyncio.run(run())
+    assert decision.rollback, "a build that produced nothing has not finished the turn"
+    assert decision.rollback_inject == [{"role": "user", "content": UNFINISHED_NUDGE}]
+
+
+def test_the_author_with_nothing_left_to_do_still_ends_the_turn(tmp_path: Path) -> None:
+    """The exemption's own case, which the fix must not take away: a turn that
+    began with a deck on the record and ran no build at all ends where it stops.
+    Held here beside the three unfinished shapes so the pair is read together --
+    the guard is about not ending a turn that still has work in it, and a turn
+    with no work in it is still allowed to end.
+    """
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(AgentHookContext(session_key="s1", inbound_content="make me a deck"))
+            own = Path(workdir.current())
+            _published(own, _pptx(own / "out" / "deck.pptx", slides=3))
+            # A build directory that exists and does not move: an earlier turn built
+            # here, so the marks are non-empty and still equal at both ends.
+            _pptx(own / "deck" / "build" / "deck.pptx", slides=3)
+
+            settled = AgentHookContext(session_key="s1", inbound_content="looks good, thanks", metadata={})
+            await hook.before_user_inbound(settled)
+            settled.response = _reply("Glad it works -- that is the deck you already have.")
+            return [await hook.after_iteration(settled) for _ in range(3)]
+
+    replies = asyncio.run(run())
+    assert not any(reply.rollback for reply in replies), "a settled turn is not sent back at all"
+    assert not any(reply.rollback_inject for reply in replies)
+
+
 def test_a_turn_that_published_its_deck_ends_once_its_reply_names_the_deck(tmp_path: Path) -> None:
     """On a live run the model's last act after publishing was a `cp` of the deck that the
     exec policy refused, and its reply was the refusal -- "would you like me to continue?"
@@ -1076,3 +1315,84 @@ def test_a_preview_from_an_earlier_deck_is_not_announced_as_this_one(tmp_path: P
     assert f"Deck: {deck}" in decision.modified_content
     assert str(stale) not in decision.modified_content
     assert "Preview" not in decision.modified_content
+
+
+# -- the destination the user named ------------------------------------------
+
+
+def _delivered_record(own: Path, deck: Path, delivered: Path) -> None:
+    """Record `deck` under out/ and `delivered` as the copy the publish step wrote there."""
+    import hashlib
+    import json
+
+    state = own / "deck" / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(deck.read_bytes()).hexdigest()
+    (state / "published.json").write_text(
+        json.dumps(
+            {
+                "published": [
+                    {"path": str(deck), "sha256": digest, "pages": 3},
+                    {"path": str(delivered), "sha256": digest, "pages": 3, "role": "delivery"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_the_delivered_path_is_announced_with_its_preview(tmp_path: Path) -> None:
+    """The user asked for the file at a path of their own; the reply that names it is
+    confirmed rather than contradicted, and its PDF rides along."""
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    ctx = AgentHookContext(session_key="s1", inbound_content="make the deck, put it in handoff/", metadata={})
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(ctx)
+            own = Path(workdir.current())
+            deck = _pptx(own / "out" / "deck.pptx", slides=3)
+            delivered = handoff / "ravenx-intro.pptx"
+            delivered.write_bytes(deck.read_bytes())
+            delivered.with_suffix(".pdf").write_bytes(b"%PDF-1.4")
+            _delivered_record(own, deck, delivered)
+            ctx.response = _reply(f"The deck is at {delivered} and has 3 slides.")
+            iteration = await hook.after_iteration(ctx)
+            ctx.outbound_content = f"The deck is at {delivered} and has 3 slides.\nMEDIA: {delivered}"
+            return await hook.after_send(ctx), delivered, iteration
+
+    decision, delivered, iteration = asyncio.run(run())
+    assert not iteration.rollback, "a reply naming the delivered path is a finished turn"
+    assert f"Published a 3-slide deck.\nDeck: {delivered}\nMEDIA: {delivered}" in decision.modified_content
+    assert f"MEDIA: {delivered.with_suffix('.pdf')}" in decision.modified_content
+    assert "No deck was published" not in decision.modified_content
+
+
+def test_an_earlier_turns_delivery_is_not_announced_again(tmp_path: Path) -> None:
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+
+    async def run():
+        with workdir.bind(wd):
+            first = AgentHookContext(session_key="s1", inbound_content="make the deck", metadata={})
+            await hook.before_user_inbound(first)
+            own = Path(workdir.current())
+            deck = _pptx(own / "out" / "deck.pptx", slides=3)
+            delivered = handoff / "ravenx-intro.pptx"
+            delivered.write_bytes(deck.read_bytes())
+            _delivered_record(own, deck, delivered)
+        with workdir.bind(wd):
+            later = AgentHookContext(session_key="s1", inbound_content="what did you deliver?", metadata={})
+            await hook.before_user_inbound(later)
+            later.outbound_content = f"Last time: {delivered}\nMEDIA: {delivered}"
+            return await hook.after_send(later)
+
+    decision = asyncio.run(run())
+    assert "Published a" not in (decision.modified_content or "")

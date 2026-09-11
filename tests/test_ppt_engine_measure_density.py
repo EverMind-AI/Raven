@@ -436,6 +436,86 @@ def test_the_copy_floors_can_be_replaced(deck: DeckBuilder) -> None:
     assert thin_copy(built, outline, floors=Floors(copy_cards=400))
 
 
+# -- a page nobody wrote into ----------------------------------------------------
+
+
+def _a_cloned_page_nobody_filled(deck: DeckBuilder, *, filled: int = 1, emptied: int = 15) -> None:
+    """A cloned page holding its heading and a row of boxes with nothing in them.
+
+    The shape of pages 7, 8, 9, 10, 12, 13, 14 and 15 of the deck this reading was
+    added for (`20260909_132114_9f5065`): one call wrote a title and a subtitle, emptied
+    every text the call had not named, and the helper meant to fill the rest looked for
+    the template's own words on a page they had already been cleared from. Each page
+    kept one or two frames of copy against thirteen to twenty-six empty ones.
+    """
+    page = deck.page()
+    for index in range(filled):
+        deck.text(page, (f"护城河是 CUDA {index + 1}。", 24.0), left=0.7, top=0.3 + index * 0.7, width=8.0, height=0.6)
+    for index in range(emptied):
+        deck.text(
+            page,
+            ("", 14.0),
+            left=0.7 + (index % 5) * 2.5,
+            top=1.8 + (index // 5) * 1.6,
+            width=2.3,
+            height=1.4,
+            wrap=True,
+        )
+
+
+def test_a_page_whose_frames_were_emptied_refuses_publication(deck: DeckBuilder) -> None:
+    _a_cloned_page_nobody_filled(deck)
+
+    findings = thin_copy(deck.save(), Outline(takeaway="t", pages=(plan(1),)))
+
+    assert [finding.kind for finding in findings] == ["emptied_page"]
+    assert findings[0].severity is Severity.BLOCKING
+    assert findings[0].detail["frames_emptied"] == 15
+    assert findings[0].detail["frames_filled"] == 1
+    assert "emptied, not removed" in findings[0].message
+    assert "`remove_unit`" in findings[0].message
+
+
+def test_a_page_merely_under_its_floor_still_only_warns(deck: DeckBuilder) -> None:
+    """The shape of the one page the floor reported across eleven delivered decks: page
+    12 of `20260906_170229_40d232`, a dozen characters short of the prose floor, with 14
+    frames of copy against 4 left empty. Being that far short is a judgement about how
+    much a page says, and the only way to answer a refusal over it is to pad the page --
+    the oscillation design doc D2 ends with no deck at all."""
+    page = deck.page()
+    for index in range(14):
+        deck.text(
+            page,
+            (_copy(32 if index == 0 else 8), 14.0),
+            left=0.7 + (index % 5) * 2.5,
+            top=0.4 + (index // 5) * 1.6,
+            width=2.3,
+            height=1.4,
+        )
+    for index in range(4):
+        deck.text(page, ("", 14.0), left=0.7 + index * 2.5, top=5.6, width=2.3, height=1.0)
+
+    findings = thin_copy(deck.save(), Outline(takeaway="t", pages=(plan(1),)))
+
+    assert [finding.kind for finding in findings] == ["thin_copy"]
+    assert findings[0].severity is Severity.WARNING
+
+
+def test_a_table_counts_as_copy_the_page_carries(deck: DeckBuilder) -> None:
+    """A page arguing from a table holds one text frame and its argument in a graphic
+    frame. Counted as copy it is thin; counted as nothing it is one frame against two
+    empty ones, and the page shape that needs no prose of its own would be refused."""
+    page = deck.page()
+    deck.text(page, ("三年的账。", 24.0), left=0.7, top=0.3, width=8.0, height=0.6)
+    deck.table(page, 3, 2, left=0.7, top=1.6, width=6.0, cell="60")
+    for index in range(2):
+        deck.text(page, ("", 14.0), left=7.5 + index * 1.8, top=1.8, width=1.6, height=1.2)
+
+    findings = thin_copy(deck.save(), Outline(takeaway="t", pages=(plan(1),)))
+
+    assert [finding.kind for finding in findings] == ["thin_copy"], "thin, and not unwritten"
+
+
 def _template_with_an_agenda(tmp_path: Path) -> Path:
     from pptx import Presentation
     from pptx.util import Inches, Pt

@@ -92,7 +92,7 @@ def literal_escapes(pptx_path: Path) -> list[Finding]:
                 findings.append(
                     Finding(
                         kind="literal_escape",
-                        severity=Severity.BLOCKING,
+                        severity=Severity.WARNING,
                         page=number,
                         message=(
                             f"this page prints {', '.join(repr(mark) for mark in found)} as characters: "

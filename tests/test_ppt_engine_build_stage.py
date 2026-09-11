@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import textwrap
 from pathlib import Path
 
@@ -83,6 +84,22 @@ def _outcome(project: Project, pages: int = 2, mapped: bool = True) -> BuildOutc
         else ()
     )
     return BuildOutcome(ok=True, pptx_path=deck, pages=pages, sources=sources, source_digest="x")
+
+
+def _drawn(project: Project, pages: int = 3) -> BuildOutcome:
+    """A real deck on disk, because dropping a page means opening the file."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    outcome = _outcome(project, pages=pages)
+    presentation = Presentation()
+    for number in range(1, pages + 1):
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
+        box.text_frame.text = f"page {number}"
+    # After _outcome, which writes a stub over this same path.
+    presentation.save(str(project.build_dir / "deck.pptx"))
+    return outcome
 
 
 def _measure(findings):
@@ -842,3 +859,166 @@ async def test_a_delivery_edited_in_place_is_reported_by_the_build_that_replaces
     assert Path(second.data["pptx_path"]).read_bytes() == (project.build_dir / "deck.pptx").read_bytes()
     # And it is said once, by the build that repaired it, not on every build after.
     assert "delivery_changed" not in (await stage.run(project)).data
+
+
+# -- the destination the user named ------------------------------------------
+
+
+def _built(project: Project, body: bytes, pages: int = 2) -> BuildOutcome:
+    deck = project.build_dir / "deck.pptx"
+    deck.write_bytes(body)
+    lines = SCRIPT.splitlines(keepends=True)
+    first = next(i for i, line in enumerate(lines) if "# SLIDE 1" in line)
+    second = next(i for i, line in enumerate(lines) if "# SLIDE 2" in line)
+    sources = (
+        PageSource(page=1, first_line=first, last_line=second),
+        PageSource(page=2, first_line=second, last_line=len(lines) - 2),
+    )
+    return BuildOutcome(ok=True, pptx_path=deck, pages=pages, sources=sources, source_digest="x")
+
+
+def _stated(project: Project, tmp_path: Path) -> Path:
+    from raven_ppt.services.publish import as_destination, write_destination
+
+    wanted = tmp_path / "handoff" / "ravenx-intro.pptx"
+    return write_destination(project, as_destination(str(wanted), project, default_name="deck.pptx"))
+
+
+@pytest.mark.asyncio
+async def test_every_publish_writes_the_stated_destination_as_well(project: Project, tmp_path: Path) -> None:
+    """Stated once; the first delivery and every revision after land on it."""
+    from raven_ppt.services.publish import delivered_decks
+
+    destination = _stated(project, tmp_path)
+
+    first = await _stage(project, outcome=_built(project, b"PK first")).run(project)
+    assert first.ok, first.note
+    assert first.data["delivered_to"] == str(destination)
+    assert destination.read_bytes() == b"PK first"
+    assert (project.exports_dir / "deck.pptx").read_bytes() == b"PK first", "out/ is written as before"
+
+    second = await _stage(project, outcome=_built(project, b"PK second")).run(project)
+    assert second.ok and second.data.get("republished") is True
+    assert destination.read_bytes() == b"PK second"
+    assert delivered_decks(project.state_dir) == [destination]
+    record = json.loads((project.state_dir / "published.json").read_text(encoding="utf-8"))["published"]
+    assert [entry.get("role") for entry in record] == [None, "delivery"]
+    assert {entry["sha256"] for entry in record} == {record[0]["sha256"]}, "one digest, two paths"
+
+
+@pytest.mark.asyncio
+async def test_a_refused_build_leaves_the_delivery_as_it_was(project: Project, tmp_path: Path) -> None:
+    """The destination holds the last deck that passed, never a half-built one."""
+    destination = _stated(project, tmp_path)
+    good = await _stage(project, outcome=_built(project, b"PK good")).run(project)
+    assert good.ok, good.note
+
+    refused = await _stage(project, findings=[_fact()], outcome=_built(project, b"PK broken")).run(project)
+    assert not refused.ok and "delivered_to" not in refused.data
+    assert destination.read_bytes() == b"PK good"
+
+    drafted = await _stage(project, outcome=_built(project, b"PK draft")).run(project, draft=True)
+    assert drafted.ok and "delivered_to" not in drafted.data
+    assert destination.read_bytes() == b"PK good"
+
+
+@pytest.mark.asyncio
+async def test_a_deck_with_no_stated_destination_is_published_as_before(project: Project) -> None:
+    result = await _stage(project).run(project)
+    assert result.ok and "delivered_to" not in result.data and "delivery_failed" not in result.data
+
+
+@pytest.mark.asyncio
+async def test_a_destination_that_cannot_be_written_is_said_not_swallowed(project: Project, tmp_path: Path) -> None:
+    """The deck is published under out/; that the named path did not get it is the author's to report."""
+    from raven_ppt.services.publish import write_destination
+
+    blocker = tmp_path / "handoff"
+    blocker.write_text("a file where the directory should be", encoding="utf-8")
+    write_destination(project, blocker / "intro.pptx")
+
+    result = await _stage(project, outcome=_built(project, b"PK deck")).run(project)
+    assert result.ok, result.note
+    assert Path(result.data["pptx_path"]).read_bytes() == b"PK deck"
+    assert "delivered_to" not in result.data
+    assert str(blocker / "intro.pptx") in result.data["delivery_failed"]
+
+
+def _stood_in(project: Project, page: int = 2) -> None:
+    from raven_ppt.backends.script.workspace import page_failures_path
+
+    page_failures_path(project).parent.mkdir(parents=True, exist_ok=True)
+    page_failures_path(project).write_text(
+        json.dumps({"pages": [{"page": page, "error": "KeyError: no shape says 'Outlook'", "traceback": "T"}]}),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_build_cap_delivers_the_pages_that_drew_without_the_stand_ins(project: Project) -> None:
+    """The cap is the one thing that stops buying quality: past it a deck goes out with
+    whatever the gates still say, because a deck that exists beats another round. That
+    includes a page the runner stood in for -- but not the stand-in itself. "Page 2 did
+    not draw" was never written, so the delivered file is the two pages that were, and
+    the built deck keeps all three for the next edit and for the findings' numbering."""
+    from pptx import Presentation
+
+    _stood_in(project)
+    result = await _stage(project, outcome=_drawn(project, 3)).run(project, release=True)
+
+    assert result.ok, result.note
+    assert result.data["dropped_pages"] == [2]
+    assert "page_failed" in result.data["released"]
+    delivered = Presentation(result.data["pptx_path"])
+    texts = [" ".join(s.text_frame.text for s in slide.shapes if s.has_text_frame) for slide in delivered.slides]
+    assert texts == ["page 1", "page 3"], texts
+    assert len(Presentation(str(project.build_dir / "deck.pptx")).slides) == 3, "the built deck keeps every page"
+
+
+@pytest.mark.asyncio
+async def test_the_preview_beside_a_short_deck_is_short_too(project: Project) -> None:
+    """The PDF the web surface previews is the render of the built deck, which has the
+    stand-in in it. One page longer than the file it sits beside, it previews a deck
+    nobody has -- so the same pages come out of the copy, and if they cannot come out
+    there is no preview rather than a wrong one."""
+    pdfium = pytest.importorskip("pypdfium2")
+
+    _stood_in(project)
+    outcome = _drawn(project, 3)
+    project.review_dir.mkdir(parents=True, exist_ok=True)
+    render = pdfium.PdfDocument.new()
+    for _ in range(3):
+        render.new_page(600, 400)
+    render.save(str(project.review_dir / "deck.pdf"))
+    later = outcome.pptx_path.stat().st_mtime + 5
+    os.utime(project.review_dir / "deck.pdf", (later, later))
+
+    result = await _stage(project, outcome=outcome).run(project, release=True)
+
+    assert result.ok, result.note
+    assert result.data["dropped_pages"] == [2]
+    preview = Path(result.data["pdf_path"])
+    assert len(pdfium.PdfDocument(str(preview))) == 2, "the preview still shows the page the deck does not have"
+
+
+@pytest.mark.asyncio
+async def test_a_draft_at_the_cap_delivers_instead_of_returning_unpublished(project: Project) -> None:
+    """The stage's draft branch returns before the publish path, so a run that only ever
+    passed `draft: true` could not reach delivery however many builds it took -- and
+    three of four measured runs are exactly that run. The cap is what publishes a deck
+    with problem pages rather than leaving the author with nothing, so it binds a draft:
+    at the cap the build delivers whatever the call asked for."""
+    stage = _stage(project, findings=[_fact()], outcome=_drawn(project, 3))
+
+    held = await stage.run(project, draft=True)
+    assert held.ok and held.data["draft"] is True
+    assert "pptx_path" not in held.data, "a draft under the cap publishes nothing"
+
+    released = await _stage(project, findings=[_fact()], outcome=_drawn(project, 3)).run(
+        project, draft=True, release=True
+    )
+
+    assert released.ok, released.note
+    assert Path(released.data["pptx_path"]).is_file(), "the draft that reached the cap delivered nothing"
+    assert released.data["released"] == ["fact"]
+    assert "draft" not in released.data, "it took the delivery path, not the draft one"

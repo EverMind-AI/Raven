@@ -101,18 +101,3 @@ def test_an_agent_loop_registers_itself_as_the_reader(tmp_path, fresh):
     # What a process that never saw the switch reads on the conversation's first tool call.
     assert session_mode("tui:restart") == "smart"
     assert session_mode("tui:fresh") is None
-
-
-def test_a_session_grant_holds_only_when_every_key_was_granted():
-    from raven.permissions.session import remember_allowed, session_allows
-
-    session_module._GRANTS.clear()
-    assert session_allows("c1", ["k1"]) is False
-    remember_allowed("c1", ["k1", "k2"])
-    assert session_allows("c1", ["k1"]) is True
-    assert session_allows("c1", ["k1", "k2"]) is True
-    assert session_allows("c1", ["k1", "k3"]) is False
-    assert session_allows("c2", ["k1"]) is False
-    assert session_allows("c1", []) is False
-    session_module._GRANTS.clear()
-    assert session_allows("c1", ["k1"]) is False

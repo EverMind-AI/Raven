@@ -1198,6 +1198,201 @@ def test_without_a_template_nothing_is_asked_to_start_from_one() -> None:
     assert _composed_pages(Outline(takeaway="t", pages=(_page(1), _page(2), _page(3))), _Free()) == []
 
 
+def test_a_plan_starting_most_of_its_content_pages_on_one_prototype_is_said() -> None:
+    """The run it was written against: a 14-page deck put 8 of its 11 content pages on one
+    prototype while 25 of the template's 27 content examples started nothing.
+
+    A warning and not a refusal: a uniform deck is a thing a user can ask for, and refusing
+    one would leave a run that was told to repeat a layout unable to finish. Pinned here
+    because the severity is the decision, not an implementation detail."""
+    from raven_ppt.services.template.defaults import bundled_path
+    from raven_ppt.tools.outline import PROTOTYPE_FLOOR, PROTOTYPE_SHARE, _repeated_prototype
+
+    bound = bundled_path("black_circuit_tech_launch")
+    if bound is None:
+        pytest.skip("the bundled template this reads is not on this checkout")
+    repeated = [3, 4, 6, 7, 9, 10, 12, 13]
+    pages = tuple(
+        _page(
+            number,
+            prototype=1
+            if number == 1
+            else 2
+            if number == 2
+            else 34
+            if number == 14
+            else (5 if number in repeated else 9),
+        )
+        for number in range(1, 15)
+    )
+
+    findings = _repeated_prototype(Outline(takeaway="t", pages=pages), _Bound(bound))
+
+    assert PROTOTYPE_SHARE == 1 / 2 and PROTOTYPE_FLOOR == 4
+    assert [(f.kind, f.severity.value) for f in findings] == [("repeated_prototype", "blocking")]
+    detail = dict(findings[0].detail)
+    assert detail["prototype"] == 5 and detail["pages"] == repeated
+    assert detail["content_pages"] == 11 and len(detail["unused_examples"]) == 25
+    assert "8 of this deck's 11 content pages" in findings[0].message
+    assert "more than all its other prototypes together" in findings[0].message
+    # The alternatives are named per page, because a refusal has to be actionable in
+    # the call that raises it.
+    assert detail["alternatives_for"], "the refusal only stands when it can name a page to move to"
+    assert "-> this template's page" in findings[0].message
+
+
+def test_a_repetition_that_clears_the_share_is_left_to_the_ask() -> None:
+    """Moving three of the eight pages is enough: five of eleven is not a majority, and
+    the refusal converges instead of standing on a plan the author cannot satisfy."""
+    from raven_ppt.services.template.defaults import bundled_path
+    from raven_ppt.tools.outline import _repeated_prototype
+
+    bound = bundled_path("black_circuit_tech_launch")
+    if bound is None:
+        pytest.skip("the bundled template this reads is not on this checkout")
+    spread = {3: 5, 4: 5, 6: 5, 7: 5, 9: 5, 10: 11, 12: 13, 13: 14, 5: 9, 8: 9, 11: 9}
+    pages = tuple(
+        _page(number, prototype=1 if number == 1 else 2 if number == 2 else 34 if number == 14 else spread[number])
+        for number in range(1, 15)
+    )
+
+    assert _repeated_prototype(Outline(takeaway="t", pages=pages), _Bound(bound)) == []
+
+
+def test_three_content_pages_on_one_prototype_stay_an_ask(tmp_path) -> None:
+    """A five-page deck cannot reach the floor: SERIES_RUN already reads three pages built
+    alike as a series built on purpose, so a refusal starts one page past it."""
+    from raven_ppt.tools.outline import SERIES_RUN, _repeated_prototype
+
+    template = _content_template(tmp_path / "house.pptx")
+    pages = (_page(1, prototype=1), _page(2, prototype=3), _page(3, prototype=3), _page(4, prototype=3))
+
+    assert SERIES_RUN == 3
+    assert _repeated_prototype(Outline(takeaway="t", pages=pages), _Bound(template)) == []
+
+
+def _examples_template(path, examples: int = 6):
+    """Cover, agenda, `examples` interchangeable content pages, closing.
+
+    Several content examples rather than one, so the refusal has unused pages to
+    name: `_matched_examples` offers each example once, so a plan with four
+    repeating pages needs four of them spare before the finding can stand at all.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    headings = ["A deck about something", "Agenda"]
+    headings += [f"Example {index + 1}" for index in range(examples)]
+    headings.append("谢谢观看")
+    for heading in headings:
+        page = presentation.slides.add_slide(presentation.slide_layouts[6])
+        page.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1)).text_frame.text = heading
+        if heading.startswith("Example"):
+            for index in range(4):
+                box = page.shapes.add_textbox(Inches(1 + 3 * index), Inches(3), Inches(2.6), Inches(2))
+                box.text_frame.text = (
+                    f"Finding {index + 1}: a sentence long enough to be copy rather than a label on it."
+                )
+    presentation.save(str(path))
+    return path
+
+
+def test_a_comparison_series_is_not_refused_for_repeating_its_prototype(tmp_path) -> None:
+    """Five consecutive pages on one example are a series, and a series is not a repeat.
+
+    `_reused_prototypes` has always read a run of SERIES_RUN or more as intentional and
+    left it alone. This refusal did not, so a plan whose pages 3-7 are a comparison a
+    reader is meant to make across pages was refused as one page repeated -- and the
+    refusal's own remedy told the author to keep the prototype for exactly that and say
+    so in `needs`, which nothing read. The two gates disagreeing left the plan with no
+    way to be recorded: the outline could not be filed and the run stopped there.
+    """
+    from raven_ppt.tools.outline import SERIES_RUN, _repeated_prototype, _series
+
+    template = _examples_template(tmp_path / "examples.pptx")
+    series = [3, 4, 5, 6, 7]
+    pages = tuple(
+        [_page(1, prototype=1), _page(2, prototype=2)]
+        + [_page(number, prototype=3) for number in series]
+        + [_page(8, prototype=4), _page(9, prototype=9)]
+    )
+
+    assert SERIES_RUN == 3
+    content = [page for page in pages if page.page in series + [8]]
+    assert _series(content) == [series], "the run is the series the other gate already accepts"
+    assert _repeated_prototype(Outline(takeaway="t", pages=pages), _Bound(template)) == []
+
+
+def test_a_template_with_nothing_left_to_offer_is_not_told_off_for_repeating(tmp_path) -> None:
+    """The guard that keeps a template with two body layouts out of this: there the
+    repetition is the template's doing, and borrowing stays an offer rather than a
+    requirement."""
+    from raven_ppt.tools.outline import _repeated_prototype
+
+    template = _content_template(tmp_path / "house.pptx")
+    pages = tuple([_page(1, prototype=1)] + [_page(number, prototype=3) for number in range(2, 8)])
+    # Six content pages on the template's only content example: past the floor and past
+    # the share, and still not refused, because there is no other page to name.
+
+    assert _repeated_prototype(Outline(takeaway="t", pages=pages), _Bound(template)) == []
+
+
+def test_a_uniform_plan_is_refused() -> None:
+    """A plan that starts most of its content pages on one prototype does not pass.
+
+    The severity was a warning for one revision, on the argument that a user may ask for a
+    uniform deck; three runs on briefs that asked for nothing of the kind then produced
+    plans at 8 of 11, 5 of 9 and 10 of 10, so the warning was recording as proposed the
+    thing it existed to stop. The severity rides on the finding rather than on a route's
+    `blocking_kinds`, which is what this also pins: no profile lists the kind, and it
+    refuses anyway."""
+    from raven_ppt.profiles import registry
+    from raven_ppt.services.template.defaults import bundled_path
+    from raven_ppt.tools.outline import _repeated_prototype
+
+    bound = bundled_path("black_circuit_tech_launch")
+    if bound is None:
+        pytest.skip("the bundled template this reads is not on this checkout")
+    repeated = [3, 4, 6, 7, 9, 10, 12, 13]
+    pages = tuple(
+        _page(
+            number,
+            prototype=1
+            if number == 1
+            else 2
+            if number == 2
+            else 34
+            if number == 14
+            else (5 if number in repeated else 9),
+        )
+        for number in range(1, 15)
+    )
+
+    findings = _repeated_prototype(Outline(takeaway="t", pages=pages), _Bound(bound))
+
+    assert findings, "this plan is the one the finding exists for"
+    assert [f.severity.value for f in findings] == ["blocking"]
+    for name in registry.names():
+        assert "repeated_prototype" not in registry.get(name).blocking_kinds, name
+
+
+def test_identical_picture_slots_are_counted_rather_than_listed() -> None:
+    """The noise that drowned the ask it sat inside: a template page with fifteen equal
+    thumbnails spent about 700 characters repeating one slot's geometry."""
+    from raven_ppt.tools.outline import _slot_facts
+
+    class _Entry:
+        picture_slots = tuple(f"[{index}] 2.3x2.6in drawing" for index in range(1, 16))
+
+    said = _slot_facts(_Entry(), canvas=100.0, largest=0.0)
+
+    assert said.count("2.3x2.6in") == 1
+    assert "15 of 2.3x2.6in" in said and "each" in said
+    assert len(said) < 60
+
+
 def test_a_page_without_a_prototype_is_offered_the_examples_that_fit_what_it_carries(tmp_path) -> None:
     """The ask that said "pick the nearest example" was acted on by nobody until a page
     number stood beside each page; the suggestion is by materials, and it stays a
@@ -1471,24 +1666,25 @@ def test_one_page_is_offered_once_across_the_pages_that_repeat(bound_template) -
 
 
 @_needs_bundled
-def test_the_ink_note_rides_the_offer_only_in_the_deck_that_needs_it(bound_template) -> None:
-    """Once for the deck and only for the one whose accent cannot carry white."""
+def test_the_ink_note_rides_the_offer_once_for_the_deck_and_for_every_deck(bound_template) -> None:
+    """Once for the deck, and for both of these -- which is the half that changed.
+
+    This used to assert that only the pale-accent template got the caveat, on the
+    reasoning that the other nine have an `accent1` dark enough to label in white. Then
+    486 clones of the reference pages were rendered and read: 89 pages came back with
+    copy under the ratio and every one of the ten hosts had some, including the one this
+    test called fine. Once per deck is still right; only for one deck was not.
+    """
     from raven_ppt.tools.outline import _reused_prototypes
 
-    pale = _reused_prototypes(
-        Outline(takeaway="t", pages=_every_example_once_plus("warm_bauhaus_quarterly_review", repeats=3)),
-        bound_template("warm_bauhaus_quarterly_review"),
-    )
-    assert "borrowed:" in pale, "every example taken, so the offers are borrowed ones"
-    assert pale.count("renders white at") == 1, "said once for the deck, not once per offer"
-    assert "this deck's ink" in pale
-
-    fine = _reused_prototypes(
-        Outline(takeaway="t", pages=_every_example_once_plus("beige_geometric_general_report", repeats=3)),
-        bound_template("beige_geometric_general_report"),
-    )
-    assert "borrowed:" in fine
-    assert "renders white at" not in fine, "a template that carries white fine gets no caveat"
+    for stem in ("warm_bauhaus_quarterly_review", "beige_geometric_general_report"):
+        said = _reused_prototypes(
+            Outline(takeaway="t", pages=_every_example_once_plus(stem, repeats=3)),
+            bound_template(stem),
+        )
+        assert "borrowed:" in said, "every example taken, so the offers are borrowed ones"
+        assert said.count("nothing recolours ink") == 1, f"{stem}: said once for the deck, not per offer"
+        assert "this deck's ink" in said, stem
 
 
 @_needs_bundled
@@ -1616,8 +1812,8 @@ def test_the_composed_refusal_says_nothing_about_borrowing_when_nothing_fits(bou
 
 
 @_needs_bundled
-def test_the_composed_refusal_carries_the_ink_caveat_only_in_the_pale_deck(bound_template) -> None:
-    """The same rule as the asks: once for the deck, and only for the one that needs it."""
+def test_the_composed_refusal_carries_the_ink_caveat_once_for_the_deck(bound_template) -> None:
+    """The same rule as the asks: once for the deck, and now for every deck."""
     from raven_ppt.tools.outline import _composed_pages
 
     pages = (
@@ -1626,8 +1822,6 @@ def test_the_composed_refusal_carries_the_ink_caveat_only_in_the_pale_deck(bound
     )
     outline = Outline(takeaway="t", pages=pages)
 
-    pale = _composed_pages(outline, bound_template("warm_bauhaus_quarterly_review"))[0].message
-    assert pale.count("renders white at") == 1, pale
-
-    fine = _composed_pages(outline, bound_template("beige_geometric_general_report"))[0].message
-    assert "renders white at" not in fine
+    for stem in ("warm_bauhaus_quarterly_review", "beige_geometric_general_report"):
+        said = _composed_pages(outline, bound_template(stem))[0].message
+        assert said.count("nothing recolours ink") == 1, said

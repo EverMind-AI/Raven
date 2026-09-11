@@ -458,7 +458,7 @@ class PptTemplateTool(Tool):
     async def _as_renders(self, deck: Project, template: Any, payload: dict[str, Any]) -> str | ToolResult:
         """Every example page as pictures, plus the measured house style."""
         folder = deck.review_dir / "template"
-        listing = menu(template.source, _unwritable_pages(template.source, template.example_pages))
+        listing = menu(template.source, *_page_notes(template.source, template.example_pages))
         named = roles(listing)
         pdf = await self.thumbnails.pdf(template.source, folder)
         shown = {entry.number for entry in listing if not entry.hidden}
@@ -502,11 +502,11 @@ class PptTemplateTool(Tool):
                 # came out as "already draws: . Clone the one ...".
                 + (f", each an arrangement this template already draws: {shapes}" if shapes else "")
                 + ". Clone the one whose arrangement matches the page's information shape -- "
-                "`adapt(prs, prototype(tpl, N), title='...', texts={...})` -- and prefer that to drawing "
+                "`s = clone_page(prs, prototype(tpl, N))` then `replace_text(s, 'the words there now', 'yours')` -- prefer that to drawing "
                 "the page yourself: a page composed from `plane`, `write` and `stack` has those and "
                 "nothing else, while whatever this template draws that they cannot -- a timeline, a ring "
                 "of badges, a numbered pill, a figure card -- exists on these pages and nowhere else. "
-                "Use `adapt(items=...)` to fill the repeated units and remove the spares. Compose inside "
+                "Write each repeated unit with `replace_text` and take the spares out with `remove_unit`. Compose inside "
                 "the measured house style only for a page no example can carry. " + LEGEND
             )
         asks = []
@@ -514,19 +514,19 @@ class PptTemplateTool(Tool):
             asks.append(
                 "clone the template's structural pages -- "
                 + ", ".join(f"its {role} is page {number}" for role, number in named.items())
-                + " -- with `from ppt_template import adapt, prototype` then "
-                "`adapt(prs, prototype(tpl, N), title='...', texts={'the words there now': 'yours'})`, where "
+                + " -- with `from ppt_template import clone_page, prototype, replace_text` then "
+                "`s = clone_page(prs, prototype(tpl, N))` and one `replace_text(s, old, new)` per line, where "
                 "`tpl = Presentation(os.environ['PPT_TEMPLATE_SOURCE'])` -- the user's own file, with these "
                 "example pages still in it. That is a different file from the one you build into: "
                 "`PPT_TEMPLATE` has had them removed, so handing that one to `prototype` answers `this "
                 "template ships 0 pages`. Those pages are the deck's house frame and are not redrawn"
             )
         # Every argument gets a literal call here, and that is the whole point of the
-        # length. A live run called `adapt` fourteen times, passed `texts=` in thirteen
-        # of them and `pictures=` and `drop=` in none -- the reply had spelled `texts={...}`
-        # out and left the other two as prose, so the template's placeholder photograph and
-        # its icons shipped untouched. The same run imported `drop_shape` and never called
-        # it. A capability described is a capability declined.
+        # length. A live run cloned fourteen pages, wrote copy into thirteen of them and
+        # reached for a picture or a leftover shape in none -- the reply had spelled the
+        # copy call out and left the other two as prose, so the template's placeholder
+        # photograph and its icons shipped untouched. The same run imported `drop_shape`
+        # and never called it. A capability described is a capability declined.
         # Named page by page in the *ask*, because the ask is what becomes `next_step` and
         # `next_step` is what the program acts on. The same list went into the payload as
         # `content_pages` first and moved a live run from five prototypes out of fifteen
@@ -539,7 +539,7 @@ class PptTemplateTool(Tool):
                 "give every content page a prototype from this list, by the arrangement it holds: "
                 + "; ".join(examples_named)
                 + " -- record the page number you picked in the plan's `prototype` field and clone it with "
-                "`adapt(prs, prototype(tpl, N), ...)`. A page you compose instead has `plane`, `write` and "
+                "`clone_page(prs, prototype(tpl, N))` and `replace_text`. A page you compose instead has `plane`, `write` and "
                 "`stack` and nothing else, and whatever this template draws that those cannot -- a timeline, "
                 "a ring of badges, a numbered pill, a figure card -- is on these pages and nowhere else. "
                 "Compose from scratch only for a page no arrangement here can carry, and say which"
@@ -549,7 +549,7 @@ class PptTemplateTool(Tool):
             payload["layout_pictures"] = carried
             asks.append(
                 "this template keeps some of its photographs on its layouts, where every page on the layout "
-                "inherits them and `pictures={...}` on a cloned page never reaches them: "
+                "inherits them and a `replace_picture` on a cloned page never reaches them: "
                 + "; ".join(carried)
                 + ". Change one for every page at once with `replace_picture(layout_pictures(slide)[0], "
                 "FIGURES/'x.png', 'cover')` after `from ppt_template import layout_pictures`, and keep the rest "
@@ -571,7 +571,7 @@ class PptTemplateTool(Tool):
                 "for a page no example above can carry, borrow one of these pages from another bundled "
                 "template -- its colours and master become this deck's, only the arrangement comes across: "
                 + "; ".join(said for _, _, said in borrowable)
-                + ". Clone it with `adapt(prs, prototype(bundled('<template>'), N), ...)` after "
+                + ". Clone it with `clone_page(prs, prototype(bundled('<template>'), N))` after "
                 "`from ppt_template import bundled`, and record both `borrowed: '<template>'` and "
                 "`prototype: N` on that page of the plan"
                 + (
@@ -590,54 +590,61 @@ class PptTemplateTool(Tool):
             )
         asks.append(
             "any listed example page may be a content prototype when its composition is close to the "
-            "page's information shape: `adapt(prs, prototype(tpl, N), title='page title', "
-            "subtitle='its second line', texts={'the words there now': 'yours'}, "
-            "pictures={4: FIGURES/'fig2.png'}, drop=[9], keep=['20XX.XX.XX'])`, where "
-            "`FIGURES = Path(os.environ['PPT_FIGURES_DIR'])` -- a bare 'figures/...' resolves against the "
-            "build directory the program runs in, which is not where the ingest put them. A key is the "
-            "shape's current text or its 1-based place on the page -- a shape's *name* matches nothing "
-            "and raises, listing what the page does hold. `title` and `subtitle` reach the page's own "
-            "heading rows without your having to know which shape they are, and on a content page they "
-            "are the form to prefer. A closing page is where `subtitle` runs out: a heading row is the topmost "
-            "line in the page's top third, and a cover that centres its title mid-page or a section "
-            "divider carrying one word has no second one, so there `adapt` raises and you name that "
-            "line in `texts` off the render instead"
+            "page's information shape. The whole route is four calls:\n"
+            "```python\n"
+            "from ppt_template import clone_page, drop_shape, prototype, remove_unit, replace_picture, "
+            "replace_text, shape_at, units\n"
+            "tpl = Presentation(os.environ['PPT_TEMPLATE_SOURCE'])   # the original, example pages intact\n"
+            "s = clone_page(prs, prototype(tpl, 7))                  # arrives holding the template's words\n"
+            "replace_text(s, 'the words there now', 'yours')         # once per line this page says\n"
+            "replace_picture(shape_at(s, 4), FIGURES / 'fig2.png', 'cover')\n"
+            "drop_shape(shape_at(s, 9))                              # a shape this page does not use\n"
+            "```\n"
+            "where `FIGURES = Path(os.environ['PPT_FIGURES_DIR'])` -- a bare 'figures/...' resolves against "
+            "the build directory the program runs in, which is not where the ingest put them. "
+            "**`replace_text`'s first argument is the text that shape is holding right now, and "
+            "`ppt_template(pages=[N])` prints exactly that string above every shape on the page**, so "
+            "read the page back and each printed line is a key you can paste. It matches on the words in "
+            "the box and never on a shape's name; a string that matches nothing raises, listing what the "
+            "page does hold"
         )
         asks.append(
-            "the two defaults are opposites, and this is the one that catches authors out: **text you "
-            "name in none of those arguments is emptied**, because the words on a template page are its "
-            "example copy -- so name every line you mean to keep, or list it in `keep=[...]` to leave it "
-            "exactly as the template wrote it. **A picture or icon you name in neither `pictures` nor "
-            "`drop` stays as it is**, so the template's stock photograph and its decorative icons ship in "
-            "your deck unless you replace them or drop them. `pictures={4: FIGURES/'fig2.png'}` "
-            "keeps the frame's size, crop and rounding; `pictures={4: (FIGURES/'fig2.png', "
-            "(0.8, 1.6, 7.4, 4.2))}` reshapes the frame first, where those four numbers are "
-            "(left, top, width, height) in inches -- a size, not the two corners a `ppt_layout` Box "
-            "holds, though a Box may be handed over whole and is converted"
+            "**a cloned page arrives carrying the template's own words, and every line you do not "
+            "replace is still saying them.** That is this route's safety rather than a nuisance: a line "
+            "you missed is visible on the page, and the build refuses to publish it and quotes the line "
+            "back (`placeholder_copy`); a numeral or a glyph of the template's left behind is one warning "
+            "for the page rather than a refusal (`placeholder_marks`). So every block is either replaced "
+            "or taken off the page with `drop_shape`, bar one: a structural page's own label -- the `目录` "
+            "or `Agenda` an index page is called by -- stays, and nothing asks you for it. "
+            "The same holds for pictures and icons -- the template's stock photograph "
+            "ships in your deck unless you replace or drop it. `replace_picture(shape, image, 'cover')` "
+            "keeps the frame's size, crop and rounding; `box=(0.8, 1.6, 7.4, 4.2)` reshapes the frame "
+            "first, those four numbers being (left, top, width, height) in inches -- a size, not the two "
+            "corners a `ppt_layout` Box holds, though a Box may be handed over whole and is converted -- "
+            "and `anchor`, `trim`, `zoom` and `alpha` are there for the rest"
         )
         asks.append(
-            "a content page is usually one small group repeated, and `items` is what fills it: "
-            "`adapt(prs, prototype(tpl, N), title='...', items=[['01', 'first heading', 'its body'], "
-            "['02', 'second heading', 'its body']])`. One entry per unit, each a list positional over "
-            "that unit's text shapes -- `None` keeps one as it is, and `''` over a number restates it "
-            "for its new position -- or a dict keyed by the text a shape holds now. Give one value per "
-            "text shape in the unit and not one per line you have to say: a list shorter than the unit "
-            "leaves the rest exactly as the template wrote it, so a two-value entry against a "
-            "three-shape card ships the template's own placeholder copy once per surviving card. "
-            "Passing more values than the unit holds raises, naming each shape, which is how to learn "
-            "the count. The units left over "
-            "are deleted rather than emptied, so a six-slot page carrying four points loses two slots "
-            "instead of shipping two empty bubbles. `items` fills the page's longest run only: if a "
-            "render shows more repeated cards than you passed items for, the page holds a second run, "
-            "and `fill(units(slide)[1], [['03', 'third heading', 'its body']])` after `adapt` returns "
-            "fills that one -- positionally, because `adapt` has already emptied its words; both come "
-            "from `from ppt_template import adapt, prototype, fill, units, shape_at, drop_shape`. To adjust one "
-            "shape after `adapt`, take a handle on it -- `shape_at(slide, 5)` by the number printed above, "
-            "`shape_near(slide, 1.56, 2.47)` by where the page shows it, `shape_saying(slide, 'Method')` by the "
-            "copy it starts with -- and never by `shape.left`, which inside a group is the group's own "
-            "coordinate and not a position on the page. `raise_type(slide)` lifts copy the template states "
-            "under the readability floor. A prototype "
-            "is a starting composition, not an immutable form; if its capacity or picture geometry is "
+            "a content page is usually one small group repeated, and each repeat is written the same "
+            "way -- one `replace_text` per line, keyed on the words that unit is holding now. **A page "
+            "with more slots than the deck has points needs the spares taken out, and that is "
+            "`remove_unit`:**\n"
+            "```python\n"
+            "s = clone_page(prs, prototype(tpl, 2))          # an agenda of eight slots\n"
+            "for old, new in pairs:                          # six of them take this deck's sections\n"
+            "    replace_text(s, old, new)\n"
+            "for spare in max(units(s), key=len)[6:]:        # the seventh and eighth go, and the\n"
+            "    remove_unit(spare)                          # survivors are laid out again\n"
+            "```\n"
+            "`remove_unit` closes the row up; `drop_shape` removes a shape and leaves the hole, which is "
+            "what you want for one shape and not for a slot. Writing '' into a slot you meant to delete "
+            "empties its text and ships its numbered bubble anyway, so it is not a spelling of delete. "
+            "`units(s)` says how many runs the page has and how long each is -- check it whenever the "
+            "render shows more repeated cards than you wrote. To reach one shape: `shape_at(s, 5)` by "
+            "the number the read-back prints, `shape_near(s, 1.56, 2.47)` by where the page shows it, "
+            "`shape_saying(s, 'Method')` by the copy it starts with -- and never by `shape.left`, which "
+            "inside a group is the group's own coordinate and not a position on the page. "
+            "`raise_type(s)` lifts copy the template states under the readability floor. A prototype is "
+            "a starting composition, not an immutable form; if its capacity or picture geometry is "
             "wrong, choose another page or compose inside the house style"
         )
         if house is not None and house.layout:
@@ -777,7 +784,7 @@ class PptTemplateTool(Tool):
                 note = (
                     f"\n# -- cut: {{withheld}} more line(s) of page {number} did not fit the "
                     f"{SOURCE_BUDGET_CHARS}-character reply. A page too large to read as code is one to clone: "
-                    "`from ppt_template import clone_page, replace_text, replace_picture, drop_shape`"
+                    "`clone_page(prs, prototype(tpl, N))` then `replace_text` per line"
                 )
                 block, withheld = _cut(block, SOURCE_BUDGET_CHARS - len(note) - 4)
                 cut[str(number)] = withheld
@@ -802,14 +809,41 @@ class PptTemplateTool(Tool):
                 "pages "
                 + ", ".join(str(number) for number in sorted(unwritable))
                 + " hold shapes python-pptx cannot write, so code alone will not reproduce them -- clone "
-                "those pages with `from ppt_template import clone_page, replace_text, replace_picture, "
-                "clear_region, drop_shape` and edit the copy instead. Replacing its words is "
-                "`replace_text`; drawing anything of your own into it -- a chart, a panel, a figure -- means "
-                "emptying that space first -- `clear_region(slide, page_box(shape_at(slide, n)))` for where one "
-                "shape is, or `clear_region(slide, Box.corners(x0, y0, x1, y1))` for a space of your own, since "
-                "four bare numbers cannot say which reading they are and are refused -- which reports every shape it took "
-                "out and every one still lying over your box. A run that swept the page by hand instead "
-                "kept the arrows, the number labels and every connector, and drew two charts on top of them"
+                "those pages with `clone_page(prs, prototype(tpl, N))` and `replace_text` per line "
+                "instead. Drawing anything of your own into it -- a chart, a panel, "
+                "a figure -- means emptying that space first -- `clear_region(slide, page_box(shape_at(slide, n)))` "
+                "for where one shape is, or `clear_region(slide, Box.corners(x0, y0, x1, y1))` for a space of "
+                "your own, since four bare numbers cannot say which reading they are and are refused -- which "
+                "reports every shape it took out and every one still lying over your box. A run that swept the "
+                "page by hand instead kept the arrows, the number labels and every connector, and drew two "
+                "charts on top of them"
+            )
+        # Apart from `cannot_be_redrawn`, because the answer is the opposite one. A run
+        # was told to clone a chart page and replace_text it, got a chart holding the
+        # template's own categories, and spent 73 minutes in a shell measuring the
+        # template's axis type so it could rebuild the chart by hand.
+        charts = {page.index + 1: page.redraw_yourself for page in sources if page.redraw_yourself}
+        if charts:
+            payload["charts_to_draw"] = {str(number): list(boxes) for number, boxes in charts.items()}
+            asks.append(
+                "pages "
+                + ", ".join(str(number) for number in sorted(charts))
+                + " carry the template's own chart. The layout may be cloned, but the chart must be redrawn "
+                "with ppt_charts from your own data and placed in the same position -- `charts_to_draw` is "
+                "the box each one occupies, and the page's code below names the two calls. Cloning a chart "
+                "keeps the template's numbers and nothing here rewrites them, replace_text included: a "
+                "chart's labels are in its own part, not in a text frame, and no gate reads inside a chart "
+                "either, so a page shipped that way is not refused"
+            )
+        if unwritable or charts:
+            # The route, where the instruction to write code is. Nine ppt_template
+            # replies in one run told an author to clone and to redraw and named no
+            # tool for either, and the run wrote 288 identical exec calls instead of
+            # a program. `ppt_template.clone_page` is also a module path that reads
+            # like this tool's name, which is the other half of the same mistake.
+            asks.append(
+                "the deck's program is where those lines go, not a call on this tool: write it to "
+                "`deck/build/build.py` with write_file, then ppt_build runs it and returns every page it drew"
             )
         payload["pages_read"] = [page.index + 1 for page in sources]
         if cut:
@@ -894,6 +928,30 @@ def _cut(block: str, budget: int) -> tuple[str, dict[str, int]]:
     return "".join(kept).rstrip("\n"), {"lines_shown": len(kept), "lines_withheld": len(lines) - len(kept)}
 
 
+# The page stays on offer -- its arrangement is exactly what an author wants a chart
+# page for -- and the offer carries what the clone does not deliver. Said beside the
+# render because that is what a prototype is chosen from: the run that cloned a chart
+# page had picked it here and read this line, which said nothing about the chart.
+_CHART_IS_YOURS = (
+    ". The {noun} on it {verb} the template's own, at {where}: the layout may be cloned, but the chart must "
+    "be redrawn with `ppt_charts` from your own data and placed in the same position. A cloned chart arrives "
+    "holding the template's numbers and nothing here rewrites them -- `replace_text` reaches text frames, and "
+    "a chart's labels are not in one"
+)
+
+
+def _chart_clause(charts: tuple[str, ...]) -> str:
+    """What the page owes the author, or "" where the page draws no chart."""
+    if not charts:
+        return ""
+    one = len(charts) == 1
+    return _CHART_IS_YOURS.format(
+        noun="chart" if one else f"{len(charts)} charts",
+        verb="is" if one else "are",
+        where=" and ".join(charts),
+    )
+
+
 def _render_label(number: int, role: str | None, entry: Any) -> str:
     """The line above a template page's render: what the page is, and how to start from it.
 
@@ -905,8 +963,9 @@ def _render_label(number: int, role: str | None, entry: Any) -> str:
     that make it a choice -- its shape, its slots, the call that takes it -- go next
     to the picture.
     """
+    charts = tuple(getattr(entry, "charts", ()) or ()) if entry is not None else ()
     if role:
-        return f"Template page {number} -- the template's {role}"
+        return f"Template page {number} -- the template's {role}" + _chart_clause(charts)
     shape = getattr(entry, "arrangement", "") if entry is not None else ""
     slots = getattr(entry, "slots", 0) if entry is not None else 0
     said = f"Template page {number} -- a content example"
@@ -917,38 +976,46 @@ def _render_label(number: int, role: str | None, entry: Any) -> str:
         said += (
             f". Picture slots: {', '.join(places)} -- what goes in each is yours to decide: a figure from the "
             "sources, a photograph, or `ppt_generate_image(..., transparent=true)` for an illustration that "
-            "sits on the page's own ground; `pictures={n: FIGURES/'x.png'}` puts it there"
+            "sits on the page's own ground; `replace_picture(shape_at(s, n), FIGURES/'x.png')` puts it there"
         )
         if any(" cut-out" in place for place in places):
             said += (
                 ". A cut-out slot is a transparent drawing floating on the ground, and its box runs wherever "
                 "the drawing does -- into the title row, over a band; a photograph there wants a box of its "
-                "own clear of the copy, `pictures={n: (image, (left, top, width, height))}`, or a cut-out of "
+                "own clear of the copy, `replace_picture(shape, image, box=(left, top, width, height))`, or a cut-out of "
                 "its own from `ppt_generate_image(..., transparent=true)`"
             )
         if any(" icon" in place for place in places):
             said += ". A" + ICON_SLOT_NOTE[1:]
+    said += _chart_clause(charts)
     return said + (
-        f". A page of this information shape starts here: `adapt(prs, prototype(tpl, {number}), title=..., "
-        f"texts={{...}}{', items=[...]' if slots else ''}{', pictures={...}' if places else ''})`, and record "
-        f"`prototype: {number}` on it in the plan"
+        f". A page of this information shape starts here: `s = clone_page(prs, prototype(tpl, {number}))`, then "
+        f"one `replace_text(s, old, new)` per line the page says"
+        f"{', `remove_unit` for the slots it does not fill' if slots else ''}"
+        f"{', `replace_picture` for the figure' if places else ''}"
+        f". Record `prototype: {number}` on it in the plan"
     )
 
 
-def _unwritable_pages(source: Path, count: int) -> dict[int, tuple[str, ...]]:
-    """Which example pages hold something python-pptx cannot write, page -> what.
+def _page_notes(source: Path, count: int) -> tuple[dict[int, tuple[str, ...]], dict[int, tuple[str, ...]]]:
+    """What each example page holds that plain code does not answer: page -> what.
 
-    Every page, not the ones asked for: the verdict an author needs at the moment of
-    choosing is "9 of 13", and a per-request answer cannot say that. Decompiling all
-    of them costs well under a second on the templates measured, and no images are
-    written because none are wanted here.
+    Two answers off one pass -- the shapes cloning keeps, and the boxes of the charts
+    cloning does not. Every page, not the ones asked for: the verdict an author needs
+    at the moment of choosing is "9 of 13", and a per-request answer cannot say that.
+    No images are written because none are wanted here.
     """
-    found: dict[int, tuple[str, ...]] = {}
+    unwritable: dict[int, tuple[str, ...]] = {}
+    charts: dict[int, tuple[str, ...]] = {}
     for number in range(1, count + 1):
         page = decompile(source, number - 1)
-        if page is not None and page.unredrawable:
-            found[number] = page.unredrawable
-    return found
+        if page is None:
+            continue
+        if page.unredrawable:
+            unwritable[number] = page.unredrawable
+        if page.redraw_yourself:
+            charts[number] = page.redraw_yourself
+    return unwritable, charts
 
 
 def _inside(workspace: Path, path: Path) -> bool:

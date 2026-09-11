@@ -12,7 +12,43 @@ remembered: `publish` takes the findings and raises on a blocking one. There is
 no way to call it without having asked.
 """
 
-from raven_ppt.services.publish.deliver import PublishRefusedError, Staged, publish, stage
+from raven_ppt.services.publish.deliver import (
+    Delivered,
+    DeliveryError,
+    PublishRefusedError,
+    Staged,
+    deliver,
+    delivered_decks,
+    publish,
+    stage,
+)
+from raven_ppt.services.publish.destination import (
+    Destination,
+    DestinationError,
+    as_destination,
+    read_destination,
+    sidecar_for,
+    write_destination,
+)
 from raven_ppt.services.publish.provenance import strip_vendor_marks
+from raven_ppt.services.publish.trim import pdf_without_pages, without_pages
 
-__all__ = ["PublishRefusedError", "Staged", "publish", "stage", "strip_vendor_marks"]
+__all__ = [
+    "Delivered",
+    "DeliveryError",
+    "Destination",
+    "DestinationError",
+    "PublishRefusedError",
+    "Staged",
+    "as_destination",
+    "deliver",
+    "delivered_decks",
+    "pdf_without_pages",
+    "publish",
+    "read_destination",
+    "sidecar_for",
+    "stage",
+    "strip_vendor_marks",
+    "without_pages",
+    "write_destination",
+]

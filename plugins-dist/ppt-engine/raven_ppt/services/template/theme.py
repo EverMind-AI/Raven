@@ -56,8 +56,10 @@ The one thing not derived is the accent. That is the template's own, always.
 
 from __future__ import annotations
 
+import colorsys
 from collections import Counter
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from raven_ppt.services.assets.fonts import SERIF_FACES, cjk_face
@@ -511,37 +513,124 @@ def _rgb(colour: str) -> tuple[int, int, int] | None:
         return None
 
 
-def white_on_accent(inventory: TemplateInventory) -> tuple[str, float] | None:
-    """The accent this template paints that white type cannot be read on, and its ratio.
+@dataclass(frozen=True)
+class Washed:
+    """One pair of colours a borrowed label would arrive in and land on, and its ratio."""
 
-    None when every accent it declares carries white type, which is the ordinary case:
-    a designer picks an accent dark enough to label. The exception is what this is for.
-    A page cloned from another template brings its own ink stated on the run -- white on
-    accent1 is how seven of the eight bundled templates label a card -- and nothing
-    recolours ink to suit the ground it lands on. So the one template whose accent1 is
-    pale receives, from every page borrowed into it, labels it cannot show; measured,
-    19 of the 31 pages borrowed into it came back under the ratio.
+    ink: str
+    ground: str
+    fill: str
+    tint: tuple[float, float]
+    alpha: float
+    ratio: float
+    seen: int = 0
+    order: int = 0
 
-    accent1 alone, not the whole series. The later accents are a chart's series colours
-    and a template is free to make them pale; accent1 is what a card, a pill and a
-    numbered circle are filled with, so it is the one a borrowed page will land on.
+    def said(self) -> str:
+        """The card named the way an author would go and change it."""
+        shade = "" if self.tint == (1.0, 0.0) else f" tinted {self.tint[0] * 100:.0f}/{self.tint[1] * 100:.0f}"
+        washed = "" if self.alpha >= 1.0 else f" at {self.alpha * 100:.0f}% alpha"
+        named = self.fill if self.fill.startswith("#") else f"`{self.fill}`{shade}{washed}"
+        return f"a {self.ink} label on {named}, which renders {self.ground} here, at {self.ratio:.1f}:1"
+
+
+def unreadable_grounds(inventory: TemplateInventory) -> tuple[Washed, ...]:
+    """The colours a borrowed card label would arrive in and land on that cannot be read, worst first.
+
+    Empty when every colour these reference pages fill a card with carries every colour
+    they label one in, once both are resolved in this deck's palette.
+
+    This used to ask one question -- is white readable on `accent1` -- and it is the
+    wrong one three times over. Measured over 486 clones of the 54 reference pages into
+    the ten bundled templates, rendered and read by `measure.contrast`, 89 pages came
+    back with copy under the ratio, spread across every one of the ten hosts. `accent1`
+    was the ground of 24 of them; the other 65 landed on `accent2` (30), the near-white
+    second plane (20), `accent3` (3), `accent5` (1) and the page ground (3), and 22 of
+    the 89 landed on a *tint* of one of those rather than the swatch. And white was only
+    68 of the inks: 6 more were the near-white literal beside it and 15 were a scheme
+    colour, which is this deck's own once the page is cloned in. So asking about
+    `accent1` against pure white answers for the one bundled template whose `accent1` is
+    pale and calls the other nine safe, the dark one 17 of the failures are in included.
+
+    Both halves come from the measurement's own facts. The ink is what the run states,
+    read off the file where it is stated exactly, and the ground is a colour the deck
+    declares -- not the fill under any particular text box, because that fill is a stack
+    of a tint over a panel over the master and resolving it by hand reproduces the
+    renderer, which is what `measure.contrast` reads a render for. What is asked is
+    therefore every (label, card) pair these pages actually state, resolved in this
+    deck's palette: `defaults` holds the three measured sets, this holds the arithmetic.
     """
     from raven_ppt.services.assets.color import contrast_ratio
-    from raven_ppt.services.template.defaults import ACCENT_READS_WHITE
+    from raven_ppt.services.template.defaults import BORROWED_INK_READS, BORROWED_LABEL_PAIRS
 
     palette = dict(inventory.theme_colours)
     mapping = dict(inventory.colour_map)
-    colour = _slot(palette, mapping, "accent1")
-    if not colour or _rgb(colour) is None:
-        return None
-    ratio = contrast_ratio(colour if str(colour).startswith("#") else f"#{colour}", "#FFFFFF")
-    return ("accent1", ratio) if ratio < ACCENT_READS_WHITE else None
+
+    def stated(spec: str) -> str | None:
+        colour = spec if spec.startswith("#") else _slot(palette, mapping, spec)
+        if not colour:
+            return None
+        colour = colour if str(colour).startswith("#") else f"#{colour}"
+        return colour.upper() if _rgb(colour) else None
+
+    behind = stated("bg1") or "#FFFFFF"
+    found: dict[tuple[str, str], Washed] = {}
+    for order, (label, card, lum_mod, lum_off, alpha, seen) in enumerate(BORROWED_LABEL_PAIRS):
+        ink, swatch = stated(label), stated(card)
+        if ink is None or swatch is None:
+            continue
+        tinted = _tinted(swatch, lum_mod, lum_off)
+        # Both ends of the wash, because the renderer sits between them and neither end
+        # is a colour of ours: the tint is what the page declares and the composite is
+        # what a reader sees once it is laid on the deck's own ground. Measured, the two
+        # disagree in both directions -- a 10% card on a light deck renders near-white
+        # and a 90% one is the swatch, and LibreOffice paints a fill's alpha stronger
+        # than PowerPoint does, so a single answer here would be ours and not the file's.
+        for ground in dict.fromkeys((tinted, _over(tinted, alpha, behind))):
+            ratio = contrast_ratio(ink, ground)
+            if ratio >= BORROWED_INK_READS:
+                continue
+            # One entry per pair of colours. Several of the pinned pairs resolve to one
+            # pair in a given deck -- a light template paints `lt1`, `bg1` and the white
+            # literal the same white -- and three rows saying one card is too pale is
+            # the boilerplate a caveat dies of.
+            key = (ink, ground)
+            standing = found.get(key)
+            if standing is None or ratio < standing.ratio:
+                found[key] = Washed(ink, ground, card, (lum_mod, lum_off), alpha, round(ratio, 2), seen, order)
+    # Commonest card first. Sorted by ratio it led with a 5%-alpha card at 1.0:1 and
+    # buried the swatch every reference page paints, which is the one an author meets.
+    return tuple(sorted(found.values(), key=lambda one: (one.order, one.ratio)))
+
+
+def _over(colour: str, alpha: float, behind: str) -> str:
+    """`colour` painted at `alpha` on `behind`, which is the colour a faint card renders."""
+    if alpha >= 1.0:
+        return colour
+    one, two = _rgb(colour), _rgb(behind)
+    if one is None or two is None:
+        return colour
+    return "#{:02X}{:02X}{:02X}".format(
+        *(round(first * alpha + second * (1 - alpha)) for first, second in zip(one, two, strict=True))
+    )
+
+
+def _tinted(colour: str, lum_mod: float, lum_off: float) -> str:
+    """`colour` with OOXML's `lumMod`/`lumOff` applied, which is how a card gets its tint."""
+    if (lum_mod, lum_off) == (1.0, 0.0):
+        return colour
+    parts = _rgb(colour)
+    if parts is None:
+        return colour
+    hue, light, saturation = colorsys.rgb_to_hls(*(value / 255 for value in parts))
+    light = min(1.0, max(0.0, light * lum_mod + lum_off))
+    return "#{:02X}{:02X}{:02X}".format(*(round(value * 255) for value in colorsys.hls_to_rgb(hue, light, saturation)))
 
 
 def labels_accent_in_ink(source: Path, accent: str = "accent1") -> int | None:
     """A page of this template that sets dark type on an `accent` fill, by page number.
 
-    The evidence half of `white_on_accent`. Telling an author their deck cannot carry
+    The evidence half of `unreadable_grounds`. Telling an author their deck cannot carry
     white labels leaves them to invent the alternative; naming the page where the
     template's own designer solved it makes the fix something to copy. None when the
     template never does it, and the caller then says less rather than claiming a page
@@ -620,26 +709,124 @@ def _run_inks(shape, palette: dict[str, str]):
             yield palette[named.get("val")]
 
 
+# How many grounds a reply names. Measured over the ten bundled templates, the question
+# finds one to five per deck and the worst two carry the failures: naming all five spends
+# the sentence on the pairs no reference page puts together.
+_GROUNDS_SAID = 3
+
+
+def _card_fills(shape) -> tuple[tuple[str, float, float, float], ...]:
+    """Every (colour, lumMod, lumOff, alpha) this shape's fill paints, as the file states it.
+
+    The reader `BORROWED_LABEL_PAIRS` was pinned with, kept here so the pinning is
+    re-runnable against the shipped code rather than against a script nobody has. A
+    scheme name comes back as itself, unresolved: which colour it is belongs to the deck
+    the page lands in, and resolving it here would answer for the wrong one.
+
+    `fillRef` is the last rung and not an afterthought. Fifteen of these pages' shapes
+    state no fill of their own and take one from their shape style, and reading only
+    `spPr` called them unfilled -- which put a label on the page ground and reported a
+    card that renders in the deck's accent as white on white.
+    """
+    properties = shape._element.find(f"{_PML}spPr")
+    node = None
+    if properties is not None:
+        if properties.find(f"{_DML}noFill") is not None:
+            return ()
+        for tag in ("solidFill", "gradFill"):
+            node = properties.find(f"{_DML}{tag}")
+            if node is not None:
+                break
+    if node is None:
+        style = shape._element.find(f"{_PML}style")
+        reference = style.find(f"{_DML}fillRef") if style is not None else None
+        if reference is None or reference.get("idx") in (None, "0"):
+            return ()
+        node = reference
+    found = []
+    for stated in list(node.iter(f"{_DML}schemeClr")) + list(node.iter(f"{_DML}srgbClr")):
+        named = stated.get("val") if stated.tag.endswith("schemeClr") else f"#{str(stated.get('val', '')).upper()}"
+        found.append((named, *_modifiers(stated)))
+    return tuple(found)
+
+
+def _modifiers(stated) -> tuple[float, float, float]:
+    """This colour's `lumMod`, `lumOff` and `alpha`, as fractions."""
+    modified = stated.find(f"{_DML}lumMod")
+    offset = stated.find(f"{_DML}lumOff")
+    alpha = stated.find(f"{_DML}alpha")
+    return (
+        int(modified.get("val", "100000")) / 100000 if modified is not None else 1.0,
+        int(offset.get("val", "0")) / 100000 if offset is not None else 0.0,
+        int(alpha.get("val", "100000")) / 100000 if alpha is not None else 1.0,
+    )
+
+
+def _label_inks(shape) -> tuple[str, ...]:
+    """Every colour this shape's copy runs state, as the file states it, unresolved.
+
+    A run that states nothing falls back to the shape style's `fontRef`, which is where
+    a template's card headings routinely put their colour. One-character runs are left
+    out: a numeral or a bullet set in the accent reads at 1.8:1 by design, and measuring
+    those as copy is what called four of one template's own pages unreadable.
+    """
+    body = shape._element.find(f"{_PML}txBody")
+    if body is None:
+        return ()
+    if len("".join(node.text or "" for node in body.iter(f"{_DML}t")).strip()) < 2:
+        return ()
+    style = shape._element.find(f"{_PML}style")
+    inherited = style.find(f"{_DML}fontRef") if style is not None else None
+    found = []
+    for run in body.iter(f"{_DML}r"):
+        fill = run.find(f"{_DML}rPr/{_DML}solidFill")
+        if fill is None:
+            fill = inherited
+        if fill is None:
+            continue
+        named = fill.find(f"{_DML}schemeClr")
+        if named is not None:
+            found.append(named.get("val"))
+            continue
+        literal = fill.find(f"{_DML}srgbClr")
+        if literal is not None:
+            found.append(f"#{str(literal.get('val', '')).upper()}")
+    return tuple(dict.fromkeys(found))
+
+
 def borrow_ink_note(inventory: TemplateInventory, source: Path) -> str:
-    """The one sentence a deck too pale to carry white labels needs, or "".
+    """The one sentence a deck whose own colours cannot carry a borrowed label needs, or "".
 
     Here rather than in the tool that says it because it is a statement about a
     template, and two tools say it -- the bind reply that first offers the reference
     pages and the outline reply that names one per page. Two spellings of it would
     come to disagree about the number.
+
+    It names the grounds and not the pages. A borrowed page's label is stated on its
+    run, nothing recolours ink to suit the ground it lands on, and which of this deck's
+    colours the label lands on is decided by the page's own arrangement -- so the fact
+    an author can act on before cloning anything is which of their colours will not
+    carry it. Named per offer it would read as boilerplate; said once for the deck it is
+    a property of the deck, which is what it is.
     """
-    pale = white_on_accent(inventory)
-    if pale is None:
+    from raven_ppt.services.template.defaults import BORROWED_INK_READS
+
+    washed = unreadable_grounds(inventory)
+    if not washed:
         return ""
-    slot, ratio = pale
+    said = "; ".join(one.said() for one in washed[:_GROUNDS_SAID])
+    rest = len(washed) - _GROUNDS_SAID
     # The example is worth having and not worth a reply for: a template python-pptx
-    # cannot walk still needs to be told its accent will not carry white labels.
+    # cannot walk still needs to be told which of its colours will not carry a label.
     try:
-        shown = labels_accent_in_ink(Path(source), slot)
+        shown = labels_accent_in_ink(Path(source), washed[0].fill)
     except Exception:  # noqa: BLE001 -- see above
         shown = None
     where = f", the way this template's own page {shown} does" if shown else ""
     return (
-        f"A borrowed page labels its cards in white on {slot}, which renders white at {ratio:.1f}:1 here, "
-        f"so set those labels in this deck's ink instead{where}."
+        "A borrowed page states its card labels on the run and nothing recolours ink to suit the ground it "
+        f"lands on, so in this deck {len(washed)} of the (label, card) pairs those pages state cannot be read: "
+        f"{said}{f'; and {rest} more' if rest > 0 else ''} -- under the {BORROWED_INK_READS:g}:1 at which the "
+        f"build refuses a page. Reset those labels in this deck's ink{where}, or fill the card with one of its "
+        "darker colours."
     )

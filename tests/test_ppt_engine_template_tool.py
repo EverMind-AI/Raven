@@ -292,7 +292,66 @@ async def test_a_page_that_cannot_be_redrawn_says_so_and_names_the_way_round(wor
     body = _body(await tool.execute(project="talk", pages=[1]))
 
     assert body["cannot_be_redrawn"]["1"]
-    assert "clone_page" in body["next_step"]
+    # And the operation it names is the one the author is taught everywhere else. Two
+    # doors onto a template page cost a live deck eight blank slides, so a reply that
+    # answered "you cannot redraw this" with a second vocabulary was the last place a
+    # second route could hide.
+    assert "clone_page(prs, prototype(tpl, N))" in body["next_step"]
+    assert "adapt(prs" not in body["next_step"]
+
+
+def _with_a_chart(path: Path) -> Path:
+    """The fixture template with a native chart added to its first example page."""
+    from pptx import Presentation
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches
+
+    presentation = Presentation(str(path))
+    data = CategoryChartData()
+    data.categories = ["Q1 of the template", "Q2 of the template"]
+    data.add_series("the template's own series", (19.2, 21.5))
+    presentation.slides[0].shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(6), Inches(4.5), Inches(6), Inches(2.5), data
+    )
+    presentation.save(str(path))
+    return path
+
+
+async def test_a_template_chart_is_the_authors_to_draw_and_says_where(workspace: Path, house: Path):
+    """The advice this replaced sent a run to clone a chart page and replace_text it.
+    Nothing writes chart data here, so the clone arrived holding the template's own
+    categories; the run then spent 73 minutes in a shell measuring the template's axis
+    type by hand. The arrangement is still what the page is worth cloning for, so the
+    page stays on offer and the offer carries the box the chart leaves behind."""
+    tool = PptTemplateTool(workspace, FakeViews())
+    await tool.execute(project="talk", path="uploads/house-style.pptx")
+    _with_a_chart(house)
+    await tool.execute(project="talk", path="uploads/house-style.pptx")
+
+    body = _body(await tool.execute(project="talk", pages=[1]))
+
+    assert body["charts_to_draw"]["1"] == ["Inches(6.00), Inches(4.50), Inches(6.00), Inches(2.50)"]
+    assert "a chart" not in body.get("cannot_be_redrawn", {}).get("1", [])
+    said = body["next_step"]
+    assert "the chart must be redrawn with ppt_charts from your own data" in said
+    assert "placed in the same position" in said
+    assert "ppt_build" in said, "the sentence that told an author to write code named no tool"
+
+
+async def test_the_page_the_author_chooses_from_says_the_chart_is_its_own(workspace: Path, house: Path):
+    """The prototype is chosen off the renders, so the line beside the render is where
+    the offer is made. A page named there as an arrangement and nothing else is cloned
+    whole, chart included."""
+    _with_a_chart(house)
+    tool = PptTemplateTool(workspace, FakeViews())
+
+    result = await tool.execute(project="talk", path="uploads/house-style.pptx")
+
+    legend = "\n".join(block["text"] for block in result.blocks if block.get("type") == "text")
+    assert "the chart must be redrawn with `ppt_charts` from your own data" in legend
+    assert "Inches(6.00), Inches(4.50), Inches(6.00), Inches(2.50)" in legend
+    assert "The chart on it is the template's own" in legend
 
 
 async def test_asking_for_pages_the_template_does_not_have(workspace: Path, house: Path):
@@ -385,7 +444,7 @@ async def test_rebinding_drops_the_band_grid_read_off_the_previous_template(work
 
 def test_the_render_caption_names_the_picture_slots_and_leaves_the_fill_to_the_author() -> None:
     """A template page's photograph and cartoon are placeholders; the caption says where
-    they are in `adapt`'s numbering and what may go there, and the starter call carries
+    they are in `shape_at`'s numbering and what may go there, and the starter call carries
     `pictures={...}`, so the choice of picture is made at the render, not after a refusal."""
     from types import SimpleNamespace
 
@@ -401,7 +460,8 @@ def test_the_render_caption_names_the_picture_slots_and_leaves_the_fill_to_the_a
 
     assert "Picture slots: [2] 5.4x3.6in photo, [7] 2.4x2.5in drawing" in said
     assert "transparent=true" in said and "yours to decide" in said
-    assert "items=[...], pictures={...})" in said
+    assert "`remove_unit` for the slots it does not fill" in said
+    assert "`replace_picture` for the figure" in said
 
     bare = _render_label(4, None, SimpleNamespace(arrangement="two columns", slots=0, picture_slots=()))
     assert "Picture slots" not in bare and "pictures={...}" not in bare

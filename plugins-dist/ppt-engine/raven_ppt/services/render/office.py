@@ -41,12 +41,13 @@ catches. The engine gains the Windows teardown that copy had and this one did no
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
 
 from raven.utils import office as soffice_run
-from raven_ppt.services.render.capabilities import find_soffice
+from raven_ppt.services.render.capabilities import find_soffice, soffice_install_hint
 from raven_ppt.services.render.errors import (
     LOG_TAIL_CHARS,
     RenderError,
@@ -57,6 +58,32 @@ from raven_ppt.services.render.errors import (
 # A deck of forty image-heavy pages converts in about half a minute on a cold
 # profile; three minutes is a hang, not a slow deck.
 DEFAULT_CONVERT_TIMEOUT_S = 180.0
+
+#: What one conversion needs of the box, for the gate below: one core for the
+#: duration and a few hundred MB for its own profile and document.
+_CORES_PER_CONVERSION = 2
+MIN_CONCURRENCY = 2
+MAX_CONCURRENCY = 8
+
+
+def default_concurrency(cores: int | None = None) -> int:
+    """How many of these a box this size runs at once.
+
+    Each call is its own process with its own profile, so they do not contend
+    for anything but the machine. Measured here on 32 cores, converting the
+    same seven templates (34 pages each, image-heavy) at four widths: one at a
+    time 87.0s, two 67.8s, four 53.5s, seven 50.3s, all seven PDFs produced
+    every time, and the slowest single conversion 50.0s / 52.8s / 49.7s /
+    50.3s -- flat, so width costs a conversion nothing and the wall clock is
+    the whole difference. A fixed 2 therefore made a 32-core box wait for a
+    two-core box's answer.
+
+    Half the cores, floored at two so the narrowest box still overlaps, and
+    capped at eight because the measurement stops there and eight profiles is
+    already a couple of GB.
+    """
+    box = cores if cores is not None else (os.cpu_count() or MIN_CONCURRENCY)
+    return max(MIN_CONCURRENCY, min(MAX_CONCURRENCY, box // _CORES_PER_CONVERSION))
 
 
 def to_pdf(
@@ -78,7 +105,8 @@ def to_pdf(
     if executable is None:
         raise RenderUnavailableError(
             "LibreOffice is not installed, so a deck cannot be turned into a PDF; "
-            "without it the deck can still be built, but not viewed or measured"
+            "without it the deck can still be built, but not viewed or measured. "
+            "Install it with: " + soffice_install_hint()
         )
     destination = Path(out_dir)
     destination.mkdir(parents=True, exist_ok=True)

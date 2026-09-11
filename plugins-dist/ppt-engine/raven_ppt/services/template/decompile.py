@@ -49,15 +49,35 @@ _UNWRITABLE = (
 
 _CLONE_INSTEAD = (
     "this page also holds {what}, which python-pptx cannot write. Code here will not "
-    "reproduce it: to keep it, clone the page with ppt_template.clone_page and replace "
-    "its text and pictures rather than redrawing it. To draw anything of your own into "
-    "the clone -- a chart, a panel, a figure -- clear the space for it first with "
+    "reproduce it: to keep it, clone the page with `clone_page(prs, prototype(tpl, N))` "
+    "and `replace_text` per line rather than redrawing it. To draw anything of "
+    "your own into the clone -- a chart, a panel, a figure -- clear the space for it first with "
     "ppt_template.clear_region(slide, box) -- a ppt_layout.Box or a page_box(shape), not "
     "four bare numbers, which cannot say whether they are two corners or a corner and a "
     "size. Whatever the template drew there is still "
     "there, and it is never one shape. The call says what it removed and what it left "
     "over your box."
 )
+
+# A chart is the one thing on a template page that a clone does not keep. Nothing in
+# this engine writes chart data -- `replace_text` reaches text frames and a chart's
+# labels are in its own part -- so a cloned chart arrives holding the template's own
+# numbers, unfillable by any route, and a live run that was told to clone one went to
+# the shell to measure its axis type by hand. It is also the one thing here that the
+# author can draw better than the template did, `ppt_charts` being twenty-three forms
+# wide. So it is reported apart from what cloning keeps, and with the box it leaves
+# behind, because the arrangement around it is worth cloning and the new chart has to
+# land in the space the old one had.
+_REDRAW_CHART = (
+    "the layout may be cloned, but the chart must be redrawn with ppt_charts from your own data and "
+    "placed in the same position, and the box it occupies is on its # [n] line below. Cloning it keeps "
+    "the template's own numbers, which nothing here can rewrite: a chart's labels live in its own part "
+    "rather than in a text frame, so replace_text does not reach them."
+)
+# Said as an exception to the clone rather than beside it, when a page has both. Two
+# separate notes read as two separate instructions, and the first of them ends on
+# "replace its text and pictures", which is exactly what a chart does not answer to.
+_BUT_THE_CHART = " A chart on it is the exception: "
 
 # Every name the emitted code may use, and where it comes from. Only the ones a
 # page actually needs are stated, because an import list longer than the page is
@@ -85,6 +105,9 @@ class PageSource:
     source: str
     picture_files: tuple[str, ...] = ()
     unredrawable: tuple[str, ...] = ()
+    # The box of each chart on the page, in the form every other box here is written
+    # in. Not part of `unredrawable`: cloning keeps those and does not keep a chart.
+    redraw_yourself: tuple[str, ...] = ()
 
     def summary(self, *, imports: bool = True) -> str:
         """The page as a block an author reads: its header, then its code.
@@ -96,7 +119,10 @@ class PageSource:
         if imports:
             head += [f"# {line}" for line in _needed_imports(self.source)]
         if self.unredrawable:
-            head.append("# " + _CLONE_INSTEAD.format(what=", ".join(self.unredrawable)))
+            note = _CLONE_INSTEAD.format(what=", ".join(self.unredrawable))
+            head.append("# " + note + (_BUT_THE_CHART + _REDRAW_CHART if self.redraw_yourself else ""))
+        elif self.redraw_yourself:
+            head.append("# " + _REDRAW_CHART)
         return "\n".join((*head, self.source))
 
 
@@ -153,11 +179,11 @@ def decompile(path: Path, index: int, *, images_dir: Path | None = None) -> Page
     lines: list[str] = [_opening(presentation, slide)]
     pictures: list[str] = []
     lost: list[str] = []
-    # The ordinal is printed beside every shape because it is the key `adapt` takes.
-    # An author read this reference, counted the shapes it shows, and wrote
-    # `texts={15: ...}` against a page whose fifteenth shape `adapt` did not agree on
-    # -- it was numbering text frames and the reference was numbering shapes. One
-    # numbering, stated where it is read.
+    charts: list[str] = []
+    # The ordinal is printed beside every shape because it is the key `shape_at` takes.
+    # An author read this reference, counted the shapes it shows, and reached for a
+    # fifteenth shape the engine did not agree on -- it was numbering text frames and
+    # the reference was numbering shapes. One numbering, stated where it is read.
     # Consecutive custom-drawn shapes are said once. A Bauhaus page carries a
     # hundred of them as pattern, and two lines each put one page at 12,800
     # characters -- most of a reply -- for shapes no code here can draw anyway.
@@ -182,6 +208,7 @@ def decompile(path: Path, index: int, *, images_dir: Path | None = None) -> Page
         if emitted.picture:
             pictures.append(emitted.picture)
         lost.extend(emitted.lost)
+        charts.extend(emitted.redraw)
     flush()
     return PageSource(
         index=index,
@@ -191,6 +218,7 @@ def decompile(path: Path, index: int, *, images_dir: Path | None = None) -> Page
         # Ordered by first appearance rather than sorted: the note reads as a walk
         # over the page, which is the order the author will look for them in.
         unredrawable=tuple(dict.fromkeys(lost)),
+        redraw_yourself=tuple(charts),
     )
 
 
@@ -490,6 +518,8 @@ class _Emitted:
     lost: tuple[str, ...] = ()
     # A shape that is only named, never drawn: a run of them folds into one line.
     decoration: bool = False
+    # The box of a chart, which is neither drawn here nor kept by cloning.
+    redraw: tuple[str, ...] = ()
 
 
 def _shape_source(shape, images_dir: Path | None, ordinal: int, design: _Design) -> _Emitted:
@@ -497,6 +527,11 @@ def _shape_source(shape, images_dir: Path | None, ordinal: int, design: _Design)
 
     box = _box(shape)
     lost = _unwritable(shape)
+    if getattr(shape, "has_chart", False):
+        # Ahead of the picture and table branches: a chart is a graphic frame, so it
+        # answers none of them and used to fall through to the empty return, whose
+        # "kept by cloning" line said the one thing that is not true of it.
+        return _Emitted(_chart_source(shape, box), lost=lost, redraw=(box,))
     if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
         source, picture = _picture_source(shape, box, images_dir, ordinal)
         return _Emitted(source, picture, lost)
@@ -541,9 +576,24 @@ def _unwritable(shape) -> tuple[str, ...]:
         found.append("a shadow or a glow")
     if shape.shape_type != MSO_SHAPE_TYPE.PICTURE and element.find(f".//{_A}blipFill") is not None:
         found.append("an image used as a fill")
-    if getattr(shape, "has_chart", False):
-        found.append("a chart")
     return tuple(found)
+
+
+def _chart_source(shape, box: str) -> str:
+    """A chart as the box it leaves the author, and the two calls that fill it.
+
+    The handle is positional rather than the `# [n]` ordinal beside it: `adapt`'s
+    `drop=` and a short `items=` both delete shapes before the author holds the
+    slide, and every ordinal after a deleted one has moved. A position on the page
+    is what this reference prints anyway, and `shape_near` raises when it misses.
+    """
+    left, top, width, height = (_inch(value) for value in _corners(shape))
+    return (
+        f"# a chart at {box} -- redrawn, not cloned: on the clone, "
+        f"drop_shape(shape_near(slide, {left:.2f}, {top:.2f}))\n"
+        f"# and draw your own data into Box.at({left:.2f}, {top:.2f}, w={width:.2f}, h={height:.2f}) "
+        "with one of ppt_charts' forms (`from ppt_layout import Box`)"
+    )
 
 
 def _picture_source(shape, box: str, images_dir: Path | None, ordinal: int) -> tuple[str, str | None]:
@@ -741,11 +791,20 @@ def _rotation(shape) -> float:
 
 
 def _box(shape) -> str:
-    return ", ".join(_inches(value) for value in (shape.left or 0, shape.top or 0, shape.width or 0, shape.height or 0))
+    return ", ".join(_inches(value) for value in _corners(shape))
+
+
+def _corners(shape) -> tuple[int, int, int, int]:
+    return (shape.left or 0, shape.top or 0, shape.width or 0, shape.height or 0)
 
 
 def _inches(value: int) -> str:
     return f"Inches({value / EMU_PER_INCH:.2f})"
+
+
+def _inch(value: int) -> float:
+    """The same number as `_inches`, unwrapped: ppt_charts takes a Box in inches."""
+    return value / EMU_PER_INCH
 
 
 def _prst(shape) -> str:

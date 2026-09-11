@@ -304,7 +304,7 @@ def test_a_template_s_own_table_style_is_left_alone(deck: DeckBuilder) -> None:
     assert native_tables(deck.save()) == []
 
 
-def test_an_escape_printed_as_characters_is_refused(deck: DeckBuilder) -> None:
+def test_an_escape_printed_as_characters_is_reported(deck: DeckBuilder) -> None:
     """Seen on a page in a live build: two cards read
     "YTVIS：46.3 → 48.3\\nOVIS：29.8 → 31.1" with the backslash-n printed, because the
     author's string went through a JSON round trip on its way into the tool and came out
@@ -316,7 +316,7 @@ def test_an_escape_printed_as_characters_is_refused(deck: DeckBuilder) -> None:
 
     findings = literal_escapes(deck.save())
     assert [f.kind for f in findings] == ["literal_escape"]
-    assert findings[0].severity is Severity.BLOCKING
+    assert findings[0].severity is Severity.WARNING
     assert findings[0].detail["escapes"] == ["\\n"]
 
 

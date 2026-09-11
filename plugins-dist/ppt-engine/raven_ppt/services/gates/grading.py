@@ -76,6 +76,9 @@ TIERS: Mapping[str, Tier] = {
     # How much copy the page carries, read off the file's own runs against what its kind
     # of page needs. Copy, not geometry: moving a box does not change it.
     "thin_copy": Tier.COPY,
+    # Same reading, and the frame count it turns on is which frames hold a word -- copy
+    # again, not where the boxes are.
+    "emptied_page": Tier.COPY,
     # The picture readings all come out of one pass over the file's own shapes and the
     # bytes behind them. No render: the box and the crop are both declared.
     "figure_distortion": Tier.DECLARED,
@@ -103,6 +106,8 @@ TIERS: Mapping[str, Tier] = {
     # A declared box outside the canvas: `measure/layout.py` says the frame's origin is
     # not something the renderer negotiates.
     "off_page": Tier.DECLARED,
+    # A box with no size, read straight off the same declared geometry.
+    "boxless_copy": Tier.DECLARED,
     # Copy on the layout's artwork and outside every placeholder, and `measure/
     # inherited.py` states it uses declared geometry so it still answers with no
     # LibreOffice on the box.
@@ -181,6 +186,8 @@ TIERS: Mapping[str, Tier] = {
     # The prototype's own filler text left in place: a string match against the
     # prototype's strings.
     "placeholder_copy": Tier.COPY,
+    # And the marks it leaves behind, off the same string match.
+    "placeholder_marks": Tier.COPY,
     # -- RENDERED: needs the PDF's word boxes or type spans, because only there has the
     # renderer finished reflowing and autofitting.
     "word_collision": Tier.RENDERED,
@@ -201,6 +208,12 @@ TIERS: Mapping[str, Tier] = {
     # The same repeated slot rendered at several sizes: the render again, grouped across
     # pages.
     "type_drift": Tier.RENDERED,
+    # And the two pair readings off the same spans: one row of one page against itself, and
+    # a page's title against the line under it. Both need the size after autofit, which is
+    # the render's answer and on a cloned page the only one -- the file states no title size
+    # at all.
+    "row_type_drift": Tier.RENDERED,
+    "outranked_title": Tier.RENDERED,
     # -- RASTER: needs the rendered pixels.
     # The modal pixel under a text box is the only place the ground has an answer
     # (`contrast.py`), and it is the most expensive single check in the pass: 1.89s of a
@@ -228,10 +241,9 @@ BLOCKING_CHECKS = frozenset(
         "citation",
         "page_budget",
         "language",
-        "literal_escape",
+        "emptied_page",
         "word_collision",
         "displaced_copy",
-        "house_style",
         "placeholder_copy",
         "template_underlay",
         "unreadable",
@@ -653,6 +665,27 @@ NOISE_FLOOR: Mapping[str, Floor] = {
         ("type_drift",),
         "measure.type_size.DRIFT_RATIO",
         "12% between two copies of one slot before the pair reads as inconsistent",
+    ),
+    "row_type_drift": Floor(
+        1.10,
+        Unit.RATIO,
+        ("row_type_drift",),
+        "measure.type_size.ROW_DRIFT",
+        "10% across one repeating row, whose own spread is 1.000 at the 95th percentile of 332 template rows",
+    ),
+    "heading_tie": Floor(
+        1.02,
+        Unit.RATIO,
+        ("outranked_title",),
+        "measure.type_size.HEADING_TIE",
+        "a tie and not any inequality: four template pages set the line under the title deliberately larger",
+    ),
+    "heading_row_width": Floor(
+        0.8,
+        Unit.SHARE,
+        ("outranked_title",),
+        "measure.type_size.HEADING_ROW_WIDTH",
+        "of the title's width before the line under it is a second heading row rather than a label beside it",
     ),
     "collision_share": Floor(
         0.4,

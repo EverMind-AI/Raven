@@ -26,6 +26,7 @@ from raven.contracts.tool import Tool, ToolResult
 from raven.utils.images import image_block, text_block
 from raven_ppt.backends.script import read_script
 from raven_ppt.contracts import (
+    DeckBrief,
     Finding,
     Profile,
     Project,
@@ -38,6 +39,7 @@ from raven_ppt.contracts import (
     outline_path,
 )
 from raven_ppt.services import regress, review_ledger, tier
+from raven_ppt.services.publish import DestinationError, as_destination, delivered_decks, write_destination
 from raven_ppt.services.regress import Regression
 from raven_ppt.stages.build import BuildStage
 from raven_ppt.tools import _return
@@ -165,6 +167,20 @@ class PptBuildTool(Tool):
                         f"the deck {self.views_per_call} at a time from here; omit it to start at page 1"
                     ),
                 },
+                "deliver_to": {
+                    "type": "string",
+                    "description": (
+                        "where the user asked for the file: an absolute path to the .pptx to write, or a "
+                        "directory ending in / to keep the deck's own name. State it once -- on any build, a "
+                        "draft included -- and it is kept for this deck: every build that publishes writes the "
+                        "deck under out/ and copies the same bytes there, first delivery and every revision "
+                        "after, and the reply names that path with the slide count. The deck's PDF preview is "
+                        "written beside it under the same name as a second file, but only when nothing is at "
+                        "that .pdf name already: a file there is the user's and is left alone, and the reply "
+                        "says the preview stayed under out/ -- tell them that when it does. A copy you make "
+                        "yourself with exec is not recorded and not the deliverable"
+                    ),
+                },
                 "draft": {
                     "type": "boolean",
                     "default": False,
@@ -186,6 +202,7 @@ class PptBuildTool(Tool):
         slides: list[int] | None = None,
         page_from: int = 1,
         draft: bool = False,
+        deliver_to: str | None = None,
         **kwargs: Any,
     ) -> str | ToolResult:
         try:
@@ -193,38 +210,22 @@ class PptBuildTool(Tool):
         except ValueError as exc:
             return _return.failed(str(exc))
 
-        # Refused rather than defaulted. Three things about this deck are the
-        # user's to decide -- its language, its audience, its length -- and all
-        # three are checked against the finished file, so guessing them here would
-        # mean measuring the deck against a brief nobody agreed to.
+        # Before the order checks, so a destination stated on a build that is refused
+        # for a missing outline is kept all the same: the author fixes the outline and
+        # builds again without repeating it, and the deck still lands where it was asked.
+        stated: dict[str, Any] = {}
+        if deliver_to is not None:
+            try:
+                kept = write_destination(
+                    deck, as_destination(deliver_to, deck, default_name=self.stage.destination(deck).name)
+                )
+            except DestinationError as exc:
+                return _return.failed(str(exc), hint='deliver_to: "/home/user/decks/intro.pptx" or "/home/user/decks/"')
+            stated["deliver_to"] = str(kept)
+
         agreed = load_brief(brief_path(deck))
-        if agreed is None:
-            return _return.failed(
-                "no brief recorded for this deck, so there is nothing to build it against",
-                hint=(
-                    "record the language, the audience and the page budget with ppt_brief -- ask the user "
-                    "with ask_user when there is a user to ask, and read them out of the task when there "
-                    "is not"
-                ),
-            )
-
-        if load_plan(intake_path(deck)) is None:
-            return _return.failed(
-                "this deck's task has not been read, so nothing knows what it is for or what it stands on",
-                hint=(
-                    "call ppt_prepare with the user's request first -- it locates and ingests the materials, "
-                    "binds a template and records what the request already states"
-                ),
-            )
-
-        if load_outline(outline_path(deck)) is None:
-            return _return.failed(
-                "no outline recorded, so nothing has decided what this deck argues or what each page says",
-                hint=(
-                    "plan it with ppt_outline first -- it checks the figures against the catalogue and the "
-                    "length against the brief, which is a cheap edit there and an expensive one here"
-                ),
-            )
+        if unready := _unready(deck, agreed, stated):
+            return unready
 
         try:
             wanted = as_ints(slides, "slides") or None
@@ -236,9 +237,20 @@ class PptBuildTool(Tool):
         # the budget was, and a nineteen-page deck took nineteen builds to look at once.
         # The tier's caps (services/tier): a whole-deck build past the cap releases the
         # deck as it stands, and a reading past its cap is not taken.
+        #
+        # A draft counts as a whole build, and the cap releases a draft. Before that it
+        # counted nothing and released nothing, which made it inert on every run that
+        # never left draft: one_door made 13 draft builds and never wrote a builds.json
+        # at all, a medium-tier run made 7 and the same, and across four runs the author
+        # passed `draft: true` on 7/7, 13/13 and 5/5 of its calls. `draft: false` is a
+        # road it does not take on its own, so a cap that only counts that road is a cap
+        # on nothing. A draft already costs a whole build -- `measure`, which renders,
+        # runs before the stage's draft branch and `_DRAFT_EXEMPT` waives three finding
+        # kinds -- so one count is the honest count, and one number is one the author can
+        # be told.
         caps = tier.read_caps(deck.workspace)
-        whole = reached = tier.whole_builds_taken(deck) + (0 if draft else 1)
-        release = not draft and caps.build_cap is not None and whole >= caps.build_cap
+        whole = reached = tier.whole_builds_taken(deck) + 1
+        release = caps.build_cap is not None and whole >= caps.build_cap
         result = await self.stage.run(
             deck,
             script,
@@ -266,21 +278,30 @@ class PptBuildTool(Tool):
         # count, because it is what the count turns on.
         lost = sorted({f.page for f in findings if f.kind == "page_failed" and f.page is not None})
         reprieve = None
-        if not draft:
-            # Counted only now: a script that produced no deck was not a build of it,
-            # and a budget it spent would release the first deck that exists past its
-            # blocking findings after a single real build. A build that lost a page to a
-            # raised block is the same thing for that page, so it goes against its own
-            # allowance instead (services/tier) until the allowance is spent.
-            reprieve = tier.count_lost_build(deck) if lost else None
-            whole = tier.whole_builds_taken(deck) if reprieve else tier.count_whole_build(deck)
-            # `reached` and not `whole`: the release above was decided on the count this
-            # build would have made, and it is what the author is being told about --
-            # while `whole` is what the build was actually charged, which the lost-pages
-            # line below reports. A spared build that says "build 2 of 3" beside "the cap
-            # is reached" is two true numbers reading as a contradiction.
+        # Counted only now: a script that produced no deck was not a build of it,
+        # and a budget it spent would release the first deck that exists past its
+        # blocking findings after a single real build. A build that lost a page to a
+        # raised block is the same thing for that page, so it goes against its own
+        # allowance instead (services/tier) until the allowance is spent.
+        reprieve = tier.count_lost_build(deck) if lost else None
+        whole = tier.whole_builds_taken(deck) if reprieve else tier.count_whole_build(deck)
+        # `reached` and not `whole`: the release above was decided on the count this
+        # build would have made, and it is what the author is being told about --
+        # while `whole` is what the build was actually charged, which the lost-pages
+        # line below reports. A spared build that says "build 2 of 3" beside "the cap
+        # is reached" is two true numbers reading as a contradiction.
 
         payload: dict[str, Any] = {"project": project, "slides": outcome.pages}
+        # Every build, first thing, because the measured failure is a budget the author
+        # cannot see: it answered a reading page by page knowing another one would come,
+        # and spent 6 more whole builds after the findings stopped falling. A number it
+        # is told is a number it can plan the next call against.
+        payload["build_budget"] = (
+            f"whole-deck build {whole} of the {caps.mode or 'session'} tier's {caps.build_cap} -- a draft "
+            "counts as one, and the build that reaches the cap delivers the deck as it stands"
+            if caps.build_cap is not None
+            else f"whole-deck build {whole}; this {caps.mode or 'session'} tier sets no cap"
+        )
         if outcome.note:
             payload["note"] = outcome.note
         # Two notes reach here and only one used to be read. `outcome.note` is the
@@ -315,49 +336,59 @@ class PptBuildTool(Tool):
             payload["republished"] = True
         if changed := result.data.get("delivery_changed"):
             payload["delivery_changed"] = changed
-        if released := result.data.get("released"):
-            payload["released_at_cap"] = (
-                f"whole-deck build {reached} of the {caps.mode or 'session'} tier's {caps.build_cap}: the deck is "
-                f"delivered as it stands, with {len(released)} finding(s) that would have held it back listed above"
+        payload.update(
+            _released_at_cap(caps, reached=reached, released=result.data.get("released"), published=result.ok)
+        )
+        payload.update(_lost_pages(caps, whole=whole, lost=lost, reprieve=reprieve, draft=draft))
+        payload.update(_delivered(result.data, stated))
+        if draft and "pptx_path" not in payload and (not wanted or max(wanted) <= outcome.pages):
+            # `pptx_path not in payload`, because a draft that reached the cap has just
+            # delivered, and telling that reply a draft does not deliver contradicts the
+            # path above it.
+            #
+            # Its own sentence rather than a clause in a next step, and otherwise
+            # unconditional. The next step below says it too, but only when nothing is blocking
+            # -- and a draft whose pages are drawn is exactly the state that collects
+            # findings, so the reply that most needs this line is the one that would not
+            # carry it. Four measured runs' builds:
+            # stack5 took 17 finished builds and published; stack6 took 5 drafts and 0
+            # finished, one_door 13 drafts and 0 finished, medium 1 finished, and none of
+            # those three published. Every run that never left draft never delivered, and
+            # the party choosing whether to be judged is the party the gates are for.
+            payload["draft_does_not_deliver"] = (
+                "these pages are drawn, and a draft is not what delivers them -- the deck reaches the user "
+                "only from a finished build (`draft: false`), which is also the call that runs every gate "
+                "and takes the second reading"
             )
-        if reprieve is not None:
-            # Said whichever way the cap went, because it is the difference between a
-            # reply the author can act on and one it reads as the end of the run.
-            payload["lost_pages_not_counted"] = (
-                f"page(s) {', '.join(str(page) for page in lost)} did not draw, so this build is not counted "
-                f"against the {caps.mode or 'session'} tier's {caps.build_cap} whole-deck build(s) "
-                f"({whole} spent, reprieve {reprieve} of {tier.CRASH_REPRIEVES}). Fix the block(s) and build again"
-            )
-        elif lost and not draft:
-            payload["lost_pages_counted"] = (
-                f"page(s) {', '.join(str(page) for page in lost)} did not draw, and this deck has used all "
-                f"{tier.CRASH_REPRIEVES} of its reprieve(s) for that, so this build is counted: whole-deck build "
-                f"{whole}" + (f" of the {caps.mode} tier's {caps.build_cap}" if caps.build_cap else "")
+        if dropped := result.data.get("dropped_pages"):
+            # Said whether or not the cap released anything else, because it is the one
+            # difference between the deck measured and the deck delivered: the file is
+            # short and its page numbers past the gap no longer match the ones in the
+            # findings above. Unsaid, that reads as a deck that was always this long.
+            payload["pages_left_out"] = (
+                f"page(s) {', '.join(str(page) for page in dropped)} did not draw, so the delivered deck has "
+                f"{outcome.pages - len(dropped)} of {outcome.pages} pages and the pages after the gap are "
+                "numbered one lower there than in the findings above. Fix those blocks and build again to "
+                "deliver the whole deck"
             )
 
         shown = list(result.data.get("showing") or [])
         outline = load_outline(outline_path(deck))
         if outline is not None:
             payload["planned_pages"] = [page.as_dict() for page in outline.pages if page.page in set(shown)]
-        # What the stage still holds unseen is the count that matters: those are the pages
-        # a build without `slides` comes back with, and the only ones publication waits on.
-        # A deck with no page-to-code mapping keeps no such record, and is walked by number.
-        left = result.data.get("unseen_after")
-        if left is not None:
-            remaining = len(left)
-        else:
-            remaining = (
-                max(outcome.pages - len(set(shown)), 0)
-                if wanted
-                else max(outcome.pages - (shown[-1] if shown else 0), 0)
-            )
         # Blocking is decided on everything measured, before any folding: what refuses
         # publication cannot depend on how the reply is arranged.
         blocking = _return.blocking_of(findings, self.profile.blocking_kinds)
-        if result.data.get("released"):
+        if result.data.get("released") and result.ok:
             # The stage published past these at the tier's cap. They stay in the reply
             # as reports; deriving a refusal from them here answered a delivered deck
             # with "not published" and a next step to build again.
+            #
+            # `result.ok`, because the cap does not release everything: a page the
+            # runner stood in for holds the deck back at any build count (see
+            # stages/build.HELD_AT_THE_CAP), and clearing this on the cap alone
+            # answered a refused deck as delivered -- the one reading the author
+            # cannot recover from, since nothing then says the page is still missing.
             blocking = []
         asks = _asks(findings, blocking)
         # Every build, not once at the brief. What the user ruled out was formatted
@@ -372,25 +403,9 @@ class PptBuildTool(Tool):
                 "and smaller, once, or as decoration is still using one. A page that brings one back makes "
                 "its point another way"
             )
-        if remaining:
-            payload["pages_shown"] = ", ".join(str(number) for number in shown) if shown else "none"
-            payload["pages_not_shown"] = remaining
-            if left is not None:
-                listed = ", ".join(str(page) for page in left[:12]) + ("..." if len(left) > 12 else "")
-                payload["pages_not_yet_shown"] = list(left)
-                more = f"call ppt_build again without slides and page {listed} come(s) back first"
-            elif wanted:
-                more = f"name it in slides, or omit slides and pass page_from={shown[-1] + 1}"
-            else:
-                more = f"call ppt_build again with page_from={shown[-1] + 1}"
-            asks.insert(
-                0,
-                f"look at the {len(shown)} page(s) below; {remaining} of this deck's {outcome.pages} "
-                f"{'have not been shown to you since their code was written' if left is not None else 'are not here'} "
-                f"-- {more} -- because a page you have not looked at is a page you have not checked",
-            )
-        elif not blocking:
-            asks.insert(0, "look at every page below")
+        unseen = result.data.get("unseen_after")
+        if look := _pages_ask(payload, unseen, shown=shown, wanted=wanted, pages=outcome.pages, blocking=blocking):
+            asks.insert(0, look)
         if refused:
             # A refusal here is not a finding to weigh: nothing was written, so there is
             # nothing to look at and nothing to accept. Say what stopped it and stop.
@@ -423,12 +438,19 @@ class PptBuildTool(Tool):
                     "other -- and if it loses a page too, what is delivered now is what the user keeps"
                 ),
             )
-        elif not blocking and "pptx_path" in payload:
+        elif not blocking and ("pptx_path" in payload or draft):
             # The reply used to end at "look at every page", which is not a next step for a
             # model that has already looked: one run rebuilt the same finished deck eight
             # times, each reply identical, chasing a warning it had already decided to
             # accept. What refuses publication and what merely reports are different
             # questions, and only the first one has to be answered before publishing.
+            #
+            # `or draft`, because the draft half of this was written for a run that stayed
+            # in draft for fourteen builds and could not reach it: a draft has no
+            # `pptx_path` -- the stage returns before publication -- so on the one path it
+            # was written for, the guard was false and the text never appeared. The test
+            # that pinned it passed because its stage returns a path whether or not the
+            # build was a draft.
             asks.insert(
                 0,
                 # Naming the wrong call is worse than naming none: there is no publish
@@ -443,7 +465,7 @@ class PptBuildTool(Tool):
                 "A second reader has already read this deck once on an empty context -- that is "
                 "first_reading above, if it is there -- and ppt_review reads it again, or "
                 "ppt_review(pages=[...]) reads back the pages you have just changed"
-                if not draft
+                if "pptx_path" in payload
                 else "nothing refuses this draft. The findings are reports and the renders are the judge: "
                 "read the pages, fix what looks wrong to you whether or not it was measured, and leave a "
                 "finding you disagree with alone. When the pages read right, build again without `draft` -- "
@@ -451,6 +473,20 @@ class PptBuildTool(Tool):
                 "it without being asked, so a second reader reads every page on an empty context and hands "
                 "back what is wrong. A deck that stays in draft is a deck nobody but you has read",
             )
+        if delivery := _delivery_ask(payload, pages=outcome.pages, refused=refused, blocking=blocking):
+            asks.insert(0, delivery)
+        if "delivered_to" not in payload and (refused or blocking or draft):
+            if held_at := delivered_decks(deck.state_dir):
+                # Nothing reached the destination this build; what the user holds there is
+                # the last deck that passed, and the author should not say otherwise.
+                payload["destination_unchanged"] = (
+                    f"{held_at[-1]} still holds the last published deck; this build wrote nothing there"
+                )
+            elif "deliver_to" in payload:
+                asks.append(
+                    f"the destination {payload['deliver_to']} is kept for this deck: the build that publishes "
+                    "writes the deck there as well and names it"
+                )
         if changed := result.data.get("delivery_changed"):
             # Before the regression note, because it is about the deck the user is
             # holding rather than about a page: the file this build replaced was not
@@ -674,6 +710,176 @@ class PptBuildTool(Tool):
         return _return.with_images(body, blocks)
 
 
+def _unready(deck: Project, agreed: DeckBrief | None, stated: dict[str, Any]) -> str | None:
+    """Whichever of the three records a build stands on has not been written yet.
+
+    Refused rather than defaulted. Three things about this deck are the user's to
+    decide -- its language, its audience, its length -- and all three are checked
+    against the finished file, so guessing them here would mean measuring the deck
+    against a brief nobody agreed to. What the task said and what each page argues
+    are the same kind of thing: not a build's to invent on the author's behalf.
+
+    The order is the order they are written, so the first thing missing is the
+    first thing named. A destination already stated travels on every refusal, so
+    the author fixes what is missing and builds again without repeating it.
+    """
+    if agreed is None:
+        return _return.failed(
+            "no brief recorded for this deck, so there is nothing to build it against",
+            hint=(
+                "record the language, the audience and the page budget with ppt_brief -- ask the user "
+                "with ask_user when there is a user to ask, and read them out of the task when there "
+                "is not"
+            ),
+            **stated,
+        )
+    if load_plan(intake_path(deck)) is None:
+        return _return.failed(
+            "this deck's task has not been read, so nothing knows what it is for or what it stands on",
+            hint=(
+                "call ppt_prepare with the user's request first -- it locates and ingests the materials, "
+                "binds a template and records what the request already states"
+            ),
+            **stated,
+        )
+    if load_outline(outline_path(deck)) is None:
+        return _return.failed(
+            "no outline recorded, so nothing has decided what this deck argues or what each page says",
+            hint=(
+                "plan it with ppt_outline first -- it checks the figures against the catalogue and the "
+                "length against the brief, which is a cheap edit there and an expensive one here"
+            ),
+            **stated,
+        )
+    return None
+
+
+def _released_at_cap(caps: tier.Caps, *, reached: int, released: Any, published: bool) -> dict[str, Any]:
+    """The findings the tier's build cap let the deck out past, named in the reply.
+
+    `reached` and not the count the build was charged: the release was decided on
+    the count this build would have made, and that is the number the author is
+    being told about. `published`, because the cap does not release everything --
+    a deck the stage still refused is not a deck delivered as it stands.
+    """
+    if not released or not published:
+        return {}
+    return {
+        "released_at_cap": (
+            f"whole-deck build {reached} of the {caps.mode or 'session'} tier's {caps.build_cap}: the deck is "
+            f"delivered as it stands, with {len(released)} finding(s) that would have held it back listed above"
+        )
+    }
+
+
+def _lost_pages(
+    caps: tier.Caps, *, whole: int, lost: Sequence[int], reprieve: int | None, draft: bool
+) -> dict[str, Any]:
+    """Whether a build that lost a page to a raised block was charged for it.
+
+    Said whichever way the cap went, because it is the difference between a reply
+    the author can act on and one it reads as the end of the run.
+    """
+    if reprieve is not None:
+        return {
+            "lost_pages_not_counted": (
+                f"page(s) {', '.join(str(page) for page in lost)} did not draw, so this build is not counted "
+                f"against the {caps.mode or 'session'} tier's {caps.build_cap} whole-deck build(s) "
+                f"({whole} spent, reprieve {reprieve} of {tier.CRASH_REPRIEVES}). Fix the block(s) and build again"
+            )
+        }
+    if lost and not draft:
+        return {
+            "lost_pages_counted": (
+                f"page(s) {', '.join(str(page) for page in lost)} did not draw, and this deck has used all "
+                f"{tier.CRASH_REPRIEVES} of its reprieve(s) for that, so this build is counted: whole-deck build "
+                f"{whole}" + (f" of the {caps.mode} tier's {caps.build_cap}" if caps.build_cap else "")
+            )
+        }
+    return {}
+
+
+def _delivered(data: dict[str, Any], stated: dict[str, Any]) -> dict[str, Any]:
+    """Where the deck landed this build, or the destination it is still bound to.
+
+    One or the other, never both: a reply naming the path the deck reached beside
+    the path it is kept for reads as two destinations, and the author passes both
+    on to the user.
+    """
+    landed: dict[str, Any] = {}
+    for key in ("delivered_to", "delivered_pdf", "delivered_pdf_kept_back", "delivery_failed"):
+        if key in data:
+            landed[key] = data[key]
+    if stated and "delivered_to" not in landed:
+        landed.update(stated)
+    return landed
+
+
+def _pages_ask(
+    payload: dict[str, Any],
+    unseen: list[int] | None,
+    *,
+    shown: Sequence[int],
+    wanted: Sequence[int] | None,
+    pages: int,
+    blocking: Sequence[Finding],
+) -> str | None:
+    """Which pages have not been looked at, and the call that brings the next ones back.
+
+    What the stage still holds unseen is the count that matters: those are the pages
+    a build without `slides` comes back with, and the only ones publication waits on.
+    A deck with no page-to-code mapping keeps no such record, and is walked by number.
+    """
+    if unseen is not None:
+        remaining = len(unseen)
+    else:
+        remaining = max(pages - len(set(shown)), 0) if wanted else max(pages - (shown[-1] if shown else 0), 0)
+    if not remaining:
+        return None if blocking else "look at every page below"
+    payload["pages_shown"] = ", ".join(str(number) for number in shown) if shown else "none"
+    payload["pages_not_shown"] = remaining
+    if unseen is not None:
+        listed = ", ".join(str(page) for page in unseen[:12]) + ("..." if len(unseen) > 12 else "")
+        payload["pages_not_yet_shown"] = list(unseen)
+        more = f"call ppt_build again without slides and page {listed} come(s) back first"
+    elif wanted:
+        more = f"name it in slides, or omit slides and pass page_from={shown[-1] + 1}"
+    else:
+        more = f"call ppt_build again with page_from={shown[-1] + 1}"
+    return (
+        f"look at the {len(shown)} page(s) below; {remaining} of this deck's {pages} "
+        f"{'have not been shown to you since their code was written' if unseen is not None else 'are not here'} "
+        f"-- {more} -- because a page you have not looked at is a page you have not checked"
+    )
+
+
+def _delivery_ask(
+    payload: dict[str, Any], *, pages: int, refused: str | None, blocking: Sequence[Finding]
+) -> str | None:
+    """The words the author repeats to the user about a deck that reached their path.
+
+    Because a live run asked for the path and the count and got a question about a
+    blocked command. Only from a build that published and that nothing refuses:
+    otherwise there is no file at that path for the sentence to be true about.
+    """
+    if refused or blocking or "pptx_path" not in payload:
+        return None
+    if "delivered_to" in payload:
+        return (
+            f"tell the user in these terms: the deck is at {payload['delivered_to']} and has {pages} slides"
+            + (f"; its PDF preview is {payload['delivered_pdf']}" if "delivered_pdf" in payload else "")
+            + (f". Say this too: {payload['delivered_pdf_kept_back']}" if "delivered_pdf_kept_back" in payload else "")
+            + f". That is the path the user named; out/ holds the engine's own copy at {payload['pptx_path']}"
+        )
+    if "delivery_failed" in payload:
+        return (
+            f"the deck is published under out/ but not at the destination the user named -- "
+            f"{payload['delivery_failed']}. State a writable absolute .pptx path with deliver_to and build "
+            "again, or tell the user plainly where the deck is and that the named path could not be written"
+        )
+    return None
+
+
 def _regressed(regressed: Sequence[Regression]) -> dict[str, Any]:
     """The comparison, page by page, for a reader acting on it rather than reading it."""
     return {
@@ -751,6 +957,11 @@ _ASK = {
     "unseen_page": "look at the {count} page(s) you have not been shown: build again without slides and they come back first",
     "evidence": "put something on the pages that are all prose: a figure, a diagram, cards led by icons, a chart -- a table only where a reader compares figures down a column",
     "wide_table": "narrow {count} table(s) or split them",
+    # A warning with its own line because it is the one finding a render cannot show:
+    # the copy is simply absent from the page, so an author checking the pictures
+    # against a generic "consider N boxless_copy finding(s)" sees nothing to fix.
+    "boxless_copy": "give {count} box(es) declared with no height or no width the size "
+    "their copy needs, or take the block off the page -- the page shows none of those words as it stands",
 }
 
 

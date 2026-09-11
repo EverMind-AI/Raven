@@ -166,7 +166,8 @@ def _render(source: Path, target: Path, timeout_s: float) -> None:
     executable = find_soffice()
     if executable is None:
         raise PdfPreviewUnavailableError(
-            "LibreOffice is not installed on the gateway host, so a deck cannot be shown as a PDF"
+            "LibreOffice is not installed on the gateway host, so a deck cannot be shown as a PDF. "
+            "Install it with: " + office.install_hint()
         )
     root = cache_dir()
     root.mkdir(parents=True, exist_ok=True)

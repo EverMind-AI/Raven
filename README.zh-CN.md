@@ -32,6 +32,16 @@ Agent 可以在需要深度调查的任务中使用 MiroThinker-backed、多来�
 
 ## 🚀 快速开始
 
+### 🧰 前置依赖
+
+安装脚本会自带 Python 工具链和 Node 运行时，只有一个程序需要你自己先装好：
+
+| 程序 | 用途 | 安装 |
+| --- | --- | --- |
+| **LibreOffice** | 把 deck 转成 PDF：deck agent 的渲染、测量、预览都走这一步，读取 Office 源文档也靠它。可选项——没有它 deck 仍然能生成并交付，但所有基于渲染页面的检查都不会运行。 | `apt install libreoffice` / `brew install --cask libreoffice` / `winget install TheDocumentFoundation.LibreOffice` |
+
+`raven doctor` 会报告它是否被找到。
+
 ### 📦 安装
 
 Linux、macOS 或 WSL2：

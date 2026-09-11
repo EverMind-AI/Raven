@@ -395,7 +395,7 @@ def distorted_figures(figures: list[Figure]) -> list[Finding]:
                     f"stretched, type in a screenshot most visibly. At {drawn.width:.2f}in wide the "
                     f"frame it needs is {fitted:.2f}in tall: give add_picture the width and let the "
                     f"height follow, or keep the box and crop the source to it "
-                    f"(pictures={{n: path}} on a template frame crops rather than stretches)"
+                    f"(replace_picture on a template frame crops rather than stretches)"
                 ),
                 detail={
                     "distortion": round(off, 3),

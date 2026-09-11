@@ -58,8 +58,9 @@ packages = ["raven_ppt"]
 # ships the modules without it installs a plugin nothing can find. The engine's
 # own assets ride the same way: shape/icon data and the DejaVu measuring fonts
 # under services/assets, the deck-authoring skill, the fork's three drifted
-# identity prompts, and -- once fetched against the pinned manifest -- the
-# ten bundled templates.
+# identity prompts, and the ten bundled templates, which are tracked so that
+# any checkout builds a wheel that can build a deck. release.yml asserts all
+# ten are in the built wheel and match their pins.
 [tool.hatch.build]
 include = [
     "raven_ppt/**/*.py",

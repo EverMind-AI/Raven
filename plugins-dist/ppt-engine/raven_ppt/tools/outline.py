@@ -383,6 +383,7 @@ class PptOutlineTool(Tool):
             + _structural(outline)
             + _house_pages(outline, state)
             + _composed_pages(outline, state)
+            + _repeated_prototype(outline, state)
         )
         budget = _budget(outline, brief)
         if budget:
@@ -432,6 +433,12 @@ class PptOutlineTool(Tool):
             borrowed_said = _borrows_for(stranded, state)
             if borrowed_said:
                 examples_said += borrowed_said
+        # The ask and `repeated_prototype` say the same thing about the same pages, and the
+        # finding says it more precisely. `_asks` already returns early for a blocking
+        # finding, so this stand-down is belt and braces at the current severity; it is kept
+        # because it states the exclusion where the two are chosen rather than leaving it to
+        # a control-flow accident one severity change away from speaking twice.
+        reused = "" if any(f.kind == "repeated_prototype" for f in findings) else _reused_prototypes(outline, state)
         asks = _asks(
             errands,
             blocking,
@@ -439,7 +446,7 @@ class PptOutlineTool(Tool):
             unprototyped,
             outline,
             examples_said,
-            _reused_prototypes(outline, state),
+            reused,
         )
         if reordered:
             asks.insert(
@@ -1163,7 +1170,8 @@ def _reused_prototypes(outline: Outline, state: Any) -> str:
             f"But {len(unused)} of this template's {len(examples)} content examples start no page of this deck. "
             "By what each repeating page says it carries: "
             + "; ".join(own_named)
-            + ". Record `prototype: N` on that page and clone it with `adapt(prs, prototype(tpl, N), ...)`. "
+            + ". Record `prototype: N` on that page and clone it with `clone_page(prs, prototype(tpl, N))`, "
+            "then `replace_text` per line. "
         )
     if borrow_named:
         said += (
@@ -1172,7 +1180,7 @@ def _reused_prototypes(outline: Outline, state: Any) -> str:
             "pages this deck can borrow -- a "
             "borrowed page arrives in this deck's own colours and master with only its arrangement carried across: "
             + "; ".join(borrow_named)
-            + ". Borrow one with `adapt(prs, prototype(bundled('<template>'), N), ...)` and record "
+            + ". Borrow one with `clone_page(prs, prototype(bundled('<template>'), N))` and record "
             "`borrowed: '<template>'` and `prototype: N` on that page of the plan." + _pale_accent_note(state)
         )
     return said.rstrip()
@@ -1256,12 +1264,17 @@ def _slot_facts(entry: Any, canvas: float, largest: float) -> str:
     icons = sum(1 for place in getattr(entry, "picture_slots", ()) or () if place.endswith(" icon"))
     parts = []
     if areas:
-        shares = [f"{size}, {area / canvas:.0%} of the page" if canvas else size for size, area in areas]
-        if largest and any(area >= largest for _, area in areas):
-            shares = [
-                share + (", the largest picture slot this template draws" if area >= largest else "")
-                for share, (_, area) in zip(shares, areas)
-            ]
+        # Identical slots are counted rather than listed. A template page with fifteen
+        # equal thumbnails spent about 700 characters of one ask repeating "2.3x2.6in, 6%
+        # of the page and" -- inside the one ask that had to be read, in the run that did
+        # not read it.
+        counted: dict[str, int] = {}
+        for size, area in areas:
+            share = f"{size}, {area / canvas:.0%} of the page" if canvas else size
+            if largest and area >= largest:
+                share += ", the largest picture slot this template draws"
+            counted[share] = counted.get(share, 0) + 1
+        shares = [share if count == 1 else f"{count} of {share} each" for share, count in counted.items()]
         parts.append(f"picture slot{'s' if len(areas) > 1 else ''} " + " and ".join(shares))
     if icons:
         parts.append(f"{icons} icon slot{'s' if icons > 1 else ''}")
@@ -1280,6 +1293,25 @@ def _slot_facts(entry: Any, canvas: float, largest: float) -> str:
 # the pages the reader pointed at as drawn by hand and ugly, and a third would have let
 # that plan through. A quarter still leaves a comparison table and a chart page.
 COMPOSED_SHARE = 1 / 4
+# The most of a deck's content pages one prototype may start before the reply says so.
+# The mirror of COMPOSED_SHARE by subject -- that one is about a plan that leaves the
+# template, this one about a plan that uses one page of it for the whole deck -- but not
+# by severity: composing is refused, repeating is reported, because a user can ask for a
+# uniform deck and a refusal would leave that run unable to finish. Measured on the outlines of three
+# live runs. A 14-page run put 8 of its 11 content pages on one prototype (73%) and its
+# renders are the finding: 8 of the 14 pages are the same five-hexagon card row, and the
+# author had been handed a per-page shortlist of unused examples twice -- it moved the
+# repeated prototype from 6 to 5 between the two calls and kept the eight. Two 16-page
+# runs put at most 2 of their 14 content pages on one prototype (14%), and a 12-page run
+# started 10 pages on 10 different ones. So the live spread is one or two pages per
+# prototype against one deck at eight, and a strict majority separates them without
+# sitting near either.
+PROTOTYPE_SHARE = 1 / 2
+# Below this many pages on one prototype only the ask speaks, whatever the share: a
+# 4-page deck whose two content pages share an example is not a monotonous deck, and
+# SERIES_RUN already says three pages built alike reads as a series built on purpose
+# rather than a habit. So this starts one page past that, and the share decides from there.
+PROTOTYPE_FLOOR = SERIES_RUN + 1
 
 
 def _composed_pages(outline: Outline, state: Any) -> list:
@@ -1348,6 +1380,98 @@ def _composed_pages(outline: Outline, state: Any) -> list:
                 "content_pages": len(content),
                 "examples": examples,
                 **({"borrowable_for": matched} if matched else {}),
+            },
+        )
+    ]
+
+
+def _repeated_prototype(outline: Outline, state: Any) -> list:
+    """Say that a plan starts most of its content pages on one prototype.
+
+    A refusal. It was a warning for one revision, on the argument that a uniform deck is
+    a thing a user can ask for and that refusing would trap a run told to repeat a layout.
+    What settled it is that no run has asked: three plans on briefs carrying no layout
+    instruction came out at 8 of 11, 5 of 9 and 10 of 10 content pages on one prototype,
+    the last with 26 of the template's 27 examples untouched, and each was corrected
+    within a minute of being refused. A warning would have filed all three as proposed.
+    The refusal names a page to move each repeat to, which is what keeps it a gate the
+    author can act on rather than a wall. A consecutive run of `SERIES_RUN` or more on
+    one example is a series and its pages are not counted, the same reading
+    `_reused_prototypes` already takes: a comparison a reader makes across pages is the
+    one deck this would otherwise have no way to plan, since the escape the message
+    offers for it is a sentence and not a switch.
+
+    Sharper than `_reused_prototypes`, which speaks for any repetition: this one is about
+    the case where one example starts more of the deck than every other page put together.
+    Only when this template's own unused examples can carry the pages that repeat, which
+    is what keeps a template with two body layouts out of it -- there the repetition is
+    the template's doing, and the borrow offer, which stays an offer, is the only answer.
+
+    Measured after the fact: the run this was written against never reached it. Once the
+    `ppt_template` roster stopped being dropped in transit, one plan came out on 10
+    distinct prototypes over 14 pages with its most-used one starting 2, so the thing that
+    produced variety was the author being told what the template ships. This check is the
+    backstop for when that is not enough, not the lever.
+    """
+    from collections import Counter
+
+    from raven_ppt.contracts import Finding, Severity
+    from raven_ppt.services.template.menu import menu
+
+    if state.template is None or not outline.pages:
+        return []
+    entries = menu(state.template.source)
+    house = {entry.number for entry in entries if entry.role}
+    content = [page for page in outline.pages if not (page.prototype in house and not page.borrowed)]
+    started = [page for page in content if page.prototype is not None]
+    if not started:
+        return []
+    used = Counter((page.borrowed, page.prototype) for page in started)
+    ((source, count),) = used.most_common(1)
+    if count < PROTOTYPE_FLOOR or count <= len(content) * PROTOTYPE_SHARE:
+        return []
+    on_it = [page for page in started if (page.borrowed, page.prototype) == source]
+    in_series = {number for run in _series(started) for number in run}
+    # The first page keeps the prototype; the rest are the ones with somewhere to go,
+    # the same division the ask makes -- less the ones inside a series, which
+    # `_reused_prototypes` already reads as intentional and leaves alone. The two have
+    # to agree: this one refused, as one page repeated, the consecutive run that one
+    # accepts as a comparison a reader is meant to make across pages, and the refusal's
+    # own offer to keep the prototype for such a series had no way to be taken.
+    repeating = [page for page in on_it[1:] if page.page not in in_series]
+    if not repeating:
+        return []
+    taken = {page.prototype for page in outline.pages if page.prototype is not None and not page.borrowed}
+    examples = [entry for entry in entries if not entry.role and not entry.hidden]
+    unused = [entry for entry in examples if entry.number not in taken]
+    named, matched = _matched_examples(repeating, unused, examples, state)
+    if not named:
+        return []
+    whose = f"the bundled template {source[0]}'s page {source[1]}" if source[0] else f"this template's page {source[1]}"
+    listed = ", ".join(str(page.page) for page in on_it)
+    return [
+        Finding(
+            kind="repeated_prototype",
+            severity=Severity.BLOCKING,
+            message=(
+                f"{count} of this deck's {len(content)} content pages (pages {listed}) start on {whose}, which is "
+                f"more than all its other prototypes together, and {len(unused)} of this template's "
+                f"{len(examples)} content examples start no page of this deck. A deck built this way reads as one "
+                "page repeated with the words changed, whatever each page says: a reader sees the arrangement "
+                "before the argument. By what each of the repeating pages says it carries: "
+                + "; ".join(named)
+                + ". Record `prototype: N` on those pages and clone each with `clone_page(prs, prototype(tpl, N))`, "
+                "then `replace_text` per line. Pages a reader is meant to compare across keep this prototype "
+                f"without being counted here, so long as they run consecutively: {SERIES_RUN} or more in a row on "
+                "one example is a series, and the pages in it are left alone"
+            ),
+            detail={
+                "prototype": source[1],
+                "borrowed": source[0] or None,
+                "pages": [page.page for page in on_it],
+                "content_pages": len(content),
+                "unused_examples": [entry.number for entry in unused],
+                "alternatives_for": matched,
             },
         )
     ]
@@ -1769,5 +1893,11 @@ def _asks(
         )
     if outline is not None:
         asks.append(_references(outline))
-    asks.append("then write the program, one block per page, in the order this outline sets")
+    # The tool is named because the sentence without it was the one a run acted on
+    # last: it wrote no program and reached for a shell. Nothing else in the reply
+    # says where a program goes or what runs it.
+    asks.append(
+        "then write the program, one block per page, in the order this outline sets: write_file to "
+        "`deck/build/build.py`, then ppt_build runs it and returns every page it drew"
+    )
     return asks

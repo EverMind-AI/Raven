@@ -22,8 +22,9 @@ from pptx.dml.color import RGBColor  # noqa: E402
 from pptx.util import Inches, Pt  # noqa: E402
 
 from raven_ppt.contracts.findings import Severity  # noqa: E402
-from raven_ppt.services.measure.contrast import contrast_findings  # noqa: E402
-from raven_ppt.services.template.compose import adapt  # noqa: E402
+from raven_ppt.contracts.rendered import WordBox  # noqa: E402
+from raven_ppt.services.measure.contrast import UNREADABLE_RATIO, contrast_findings  # noqa: E402
+from raven_ppt.services.template.compose import clone_page, replace_text  # noqa: E402
 from tests._ppt_engine_fixtures import deck, image, noise_image, noise_png, product_page, template_file  # noqa: F401
 
 # Three of the bound template's own theme roles, and the two ratios they make between
@@ -35,7 +36,7 @@ _BACKGROUND = (0xFC, 0xFC, 0xFC)
 # 13.333x7.5in at 72px per inch, which is the dpi the check renders at.
 _PX_PER_INCH = 72
 _CANVAS = (960, 540)
-# The template's own words, which is how `adapt` finds the shape to write into.
+# The template's own words, which is how `replace_text` finds the shape to write into.
 _KICKER = "the template's own kicker"
 
 
@@ -103,13 +104,13 @@ def _composed(path: Path, text: str = "创建/加入 项目") -> Path:
 def _cloned(path: Path, template: Path) -> Path:
     """The same page, arrived at the way a build arrives at one: cloned from the file.
 
-    The label is named in `texts=` because `adapt` empties every shape it is not told
-    about, and a shape with no words in it is not measured.
+    The label is written with `replace_text` because this is the shape the check is
+    about: the measurement is of the words the deck itself put on the page.
     """
     source = Presentation(str(template))
     deck = Presentation()
     deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    adapt(deck, source.slides[0], texts={_KICKER: "本页自己的小标题"})
+    replace_text(clone_page(deck, source.slides[0]), _KICKER, "本页自己的小标题")
     deck.save(str(path))
     return path
 
@@ -346,7 +347,8 @@ def test_a_box_the_program_laid_over_a_cloned_page_is_the_programs(tmp_path: Pat
     source = Presentation(str(template))
     built = Presentation()
     built.slide_width, built.slide_height = Inches(13.333), Inches(7.5)
-    page = adapt(built, source.slides[0], texts={_KICKER: ""})
+    page = clone_page(built, source.slides[0])
+    replace_text(page, _KICKER, "")
     _label(page, "the program's own copy", left=8.11, top=3.07)
     built.save(str(deck))
 
@@ -435,6 +437,129 @@ def test_the_refusal_names_who_drew_the_shape_on_a_dark_template_too(tmp_path: P
     assert "this shape is your own program's" in finding.message
 
 
+# The delivered page this reproduces: two white bullets across the bright crest of a
+# green wave, at 12.0in of copy in a box 1.05in tall. The crest is narrow across the
+# page, so a full-height column of that box holds two lines and their dark leading and
+# the crest is a minority of it; the word the crest crosses sits mostly on it.
+_RIDGE = (0x01, 0xE6, 0x98)
+_DARK = (0x16, 0x1B, 0x1E)
+_LINES = (224, 256)
+_WORD_TOP, _WORD_BOTTOM = 220, 246
+_WORDS = tuple(150 + index * 70 for index in range(6))
+_WORD_WIDE = 60
+_CROSSED = 3
+
+
+def _wave_page(path: Path, *, ridge: bool) -> Path:
+    """A dark page with two lines of glyph strokes, and a narrow bright ridge or not."""
+    from PIL import Image
+
+    image = Image.new("RGB", _CANVAS, _DARK)
+    pixels = image.load()
+    if ridge:
+        left = _WORDS[_CROSSED] - 5
+        for x in range(left, left + _WORD_WIDE - 10):
+            for y in range(_WORD_TOP, _WORD_BOTTOM):
+                pixels[x, y] = _RIDGE
+    for top in _LINES:
+        for start in _WORDS:
+            for x in range(start, start + _WORD_WIDE, 12):
+                for stroke in range(x, min(x + 4, start + _WORD_WIDE)):
+                    for y in range(top, top + 16):
+                        pixels[stroke, y] = _BACKGROUND
+    image.save(path)
+    return path
+
+
+def _two_line_block(path: Path) -> Path:
+    """One text box holding two lines, which is what makes a column hold both of them."""
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    page = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for index in range(4):
+        page.shapes.add_textbox(Inches(7.22 + index * 0.31), Inches(0.44), Inches(0.29), Inches(0.27))
+    box = page.shapes.add_textbox(Inches(2.0), Inches(3.0), Inches(6.0), Inches(1.0))
+    frame = box.text_frame
+    frame.text = " ".join(_SPOKEN[:6])
+    frame.add_paragraph().text = " ".join(_SPOKEN[6:])
+    for para in frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(14)
+            run.font.color.rgb = RGBColor(*_BACKGROUND)
+    presentation.save(str(path))
+    return path
+
+
+_SPOKEN = (
+    "market",
+    "heading",
+    "toward",
+    "flexibility",
+    "across",
+    "grids",
+    "returns",
+    "depend",
+    "wholly",
+    "upon",
+    "revenue",
+    "discipline",
+)
+
+
+def _painted_words() -> list[WordBox]:
+    """Where the render put each word, which is what a real run reads out of the PDF."""
+    boxes = []
+    for line, top in enumerate(_LINES):
+        for index, left in enumerate(_WORDS):
+            boxes.append(
+                WordBox(
+                    page=1,
+                    text=_SPOKEN[line * 6 + index],
+                    x0=left,
+                    y0=_WORD_TOP,
+                    x1=left + _WORD_WIDE,
+                    y1=_WORD_BOTTOM,
+                )
+            )
+    return boxes
+
+
+def test_a_ridge_across_one_word_is_read_where_the_word_is(tmp_path: Path) -> None:
+    """The delivered miss: a column of the declared box cannot see a narrow ridge.
+
+    Page 12 of a delivered deck set two white bullets across the bright crest of a
+    green wave. The declared box is 1707x151px over two lines, a column of it is
+    226px wide, the crest is a minority of every column, and every column's commonest
+    band came back #161B1E for 17.4:1 -- past all four guards, with none of them the
+    cause. The same page's title, white on the dark half, reads 17.4:1 truthfully, so
+    the page carried a passing and a failing case of one colour pair.
+    """
+    deck = _two_line_block(tmp_path / "deck.pptx")
+    page = _wave_page(tmp_path / "page-001.png", ridge=True)
+
+    assert contrast_findings(deck, None, pages=[page]) == []
+
+    findings = contrast_findings(deck, None, pages=[page], words=_painted_words())
+
+    assert [one.kind for one in findings] == ["unreadable"]
+    assert findings[0].severity is Severity.BLOCKING
+    assert findings[0].detail["word"] == _SPOKEN[_CROSSED]
+    assert findings[0].detail["ratio"] < UNREADABLE_RATIO
+
+
+def test_the_words_of_a_block_on_one_ground_report_nothing(tmp_path: Path) -> None:
+    """The other half: word boxes may only make the reading worse, never noisier.
+
+    The same block and the same words with the ridge taken away. A word box is tighter
+    than a declared box and holds a larger share of glyphs, and reading the glyphs'
+    own antialiasing as the ground would report every page on a dark deck.
+    """
+    deck = _two_line_block(tmp_path / "deck.pptx")
+    page = _wave_page(tmp_path / "page-001.png", ridge=False)
+
+    assert contrast_findings(deck, None, pages=[page], words=_painted_words()) == []
+
+
 def _two_grounds(path: Path, right: tuple[int, int, int]) -> Path:
     """A page where the label's box crosses from one ground onto a second one.
 
@@ -497,9 +622,10 @@ def test_a_bold_title_on_a_photograph_is_not_measured_against_its_own_strokes() 
     for left in range(10, 390, 20):
         crop[8:52, left : left + 11] = ink
 
-    ground = _worst_ground(crop, ink)
+    read = _worst_ground(crop, ink)
 
-    assert ground is not None
+    assert read is not None
+    ground, _ = read
     assert _ratio(ink, ground) > 4, f"the ground is the photograph, not the strokes: {ground}"
 
 
@@ -514,9 +640,9 @@ def test_black_type_on_a_black_panel_is_still_read_as_black_on_black() -> None:
     crop[0:2, :] = (0x20, 0x20, 0x20)
     ink = (0x1A, 0x1A, 0x1A)
 
-    ground = _worst_ground(crop, ink)
+    read = _worst_ground(crop, ink)
 
-    assert ground is not None and _ratio(ink, ground) < 1.2
+    assert read is not None and _ratio(ink, read[0]) < 1.2
 
 
 def test_ink_the_renderer_painted_one_level_off_is_still_the_ink() -> None:
@@ -530,9 +656,9 @@ def test_ink_the_renderer_painted_one_level_off_is_still_the_ink() -> None:
     for left in range(10, 390, 20):
         crop[8:52, left : left + 11] = (0x30, 0x30, 0x30)
 
-    ground = _worst_ground(crop, (0x2F, 0x2F, 0x2F))
+    read = _worst_ground(crop, (0x2F, 0x2F, 0x2F))
 
-    assert ground is not None and _ratio((0x2F, 0x2F, 0x2F), ground) > 8
+    assert read is not None and _ratio((0x2F, 0x2F, 0x2F), read[0]) > 8
 
 
 def test_a_dark_photograph_beside_the_words_is_not_read_as_ink() -> None:

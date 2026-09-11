@@ -53,9 +53,56 @@ KILL_TIMEOUT_S = 10.0
 does not hold the caller past the budget it has already given up on."""
 
 
+# Where a native-Windows LibreOffice puts its launcher. The MSI that `winget`
+# installs registers no command alias and puts nothing on PATH, so the remedy
+# `install_hint` prints is followed correctly and still leaves a PATH-only
+# search finding nothing. LibreOffice documents the executable under the
+# installation's `program` directory, and these are the roots an install picks
+# from.
+_WINDOWS_PROGRAM_ROOT_VARS = ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA")
+
+
 def find_soffice() -> str | None:
-    """LibreOffice's launcher, under either of the two names it ships as."""
-    return shutil.which("soffice") or shutil.which("libreoffice")
+    """LibreOffice's launcher, under either of the two names it ships as.
+
+    One resolver, because every seat that reports LibreOffice missing -- `raven
+    doctor`, the gateway preview, the ppt engine's render gate -- has to agree
+    with the one that runs it. A second copy of this is how the pair this module
+    consolidated diverged before.
+    """
+    found = shutil.which("soffice") or shutil.which("libreoffice")
+    if found:
+        return found
+    if sys.platform == "win32":
+        return _windows_install_soffice()
+    return None
+
+
+def _windows_install_soffice() -> str | None:
+    """The launcher inside a stock Windows installation, or None."""
+    for variable in _WINDOWS_PROGRAM_ROOT_VARS:
+        root = os.environ.get(variable)
+        if not root:
+            continue
+        candidate = Path(root) / "LibreOffice" / "program" / "soffice.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def install_hint() -> str:
+    """The command that installs LibreOffice on this platform, bare so a caller can phrase it.
+
+    Every message that reports it missing ends with this. Naming the dependency
+    was never the gap -- the messages already said "LibreOffice" -- but a user
+    who has just been told a deck cannot be rendered still has to go and find
+    out what to type, and this is not a Python package `uv` will fetch.
+    """
+    if sys.platform == "darwin":
+        return "brew install --cask libreoffice"
+    if sys.platform == "win32":
+        return "winget install TheDocumentFoundation.LibreOffice"
+    return "apt install libreoffice"
 
 
 def convert_command(source: Path, staged: Path, profile: Path, *, executable: str) -> list[str]:

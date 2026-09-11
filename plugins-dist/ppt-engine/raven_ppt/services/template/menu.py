@@ -89,7 +89,7 @@ class PageEntry:
     """`cover`, `agenda`, `closing`, or empty for an ordinary content page."""
     slots: int = 0
     """How many times the page's longest repeating unit repeats: the number of items
-    `adapt(items=...)` can fill before it has to be a different page.
+    one page's repeating run can carry before it has to be a different page.
 
     The count an author actually chooses a prototype by -- five findings want a page
     with five slots -- and the one the listing did not carry: a live program filled a
@@ -108,7 +108,7 @@ class PageEntry:
     it, whose request happened to list the arrangements in prose, cloned eleven."""
     picture_slots: tuple[str, ...] = ()
     """Where a picture of the author's can go, each as `[n] WxHin photo|cut-out|icon|drawing`
-    in the numbering `adapt` takes (`# [n]` over the reference, groups opened). A cut-out is
+    in the numbering `shape_at` takes (`# [n]` over the reference, groups opened). A cut-out is
     a transparent illustration on the page's own ground; its box runs wherever the drawing
     does, so a photograph wants a box of its own there, or a cut-out of its own. An icon is
     a picture no longer than `ICON_MAX_IN` a side: a mark beside one unit, not a picture of
@@ -118,7 +118,7 @@ class PageEntry:
     The template's picture placeholders are seldom `p:pic`: the amber template draws
     every photograph as a rounded rectangle *filled* with one, and a section page's
     cartoon is a group of freeforms. Counting `p:pic` alone told an author those pages
-    held no picture, and `pictures={2: ...}` against the photograph it could see was
+    held no picture, and a swap against the photograph it could see was
     refused with "no picture frame at all" on three pages of one live run. What fills a
     slot is the author's decision; this says which shapes are slots."""
     hidden: bool = False
@@ -134,6 +134,15 @@ class PageEntry:
     writing the `texts={...}` that fills it, and one page-choosing sentence further up
     is a whole plan too early. The counts either side of it are shapes; this is
     characters, and the two used the same verb until this field existed."""
+
+    charts: tuple[str, ...] = ()
+    """The box of each chart the template drew on this page, in inches.
+
+    Carried because the arrangement around a template's chart is exactly what an
+    author wants and the chart itself is the one element cloning does not deliver:
+    it comes over holding the template's own numbers, and nothing writes a chart's
+    data here. So the page stays on offer and the offer says what the author owes
+    it -- a chart of its own, drawn with `ppt_charts` into this box."""
 
     def line(self) -> str:
         parts = [f"[{self.number}]"]
@@ -161,31 +170,44 @@ class PageEntry:
         if self.picture_slots:
             parts.append("picture slots " + ", ".join(self.picture_slots))
         parts.append("clone it" if self.clone_only else "code can redraw it")
+        if self.charts:
+            # Described rather than spelled as an argument: these are python-pptx's
+            # units, and `ppt_charts` takes a Box in inches. The page read back as code
+            # carries the pasteable form.
+            parts.append(
+                f"and the chart at {' and '.join(self.charts)} is yours to draw with ppt_charts -- a cloned "
+                "chart holds the template's own numbers and nothing rewrites them"
+            )
         return " — ".join(parts)
 
 
 _MENUS: dict[tuple, tuple[PageEntry, ...]] = {}
 
 
-def menu(path: Path, unwritable: dict[int, tuple[str, ...]] | None = None) -> tuple[PageEntry, ...]:
+def menu(
+    path: Path,
+    unwritable: dict[int, tuple[str, ...]] | None = None,
+    charts: dict[int, tuple[str, ...]] | None = None,
+) -> tuple[PageEntry, ...]:
     """Every example page of this template, one entry each.
 
     `unwritable` is what `decompile` found it could not reproduce, keyed by page
-    number; a page named there is one to clone rather than redraw. Passed in rather
-    than recomputed because decompiling thirteen pages to build a menu would cost
-    more than the menu saves.
+    number; a page named there is one to clone rather than redraw. `charts` is the
+    other half of the same read -- the boxes of the charts on a page, which cloning
+    does not deliver. Both are passed in rather than recomputed because decompiling
+    thirteen pages to build a menu would cost more than the menu saves.
     """
     # Read once per template file: a measurement pass asks for this menu nine times
     # for one build, 0.36s each on a 13MB template, and the file does not change
     # between them.
     try:
         stat = Path(path).stat()
-        key = (str(Path(path).resolve()), stat.st_mtime_ns, stat.st_size, _frozen(unwritable))
+        key = (str(Path(path).resolve()), stat.st_mtime_ns, stat.st_size, _frozen(unwritable), _frozen(charts))
     except OSError:
         key = None
     if key is not None and key in _MENUS:
         return _MENUS[key]
-    entries = _menu(path, unwritable)
+    entries = _menu(path, unwritable, charts)
     if key is not None:
         if len(_MENUS) >= 8:
             _MENUS.pop(next(iter(_MENUS)))
@@ -197,7 +219,11 @@ def _frozen(unwritable: dict[int, tuple[str, ...]] | None) -> tuple:
     return tuple(sorted((number, tuple(what)) for number, what in (unwritable or {}).items()))
 
 
-def _menu(path: Path, unwritable: dict[int, tuple[str, ...]] | None = None) -> tuple[PageEntry, ...]:
+def _menu(
+    path: Path,
+    unwritable: dict[int, tuple[str, ...]] | None = None,
+    charts: dict[int, tuple[str, ...]] | None = None,
+) -> tuple[PageEntry, ...]:
     try:
         from pptx import Presentation
     except ImportError:  # pragma: no cover -- python-pptx ships with the extra
@@ -207,6 +233,7 @@ def _menu(path: Path, unwritable: dict[int, tuple[str, ...]] | None = None) -> t
     except Exception:  # noqa: BLE001 -- a malformed file is simply not a template
         return ()
     named = unwritable or {}
+    drawn = charts or {}
     canvas_h = (presentation.slide_height or 0) / EMU_PER_INCH
     entries: list[PageEntry] = []
     for number, slide in enumerate(presentation.slides, start=1):
@@ -224,13 +251,14 @@ def _menu(path: Path, unwritable: dict[int, tuple[str, ...]] | None = None) -> t
                 shapes=sum(1 for s in shapes if is_filled(s) and s not in texts),
                 arrangement=page_signature(slide, canvas_h) or "",
                 slots=_slots(slide),
-                clone_only=number in named,
+                clone_only=number in named or number in drawn,
                 hidden=slide.element.get("show") == "0",
                 # Not for a page marked not-for-show: the line already says it is not
                 # for building on, and a band on it is characters spent on an offer
                 # the same line withdraws.
                 capacity="" if slide.element.get("show") == "0" else page_band(texts),
                 unwritable=tuple(named.get(number, ())),
+                charts=tuple(drawn.get(number, ())),
                 role=_role(
                     number,
                     slide.slide_layout.name or "",
@@ -347,6 +375,29 @@ def roles(entries: tuple[PageEntry, ...]) -> dict[str, int]:
     return found
 
 
+# The words a structural page's own copy names itself by, per role. `_COVER_LAYOUTS` is
+# not here: those are layout names, and a cover's copy is the deck's own title.
+_ROLE_LABELS = {AGENDA: _AGENDA_WORDS, SECTION: _SECTION_WORDS, CLOSING: _CLOSING_WORDS}
+
+
+def role_named(text: str) -> str:
+    """The role this string names, when the string is nothing but that role's name.
+
+    `_role` asks what a whole *page* is, and there a heading that merely mentions a role
+    is answer enough -- a divider's title slot reads "单击此处添加章节标题" and that page
+    is a divider. This asks the narrower question a gate needs: is this string the label
+    itself, the fixed word a template writes on its own index page and keeps there. So
+    the whole string has to be the word, not contain it: `目录` and `Agenda` are the two
+    halves of one such label, while the instruction to fill a slot names the role and is
+    still an unfilled slot.
+    """
+    said = " ".join(text.split()).casefold()
+    for role, words in _ROLE_LABELS.items():
+        if said in {word.strip() for word in words}:
+            return role
+    return ""
+
+
 def _heading(texts: list) -> str:
     """The page's own first line, which is usually what the page is called.
 
@@ -375,7 +426,7 @@ ICON_SLOT_NOTE = (
     f"an icon slot (a picture at most {ICON_MAX_IN:g}in on a side) is a mark standing for the unit beside it, "
     "one per unit: on a cloned page give each unit its own -- `swap_icon(slide, shape_at(slide, n), '<icon "
     "name>', colour=T['accent'])` draws a Tabler icon in the slot's box (section 7 of the skill; "
-    "`find_icons('<what the unit is about>')` names one) -- or drop them all with `drop=[n, ...]`. The "
+    "`find_icons('<what the unit is about>')` names one) -- or drop them all with `drop_shape`. The "
     "template's marks kept, or one mark beside several things, mark nothing"
 )
 # A drawing at least this share of the page wide is a band or a backdrop, not a slot.
@@ -388,10 +439,10 @@ def _is_photo(shape) -> bool:
 
 
 def _picture_slots(slide, page_width: int = 0) -> tuple[str, ...]:
-    """The page's picture placeholders in `adapt`'s numbering: photographs, then drawings.
+    """The page's picture placeholders in `shape_at`'s numbering: photographs, then drawings.
 
     A drawing is named by its first member's number with the whole drawing's size, since
-    `adapt` opens groups and a member stands for the wordless group around it.
+    the numbering opens groups and a member stands for the wordless group around it.
     """
     found: list[str] = []
     named: list[Any] = []

@@ -117,8 +117,7 @@
         "profile": "script_author",
         "composerModel": "",
         "readerEffort": "low",
-        "renderDpi": 144,
-        "renderConcurrency": 2
+        "renderDpi": 144
       }
     }
   }

@@ -226,20 +226,91 @@ REFERENCE_ARTWORK: dict[str, dict[int, int]] = {
     "black_circuit_tech_launch": {13: 1},
 }
 
-# Under this, white type on a fill of that colour stops being type. The number is
-# `measure.contrast.UNREADABLE_RATIO`, restated here rather than imported because this
-# module must not depend on the measurement package; the two are checked against each
-# other in the tests.
+# Every (label, card) pair the 54 reference pages write: the colour a run states, and the
+# fill of the card that run sits inside -- the shape's own fill, or the smallest filled
+# box that contains it, since a template routinely draws the card and the label as two
+# shapes. Read off all 54 pages, commonest first, with the number of cards that write
+# each pair as the last column -- a reply that has room for three names the three an
+# author is most likely to clone, not the three with the lowest ratio, which measured
+# are a 5%-alpha card and two accents on each other.
 #
-# It matters at borrowing time because it is the one thing a borrowed page cannot
-# bring with it. Measured over all 252 cross-template clones of these pages: 28 came
-# out with copy under that ratio that read above it in its own template, and 19 of the
-# 28 landed in the one bundled template whose accent1 renders white at 1.88:1. That
-# template's own pages set dark ink on that fill instead -- its page 8 reads 7.11:1 on
-# the same colour -- so what the clone carries across is a habit that is right in the
-# seven templates whose accent1 is dark and wrong in the eighth. The ink is stated on
-# the run, not derived from the ground, so nothing recolours it.
-ACCENT_READS_WHITE = 2.0
+# The columns are the label's colour, the card's colour, the card's `lumMod`, `lumOff`
+# and `alpha`, and how many cards on these pages are painted that way. A scheme name resolves to whatever the deck the page lands in
+# paints that scheme with; a literal arrives unchanged, because nothing recolours a
+# stated colour. That split is the whole mechanism this exists for: a page keeps its
+# label and is given the deck's palette for its card, so a pair that reads in the
+# template it was cut from can arrive unreadable, and the pairs are where it shows.
+#
+# The other three numbers are not decoration. A card is routinely a tint rather than the
+# swatch -- 75/0 is the commonest card on these pages and 60/40 the next -- and 22 of the
+# 89 measured failures landed on a tint and not on the colour the theme states. Alpha is
+# here for the same reason in the other direction: a card at 15% is not its swatch, it is
+# the page ground with a hint of the swatch in it, which is why `theme.unreadable_grounds`
+# asks about both ends of the wash rather than picking one.
+#
+# Why the pairs and not a cross product of the colours they use: the first cut crossed
+# eight inks against eight fills, asked about 80-odd pairs per deck and named a label in
+# one accent on a card in another -- pairs no reference page makes, which crowded out the
+# two that carry every failure. A second cut paired everything that shares a page and came
+# back with 163 pairs no measured failure ever landed on. Pairing a label with the card it
+# sits inside is what the renderer does, and it is done here, once, against files pinned
+# by sha256 -- not at reply time, where resolving a stack of fills would reproduce the
+# renderer that `measure.contrast` reads a render for.
+#
+# Calibrated against 486 clones of these pages into the ten bundled templates, rendered
+# and read by `measure.contrast`: of the 89 pages that came back with copy under the
+# ratio, 77 land on a colour these pairs name, in all ten hosts -- against 24 in one host
+# for the `accent1`-against-white question this replaces. The 12 it does not name are
+# cards painted by a shape behind the text rather than around it, which no pair can reach
+# without the page.
+BORROWED_LABEL_PAIRS: tuple[tuple[str, str, float, float, float, int], ...] = (
+    ("#F8F8F8", "accent1", 0.75, 0.0, 1.0, 52),
+    ("#FFFFFF", "accent1", 1.0, 0.0, 1.0, 45),
+    ("#F8F8F8", "accent1", 1.0, 0.0, 1.0, 43),
+    ("lt1", "accent1", 1.0, 0.0, 1.0, 23),
+    ("#FFFFFF", "accent2", 0.6, 0.4, 1.0, 21),
+    ("#FFFFFF", "accent1", 0.6, 0.4, 1.0, 19),
+    ("lt1", "accent2", 1.0, 0.0, 1.0, 17),
+    ("#FFFFFF", "accent2", 1.0, 0.0, 1.0, 17),
+    ("lt1", "accent1", 0.75, 0.0, 1.0, 14),
+    ("tx1", "accent1", 1.0, 0.0, 0.15, 13),
+    ("lt1", "accent2", 0.6, 0.4, 1.0, 11),
+    ("tx1", "bg1", 1.0, 0.0, 1.0, 8),
+    ("tx1", "accent1", 1.0, 0.0, 1.0, 8),
+    ("lt1", "accent3", 1.0, 0.0, 0.9, 8),
+    ("bg1", "accent1", 1.0, 0.0, 1.0, 7),
+    ("tx1", "accent1", 0.2, 0.8, 1.0, 6),
+    ("tx1", "accent1", 1.0, 0.0, 0.5, 6),
+    ("tx1", "accent2", 1.0, 0.0, 0.2, 6),
+    ("tx1", "accent4", 0.2, 0.8, 1.0, 4),
+    ("tx1", "accent1", 1.0, 0.0, 0.2, 4),
+    ("accent1", "bg1", 1.0, 0.0, 1.0, 3),
+    ("bg1", "accent2", 1.0, 0.0, 1.0, 2),
+    ("accent2", "accent1", 1.0, 0.0, 0.2, 2),
+    ("tx1", "accent1", 1.0, 0.0, 0.1, 2),
+    ("tx1", "accent2", 1.0, 0.0, 0.1, 2),
+    ("lt1", "accent1", 0.6, 0.4, 1.0, 1),
+    ("#F8F8F8", "accent1", 1.0, 0.0, 0.05, 1),
+    ("#F8F8F8", "accent1", 1.0, 0.0, 0.46, 1),
+    ("accent4", "accent1", 1.0, 0.0, 0.15, 1),
+)
+
+# Under this, a borrowed page's label on a fill of that colour stops being type. The
+# number is `measure.contrast.UNREADABLE_RATIO`, restated here rather than imported
+# because this module must not depend on the measurement package; the two are checked
+# against each other in the tests.
+#
+# It matters at borrowing time because it is the one thing a borrowed page cannot bring
+# with it: the ink is stated on the run, not derived from the ground, so nothing
+# recolours it. Measured over all 486 clones of these 54 pages into the ten bundled
+# templates, rendered and read by `measure.contrast`: 89 pages came back with copy under
+# this ratio, in every one of the ten hosts -- 28 in the one whose `accent1` renders
+# white at 1.88:1, and 17 in the dark one, whose `accent1` reads 2.33:1 and whose
+# `accent2` reads 1.91:1. Only 2 of the 54 pages read under the ratio in their own
+# template's colours, and both are that template's own decoration, which the gate reports
+# rather than refuses -- so a page that arrives unreadable arrived that way from the
+# palette it landed in, and the palette is what `theme.unreadable_grounds` asks.
+BORROWED_INK_READS = 2.0
 
 
 def templates_dir() -> Path:

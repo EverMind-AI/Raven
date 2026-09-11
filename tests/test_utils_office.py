@@ -160,3 +160,71 @@ def test_the_viewer_and_the_ppt_engine_ask_the_same_module() -> None:
     assert getattr(design_office, "soffice_run", None) is None, (
         "the design engine still converts through its own backend; say so here when that changes"
     )
+
+
+def test_a_windows_install_is_found_where_the_advertised_remedy_leaves_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`install_hint` sends native-Windows users to `winget install
+    TheDocumentFoundation.LibreOffice`. That package registers no command alias
+    and puts nothing on PATH, so a PATH-only search made the advertised remedy a
+    dead end: the user installs exactly what they were told to and `raven
+    doctor`, the gateway preview and the render gate all still say it is
+    missing. The launcher sits under the installation's `program` directory.
+    """
+    program_files = tmp_path / "Program Files"
+    launcher = program_files / "LibreOffice" / "program" / "soffice.exe"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("")
+
+    monkeypatch.setattr(office.sys, "platform", "win32")
+    monkeypatch.setattr(office.shutil, "which", lambda name: None)
+    for variable in office._WINDOWS_PROGRAM_ROOT_VARS:
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("ProgramFiles", str(program_files))
+
+    assert office.find_soffice() == str(launcher)
+    assert office.install_hint() == "winget install TheDocumentFoundation.LibreOffice"
+
+
+def test_the_path_still_wins_and_no_install_is_still_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The install search is a fallback, not a preference: an operator who put a
+    build on PATH gets that one. And a Windows host with neither answers None
+    rather than a path that is not there."""
+    monkeypatch.setattr(office.sys, "platform", "win32")
+    for variable in office._WINDOWS_PROGRAM_ROOT_VARS:
+        monkeypatch.delenv(variable, raising=False)
+
+    monkeypatch.setattr(office.shutil, "which", lambda name: "C:\\tools\\soffice.exe" if name == "soffice" else None)
+    assert office.find_soffice() == "C:\\tools\\soffice.exe"
+
+    monkeypatch.setattr(office.shutil, "which", lambda name: None)
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "nothing here"))
+    assert office.find_soffice() is None
+
+
+def test_a_posix_host_does_not_go_looking_for_a_windows_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PATH is the whole answer on the platforms that install through a package
+    manager, so the probe does not run and cannot produce a Windows path here."""
+    monkeypatch.setattr(office.sys, "platform", "linux")
+    monkeypatch.setattr(office.shutil, "which", lambda name: None)
+    monkeypatch.setenv("ProgramFiles", "C:\\Program Files")
+    assert office.find_soffice() is None
+
+
+def test_every_seat_that_reports_libreoffice_missing_asks_one_resolver() -> None:
+    """The resolver, not just the conversion.
+
+    The engine's render gate, the gateway preview and `raven doctor` each decide
+    whether LibreOffice is present, and they have to decide it the same way --
+    a seat that calls it missing on an install the runner would have used is the
+    divergence this module exists to end. The engine re-exports rather than
+    reimplements, which is the fact that keeps them equal.
+    """
+    from raven.cli import doctor_commands
+    from raven.rpc import pdf_preview
+    from raven_ppt.services.render import capabilities as engine_capabilities
+
+    assert engine_capabilities._find_soffice is office.find_soffice
+    assert pdf_preview.find_soffice() == office.find_soffice()
+    assert doctor_commands._gather_external_tools().soffice == office.find_soffice()

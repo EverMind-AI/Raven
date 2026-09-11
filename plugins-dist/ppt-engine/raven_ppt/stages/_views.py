@@ -5,7 +5,9 @@ about a caller's budget rather than about rendering:
 
 Concurrency. LibreOffice takes seconds and holds a profile directory; the service
 is stateless by design, so the limit lives with whoever is asking. Without one, a
-review of a twenty-page deck starts twenty conversions.
+review of a twenty-page deck starts twenty conversions. How many is a fact about
+the box rather than about the deck, so the number comes from
+``render.default_concurrency`` and only an operator's own setting overrides it.
 
 Blocking calls. The chain is synchronous -- subprocesses and Pillow -- so a stage
 inside an event loop has to hand it to a thread or it stops everything else for
@@ -40,7 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.utils.images import _IMAGE_TOKEN_CAP, detect_image_mime, image_pixel_size
-from raven_ppt.services.render import LocalDeckRenderer, RenderError, sheet
+from raven_ppt.services.render import LocalDeckRenderer, RenderError, default_concurrency, sheet
 
 _log = logging.getLogger(__name__)
 
@@ -97,7 +99,7 @@ class DeckViews:
 
     renderer: object = field(default_factory=LocalDeckRenderer)
     dpi: int = 144
-    concurrency: int = 2
+    concurrency: int = field(default_factory=default_concurrency)
     max_image_bytes: int = MAX_IMAGE_BYTES
 
     def __post_init__(self) -> None:

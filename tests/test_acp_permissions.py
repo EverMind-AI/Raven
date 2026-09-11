@@ -22,7 +22,6 @@ import pytest
 from raven.acp.outbound import ConnectionClosedError, OutboundRequests, RequestFailedError
 from raven.acp.permissions import AcpPermissionBroker
 from raven.acp.updates import AcpSession, UpdateTranslator
-from raven.contracts.permissions import ApprovalChoice
 from tests.acp_schema import validate_def, validate_outbound
 
 
@@ -126,32 +125,17 @@ class TestTheRequest:
         validate_def("RequestPermissionRequest", client.request["params"])
         assert client.request["params"]["toolCall"]["toolCallId"]
 
-    async def test_once_session_and_reject_are_offered(self):
-        """``allow_always`` is offered now that the gate keeps a session grant
-        behind it; the persisted rule needs a text a human confirms, and this
-        wire has no editor for one, so no fourth option."""
+    async def test_only_once_options_are_offered(self):
+        """``ApprovalBroker.resolve`` takes allow or deny and its docstring says
+        there is no always-allow state; ``denied_digests`` clears every turn.
+        Offering ``allow_always`` would be a lie the client renders as a saved
+        preference."""
         client, _, broker = _rig(_allow)
 
         await _ask(broker)
 
         kinds = [option["kind"] for option in client.request["params"]["options"]]
-        assert kinds == ["allow_once", "allow_always", "reject_once"]
-        assert [o["name"] for o in client.request["params"]["options"]][1] == "Allow for this session"
-
-    async def test_the_always_option_answers_as_a_session_grant(self):
-        def pick_session(frame: dict) -> dict:
-            option = next(o for o in frame["params"]["options"] if o["kind"] == "allow_always")
-            return {"result": {"outcome": {"outcome": "selected", "optionId": option["optionId"]}}}
-
-        client, _, broker = _rig(pick_session)
-        outcome = await broker.await_approval(
-            conversation_id="acp:s1", turn_id="turn-1", tool_call_id="", command="git push", description="Push"
-        )
-
-        assert outcome.choice is ApprovalChoice.ALLOW_SESSION
-        assert outcome.approved is True
-        assert outcome.answered is True
-        assert broker.outcomes == {"allowed-session": 1}
+        assert kinds == ["allow_once", "reject_once"]
 
     async def test_the_turn_id_rides_in_meta_not_at_the_top_level(self):
         """The spec forbids custom fields on standard types and declares ``_meta``

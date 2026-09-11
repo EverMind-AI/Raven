@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Fetch the pinned deck templates into the engine's gitignored assets directory.
+"""Verify the tracked deck templates, or land a fresh cut of them.
 
-The .pptx payload never enters git (the destination directory's .gitignore fences it);
-``templates.manifest.json`` pins every file by sha256 and names the endpoint that
-serves them -- a generic package in the project's GitLab package registry. The
-project is private, so the request carries ``PRIVATE-TOKEN`` from ``$GITLAB_TOKEN``
-(any token that can read the repository) or ``JOB-TOKEN`` from ``$CI_JOB_TOKEN``
-inside CI. ``--from <dir>`` copies from a local directory instead, and ``--verify``
-checks what is already in place. Whatever fails its pin is removed, never kept: a
-wheel built over the destination must not package a byte the manifest did not sign.
+Not an install step. The .pptx payload is tracked in git under the destination
+``templates.manifest.json`` names, and rides the ppt-engine wheel from there, so a
+fresh clone already has all ten: the registry this script pulls from is private, and
+requiring it was why an outside install got an empty template catalogue. What remains
+is the maintainer half of the loop.
+
+``--verify`` (the everyday mode) hashes what is on disk against the pins -- the same
+check the release gate runs against the built wheel. Landing a re-cut is the other
+half: ``--from <dir>`` copies from a local directory, and a bare run pulls the pinned
+version out of the project's GitLab generic package registry, carrying ``PRIVATE-TOKEN``
+from ``$GITLAB_TOKEN`` (any token that can read the repository) or ``JOB-TOKEN`` from
+``$CI_JOB_TOKEN`` inside CI. Either way the new bytes must then be committed, with the
+pins rewritten to match. Whatever fails its pin is removed, never kept: a wheel built
+over the destination must not package a byte the manifest did not sign.
 
 A manifest whose endpoint is still a ``stub://`` placeholder is refused with the owner
 card rather than guessed at.

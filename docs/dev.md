@@ -4,6 +4,22 @@
 
 The project uses **Python + `uv`** with `hatchling` as the build backend.
 
+### 0. System prerequisites
+
+`uv` installs everything raven imports. One program it cannot: **LibreOffice**,
+which converts a deck (or any Office source document) to PDF. The deck engine
+renders, measures and previews through that conversion, and the gateway's PDF
+viewer serves it, so without LibreOffice a deck still builds but nothing that
+reads the rendered page runs, and several integration tests skip.
+
+```bash
+apt install libreoffice                          # Debian / Ubuntu
+brew install --cask libreoffice                  # macOS
+winget install TheDocumentFoundation.LibreOffice # Windows
+```
+
+`raven doctor` reports it under **External tools**.
+
 ### 1. Install dependencies
 
 ```bash
@@ -67,4 +83,5 @@ Creates `~/.raven/config.json` and the workspace directory. Edit the config to a
 uv run pytest tests/
 ```
 
-Requires Python >= 3.12. Test configuration is in `pyproject.toml` (`asyncio_mode = "auto"`).
+Requires Python >= 3.12, and LibreOffice for the tests that render a deck (they skip without it).
+Test configuration is in `pyproject.toml` (`asyncio_mode = "auto"`).

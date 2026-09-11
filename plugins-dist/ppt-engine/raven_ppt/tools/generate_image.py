@@ -134,8 +134,8 @@ class PptGenerateImageTool(Tool):
                 "description": (
                     "a cut-out that sits on the template's own ground, in place of a drawing it put there: the "
                     "subject is generated on a green screen and the green is keyed out to alpha afterwards, so "
-                    "the page's colour shows around it. Then `replace_picture(<that drawing>, path)` or "
-                    "`adapt(pictures={n: path})` puts it where the template's drawing was. Not for a photograph "
+                    "the page's colour shows around it. Then `replace_picture(<that drawing>, path)` "
+                    "puts it where the template's drawing was. Not for a photograph "
                     "or a scene that fills its frame"
                 ),
             },

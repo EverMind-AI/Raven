@@ -110,6 +110,29 @@ jobs:
           print(f"OK: {whl} ships entry.js, the served page and {len(agents)} sub-agents, no node_modules")
           PY
 
+      # 4a) The deck engine's own payload. The templates are tracked now, but
+      #     a wheel that silently ships none is exactly the failure this gate
+      #     exists to catch: `default_template_catalog()` returns an empty
+      #     tuple and the deck agent degrades to "bring your own template"
+      #     instead of failing, so nothing else notices.
+      - name: Verify ppt-engine wheel carries the bundled templates
+        run: |
+          python3 - <<'PY'
+          import glob, hashlib, json, zipfile
+          whl = sorted(glob.glob("dist/ppt_engine-*.whl"))[-1]
+          pins = json.load(open("plugins-dist/ppt-engine/templates.manifest.json"))["files"]
+          archive = zipfile.ZipFile(whl)
+          names = set(archive.namelist())
+          for entry in pins:
+              member = f"raven_ppt/assets/templates/{entry['name']}"
+              assert member in names, f"{entry['name']} missing from {whl}"
+              blob = archive.read(member)
+              assert len(blob) == entry["bytes"], f"{entry['name']} is {len(blob)} bytes, pinned {entry['bytes']}"
+              digest = hashlib.sha256(blob).hexdigest()
+              assert digest == entry["sha256"], f"{entry['name']} is {digest}, pinned {entry['sha256']}"
+          print(f"OK: {whl} ships all {len(pins)} bundled templates, each matching its pin")
+          PY
+
       # 4b) Export the locked dependency set as a constraints file. The install
       #     scripts pass this to `uv tool install -c` so a one-click install gets
       #     the exact versions we lock and test, instead of re-resolving to the

@@ -6,17 +6,16 @@ second *transport* for the same one. The permission gate
 needs a human; the TUI's implementation emits ``approval.request``
 on its own wire, and this one sends ``session/request_permission`` on the ACP
 wire. Everything about authority stays where it was -- the model never decides,
-and the gate is what remembers a grant.
+the grant covers one exact command, and there is no persistent policy.
 
 Two shapes of the protocol constrain what can be offered:
 
-* **"Always" here means this session.** The gate keeps a session grant on the
-  conversation (``raven.permissions.session``), so ``allow_always`` is offered
-  and answers as ``ALLOW_SESSION``: the editor's user sees the command stop
-  asking for the rest of the session, which is what the kind promises a
-  client to render. The persisted rule the TUI and the web can write needs a
-  text the human confirms, and this wire has no editor for one, so that grant
-  is not offered here.
+* **There is no "always".** The approval round trip grants one exact action
+  once, and the per-turn ``denied_digests`` memory is cleared at every turn
+  boundary -- there is no always-allow state anywhere. So only ``allow_once``
+  and ``reject_once`` are offered. ``allow_always`` is in the schema and an
+  editor's user will want it -- offering it with nothing behind it would be a
+  lie the client then renders as a saved preference.
 * **A refusal is a selection.** ``RequestPermissionOutcome`` has exactly two
   variants, ``cancelled`` and ``selected``; there is no ``denied``. Rejecting is
   ``selected`` carrying a reject option's id.
@@ -51,7 +50,6 @@ from raven.acp.updates import UpdateTranslator
 from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
 
 ALLOW_KIND = "allow_once"
-SESSION_KIND = "allow_always"
 REJECT_KIND = "reject_once"
 
 
@@ -66,7 +64,7 @@ REJECT_KIND = "reject_once"
 # into a refusal everywhere at once. ``cancelled-turn`` is the one exception and
 # cannot have one -- that path records the tally and then re-raises, so the
 # outcome it built is discarded and no caller can observe the field.
-_ANSWERED = frozenset({"allowed", "allowed-session", "rejected"})
+_ANSWERED = frozenset({"allowed", "rejected"})
 
 
 class AcpPermissionBroker:
@@ -104,12 +102,8 @@ class AcpPermissionBroker:
         tool_call_id: str,
         command: str,
         description: str,
-        suggested_pattern: str = "",
     ) -> ApprovalOutcome:
-        """Ask, and return the grant the client's user chose.
-
-        ``suggested_pattern`` is accepted for the responder contract and unused:
-        this wire has no editor a human could confirm a rule in.
+        """Ask, and return whether this exact command may run once.
 
         Fails closed on every path. The signature is the one the permission
         gate calls, including the keyword-only arguments, so this object can be
@@ -120,10 +114,9 @@ class AcpPermissionBroker:
             # No ACP session owns this turn -- a cron or runtime turn sharing the
             # process. There is nobody to ask, and "nobody to ask" is not
             # permission.
-            return self._record("no-session")
+            return self._record("no-session", False)
 
         allow_id = f"allow-{uuid4().hex}"
-        session_grant_id = f"session-{uuid4().hex}"
         reject_id = f"reject-{uuid4().hex}"
         request = {
             "sessionId": session_id,
@@ -139,7 +132,6 @@ class AcpPermissionBroker:
             },
             "options": [
                 {"optionId": allow_id, "name": "Allow once", "kind": ALLOW_KIND},
-                {"optionId": session_grant_id, "name": "Allow for this session", "kind": SESSION_KIND},
                 {"optionId": reject_id, "name": "Reject", "kind": REJECT_KIND},
             ],
             # Not a standard field, and the spec forbids custom keys on standard
@@ -156,9 +148,9 @@ class AcpPermissionBroker:
             # The first measured failure mode. An error here is the client saying
             # it cannot ask, which is not the same as the user saying yes.
             logger.info("acp: permission request refused by the client: {}", exc)
-            return self._record("client-error")
+            return self._record("client-error", False)
         except ConnectionClosedError:
-            return self._record("connection-closed")
+            return self._record("connection-closed", False)
         except TimeoutError:
             # A client that never answers. Distinguished from a denial in the
             # tally because they mean different things to whoever reads it: one
@@ -166,13 +158,13 @@ class AcpPermissionBroker:
             # (``asyncio.TimeoutError`` is this same class since 3.11, so one
             # clause covers both spellings.)
             logger.warning("acp: permission request went unanswered; treating it as a refusal")
-            return self._record("timeout")
+            return self._record("timeout", False)
         except asyncio.CancelledError:
             # The turn is being torn down. Re-raised rather than converted to a
             # refusal: a cancelled turn has no decision to report, and swallowing
             # it here would report the tool call as denied in a turn that no
             # longer exists.
-            self._record("cancelled-turn")
+            self._record("cancelled-turn", False)
             raise
         except Exception:
             # The catch-all matters, and this is why: the write itself can fail.
@@ -183,37 +175,36 @@ class AcpPermissionBroker:
             # reported to the model as a *failed tool call* rather than as a
             # refusal. Failing closed is the whole contract of this function.
             logger.exception("acp: asking for permission failed; treating it as a refusal")
-            return self._record("transport-error")
+            return self._record("transport-error", False)
 
-        return self._read_outcome(result, allow_id=allow_id, session_grant_id=session_grant_id, reject_id=reject_id)
+        return self._read_outcome(result, allow_id=allow_id, reject_id=reject_id)
 
-    def _read_outcome(self, result: Any, *, allow_id: str, session_grant_id: str, reject_id: str) -> ApprovalOutcome:
+    def _read_outcome(self, result: Any, *, allow_id: str, reject_id: str) -> ApprovalOutcome:
         """Read the answer, believing only what this request minted."""
         if not isinstance(result, dict):
             logger.warning("acp: permission answer was not an object; treating it as a refusal")
-            return self._record("malformed")
+            return self._record("malformed", False)
         outcome = result.get("outcome")
         if not isinstance(outcome, dict):
-            return self._record("malformed")
+            return self._record("malformed", False)
         kind = outcome.get("outcome")
         if kind == "cancelled":
             # The third measured failure mode, and the only one that is not a
             # failure: the spec requires a client to answer every pending
             # permission with this when it cancels a turn.
-            return self._record("cancelled")
+            return self._record("cancelled", False)
         if kind != "selected":
-            return self._record("unknown-outcome")
+            return self._record("unknown-outcome", False)
         option_id = outcome.get("optionId")
         if option_id == allow_id:
-            return self._record("allowed", ApprovalChoice.ALLOW)
-        if option_id == session_grant_id:
-            return self._record("allowed-session", ApprovalChoice.ALLOW_SESSION)
+            return self._record("allowed", True)
         if option_id == reject_id:
-            return self._record("rejected")
-        # The fourth. An id from an earlier request, or one the client invented.
-        # Believing it would grant authority nobody granted.
+            return self._record("rejected", False)
+        # The fourth. An id from an earlier request, or one the client invented
+        # -- including the ``allow_always`` a client might synthesise because its
+        # UI offers one. Believing it would grant authority nobody granted.
         logger.warning("acp: permission answer carried an option id this request did not mint")
-        return self._record("unknown-option")
+        return self._record("unknown-option", False)
 
     def _session_for(self, conversation_id: str) -> str | None:
         """The ACP session a turn's lane belongs to.
@@ -229,10 +220,14 @@ class AcpPermissionBroker:
         session = self._translator.get(session_of(conversation_id))
         return None if session is None else session.session_id
 
-    def _record(self, outcome: str, choice: ApprovalChoice = ApprovalChoice.DENY) -> ApprovalOutcome:
+    def _record(self, outcome: str, allowed: bool) -> ApprovalOutcome:
         self.outcomes[outcome] = self.outcomes.get(outcome, 0) + 1
-        # The editor protocol has no "stop the turn" variant and never produces one.
-        return ApprovalOutcome(choice=choice, answered=outcome in _ANSWERED)
+        # Two options were offered, so two choices can come back; the editor
+        # protocol has no "stop the turn" variant and never produces one.
+        return ApprovalOutcome(
+            choice=ApprovalChoice.ALLOW if allowed else ApprovalChoice.DENY,
+            answered=outcome in _ANSWERED,
+        )
 
 
 __all__ = ["ALLOW_KIND", "REJECT_KIND", "AcpPermissionBroker"]

@@ -87,11 +87,17 @@ class OrganGlueMixin:
         if not blocks:
             return model_text, blocks, None
         if not self._supports_vision(model):
-            return image_placeholder_text(blocks, blind=True, describe_tool=self._describe_tool_name()), None, None
+            return (
+                image_placeholder_text(
+                    blocks, blind=True, describe_tool=self._describe_tool_name(), tool_text=model_text
+                ),
+                None,
+                None,
+            )
         if self._supports_image_tool_result(model):
             return model_text, blocks, None
         attach = [b for b in blocks if b.get("type") == "image_url"]
-        return image_placeholder_text(blocks), None, attach
+        return image_placeholder_text(blocks, tool_text=model_text), None, attach
 
     def _supports_vision(self, model: str | None = None) -> bool:
         """Cached per model: whether this model can see a picture at all.

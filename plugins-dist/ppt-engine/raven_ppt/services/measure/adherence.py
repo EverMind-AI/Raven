@@ -32,7 +32,9 @@ template's, so the deck that ignored its template scores 12-23% by area.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import re
+import unicodedata
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +80,7 @@ def template_adherence(pptx_path: Path, template: Path | None) -> list[Finding]:
         return []
     everywhere = {box for boxes in prototypes.values() for box in boxes}
     left_over = _placeholders_by_page(pptx_path, Path(template))
+    laid_over = _added_text_boxes(pptx_path, everywhere)
     adapted: list[int] = []
     partly: list[int] = []
     unrelated: list[int] = []
@@ -86,13 +89,26 @@ def template_adherence(pptx_path: Path, template: Path | None) -> list[Finding]:
         if len(shapes) < MIN_SHAPES:
             continue
         share = sum(1 for box in shapes if _matches(box, everywhere)) / len(shapes)
-        if left_over.get(number):
+        if left_over.get(number) and laid_over.get(number):
             # Position says this page is the template's; its words say the template's
-            # own text boxes were never touched. Both are true at once in exactly one
-            # situation, and it is the one a live deck was in: `clone_page` for the
-            # background, `add_textbox` for the copy, nothing replaced. The shapes
-            # match because they are still the template's, sitting under a second
-            # layer -- which is why position alone cannot be the measurement.
+            # own text boxes were never touched; and there is a block of copy standing
+            # where the template has none. All three at once is one situation, and it is
+            # the one a live deck was in: `clone_page` for the background, `add_textbox`
+            # for the copy, nothing replaced. The shapes match because they are still
+            # the template's, sitting under a second layer -- which is why position
+            # alone cannot be the measurement.
+            #
+            # The third condition is the one that has to be asked, and it was not until
+            # a page came back condemned for a construction it had not used. The
+            # route since removed emptied the text a call did not name, so on it the
+            # first condition could never hold and this check only ever saw the
+            # hand-built case. Now that an unfilled frame keeps the template's words, a plain
+            # missed fill satisfies the first two -- and the finding then told an author
+            # who had added nothing that they had laid boxes over the page. A refusal
+            # whose stated reason is wrong is worse than no refusal: it teaches its way
+            # around the gate. `placeholder_copy` reports the missed fill, string by
+            # string, so there is nothing lost by requiring this one to mean what it
+            # says.
             underlay.append(number)
             continue
         bucket = adapted if share >= FROM_PROTOTYPE else partly if share >= SHARES_LITTLE else unrelated
@@ -108,12 +124,18 @@ def template_adherence(pptx_path: Path, template: Path | None) -> list[Finding]:
                     f"{'has' if len(underlay) == 1 else 'have'} the template's page cloned underneath and new "
                     f"text boxes laid on top of it: the template's own text is still there, unreplaced, and "
                     f"the copy sits over it. That is using the template as a background. Replace the text in "
-                    f"the shapes the template drew -- `adapt(prs, prototype, texts={{...}})` matches a shape by "
-                    f"the text it currently holds or by its index, empties the ones you do not name, and keeps "
+                    f"the shapes the template drew -- `replace_text(slide, 'the words there now', 'yours')` matches a "
+                    f"shape by the text it is holding and keeps "
                     f"every position, size, colour and font the template chose. Adding a box over a page you "
                     f"cloned pays for the clone twice and reads as two designs at once"
                 ),
-                detail={"underlay": underlay, "adapted": adapted, "partly_adapted": partly, "unrelated": unrelated},
+                detail={
+                    "underlay": underlay,
+                    "blocks_added": {str(number): laid_over.get(number, 0) for number in underlay},
+                    "adapted": adapted,
+                    "partly_adapted": partly,
+                    "unrelated": unrelated,
+                },
             )
         )
     named = _structural_pages(Path(template))
@@ -136,7 +158,7 @@ def template_adherence(pptx_path: Path, template: Path | None) -> list[Finding]:
                 "this deck is built in the user's template and none of its pages came from the template's own "
                 + ", ".join(f"{role} (page {number})" for role, number in named.items())
                 + ". Those are the pages a reader recognises whose deck this is by -- clone them with "
-                "`adapt(prs, prototype(tpl, N), texts={...})`. The content pages in between are yours to compose "
+                "`clone_page(prs, prototype(tpl, N))` and `replace_text` per line. The content pages in between are yours to compose "
                 "and nothing here asks them to match the template's own"
             ),
             detail={"structural": named, "adapted": adapted, "partly_adapted": partly, "unrelated": unrelated},
@@ -172,26 +194,92 @@ def _from_one_of(shapes: set, prototypes: dict[int, set], named: dict[str, int])
     return False
 
 
-# Below this a matching string is a page number, a bullet glyph or a unit, and two
-# pages sharing it means nothing. Above it, a text block that is word-for-word the
-# template's is the template's -- nobody retypes a placeholder.
-PLACEHOLDER_MIN_CHARS = 5
+# How many of a page's leftover marks the folded warning names before it stops.
+MARKS_NAMED = 3
 
 
-def placeholder_copy(pptx_path: Path, template: Path | None, borrowed: Sequence[Path] = ()) -> list[Finding]:
+def _carries_meaning(text: str) -> bool:
+    """Is this string of the template's a phrase, or a mark?
+
+    This used to be a count of characters -- five -- and a count of characters cannot
+    read Chinese. Four characters is a page number in Latin and a whole phrase in
+    Chinese, so the floor let two live pages through: a deck's page 14 kept the
+    template's four quarters in its chart, and an otherwise English page 10 kept
+    "\u5de5\u4f5c\u611f\u609f" as its heading. Both are unmistakably the template's copy on a
+    delivered page, and both measured four characters.
+
+    So the question is the form of the string rather than its length. A phrase carries
+    meaning: one CJK character is a word, and two Latin words are a sentence fragment
+    nobody types twice by accident. Everything else -- a numeral, a glyph, a lone
+    token -- is a mark, and a page keeping one is not a page that forgot to write.
+    """
+    if any(_is_cjk(character) for character in text):
+        return True
+    return len(re.findall(r"[^\W\d_]+", text)) >= 2
+
+
+def _is_cjk(character: str) -> bool:
+    """A letter whose script makes one character a word, by the name Unicode gives it."""
+    if not character.isalpha():
+        return False
+    named = unicodedata.name(character, "")
+    return any(script in named for script in ("CJK", "HIRAGANA", "KATAKANA", "HANGUL"))
+
+
+# What to do about it, by what holds the copy. `replace_text` reaches a text frame and
+# nothing else: a chart's categories and legend live in the chart part, so an author
+# told to write the string with it would look for a shape that is not there.
+_HOW_TO_REPLACE = {
+    "frame": (
+        "Replace it with what this page says, or take the shape off the page: "
+        "`replace_text(slide, 'this line', 'yours')`, or `drop_shape`"
+    ),
+    "table": "Replace it with what this page says: write the cell when the table is filled",
+    "chart": (
+        "It sits in this page's chart, which `replace_text` does not reach -- pass the readings this page "
+        "argues from to the chart that draws it, categories and series names included"
+    ),
+}
+
+
+def placeholder_copy(
+    pptx_path: Path,
+    template: Path | None,
+    borrowed: Sequence[Path] = (),
+    outline: Any | None = None,
+) -> list[Finding]:
     """Text blocks a page cloned from the template and never replaced.
 
     From a live deck that otherwise used its template well: page 4 carried
     "单击此处添加长一点的副标题" at subtitle size, and page 7 carried the same block
-    with a figure over most of it, one character showing. `adapt` replaces the texts
-    it is given and leaves the rest of the cloned page alone, which is right -- a
-    prototype's furniture is why it was cloned -- but a placeholder is not furniture.
+    with a figure over most of it, one character showing. `clone_page` brings the whole
+    page across and `replace_text` writes the lines it is given, leaving the rest alone,
+    which is right -- a prototype's furniture is why it was cloned -- but a placeholder
+    is not furniture.
 
-    Refused rather than reported. A finished page saying "click here to add a title"
-    is not a matter of degree, and no reading of the brief wants it.
+    Refused rather than reported, when the string carries meaning. A finished page
+    saying "click here to add a title" is not a matter of degree, and no reading of the
+    brief wants it. `_carries_meaning` decides which of the two a leftover string is,
+    and the rest come back as one folded warning per page rather than one each.
 
-    URLs and pure digits are skipped: a template's own watermark and its page numbers
-    come through cloning too, and neither is an unfilled slot.
+    URLs, pure digits and numbered labels are skipped entirely: a template's own
+    watermark, its page numbers and its dividers' "PART 01" come through cloning too,
+    and none of them is an unfilled slot.
+
+    So is a line the page's own plan asked it to say. The plan is written before the
+    deck is drawn and in the author's own words, so a template line that turns up in it
+    word for word is two decks agreeing about English rather than a slot nobody filled
+    -- and this check refuses publication, so its false positives are answered by
+    defacing a correct page. One live deck was held back over the "Thank you" on its
+    closing page, which its own plan had asked for as "Close: Thank you.", while the
+    real placeholder two pages earlier sat in a chart nothing read.
+
+    Nor is a structural page's own role label. A contents page is still the contents
+    page after it is filled, so the fixed word naming it -- `目录`, `Agenda` -- is copy
+    the deck inherits and keeps on purpose, and the template has no other word for it to
+    be replaced with. `_role_labels` asks which of the deck's pages plays which role and
+    exempts only that role's own name there, so the same string standing in a content
+    page's body is still an unfilled slot.
 
     `borrowed` is every other bundled template the plan took a page from: a page cloned
     out of one of those carries that file's example copy, which the bound template's
@@ -204,9 +292,23 @@ def placeholder_copy(pptx_path: Path, template: Path | None, borrowed: Sequence[
     placeholders: set[str] = set().union(*(_texts(source) for source in sources))
     if not placeholders:
         return []
+    from raven_ppt.services.template.menu import role_named
+
+    plans = _plans_by_page(outline)
+    labels = _role_labels(outline, template, borrowed)
     findings: list[Finding] = []
     for number, texts in _texts_by_page(pptx_path).items():
-        for text in sorted(texts & placeholders):
+        planned = plans.get(number, "")
+        role = labels.get(number, "")
+        left = [
+            text
+            for text in sorted(set(texts) & placeholders)
+            if not (planned and _folded(text) in planned) and not (role and role_named(text) == role)
+        ]
+        marks = [text for text in left if not _carries_meaning(text)]
+        for text in left:
+            if text in marks:
+                continue
             findings.append(
                 Finding(
                     kind="placeholder_copy",
@@ -214,13 +316,40 @@ def placeholder_copy(pptx_path: Path, template: Path | None, borrowed: Sequence[
                     page=number,
                     message=(
                         f"page {number} still says \u201c{text[:40]}\u201d, which is the template's own "
-                        f"placeholder text. Replace it with what this page says, or drop the shape: pass it in "
-                        f"`texts=` to adapt(), or name it in `drop=`"
+                        f"placeholder text. {_HOW_TO_REPLACE[texts[text]]}"
                     ),
-                    detail={"text": text[:120]},
+                    detail={"text": text[:120], "holder": texts[text]},
                 )
             )
+        if marks:
+            findings.append(_marks_left(number, marks, texts))
     return findings
+
+
+def _marks_left(number: int, marks: list[str], texts: dict[str, str]) -> Finding:
+    """All of one page's leftover marks in one finding, rather than one finding each.
+
+    A mark is the other half of the same reading, and it has to arrive quietly. The
+    marks are the template's numerals, its glyphs and its lone tokens, and one page can
+    carry a dozen: the run that measured D35's noise found `prototype_kept` reported 26
+    times, answered zero times, and still standing at delivery. Twelve findings a page
+    would be that again. So the page is told once, with a few of them named, and what to
+    do about them is one decision rather than twelve.
+    """
+    named = ", ".join(f"\u201c{text[:20]}\u201d" for text in marks[:MARKS_NAMED])
+    rest = f", and {len(marks) - MARKS_NAMED} more" if len(marks) > MARKS_NAMED else ""
+    return Finding(
+        kind="placeholder_marks",
+        severity=Severity.WARNING,
+        page=number,
+        message=(
+            f"page {number} still carries {len(marks)} of the template's own numerals and marks: "
+            f"{named}{rest}. Each is one string of the template's that this page did not replace. "
+            f"Keep the ones the design draws -- a rule's glyph, a unit beside a number -- and replace "
+            f"or drop the rest: `replace_text(slide, 'the mark there now', 'yours')`, or `drop_shape`"
+        ),
+        detail={"marks": [text[:40] for text in marks], "holders": sorted({texts[text] for text in marks})},
+    )
 
 
 # Below this share of the page a template's image is decoration -- an icon, a corner
@@ -281,9 +410,9 @@ def template_pictures(pptx_path: Path, template: Path | None, borrowed: Sequence
             message=(
                 f"the template's own images are still showing in {count} on page(s) {where}. A template's photograph "
                 f"is a placeholder: it illustrates nothing this deck says. Replace it with a figure "
-                f"(`pictures={{n: FIGURES/'x.png'}}` with `FIGURES = Path(os.environ['PPT_FIGURES_DIR'])`, "
-                f"which crops to the frame rather than stretching), drop "
-                f"the frame (`drop=[n]`), or keep it if it is part of the design rather than a photograph"
+                f"(`replace_picture(shape_at(slide, n), FIGURES/'x.png')` with `FIGURES = "
+                f"Path(os.environ['PPT_FIGURES_DIR'])`, which crops to the frame rather than stretching), drop "
+                f"the frame (`drop_shape`), or keep it if it is part of the design rather than a photograph"
             ),
             detail={"pages": {str(k): v for k, v in sorted(pages.items())}, "distinct": len(distinct)},
         )
@@ -440,7 +569,7 @@ def layout_photographs(pptx_path: Path, template: Path | None) -> list[Finding]:
 
     The other half of `template_pictures`: that one reads the pictures on the page, and
     a template's cover, section and closing photographs are as often on the *layout*,
-    where `pictures={...}` on a cloned page never reaches them. Reported, not refused,
+    where a `replace_picture` on a cloned page never reaches them. Reported, not refused,
     and once per layout rather than once per page, because the fix is one call for the
     whole layout -- and because an illustration the designer drew there is the design,
     which the author keeps.
@@ -460,7 +589,7 @@ def layout_photographs(pptx_path: Path, template: Path | None) -> list[Finding]:
             severity=Severity.WARNING,
             message=(
                 f"the template's own picture is on the layout, not the page, so every page on it shows it: {named}. "
-                "`pictures={...}` on the cloned page cannot reach a layout's picture. `layout_pictures(slide)` "
+                "A `replace_picture` on the cloned page cannot reach a layout's picture. `layout_pictures(slide)` "
                 "returns them, largest first, and `replace_picture(layout_pictures(slide)[0], FIGURES/'x.png', "
                 "'cover')` changes the picture for every page on that layout at once -- a picture generated in "
                 "the deck's own style is the usual replacement. One the size of the page is the page's background "
@@ -510,11 +639,16 @@ def _pictures_by_page(path: Path, every: bool = False) -> dict[int, list[str]]:
 
 
 def _placeholders_by_page(pptx_path: Path, template: Path) -> dict[int, list[str]]:
-    """Which pages still carry text the template wrote, keyed by page."""
-    placeholders = _texts(template)
+    """Which pages still carry a phrase the template wrote, keyed by page.
+
+    Phrases and not marks. `template_underlay` reads this to ask whether a page's own
+    text boxes were ever touched, and a page keeping the template's bullet glyph has
+    not answered that question either way.
+    """
+    placeholders = {text for text in _texts(template) if _carries_meaning(text)}
     if not placeholders:
         return {}
-    return {number: sorted(texts & placeholders) for number, texts in _texts_by_page(pptx_path).items()}
+    return {number: sorted(set(texts) & placeholders) for number, texts in _texts_by_page(pptx_path).items()}
 
 
 def _texts(path: Path) -> set[str]:
@@ -522,23 +656,125 @@ def _texts(path: Path) -> set[str]:
     return {text for texts in _texts_by_page(path).values() for text in texts}
 
 
-def _texts_by_page(path: Path) -> dict[int, set[str]]:
+_CHART_NS = "{http://schemas.openxmlformats.org/drawingml/2006/chart}"
+_DRAWING_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+
+
+def _chart_texts(shape: Any) -> list[str]:
+    """The copy a chart shows: its title, its series names and its cached categories.
+
+    Read off the chart part, because a graphic frame has no text frame -- and that is
+    the whole reason this is here. `replace_text` reaches text frames and nothing else, so a
+    cloned data page arrives with the template's own quarters in its axis and its example
+    series in its legend, and the reader sees them. One live deck's page 14 showed four
+    Chinese quarters and an "add text here" legend while every check that reads a page's
+    copy looked straight past it.
+    """
+    if not getattr(shape, "has_chart", False):
+        return []
+    try:
+        space = shape.chart._chartSpace
+    except Exception:  # noqa: BLE001 -- a chart whose part is missing is not a measurement
+        return []
+    found = [node.text for node in space.iter(f"{_DRAWING_NS}t")]
+    for holder in (f"{_CHART_NS}tx", f"{_CHART_NS}cat"):
+        for cached in space.iter(holder):
+            found.extend(node.text for node in cached.iter(f"{_CHART_NS}v"))
+    return [text for text in found if text]
+
+
+def _shape_texts(shape: Any) -> Iterator[tuple[str, str]]:
+    """Every block of copy one shape puts on the page, and what holds it.
+
+    Three holders and not one: a text frame, a table's cells, and a chart's own
+    strings. What a check about the template's leftover copy has to read is the copy
+    the page shows, and two of the three are invisible to `has_text_frame`. The holder
+    comes back with the text because it decides the advice: copy in a text frame is
+    written with `replace_text`, copy in a chart is rewritten where the chart is built.
+    """
+    if getattr(shape, "has_text_frame", False):
+        yield "frame", shape.text_frame.text
+    if getattr(shape, "has_table", False):
+        for row in shape.table.rows:
+            for cell in row.cells:
+                yield "table", cell.text
+    for text in _chart_texts(shape):
+        yield "chart", text
+
+
+def _numbered_label(text: str) -> bool:
+    """A label whose only variable part is a number: "01", "PART 01", "STEP 3".
+
+    A clone carries the template's page numbers, and those were skipped from the
+    start; a section divider's "PART 01" is the same thing with a word for what it
+    numbers, and nobody was ever meant to replace it. One delivered deck was refused
+    publication over the three its dividers kept.
+    """
+    if not any(character.isdigit() for character in text):
+        return False
+    words = [word for word in re.split(r"[\W\d_]+", text) if word]
+    return len(words) <= 1 and all(len(word) <= 6 for word in words)
+
+
+def _plans_by_page(outline: Any | None) -> dict[int, str]:
+    """What each page's own plan says it will say, as one folded string per page."""
+    plans: dict[int, str] = {}
+    for page in getattr(outline, "pages", ()) or ():
+        said = [str(getattr(page, "claim", "") or ""), *(str(one) for one in getattr(page, "says", ()) or ())]
+        plans[int(getattr(page, "page", 0))] = _folded(" ".join(said))
+    return plans
+
+
+def _role_labels(outline: Any | None, template: Path | None, borrowed: Sequence[Path] = ()) -> dict[int, str]:
+    """page -> the structural role it plays, for the deck's own pages.
+
+    Read off the template page the plan cloned, which is the same pair
+    `density._furniture` reads. Asking the built page instead would be circular here:
+    `menu` recognises an index page by the very label this decides whether to forgive,
+    so the page would excuse a string on the strength of that string. A page that
+    declares no prototype gets no role and no exemption.
+    """
+    from raven_ppt.services.template.menu import menu, roles
+
+    files: dict[str, Path] = {}
+    if template is not None and Path(template).is_file():
+        files[""] = files[Path(template).stem] = Path(template)
+    files.update({Path(other).stem: Path(other) for other in borrowed if Path(other).is_file()})
+    found: dict[int, str] = {}
+    for page in getattr(outline, "pages", ()) or ():
+        prototype = getattr(page, "prototype", None)
+        source = files.get(str(getattr(page, "borrowed", "") or ""))
+        if prototype is None or source is None:
+            continue
+        role = next((role for role, number in roles(menu(source)).items() if number == int(prototype)), "")
+        if role:
+            found[int(getattr(page, "page", 0))] = role
+    return found
+
+
+def _folded(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def _texts_by_page(path: Path) -> dict[int, dict[str, str]]:
+    """Every replaceable block of copy per page, mapped to what holds it."""
     try:
         presentation = open_deck(path)
     except Exception:  # noqa: BLE001 -- an unreadable deck is not a measurement
         return {}
-    pages: dict[int, set[str]] = {}
+    pages: dict[int, dict[str, str]] = {}
     for number, slide in enumerate(presentation.slides, start=1):
-        found: set[str] = set()
+        found: dict[str, str] = {}
         for shape in iter_shapes(slide.shapes):
-            if not getattr(shape, "has_text_frame", False):
-                continue
-            text = " ".join(shape.text_frame.text.split())
-            if len(text) < PLACEHOLDER_MIN_CHARS or text.replace(".", "").isdigit():
-                continue
-            if text.lower().startswith(("http://", "https://", "www.")):
-                continue
-            found.add(text)
+            for holder, raw in _shape_texts(shape):
+                text = " ".join(raw.split())
+                if not text or text.replace(".", "").isdigit():
+                    continue
+                if _numbered_label(text):
+                    continue
+                if text.lower().startswith(("http://", "https://", "www.")):
+                    continue
+                found.setdefault(text, holder)
         pages[number] = found
     return pages
 
@@ -619,7 +855,7 @@ def prototype_kept(pptx_path: Path, template: Path | None, outline: Any | None) 
                 message=(
                     f"page {page.page} says in the outline that it is built on {whose} page {wanted}, and "
                     f"{share:.0%} of its shapes sit where that page puts one.{instead} Build it on the page it "
-                    f"promised -- `adapt(prs, {call}, ...)`, which counts from 1 -- or change the "
+                    f"promised -- `clone_page(prs, {call})`, which counts from 1 -- or change the "
                     f"outline to name the page it is really built on. A plan nobody follows is worse than no "
                     f"plan, because the checks that trust it stop meaning anything"
                 ),
@@ -646,6 +882,42 @@ def _matches(box: tuple[float, float, float, float], known: set[tuple[float, flo
     if box in known:
         return True
     return any(max(abs(box[index] - other[index]) for index in range(4)) <= TOLERANCE_IN for other in known)
+
+
+def _added_text_boxes(path: Path, prototype_boxes: set[tuple[float, float, float, float]]) -> dict[int, int]:
+    """Per page, how many blocks of copy stand where the template has no shape at all.
+
+    The evidence for "a box was laid over this page", asked of the page rather than
+    inferred from the words on it. Cloning is exact, so a block the template drew comes
+    back at the template's coordinates and a block the author added does not -- the same
+    reading `template_adherence` is built on, narrowed to shapes that carry copy,
+    because a box is what the finding accuses the page of adding.
+    """
+    try:
+        presentation = open_deck(path)
+    except Exception:  # noqa: BLE001 -- an unreadable deck is not a measurement
+        return {}
+    added: dict[int, int] = {}
+    for number, slide in enumerate(presentation.slides, start=1):
+        count = 0
+        for shape in iter_shapes(slide.shapes):
+            if not getattr(shape, "has_text_frame", False):
+                continue
+            if not (shape.text_frame.text or "").strip():
+                continue
+            try:
+                box = (
+                    round(shape.left / EMU_PER_INCH, _PLACES),
+                    round(shape.top / EMU_PER_INCH, _PLACES),
+                    round(shape.width / EMU_PER_INCH, _PLACES),
+                    round(shape.height / EMU_PER_INCH, _PLACES),
+                )
+            except TypeError:  # a shape with no geometry of its own
+                continue
+            if not _matches(box, prototype_boxes):
+                count += 1
+        added[number] = count
+    return added
 
 
 def _pages(path: Path) -> dict[int, set[tuple[float, float, float, float]]]:

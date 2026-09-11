@@ -66,7 +66,7 @@ from raven_ppt.services.measure.fit import overset_copy
 from raven_ppt.services.measure.furniture import footer_findings, grid_findings
 from raven_ppt.services.measure.geometry import slide_count
 from raven_ppt.services.measure.inherited import over_layout_art
-from raven_ppt.services.measure.layout import off_page_shapes, spilled_copy, wrapped_labels
+from raven_ppt.services.measure.layout import boxless_copy, off_page_shapes, spilled_copy, wrapped_labels
 from raven_ppt.services.measure.overlap import overlap_findings
 from raven_ppt.services.measure.quotas import equal_card_habit, repeated_layout, symmetry_habit
 from raven_ppt.services.measure.rendered import (
@@ -86,7 +86,9 @@ from raven_ppt.services.measure.rendered import (
 from raven_ppt.services.measure.type_size import (
     Span,
     drift_findings,
+    outranked_findings,
     rendered_spans,
+    row_findings,
     scale_findings,
     type_findings,
 )
@@ -168,9 +170,14 @@ DISPATCH: Mapping[str, Severity] = {
     # shape -- two rows over one table, one refusing and one reporting, is the
     # contradiction `band` was downgraded for.
     # A page printing "48.3\\nOVIS" is not taste and not layout: the escape was escaped on
-    # its way in, and the fix is one character in the author's program. Refused, with the
-    # other rows about what a page says.
-    "literal_escape": Severity.BLOCKING,
+    # its way in, and the fix is one character in the author's program. That argument
+    # asked for a refusal and got one; no measurement was ever taken behind it. Over the
+    # seven runs and 932 findings D3b read one by one this check fired zero times, both
+    # of the pages it is written from were found by a person reading a deck rather than
+    # by the check, and one of those pages went out delivered -- so nothing here has
+    # measured what it does to a page that legitimately prints a backslash outside the
+    # quotes and brackets `_CODE_MARKS` exempts. Reported until something has (D52).
+    "literal_escape": Severity.WARNING,
     # An expression written as prose. The fix is one call in the program.
     "flat_formula": Severity.WARNING,
     # Parallel claims stacked in one box, so they read as a list to be read out.
@@ -182,6 +189,30 @@ DISPATCH: Mapping[str, Severity] = {
     # box to fit what went into it. The sizes even out by giving the boxes room, and
     # cutting the copy is the last resort.
     "type_drift": Severity.WARNING,
+    # The same reading with the row for its own baseline instead of the declared size, and
+    # it is a different finding rather than a tuning of that one. `type_drift` asks whether
+    # a box came out under the size its slot was drawn at, which on one delivered page named
+    # the four card headings at 16.8pt as the outliers and left the lone 20.0pt one standing
+    # as the house style, and on the page after it reported all five members of a row that
+    # renders uniformly at 17.4pt -- a row a reader has no complaint about. This one asks
+    # whether the copies of one slot *inside a single repeating unit* agree with each other.
+    # A warning for the reason both of its neighbours are: the honest fixes are evening out
+    # what the units hold or setting the row one size, and D2 keeps a refusal off anything
+    # whose answer is room taken from a neighbour or a line cut. Calibrated first: over the
+    # ten bundled templates writing their own copy into their own boxes, 327 repeating rows
+    # carry a render and two report, both in `green_aurora` and both rendered and looked at
+    # -- card headings at 16.2 / 16.2 / 12.2 / 13.3pt and at 18 / 18 / 18 / 15.1 / 14.2pt,
+    # visibly uneven. Over four decks of the previous era, 80 pages, it reports nothing.
+    "row_type_drift": Severity.WARNING,
+    # And whether the page's title still outranks the line under it. The knowledge gap
+    # rather than the refusal, which is why it warns and why its message leads with the
+    # number: a cloned title states no size and resolves to 28pt through the master, so an
+    # author writing 28pt into the caption slot beneath it collides with a number nothing
+    # in its program ever showed it. One delivered page has both at 28.01pt with the caption
+    # the longer string, and a reader meets the caption as the heading. Held to a tie and not
+    # to any inequality, because four of the templates' own pages set that line deliberately
+    # larger -- a statistic, a section numeral, a pull-quote -- and each is an idiom.
+    "outranked_title": Severity.WARNING,
     # And the size the author picked rather than the one the renderer produced: copy set
     # over the floor, under `BODY_PT`, at a number the ramp does not have. A warning with
     # the two rows above it and for the same reason -- raising a size costs room, and a
@@ -223,6 +254,14 @@ DISPATCH: Mapping[str, Severity] = {
     "undivided_body": Severity.WARNING,
     # A page carrying less copy than its kind of page needs to say anything.
     "thin_copy": Severity.WARNING,
+    # And the same page when what it does not say is standing there in empty boxes.
+    # Refused, which the row above is not, and the difference is what the fix can be:
+    # a page twelve characters under a prose floor is answerable by padding it, which
+    # is the oscillation D2 ends with no deck at all, while a page holding a title and
+    # twenty-five empty frames is answerable only by writing the page. One live deck
+    # sent eight of its sixteen pages out as the two lines one call had written, and the
+    # only reason anyone noticed is that a ninth used an engine function that raises.
+    "emptied_page": Severity.BLOCKING,
     # A picture stretched: the box's shape and the shape of the part of the file it
     # shows disagree. Reported rather than refused because the reading is new and the
     # crop and cover paths took three passes to read correctly.
@@ -335,6 +374,19 @@ DISPATCH: Mapping[str, Severity] = {
     # its run was called out for.
     "displaced_copy": Severity.BLOCKING,
     "off_page": Severity.WARNING,
+    # And the box that never reached the page at all: copy in a frame declared with no
+    # height or no width -- one live page came back as the template's background and its
+    # footer with the whole page's words in a 0in-tall title. Reported, with its
+    # neighbours here. It was written as a refusal on the argument that a box of no size
+    # shows nothing whatever the copy says, and that argument is still sound; the
+    # evidence under it is not. Its calibration was 531 pages for one finding and no
+    # false positives (D52), and a single positive cannot show what a gate costs on the
+    # work it reads wrongly -- which is the whole of what downgraded `band` and
+    # `covered_shape` above, both of them also right about the page they were written
+    # for. That one page traced to the author program's own safe-area constants rather
+    # than to anything the engine emits, so nothing yet says this shape is one the
+    # pipeline produces either. The reading stays; only the refusal goes.
+    "boxless_copy": Severity.WARNING,
     # A shape inside the page whose copy is not: a box with wrapping off does not clip,
     # it paints straight out of itself, and two page titles of one delivered deck ran off
     # the canvas that way while every other check passed.
@@ -346,10 +398,18 @@ DISPATCH: Mapping[str, Severity] = {
     "unchecked_citations": Severity.WARNING,
     "unchecked_agreement": Severity.WARNING,
     "unrendered": Severity.WARNING,
-    # With the language row rather than with the layout warnings: a deck in
-    # somebody else's colours is not a deck the user asked for, and the fix is one
-    # line at the top of the program rather than a rearranged page.
-    "house_style": Severity.BLOCKING,
+    # A deck in somebody else's colours is not a deck the user asked for, and the fix
+    # is one line at the top of the program rather than a rearranged page -- so this sat
+    # with the language row and refused. It reports instead (D52), because the argument
+    # is all there is: the defect it names was seen twice before this existed and the
+    # check has never been recorded firing, no template or deck sweep stands behind it,
+    # and the one test for the ordinary case compares a deck against itself, which is
+    # true by construction and could not have found a false positive. The predicate is
+    # also the least forgiving here -- any one theme slot differing refuses the whole
+    # deck -- and an author who repainted the theme in its own program gets told it did
+    # not open the template, which it did. A refusal whose stated reason is wrong is
+    # what `template_underlay` was narrowed for.
+    "house_style": Severity.WARNING,
     # The place, where `type_drift` measures the size: the title row is the one element
     # every page of a deck shares, and a deck whose titles start at three different left
     # edges reads as three decks. Reported, because a page may earn its own treatment.
@@ -369,6 +429,11 @@ DISPATCH: Mapping[str, Severity] = {
     # left its placeholder copy in place. Refused, not reported -- a page saying
     # "single-click here to add a subtitle" is finished by nobody's standard.
     "placeholder_copy": Severity.BLOCKING,
+    # The other half of the same reading: the template's numerals, glyphs and lone
+    # tokens, which say nothing about whether the page was written. Reported, folded to
+    # one finding per page -- a page can keep a dozen, and a dozen findings about marks
+    # is the noise D35 measured going unanswered 26 times.
+    "placeholder_marks": Severity.WARNING,
     # A template photograph still on a finished page. Reported, not refused: a
     # decorative graphic and a placeholder photograph both arrive as a PNG, and
     # deleting the first damages the page.
@@ -537,17 +602,35 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "literal_escape": lambda deck: literal_escapes(deck.pptx_path),
         "type_floor": lambda deck: type_findings(deck.pptx_path, deck.rendered_type),
         "type_drift": lambda deck: drift_findings(deck.pptx_path, deck.rendered_type),
+        "row_type_drift": lambda deck: row_findings(deck.pptx_path, deck.rendered_type),
+        # `prototypes` for the same reason `type_scale` takes it, and here it decides what
+        # the finding asks for rather than whether it fires: a caption slot at one of the
+        # template's own coordinates carries the template's size, so the advice is to state
+        # a smaller one rather than to stop matching a number the author never picked.
+        "outranked_title": lambda deck: outranked_findings(deck.pptx_path, deck.rendered_type, deck.prototypes),
         # `prototypes` and not `template`: the prepared copy has its example pages removed,
         # so it holds no page a box could have been cloned from and every box would read as
         # the author's. The same argument `template_adherence` is wired on.
         "type_scale": lambda deck: scale_findings(deck.pptx_path, deck.prototypes),
         "off_page": lambda deck: off_page_shapes(deck.pptx_path),
+        "boxless_copy": lambda deck: boxless_copy(deck.pptx_path),
         "spilled_copy": lambda deck: spilled_copy(deck.pptx_path, deck.measurer),
         "over_layout_art": lambda deck: over_layout_art(deck.pptx_path, deck.prototypes),
         "template_adherence": lambda deck: [
             f for f in template_adherence(deck.pptx_path, deck.prototypes) if f.kind == "template_adherence"
         ],
-        "placeholder_copy": lambda deck: placeholder_copy(deck.pptx_path, deck.prototypes, _borrowed(deck.outline)),
+        # One reading filtered two ways, as the adherence rows above are: a leftover
+        # string either carries meaning or is a mark, and the two answer differently.
+        "placeholder_copy": lambda deck: [
+            f
+            for f in placeholder_copy(deck.pptx_path, deck.prototypes, _borrowed(deck.outline), deck.outline)
+            if f.kind == "placeholder_copy"
+        ],
+        "placeholder_marks": lambda deck: [
+            f
+            for f in placeholder_copy(deck.pptx_path, deck.prototypes, _borrowed(deck.outline), deck.outline)
+            if f.kind == "placeholder_marks"
+        ],
         "template_picture": lambda deck: template_pictures(deck.pptx_path, deck.prototypes, _borrowed(deck.outline)),
         "layout_picture": lambda deck: layout_photographs(deck.pptx_path, deck.prototypes),
         "same_mark": lambda deck: unit_marks(deck.pptx_path, deck.prototypes, _borrowed(deck.outline)),
@@ -557,8 +640,16 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         # its own program drew, and which of the two files the fix belongs in is the
         # whole of what to do next. `prototypes` and not `template` for the reason
         # `type_scale` above gives.
+        # `rendered_words` because the ground is read under the words the renderer
+        # painted, not inside the box the file declares: a two-line block's declared
+        # box is mostly ground no character sits on. Cached on the record, so this
+        # shares the one PDF read the word checks already pay for.
         "unreadable": lambda deck: contrast_findings(
-            deck.pptx_path, deck.pdf_path, pages=deck.rendered_pages, prototypes=deck.prototypes
+            deck.pptx_path,
+            deck.pdf_path,
+            pages=deck.rendered_pages,
+            prototypes=deck.prototypes,
+            words=deck.rendered_words,
         ),
         "template_underlay": lambda deck: [
             f for f in template_adherence(deck.pptx_path, deck.prototypes) if f.kind == "template_underlay"
@@ -592,7 +683,8 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "undivided_body": lambda deck: undivided_bodies(
             deck.pptx_path, deck.bands, _structural(deck.outline, deck.prototypes)
         ),
-        "thin_copy": lambda deck: thin_copy(deck.pptx_path, deck.outline, deck.prototypes),
+        "thin_copy": lambda deck: _of_kind(thin_copy(deck.pptx_path, deck.outline, deck.prototypes), "thin_copy"),
+        "emptied_page": lambda deck: _of_kind(thin_copy(deck.pptx_path, deck.outline, deck.prototypes), "emptied_page"),
         "figure_distortion": lambda deck: _of_kind(figure_findings(deck.pptx_path, deck.bands), "figure_distortion"),
         "figure_crop": lambda deck: _of_kind(figure_findings(deck.pptx_path, deck.bands), "figure_crop"),
         "figure_undersized": lambda deck: _of_kind(figure_findings(deck.pptx_path, deck.bands), "figure_undersized"),

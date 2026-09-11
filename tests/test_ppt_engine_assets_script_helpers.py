@@ -14,6 +14,7 @@ working build directory has to come out of `script_helper_files()`.
 
 from __future__ import annotations
 
+import ast
 import json
 import signal
 from contextlib import contextmanager
@@ -420,6 +421,25 @@ def test_the_theme_module_exposes_the_themes_and_a_colour_converter(tmp_path: Pa
     accent = module["THEMES"]["ink-graphite"]["accent"]
     assert accent == THEMES["ink-graphite"].accent
     assert rgb(accent) == RGBColor(0x0B, 0x5F, 0xA5)
+
+
+def test_a_theme_id_that_is_not_there_is_told_which_ones_are(tmp_path: Path) -> None:
+    """A run wanted a dark palette, typed a theme id that is not in the catalog, and got
+    a KeyError carrying nothing but the id it had just written; it then edited themes.json
+    to make the key exist, which the next build wrote back over. The miss names what is
+    there and says where a palette of one's own goes instead."""
+    _install(tmp_path)
+    module = _load_module(tmp_path, THEME_MODULE_FILENAME)
+
+    with pytest.raises(KeyError) as caught:
+        module["THEMES"]["ravenx-dark"]
+
+    said = str(caught.value)
+    assert "'ravenx-dark' is not a palette in this build directory" in said
+    assert module["THEME_NAMES"][0] in said
+    assert "Editing themes.json does not add one" in said
+    assert "THEMES[next(iter(THEMES))]" in said
+    assert module["THEMES"][module["THEME_NAMES"][0]]["accent"].startswith("#"), "a real entry still answers"
 
 
 def test_the_exported_catalog_carries_paints_and_no_type_scale() -> None:
@@ -4569,15 +4589,20 @@ def test_the_theme_module_docstring_follows_its_payload():
     themes and picking one by name is how an author chooses -- which the very
     test above this one does. The single text said naming a theme is a
     KeyError, so on the catalog route it forbade the supported way to pick.
+
+    Read off the docstring rather than the whole module: both routes now raise a
+    KeyError that names the entries there are, so the word is in the source of
+    each and only the text an author reads can carry a route's own claim.
     """
-    catalog = theme_module_source()
-    single = theme_module_source(single_theme=True)
+    catalog, single = theme_module_source(), theme_module_source(single_theme=True)
+    catalog_says = ast.get_docstring(ast.parse(catalog)) or ""
+    single_says = ast.get_docstring(ast.parse(single)) or ""
 
-    assert "next(iter(THEMES))" in single
-    assert "KeyError" in single, "typing an id really is a KeyError against one entry"
+    assert "next(iter(THEMES))" in single_says
+    assert "KeyError" in single_says, "typing an id really is a KeyError against one entry"
 
-    assert "KeyError" not in catalog, "against the catalog a named theme resolves"
-    assert "THEME_NAMES" in catalog, "and the catalog route says where the names are"
+    assert "KeyError" not in catalog_says, "against the catalog a named theme resolves"
+    assert "THEME_NAMES" in catalog_says, "and the catalog route says where the names are"
 
     for body in (catalog, single):
         compile(body, "ppt_theme.py", "exec")

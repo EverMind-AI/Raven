@@ -1,7 +1,5 @@
-import { renderSync } from '@hermes/ink'
 import { render } from 'ink-testing-library'
 import React from 'react'
-import { PassThrough } from 'stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Msg } from '../types.js'
@@ -12,14 +10,11 @@ import { resetTurnState } from '../app/turnStore.js'
 import { resetUiState } from '../app/uiStore.js'
 import { ApprovalPrompt } from '../components/prompts.js'
 import {
-  ALWAYS_OPTION,
   APPROVAL_OPTIONS,
-  approvalOptionsFor,
   approvalRemainingSeconds,
   approvalResponseAccepted,
   buildApprovalRespond
 } from '../lib/approval.js'
-import { stripAnsi } from '../lib/text.js'
 import { DEFAULT_THEME } from '../theme.js'
 
 const ref = <T>(current: T) => ({ current })
@@ -128,53 +123,8 @@ describe('approval round-trip', () => {
     expect(getOverlayState().approval).toBeNull()
   })
 
-  it('offers allow once, allow for the session and the two refusals', () => {
-    expect(APPROVAL_OPTIONS.map(o => o.choice)).toEqual(['allow', 'allow_session', 'deny', 'deny_stop'])
-  })
-
-  it('offers the persisted grant only when the runtime suggested a prefix, with the refusals last', () => {
-    expect(approvalOptionsFor(undefined)).toBe(APPROVAL_OPTIONS)
-    expect(approvalOptionsFor('')).toBe(APPROVAL_OPTIONS)
-    expect(approvalOptionsFor('git push *').map(o => o.choice)).toEqual([
-      'allow',
-      'allow_session',
-      'allow_always',
-      'deny',
-      'deny_stop'
-    ])
-    expect(ALWAYS_OPTION.fallback).toContain('{pattern}')
-  })
-
-  it('keeps the suggested prefix off the request when the runtime sent none', () => {
-    const onEvent = createGatewayEventHandler(buildCtx([]))
-
-    onEvent({
-      payload: {
-        approval_id: 'approval-a',
-        command: 'git push origin HEAD',
-        conversation_id: 'session-a',
-        description: 'Push',
-        expires_at: 1735689630,
-        suggested_pattern: 'git push *'
-      },
-      session_id: 'session-a',
-      type: 'approval.request'
-    } as any)
-    expect(getOverlayState().approval?.suggestedPattern).toBe('git push *')
-
-    onEvent({
-      payload: {
-        approval_id: 'approval-b',
-        command: 'uv run pytest',
-        conversation_id: 'session-a',
-        description: 'Run',
-        expires_at: 1735689630,
-        suggested_pattern: ''
-      },
-      session_id: 'session-a',
-      type: 'approval.request'
-    } as any)
-    expect(getOverlayState().approval).not.toHaveProperty('suggestedPattern')
+  it('offers allow once and the two refusals, never a persistent grant', () => {
+    expect(APPROVAL_OPTIONS.map(o => o.choice)).toEqual(['allow', 'deny', 'deny_stop'])
   })
 
   it('names its choices through i18n, so the keys follow the locale', async () => {
@@ -184,7 +134,7 @@ describe('approval round-trip', () => {
     const { setLocale, t } = await import('../i18n/index.js')
     const { UI_TEXT } = await import('../i18n/messages.generated.js')
     const before = APPROVAL_OPTIONS.map(o => t(o.key, o.fallback))
-    expect(before).toEqual(['Allow once', 'Allow for this session', 'Deny (agent continues)', 'Deny and stop the turn'])
+    expect(before).toEqual(['Allow once', 'Deny (agent continues)', 'Deny and stop the turn'])
 
     // Compared against the catalogue rather than spelled out: the zh text is
     // the catalogue's to own, and this file is not a zh fixture zone.
@@ -202,20 +152,6 @@ describe('approval round-trip', () => {
     expect(buildApprovalRespond('approval-a', 'session-a', 'deny')).toEqual({
       approval_id: 'approval-a',
       choice: 'deny',
-      session_id: 'session-a'
-    })
-  })
-
-  it('carries the pattern only with a persisted grant that has one', () => {
-    expect(buildApprovalRespond('approval-a', 'session-a', 'allow_always', '', 'git push *')).toEqual({
-      approval_id: 'approval-a',
-      choice: 'allow_always',
-      pattern: 'git push *',
-      session_id: 'session-a'
-    })
-    expect(buildApprovalRespond('approval-a', 'session-a', 'allow_session')).toEqual({
-      approval_id: 'approval-a',
-      choice: 'allow_session',
       session_id: 'session-a'
     })
   })
@@ -360,70 +296,5 @@ describe('an answer names the request that produced it', () => {
     app.unmount()
 
     expect(answered).toEqual([])
-  })
-})
-
-describe('one prompt per request', () => {
-  // ink routes keystrokes through useInput only when stdin looks like a raw-mode
-  // TTY, which ink-testing-library's stub is not: same PassThrough harness as
-  // the clarify prompt tests.
-  it('drops a half-edited prefix when a new request replaces the old one', async () => {
-    const noop = () => {}
-    const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
-    const stdout = new PassThrough()
-    const stdin = new PassThrough()
-    const stderr = new PassThrough()
-    // A non-TTY stdout gets whole frames rather than cursor-movement diffs, so
-    // what was written since the last reset is what the screen shows.
-    Object.assign(stdout, { columns: 100, isTTY: false, rows: 30 })
-    Object.assign(stdin, { isTTY: true, ref: noop, setRawMode: noop, unref: noop })
-    Object.assign(stderr, { isTTY: true })
-    let out = ''
-    stdout.on('data', (d: Buffer) => {
-      out += d.toString()
-    })
-    const onChoice = vi.fn()
-    const first = {
-      approvalId: 'approval-a',
-      command: 'git push origin HEAD',
-      conversationId: 'session-a',
-      description: 'Push',
-      expiresAt: Date.now() + 60_000,
-      suggestedPattern: 'git push *'
-    }
-    const node = (req: typeof first) => React.createElement(ApprovalPrompt, { onChoice, req, t: DEFAULT_THEME })
-    const instance = renderSync(node(first), {
-      patchConsole: false,
-      stderr: stderr as unknown as NodeJS.WriteStream,
-      stdin: stdin as unknown as NodeJS.ReadStream,
-      stdout: stdout as unknown as NodeJS.WriteStream
-    })
-
-    try {
-      await delay(30)
-      // Pick the persisted grant: the prefix opens for editing.
-      out = ''
-      stdin.write('3')
-      await delay(40)
-      expect(stripAnsi(out)).toContain('prefix rule to save')
-
-      // Request B lands on the same instance, with no suggestion: the editor is
-      // gone and the list is B's, with B's default.
-      const second = { ...first, approvalId: 'approval-b', command: 'touch x', suggestedPattern: undefined }
-      out = ''
-      instance.rerender(node(second))
-      await delay(40)
-      expect(stripAnsi(out)).not.toContain('prefix rule to save')
-      expect(stripAnsi(out)).toContain('Allow for this session')
-
-      // Enter answers B with B's default (deny), never with A's prefix.
-      stdin.write('\r')
-      await delay(40)
-      expect(onChoice).toHaveBeenCalledTimes(1)
-      expect(onChoice.mock.calls[0]).toEqual(['deny', '', 'approval-b'])
-    } finally {
-      instance.unmount()
-      instance.cleanup()
-    }
   })
 })

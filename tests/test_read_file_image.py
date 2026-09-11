@@ -288,6 +288,32 @@ def test_image_placeholder_text_keeps_the_path_and_never_leaks_base64() -> None:
     assert "AAAA" not in out and len(out) < 300
 
 
+def test_the_tool_result_text_survives_a_transport_that_cannot_carry_the_image() -> None:
+    """The reply's substance is `model_text`, which is not in `blocks` and was dropped.
+
+    Measured on a 14-page deck run over an OpenAI-style endpoint: `ppt_template` returned
+    a roster naming the template's 27 content prototypes and 36 borrowable pages, and the
+    author received the 34 per-image captions with the roster, the borrow offer and the
+    next step all absent. It then planned 8 of its 14 pages onto one prototype and
+    borrowed nothing. The docstring already claimed this text was kept.
+    """
+    blocks = [
+        {"type": "text", "text": "Template page 1 -- the template's cover"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * 5000}},
+    ]
+    roster = '{"example_pages": 34, "borrowable_pages": ["amber_wave_quarterly_summary page 4"]}'
+
+    out = image_placeholder_text(blocks, tool_text=roster)
+
+    assert "borrowable_pages" in out and "example_pages" in out
+    assert "Template page 1" in out
+    assert out.index("borrowable_pages") < out.index("Template page 1"), "the tool's own text leads"
+    assert "1 image attached" in out
+    # A tool that puts the same string in both places is not quoted twice.
+    same = image_placeholder_text([{"type": "text", "text": roster}], tool_text=roster)
+    assert same.count("borrowable_pages") == 1
+
+
 def test_blind_placeholder_does_not_promise_a_picture_that_never_arrives() -> None:
     """Two reasons for the same substitution, and they must not share wording.
 

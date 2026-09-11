@@ -343,61 +343,23 @@ describe('the approval sheet', () => {
 
 describe('the permission approval sheet', () => {
   const req = { approvalId: 'ap-1', command: 'rm file.txt', description: 'Delete files' }
-  const suggested = { ...req, command: 'git push origin HEAD', suggestedPattern: 'git push *' }
   const sheets = () => [...document.querySelectorAll('.csheet')]
   const opts = () => [...document.querySelectorAll<HTMLButtonElement>('.csheet .opt')]
-  const patternBox = () => document.querySelector<HTMLInputElement>('.csheet .pattern-in')!
 
-  it('offers allow once, allow for the session and the two refusals, in that order', () => {
+  it('offers allow once and the two refusals, in that order', () => {
     openApproval(req, () => {})
     expect(opts().map((b) => b.textContent)).toEqual([
       '1gui.confirm.allow',
-      '2gui.confirm.allow_session',
-      '3gui.confirm.deny',
-      '4gui.confirm.deny_stop',
+      '2gui.confirm.deny',
+      '3gui.confirm.deny_stop',
     ])
-  })
-
-  it('offers the persisted grant only with a suggestion, before the refusals', () => {
-    openApproval(suggested, () => {})
-    expect(opts().map((b) => b.querySelector('span:nth-child(2)')!.textContent)).toEqual([
-      'gui.confirm.allow',
-      'gui.confirm.allow_session',
-      'gui.confirm.allow_always',
-      'gui.confirm.deny',
-      'gui.confirm.deny_stop',
-    ])
-    expect(patternBox().value).toBe('git push *')
-  })
-
-  it('reports the session grant', () => {
-    const said: unknown[] = []
-    openApproval(req, (choice, feedback, pattern) => said.push([choice, feedback, pattern]))
-    opts()[1]!.click()
-    expect(said).toEqual([['allow_session', '', undefined]])
-    expect(sheets().length).toBe(0)
-  })
-
-  it('sends the prefix as the reader left it, and nothing when they emptied it', () => {
-    const said: unknown[] = []
-    openApproval(suggested, (choice, feedback, pattern) => said.push([choice, feedback, pattern]))
-    patternBox().value = ' git push origin * '
-    opts()[2]!.click()
-    expect(said).toEqual([['allow_always', '', 'git push origin *']])
-    expect(sheets().length).toBe(0)
-
-    openApproval(suggested, (choice, feedback, pattern) => said.push([choice, feedback, pattern]))
-    patternBox().value = '   '
-    opts()[2]!.click()
-    expect(said.length).toBe(1)
-    expect(sheets().length).toBe(1)
   })
 
   it('reports the choice, with the typed note riding a refusal', () => {
     const said: Array<[string, string]> = []
     openApproval(req, (choice, feedback) => said.push([choice, feedback]))
     document.querySelector<HTMLInputElement>('.csheet .note-in')!.value = ' move it aside '
-    opts()[2]!.click()
+    opts()[1]!.click()
     expect(said).toEqual([['deny', 'move it aside']])
     expect(sheets().length).toBe(0)
   })
@@ -405,7 +367,7 @@ describe('the permission approval sheet', () => {
   it('answers deny_stop from its own button', () => {
     const said: Array<[string, string]> = []
     openApproval(req, (choice, feedback) => said.push([choice, feedback]))
-    opts()[3]!.click()
+    opts()[2]!.click()
     expect(said).toEqual([['deny_stop', '']])
   })
 

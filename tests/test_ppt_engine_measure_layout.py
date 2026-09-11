@@ -1,4 +1,4 @@
-"""The two things the declared geometry alone can decide -- and, for the label
+"""The three things the declared geometry alone can decide -- and, for the label
 check, what the render is allowed to overrule it about."""
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from raven_ppt.services.measure.layout import (
     LABEL_MAX_SPACES,
     LABEL_MIN_CHARS,
     LABEL_SLACK,
+    boxless_copy,
     off_page_shapes,
     spilled_copy,
     wrapped_labels,
@@ -74,6 +75,47 @@ def test_the_slack_is_what_decides_a_shape_on_the_margin(deck: DeckBuilder) -> N
         findings.append(off_page_shapes(builder.save(f"edge{past}.pptx")))
 
     assert [len(found) for found in findings] == [0, 1]
+
+
+def test_copy_in_a_box_with_no_height_is_reported(deck: DeckBuilder) -> None:
+    """Page 12 of the one-door run, which rendered as the template's background and
+    its footer. Opened, it held the whole page's copy in a title placeholder declared
+    11.88in wide and 0in tall, and every other check read the copy and passed it."""
+    from pptx.util import Emu
+
+    page = deck.page()
+    lost = deck.text(page, "Investment Takeaways", left=0.72, top=0.0, width=11.88, height=1.0)
+    lost.height = Emu(0)
+    deck.text(page, "Energy Fund Investment Committee", left=7.23, top=6.41, width=5.37, height=0.3)
+
+    findings = boxless_copy(deck.save())
+
+    assert [finding.kind for finding in findings] == ["boxless_copy"]
+    assert findings[0].severity is Severity.WARNING
+    assert findings[0].page == 1
+    assert findings[0].detail["blocks"] == ["Investment Takeaways"]
+
+
+def test_a_box_with_no_width_is_the_same_defect(deck: DeckBuilder) -> None:
+    from pptx.util import Emu
+
+    page = deck.page()
+    deck.text(page, "Deployment scale", left=1.0, top=1.0, width=4.0, height=1.0).width = Emu(0)
+
+    assert len(boxless_copy(deck.save())) == 1
+
+
+def test_an_empty_box_of_no_size_is_not_a_finding(deck: DeckBuilder) -> None:
+    """A zero-size frame holding nothing has lost nothing. The template's own spacer
+    frames arrive that way, and a page is judged on the copy a reader cannot see."""
+    from pptx.util import Emu
+
+    page = deck.page()
+    empty = deck.text(page, "", left=1.0, top=1.0, width=4.0, height=1.0)
+    empty.height = Emu(0)
+    deck.text(page, "Deployment scale", left=1.0, top=2.0, width=4.0, height=1.0)
+
+    assert boxless_copy(deck.save()) == []
 
 
 def test_the_label_bounds_are_short_text_and_few_spaces() -> None:

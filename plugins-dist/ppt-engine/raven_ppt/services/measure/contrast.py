@@ -34,13 +34,16 @@ against, the finding says nothing about it rather than guessing.
 
 from __future__ import annotations
 
+import math
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from raven_ppt.contracts.findings import Finding, Severity
+from raven_ppt.contracts.rendered import WordBox
 
 # Who drew a shape is `adherence`'s question and `adherence`'s answer: a cloned page
 # keeps its prototype's shape positions exactly, and the tolerance that reads as "the
@@ -56,6 +59,7 @@ from raven_ppt.services.measure.geometry import (
     shape_rect_pt,
 )
 from raven_ppt.services.measure.type_size import _inches, _template_boxes
+from raven_ppt.services.measure.words import by_page
 from raven_ppt.services.template.decompile import inherited_ink, page_design, run_ink
 
 # WCAG AA asks 4.5:1 for body copy and 3:1 for large text, and 3:1 applied to everything
@@ -185,11 +189,16 @@ def contrast_findings(
     dpi: int = 72,
     pages: list[Path] | None = None,
     prototypes: Path | None = None,
+    words: Sequence[WordBox] | None = None,
 ) -> list[Finding]:
     """Text whose declared colour is too close to the ground it landed on.
 
     `pages` are rendered pages when the caller already has them, which is also how a
     test hands over a page without a renderer on the machine.
+
+    `words` are the render's own word boxes, which give the reading a region the type
+    fills rather than one the file declares -- see `_word_slices`. Without them the
+    declared box is all there is, which is what this measured before.
 
     `prototypes` is the user's template as handed over, which is what lets the finding
     name who drew the shape it measured. Without it the finding says nothing about that
@@ -213,6 +222,7 @@ def contrast_findings(
     canvas_w = (presentation.slide_width or 1) / EMU_PER_INCH
     canvas_h = (presentation.slide_height or 1) / EMU_PER_INCH
     origins = _origins(pptx_path, prototypes)
+    rendered = by_page(words) if words else {}
 
     findings: list[Finding] = []
     for number, slide in enumerate(presentation.slides, start=1):
@@ -221,14 +231,14 @@ def contrast_findings(
             continue
         with Image.open(png) as opened:
             image = opened.convert("RGB")
-            worst: tuple[float, str, str, tuple[int, int, int], Any] | None = None
+            worst: tuple[float, str, str, tuple[int, int, int], Any, str | None] | None = None
             count = 0
             design = page_design(presentation, slide)
             for shape in iter_shapes(slide.shapes):
-                measured = _measure(shape, image, canvas_w, canvas_h, design)
+                measured = _measure(shape, image, canvas_w, canvas_h, design, rendered.get(number))
                 if measured is None:
                     continue
-                ratio, text, ink, ground = measured
+                ratio, text, ink, ground, under = measured
                 if ratio >= UNREADABLE_RATIO:
                     continue
                 # Asked here rather than of the page's worst block. A mark can measure
@@ -241,14 +251,16 @@ def contrast_findings(
                     continue
                 count += 1
                 if worst is None or ratio < worst[0]:
-                    worst = (ratio, text, ink, ground, shape)
+                    worst = (ratio, text, ink, ground, shape, under)
         if worst is None:
             continue
-        ratio, text, ink, ground, shape = worst
+        ratio, text, ink, ground, shape, under = worst
         drew, prototype = _drawn_by(shape, number, origins)
         clause = "" if drew is None else _DREW[drew].format(prototype=prototype)
         others = f" and {count - 1} more block(s) on the page" if count > 1 else ""
         detail: dict[str, Any] = {"ratio": round(ratio, 2), "blocks": count, "ink": ink, "text": text[:60]}
+        if under is not None:
+            detail["word"] = under
         if drew is not None:
             detail["drawn_by"] = drew
         if prototype is not None:
@@ -261,7 +273,9 @@ def contrast_findings(
                 page=number,
                 message=(
                     f"'{text[:_HEAD]}' is set in #{ink} on a ground that renders "
-                    f"#{'%02X%02X%02X' % ground}{others} -- {ratio:.1f}:1, "
+                    f"#{'%02X%02X%02X' % ground}"
+                    + (f", under the word '{under}'" if under else "")
+                    + f"{others} -- {ratio:.1f}:1, "
                     f"under the {UNREADABLE_RATIO:g}:1 at which the characters stop being there at all. On a "
                     f"dark deck the type colour is the theme's `foreground`; `surface` and `background` are "
                     f"what the ground is painted with, and reaching for one of those gives you black on black"
@@ -279,8 +293,19 @@ def contrast_findings(
     return findings
 
 
-def _measure(shape: Any, image: Any, canvas_w: float, canvas_h: float, design: Any = None):
-    """(ratio, text, ink hex, ground rgb) for one text block, or None when it cannot say."""
+def _measure(
+    shape: Any,
+    image: Any,
+    canvas_w: float,
+    canvas_h: float,
+    design: Any = None,
+    words: Sequence[WordBox] | None = None,
+):
+    """(ratio, text, ink hex, ground rgb, the word read under) for one block, or None.
+
+    The last element is the word whose own box gave the reading, or None when the
+    declared box did -- which is every block the render offered no word for.
+    """
     if not getattr(shape, "has_text_frame", False):
         return None
     text = " ".join(shape.text_frame.text.split())
@@ -322,10 +347,70 @@ def _measure(shape: Any, image: Any, canvas_w: float, canvas_h: float, design: A
         # wrong. Judging the page on a colour it does not show is the one thing a
         # resolved ink must not do.
         return None
-    ground = _worst_ground(crop, _rgb(ink))
+    ground = _worst_ground(crop, _rgb(ink), _word_slices(shape, text, where, words, image, canvas_w, canvas_h))
     if ground is None:
         return None
-    return _ratio(_rgb(ink), ground), text, ink, ground
+    band, under = ground
+    return _ratio(_rgb(ink), band), text, ink, band, under
+
+
+_PT_PER_INCH = 72.0
+# How far outside the declared box a word box may sit and still be this shape's, in
+# inches. Both boxes are points from the page's top left, so this covers rounding and
+# the hairline a glyph's side bearing puts past the frame, not a real gap.
+_WORD_SLACK = 0.02
+
+
+def _word_slices(
+    shape: Any,
+    text: str,
+    where: Any,
+    words: Sequence[WordBox] | None,
+    image: Any,
+    canvas_w: float,
+    canvas_h: float,
+) -> tuple[tuple[str, Any], ...]:
+    """This shape's copy as the render drew it, word by word, as pixels.
+
+    The region the column slices cannot make. A slice is a full-height column of the
+    declared box, so a block of two lines is judged on a column holding both of them
+    and the dark leading between; a word box holds one word's glyphs and the ground
+    behind them and nothing else. On a delivered page 12, two white bullets crossed the
+    bright crest of a green wave: at 226x151px per column the crest is a minority of
+    every column, every column's commonest band came back #161B1E, and the page passed
+    at 17.4:1 with none of the guards below the cause. Under the word 'flexibility' the
+    ground is #01E697 and the reading is 1.6:1. The same page's title, white on the dark
+    half, reads 17.4:1 through either region, which is why the page needed the sharper
+    one to tell its two cases of one colour pair apart.
+
+    Two tests decide whether a word is this shape's, because either alone answers
+    wrongly. Inside the declared box, or the word belongs to whatever else the page puts
+    there; and the word's own characters present in this shape's copy, or two
+    overlapping boxes each claim the other's words and a block is judged against a
+    colour it is not set in -- a footer overlapping a body box is that case, on this
+    same delivered page.
+    """
+    if not words or where is None:
+        return ()
+    found: list[tuple[str, Any]] = []
+    for word in words:
+        if not word.text.strip() or word.text not in text:
+            continue
+        x0, y0, x1, y1 = (value / _PT_PER_INCH for value in (word.x0, word.y0, word.x1, word.y1))
+        if x0 < where.x0 - _WORD_SLACK or x1 > where.x1 + _WORD_SLACK:
+            continue
+        if y0 < where.y0 - _WORD_SLACK or y1 > where.y1 + _WORD_SLACK:
+            continue
+        box = (
+            max(int(x0 / canvas_w * image.width), 0),
+            max(int(y0 / canvas_h * image.height), 0),
+            min(math.ceil(x1 / canvas_w * image.width), image.width),
+            min(math.ceil(y1 / canvas_h * image.height), image.height),
+        )
+        if box[2] - box[0] < 2 or box[3] - box[1] < 2:
+            continue
+        found.append((word.text, np.asarray(image.crop(box), dtype=np.uint8)))
+    return tuple(found)
 
 
 # How wide a slice of a block gets its own ground reading, in the crop's own pixels
@@ -429,8 +514,19 @@ def _painted_in(crop: Any, ink: tuple[int, int, int]) -> bool:
     return bool(_ink_mask(arr, ink).mean() >= _INK_IS_GROUND_SHARE)
 
 
-def _worst_ground(crop: Any, ink: tuple[int, int, int]) -> tuple[int, int, int] | None:
-    """The ground this block sits worst against, or None when it cannot be read.
+def _worst_ground(
+    crop: Any,
+    ink: tuple[int, int, int],
+    named: tuple[tuple[str, Any], ...] = (),
+) -> tuple[tuple[int, int, int], str | None] | None:
+    """The ground this block sits worst against and the word it was read under, or None.
+
+    `named` are the render's own word boxes as pixels (see `_word_slices`), judged after
+    the column slices and through the same four guards below. Extra regions rather than
+    a replacement: the column reading is what every measured deck calibrated those
+    guards against, so a word box can only make the answer worse, never quieter, and
+    the word comes back so the finding can say where on the line it went wrong. None
+    for the word when a column slice or the whole crop gave the answer.
 
     Sliced across rather than taken whole -- see `_SLICE_SHARE`. A block whose slices
     all agree gets the same answer as one ground for the whole crop, which is every
@@ -454,35 +550,42 @@ def _worst_ground(crop: Any, ink: tuple[int, int, int]) -> tuple[int, int, int] 
     has_ink = span is not None
     if span is not None and span[1] - span[0] >= 1:
         narrowed = arr[:, span[0] : span[1]]
-        if narrowed.shape[0] * narrowed.shape[1] < _MIN_PIXELS:
-            return whole
-        arr = narrowed
+        if narrowed.shape[0] * narrowed.shape[1] >= _MIN_PIXELS:
+            arr = narrowed
     height, columns = arr.shape[:2]
     width = max(1, int(round(height * _SLICE_SHARE)))
-    if columns <= width:
-        return whole
-    worst, held = whole, _ratio(ink, whole)
-    keys = _keys(arr)
-    step = _GROUND_STEP
-    for start in range(0, columns, width):
-        part = arr[:, start : min(start + width, columns)]
+    regions: list[tuple[str | None, Any]] = []
+    if columns > width:
+        regions = [(None, arr[:, start : min(start + width, columns)]) for start in range(0, columns, width)]
+    regions.extend(named)
+    worst, held, under = whole, _ratio(ink, whole), None
+    for word, part in regions:
         if part.shape[0] * part.shape[1] < _MIN_PIXELS:
             continue
         band = _ground(part, ink)
         step = _GROUND_STEP
         key = ((band[0] // step) * _GROUND_LEVELS + band[1] // step) * _GROUND_LEVELS + band[2] // step
-        window = keys[:, start : min(start + width, columns)]
         pixels = part.shape[0] * part.shape[1]
-        if int((window == key).sum()) / pixels < _SLICE_GROUND_SHARE:
+        # Asked of a column and not of a word. The question is whether the winning
+        # band is this region's ground or the glyphs standing in it, and a column of
+        # the declared box can hold neither -- an empty tail, the page beside a panel
+        # -- so a column with no dominant colour has no ground to read. A word box
+        # holds that word's glyphs and the ground behind them and nothing else, so
+        # there is nothing else the winner could be, and the two guards below already
+        # test the ink directly. Dominance is what a textured ground does not have:
+        # the crest of a rendered wave is a continuum of greens, no 16-level band of
+        # it holds 15% of the word 'flexibility' sits on, and that word is the one a
+        # reader cannot make out.
+        if word is None and int((_keys(part) == key).sum()) / pixels < _SLICE_GROUND_SHARE:
             continue
-        # Type never covers half of its own line box. A slice mostly in the ink's own
+        # Type never covers half of its own line box. A region mostly in the ink's own
         # bucket is a photograph or a filled shape the box reaches over, not words on
         # a ground: a dark title's declared box ran into the dark photograph beside
         # it and the photograph was read as its ground at 1.4:1.
         painted = float(_ink_mask(part, ink, _INK_EXACT).mean())
         if painted > _SLICE_INK_MAX:
             continue
-        # And a slice with no glyph in it has no text to read: a title's declared
+        # And a region with no glyph in it has no text to read: a title's declared
         # box ran across the photograph beside it, and the photograph -- distinct
         # from the ink, distinct from the page -- was read as the title's ground.
         if has_ink and painted < _SLICE_INK_MIN:
@@ -491,8 +594,8 @@ def _worst_ground(crop: Any, ink: tuple[int, int, int]) -> tuple[int, int, int] 
             continue
         ratio = _ratio(ink, band)
         if ratio < held:
-            worst, held = band, ratio
-    return worst
+            worst, held, under = band, ratio, word
+    return worst, under
 
 
 # How coarsely the ground's pixels are bucketed before the commonest one is taken. A

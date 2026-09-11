@@ -447,7 +447,12 @@ async def test_a_draft_is_told_where_the_second_reading_is(project: Project) -> 
     the draft branch is exactly where an author sits while it still believes the pages
     need work.
     """
-    tool = _tool(project, _ok(project))
+    # No `pptx_path`, which is what the stage really hands back for a draft: it returns
+    # before publication. With one in the data this passed while the text it asserts was
+    # unreachable in production -- the branch carrying it tests for a published path.
+    built = _ok(project)
+    drafted = replace(built, data={key: value for key, value in built.data.items() if key != "pptx_path"})
+    tool = _tool(project, drafted)
 
     reply = await tool.execute(project=project.slug, draft=True)
     said = reply if isinstance(reply, str) else reply.model_text
@@ -748,7 +753,7 @@ async def test_nothing_is_read_while_something_refuses_the_build(project: Projec
     reader = _Reader()
     gated = _ok(
         project,
-        findings=(Finding(kind="house_style", severity=Severity.WARNING, message="not the template's", page=1),),
+        findings=(Finding(kind="unplaced_figure", severity=Severity.WARNING, message="page 1 planned Fig. 2", page=1),),
         pages=6,
     )
     tool = _tool(project, gated)
@@ -1002,30 +1007,41 @@ async def test_the_pages_a_build_names_are_read_before_the_backlog(project: Proj
 
 
 @pytest.mark.asyncio
-async def test_the_tiers_build_cap_releases_the_deck_and_says_so(project: Project) -> None:
-    """A capped tier (services/tier) counts whole-deck builds: the build that reaches
-    the cap asks the stage to release the deck as it stands, drafts count nothing,
-    and the reply names the cap so the author knows why the gates stopped holding."""
+async def test_the_tiers_build_cap_counts_a_draft_and_releases_one(project: Project) -> None:
+    """A draft counts as a whole build and the cap releases a draft. Counting only
+    finished builds made the cap inert on the runs that needed it: one_door made 13
+    draft builds and never wrote a builds.json at all, a medium-tier run made 7 and the
+    same, and across four runs the author passed `draft: true` on 7/7, 13/13 and 5/5 of
+    its calls -- so a cap that only counts `draft: false` is a cap on a road the author
+    does not take. A draft already costs a whole build: `measure` renders before the
+    stage's draft branch, and `_DRAFT_EXEMPT` waives three finding kinds.
+
+    Every reply says the count, because a budget the author cannot see is one it spends
+    as though it were endless."""
     from raven_ppt.services import tier
 
-    tier.write_mode(project.workspace, {"buildCap": 2, "readingCap": 3}, "high")
+    tier.write_mode(project.workspace, {"buildCap": 3, "readingCap": 3}, "high")
     tool = _tool(project, _ok(project))
     stage = tool.stage
 
-    await tool.execute(project="tarvis", draft=True)
-    await tool.execute(project="tarvis")
-    assert stage.releases == [False, False]
-    assert tier.whole_builds_taken(project) == 1
+    first = _body(await tool.execute(project="tarvis", draft=True))
+    assert tier.whole_builds_taken(project) == 1, "a draft counts"
+    assert "whole-deck build 1 of the high tier's 3" in first["build_budget"]
+    assert "a draft counts as one" in first["build_budget"]
 
-    reply = await tool.execute(project="tarvis")
-    assert stage.releases[-1] is True
+    await tool.execute(project="tarvis", draft=True)
+    assert stage.releases == [False, False]
     assert tier.whole_builds_taken(project) == 2
-    said = reply if isinstance(reply, str) else reply.model_text
-    assert "released_at_cap" not in said, "the stage had nothing to release, so nothing is claimed"
+
+    last = _body(await tool.execute(project="tarvis", draft=True))
+    assert stage.releases[-1] is True, "the draft that reaches the cap releases the deck"
+    assert tier.whole_builds_taken(project) == 3
+    assert "whole-deck build 3 of the high tier's 3" in last["build_budget"]
 
     tier.write_mode(project.workspace, {}, "max")
-    await tool.execute(project="tarvis")
+    uncapped = _body(await tool.execute(project="tarvis", draft=True))
     assert stage.releases[-1] is False, "the max tier caps nothing"
+    assert uncapped["build_budget"] == "whole-deck build 4; this max tier sets no cap"
 
 
 @pytest.mark.asyncio
@@ -1160,6 +1176,51 @@ async def test_an_edited_delivery_is_named_first_in_the_reply(project: Project) 
     assert step.index(changed) < step.index("this deck is delivered at")
 
 
+async def test_a_deck_the_cap_refused_is_not_reported_as_delivered(project: Project) -> None:
+    """`released` says the stage stopped holding the findings back, not that the file
+    went out: publication can still refuse for a reason of its own -- a staged deck that
+    vanished, a deck that changed after it was measured -- and the stage returns those
+    with `released` already in the data. Clearing the refusal on `released` alone
+    answered that with a delivered deck and a cap line, and nothing then said the deck
+    had not been written."""
+    from raven_ppt.services import tier
+
+    tier.write_mode(project.workspace, {"buildCap": 1, "readingCap": 3}, "high")
+    held = Finding(kind="citation", severity=Severity.BLOCKING, message="page 1 cites Fig. 4", page=1)
+    built = _ok(project, findings=(held,), released=["citation"])
+    refused = replace(
+        built,
+        ok=False,
+        data={key: value for key, value in built.data.items() if key != "pptx_path"},
+        note="the deck changed after it was checked; build it again so the checks describe it",
+    )
+
+    body = _body(await _tool(project, refused).execute(project="tarvis"))
+
+    assert body["ok"] is False
+    assert "released_at_cap" not in body, "a refused deck was reported as delivered as it stands"
+    assert "the deck changed after it was checked" in body["not_delivered"]
+
+
+@pytest.mark.asyncio
+async def test_the_reply_names_the_pages_the_delivery_left_out(project: Project) -> None:
+    """The cap delivers the pages that drew and leaves the runner's stand-ins out, so
+    the file is shorter than the deck every finding above it is numbered against. Unsaid,
+    that reads as a deck that was always this long -- and as page numbers that point at
+    the wrong pages once the reader opens it."""
+    from raven_ppt.services import tier
+
+    tier.write_mode(project.workspace, {"buildCap": 1, "readingCap": 3}, "high")
+    stood_in = Finding(kind="page_failed", severity=Severity.BLOCKING, message="page 2's block raised", page=2)
+    delivered = _ok(project, findings=(stood_in,), pages=3, released=["page_failed"], dropped_pages=[2])
+    body = _body(await _tool(project, replace(delivered, ok=True)).execute(project="tarvis"))
+
+    assert body["ok"] is True
+    assert "page(s) 2 did not draw" in body["pages_left_out"]
+    assert "2 of 3 pages" in body["pages_left_out"]
+    assert "numbered one lower" in body["pages_left_out"]
+
+
 @pytest.mark.asyncio
 async def test_a_script_that_produced_no_deck_is_not_a_whole_build(project: Project) -> None:
     """The count that reaches the cap is of decks built, not of scripts run: two syntax
@@ -1180,3 +1241,124 @@ async def test_a_script_that_produced_no_deck_is_not_a_whole_build(project: Proj
     await tool.execute(project="tarvis")
     assert tier.whole_builds_taken(project) == 1
     assert tool.stage.releases[-1] is False, "the first deck that exists is the first whole build"
+
+
+# -- the destination the user named ------------------------------------------
+
+
+async def test_a_destination_the_publish_step_cannot_promise_is_refused_before_the_build(project: Project) -> None:
+    from raven_ppt.services.publish import read_destination
+
+    tool = _tool(project, _ok(project))
+    body = _body(await tool.execute(project="tarvis", deliver_to="handoff/intro.pptx"))
+
+    assert body["ok"] is False and "not an absolute path" in body["error"]
+    assert "deliver_to" in body["hint"]
+    assert read_destination(project) is None
+    assert tool.stage.calls == [], "nothing was built"
+
+
+async def test_a_destination_stated_on_a_refused_build_is_kept_all_the_same(tmp_path: Path) -> None:
+    """Stated on the first call and refused for a missing outline: the author fixes the
+    outline and builds again without repeating it, and the deck still lands there."""
+    from raven_ppt.services.publish import read_destination
+
+    bare = Project(workspace=tmp_path, slug="unplanned")
+    write_brief(DeckBrief(language="English", audience="a review", pages=PageBudget(1, 40)), brief_path(bare))
+    write_plan(IntakePlan(topic="a deck", digest="x"), intake_path(bare))
+    wanted = tmp_path / "handoff" / "intro.pptx"
+
+    body = _body(await _tool(bare, _ok(bare)).execute(project="unplanned", deliver_to=str(wanted)))
+
+    assert body["ok"] is False and "no outline recorded" in body["error"]
+    assert body["deliver_to"] == str(wanted)
+    assert read_destination(bare) == wanted
+
+
+async def test_a_directory_destination_takes_the_stages_own_deck_name(project: Project, tmp_path: Path) -> None:
+    from raven_ppt.services.publish import read_destination
+
+    handoff = tmp_path / "handoff"
+    body = _body(await _tool(project, _ok(project)).execute(project="tarvis", draft=True, deliver_to=f"{handoff}/"))
+
+    assert body["ok"] is True
+    assert body["deliver_to"] == str(handoff / "deck.pptx") == str(read_destination(project))
+    assert f"the destination {handoff / 'deck.pptx'} is kept for this deck" in body["next_step"]
+
+
+async def test_the_delivered_path_and_the_slide_count_are_words_the_author_repeats(
+    project: Project, tmp_path: Path
+) -> None:
+    delivered = tmp_path / "handoff" / "ravenx-intro.pptx"
+    result = _ok(project, pages=12, delivered_to=str(delivered), delivered_pdf=str(delivered.with_suffix(".pdf")))
+
+    body = _body(await _tool(project, result).execute(project="tarvis"))
+
+    assert body["ok"] is True and body["delivered_to"] == str(delivered)
+    assert body["next_step"].startswith(f"tell the user in these terms: the deck is at {delivered} and has 12 slides")
+    assert f"its PDF preview is {delivered.with_suffix('.pdf')}" in body["next_step"]
+    assert body["pptx_path"] in body["next_step"], "out/ is still named as the engine's own copy"
+
+
+async def test_a_destination_that_could_not_be_written_is_the_first_thing_said(project: Project) -> None:
+    result = _ok(project, delivery_failed="/handoff/intro.pptx: could not write /handoff/intro.pptx: Permission denied")
+
+    body = _body(await _tool(project, result).execute(project="tarvis"))
+
+    assert body["ok"] is True
+    assert body["next_step"].startswith("the deck is published under out/ but not at the destination the user named")
+    assert "Permission denied" in body["next_step"]
+
+
+async def test_a_refused_build_says_the_destination_still_holds_the_last_deck(project: Project, tmp_path: Path) -> None:
+    from raven_ppt.services.publish.deliver import record_published
+
+    delivered = tmp_path / "handoff" / "ravenx-intro.pptx"
+    record_published(project, delivered, "abc", 12, role="delivery")
+    refused = replace(_ok(project), ok=False, note="the built deck is empty")
+    refused = replace(refused, data={k: v for k, v in refused.data.items() if k != "pptx_path"})
+
+    body = _body(await _tool(project, refused).execute(project="tarvis"))
+
+    assert body["destination_unchanged"].startswith(f"{delivered} still holds the last published deck")
+    assert "delivered" not in body["next_step"]
+
+
+@pytest.mark.asyncio
+async def test_every_draft_build_says_that_a_draft_does_not_deliver(project: Project) -> None:
+    """Four measured runs' builds: stack5 took 17 finished builds and published; stack6
+    took 5 drafts and 0 finished, one_door 13 and 0, medium 1 finished -- and none of
+    those three published. Every run that never left draft never delivered, and `draft`
+    is the author's own switch, so the party choosing whether to be judged is the party
+    the gates exist for.
+
+    The reply used to carry this sentence in the next step below, behind
+    `"pptx_path" in payload` -- which a draft never has, because the stage returns before
+    publication. It was unreachable on the one path that needed it. Now it is its own
+    line on every draft, and absent from a finished build, which has delivered."""
+    built = _ok(project, pages=4)
+    # A draft as the stage really returns one: `draft` set and no `pptx_path`, because it
+    # returns before publication. The older pin used a stage that hands back a path on a
+    # draft too, which is why the next step below read as reachable when it was not.
+    drafted = replace(
+        built, data={key: value for key, value in built.data.items() if key != "pptx_path"} | {"draft": True}
+    )
+    body = _body(await _tool(project, drafted).execute(project="tarvis", draft=True))
+
+    assert "a draft is not what delivers them" in body["draft_does_not_deliver"]
+    assert "`draft: false`" in body["draft_does_not_deliver"]
+    assert "build again without `draft`" in str(body["next_step"]), "the draft's next step is reachable too"
+
+    finished = _body(await _tool(project, _ok(project, pages=4)).execute(project="tarvis"))
+    assert "draft_does_not_deliver" not in finished, "a finished build has delivered; it needs no such line"
+
+
+@pytest.mark.asyncio
+async def test_a_draft_asked_for_a_page_it_has_not_drawn_yet_does_not_claim_it(project: Project) -> None:
+    """The sentence opens on the pages being drawn, so it is only true once the pages
+    the call named exist. A draft asked for page 7 of a four-page program has not drawn
+    what it was asked for, and the reply says so elsewhere."""
+    drafted = replace(_ok(project, pages=4), data={**_ok(project, pages=4).data, "draft": True})
+    body = _body(await _tool(project, drafted).execute(project="tarvis", draft=True, slides=[7]))
+
+    assert "draft_does_not_deliver" not in body

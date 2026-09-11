@@ -98,8 +98,9 @@ READING_DECK_BUDGET_S = 900.0
 # not tight.
 # Room for the reply and for a reasoning model's thinking before it, which spends
 # from the same budget: at 2500 a reader cut off mid-object was asked again at 5000,
-# and the second call cost what the first had. Sized so one call is the call.
-REPLY_TOKENS = 8000
+# and the second call cost what the first had. Sized so one call is the call, with
+# room for a model that thinks longer than the one it was measured against.
+REPLY_TOKENS = 16000
 
 # The document both sides read. The author writes against it and this call judges the
 # render by it, and that is the point of it being a file rather than a string here: a

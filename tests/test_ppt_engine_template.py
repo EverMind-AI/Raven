@@ -212,6 +212,70 @@ def test_the_reference_states_what_it_cannot_draw(template: Path, tmp_path: Path
     assert "clone the page" in source.summary()
 
 
+def _charted(path: Path, *, gradient: bool = False) -> Path:
+    """A page holding a native chart, the way a real template holds one.
+
+    python-pptx writes a chart even though it cannot rewrite one, which is exactly
+    the asymmetry these tests are about.
+    """
+    from pptx import Presentation
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    page = presentation.slides.add_slide(presentation.slide_layouts[6])
+    page.shapes.add_textbox(Inches(1), Inches(0.5), Inches(11), Inches(1)).text_frame.text = "Quarterly volume"
+    data = CategoryChartData()
+    data.categories = ["Q1 of the template", "Q2 of the template"]
+    data.add_series("the template's own series", (19.2, 21.5))
+    page.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(2), Inches(2.5), Inches(6), Inches(3.5), data)
+    if gradient:
+        panel = page.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(9), Inches(2.5), Inches(3), Inches(3.5))
+        panel.fill.gradient()
+    presentation.save(str(path))
+    return path
+
+
+def test_a_chart_is_the_authors_to_draw_rather_than_the_clones_to_keep(tmp_path: Path):
+    """A live run was told to clone a chart page and replace_text it, got a chart it
+    could not fill, and spent 73 minutes in a shell measuring the template's own axis
+    type so it could rebuild the chart by hand. Nothing in this engine writes chart
+    data and replace_text cannot reach a chart's labels, so a clone delivers the
+    template's numbers and no route empties them; the layout is still worth cloning,
+    and only the chart is the author's to draw."""
+    source = decompile(_charted(tmp_path / "charted.pptx"), 0, images_dir=tmp_path / "img")
+
+    assert source is not None
+    assert "a chart" not in source.unredrawable, "cloning is not what gets a chart into a deck"
+    assert source.redraw_yourself == ("Inches(2.00), Inches(2.50), Inches(6.00), Inches(3.50)",)
+    said = source.summary()
+    assert "the chart must be redrawn with ppt_charts from your own data" in said
+    assert "placed in the same position" in said
+    assert "drop_shape(shape_near(slide, 2.00, 2.50))" in said
+    assert "Box.at(2.00, 2.50, w=6.00, h=3.50)" in said
+    assert "kept by cloning" not in said, "the line under the chart said the one thing that is untrue of it"
+
+
+def test_a_page_with_a_chart_and_a_gradient_says_both_without_contradicting_itself(tmp_path: Path):
+    """The two answers are opposite -- clone that, draw this -- and a page can want
+    both. Said as one note, the chart an exception to the clone, because two notes
+    read as two instructions and the clone note ends on "replace its text and
+    pictures", which is exactly what a chart does not answer to."""
+    source = decompile(_charted(tmp_path / "both.pptx", gradient=True), 0, images_dir=tmp_path / "img")
+
+    assert source is not None
+    assert "a gradient fill" in source.unredrawable
+    assert source.redraw_yourself
+    notes = [line for line in source.summary().splitlines() if "python-pptx cannot write" in line]
+    assert len(notes) == 1, notes
+    assert "clone the page" in notes[0]
+    assert "A chart on it is the exception" in notes[0]
+    assert "the chart must be redrawn with ppt_charts" in notes[0]
+
+
 def test_a_run_of_custom_drawn_shapes_is_said_once(tmp_path: Path):
     """A Bauhaus contents page carries a hundred freeforms as pattern; two lines each
     made one page 12,800 characters of a reply that cuts at 16,000. Consecutive ones
@@ -564,16 +628,14 @@ def test_filling_fewer_items_than_slots_deletes_the_spares(tmp_path: Path):
     emptied their text and left two numbered bubbles sitting on the page."""
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt, units
+    from raven_ppt.services.template import clone_page, fill, replace_text, units
 
     source = Presentation(str(_card_page(tmp_path / "cards.pptx")))
     out = Presentation(str(tmp_path / "cards.pptx"))
-    slide = adapt(
-        out,
-        source.slides[0],
-        texts={"单击此处添加页面标题": "四类任务本质相同"},
-        items=[["01", "视频实例分割"], ["02", "视频全景分割"], ["03", "半监督分割"]],
-    )
+    slide = clone_page(out, source.slides[0])
+    replace_text(slide, "单击此处添加页面标题", "四类任务本质相同")
+    fill(max(units(slide), key=len), [["01", "视频实例分割"], ["02", "视频全景分割"], ["03", "半监督分割"]])
+
     assert [len(run) for run in units(slide)] == [3], "the fourth unit is gone, not emptied"
     said = _texts(slide)
     assert "视频实例分割" in said and "半监督分割" in said
@@ -586,43 +648,273 @@ def test_more_items_than_slots_grows_the_run_rather_than_dropping_content(tmp_pa
     two items over, and the authors then cloned units by hand; a regular row grows."""
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt, units
+    from raven_ppt.services.template import clone_page, fill, units
 
     source = Presentation(str(_card_page(tmp_path / "cards.pptx")))
     out = Presentation(str(tmp_path / "cards.pptx"))
 
-    slide = adapt(out, source.slides[0], items=[["0%d" % n, "点 %d" % n] for n in range(1, 7)])
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [["0%d" % n, "点 %d" % n] for n in range(1, 7)])
 
     assert [len(run) for run in units(slide)] == [6]
     assert {"点 1", "点 6", "06"} <= _texts(slide), "nothing dropped, the new slots filled and numbered"
 
 
-def test_text_inside_a_group_is_replaced_and_unnamed_text_is_emptied(tmp_path: Path):
+def test_text_inside_a_group_is_replaced_and_unnamed_text_is_left_standing(tmp_path: Path):
     """77% of real example pages have groups, and `slide.shapes` does not descend
-    into them -- so this was the reason a deck shipped with its author's own
-    `texts={...}` keys still on the page as placeholders."""
+    into them -- so this was the reason a deck shipped with the strings its author had
+    named still on the page as placeholders.
+
+    And what no call names is still the template's, which is the contract the
+    gate reads: an unfilled frame says the template's words out loud, where
+    `placeholder_copy` refuses it by name, rather than going blank where nothing can
+    tell it from a page the design meant to leave empty.
+    """
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page, replace_text, shape_at
 
     source = Presentation(str(_card_page(tmp_path / "cards.pptx", slots=2, shapes_per_slot=3)))
     out = Presentation(str(tmp_path / "cards.pptx"))
-    slide = adapt(out, source.slides[0], texts={"单击此处添加页面标题": "标题", 3: "组内被按序号替换"})
+    slide = clone_page(out, source.slides[0])
+    replace_text(slide, "单击此处添加页面标题", "标题")
+    replace_text(shape_at(slide, 3), "组内被按序号替换")
     said = _texts(slide)
     assert "组内被按序号替换" in said, "an index reaches a shape inside a group"
-    assert "单击添加小标题" not in said and "单击此处添加文本" not in said
+    assert "单击添加小标题" in said, "a frame no call named still says what the template wrote"
 
 
 def test_a_key_that_matches_nothing_says_what_the_page_holds(tmp_path: Path):
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page
 
     source = Presentation(str(_card_page(tmp_path / "cards.pptx")))
     out = Presentation(str(tmp_path / "cards.pptx"))
+    slide = clone_page(out, source.slides[0])
     with pytest.raises(KeyError) as caught:
-        adapt(out, source.slides[0], texts={"没有这段文字": "x"})
+        replace_text(slide, "没有这段文字", "x")
     assert "单击此处添加页面标题" in str(caught.value), "the refusal lists what is there"
+
+
+# --- what a failed lookup says -------------------------------------------------------
+#
+# The class of failure these cover, measured on one live run: six of its seven builds
+# died naming a string the page it was editing did not hold, four of them on the same
+# key in four consecutive builds. The answer was in every one of those messages -- shape
+# 25 of 27 held '数字健康兴起' against the '数字健康崛起' that was asked for, one glyph
+# apart and the same meaning -- and the message never said so, so the author read the
+# inventory, fixed something else, and rebuilt. The programs differ between attempts, so
+# this was never a frozen loop: nothing pointed at the line.
+
+
+def _page_of_mostly_drawings(path: Path):
+    """A page shaped like the one that raised four times: a row of cards whose text is
+    outnumbered by wordless boxes, so a hint must not be built out of an empty string."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    page = presentation.slides.add_slide(presentation.slide_layouts[6])
+    heading = page.shapes.add_textbox(Inches(0.7), Inches(0.5), Inches(9.0), Inches(0.8))
+    heading.text_frame.text = "生物科技如何改变医疗健康行业"
+    for index, (label, blurb) in enumerate(
+        (
+            ("基因编辑革新", "定制化治疗方案成为现实"),
+            ("再生医学进展", "器官再生与移植迎来新希望"),
+            ("精准医疗崛起", "基于个体基因特征的精准治疗"),
+            ("数字健康兴起", "利用数据科技优化医疗服务"),
+        )
+    ):
+        left = 0.7 + index * 3.0
+        for spare in range(3):
+            page.shapes.add_textbox(Inches(left + spare * 0.1), Inches(1.6), Inches(0.3), Inches(0.3))
+        page.shapes.add_textbox(Inches(left), Inches(2.4), Inches(0.6), Inches(0.5)).text_frame.text = f"0{index + 1}"
+        page.shapes.add_textbox(Inches(left), Inches(3.0), Inches(2.6), Inches(0.5)).text_frame.text = label
+        page.shapes.add_textbox(Inches(left), Inches(3.6), Inches(2.6), Inches(1.0)).text_frame.text = blurb
+    presentation.save(str(path))
+    return path
+
+
+def _cloned(tmp_path: Path, source_name: str = "cards.pptx", page: int = 1):
+    """The same page these cases always used, cloned the way the copy route clones it."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.template.compose import prototype
+
+    source = Presentation(str(tmp_path / source_name))
+    out = Presentation()
+    out.slide_width, out.slide_height = Inches(13.333), Inches(7.5)
+    return clone_page(out, prototype(source, page))
+
+
+def test_a_key_one_glyph_out_is_told_which_shape_it_meant(tmp_path: Path):
+    """The decisive live case, replayed: 崛起 for 兴起, near-synonyms one glyph apart.
+
+    Through `replace_text`, which is the lookup that survived `adapt`'s removal. The
+    hint and the shape number are the same; what changed is the call and the phrase
+    the inventory opens with, because the old one belonged to `adapt`'s own advice.
+    """
+    _page_of_mostly_drawings(tmp_path / "cards.pptx")
+    slide = _cloned(tmp_path)
+
+    with pytest.raises(KeyError) as refused:
+        replace_text(slide, "数字健康崛起", "Digital health")
+
+    message = str(refused.value)
+    hint, _, inventory = message.partition("The page holds")
+    assert "数字健康兴起" in hint, "the near miss is named before the inventory, not inside it"
+    assert "数字健康崛起" in hint, "and beside what was actually asked for"
+    assert inventory, "the inventory still follows it -- it is the answer when nothing is near"
+    assert "'数字健康兴起'" in hint
+
+
+def test_a_hint_is_never_built_out_of_a_wordless_shape(tmp_path: Path):
+    """12 of the 27 shapes on the page that raised four times hold no text at all, and an
+    empty string scores against anything short."""
+    _page_of_mostly_drawings(tmp_path / "cards.pptx")
+    slide = _cloned(tmp_path)
+
+    with pytest.raises(KeyError) as refused:
+        replace_text(slide, "完全无关的一段文字", "x")
+
+    hint = str(refused.value).partition("The page holds")[0]
+    assert "Did you mean" not in hint, "nothing on the page is close, so nothing is offered"
+    assert "''" not in hint
+
+
+def test_a_key_absent_from_the_page_but_present_on_another_is_traced_to_it(tmp_path, monkeypatch):
+    """The live run's other two failures: the author named page 2's copy while writing
+    into page 1, so no shape on the page is near it and the inventory cannot explain a
+    string the page never held. Word for word only -- the page number is right or there
+    is no clause.
+
+    The clause needs the file the page was cloned out of. `adapt` held it and is gone;
+    `replace_text` is handed a page already in the deck being built, so the template is
+    reached where the runner puts it, `PPT_TEMPLATE_SOURCE`. Bound here the way the
+    runner binds it.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    _page_of_mostly_drawings(tmp_path / "cards.pptx")
+    source = Presentation(str(tmp_path / "cards.pptx"))
+    second = source.slides.add_slide(source.slide_layouts[6])
+    second.shapes.add_textbox(
+        Inches(1.0), Inches(1.0), Inches(6.0), Inches(0.8)
+    ).text_frame.text = "新技术、新产品及新服务在行业中的应用"
+    source.save(str(tmp_path / "two.pptx"))
+    monkeypatch.setenv("PPT_TEMPLATE_SOURCE", str(tmp_path / "two.pptx"))
+    slide = _cloned(tmp_path, "two.pptx", 1)
+
+    with pytest.raises(KeyError) as refused:
+        replace_text(slide, "新技术、新产品及新服务在行业中的应用", "x")
+
+    hint = str(refused.value).partition("The page holds")[0]
+    assert "is on page 2 of this template" in hint
+
+
+def test_a_key_absent_with_no_template_bound_says_nothing_extra(tmp_path, monkeypatch):
+    """And the same call with no template in the environment: one clause fewer, never a
+    second error on top of the refusal being raised."""
+    monkeypatch.delenv("PPT_TEMPLATE_SOURCE", raising=False)
+    _page_of_mostly_drawings(tmp_path / "cards.pptx")
+    slide = _cloned(tmp_path)
+
+    with pytest.raises(KeyError) as refused:
+        replace_text(slide, "新技术、新产品及新服务在行业中的应用", "x")
+
+    hint = str(refused.value).partition("The page holds")[0]
+    assert "of this template" not in hint
+
+
+def test_a_key_too_short_to_judge_is_offered_nothing(tmp_path: Path):
+    """A page's 01/02/03/04 row scores 0.5 against every member of itself, so under four
+    characters the measure is turned off rather than tuned."""
+    _page_of_mostly_drawings(tmp_path / "cards.pptx")
+    slide = _cloned(tmp_path)
+
+    with pytest.raises(KeyError) as refused:
+        replace_text(slide, "09", "x")
+
+    hint = str(refused.value).partition("The page holds")[0]
+    assert "Did you mean" not in hint
+
+
+def test_what_matches_is_untouched_by_what_the_failure_says(tmp_path: Path):
+    """The change is to the refusal, not to eligibility: a substring still resolves and a
+    key that resolved before still resolves."""
+    _page_of_mostly_drawings(tmp_path / "cards.pptx")
+    slide = _cloned(tmp_path)
+
+    replace_text(slide, "数字健康兴起", "Digital health")
+    replace_text(slide, "利用数据", "Data science")
+
+    said = [s.text_frame.text for s in slide.shapes if getattr(s, "has_text_frame", False)]
+    assert "Digital health" in said
+    assert "Data science" in said
+
+
+def test_the_replace_text_refusal_names_the_copy_it_meant(tmp_path: Path):
+    from pptx import Presentation
+
+    from raven_ppt.services.template import clone_page, replace_text
+
+    source = Presentation(str(_page_of_mostly_drawings(tmp_path / "cards.pptx")))
+    out = Presentation(str(tmp_path / "cards.pptx"))
+    slide = clone_page(out, source.slides[0])
+
+    with pytest.raises(KeyError) as refused:
+        replace_text(slide, "数字健康崛起", "Digital health")
+
+    hint = str(refused.value).partition("The page holds")[0]
+    assert "数字健康兴起" in hint
+    assert "The page holds" in str(refused.value), "the inventory is kept"
+
+
+def test_the_unit_refusal_names_the_slot_it_meant(tmp_path: Path):
+    """A dict item is keyed by the copy a slot holds now, so the same slip lands here."""
+    from pptx import Presentation
+
+    from raven_ppt.services.template import clone_page, fill, units
+
+    source = Presentation(str(_card_page(tmp_path / "cards.pptx")))
+    out = Presentation(str(tmp_path / "cards.pptx"))
+    slide = clone_page(out, source.slides[0])
+    run = max(units(slide), key=len)
+
+    with pytest.raises(KeyError) as refused:
+        fill(run, [{"单击添加小标提": "Digital health"}])
+
+    message = str(refused.value)
+    assert "Did you mean" in message.partition("It holds")[0], message
+    assert "单击添加小标题" in message.partition("It holds")[0]
+    assert "It holds" in message, "the unit's own copy is still listed"
+
+
+def test_the_prefix_refusal_names_the_copy_it_meant(tmp_path: Path):
+    """`shape_saying` matches a prefix, so the key is weighed against each candidate's
+    opening of the same length -- scoring six characters against a whole paragraph finds
+    nothing."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.template.compose import shape_saying
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1.0), Inches(1.0), Inches(6.0), Inches(0.6))
+    box.text_frame.text = "数字健康兴起：数据科技如何改变医疗服务的交付方式"
+
+    with pytest.raises(KeyError) as refused:
+        shape_saying(slide, "数字健康崛起")
+
+    message = str(refused.value)
+    assert "Did you mean" in message.partition("Its copy reads")[0]
+    assert "Its copy reads" in message
 
 
 def test_the_arrangement_of_a_run_is_reported_not_reflowed(tmp_path: Path):
@@ -745,17 +1037,17 @@ def test_the_boxes_of_a_run_are_sizes_and_say_so(tmp_path: Path):
 def test_a_pictures_box_reshapes_the_frame_in_either_spelling(tmp_path: Path, image):
     """The reshape a fitting refusal offers, given as a size and as two corners.
 
-    `pictures={n: (image, box)}` exists because a live run told its landscape figure
-    could not go in a portrait frame answered by permuting the shape number three times.
-    The box goes through the same reading as `place`: a Box is converted, four numbers are
-    a size. Stretch, so the frame stays exactly where it was put and the assertion is
-    about the box rather than about the fit.
+    `replace_picture(shape, image, box=...)` exists because a live run told its landscape
+    figure could not go in a portrait frame answered by permuting the shape number three
+    times. The box goes through the same reading as `place`: a Box is converted, four
+    numbers are a size. Stretch, so the frame stays exactly where it was put and the
+    assertion is about the box rather than about the fit.
     """
     from pptx import Presentation
     from pptx.enum.shapes import MSO_SHAPE_TYPE
     from pptx.util import Inches
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page
 
     path = _card_page(tmp_path / "cards.pptx")
     once = Presentation(str(path))
@@ -764,8 +1056,9 @@ def test_a_pictures_box_reshapes_the_frame_in_either_spelling(tmp_path: Path, im
 
     def framed(box):
         source, out = Presentation(str(path)), Presentation(str(path))
-        slide = adapt(out, source.slides[0], pictures={1: (str(image("fig.png", (10, 20, 30))), box, "stretch")})
+        slide = clone_page(out, source.slides[0])
         frame = next(s for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.PICTURE)
+        replace_picture(frame, str(image("fig.png", (10, 20, 30))), "stretch", box=box)
         return [round(value / 914400, 2) for value in (frame.left, frame.top, frame.width, frame.height)]
 
     assert framed(_layout_box(0.8, 1.6, 8.2, 5.8)) == [0.8, 1.6, 7.4, 4.2]
@@ -785,18 +1078,18 @@ def _texts(slide) -> set[str]:
     }
 
 
-def test_the_reference_numbering_is_the_numbering_adapt_takes(tmp_path: Path):
+def test_the_reference_numbering_is_the_numbering_shape_at_takes(tmp_path: Path):
     """One numbering for the page, printed where the author reads it.
 
-    A live author read the reference, counted, and wrote `texts={15: ...}` against a
-    page whose text frames stopped at fourteen: the reference numbered shapes and
-    `adapt` numbered text frames. The two orders have to be the same walk.
+    A live author read the reference, counted, and named shape 15 on a page whose text
+    frames stopped at fourteen: the reference numbered shapes and the route since
+    removed numbered text frames. The two orders have to be the same walk.
     """
     import re
 
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import shape_at
     from raven_ppt.services.template.compose import _all_shapes
     from raven_ppt.services.template.decompile import _flatten
 
@@ -813,22 +1106,23 @@ def test_the_reference_numbering_is_the_numbering_adapt_takes(tmp_path: Path):
     # And the ordinal reaches the shape the reference showed at that ordinal.
     wanted = next(index for index, shape in enumerate(walked, start=1) if shape.text_frame.text == "02")
     out = Presentation(str(path))
-    slide = adapt(out, page, texts={wanted: "第二张卡"})
+    slide = clone_page(out, page)
+    replace_text(shape_at(slide, wanted), "第二张卡")
     assert "第二张卡" in _texts(slide)
 
 
 def test_an_index_pointing_at_the_wrong_kind_of_shape_is_refused(tmp_path: Path, image):
-    """Ambiguity refuses; a page with one picture does not.
+    """A number that lands on copy is a miscount, and the refusal lists the page.
 
-    Two models each wrote `pictures={2: ...}` against a page whose picture was shape 3.
-    Where there is exactly one frame the index cannot mean anything else, so it is read
-    as that one -- refusing there cost a round to teach a number the page could supply.
-    With two frames the index has to be right.
+    Two models each aimed at a page's second shape when its picture was the third. The
+    check used to sit in the call that resolved the number and moved onto this one with
+    it (D41), because the numbering is what makes the mistake worth a refusal: without
+    it a card's heading silently became a photograph.
     """
     from pptx import Presentation
     from pptx.util import Inches
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page, prototype, replace_picture, shape_at
 
     photo = image("shot.png", (90, 90, 90))
     path = _card_page(tmp_path / "cards.pptx")
@@ -839,24 +1133,9 @@ def test_an_index_pointing_at_the_wrong_kind_of_shape_is_refused(tmp_path: Path,
     twice.save(str(path))
 
     source, out = Presentation(str(path)), Presentation(str(path))
-    with pytest.raises(KeyError, match="picture|shape"):
-        adapt(out, source.slides[0], pictures={2: str(photo)})
-
-
-def test_one_picture_on_the_page_takes_whatever_index_was_meant(tmp_path: Path, image):
-    from pptx import Presentation
-    from pptx.util import Inches
-
-    from raven_ppt.services.template import adapt
-
-    photo = image("shot.png", (90, 90, 90))
-    path = _card_page(tmp_path / "cards.pptx")
-    once = Presentation(str(path))
-    once.slides[0].shapes.add_picture(str(photo), Inches(1), Inches(4), width=Inches(3))
-    once.save(str(path))
-
-    source, out = Presentation(str(path)), Presentation(str(path))
-    adapt(out, source.slides[0], pictures={2: str(image("other.png", (10, 20, 30)))})
+    slide = clone_page(out, prototype(source, 1))
+    with pytest.raises(ValueError, match="picture cannot stand in for"):
+        replace_picture(shape_at(slide, 2), str(photo))
 
 
 def test_a_landscape_figure_in_a_portrait_slot_is_placed_with_a_warning(tmp_path: Path, image) -> None:
@@ -905,219 +1184,6 @@ def test_a_figure_near_its_frames_proportions_is_fitted(tmp_path: Path, image) -
     replace_picture(frame, near)
     # contain gave way on the height and kept the centre
     assert round(frame.width / frame.height, 2) == round(1600 / 900, 2)
-
-
-def test_adapt_writes_the_heading_rows_by_role(tmp_path: Path) -> None:
-    """The parameter a live author went looking for.
-
-    It called `inspect.signature(adapt)` for a `title`, found none, filled the page with
-    `items` alone -- which empties the header, because text this call does not name is
-    emptied -- and then wrote its heading back as two new boxes over the clone, which is
-    the one construction `template_underlay` refuses. Naming the role is all it wanted.
-    """
-    from pptx import Presentation
-    from pptx.util import Inches, Pt
-
-    from raven_ppt.services.template.compose import adapt
-
-    source = Presentation()
-    source.slide_width, source.slide_height = Inches(13.333), Inches(7.5)
-    page = source.slides.add_slide(source.slide_layouts[5])
-    page.shapes.title.text = "单击此处添加章节标题"
-    under = page.shapes.add_textbox(Inches(0.7), Inches(1.3), Inches(6.0), Inches(0.5))
-    run = under.text_frame.paragraphs[0].add_run()
-    run.text = "单击此处添加副标题"
-    run.font.size = Pt(20)
-    template = tmp_path / "t.pptx"
-    source.save(str(template))
-
-    deck = Presentation()
-    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    slide = adapt(deck, Presentation(str(template)).slides[0], title="实验结果", subtitle="七个基准")
-
-    said = [shape.text_frame.text.strip() for shape in slide.shapes if shape.has_text_frame]
-    assert "实验结果" in said and "七个基准" in said
-    assert "单击此处添加章节标题" not in said
-
-
-def test_a_page_with_no_heading_row_says_so(tmp_path: Path) -> None:
-    """A refusal rather than a silent miss: the author asked for something this page
-    has nowhere to put."""
-    from pptx import Presentation
-    from pptx.util import Inches
-
-    from raven_ppt.services.template.compose import adapt
-
-    source = Presentation()
-    source.slide_width, source.slide_height = Inches(13.333), Inches(7.5)
-    page = source.slides.add_slide(source.slide_layouts[6])
-    page.shapes.add_textbox(Inches(1), Inches(5.0), Inches(4), Inches(0.5)).text_frame.text = "footnote"
-    template = tmp_path / "t.pptx"
-    source.save(str(template))
-
-    deck = Presentation()
-    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    with pytest.raises(KeyError, match="title"):
-        adapt(deck, Presentation(str(template)).slides[0], title="没有地方放")
-
-
-def _written_slots(slide) -> dict:
-    """What each of the clone's placeholders ended up holding, keyed by its role."""
-    return {
-        shape.placeholder_format.type: shape.text_frame.text.strip()
-        for shape in slide.shapes
-        if shape.is_placeholder and shape.has_text_frame
-    }
-
-
-def test_a_cover_heading_is_found_where_the_template_centred_it(tmp_path: Path) -> None:
-    """The geometry of a real cover, and what reading the top third made of it.
-
-    Measured across the sixteen bundled templates: the cover title is centred in the
-    page, between 1.24in and 4.76in down a 7.5in canvas, and what sits in the top third
-    is the presenter line and the date. So `title=` resolved to "Presenter name" on two
-    covers and `subtitle=` raised on ten of them. This is the worst of those, with both
-    chrome rows above the heading and the whole heading below the band.
-    """
-    from pptx import Presentation
-    from pptx.enum.shapes import PP_PLACEHOLDER
-    from pptx.util import Inches
-
-    from raven_ppt.services.template.compose import adapt
-
-    source = Presentation()
-    source.slide_width, source.slide_height = Inches(13.333), Inches(7.5)
-    page = source.slides.add_slide(source.slide_layouts[0])
-    for slot, box, said in (
-        (0, (0.72, 4.41, 8.0, 1.59), "棕色商务风工作总结汇报"),
-        (1, (0.72, 6.06, 8.0, 0.65), "回望来路，蓄力前行，再谱新篇"),
-    ):
-        shape = page.placeholders[slot]
-        shape.left, shape.top, shape.width, shape.height = (Inches(value) for value in box)
-        shape.text_frame.text = said
-    for left, said in ((0.72, "Presenter name"), (9.21, "20XX.XX.XX")):
-        page.shapes.add_textbox(Inches(left), Inches(0.51), Inches(2.0), Inches(0.41)).text_frame.text = said
-    template = tmp_path / "cover.pptx"
-    source.save(str(template))
-
-    deck = Presentation()
-    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    slide = adapt(deck, Presentation(str(template)).slides[0], title="七个基准上的结果", subtitle="与六个基线的对比")
-
-    wrote = _written_slots(slide)
-    assert wrote[PP_PLACEHOLDER.CENTER_TITLE] == "七个基准上的结果"
-    assert wrote[PP_PLACEHOLDER.SUBTITLE] == "与六个基线的对比"
-    assert "Presenter name" not in [shape.text_frame.text.strip() for shape in slide.shapes if shape.has_text_frame]
-
-
-def test_a_section_divider_subtitle_is_the_line_under_its_title(tmp_path: Path) -> None:
-    """The other half of the same measurement: every one of the sixteen dividers puts
-    its one line under the title below the top third, so `subtitle=` raised KeyError on
-    all sixteen. The line is 0 to 0.34in under the title's own box and at exactly its
-    left edge, which is what makes the two of them one heading block."""
-    from pptx import Presentation
-    from pptx.enum.shapes import PP_PLACEHOLDER
-    from pptx.util import Inches
-
-    from raven_ppt.services.template.compose import adapt
-
-    source = Presentation()
-    source.slide_width, source.slide_height = Inches(13.333), Inches(7.5)
-    page = source.slides.add_slide(source.slide_layouts[2])
-    for slot, box, said in (
-        (0, (0.72, 1.24, 8.0, 1.78), "单击此处添加章节标题"),
-        (1, (0.72, 3.09, 8.0, 0.67), "单击此处添加章节页描述内容"),
-    ):
-        shape = page.placeholders[slot]
-        shape.left, shape.top, shape.width, shape.height = (Inches(value) for value in box)
-        shape.text_frame.text = said
-    template = tmp_path / "section.pptx"
-    source.save(str(template))
-
-    deck = Presentation()
-    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    slide = adapt(deck, Presentation(str(template)).slides[0], title="实验设置", subtitle="数据、基线与指标")
-
-    wrote = _written_slots(slide)
-    assert wrote[PP_PLACEHOLDER.TITLE] == "实验设置"
-    assert wrote[PP_PLACEHOLDER.BODY] == "数据、基线与指标"
-
-
-def test_a_presenter_row_above_the_title_is_neither_heading(tmp_path: Path) -> None:
-    """A closing page carries a title and two lines of chrome and no subtitle at all.
-
-    Both facts have to survive: the title is the title however far down the page it is,
-    and a page with no subtitle row refuses `subtitle=` rather than writing the author's
-    line onto the presenter's name -- which is what six of the sixteen closing pages did.
-    """
-    from pptx import Presentation
-    from pptx.enum.shapes import PP_PLACEHOLDER
-    from pptx.util import Inches
-
-    from raven_ppt.services.template.compose import adapt
-
-    source = Presentation()
-    source.slide_width, source.slide_height = Inches(13.333), Inches(7.5)
-    page = source.slides.add_slide(source.slide_layouts[5])
-    heading = page.placeholders[0]
-    heading.left, heading.top, heading.width, heading.height = Inches(0.72), Inches(3.5), Inches(8.0), Inches(2.0)
-    heading.text_frame.text = "谢谢观看"
-    for left, said in ((0.72, "Presenter name"), (3.76, "20XX.XX.XX")):
-        page.shapes.add_textbox(Inches(left), Inches(0.68), Inches(2.0), Inches(0.31)).text_frame.text = said
-    template = tmp_path / "closing.pptx"
-    source.save(str(template))
-
-    deck = Presentation()
-    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    slide = adapt(deck, Presentation(str(template)).slides[0], title="谢谢")
-    assert _written_slots(slide)[PP_PLACEHOLDER.TITLE] == "谢谢"
-
-    with pytest.raises(KeyError, match="subtitle"):
-        adapt(deck, Presentation(str(template)).slides[0], title="谢谢", subtitle="有问题欢迎交流")
-
-
-def test_a_subtitle_stranded_mid_page_is_found_by_its_type_size(tmp_path: Path) -> None:
-    """The last resort, and the tie that refuses it.
-
-    One content page in the bundled sixteen sets its title at the very top and its
-    subtitle at 4.20in, over a row of cards -- out of reach of the top third and too far
-    under the title to be one block with it. Its size says what it is: 24pt against a
-    column that declares nothing else. An agenda page reached the same way declares one
-    size across eight numbered slots, and picking any of them would put the author's
-    subtitle inside slot 01, so a tie is a refusal.
-    """
-    from pptx import Presentation
-    from pptx.enum.shapes import PP_PLACEHOLDER
-    from pptx.util import Inches, Pt
-
-    from raven_ppt.services.template.compose import adapt
-
-    def build(path: Path, sizes: tuple[int, ...]):
-        source = Presentation()
-        source.slide_width, source.slide_height = Inches(13.333), Inches(7.5)
-        page = source.slides.add_slide(source.slide_layouts[5])
-        heading = page.placeholders[0]
-        heading.left, heading.top, heading.width, heading.height = Inches(0.72), Inches(0.14), Inches(8.0), Inches(0.98)
-        heading.text_frame.text = "单击此处添加页面标题"
-        for index, size in enumerate(sizes):
-            box = page.shapes.add_textbox(Inches(0.72), Inches(4.2 + index * 0.9), Inches(6.0), Inches(0.62))
-            run = box.text_frame.paragraphs[0].add_run()
-            run.text = f"单击此处添加长一点的副标题 {index}"
-            run.font.size = Pt(size)
-        source.save(str(path))
-        return path
-
-    deck = Presentation()
-    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    stranded = Presentation(str(build(tmp_path / "stranded.pptx", (24, 12)))).slides[0]
-    slide = adapt(deck, stranded, title="实验结果", subtitle="七个基准")
-
-    assert _written_slots(slide)[PP_PLACEHOLDER.TITLE] == "实验结果"
-    assert "七个基准" in [shape.text_frame.text.strip() for shape in slide.shapes if shape.has_text_frame]
-
-    tied = Presentation(str(build(tmp_path / "tied.pptx", (20, 20)))).slides[0]
-    with pytest.raises(KeyError, match="subtitle"):
-        adapt(deck, tied, title="实验结果", subtitle="七个基准")
 
 
 def test_replace_picture_swaps_a_photograph_used_as_a_shape_fill(tmp_path: Path) -> None:
@@ -1254,6 +1320,99 @@ def test_a_position_that_matches_nothing_says_what_the_page_holds(tmp_path: Path
     assert "(1.00, 1.00)" in str(refused.value)
 
 
+def _positions_page(spots):
+    """A page whose shapes sit at given inch positions, for weighing a failed lookup."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for left, top, text in spots:
+        box = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(2.0), Inches(0.5))
+        if text:
+            box.text_frame.text = text
+    return slide
+
+
+def test_a_point_on_the_asked_for_axis_is_named_as_a_row_counted_one_off():
+    """A live page failure, replayed. Asked for (7.39, 2.3): the nearest shape is a
+    drawing 0.72in away and the one the author meant is the text box 0.87in away on
+    exactly the x it asked for -- so distance alone names the wrong one, and the axis
+    that matches is what says the mistake was a row counted off by one. Both are
+    offered, each with its reason, rather than one of them guessed at."""
+    from raven_ppt.services.template.compose import shape_near
+
+    slide = _positions_page(
+        [
+            (0.72, 0.14, "成都夜间消费多中心格局"),
+            (6.98, 1.71, None),
+            (7.39, 1.43, "存量更新片区"),
+            (1.23, 2.23, "核心商圈带"),
+        ]
+    )
+
+    with pytest.raises(KeyError) as refused:
+        shape_near(slide, 7.39, 2.30, 0.2)
+
+    hint = str(refused.value).partition("Positions are on the page")[0]
+    assert "0.72in away" in hint, "the nearest shape is named, with the distance"
+    assert "存量更新片区" in hint, "and so is the one sharing the x that was asked for"
+    assert "on the x you asked for" in hint
+    assert "a row counted one off" in hint
+    assert "The page holds" in str(refused.value), "the inventory is kept"
+
+
+def test_the_nearest_shape_carries_the_axis_note_when_it_is_the_same_shape():
+    """The second live failure: one shape is both the nearest and the one on the asked-for
+    x, so it is one clause rather than two."""
+    from raven_ppt.services.template.compose import shape_near
+
+    slide = _positions_page([(0.72, 0.14, "业态规划与运营主体"), (6.56, 3.78 + 0.48, None), (1.10, 2.36, "业态配比")])
+
+    with pytest.raises(KeyError) as refused:
+        shape_near(slide, 6.62, 3.78, 0.2)
+
+    hint = str(refused.value).partition("Positions are on the page")[0]
+    assert hint.count("Nearest is") == 1
+    assert "0.48in away, on the x you asked for" in hint
+    assert "a row counted one off" in hint
+
+
+def test_a_point_in_empty_space_is_pointed_nowhere():
+    """Over the ten bundled templates no grid point further than 3in from every shape
+    draws a clause at all, and none anywhere draws one naming something over 2in away --
+    a hint that sends the author across the page is worse than the silence it replaces."""
+    from raven_ppt.services.template.compose import shape_near
+
+    slide = _positions_page([(0.5, 0.5, "top left"), (0.5, 1.5, "under it")])
+
+    with pytest.raises(KeyError) as refused:
+        shape_near(slide, 11.0, 6.5, 0.2)
+
+    hint = str(refused.value).partition("Positions are on the page")[0]
+    assert "Nearest is" not in hint
+    assert "counted one off" not in hint
+    assert "The page holds" in str(refused.value), "which is what makes it actionable instead"
+
+
+def test_the_tolerance_that_matches_is_not_widened_by_what_the_failure_says():
+    """The 0.2in radius is the contract. A shape 0.5in out still refuses, and a shape
+    inside the radius still resolves -- the change is only to the wording of the refusal."""
+    from raven_ppt.services.template.compose import shape_near
+
+    slide = _positions_page([(3.0, 3.0, "wanted"), (3.5, 3.0, "beside it")])
+
+    assert shape_near(slide, 3.05, 3.05, 0.2).text_frame.text == "wanted"
+    with pytest.raises(KeyError):
+        shape_near(slide, 3.0, 3.5, 0.2)
+    # And a tolerance the caller narrows is what "on the x you asked for" means, so a
+    # shape 0.08in off the x cannot be called aligned under tol=0.05.
+    with pytest.raises(KeyError) as refused:
+        shape_near(slide, 3.08, 4.0, 0.05)
+    assert "on the x you asked for" not in str(refused.value)
+
+
 def test_copy_the_template_states_under_the_floor_is_lifted_and_stops_refitting(tmp_path: Path) -> None:
     """Two live authors wrote this for themselves, same name, same 14pt default."""
     from pptx import Presentation
@@ -1302,6 +1461,40 @@ def test_a_shape_is_found_by_the_copy_it_starts_with(tmp_path: Path) -> None:
         shape_saying(slide, "Results")
 
 
+def test_the_templates_own_wording_is_still_there_after_a_replacement(tmp_path: Path) -> None:
+    """The failure this used to describe cannot happen any more.
+
+    Three builds of one live run died looking for a template string the route since
+    removed had emptied one line earlier, and a fourth wrote its own version of
+    `shape_saying` without the raise and shipped eight blank pages. Nothing empties a
+    frame now, so the block the author is reaching for is exactly where the template
+    left it -- and a prefix that still matches nothing gets a refusal about the prefix,
+    not about a pass that is gone.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.template.compose import prototype, shape_saying
+
+    template = Presentation()
+    template.slide_width, template.slide_height = Inches(13.333), Inches(7.5)
+    page = template.slides.add_slide(template.slide_layouts[6])
+    for index, said in enumerate(("趋势展望", "在演示中，简洁清晰的逻辑")):
+        box = page.shapes.add_textbox(Inches(1.0), Inches(1.0 + index), Inches(6.0), Inches(0.6))
+        box.text_frame.text = said
+
+    built = Presentation()
+    built.slide_width, built.slide_height = Inches(13.333), Inches(7.5)
+    slide = clone_page(built, prototype(template, 1))
+    replace_text(slide, "趋势展望", "Momentum")
+
+    assert shape_saying(slide, "在演示中").text_frame.text == "在演示中，简洁清晰的逻辑"
+    with pytest.raises(KeyError) as raised:
+        shape_saying(slide, "没有这一段")
+    assert "empties every text" not in str(raised.value)
+    assert "`replace_text(slide, old, new)`" in str(raised.value)
+
+
 def test_an_empty_value_over_a_number_restates_it_instead_of_blanking_it(tmp_path: Path):
     """A template numbers its slots 01..08 and the deck has fewer sections.
 
@@ -1314,16 +1507,13 @@ def test_an_empty_value_over_a_number_restates_it_instead_of_blanking_it(tmp_pat
     """
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page, fill, replace_text, units
 
     source = Presentation(str(_card_page(tmp_path / "cards.pptx", slots=6)))
     out = Presentation(str(tmp_path / "cards.pptx"))
-    slide = adapt(
-        out,
-        source.slides[0],
-        texts={"单击此处添加页面标题": "四类任务本质相同"},
-        items=[["", f"第 {n} 条"] for n in range(1, 5)],
-    )
+    slide = clone_page(out, source.slides[0])
+    replace_text(slide, "单击此处添加页面标题", "四类任务本质相同")
+    fill(max(units(slide), key=len), [["", f"第 {n} 条"] for n in range(1, 5)])
 
     said = _texts(slide)
     assert [n for n in ("01", "02", "03", "04") if n in said] == ["01", "02", "03", "04"]
@@ -1334,7 +1524,7 @@ def test_a_single_digit_template_keeps_a_single_digit(tmp_path: Path):
     """The padding is the template's, not this function's."""
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page, fill, units
 
     path = _card_page(tmp_path / "cards.pptx", slots=4)
     source = Presentation(str(path))
@@ -1346,7 +1536,8 @@ def test_a_single_digit_template_keeps_a_single_digit(tmp_path: Path):
 
     source = Presentation(str(path))
     out = Presentation(str(path))
-    slide = adapt(out, source.slides[0], items=[["", "甲"], ["", "乙"]])
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [["", "甲"], ["", "乙"]])
 
     said = _texts(slide)
     assert "1" in said and "2" in said
@@ -1357,11 +1548,12 @@ def test_an_empty_value_over_words_still_empties_them(tmp_path: Path):
     """Only a number is restated. Everything else means what it says."""
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page, fill, units
 
     source = Presentation(str(_card_page(tmp_path / "cards.pptx", slots=3)))
     out = Presentation(str(tmp_path / "cards.pptx"))
-    slide = adapt(out, source.slides[0], items=[["01", ""], ["02", ""]])
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [["01", ""], ["02", ""]])
 
     assert "单击添加小标题" not in _texts(slide)
 
@@ -1370,44 +1562,43 @@ def test_a_number_kept_with_none_is_the_templates_own(tmp_path: Path):
     """`None` has not changed: it leaves the shape exactly as the template wrote it."""
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page, fill, units
 
     source = Presentation(str(_card_page(tmp_path / "cards.pptx", slots=4)))
     out = Presentation(str(tmp_path / "cards.pptx"))
-    slide = adapt(out, source.slides[0], items=[[None, "甲"], [None, "乙"]])
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [[None, "甲"], [None, "乙"]])
 
     said = _texts(slide)
     assert "01" in said and "02" in said
 
 
-def test_a_short_item_keeps_the_units_number_and_drops_its_placeholder(tmp_path: Path):
-    """What a short list keeps, and what it must not.
+def test_a_short_item_restates_the_number_and_leaves_the_rest_to_the_gate(tmp_path: Path):
+    """What a short list keeps, and who answers for the rest.
 
-    Two failures meet in this one call. Taking the numbers off a real template's
-    agenda: the unit holds the number beside the copy, the author gave fewer values
-    than shapes, and the pass that empties unnamed text emptied all six of them, so
-    the page shipped blank folders where the template had 01 to 08. And leaving a
-    placeholder standing: a delivered page's four cards each kept "单击添加小标题"
-    under the author's own heading, which `placeholder_copy` refuses at the gate --
-    ten builds went by with the author editing elsewhere.
+    Taking the numbers off a real template's agenda: the unit holds the number beside
+    the copy, the author gave fewer values than shapes, and the pass that used to empty
+    unnamed text emptied all six of them, so the page shipped blank folders where the
+    template had 01 to 08. The number is still restated for its new position, because a
+    unit moved up the run cannot keep the old one.
 
-    So running off the end of the list cannot mean one thing for both. A number is
-    the template's own content and is restated; anything else the template wrote is
-    its example copy and goes. An explicit ``None`` still keeps whatever it names --
-    that is the escape for a fixed label worth keeping.
+    Everything else a short list runs out before is now left saying what the template
+    wrote. That is not a good page either -- a delivered deck's four cards each kept
+    "单击添加小标题" under the author's own heading -- but it is a page
+    `placeholder_copy` refuses by name, which a blank one was not.
     """
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page, fill, units
 
     source = Presentation(str(_card_page(tmp_path / "cards.pptx", slots=4, shapes_per_slot=3)))
     out = Presentation(str(tmp_path / "cards.pptx"))
-    slide = adapt(out, source.slides[0], items=[["01", "甲"], ["02", "乙"]])
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [["01", "甲"], ["02", "乙"]])
 
     said = _texts(slide)
     assert "01" in said and "甲" in said
-    assert "单击此处添加文本" not in said, "a placeholder past the end of the list is example copy, not furniture"
-    assert "单击添加小标题" not in said, "the heading was named, so nothing of the template's is left in it"
+    assert "单击此处添加文本" in said, "a placeholder past the end of the list stands for the gate to refuse"
 
 
 def test_a_short_item_restates_a_number_it_never_reached(tmp_path: Path):
@@ -1421,7 +1612,7 @@ def test_a_short_item_restates_a_number_it_never_reached(tmp_path: Path):
     from pptx import Presentation
     from pptx.util import Inches
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page, fill, units
 
     # Built here rather than from `_card_page`, which puts the number first: the unit
     # this protects is the one the docstring above describes, a label with the number
@@ -1439,7 +1630,8 @@ def test_a_short_item_restates_a_number_it_never_reached(tmp_path: Path):
 
     source = Presentation(str(tmp_path / "agenda.pptx"))
     out = Presentation(str(tmp_path / "agenda.pptx"))
-    slide = adapt(out, source.slides[0], items=[["甲"], ["乙"], ["丙"]])
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [["甲"], ["乙"], ["丙"]])
 
     said = _texts(slide)
     assert {"甲", "乙", "丙"} <= said
@@ -1569,14 +1761,13 @@ def test_items_are_counted_in_reading_order_not_file_order(tmp_path: Path) -> No
     copy into the 60pt figure box and the figure into the heading slot."""
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page, fill, units
 
     path = _unit_page(tmp_path, "stats.pptx", _stat_card)
     source, out = Presentation(str(path)), Presentation(str(path))
 
-    slide = adapt(out, source.slides[0], items=[["72%", "过夜访客", "约七成过夜。"]] * 4)
-
-    from raven_ppt.services.template import units
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [["72%", "过夜访客", "约七成过夜。"]] * 4)
 
     first = min(units(slide)[0], key=lambda unit: unit.left)
     by_top = sorted((s.top, s.text_frame.text) for s in first.shapes if getattr(s, "has_text_frame", False))
@@ -1616,7 +1807,7 @@ def test_the_survivors_of_a_row_share_its_original_width(tmp_path: Path) -> None
     card-sized hole on the right, which every author closed by hand or shipped."""
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt, units
+    from raven_ppt.services.template import clone_page, fill, units
 
     path = _unit_page(tmp_path, "row.pptx", _stat_card)
     source, out = Presentation(str(path)), Presentation(str(path))
@@ -1624,7 +1815,8 @@ def test_the_survivors_of_a_row_share_its_original_width(tmp_path: Path) -> None
     left0 = min(unit.left for unit in before)
     right0 = max(unit.left + unit.width for unit in before)
 
-    slide = adapt(out, source.slides[0], items=[["1", "甲", "一"], ["2", "乙", "二"], ["3", "丙", "三"]])
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [["1", "甲", "一"], ["2", "乙", "二"], ["3", "丙", "三"]])
 
     after = sorted(units(slide)[0], key=lambda unit: unit.left)
     assert len(after) == 3
@@ -1640,7 +1832,7 @@ def test_a_short_item_skips_the_number_that_reads_first(tmp_path: Path) -> None:
     from pptx import Presentation
     from pptx.util import Inches
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page, fill, units
 
     def numbered(group, index: int) -> None:
         number = group.shapes.add_textbox(Inches(0.7 + index * 3.0), Inches(2.0), Inches(0.6), Inches(0.6))
@@ -1651,7 +1843,8 @@ def test_a_short_item_skips_the_number_that_reads_first(tmp_path: Path) -> None:
     path = _unit_page(tmp_path, "numbered.pptx", numbered)
     source, out = Presentation(str(path)), Presentation(str(path))
 
-    slide = adapt(out, source.slides[0], items=[["甲"], ["乙"]])
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [["甲"], ["乙"]])
 
     said = _texts(slide)
     assert {"甲", "乙", "01", "02"} <= said
@@ -1663,7 +1856,7 @@ def test_a_full_item_addresses_every_shape_including_the_number(tmp_path: Path) 
     from pptx import Presentation
     from pptx.util import Inches
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page, fill, units
 
     def numbered(group, index: int) -> None:
         number = group.shapes.add_textbox(Inches(0.7 + index * 3.0), Inches(2.0), Inches(0.6), Inches(0.6))
@@ -1674,7 +1867,8 @@ def test_a_full_item_addresses_every_shape_including_the_number(tmp_path: Path) 
     path = _unit_page(tmp_path, "quarters.pptx", numbered)
     source, out = Presentation(str(path)), Presentation(str(path))
 
-    slide = adapt(out, source.slides[0], items=[["Q1", "甲"], ["Q2", "乙"]])
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [["Q1", "甲"], ["Q2", "乙"]])
 
     assert {"Q1", "Q2", "甲", "乙"} <= _texts(slide)
     assert not {"01", "02"} & _texts(slide)
@@ -1686,7 +1880,7 @@ def test_an_irregular_run_is_not_moved(tmp_path: Path) -> None:
     from pptx import Presentation
     from pptx.util import Inches
 
-    from raven_ppt.services.template import adapt, units
+    from raven_ppt.services.template import clone_page, fill, units
 
     spots = [(1.0, 4.5), (4.0, 6.0), (7.0, 2.0), (10.0, 3.5)]
 
@@ -1698,7 +1892,8 @@ def test_an_irregular_run_is_not_moved(tmp_path: Path) -> None:
     path = _unit_page(tmp_path, "path.pptx", pill)
     source, out = Presentation(str(path)), Presentation(str(path))
 
-    slide = adapt(out, source.slides[0], items=[["甲"], ["乙"], ["丙"]])
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [["甲"], ["乙"], ["丙"]])
 
     kept = sorted((round(u.left / 914400, 2), round(u.top / 914400, 2)) for u in units(slide)[0])
     assert kept == sorted(spots[i] for i in (2, 0, 3)) or len(kept) == 3
@@ -1737,7 +1932,7 @@ def test_a_page_borrowed_across_templates_lands_on_the_deck_s_own_layout_and_the
     from pptx.enum.dml import MSO_THEME_COLOR
     from pptx.util import Inches
 
-    from raven_ppt.services.template.compose import adapt
+    from raven_ppt.services.template.compose import clone_page, replace_text
 
     def deck(path: Path, theme_hint: str):
         built = Presentation()
@@ -1753,7 +1948,8 @@ def test_a_page_borrowed_across_templates_lands_on_the_deck_s_own_layout_and_the
     lender = Presentation(str(deck(tmp_path / "lender.pptx", "借来的卡")))
     target = Presentation(str(deck(tmp_path / "target.pptx", "自己的卡")))
 
-    slide = adapt(target, lender.slides[0], texts={"借来的卡": "换了字"})
+    slide = clone_page(target, lender.slides[0])
+    replace_text(slide, "借来的卡", "换了字")
     target.save(str(tmp_path / "out.pptx"))
 
     assert slide.slide_layout.name == lender.slides[0].slide_layout.name
@@ -1898,7 +2094,7 @@ def test_more_items_than_slots_grows_a_row_within_its_width(tmp_path: Path) -> N
     five cards across the same width, shrunk alike, and the fifth is filled."""
     from pptx import Presentation
 
-    from raven_ppt.services.template import adapt, units
+    from raven_ppt.services.template import clone_page, fill, units
 
     path = _unit_page(tmp_path, "grow.pptx", _stat_card)
     source, out = Presentation(str(path)), Presentation(str(path))
@@ -1907,7 +2103,8 @@ def test_more_items_than_slots_grows_a_row_within_its_width(tmp_path: Path) -> N
     right0 = max(u.left + u.width for u in before)
     width0 = before[0].width
 
-    slide = adapt(out, source.slides[0], items=[[f"{n}0%", f"第 {n} 项", "正文"] for n in range(1, 6)])
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [[f"{n}0%", f"第 {n} 项", "正文"] for n in range(1, 6)])
 
     grown = sorted(units(slide)[0], key=lambda u: u.left)
     assert len(grown) == 5
@@ -1991,7 +2188,7 @@ def test_an_irregular_run_is_not_grown(tmp_path: Path) -> None:
     from pptx import Presentation
     from pptx.util import Inches
 
-    from raven_ppt.services.template import adapt
+    from raven_ppt.services.template import clone_page, fill, units
 
     spots = [(1.0, 4.5), (4.0, 6.0), (7.0, 2.0), (10.0, 3.5)]
 
@@ -2002,9 +2199,10 @@ def test_an_irregular_run_is_not_grown(tmp_path: Path) -> None:
 
     path = _unit_page(tmp_path, "curve.pptx", pill)
     source, out = Presentation(str(path)), Presentation(str(path))
+    slide = clone_page(out, source.slides[0])
 
     with pytest.raises(ValueError, match="no row, column or grid") as refused:
-        adapt(out, source.slides[0], items=[["甲"], ["乙"], ["丙"], ["丁"], ["戊"]])
+        fill(max(units(slide), key=len), [["甲"], ["乙"], ["丙"], ["丁"], ["戊"]])
     # The way out is named, with the geometry to take it: two measured runs met this
     # refusal on a template's diagonal pair and had only "another prototype" to go on.
     assert "clone_shape(run[-1], (left, top, width, height))" in str(refused.value)
@@ -2594,7 +2792,7 @@ def test_surplus_empty_values_are_dropped_rather_than_refused(tmp_path: Path) ->
     from pptx import Presentation
     from pptx.util import Inches
 
-    from raven_ppt.services.template import adapt, units
+    from raven_ppt.services.template import clone_page, fill, units
 
     def two_lines(group, index: int) -> None:
         left = Inches(0.9 + index * 3.0)
@@ -2606,7 +2804,8 @@ def test_surplus_empty_values_are_dropped_rather_than_refused(tmp_path: Path) ->
     path = _unit_page(tmp_path, "agenda.pptx", two_lines)
     source, out = Presentation(str(path)), Presentation(str(path))
 
-    slide = adapt(out, source.slides[0], items=[["", "标杆案例调研", "国内外四个样本"]] * 4)
+    slide = clone_page(out, source.slides[0])
+    fill(max(units(slide), key=len), [["", "标杆案例调研", "国内外四个样本"]] * 4)
 
     first = min(units(slide)[0], key=lambda unit: unit.left)
     texts = [
@@ -2614,8 +2813,9 @@ def test_surplus_empty_values_are_dropped_rather_than_refused(tmp_path: Path) ->
     ]
     assert texts == ["标杆案例调研", "国内外四个样本"]
 
-    with pytest.raises(ValueError, match="holds 2 text shape"):
-        adapt(Presentation(str(path)), source.slides[0], items=[["甲", "乙", "丙"]] * 4)
+    again = clone_page(Presentation(str(path)), source.slides[0])
+    with pytest.raises(ValueError, match="2 text shape\\(s\\) a unit on this page holds"):
+        fill(max(units(again), key=len), [["甲", "乙", "丙"]] * 4)
 
 
 def test_wash_sets_any_pictures_transparency_and_refuses_a_solid_fill(tmp_path: Path) -> None:
@@ -2732,8 +2932,8 @@ def test_replace_picture_puts_a_picture_where_a_drawn_illustration_was(tmp_path:
 
 
 def test_replace_picture_takes_a_group_member_with_its_whole_group(tmp_path: Path, image) -> None:
-    """`adapt` numbers a group's members too, so an author points at the oval inside the
-    cartoon; a group is one drawing, and half a cartoon left behind is worse than none."""
+    """`shape_at` numbers a group's members too, so an author points at the oval inside
+    the cartoon; a group is one drawing, and half a cartoon left behind is worse than none."""
     from pptx.enum.shapes import MSO_SHAPE_TYPE
 
     from raven_ppt.services.template.compose import replace_picture
@@ -2748,14 +2948,14 @@ def test_replace_picture_takes_a_group_member_with_its_whole_group(tmp_path: Pat
     assert any(shape.shape_type == MSO_SHAPE_TYPE.TEXT_BOX for shape in slide.shapes), "the title is untouched"
 
 
-def test_adapt_swaps_a_drawing_and_several_loose_shapes_for_one_picture(tmp_path: Path, image) -> None:
-    """`pictures={n: ...}` on a page whose illustration is drawn used to report the key as
-    missed, so the author fell back to drawing over it. `adapt` numbers a group's members
-    and not the group, so a member stands for its whole cartoon; a tuple of keys names the
-    loose parts of one drawing together, and the picture spans their union."""
+def test_replace_picture_swaps_a_drawing_and_several_loose_shapes_for_one_picture(tmp_path: Path, image) -> None:
+    """A key naming the drawn illustration on a page used to come back as missed, so the
+    author fell back to drawing over it. `shape_at` numbers a group's members and not the
+    group, so a member stands for its whole cartoon; a list of shapes names the loose
+    parts of one drawing together, and the picture spans their union."""
     from pptx.enum.shapes import MSO_SHAPE_TYPE
 
-    from raven_ppt.services.template.compose import _all_shapes, adapt
+    from raven_ppt.services.template.compose import _all_shapes, clone_page, replace_text, shape_at
 
     presentation, slide, cartoon, star, panel = _drawing_page(tmp_path)
     every = list(_all_shapes(slide.shapes))
@@ -2763,7 +2963,9 @@ def test_adapt_swaps_a_drawing_and_several_loose_shapes_for_one_picture(tmp_path
     star_index = every.index(star) + 1
     figure = image("scene.png", (200, 120, 40))
 
-    page = adapt(presentation, slide, title="Night market", pictures={(oval_index, star_index): figure})
+    page = clone_page(presentation, slide)
+    replace_text(page, "Where the market sits", "Night market")
+    replace_picture([shape_at(page, oval_index), shape_at(page, star_index)], figure)
 
     kinds = [shape.shape_type for shape in page.shapes]
     assert MSO_SHAPE_TYPE.GROUP not in kinds and kinds.count(MSO_SHAPE_TYPE.PICTURE) == 1
@@ -2775,18 +2977,17 @@ def test_adapt_swaps_a_drawing_and_several_loose_shapes_for_one_picture(tmp_path
     assert any("Night market" in shape.text_frame.text for shape in page.shapes if shape.has_text_frame)
 
 
-def test_adapt_does_not_read_a_text_panel_as_an_illustration(tmp_path: Path, image) -> None:
-    """A shape that holds copy is a miscount, not a drawing: an index landing on the copy
-    panel is refused as before, rather than the panel giving way to a picture."""
+def test_replace_picture_does_not_read_a_text_panel_as_an_illustration(tmp_path: Path, image) -> None:
+    """A shape that holds copy is a miscount, not a drawing: the copy panel is refused
+    rather than giving way to a picture."""
     import pytest
 
-    from raven_ppt.services.template.compose import _all_shapes, adapt
+    from raven_ppt.services.template.compose import replace_picture
 
-    presentation, slide, cartoon, star, panel = _drawing_page(tmp_path)
-    every = list(_all_shapes(slide.shapes))
+    _presentation, _slide, _cartoon, _star, panel = _drawing_page(tmp_path)
 
-    with pytest.raises(KeyError):
-        adapt(presentation, slide, title="Night market", pictures={every.index(panel) + 1: image("x.png", (1, 2, 3))})
+    with pytest.raises(ValueError, match="not an illustration"):
+        replace_picture(panel, image("x.png", (1, 2, 3)))
 
 
 def test_a_drawing_inside_a_card_takes_only_the_wordless_group_around_it(tmp_path: Path, image) -> None:
@@ -2822,8 +3023,8 @@ def test_a_drawing_inside_a_card_takes_only_the_wordless_group_around_it(tmp_pat
 def test_the_menu_lists_picture_filled_shapes_and_drawings_as_picture_slots(tmp_path: Path, image) -> None:
     """The amber template draws every photograph as a rounded rectangle filled with one and
     a section page's cartoon as a group of freeforms; counting `p:pic` alone told an author
-    those pages held no picture, and its `pictures={2: ...}` was refused on three pages of
-    one live run. Both are slots now, numbered as `adapt` numbers; a card icon is not."""
+    those pages held no picture, and the frame it named was refused on three pages of
+    one live run. Both are slots now, numbered as `shape_at` numbers; a card icon is not."""
     from lxml import etree
     from pptx import Presentation
     from pptx.enum.shapes import MSO_SHAPE
@@ -2869,20 +3070,36 @@ def test_the_menu_lists_picture_filled_shapes_and_drawings_as_picture_slots(tmp_
     assert "picture slots [2] 5.4x3.6in photo, [3] 2.4x3.5in drawing" in entry.line()
 
 
-def test_adapt_names_a_drawing_a_picture_may_stand_in_for_when_a_key_misses(tmp_path: Path, image) -> None:
+def test_a_missed_index_names_a_drawing_a_picture_may_stand_in_for(tmp_path: Path) -> None:
     """The refusal used to list every wordless shape as `shape`, so an author reading it could
     not tell the cartoon from a band; it now says which shapes a picture may take over."""
     import pytest
 
-    from raven_ppt.services.template.compose import adapt
+    from raven_ppt.services.template.compose import shape_at
 
     presentation, slide, cartoon, star, panel = _drawing_page(tmp_path)
 
-    with pytest.raises(KeyError) as caught:
-        adapt(presentation, slide, title="Night market", pictures={99: image("x.png", (1, 2, 3))})
+    with pytest.raises(IndexError) as caught:
+        shape_at(slide, 99)
 
     assert "[2] drawing 2.0x4.0in (a picture may take its place)" in str(caught.value), "a member is named by its whole"
-    assert "name a drawing listed below" in str(caught.value)
+
+
+def test_a_role_label_is_the_whole_string_and_not_a_word_inside_it() -> None:
+    """What `role_named` has to keep out. `_role` calls a page a divider when its heading
+    merely mentions one, which is right for a page and would be a hole in a gate: the
+    instruction to fill a divider's title slot names the role and is still an unfilled
+    slot, and `Trends` carries `end`. Only a string that is nothing but the role's own
+    name is the label a deck inherits."""
+    from raven_ppt.services.template.menu import AGENDA, CLOSING, role_named
+
+    assert role_named("目录") == AGENDA
+    assert role_named("Agenda") == AGENDA, "the two halves of one label, graded the same"
+    assert role_named("AGENDA") == AGENDA
+    assert role_named("谢谢") == CLOSING
+    assert role_named("单击此处添加章节标题") == ""
+    assert role_named("Trends") == ""
+    assert role_named("工作感悟") == "", "one of the two live misses the length floor let through"
 
 
 def test_the_menu_names_a_small_picture_an_icon_slot(tmp_path: Path) -> None:
@@ -2912,7 +3129,7 @@ def test_the_menu_names_a_small_picture_an_icon_slot(tmp_path: Path) -> None:
 
     assert ICON_MAX_IN == 1.8
     assert entry.picture_slots == ("[1] 1.7x1.7in icon", "[2] 5.3x2.9in photo")
-    assert "one per unit" in ICON_SLOT_NOTE and "swap_icon" in ICON_SLOT_NOTE and "drop=[n, ...]" in ICON_SLOT_NOTE
+    assert "one per unit" in ICON_SLOT_NOTE and "swap_icon" in ICON_SLOT_NOTE and "drop_shape" in ICON_SLOT_NOTE
 
 
 def test_a_small_transparent_glyph_is_an_icon_slot_and_the_same_glyph_grown_is_a_cut_out(tmp_path: Path) -> None:
@@ -3155,3 +3372,425 @@ def test_replace_text_keeps_the_prototypes_copy_across_a_second_write(tmp_path: 
         _say_what_did_not_fit()
     assert len(caught) == 1
     assert "the copy it replaces took 2" in str(caught[0].message), "the prototype's, not 'Buy'"
+
+
+# --- one door: what an unfilled frame does, and what the refusals say ------------
+
+_BUNDLED = Path(__file__).resolve().parents[1] / "plugins-dist/ppt-engine/raven_ppt/assets/templates"
+_needs_payload = pytest.mark.skipif(
+    not any(_BUNDLED.glob("*.pptx")),
+    reason="the template payload is fetched, not tracked; run plugins-dist/ppt-engine/fetch_templates.py",
+)
+
+
+def _all_of(container):
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    for shape in container.shapes:
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            yield from _all_of(shape)
+        else:
+            yield shape
+
+
+@_needs_payload
+def test_a_frame_no_call_named_is_refused_by_the_gate(tmp_path: Path) -> None:
+    """The whole of D38 in one page, on a real template rather than a fixture.
+
+    The route since removed emptied the frames a call did not name, and the resulting
+    page was unnameable: eight of them shipped out of one live deck with every check
+    green, each holding the two lines its call had written over thirteen to twenty-six
+    blank boxes. Keeping the template's words instead makes the same mistake loud -- the
+    page says the template's own copy out loud and `placeholder_copy` refuses to publish
+    it, naming the page and the line. That is the trade: the failure is not prevented,
+    it is made impossible to ship.
+    """
+    from pptx import Presentation
+
+    from raven_ppt.services.measure.adherence import placeholder_copy
+    from raven_ppt.services.template import clone_page, prototype
+
+    house = _BUNDLED / "amber_wave_quarterly_summary.pptx"
+    template = Presentation(str(house))
+    built = Presentation(str(house))
+    for slide in list(built.slides._sldIdLst):
+        built.slides._sldIdLst.remove(slide)
+
+    page = clone_page(built, prototype(template, 4))
+    named = next(
+        shape for shape in _all_of(page) if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip()
+    )
+    replace_text(named, "本页自己的标题")
+    kept = [
+        shape.text_frame.text.strip()
+        for shape in _all_of(page)
+        if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip()
+    ]
+    assert len(kept) > 1, f"a frame no call named still holds the template's own copy: {kept}"
+
+    out = tmp_path / "one-page.pptx"
+    built.save(str(out))
+    refused = placeholder_copy(out, house)
+    assert refused, f"the gate has to see what the clone left standing: {kept}"
+    assert all(finding.page == 1 for finding in refused)
+    assert "placeholder text" in refused[0].message
+
+
+def _ascending_run(tmp_path: Path, name: str, boxes, frames_per_unit: int) -> Path:
+    """A page whose units climb a diagonal, which is the arrangement that refuses growth.
+
+    The boxes are the real ones off the page each recorded crash was on, so the run is
+    "irregular" here for the same reason it was there: no row, no column, no grid, and
+    where a fifth unit would go is the designer's call and not this code's.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    built = Presentation()
+    built.slide_width, built.slide_height = Inches(13.333), Inches(7.5)
+    page = built.slides.add_slide(built.slide_layouts[6])
+    for index, (left, top, width, height) in enumerate(boxes):
+        group = page.shapes.add_group_shape()
+        said = ("跨界合作的意义", "资源共享，优势互补", "单击此处添加文本")
+        for row in range(frames_per_unit):
+            box = group.shapes.add_textbox(
+                Inches(left), Inches(top + row * (height / frames_per_unit)), Inches(width), Inches(0.4)
+            )
+            box.text_frame.text = said[row] if row < len(said) else f"0{index + 1}"
+    path = tmp_path / name
+    built.save(str(path))
+    return path
+
+
+# The three build crashes of the newest recorded run, by the prototype each was on and
+# the geometry that page really has. Two are the run refusing to grow, one is a unit
+# refusing an entry; all three used to print `frames` -- the prototype's own shapes --
+# where the author's values belonged, so a probe passing ['a', 'b', 'c'] read the
+# template's Chinese back at itself and changed the prototype instead of the list.
+_STAIRS = ((0.74, 4.03, 2.65, 3.40), (3.79, 3.24, 2.67, 4.18), (6.86, 2.45, 2.67, 4.97), (9.93, 1.66, 2.67, 5.76))
+_BRANCHES = ((5.50, 1.86, 2.38, 1.22), (3.90, 3.53, 2.38, 1.12), (7.06, 3.53, 2.38, 1.12), (7.06, 5.22, 2.38, 1.12))
+
+
+@pytest.mark.parametrize(
+    ("label", "boxes", "frames", "items", "expected"),
+    [
+        (
+            "prototype 10: 5 items to a 4-unit page",
+            _STAIRS,
+            3,
+            [["01", "Now: Blackwell Ultra", "shipping in volume"]] * 5,
+            ("cannot take 5", "The 5 entries you gave", "'Now: Blackwell Ultra'"),
+        ),
+        (
+            "prototype 6: 7 items to a 4-unit page",
+            _BRANCHES,
+            3,
+            [["Revenue", "up 65% YoY", "the four-year trail"]] * 7,
+            ("cannot take 7", "The 7 entries you gave", "'Revenue'"),
+        ),
+        (
+            "prototype 11: 5 items of 3 values, unit holds 2",
+            _STAIRS + ((9.93, 0.5, 2.67, 1.0),),
+            2,
+            [["Accelerators", "AMD and Intel compete", "third value"]] * 5,
+            (
+                "2 text shape(s) a unit on this page holds",
+                "The 5 entries you gave",
+                "'Accelerators'",
+                "'跨界合作的意义'",
+            ),
+        ),
+    ],
+)
+def test_an_arity_refusal_names_the_callers_values_and_the_pages_real_shape(
+    tmp_path: Path, label, boxes, frames, items, expected
+) -> None:
+    """What the message is for. Ten builds across the measured runs died on an arity
+    refusal, and the sentence they got quoted the shapes already on the prototype on
+    both sides of "N values were given"."""
+    from pptx import Presentation
+
+    from raven_ppt.services.template import clone_page, fill, units
+
+    path = _ascending_run(tmp_path, "stairs.pptx", boxes, frames)
+    source, out = Presentation(str(path)), Presentation(str(path))
+    slide = clone_page(out, source.slides[0])
+
+    with pytest.raises(ValueError) as raised:
+        fill(max(units(slide), key=len), items)
+    said = str(raised.value)
+    for phrase in expected:
+        assert phrase in said, f"{label}: {phrase!r} missing from: {said}"
+
+
+@_needs_payload
+def test_replace_text_carries_a_run_list_on_a_cloned_page(tmp_path: Path) -> None:
+    """The route since removed stringified the text it was handed, so a page wanting one
+    word in the accent had to be written twice: one call for the cards, then a second
+    pass with `replace_text` for the heading. Three recorded scripts did exactly that,
+    twenty call sites between them."""
+    from pptx import Presentation
+
+    from raven_ppt.services.assets import script_helpers
+    from raven_ppt.services.template import clone_page, prototype
+
+    namespace: dict = {}
+    exec(compile(script_helpers.script_helper_files()["ppt_layout.py"], "ppt_layout", "exec"), namespace)  # noqa: S102
+    Run = namespace["Run"]
+
+    house = _BUNDLED / "amber_wave_quarterly_summary.pptx"
+    template = Presentation(str(house))
+    built = Presentation(str(house))
+    for slide in list(built.slides._sldIdLst):
+        built.slides._sldIdLst.remove(slide)
+
+    page = clone_page(built, prototype(template, 4))
+    named = next(
+        shape for shape in _all_of(page) if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip()
+    )
+    replace_text(named, [Run("访客中约 "), Run("84%", bold=True), Run(" 到访过")])
+    wrote = [
+        shape for shape in _all_of(page) if getattr(shape, "has_text_frame", False) and "84%" in shape.text_frame.text
+    ]
+    assert wrote, "the run list reached the page"
+    runs = [run for paragraph in wrote[0].text_frame.paragraphs for run in paragraph.runs]
+    assert [run.text for run in runs] == ["访客中约 ", "84%", " 到访过"], "one run per piece, not one line"
+    assert runs[1].font.bold is True
+
+
+def test_replace_picture_takes_the_wash_and_the_trim_beside_the_fit(tmp_path: Path, image) -> None:
+    """The route since removed carried image, box and fit and stopped there, so a page
+    that wanted the wash `backdrop` takes, or a trim off one edge, had to reach the frame
+    again by index on the returned slide -- five call sites in one recorded script."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.template import clone_page, shape_at
+
+    old, new = image("old.png", (20, 90, 140)), image("new.png", (200, 40, 40))
+    built = Presentation()
+    built.slide_width, built.slide_height = Inches(13.333), Inches(7.5)
+    page = built.slides.add_slide(built.slide_layouts[6])
+    page.shapes.add_textbox(Inches(0.7), Inches(0.5), Inches(9), Inches(0.8)).text_frame.text = "单击此处添加页面标题"
+    page.shapes.add_picture(str(old), Inches(1), Inches(2), Inches(5), Inches(3))
+    path = tmp_path / "photo.pptx"
+    built.save(str(path))
+
+    source = Presentation(str(path))
+    washed = clone_page(Presentation(str(path)), source.slides[0])
+    replace_picture(shape_at(washed, 2), new, "cover", alpha=0.3)
+    assert "alphaModFix" in washed._element.xml, "alpha reached replace_picture"
+    trimmed = clone_page(Presentation(str(path)), source.slides[0])
+    replace_picture(shape_at(trimmed, 2), new, "cover", trim=(0, 0, 0, 0.2))
+    assert "srcRect" in trimmed._element.xml, "trim reached replace_picture"
+
+    with pytest.raises(TypeError, match="image"):
+        replace_picture(shape_at(clone_page(Presentation(str(path)), source.slides[0]), 2))
+    with pytest.raises(TypeError, match="nope"):
+        replace_picture(shape_at(clone_page(Presentation(str(path)), source.slides[0]), 2), new, "cover", nope=1)
+
+
+def _bottom_anchored_title(anchor: str = "b", *, own_autofit: bool = False):
+    """A page whose title placeholder takes its anchor from the layout, as templates do.
+
+    Not one built by hand on a blank layout: the measurement this exists for is that
+    the anchor is written on the layout and the shape answers nothing, which is how
+    every closing page in the bundled templates is drawn.
+    """
+    from lxml import etree
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    ns = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    built = Presentation()
+    built.slide_width, built.slide_height = Inches(13.333), Inches(7.5)
+    layout = built.slide_layouts[0]
+    holder = next(p for p in layout.placeholders if p.placeholder_format.idx == 0)
+    body = holder.text_frame._txBody.find(f"{ns}bodyPr")
+    body.set("anchor", anchor)
+    etree.SubElement(body, f"{ns}normAutofit")
+    slide = built.slides.add_slide(layout)
+    title = slide.shapes.title
+    title.left, title.top = Inches(0.72), Inches(1.24)
+    title.width, title.height = Inches(5.58), Inches(3.0)
+    frame = title.text_frame
+    if own_autofit:
+        etree.SubElement(frame._txBody.find(f"{ns}bodyPr"), f"{ns}normAutofit")
+    frame.text = "Thank you\nfor watching"
+    for paragraph in frame.paragraphs:
+        for run in paragraph.runs:
+            run.font.size = Pt(72)
+    return built, title
+
+
+def test_replace_text_reports_a_display_headline_growing_up_off_the_canvas(tmp_path: Path) -> None:
+    """The closing page of a live medium-tier deck, and the one defect that destroyed
+    a page rather than spoiling it: `replace_text` keeps the prototype's geometry, the
+    frame is bottom-anchored, and a 4-line headline at the template's display size grew
+    upward until its first line was cut off by the top edge of the slide. Verified
+    against the render of that build."""
+    import warnings
+
+    from raven_ppt.services.template.compose import _say_what_did_not_fit, replace_text
+
+    _, title = _bottom_anchored_title()
+    replace_text(title, "Buy the cycle.\nPrice the tail risks.")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _say_what_did_not_fit()
+
+    assert len(caught) == 1
+    said = str(caught[0].message)
+    assert "page 1:" in said
+    assert "needs 4 lines at 72pt in this 5.38in column and the box shows 2" in said
+    assert "the copy it replaces took 2" in said
+    assert "Bottom-anchored: it grows upward, beginning" in said
+    assert "above the top of the slide, and its first line is cut off" in said
+
+
+def test_replace_text_says_nothing_when_the_copy_is_the_templates_own(tmp_path: Path) -> None:
+    """The one case that must never report. The box's height in lines is arithmetic on
+    an assumed line-height factor and can read under what the designer put in it, so
+    the prototype's own copy is the floor -- which makes writing it back silent by
+    construction rather than by a threshold that happens to hold. Replayed over the ten
+    bundled templates, 2,084 boxes on 211 pages: no reports."""
+    import warnings
+
+    from raven_ppt.services.template.compose import _say_what_did_not_fit, replace_text
+
+    _, title = _bottom_anchored_title()
+    held = title.text_frame.text
+    replace_text(title, held)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _say_what_did_not_fit()
+    assert not caught, [str(w.message) for w in caught]
+
+
+def test_replace_text_reports_a_shrink_where_the_frame_itself_autofits(tmp_path: Path) -> None:
+    """`normAutofit` on the shape and on the layout are not the same thing to the
+    renderer. The bundled card labels carry it on the shape and a live deck's copy came
+    back at 17pt where the template set 20pt; the closing headline inherits it from the
+    layout alone and was drawn at the full 72pt and clipped. So the shrink is read off
+    the shape, and how far it shrinks is not predicted -- an earlier version put the
+    scale at shows/needs and promised 10pt where the render gave 17pt."""
+    import warnings
+
+    from raven_ppt.services.template.compose import _say_what_did_not_fit, _shrinks_to_fit, replace_text
+
+    _, inherited = _bottom_anchored_title()
+    assert not _shrinks_to_fit(inherited), "the layout's autofit is not the shape's"
+    _, own = _bottom_anchored_title(own_autofit=True)
+    assert _shrinks_to_fit(own)
+
+    replace_text(own, "Buy the cycle.\nPrice the tail risks.")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _say_what_did_not_fit()
+    said = str(caught[0].message)
+    assert "shrinks its text to fit, so this box comes back under the 72pt" in said
+    assert "grows upward" not in said, "a frame that shrinks does not spill"
+    assert "10pt" not in said, "how far it shrinks is the renderer's arithmetic"
+
+
+def test_replace_text_reports_copy_running_off_the_bottom_of_the_page(tmp_path: Path) -> None:
+    """The other direction: a top-anchored frame low on the page grows down, and the
+    report says how far past the canvas rather than only how far past the box."""
+    import warnings
+
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    from raven_ppt.services.template.compose import _say_what_did_not_fit, replace_text
+
+    built = Presentation()
+    built.slide_width, built.slide_height = Inches(13.333), Inches(7.5)
+    slide = built.slides.add_slide(built.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(0.72), Inches(6.6), Inches(3.0), Inches(0.6))
+    frame = box.text_frame
+    frame.word_wrap = True
+    frame.text = "A short note"
+    frame.paragraphs[0].runs[0].font.size = Pt(18)
+
+    replace_text(
+        box,
+        "A source note long enough to need four lines of this narrow column, "
+        "which the page has no room below the box to give it",
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _say_what_did_not_fit()
+    said = str(caught[0].message)
+    assert "It grows downward" in said and "past the bottom edge of the slide" in said
+
+
+def test_replace_text_keeps_the_prototypes_copy_across_a_second_write(tmp_path: Path) -> None:
+    """The floor is the template's copy, not the author's own first draft. A page
+    written twice measured the second string against the first, and the box's certified
+    capacity went with it."""
+    import warnings
+
+    from raven_ppt.services.template.compose import _say_what_did_not_fit, replace_text
+
+    _, title = _bottom_anchored_title()
+    replace_text(title, "Buy")
+    replace_text(title, "Buy the cycle.\nPrice the tail risks.")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _say_what_did_not_fit()
+    assert len(caught) == 1
+    assert "the copy it replaces took 2" in str(caught[0].message), "the prototype's, not 'Buy'"
+
+
+def test_replace_text_writes_into_a_frame_that_has_no_paragraph_at_all() -> None:
+    """Eight card panels in the bundled templates carry a `<p:txBody>` of nothing but
+    `<a:bodyPr/>` and an empty `<a:lstStyle/>` -- `black_circuit_tech_launch` page 25
+    and `green_aurora_tech_trends` page 20, four each. Copying the last paragraph's
+    properties raised `IndexError` on the empty tuple, and a build is one program, so
+    the raise took every page after it."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.template.compose import _A, replace_text
+
+    built = Presentation()
+    slide = built.slides.add_slide(built.slide_layouts[6])
+    panel = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(4), Inches(2))
+    body = panel.text_frame._txBody
+    for paragraph in list(body.findall(f"{{{_A}}}p")):
+        body.remove(paragraph)
+    assert panel.text_frame.paragraphs == (), "the shape the templates hold: a text body with no paragraph"
+
+    replace_text(panel, "Grid-scale storage fell to $117/kWh")
+
+    assert [p.text for p in panel.text_frame.paragraphs] == ["Grid-scale storage fell to $117/kWh"]
+    written = panel.text_frame.paragraphs[0]
+    assert written._p.find(f"{{{_A}}}pPr") is None, "nothing invented: the paragraph states nothing of its own"
+    assert written.runs[0]._r.find(f"{{{_A}}}rPr") is None, "nor does its run -- the file's own defaults answer"
+
+    # Several lines still land as several paragraphs, the second copied off the first.
+    replace_text(panel, "first\nsecond")
+    assert [p.text for p in panel.text_frame.paragraphs] == ["first", "second"]
+
+
+def test_replace_text_writing_nothing_back_leaves_a_paragraphless_frame_empty() -> None:
+    """Writing a paragraphless frame's own copy back is writing `''`. It must not raise
+    and must not put anything on the page: the ten templates' 3157 text frames all
+    written back are 0 raises and no visible change to either affected page."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.template.compose import _A, replace_text
+
+    built = Presentation()
+    slide = built.slides.add_slide(built.slide_layouts[6])
+    panel = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(4), Inches(2))
+    body = panel.text_frame._txBody
+    for paragraph in list(body.findall(f"{{{_A}}}p")):
+        body.remove(paragraph)
+
+    replace_text(panel, panel.text_frame.text)
+
+    assert panel.text_frame.text == ""
+    assert len(panel.text_frame.paragraphs) == 1, "the one paragraph the format requires, and no run in it"
+    assert panel.text_frame.paragraphs[0].runs == ()

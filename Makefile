@@ -1,4 +1,4 @@
-.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down
+.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel fetch-templates verify-templates beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
@@ -30,7 +30,8 @@ help:
 	@echo "  check-large-files Validate PR files avoid blocked assets and size bloat"
 	@echo "  check-source-language Validate PR-added lines stay English outside the exemption zones"
 	@echo "  check-core-wheel  Build the raven-core wheel and smoke it in a clean venv"
-	@echo "  fetch-templates Pull the deck engine's eight bundled templates from the package registry (needs GITLAB_TOKEN)"
+	@echo "  fetch-templates Re-pull the deck engine's ten bundled templates over the tracked copies (maintainers; needs GITLAB_TOKEN)"
+	@echo "  verify-templates Hash the tracked deck templates against their pins"
 	@echo "  docker-build   Build the container image (page + engine + nginx)"
 	@echo "  docker-up      Build if needed and start the stack from docker/"
 	@echo "  docker-down    Stop the stack (the data volume is kept)"
@@ -157,6 +158,10 @@ clean:
 	rm -rf ui-web/dist
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
 
+# Not an install step: the ten templates are tracked, and a clone already has
+# them. This lands a fresh cut over them, to be committed with rewritten pins.
 fetch-templates:
 	python3 plugins-dist/ppt-engine/fetch_templates.py
 
+verify-templates:
+	python3 plugins-dist/ppt-engine/fetch_templates.py --verify

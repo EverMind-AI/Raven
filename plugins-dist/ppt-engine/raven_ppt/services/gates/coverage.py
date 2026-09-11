@@ -36,7 +36,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from raven_ppt.contracts import Finding, Severity
-from raven_ppt.services.render.capabilities import available
+from raven_ppt.services.render.capabilities import available, soffice_install_hint
 from raven_ppt.services.render.errors import RenderError, RenderUnavailableError
 from raven_ppt.services.render.pdf import page_sizes, unusable_pages
 
@@ -100,7 +100,7 @@ def _no_pdf() -> Finding:
             "the deck could not be rendered on this machine, so nothing measured on the rendered page ran: "
             + silent
             + ". Only the geometry the file declares was checked",
-            "install LibreOffice to measure what a reader will actually see",
+            "install LibreOffice to measure what a reader will actually see: " + soffice_install_hint(),
         )
     return _gap(
         "unrendered",

@@ -148,6 +148,25 @@ CARD_GROUP = 3
 # with no floor, so it never reaches a finding and has no name here.
 CONTENT, CARDS, DATA = "content", "cards", "data"
 
+# Below its floor and holding more emptied frames than filled ones, a page is not thin
+# -- it is unwritten, and that is a different verdict. Eight pages of one live deck went
+# out that way, each holding the two lines one call had written over thirteen to
+# twenty-six boxes with nothing in them: the route those pages took emptied every text
+# the call did not name, and the helper the author then wrote searched the emptied page
+# for the words that had just been erased. That route is gone, so the commonest road
+# to this page is closed -- the check stays because a program can still write "" into
+# every frame it reaches, and a page that arrives blank is worth refusing however it got
+# there.
+#
+# The frame count is what separates the two verdicts, and it is a question rather than
+# a threshold. Measured over the ten bundled templates (211 example pages), eleven
+# delivered decks and that deck: every page the floor reported on a delivered deck or
+# a template kept at least three frames of copy, and the eight kept one or two against
+# thirteen or more emptied. Below its floor with the copy it does have outnumbered by
+# the boxes it does not fill, a page was cloned to say something the words never
+# reached.
+EMPTIED = "emptied_page"
+
 # What the plan calls a page when the page is the template's own furniture. The same
 # vocabulary the outline gates read, because a page is furniture in one place or in
 # neither.
@@ -445,6 +464,12 @@ def thin_copy(
 ) -> list[Finding]:
     """Pages carrying less copy than their kind of page needs to say anything.
 
+    Two verdicts, one reading. A page merely under its floor is `thin_copy` and rides
+    along with the deck; a page under its floor whose emptied frames outnumber the ones
+    carrying anything is `emptied_page` and refuses publication, because it was cloned
+    to say something and the words never arrived. See `EMPTIED` for why the frame count
+    is what separates them.
+
     The floor differs by what the page is for, so the plan has to be there: a data
     page whose chart carries the argument and a prose page look the same to a
     character count, and one floor for both is either noise on the first or silence
@@ -472,6 +497,32 @@ def thin_copy(
         chars = sum(len("".join(text.split())) for text in page_paragraphs(slide))
         if chars >= floor:
             continue
+        emptied, filled = _frames_emptied_and_filled(slide)
+        if emptied > filled:
+            findings.append(
+                Finding(
+                    kind=EMPTIED,
+                    severity=Severity.BLOCKING,
+                    page=number,
+                    message=(
+                        f"this page holds {emptied} text frames with nothing in them against {filled} carrying "
+                        f"copy, and says {chars} characters where its kind of page needs {floor}. A frame written "
+                        f'with "" is emptied, not removed: the box stays on the page and shows nothing. Write '
+                        f"every line of this page with `replace_text(slide, 'the words there now', 'yours'), and "
+                        f"take what it does not use off it -- `remove_unit` for a spare slot, `drop_shape` "
+                        f"for a single shape"
+                    ),
+                    detail={
+                        "page": number,
+                        "chars": chars,
+                        "floor": floor,
+                        "page_kind": kind,
+                        "frames_emptied": emptied,
+                        "frames_filled": filled,
+                    },
+                )
+            )
+            continue
         findings.append(
             Finding(
                 kind="thin_copy",
@@ -487,6 +538,26 @@ def thin_copy(
             )
         )
     return findings
+
+
+def _frames_emptied_and_filled(slide: Any) -> tuple[int, int]:
+    """How many of this page's text frames stand empty, and how much of it speaks.
+
+    A table's cells and a chart's own strings count as copy the page carries: a page
+    whose argument is a table is not an unwritten page, and counting only text frames
+    would call it one.
+    """
+    emptied = filled = 0
+    for shape in iter_shapes(slide.shapes):
+        if getattr(shape, "has_text_frame", False):
+            if shape.text_frame.text.strip():
+                filled += 1
+            else:
+                emptied += 1
+            continue
+        if getattr(shape, "has_table", False) or getattr(shape, "has_chart", False):
+            filled += 1
+    return emptied, filled
 
 
 def _kind_name(kind: str) -> str:

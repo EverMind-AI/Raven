@@ -127,13 +127,16 @@ class PrepareStage:
     # 2009-character string, then 100 of 100, then nothing at all, and each one cost
     # the author a round and four to six minutes to ask again. The answer itself is a
     # plan of about 2000 characters; the rest of this is headroom for the thinking in
-    # front of it, and a ceiling is only spent when it is used.
-    max_tokens: int = 16000
+    # front of it, and a ceiling is only spent when it is used. Doubled again for a
+    # model that thinks longer than the one this was sized against.
+    max_tokens: int = 32000
     # What the doubled retry below may not exceed. Doubling an already-raised ceiling
     # is how a caller's guess turns into a gateway's 400 about max_tokens, and the
     # branch after it would then report that instead of the parse failure it was
-    # written for.
-    max_intake_tokens: int = 32000
+    # written for. Kept at twice the ceiling above: at the old 32000 the retry
+    # resolved to min(64000, 32000), which is the ceiling it just failed at, so the
+    # doubling it exists for quietly stopped happening.
+    max_intake_tokens: int = 64000
 
     async def run(self, project: Project, task: str, files: Sequence[str] = ()) -> StageResult:
         taken = self._take(project, files)

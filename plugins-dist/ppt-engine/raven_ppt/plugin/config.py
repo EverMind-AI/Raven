@@ -46,8 +46,10 @@ proxy) through the same grant and is withheld where the host configured none.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+from raven_ppt.services.render import default_concurrency
 
 
 def _flag(raw: dict[str, Any], key: str, fallback: bool) -> bool:
@@ -84,7 +86,7 @@ class EngineConfig:
     profile: str = "script_author"
     composer_model: str = ""
     render_dpi: int = 144
-    render_concurrency: int = 2
+    render_concurrency: int = field(default_factory=default_concurrency)
     views_per_call: int = 3
     deck_name: str = "deck.pptx"
     web_proxy: str | None = None
@@ -143,7 +145,7 @@ class EngineConfig:
             profile=profile,
             composer_model=_text(raw, "composerModel", ""),
             render_dpi=_count(raw, "renderDpi", 144, 72, 300),
-            render_concurrency=_count(raw, "renderConcurrency", 2, 1, 8),
+            render_concurrency=_count(raw, "renderConcurrency", default_concurrency(), 1, 8),
             views_per_call=_count(raw, "viewsPerCall", 3, 1, 12),
             deck_name=_text(raw, "deckName", "deck.pptx") or "deck.pptx",
             web_proxy=_text(raw, "webProxy", "") or None,

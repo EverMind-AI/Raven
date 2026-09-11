@@ -277,8 +277,9 @@ class PptFigureInspectTool(Tool):
                 # Shared with the model's thinking -- see `stages/prepare.py`, where
                 # the same ceiling set for the answer alone cut three live intakes in
                 # half. A caption and a one-line reading are short; the reasoning in
-                # front of them is not.
-                max_tokens=6000,
+                # front of them is not, and how long it runs is the model's to
+                # decide, so the ceiling leaves room rather than fitting the answer.
+                max_tokens=12000,
             )
             try:
                 payload = json.loads(reply[reply.index("{") : reply.rindex("}") + 1])

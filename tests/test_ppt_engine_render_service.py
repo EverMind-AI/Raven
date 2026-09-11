@@ -717,3 +717,23 @@ def test_a_contact_sheet_of_nothing_is_refused(tmp_path: Path) -> None:
 def _line(words: list[WordBox]) -> str:
     """The page's copy in reading order, for asserting on what was rendered."""
     return " ".join(word.text for word in sorted(words, key=lambda word: (round(word.y0), word.x0)))
+
+
+def test_the_conversion_width_is_read_off_the_box_not_fixed_at_two() -> None:
+    """Half the cores, floored at two and capped at eight.
+
+    Each conversion is its own process with its own profile (the test above is
+    why), so they contend for the machine and nothing else. Measured here on 32
+    cores with seven image-heavy 34-page templates: 87.0s one at a time, 67.8s
+    two-wide, 53.5s four-wide, 50.3s seven-wide, seven PDFs every time, and the
+    slowest single conversion 50.0 / 52.8 / 49.7 / 50.3s -- flat, so the width
+    buys wall clock without costing a conversion anything. The floor keeps the
+    narrowest box overlapping at all; the cap is where the measurement stops and
+    where eight profiles already cost a couple of GB.
+    """
+    assert office.default_concurrency(1) == office.MIN_CONCURRENCY
+    assert office.default_concurrency(4) == 2
+    assert office.default_concurrency(8) == 4
+    assert office.default_concurrency(16) == 8
+    assert office.default_concurrency(128) == office.MAX_CONCURRENCY
+    assert office.MIN_CONCURRENCY <= office.default_concurrency() <= office.MAX_CONCURRENCY

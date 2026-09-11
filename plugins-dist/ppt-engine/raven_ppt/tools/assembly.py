@@ -24,6 +24,7 @@ from raven_ppt.backends.script import ScriptBackend, asset_helpers, provision, r
 from raven_ppt.contracts import Profile
 from raven_ppt.profiles import registry
 from raven_ppt.services.ingest import ingest_materials
+from raven_ppt.services.render import default_concurrency
 from raven_ppt.services.template import bound
 from raven_ppt.stages._measure import DeckMeasurer
 from raven_ppt.stages._views import DeckViews
@@ -67,7 +68,7 @@ def build_ppt_tools(
     provider: Any | None = None,
     composer_model: str | None = None,
     render_dpi: int = 144,
-    render_concurrency: int = 2,
+    render_concurrency: int | None = None,
     views_per_call: int = BATCH_VIEWS,
     deck_name: str = "deck.pptx",
     web_proxy: str | None = None,
@@ -103,7 +104,7 @@ def build_ppt_tools(
         log.warning("the %s route is declared but its backend is not implemented yet", chosen.name)
         return []
 
-    views = DeckViews(dpi=render_dpi, concurrency=render_concurrency)
+    views = DeckViews(dpi=render_dpi, concurrency=render_concurrency or default_concurrency())
     measure = DeckMeasurer(views=views)
     helpers = asset_helpers()
 

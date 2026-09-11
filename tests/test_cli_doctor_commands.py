@@ -1235,3 +1235,53 @@ class TestDoctorWithoutTheMemoryPlugin:
 
         with everos_plugin_broken(), pytest.raises(ImportError):
             dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
+
+
+def test_doctor_names_the_libreoffice_it_found(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The row exists to answer "will my decks render", so it prints the path
+    that would be run rather than a tick."""
+    monkeypatch.setattr("raven.utils.office.find_soffice", lambda: "/usr/bin/soffice")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "LibreOffice" in result.stdout
+    assert "/usr/bin/soffice" in result.stdout
+    assert "not found" not in result.stdout.split("External tools")[1]
+
+
+def test_doctor_reports_libreoffice_missing_with_the_command_that_installs_it(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing LibreOffice is reported and does not move the exit code: decks
+    still build, the render-truth gates simply do not run. The remedy is printed
+    because this is not a package `uv` will fetch."""
+    monkeypatch.setattr("raven.utils.office.find_soffice", lambda: None)
+    monkeypatch.setattr("raven.utils.office.install_hint", lambda: "apt install libreoffice")
+
+    result = runner.invoke(app, ["doctor"])
+
+    external = result.stdout.split("External tools")[1]
+    assert "not found" in external
+    assert "apt install libreoffice" in external
+
+
+def test_doctor_finds_the_windows_install_the_remedy_it_prints_creates(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The Windows remedy is `winget install TheDocumentFoundation.LibreOffice`,
+    which puts nothing on PATH. `raven doctor` has to find what it told the user
+    to install, or the row calls LibreOffice missing on a host that has it and
+    the ppt engine's render gate says the same.
+    """
+    from raven.utils import office
+
+    launcher = tmp_path / "Program Files" / "LibreOffice" / "program" / "soffice.exe"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("")
+    monkeypatch.setattr(office.sys, "platform", "win32")
+    monkeypatch.setattr(office.shutil, "which", lambda name: None)
+    for variable in office._WINDOWS_PROGRAM_ROOT_VARS:
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "Program Files"))
+
+    assert doctor_commands._gather_external_tools().soffice == str(launcher)

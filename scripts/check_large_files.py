@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -78,6 +79,35 @@ RAVEN_DESIGN_SKILL_PREFIXES = (
     ),
 )
 
+# The ten bundled deck templates the ppt engine offers a task that brings no
+# template of its own. They are tracked because a fresh clone that cannot build
+# a deck is not an install, and seven of them clear the 1 MiB ceiling; the
+# maintainer approved that exception when they entered git.
+#
+# The roster is written out here rather than read from the engine's manifest.
+# A gate that takes its own exception list from a file in the tree it is
+# checking grants exceptions to whoever edits that file, which is the change
+# under review -- adding an oversized file plus a manifest entry would pass.
+# AGENTS.md section 7 wants a per-file maintainer decision, so an eleventh
+# template has to be added here, in the diff a reviewer reads, and the manifest
+# goes on verifying that the bytes are the ones that were approved.
+BUNDLED_DECK_TEMPLATE_DIR = "plugins-dist/ppt-engine/raven_ppt/assets/templates"
+BUNDLED_DECK_TEMPLATE_MANIFEST = "plugins-dist/ppt-engine/templates.manifest.json"
+PINNED_DECK_TEMPLATES = frozenset(
+    {
+        "amber_wave_quarterly_summary.pptx",
+        "beige_geometric_general_report.pptx",
+        "black_circuit_tech_launch.pptx",
+        "blue_minimal_general_analysis.pptx",
+        "gold_panel_year_end_summary.pptx",
+        "green_aurora_tech_trends.pptx",
+        "mint_memphis_thesis_defense.pptx",
+        "red_chinese_traditional_culture.pptx",
+        "teal_illustrated_work_analysis.pptx",
+        "warm_bauhaus_quarterly_review.pptx",
+    }
+)
+
 
 @dataclass(frozen=True)
 class FileSizeViolation:
@@ -134,6 +164,8 @@ def find_oversized_files(paths: list[str], *, max_bytes: int, root: Path) -> lis
         if not path or path in seen:
             continue
         seen.add(path)
+        if _is_pinned_deck_template(path):
+            continue
         candidate = root / path
         if not candidate.is_file():
             continue
@@ -159,6 +191,28 @@ def find_blocked_asset_files(paths: list[str], *, root: Path) -> list[BlockedAss
         if extension in BLOCKED_ASSET_EXTENSIONS and not _is_allowed_skill_reference_image(path, extension):
             violations.append(BlockedAssetViolation(path=path, extension=extension))
     return violations
+
+
+def manifest_deck_template_names(root: Path) -> frozenset[str]:
+    """The template filenames the ppt engine's manifest pins, empty when it cannot be read.
+
+    Not what the gate allows -- `PINNED_DECK_TEMPLATES` is that, and says why.
+    This reads the other side so a test can hold the two together and fail when
+    the manifest and the approved roster drift apart.
+    """
+    try:
+        manifest = json.loads((root / BUNDLED_DECK_TEMPLATE_MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        return frozenset()
+    return frozenset(str(entry["name"]) for entry in files if isinstance(entry, dict) and "name" in entry)
+
+
+def _is_pinned_deck_template(path: str) -> bool:
+    parent, _, name = path.rpartition("/")
+    return parent == BUNDLED_DECK_TEMPLATE_DIR and name in PINNED_DECK_TEMPLATES
 
 
 def _is_allowed_skill_reference_image(path: str, extension: str) -> bool:

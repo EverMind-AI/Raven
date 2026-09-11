@@ -121,6 +121,19 @@ async def test_the_reply_says_what_part_each_page_plays(tmp_path: Path) -> None:
     ]
 
 
+async def test_the_accepted_outline_names_the_tool_that_runs_the_program(tmp_path: Path) -> None:
+    """The last ask an accepted outline makes is the instruction the author acts on,
+    and it said "write the program" with no tool attached to it. One run took that
+    sentence to a shell: 288 byte-identical exec calls, no build.py, no ppt_build.
+    """
+    body = await _reply(tmp_path, _pages(None, None, None))
+
+    said = body["next_step"]
+    assert "write the program" in said
+    assert "deck/build/build.py" in said
+    assert "ppt_build" in said
+
+
 async def test_a_plan_naming_no_roles_reads_as_it_always_did(tmp_path: Path) -> None:
     """The line the field must not cross: an outline that says nothing about roles is
     the outline this tool answered before there was a field to say it in."""

@@ -255,6 +255,14 @@ _UNDOCUMENTED = {
     # program, and it is a function *in* the projection only because the projection
     # is the module's own source. An author's program never calls it.
     "ppt_template.helper_source",
+    # Deliberately untaught, and the entry here that is a decision rather than a
+    # technicality. `fill` writes a list into a page's repeating units, which is what
+    # the removed second route reached through `units()` -- and on a measured template
+    # page `units()` sees none of the three cards the copy belongs in, so the taught
+    # route cannot be one that depends on it. The taught route is the copy one:
+    # `clone_page` then `replace_text`, keyed on the words a shape is holding. `fill`
+    # stays importable for a program written against an older reference.
+    "ppt_template.fill",
 }
 
 for module, source in _SIGNATURES.items():
@@ -506,8 +514,44 @@ for var in re.findall(r'env\["(PPT_[A-Z_]+)"\]', runner):
 
 # 9. template helpers
 compose = (ROOT / "plugins-dist/ppt-engine/raven_ppt/services/template/compose.py").read_text()
-for fn in ("clone_page", "replace_text", "replace_picture", "drop_shape"):
+for fn in ("clone_page", "prototype", "replace_text", "replace_picture", "drop_shape", "remove_unit", "units"):
     ok(f"def {fn}" in compose, f"skill promises {fn} and compose.py does not define it")
+
+# 9.1 One way to put a template page to work.
+#
+# Two doors were measured and the cost was a deck: the second route emptied every text
+# its call did not name and `clone_page` kept them, so an author who called one and then
+# reached for the words the other would have left found nothing, printed a miss line per
+# shape and shipped eight pages holding a title over twenty blank boxes. The route was
+# then removed rather than left importable (D41), because a route nobody is taught is
+# still a route a model reaches for from an older reference -- so the pin is on the
+# definition, not on what the document happens to print.
+ok(
+    "def adapt" not in _SIGNATURES["ppt_template"],
+    "the projected ppt_template defines adapt again, so an author's program can call it (D41)",
+)
+ok("adapt(" not in _UNWRAPPED, "the skill prints an adapt call again; clone_page + replace_text is the one route (D41)")
+ok(
+    _UNWRAPPED.count("clone_page(prs, prototype(") >= 3,
+    "the skill has stopped printing the one call it teaches, `clone_page(prs, prototype(tpl, N))`",
+)
+ok(
+    "replace_text(s, " in _UNWRAPPED or "replace_text(slide, " in _UNWRAPPED,
+    "the skill never shows replace_text keyed on the words a shape holds, which is the route",
+)
+# And the same door in the tool the author reads before writing a line. `ppt_template`
+# is where a page is chosen, so a second vocabulary there outranks anything the skill
+# says: two of its replies used to answer "this page cannot be redrawn" with an import
+# list of the primitives.
+_TEMPLATE_TOOL = (ROOT / "plugins-dist/ppt-engine/raven_ppt/tools/template.py").read_text()
+ok(
+    "adapt(prs" not in _TEMPLATE_TOOL,
+    "the ppt_template reply teaches an adapt call again; its replies teach clone_page + replace_text (D41)",
+)
+ok(
+    "clone_page(prs, prototype(" in _TEMPLATE_TOOL,
+    "the ppt_template reply stopped printing the call it teaches",
+)
 
 # 10. what refuses a deck and what only reports, held against the code in both
 # directions.
@@ -531,20 +575,20 @@ _KIND_PHRASES = {
     "citation": "citing one figure while showing another",
     "page_budget": "length the brief did not agree",
     "language": "the wrong language",
-    "house_style": "not the bound template's",
     "unmapped_page": "cannot map back to",
     "page_failed": "block raised",
     "unseen_page": "never been shown",
     "unplaced_figure": "promised a figure and that shows no picture",
-    "literal_escape": "printing an escape",
     "unreadable": "cannot make out",
     "word_collision": "colliding in the render",
     "placeholder_copy": "placeholder text",
+    "emptied_page": "cloned and never wrote into",
     "template_underlay": "new text boxes laid over",
     "figure": "figure id the catalogue does not hold",
     "borrowed": "naming no bundled template",
     "house_page": "cover, index and closing",
     "composed_pages": "more than a quarter of its content pages",
+    "repeated_prototype": "more of its content pages on one prototype",
     # Reports.
     "covered_shape": "hidden behind an opaque shape",
     "band": "filled colour bar",
@@ -556,6 +600,10 @@ _KIND_PHRASES = {
     "card_overflow": "escaping a card",
     "crowded_panel": "crowding its panel",
     "off_page": "over the page edge",
+    "house_style": "not the bound template's",
+    "literal_escape": "printing an escape",
+    "boxless_copy": "box with no height",
+    "placeholder_marks": "numerals and marks left on a page",
     "spilled_copy": "painted off the page",
     "over_layout_art": "on the layout's artwork",
     "flat_formula": "expression set as prose",
@@ -568,6 +616,8 @@ _KIND_PHRASES = {
     "excessive_whitespace": "large blank field",
     "unseparated_blocks": "no more air between them",
     "type_drift": "one slot the deck sets at several sizes",
+    "row_type_drift": "one row whose cards came out at different sizes",
+    "outranked_title": "title and the line under it came out at one size",
     "type_scale": "not a step of the ramp",
     "title_row": "different left edges",
     "layout_variety": "nearly all resolve to one page structure",

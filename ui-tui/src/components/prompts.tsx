@@ -10,7 +10,7 @@ import type { Theme } from '../theme.js'
 import type { ApprovalReq, ClarifyReq, ConfirmReq } from '../types.js'
 
 import { t as tr } from '../i18n/index.js'
-import { approvalOptionsFor, approvalRemainingSeconds } from '../lib/approval.js'
+import { APPROVAL_OPTIONS, approvalRemainingSeconds } from '../lib/approval.js'
 import { CONFIRM_COUNTDOWN_SECONDS, tickCountdown } from '../lib/confirmCountdown.js'
 import { isMac } from '../lib/platform.js'
 import { TextInput } from './textInput.js'
@@ -32,29 +32,12 @@ const clarifyRemainingText = (secs: number): string => {
 }
 
 export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptProps) {
-  const options = approvalOptionsFor(req.suggestedPattern)
   // Deny-and-continue is the default: it matches what a timeout does, and an
   // accidental Enter must never grant authority or kill the turn.
-  const [sel, setSel] = useState(() => options.findIndex(o => o.choice === 'deny'))
+  const [sel, setSel] = useState(1)
   // The deny choice a note is being attached to, or null when not typing one.
   const [noting, setNoting] = useState<null | string>(null)
   const [note, setNote] = useState('')
-  // The prefix rule being edited before it is saved, or null when not editing.
-  // Seeded from the runtime's suggestion; what is sent is what the human left.
-  const [pattern, setPattern] = useState<null | string>(null)
-  // The request this state belongs to. The mount site keys the component by
-  // request id, and this is the same guarantee from the inside: should a new
-  // request ever reach a reused instance, its selection and any half-typed
-  // prefix or note start over rather than being sent under the new id.
-  const [forId, setForId] = useState(req.approvalId)
-
-  if (forId !== req.approvalId) {
-    setForId(req.approvalId)
-    setSel(options.findIndex(o => o.choice === 'deny'))
-    setNoting(null)
-    setNote('')
-    setPattern(null)
-  }
   const [remainingSeconds, setRemainingSeconds] = useState(() => approvalRemainingSeconds(req.expiresAt))
 
   useEffect(() => {
@@ -91,10 +74,9 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
       return
     }
 
-    if (noting !== null || pattern !== null) {
+    if (noting !== null) {
       if (key.escape) {
         setNoting(null)
-        setPattern(null)
       }
 
       return
@@ -104,39 +86,29 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
       setSel(s => s - 1)
     }
 
-    if (key.downArrow && sel < options.length - 1) {
+    if (key.downArrow && sel < APPROVAL_OPTIONS.length - 1) {
       setSel(s => s + 1)
     }
 
     // A note only makes sense on a refusal: it travels to the model as the
     // reason, and an allowed call needs none.
-    if (key.tab && options[sel]!.choice.startsWith('deny')) {
+    if (key.tab && APPROVAL_OPTIONS[sel]!.choice !== 'allow') {
       setNote('')
-      setNoting(options[sel]!.choice)
+      setNoting(APPROVAL_OPTIONS[sel]!.choice)
 
       return
     }
 
-    // The persisted grant is not sent on the keypress that picked it: the
-    // prefix opens for editing first, and Enter there is what sends.
-    const pick = (option: (typeof options)[number]) => {
-      if (option.choice === 'allow_always') {
-        setPattern(req.suggestedPattern ?? '')
-      } else {
-        onChoice(option.choice, '', req.approvalId)
-      }
-    }
-
     const n = parseInt(ch, 10)
 
-    if (n >= 1 && n <= options.length) {
-      pick(options[n - 1]!)
+    if (n >= 1 && n <= APPROVAL_OPTIONS.length) {
+      onChoice(APPROVAL_OPTIONS[n - 1]!.choice, '', req.approvalId)
 
       return
     }
 
     if (key.return) {
-      pick(options[sel]!)
+      onChoice(APPROVAL_OPTIONS[sel]!.choice, '', req.approvalId)
     }
   })
 
@@ -166,40 +138,15 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
 
       <Text />
 
-      {pattern !== null ? (
-        <>
-          <Text color={t.color.label}>
-            {'  '}
-            {tr('gui.confirm.pattern_for', 'prefix rule to save; it applies in every working directory')}
-          </Text>
-
-          <Box>
-            <Text color={t.color.label}>{'> '}</Text>
-            <TextInput
-              columns={Math.max(20, cols - 6)}
-              onChange={setPattern}
-              /* An emptied box saves nothing and sends nothing; Esc is the way
-                 back to the list, and a stray Enter must not grant. */
-              onSubmit={v =>
-                expired || !v.trim() ? undefined : onChoice('allow_always', '', req.approvalId, v.trim())
-              }
-              value={pattern}
-            />
-          </Box>
-
-          <Text color={t.color.muted}>
-            {tr('gui.confirm.pattern_keys', 'Enter save · Esc back · expires in {n}s', {
-              n: String(remainingSeconds)
-            })}
-          </Text>
-        </>
-      ) : noting !== null ? (
+      {noting !== null ? (
         <>
           <Text color={t.color.label}>
             {'  '}
             {tr('gui.confirm.note_for', 'note for the model ({what})', {
               what:
-                noting === 'deny_stop' ? tr('gui.confirm.deny_stop', 'Deny and stop') : tr('gui.confirm.deny', 'Deny')
+                noting === 'deny_stop'
+                  ? tr('gui.confirm.deny_stop', 'Deny and stop')
+                  : tr('gui.confirm.deny', 'Deny')
             })}
           </Text>
 
@@ -223,11 +170,11 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
         </>
       ) : (
         <>
-          {options.map((option, i) => (
+          {APPROVAL_OPTIONS.map((option, i) => (
             <Text key={option.choice}>
               <Text bold={sel === i} color={sel === i ? t.color.warn : t.color.muted} inverse={sel === i}>
                 {sel === i ? '▸ ' : '  '}
-                {i + 1}. {tr(option.key, option.fallback, { pattern: req.suggestedPattern ?? '' })}
+                {i + 1}. {tr(option.key, option.fallback)}
               </Text>
             </Text>
           ))}
@@ -235,8 +182,8 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
           <Text color={t.color.muted}>
             {tr(
               'gui.confirm.keys',
-              'up/down select · Enter confirm · 1-{count} quick pick · Tab add note · Ctrl+C deny · expires in {n}s',
-              { count: String(options.length), n: String(remainingSeconds) }
+              'up/down select · Enter confirm · 1-3 quick pick · Tab add note · Ctrl+C deny · expires in {n}s',
+              { n: String(remainingSeconds) }
             )}
           </Text>
         </>
@@ -273,12 +220,7 @@ export function ClarifyPrompt({ cols = 80, onAnswer, onCancel, req, t }: Clarify
   const heading = (
     <Text bold>
       <Text color={t.color.accent}>ask</Text>
-      {total > 1 ? (
-        <Text color={t.color.muted}>
-          {' '}
-          ({position}/{total})
-        </Text>
-      ) : null}
+      {total > 1 ? <Text color={t.color.muted}> ({position}/{total})</Text> : null}
       {req.header ? <Text color={t.color.label}> [{req.header}]</Text> : null}
       <Text color={t.color.text}> {req.question}</Text>
     </Text>
@@ -363,7 +305,9 @@ export function ClarifyPrompt({ cols = 80, onAnswer, onCancel, req, t }: Clarify
           />
         </Box>
 
-        <Text color={t.color.muted}>{budget}Enter send · Esc back</Text>
+        <Text color={t.color.muted}>
+          {budget}Enter send · Esc back
+        </Text>
       </Box>
     )
   }
@@ -538,7 +482,7 @@ interface ApprovalPromptProps {
   // The id of the request THIS prompt rendered. An answer belongs to the
   // request the human was looking at (or that the countdown was armed for),
   // never to whichever one happens to occupy the slot when the callback runs.
-  onChoice: (s: string, feedback?: string, approvalId?: string, pattern?: string) => void
+  onChoice: (s: string, feedback?: string, approvalId?: string) => void
   req: ApprovalReq
   t: Theme
 }

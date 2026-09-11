@@ -41,6 +41,17 @@ https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
 ## 🚀 Quick Start
 
+### 🧰 Prerequisites
+
+The installer brings its own Python toolchain and Node runtime, so the only
+thing to have ready beforehand is one program raven cannot install for you:
+
+| Program | Needed for | Install |
+| --- | --- | --- |
+| **LibreOffice** | Turning a deck into a PDF, which is how the deck agent renders, measures and previews one, and how any Office document is read as source material. Optional: without it a deck is still built and delivered, but nothing that looks at the rendered page runs. | `apt install libreoffice` / `brew install --cask libreoffice` / `winget install TheDocumentFoundation.LibreOffice` |
+
+`raven doctor` reports whether it was found.
+
 ### 📦 Install
 
 Linux, macOS, or WSL2:

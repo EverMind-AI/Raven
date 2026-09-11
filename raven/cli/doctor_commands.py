@@ -60,6 +60,23 @@ class FeaturesInfo:
 
 
 @dataclass
+class ExternalToolsInfo:
+    """External programs raven runs, which no Python install can supply.
+
+    LibreOffice is the whole of it today, and it went undeclared for as long as
+    it has existed: nothing in the README, the installers, pyproject or docs
+    ever named it, while a deck run needs it to turn a deck into a PDF and
+    therefore to render, measure or preview one. Absent, a deck still builds
+    and publishes -- the render-truth gates simply do not run -- so this
+    reports and does not move the exit code, the same reading as a channel SDK
+    that is not installed.
+    """
+
+    soffice: Optional[str] = None
+    install_hint: str = ""
+
+
+@dataclass
 class GatewayInfo:
     running: bool = False
     pid: Optional[int] = None
@@ -216,6 +233,7 @@ class DoctorReport:
     paths: Optional[PathsInfo] = None
     routing: Optional[RoutingInfo] = None
     features: Optional[FeaturesInfo] = None
+    external_tools: Optional[ExternalToolsInfo] = None
     gateway: Optional[GatewayInfo] = None
     memory: Optional[MemoryInfo] = None
     tools: Optional[ToolsInfo] = None
@@ -412,6 +430,12 @@ def _gather_tools(config: "Config") -> ToolsInfo:
     )
 
 
+def _gather_external_tools() -> ExternalToolsInfo:
+    from raven.utils.office import find_soffice, install_hint
+
+    return ExternalToolsInfo(soffice=find_soffice(), install_hint=install_hint())
+
+
 def _gather_static_checks() -> DoctorReport:
     """Inspect config / routing / features. Strictly zero-network."""
     from raven.config.loader import get_config_path, load_config
@@ -480,6 +504,8 @@ def _gather_static_checks() -> DoctorReport:
         channels_missing_deps=missing_dependency_channels(config),
         skill_forge_enabled=skill_forge_on,
     )
+
+    report.external_tools = _gather_external_tools()
 
     report.tools = _gather_tools(config)
 
@@ -792,6 +818,17 @@ def _render_human_output(report: DoctorReport) -> None:
             console.print(f"               [yellow]⚠ SDK missing: {names}[/yellow]  [dim]{missing_dep_hint()}[/dim]")
         sf_label = "enabled" if features.skill_forge_enabled else "[dim]disabled[/dim]"
         console.print(f"  Skill forge: {sf_label}")
+
+    external = report.external_tools
+    if external is not None:
+        console.print("\n[bold]External tools[/bold]")
+        if external.soffice:
+            console.print(f"  LibreOffice: [green]{external.soffice}[/green]")
+        else:
+            console.print(
+                "  LibreOffice: [yellow]not found[/yellow]  "
+                f"[dim]decks build but cannot be rendered, measured or previewed; {external.install_hint}[/dim]"
+            )
 
     gateway = report.gateway
     if gateway is not None:

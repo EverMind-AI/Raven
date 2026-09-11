@@ -277,3 +277,40 @@ def test_the_image_generator_answers_configured_from_the_live_host_section(tmp_p
     section["now"] = MediaToolConfig()
     assert generator.configured() is False
     assert "ppt_generate_image" in {t.name for t in build_ppt_tools(tmp_path)}, "built even with no reader lent"
+
+
+def test_the_render_gate_follows_the_box_and_an_operators_number_still_wins() -> None:
+    """An absent renderConcurrency is a question about the machine, not a default.
+
+    The fork spelled 2 and the shipped product spelled it after it, so every box
+    ran two conversions at once -- measured on 32 cores, seven templates take
+    50.3s seven-wide against 67.8s two-wide with the slowest single conversion
+    unchanged, so the fixed number was a 32-core box waiting for a two-core box's
+    answer. The slice no longer spells it (the launcher ledger pins that), which
+    makes this default the one the product actually runs on; a setting that is
+    written still wins, and the range is still refused rather than clamped.
+    """
+    from raven_ppt.plugin.config import EngineConfig
+    from raven_ppt.services.render import default_concurrency
+
+    assert EngineConfig().render_concurrency == default_concurrency()
+    assert EngineConfig.from_slice({}).render_concurrency == default_concurrency()
+    assert EngineConfig.from_slice({"renderConcurrency": 1}).render_concurrency == 1
+    assert EngineConfig.from_slice({"renderConcurrency": 8}).render_concurrency == 8
+    for bad in (0, 9, -1):
+        with pytest.raises(ValueError):
+            EngineConfig.from_slice({"renderConcurrency": bad})
+
+
+def test_the_stage_and_the_slice_read_the_same_gate() -> None:
+    """The two seats that size the gate, kept on one number.
+
+    `DeckViews` is built by direct callers (a test, a script, the template tool's
+    thumbnails) as well as by assembly, so a stage default left at 2 would keep
+    half the callers on the old fixed number while the product moved.
+    """
+    from raven_ppt.plugin.config import EngineConfig
+    from raven_ppt.services.render import default_concurrency
+    from raven_ppt.stages._views import DeckViews
+
+    assert DeckViews().concurrency == default_concurrency() == EngineConfig().render_concurrency

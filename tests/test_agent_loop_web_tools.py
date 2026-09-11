@@ -359,10 +359,8 @@ def test_a_subagent_gate_asks_through_the_parent_turns_responder(workspace, tmp_
 
     click = _Click()
     start_permission_turn(click, conversation_id="sub", turn_id="t1")
-    # A write, not a read: `echo` would run without asking under the read-only
-    # default, and this test is about the ask reaching the parent's responder.
-    result = asyncio.run(registry.execute("exec", {"command": "touch delegated"}))
-    assert click.seen == ["touch delegated"]
+    result = asyncio.run(registry.execute("exec", {"command": "echo delegated"}))
+    assert click.seen == ["echo delegated"]
     assert "denied" in str(result).lower()
 
 

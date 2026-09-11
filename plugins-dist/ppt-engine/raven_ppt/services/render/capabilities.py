@@ -18,6 +18,17 @@ from dataclasses import dataclass
 from functools import cache
 from types import ModuleType
 
+from raven.utils.office import find_soffice as _find_soffice
+from raven.utils.office import install_hint as soffice_install_hint
+
+__all__ = [
+    "RenderCapabilities",
+    "available",
+    "find_soffice",
+    "pdfium",
+    "soffice_install_hint",
+]
+
 
 @dataclass(frozen=True)
 class RenderCapabilities:
@@ -52,7 +63,7 @@ class RenderCapabilities:
         """What to install, named the way it is installed."""
         gaps: list[str] = []
         if not self.can_convert:
-            gaps.append("libreoffice")
+            gaps.append(f"libreoffice -- {soffice_install_hint()}")
         if not self.can_rasterise:
             gaps.append("pypdfium2 (the ppt-engine wheel carries it) or poppler-utils")
         if not self.can_measure_words:
@@ -79,8 +90,14 @@ def available(*, soffice: str | None = None) -> RenderCapabilities:
 
 
 def find_soffice() -> str | None:
-    """LibreOffice's launcher, under either of the two names it ships as."""
-    return shutil.which("soffice") or shutil.which("libreoffice")
+    """LibreOffice's launcher, asked of the module that also runs it.
+
+    Re-exported rather than reimplemented: the render gate has to call LibreOffice
+    missing on exactly the installs `raven doctor` calls it missing on, and a
+    second search of its own is what drifted last time -- one copy knew where a
+    Windows install puts the binary and the other only looked at PATH.
+    """
+    return _find_soffice()
 
 
 @cache

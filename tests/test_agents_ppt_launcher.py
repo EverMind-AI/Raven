@@ -37,7 +37,7 @@ REPO = Path(__file__).resolve().parent.parent
 RUN_PY = REPO / "agents" / "raven-ppt" / "run.py"
 FORK = REPO / "tests" / "fixtures" / "vendored_fork" / "raven-ppt"
 ENGINE_HOME = REPO / "plugins-dist" / "ppt-engine"
-CARRIED_PROMPTS = ("SOUL.md", "AGENTS.md", "TOOLS.md")
+CARRIED_PROMPTS = ("SOUL.md", "AGENTS.md")
 
 
 @pytest.fixture()
@@ -192,6 +192,14 @@ TRUNK_OVERRIDDEN_DEFAULTS = {
 # a page; the gateway's own low effort reads one in 13 to 29.
 TRUNK_ONLY_SLICE = {"readerEffort": "low"}
 
+# Fork slice keys the product deliberately stops spelling. renderConcurrency: the
+# fork's fixed 2 is now the engine's floor rather than its answer -- the number of
+# LibreOffice conversions a box runs at once is a fact about the box (measured: 32
+# cores convert seven templates in 50.3s at seven-wide against 67.8s at two-wide,
+# with the slowest single conversion unchanged), so an absent key follows the box
+# and only an operator's own setting overrides it.
+TRUNK_DROPPED_SLICE = {"renderConcurrency": 2}
+
 
 def test_the_config_is_the_forks_modulo_the_swap_ledger():
     """Every delta against the sealed fork wrapper's config is a ledgered row:
@@ -206,10 +214,14 @@ def test_the_config_is_the_forks_modulo_the_swap_ledger():
     slice_ = ours["plugins"]["config"].pop("ppt-engine")
     for key, value in TRUNK_ONLY_SLICE.items():
         assert slice_.pop(key) == value
-    assert slice_ == theirs["tools"]["ppt"]
+    fork_slice = dict(theirs["tools"]["ppt"])
+    for key, value in TRUNK_DROPPED_SLICE.items():
+        assert fork_slice.pop(key) == value, key
+        assert key not in slice_, f"{key} is spelled again; the ledger row is stale"
+    assert slice_ == fork_slice
     fork_tools = dict(theirs["tools"])
     retired = fork_tools.pop("ppt")
-    assert retired == slice_
+    assert retired == {**slice_, **TRUNK_DROPPED_SLICE}
     ours_disabled = set(ours["tools"].pop("disabledTools"))
     fork_disabled = set(fork_tools.pop("disabledTools"))
     assert ours_disabled - fork_disabled == TRUNK_HELD_OUT
@@ -263,6 +275,25 @@ def test_the_carried_identity_prompts_are_the_forks_byte_for_byte():
         ours = (ENGINE_HOME / "raven_ppt" / "prompts" / name).read_bytes()
         theirs = (FORK / "Raven-PPT" / "raven" / "templates" / name).read_bytes()
         assert ours == theirs, name
+
+
+def test_the_build_script_guide_names_the_route_the_engine_offers():
+    """`TOOLS.md` is the one carried prompt this product has deliberately
+    diverged on, so the claim held here is what the divergence was for rather
+    than byte equality with the fork.
+
+    It is a live prompt, not parked bytes: `seed_identity` writes it to the
+    agent home's `TOOLS.md`, which is one of the three seats the host's
+    context builder reads. The fork's copy lists the template helpers as
+    "`prototype` and `adapt` to clone a page and fill it", and `adapt` is gone
+    (D41), so carrying those bytes forward would seed every session an import
+    that raises."""
+    ours = (ENGINE_HOME / "raven_ppt" / "prompts" / "TOOLS.md").read_text(encoding="utf-8")
+    theirs = (FORK / "Raven-PPT" / "raven" / "templates" / "TOOLS.md").read_text(encoding="utf-8")
+
+    assert "adapt" in theirs, "the fork's copy is the baseline this diverged from"
+    assert "adapt" not in ours, "the seeded guide names a call the engine no longer offers (D41)"
+    assert "clone_page" in ours and "replace_text" in ours
 
 
 def test_the_install_shim_is_the_house_family_byte_for_byte():

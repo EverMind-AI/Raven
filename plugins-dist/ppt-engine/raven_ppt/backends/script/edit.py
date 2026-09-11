@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 
-_CREATES_A_SLIDE = ("add_slide", "clone_page", "adapt")
+_CREATES_A_SLIDE = ("add_slide", "clone_page")
 
 
 def slide_creators(prelude: str) -> list[str]:

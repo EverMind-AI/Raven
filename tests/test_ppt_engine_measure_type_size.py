@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,7 +13,11 @@ from raven_ppt.services.measure.type_size import (
     BODY_PT,
     LABEL_PT,
     MIN_FLOOR_PT,
+    Span,
     census,
+    drift_findings,
+    outranked_findings,
+    row_findings,
     scale_findings,
     type_findings,
     type_floors,
@@ -333,7 +338,7 @@ def test_the_templates_own_copy_is_not_the_authors_choice(tmp_path: Path) -> Non
 def test_a_box_the_author_added_inside_a_template_is_still_the_authors(tmp_path: Path) -> None:
     """The mix a real templated deck is: the template's frame, the author's body.
 
-    Per shape rather than per page, because `adapt` clones a prototype and the author
+    Per shape rather than per page, because `clone_page` copies a prototype and the author
     then composes inside it -- scoping by page would have excluded the copy they wrote.
     """
     template = _deck(tmp_path, [(COPY, 1.0, 2.0, 6.0, 1.0)], name="template", size=15.0)
@@ -427,3 +432,463 @@ def _multi(stem: Path, pages: list[list[tuple[str, float, float, float, float]]]
     path = stem.with_suffix(".pptx")
     presentation.save(str(path))
     return path
+
+
+# The two pair readings: a row against itself, and a page's title against the line under
+# it. Their own helpers, because both need a render's spans and one needs repeating units,
+# and neither is expressible with `DeckBuilder`'s flat pages.
+TITLE = "Network Status and the Global Fleet"
+CAPTION = "Systems in service, route kilometres, landings, and the ageing of the fleet"
+
+
+def _titled(
+    tmp_path: Path,
+    caption: str,
+    *,
+    caption_pt: float | None,
+    caption_width: float = 9.0,
+    title_pt: float | None = None,
+    name: str = "deck",
+) -> tuple[Path, Any]:
+    """One page: the layout's own title placeholder, and a line under it.
+
+    The title states no size unless `title_pt` says so, which is the state a cloned
+    template page is in -- python-pptx's default master sets 44pt for a title, and that
+    is the number nothing in an author's program shows it.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[5])
+    title = slide.shapes.title
+    title.left, title.top, title.width, title.height = Inches(0.5), Inches(0.3), Inches(9.0), Inches(1.0)
+    if title_pt is None:
+        title.text_frame.text = TITLE
+    else:
+        run = title.text_frame.paragraphs[0].add_run()
+        run.text = TITLE
+        run.font.size = Pt(title_pt)
+    box = slide.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(caption_width), Inches(0.6))
+    if caption_pt is None:
+        box.text_frame.text = caption
+    else:
+        run = box.text_frame.paragraphs[0].add_run()
+        run.text = caption
+        run.font.size = Pt(caption_pt)
+    path = tmp_path / f"{name}.pptx"
+    presentation.save(str(path))
+    return path, presentation
+
+
+def _pair_spans(title_pt: float, caption_pt: float, caption: str = CAPTION) -> list[Span]:
+    """What the renderer set the two lines at, inside the boxes `_titled` drew."""
+    return [
+        Span(page=1, size_pt=title_pt, text=TITLE, x0=40, y0=25, x1=400, y1=25 + title_pt),
+        Span(page=1, size_pt=caption_pt, text=caption, x0=40, y0=115, x1=600, y1=115 + caption_pt),
+    ]
+
+
+def test_a_title_and_the_line_under_it_at_one_size_is_reported(tmp_path: Path) -> None:
+    """The state a reader calls two competing headings, with the caption dominant."""
+    path, _ = _titled(tmp_path, CAPTION, caption_pt=44.0)
+
+    found = outranked_findings(path, _pair_spans(44.0, 44.0))
+
+    assert [finding.kind for finding in found] == ["outranked_title"]
+    assert found[0].severity is Severity.WARNING
+    assert found[0].page == 1
+    assert found[0].detail["title_pt"] == 44.0
+    assert found[0].detail["under_pt"] == 44.0
+    assert found[0].detail["under_chars"] > found[0].detail["title_chars"]
+
+
+def test_the_finding_states_the_size_the_author_could_not_see(tmp_path: Path) -> None:
+    """The whole reason this warns rather than refuses.
+
+    The title box states nothing; its 44pt comes off the master. An author matching it
+    is matching a number no line of its program mentions, which is a knowledge gap and
+    not a decision to overrule -- so the number is in the message, not just the detail.
+    """
+    path, _ = _titled(tmp_path, CAPTION, caption_pt=44.0)
+
+    found = outranked_findings(path, _pair_spans(44.0, 44.0))
+
+    assert found[0].detail["inherited_pt"] == 44.0
+    assert "states no size of its own" in found[0].message
+    assert "44pt through the layout and the master" in found[0].message
+
+
+def test_a_line_the_author_deliberately_set_larger_is_left_alone(tmp_path: Path) -> None:
+    """A pull-quote, a statistic, a section numeral -- four template pages do this."""
+    path, _ = _titled(tmp_path, "662+", caption_pt=54.0)
+
+    assert outranked_findings(path, _pair_spans(44.0, 54.0, "662+")) == []
+
+
+def test_a_label_beside_the_title_is_not_a_second_heading_row(tmp_path: Path) -> None:
+    """A narrow gloss under a full-width title reads as one heading pair, not two."""
+    path, _ = _titled(tmp_path, "Agenda", caption_pt=44.0, caption_width=2.5)
+
+    assert outranked_findings(path, _pair_spans(44.0, 44.0, "Agenda")) == []
+
+
+def test_two_lines_of_body_type_are_not_a_heading_hierarchy(tmp_path: Path) -> None:
+    """A page with no title at all: `_heading_rows` infers one, and a 12pt line is not it.
+
+    One delivered page put a 12pt chart footnote 0.04in above its 12pt caption, and read
+    as a title being outranked by the line under it.
+    """
+    path, _ = _titled(tmp_path, CAPTION, caption_pt=12.0, title_pt=12.0)
+
+    assert outranked_findings(path, _pair_spans(12.0, 12.0)) == []
+
+
+def test_the_advice_turns_on_whose_box_carries_the_size(tmp_path: Path) -> None:
+    """Same tie, opposite advice, which is what `template` is for.
+
+    Every tie in the evidence tree is on a box the template drew, so telling the author
+    to stop choosing 44pt would be telling it about a choice it never made. A box the
+    author drew is the other case and the cheap one: two numbers it can both see.
+    """
+    path, _ = _titled(tmp_path, CAPTION, caption_pt=44.0)
+    spans = _pair_spans(44.0, 44.0)
+
+    theirs = outranked_findings(path, spans, path)
+    mine = outranked_findings(path, spans, _deck(tmp_path, [("elsewhere", 6.0, 6.0, 2.0, 0.4)], name="other"))
+
+    assert theirs[0].detail["under_is_the_templates_box"] is True
+    assert "do not touch the title" in theirs[0].message
+    assert mine[0].detail["under_is_the_templates_box"] is False
+    assert "You drew this box and chose this size" in mine[0].message
+
+
+def test_without_a_render_neither_pair_reading_answers(tmp_path: Path) -> None:
+    """No spans is no signal, and a check with no signal says nothing."""
+    path, _ = _titled(tmp_path, CAPTION, caption_pt=44.0)
+
+    assert outranked_findings(path, None) == []
+    assert outranked_findings(path, []) == []
+    assert row_findings(path, None) == []
+
+
+CARDS = [
+    "Systems in service",
+    "Route kilometres",
+    "Aging fleet",
+]
+
+
+def _row(tmp_path: Path, sizes: list[float] | None, *, declared: float | None = 20.0, name: str = "row") -> Path:
+    """One page carrying three copies of a one-box unit, which is what `units` groups.
+
+    `sizes` is unused here and named in `_row_spans`: the file states one size for all
+    three, and what differs is what the renderer did with it.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for index, text in enumerate(CARDS):
+        group = slide.shapes.add_group_shape()
+        box = group.shapes.add_textbox(Inches(1.0 + 3.0 * index), Inches(4.0), Inches(2.0), Inches(0.6))
+        if declared is None:
+            box.text_frame.text = text
+            continue
+        run = box.text_frame.paragraphs[0].add_run()
+        run.text = text
+        run.font.size = Pt(declared)
+    path = tmp_path / f"{name}.pptx"
+    presentation.save(str(path))
+    return path
+
+
+def _row_spans(sizes: list[float]) -> list[Span]:
+    """One span per card, landing inside the box `_row` drew for it."""
+    found = []
+    for index, (text, size) in enumerate(zip(CARDS, sizes)):
+        left = 72.0 * (1.0 + 3.0 * index) + 6
+        found.append(Span(page=1, size_pt=size, text=text, x0=left, y0=295, x1=left + 100, y1=295 + size))
+    return found
+
+
+def test_a_row_whose_members_came_out_at_different_sizes_is_reported(tmp_path: Path) -> None:
+    """The finding is the row: every box behaved, and the row still reads wrong."""
+    path = _row(tmp_path, None)
+
+    found = row_findings(path, _row_spans([16.8, 16.8, 20.0]))
+
+    assert [finding.kind for finding in found] == ["row_type_drift"]
+    assert found[0].severity is Severity.WARNING
+    assert found[0].detail["sizes_pt"] == [16.8, 16.8, 20.0]
+    assert found[0].detail["units"] == 3
+    assert found[0].detail["spread"] == round(20.0 / 16.8, 3)
+    assert "the row is what reads wrong" in found[0].message
+
+
+def test_a_row_that_shrank_evenly_is_not_a_row_a_reader_complains_about(tmp_path: Path) -> None:
+    """Where this reading and `type_drift` part company, on one delivered page each.
+
+    Three boxes drawn at 20pt and all rendered at 17pt are a row nobody can tell apart;
+    `type_drift` reports all three of them against the size the slot was drawn at, which
+    is the question "did this box shrink" and not the question a reader is asking.
+    """
+    path = _row(tmp_path, None)
+    spans = _row_spans([17.0, 17.0, 17.0])
+
+    assert row_findings(path, spans) == []
+    assert [finding.kind for finding in drift_findings(path, spans)] == ["type_drift"]
+
+
+def test_a_member_reading_larger_than_its_own_size_is_a_misattribution(tmp_path: Path) -> None:
+    """Autofit only shrinks, so a box cannot render above the size its runs state.
+
+    One delivered page's 14pt body box read 30pt, off the number tile stacked beside it,
+    and the row came back with a spread of 2.1.
+    """
+    path = _row(tmp_path, None)
+
+    assert row_findings(path, _row_spans([20.0, 20.0, 30.0])) == []
+
+
+def test_a_page_with_nothing_repeating_has_no_row_to_read(tmp_path: Path) -> None:
+    found = row_findings(
+        _deck(tmp_path, [("a line of copy on its own", 1.0, 1.0, 4.0, 0.5)], size=20.0),
+        [Span(page=1, size_pt=20.0, text="a line of copy on its own", x0=80, y0=80, x1=300, y1=100)],
+    )
+
+    assert found == []
+
+
+# What `_heading_rows` answers is the role the template named, not where it sits: a
+# SUBTITLE placeholder set above the title comes back as the subtitle on purpose, because
+# a kicker is still the row the template called that. So the pair reading has to ask about
+# the relation itself, and both halves of the relation are in the message it prints.
+KICKER = "Q3"
+SHORT = "Q3 2026 review"
+
+
+def _kickered(tmp_path: Path, *, kicker: str = KICKER, name: str = "kicker") -> Path:
+    """One page whose SUBTITLE placeholder sits above its title, both full width.
+
+    The template idiom the geometry guard is about: a section kicker over the title,
+    which `_heading_rows` returns as the subtitle and which is not the line under it.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[0])
+    title = slide.shapes.title
+    title.left, title.top, title.width, title.height = Inches(0.5), Inches(2.0), Inches(9.0), Inches(1.0)
+    run = title.text_frame.paragraphs[0].add_run()
+    run.text = TITLE
+    run.font.size = Pt(44.0)
+    above = next(shape for shape in slide.placeholders if shape.placeholder_format.idx == 1)
+    above.left, above.top, above.width, above.height = Inches(0.5), Inches(0.5), Inches(9.0), Inches(0.8)
+    kick = above.text_frame.paragraphs[0].add_run()
+    kick.text = kicker
+    kick.font.size = Pt(44.0)
+    path = tmp_path / f"{name}.pptx"
+    presentation.save(str(path))
+    return path
+
+
+def _kicker_spans(kicker: str = KICKER) -> list[Span]:
+    return [
+        Span(page=1, size_pt=44.0, text=TITLE, x0=40, y0=150, x1=560, y1=194),
+        Span(page=1, size_pt=44.0, text=kicker, x0=40, y0=40, x1=90, y1=84),
+    ]
+
+
+def test_a_kicker_set_over_the_title_is_not_the_line_under_it(tmp_path: Path) -> None:
+    """The finding is about the line *under* the title, and this one is above it.
+
+    Read only for width and size, a full-width two-character kicker over a title at one
+    size reported the title as outranked -- and said the kicker was "the line under it"
+    and "the longer of the two (2 characters against 24)" in one sentence.
+    """
+    assert outranked_findings(_kickered(tmp_path), _kicker_spans()) == []
+
+
+def test_a_title_longer_than_the_line_under_it_has_not_been_outranked(tmp_path: Path) -> None:
+    """At one size the eye goes to the longer line, so a longer title still reads as one.
+
+    Two pages of the evidence tree are this shape: an 83-character title over a
+    51-character caption, both at 28pt.
+    """
+    path, _ = _titled(tmp_path, SHORT, caption_pt=44.0)
+
+    assert outranked_findings(path, _pair_spans(44.0, 44.0, SHORT)) == []
+
+
+HEADINGS = ["Systems in service", "Aging fleet"]
+BODIES = ["Route kilometres and landings across the network", "Average airframe age against the benchmark"]
+
+
+def _two_level(tmp_path: Path, *, name: str = "two_level") -> Path:
+    """Two cards, each holding a 3x0.6in heading over a separate 3x0.6in body, both 20pt.
+
+    One box shape and one stated size across two levels of one unit, which is the
+    ordinary way a card is drawn rather than a contrived one.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for index, (heading, body) in enumerate(zip(HEADINGS, BODIES)):
+        group = slide.shapes.add_group_shape()
+        for row, text in ((0, heading), (1, body)):
+            box = group.shapes.add_textbox(Inches(1.0 + 4.0 * index), Inches(3.0 + 1.0 * row), Inches(3.0), Inches(0.6))
+            run = box.text_frame.paragraphs[0].add_run()
+            run.text = text
+            run.font.size = Pt(20.0)
+    path = tmp_path / f"{name}.pptx"
+    presentation.save(str(path))
+    return path
+
+
+def _two_level_spans(headings: list[float], bodies: list[float]) -> list[Span]:
+    found = []
+    for index, (heading, body) in enumerate(zip(HEADINGS, BODIES)):
+        left = 72.0 * (1.0 + 4.0 * index) + 6
+        found.append(Span(page=1, size_pt=headings[index], text=heading, x0=left, y0=220, x1=left + 120, y1=240))
+        found.append(Span(page=1, size_pt=bodies[index], text=body, x0=left, y0=292, x1=left + 120, y1=306))
+    return found
+
+
+def test_two_levels_of_one_unit_drawn_alike_are_still_two_rows(tmp_path: Path) -> None:
+    """The headings agree with each other and the bodies agree with each other.
+
+    Keyed on the box and the stated size alone, all four boxes merged into one level and
+    reported a 1.429 spread over a run where neither row drifts at all.
+    """
+    path = _two_level(tmp_path)
+
+    assert row_findings(path, _two_level_spans([20.0, 20.0], [14.0, 14.0])) == []
+
+
+def test_the_level_that_drifts_is_the_one_named_when_two_are_drawn_alike(tmp_path: Path) -> None:
+    """And the split does not cost the reading anything: the uneven level still reports."""
+    path = _two_level(tmp_path)
+
+    found = row_findings(path, _two_level_spans([20.0, 20.0], [14.0, 10.0]))
+
+    assert [finding.kind for finding in found] == ["row_type_drift"]
+    assert found[0].detail["sizes_pt"] == [10.0, 14.0]
+    assert found[0].detail["slot_at"] == 2
+    assert found[0].detail["spread"] == 1.4
+    assert "2nd slot down each unit" in found[0].message
+
+
+def test_both_readings_record_the_boxes_they_are_about(tmp_path: Path) -> None:
+    """The one identity `quiet` can compare across the two type baselines.
+
+    A level here is a slot inside a repeating unit and `type_drift`'s group is a shape
+    repeated anywhere in the deck, so neither one's own key means anything to the other.
+    """
+    path = _two_level(tmp_path)
+    spans = _two_level_spans([20.0, 20.0], [14.0, 10.0])
+
+    row = row_findings(path, spans)[0]
+    drift = drift_findings(path, spans)[0]
+
+    assert len(row.detail["boxes"]) == 2
+    assert all(len(box) == 4 for box in row.detail["boxes"])
+    assert row.detail["boxes"] == sorted(row.detail["boxes"])
+    assert drift.detail["boxes"] == row.detail["boxes"]
+
+
+# And the other direction, which pulls against the two above: a level has to keep its
+# position when a unit leaves an optional slot unspoken. `adapt` empties every frame it
+# was not told about, so a card that supplied only its body arrives holding an empty
+# label frame the card beside it filled.
+OPTIONAL = "Optional label"
+LOOSE_BODIES = ["Route kilometres flown", "Average airframe age against the industry benchmark"]
+
+
+def _optional_row(tmp_path: Path, *, name: str = "optional") -> Path:
+    """Two cards, an optional 3x0.4in label over an identical 3x0.6in body slot.
+
+    The first card supplied only its body; the second supplied both.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for index, body in enumerate(LOOSE_BODIES):
+        group = slide.shapes.add_group_shape()
+        label = group.shapes.add_textbox(Inches(1.0 + 4.0 * index), Inches(2.6), Inches(3.0), Inches(0.4))
+        if index:
+            spoken = label.text_frame.paragraphs[0].add_run()
+            spoken.text = OPTIONAL
+            spoken.font.size = Pt(14.0)
+        box = group.shapes.add_textbox(Inches(1.0 + 4.0 * index), Inches(3.2), Inches(3.0), Inches(0.6))
+        run = box.text_frame.paragraphs[0].add_run()
+        run.text = body
+        run.font.size = Pt(20.0)
+    path = tmp_path / f"{name}.pptx"
+    presentation.save(str(path))
+    return path
+
+
+def _optional_spans(bodies: list[float]) -> list[Span]:
+    found = [Span(page=1, size_pt=14.0, text=OPTIONAL, x0=366, y0=192, x1=452, y1=206)]
+    for index, (body, size) in enumerate(zip(LOOSE_BODIES, bodies)):
+        left = 72.0 * (1.0 + 4.0 * index) + 6
+        found.append(Span(page=1, size_pt=size, text=body, x0=left, y0=238, x1=left + 120, y1=238 + size))
+    return found
+
+
+def test_an_optional_slot_one_unit_left_empty_keeps_the_row_comparable(tmp_path: Path) -> None:
+    """The position is the slot's, not the copy's, or the row stops being a row.
+
+    Ranked over the frames holding words, the first card's body came second in its unit
+    and the second card's body third, so a row running 20pt against 14pt reported
+    nothing -- a false silence on a layout `adapt` produces routinely.
+    """
+    path = _optional_row(tmp_path)
+
+    found = row_findings(path, _optional_spans([20.0, 14.0]))
+
+    assert [finding.kind for finding in found] == ["row_type_drift"]
+    assert found[0].detail["sizes_pt"] == [14.0, 20.0]
+    assert found[0].detail["slot_at"] == 2
+    assert found[0].detail["spread"] == round(20.0 / 14.0, 3)
+
+
+def test_an_optional_slot_left_empty_everywhere_is_furniture_and_holds_no_position(
+    tmp_path: Path,
+) -> None:
+    """What keeps the guard above from counting an icon's container as a slot.
+
+    A shape no unit of the run puts copy in is a spacer or an icon frame, and it never
+    had a position. One template's zigzag timeline draws its icon container above the
+    heading in one of five units and below it in the other four; counted as a position,
+    the odd card falls out of that row and the finding is left reporting four of five.
+    """
+    path = _optional_row(tmp_path)
+    spans = [span for span in _optional_spans([20.0, 14.0]) if span.text != OPTIONAL]
+    from pptx import Presentation
+
+    presentation = Presentation(path)
+    for group in presentation.slides[0].shapes:
+        for shape in group.shapes:
+            if shape.text_frame.text.strip() == OPTIONAL:
+                shape.text_frame.paragraphs[0].runs[0].text = ""
+    emptied = tmp_path / "furniture.pptx"
+    presentation.save(str(emptied))
+
+    found = row_findings(emptied, spans)
+
+    assert [finding.kind for finding in found] == ["row_type_drift"]
+    assert found[0].detail["slot_at"] == 1
+    assert found[0].detail["sizes_pt"] == [14.0, 20.0]

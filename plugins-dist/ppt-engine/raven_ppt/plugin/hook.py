@@ -54,6 +54,7 @@ from raven.utils.workspace import sync_workspace_templates
 from raven_ppt.plugin import ledger, materials
 from raven_ppt.services import tier
 from raven_ppt.services.publish.deliver import (
+    delivered_decks,
     last_refusal,
     published_digests,
     published_original,
@@ -315,10 +316,12 @@ class PptEngineHook(AgentHook):
             root = self._own_folder(root, ctx.session_key)
             if ctx.metadata is not None:
                 # What the inbound phase would have taken, so a deck this turn publishes is
-                # still told apart from an earlier turn's and announced.
-                ctx.metadata.setdefault(_METADATA_KEY, {}).setdefault(
-                    "deck_mtimes_before", materials.deck_mtimes(root / OUT_DIRNAME)
-                )
+                # still told apart from an earlier turn's and announced, and a deck that
+                # already stood is not something this turn failed to publish.
+                meta = ctx.metadata.setdefault(_METADATA_KEY, {})
+                meta.setdefault("deck_mtimes_before", _decks_before(root))
+                meta.setdefault("build_marks_before", _build_marks(root))
+                meta.setdefault("deck_stood", bool(_standing_decks(root)))
                 # The session's tier, for the deck tools that run outside the hook chain:
                 # the mode overlay's deck knobs (services/tier) are written where ppt_build
                 # reads them per call, so a tier switched mid-session takes effect on the
@@ -366,9 +369,16 @@ class PptEngineHook(AgentHook):
             return HookDecision(short_circuit_result=(f"The material could not be staged. {exc}", []))
         # Taken before the turn runs, so what this turn publishes can be told
         # apart from what an earlier turn of the same session left behind.
-        ctx.metadata.setdefault(_METADATA_KEY, {})["deck_mtimes_before"] = materials.deck_mtimes(root / OUT_DIRNAME)
+        meta = ctx.metadata.setdefault(_METADATA_KEY, {})
+        meta["deck_mtimes_before"] = _decks_before(root)
+        meta["build_marks_before"] = _build_marks(root)
+        # What already stands, so a turn that is not deck work is not told to build
+        # one: read from the publish record rather than from the folder, because a
+        # copy someone put under out/ is not a deck this project published.
+        standing = _standing_decks(root)
+        meta["deck_stood"] = bool(standing)
         return HookDecision(
-            modified_content=text + materials.describe(staged, root / MATERIALS_DIRNAME, root / OUT_DIRNAME)
+            modified_content=text + materials.describe(staged, root / MATERIALS_DIRNAME, root / OUT_DIRNAME, standing)
         )
 
     async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
@@ -382,6 +392,15 @@ class PptEngineHook(AgentHook):
         directory, not from the prose: with no deck and no question to the user in
         the reply, the iteration is rolled back and the model is told to continue.
         Bounded to `UNFINISHED_NUDGES` per turn, under the loop's own rollback cap.
+
+        A turn that begins with a deck already on the record is not that run. The
+        inbound phase tells such a turn its deck stands and hands it no compile
+        instruction, but this guard knew only whether *this* turn published, so the
+        plain answer to "looks good, thanks" was rolled back twice and told to build
+        and publish, and only the cap let the third reply end. The turn-start fact
+        rides `deck_stood`, and a turn that began with a deck and wrote no build of
+        its own ends where it stops: the cap is an escape hatch, not an answer to a
+        guard firing on the wrong turn.
         """
         bound = workdir.current()
         if bound is not None:
@@ -403,8 +422,34 @@ class PptEngineHook(AgentHook):
         root = Path(bound)
         if not _deck_started(root):
             return HookDecision()
-        published = published_digests(root / "deck" / "state")
-        deck, _ = materials.verified_deck(root / OUT_DIRNAME, text, meta["deck_mtimes_before"], published)
+        state = root / "deck" / "state"
+        published = published_digests(state)
+        delivered = delivered_decks(state)
+        deck, _ = materials.verified_deck(root / OUT_DIRNAME, text, meta["deck_mtimes_before"], published, delivered)
+        unpublished = materials.unpublished_decks(root / OUT_DIRNAME, meta["deck_mtimes_before"], published)
+        named = [path for path in unpublished if path.name in text]
+        if named and not meta.get("copy_nudged"):
+            # Before the hands-back test: "delivered, would you like changes?" names the
+            # copy and asks a question in the same breath. And before the delivered
+            # nudge: a deck published under out/ and then copied by hand to the path the
+            # user asked for is a finished deck named by the wrong file, and the answer
+            # is the argument that writes it there, not the out/ path. Once; a second
+            # such reply falls through to the nudges below.
+            meta["copy_nudged"] = True
+            listed = ", ".join(str(path) for path in named)
+            # A file the publish step's own record names is not a copy of anything --
+            # it is the delivery, edited after the fact. Two conditions, two fixes.
+            tampered = unrecorded_deliveries(state)
+            nudge = (
+                TAMPERED_NUDGE.format(names=listed)
+                if tampered
+                else COPY_NUDGE.format(names=listed, reason=_refused_because(state))
+            )
+            return HookDecision(
+                rollback=True,
+                rollback_inject=[{"role": "user", "content": nudge}],
+                notes=["ppt_engine: reply naming a copy the publish step never wrote rolled back (1/1)"],
+            )
         if deck is not None:
             if deck.name in text or meta.get("delivered_nudged"):
                 return HookDecision()
@@ -416,32 +461,24 @@ class PptEngineHook(AgentHook):
                 rollback_inject=[{"role": "user", "content": DELIVERED_NUDGE.format(paths=paths)}],
                 notes=["ppt_engine: reply ending a turn without naming the deck it published rolled back (1/1)"],
             )
-        named = [
-            path
-            for path in materials.unpublished_decks(root / OUT_DIRNAME, meta["deck_mtimes_before"], published)
-            if path.name in text
-        ]
-        if named and not meta.get("copy_nudged"):
-            # Before the hands-back test: "delivered, would you like changes?" names the
-            # copy and asks a question in the same breath. Once; a second such reply
-            # falls through to the unfinished nudges below.
-            meta["copy_nudged"] = True
-            listed = ", ".join(str(path) for path in named)
-            # A file the publish step's own record names is not a copy of anything --
-            # it is the delivery, edited after the fact. Two conditions, two fixes.
-            tampered = unrecorded_deliveries(root / "deck" / "state")
-            nudge = (
-                TAMPERED_NUDGE.format(names=listed)
-                if tampered
-                else COPY_NUDGE.format(names=listed, reason=_refused_because(root / "deck" / "state"))
-            )
-            return HookDecision(
-                rollback=True,
-                rollback_inject=[{"role": "user", "content": nudge}],
-                notes=["ppt_engine: reply naming a copy the publish step never wrote rolled back (1/1)"],
-            )
         if _hands_back(text):
             return HookDecision()
+        if meta.get("deck_stood") and not unpublished and _built_nothing(root, meta):
+            # The deck the user has was on the record before this turn began, and this
+            # turn built nothing for the record to be missing. So there is nothing this
+            # reply failed to publish, and the nudge's premise -- ending here hands the
+            # user nothing -- is false. It is the same fact the inbound statement turns
+            # on, carried here rather than re-read.
+            #
+            # "Built nothing" is the turn-start fact and not a reading of out/. A build
+            # refused on blocking findings returns before it is staged, a draft is never
+            # published, and a build whose script failed reaches neither: all three leave
+            # out/ as they found it while being exactly the unfinished turn this guard is
+            # for. Reading out/ let a revision turn whose build was refused end here
+            # claiming it had built none.
+            return HookDecision(
+                notes=["ppt_engine: the deck on the record stands and this turn built none; letting the reply end"]
+            )
         nudged = int(meta.get("unfinished_nudges", 0))
         if nudged >= UNFINISHED_NUDGES:
             return HookDecision(notes=[f"ppt_engine: turn ending without a deck after {nudged} nudges; letting it end"])
@@ -458,9 +495,11 @@ class PptEngineHook(AgentHook):
         if bound is None or before is None:
             return HookDecision()
         out_dir = Path(bound) / OUT_DIRNAME
+        state = Path(bound) / "deck" / "state"
         reply = ctx.outbound_content or ""
-        published = published_digests(Path(bound) / "deck" / "state")
-        deck, slides = materials.verified_deck(out_dir, reply, before, published)
+        published = published_digests(state)
+        delivered = delivered_decks(state)
+        deck, slides = materials.verified_deck(out_dir, reply, before, published, delivered)
         if deck is None:
             copied = materials.unpublished_decks(out_dir, before, published)
             if copied:
@@ -470,15 +509,14 @@ class PptEngineHook(AgentHook):
                 # apart -- a path the record names was published, whatever its bytes say
                 # now -- and they want opposite things said about them.
                 names = ", ".join(path.name for path in copied)
-                tampered = unrecorded_deliveries(Path(bound) / "deck" / "state")
+                tampered = unrecorded_deliveries(state)
                 note = (
                     f"\n\nThe deck under {out_dir} is not the one ppt_build published: " + tampered[0]
                     if tampered
                     else (
                         f"\n\nNo deck was published this turn. {names} under {out_dir} was not written by "
                         "ppt_build, so it did not pass the checks and is not the deliverable; the deck is "
-                        f"delivered only when ppt_build publishes it. "
-                        f"{_refused_because(Path(bound) / 'deck' / 'state')}"
+                        f"delivered only when ppt_build publishes it. {_refused_because(state)}"
                     )
                 )
                 return HookDecision(modified_content=reply + note)
@@ -507,6 +545,50 @@ class PptEngineHook(AgentHook):
         if _preview_of(deck, preview):
             announced += f"\nPreview (the same deck as a PDF, for viewing): {preview}\nMEDIA: {preview}"
         return HookDecision(modified_content=reply + announced)
+
+
+def _decks_before(root: Path) -> dict[Path, float]:
+    """What the turn starts with: every deck under out/ and every delivery on the record."""
+    return materials.deck_mtimes(root / OUT_DIRNAME, delivered_decks(root / "deck" / "state"))
+
+
+def _build_marks(root: Path) -> tuple[object, ...]:
+    """What "this turn built something" is decided from, read at the turn's start
+    and again at its end.
+
+    Not the decks under ``out/``. A build refused on blocking findings returns
+    before it is staged or published, a draft is never published at all, and a
+    build whose script failed reaches neither -- all three did the turn's work and
+    left ``out/`` exactly as they found it. What a build does move is the
+    candidate, the program that draws it, and the failure folder, so those are
+    the fact. Sizes and mtimes rather than digests, because this only has to
+    differ: a build that rewrote a file with the same bytes still ran.
+    """
+    deck = root / "deck"
+    marks: list[object] = []
+    for path in (deck / "build" / "deck.pptx", deck / "build" / "build.py"):
+        try:
+            stat = path.stat()
+        except OSError:
+            marks.append(None)
+            continue
+        marks.append((stat.st_size, stat.st_mtime_ns))
+    try:
+        marks.append(sum(1 for _ in (deck / "review" / "build_failures").iterdir()))
+    except OSError:
+        marks.append(0)
+    return tuple(marks)
+
+
+def _standing_decks(root: Path) -> list[Path]:
+    """The decks the publish record already holds, read once at the turn's start.
+
+    Both the statement the inbound phase writes and the guard `after_iteration`
+    holds the turn to turn on this one fact, so they ask for it in one place: a
+    turn told its deck stands and then sent back to publish one is the pair
+    disagreeing.
+    """
+    return materials.published_decks(root / OUT_DIRNAME, published_digests(root / "deck" / "state"))
 
 
 def _preview_beside_copy(state_dir: Path, deck: Path, preview: Path) -> None:
@@ -552,6 +634,16 @@ def _deck_started(root: Path) -> bool:
     """Whether this workdir holds a deck in progress: state or a build script exists."""
     deck = root / "deck"
     return (deck / "state").is_dir() or (deck / "build").is_dir()
+
+
+def _built_nothing(root: Path, meta: dict) -> bool:
+    """Whether this turn moved none of the marks a build moves.
+
+    A turn whose start was never recorded cannot answer this, and the safe answer
+    is no: the guard stays on rather than exempting a turn it cannot vouch for.
+    """
+    before = meta.get("build_marks_before")
+    return before is not None and _build_marks(root) == tuple(before)
 
 
 def _hands_back(text: str) -> bool:

@@ -645,7 +645,7 @@ from ppt_charts import (
     write_label
 )
 from ppt_template import (
-    adapt, add_unit, backdrop, bundled, clear_region, clone_page, clone_shape, drop_shape, fill,
+    add_unit, backdrop, bundled, clear_region, clone_page, clone_shape, drop_shape,
     layout_pictures, page_box, prototype, raise_type, remove_unit, replace_picture, replace_text,
     shape_at, shape_near, shape_saying, shapes_in, units, wash
 )
@@ -779,11 +779,10 @@ use, by their DrawingML names, and the two layouts built on them. Signatures in
 | --- | --- |
 | `prototype(template, number)` | the template's page `number`, counting from 1 |
 | `bundled(name)` | another bundled template by file name, for a page borrowed from it (§8); found through `PPT_BUNDLED_TEMPLATES`, which `ppt_build` sets |
-| `adapt(presentation, prototype, texts=None, pictures=None, drop=(), keep=(), items=None, title=None, subtitle=None)` | clone a page and fill it in; §8 |
+| `clone_page(presentation, prototype)` | **copy a template page into the deck, its words and all -- the one way a template page is put to work**; §8 |
 | `units(container)`, `arrangement(run)` | the page's repeating units; how a run is laid out |
 | `boxes(run)` | each unit's `(left, top, width, height)` in inches, page order — a size, **not** a `ppt_layout.Box`, so `boxes(run)[0][2]` is a width and not a far edge |
 | `place(unit, box)` | move one unit; the box is `(left, top, width, height)` in inches, and a `ppt_layout.Box` is accepted and converted from its two corners |
-| `fill(run, items)` | write `items` into the units of one run and delete the spares — what `adapt(items=...)` does, reachable per run |
 | `shape_at(slide, number)`, `drop_shape(shape)` | one shape by index, counting from 1; remove it |
 | `shape_near(container, left, top, tol=0.08, with_text=False)` | one shape by where the page shows it, in inches |
 | `shape_saying(container, prefix)` | one shape by the copy it starts with |
@@ -795,9 +794,8 @@ use, by their DrawingML names, and the two layouts built on them. Signatures in
 | `replace_text(target, text, new=None)`, `replace_picture(shape, image, fit="contain", *, anchor="centre", trim=None, zoom=1.0, alpha=None, box=None)` | in place, keeping how the template set it; `alpha` washes the new picture the way `backdrop` does, for the frame that is the page. `shape` may be a drawing rather than a frame -- a group of freeforms, a cartoon -- or a list of shapes making one: the picture takes its box and its depth and the drawing goes |
 | `backdrop(slide, image, *, alpha=1.0, scrim=0.62, ink=None, light_type=True, box=None, anchor="centre", trim=None, zoom=1.0)` | a photograph behind everything on the page, cover-cropped to the canvas (or `box`), at full strength under a plane of the theme's ink at `scrim`, with every run of type on the page set light (saturated accents kept) -- the cover form; `scrim=None` with `alpha` at 0.12 or under is the texture form behind a template's own ground; returns the picture |
 | `layout_pictures(slide)` | the photographs a page inherits from its layout, largest first; `replace_picture(layout_pictures(slide)[0], image, "cover")` changes them for every page on that layout; one the size of the page is the page's background -- `alpha=0.1` keeps it the texture the template meant (0.12 to 0.80 is the fog `washed_backdrop` reports), and a photograph meant to be seen goes in at full strength under a plane of ink with light type, as `backdrop` lays them |
-| `wash(shape, alpha)` | set any picture's transparency -- a frame the template drew, one `pictures=` filled, one you placed -- to the same share `backdrop` takes; a picture at full strength again is `wash(shape, 1)`; a photograph a title has to read over wants a plane of ink over it, not a wash to 0.3, which reads as fog |
-| `clone_page(presentation, prototype)` | when `adapt` is more than the page needs |
-| `add_unit(target, count=1)` | one more slot on a page's repeating run -- a run from `units(slide)`, or the slide for its longest -- copied from the last unit and laid out again; `adapt(items=...)` calls it when the items outnumber the slots |
+| `wash(shape, alpha)` | set any picture's transparency -- a frame the template drew, one `replace_picture` filled, one you placed -- to the same share `backdrop` takes; a picture at full strength again is `wash(shape, 1)`; a photograph a title has to read over wants a plane of ink over it, not a wash to 0.3, which reads as fog |
+| `add_unit(target, count=1)` | one more slot on a page's repeating run -- a run from `units(slide)`, or the slide for its longest -- copied from the last unit and laid out again |
 | `remove_unit(unit)` | one slot fewer, and the row closed up; `drop_shape` removes and leaves the hole |
 | `clone_shape(shape, box=None)` | a copy of one shape on the same page, at a page box -- the `clone_panel` five builds wrote for themselves |
 
@@ -852,19 +850,23 @@ three title rows (§8, §12).
 
 Five of those raise a question a signature cannot answer:
 
-- `replace_text(shape, "新文字")` writes one shape. `replace_text(slide, "旧文字", "新文字")`
-  finds whatever on the page holds that string and writes it — the form to reach for,
-  because finding the shape is the tedious half. `text` may be a list of `Run` instead
-  of a string, and then one word of a cloned page's line can carry the accent:
+- `replace_text(slide, "旧文字", "新文字")` finds whatever on the cloned page holds that
+  string and writes it — **this is how a template page is filled in**, one call per line the
+  page says. The key is the text the shape holds *now*, which is exactly what
+  `ppt_template(pages=[N])` prints above each shape, so a read-back is a list of keys to
+  paste. `replace_text(shape, "新文字")` writes one shape you already hold. The value may be
+  a list of `Run` instead of a string, so one word can carry the accent:
 
 ```python
-replace_text(shape, [Run("访客中约 "), Run("84%", bold=True, colour=ACCENT_INK), Run(" 到访过夜市")])
+s = clone_page(prs, prototype(tpl, 6))
+replace_text(s, "单击此处添加文本",
+             [Run("访客中约 "), Run("84%", bold=True, colour=ACCENT_INK), Run(" 到访过夜市")])
 ```
 
   Whatever a piece does not state is the template's — every piece is a copy of the run
   the template put there, so the line keeps its face and size and one word of it does
-  not. This is the *only* way to emphasise a word on a cloned page: the plain-string
-  form puts the whole line into one run, and one run carries one colour. Pass a list of
+  not. This is the *only* way to emphasise a word on a cloned page: a plain string
+  puts the whole line into one run, and one run carries one colour. Pass a list of
   those lists for several paragraphs.
 - `replace_picture(shape, image, fit)` — `"contain"` shrinks the frame to the picture's
   own proportions; `"cover"` crops the picture to fill the frame as it stands. Either way
@@ -875,8 +877,9 @@ replace_text(shape, [Run("访客中约 "), Run("84%", bold=True, colour=ACCENT_I
   and a picture takes the drawing's box and its place in the z-order, the drawing gone --
   a member stands for the wordless group around it, so the cartoon goes whole and the
   card it sits in stays;
-  `adapt(pictures={7: path})` does the same when shape 7 is drawn, and
-  `pictures={(5, 6, 7): path}` gives several loose shapes way to one picture. An
+  `replace_picture(shape_at(slide, 7), path, "cover")` does the same when shape 7 is drawn, and
+  `replace_picture([shape_at(slide, 5), shape_at(slide, 6)], path)` gives several loose
+  shapes way to one picture. An
   illustration meant to sit on the template's ground is asked for with
   `ppt_generate_image(..., transparent=true)`, which has it drawn on a green screen and keys the green out.
   Three arguments decide *which* pixels a cover keeps, and none of them writes a file:
@@ -899,10 +902,10 @@ replace_text(shape, [Run("访客中约 "), Run("84%", bold=True, colour=ACCENT_I
   cards set diagonally, pills on a curve -- because where the next one goes is yours to
   say. Say it with `clone_shape(run[-1], (left, top, width, height))` and put the copy
   where the design wants it (the refusal prints where the existing units sit); then
-  `fill(run + [copy], items)` treats it as a slot.
-- `fill(run, items)` writes items into a run's units and removes the ones left over, group
-  and all: `fill(units(slide)[1], [["03", "本文", "小标题"]])`. Reach for it where
-  `adapt(items=...)` was not enough, which is the two-run page below.
+  the copy takes `replace_text` like any other slot.
+- `remove_unit(unit)` takes one slot out of a run and closes the gap, group and all. That
+  is how a page with more slots than the deck has points is cut down to size, and it is
+  the only operation `replace_text` cannot express on its own.
 
 **Re-flow off the geometry the template already fixed.** `boxes(run)` hands back the
 pitch and the size the template drew, and that tuple is exactly what `place` takes;
@@ -911,76 +914,50 @@ computing a position without it is guessing at coordinates the page already hold
 `ppt_theme` gives `THEMES` and `rgb`. `ppt_icons` gives `add_icon(slide, name, left,
 top, size, colour, width_pt=1.75)`, `swap_icon(slide, shape, name, colour=None)`, `find_icons(term)` and `ICON_NAMES`.
 
-**`adapt(items=...)` in detail.** One entry per repeating unit, and the units left over
-are deleted **and the row closed up**: three items on a four-card row leave three cards
-re-spaced across the row's original width, six on an eight-slot grid fill it row by row
-with the short last row centred. **More items than slots grows the run**: five on a
-four-card row is five cards across the same width -- gutters closed to a tenth of an inch
-first, then every card shrunk alike so a circle stays a circle -- and nine on a 2x4 grid is
-a third row at the grid's own pitch. It refuses past the point a card can still carry
-copy (1.2in) or a grid runs off the page, and then a prototype with that many slots is the
-answer: `ppt_template` prints each page's. A run that follows no grid -- pills along a
-path, marks around a circle -- is neither grown nor moved, because any move would guess at
-the design; give those a dict entry keyed by the template's own words so each item lands
-on the slot you mean.
-Each entry is a list positional over that unit's text shapes, or a dict keyed by the text
-a shape holds now. In a list: `None` keeps the template's own words, a string replaces
-them, and `""` empties the shape — **except over a number, where `""` means "this unit's
-number" and the slot is renumbered for its position**, in the template's own padding —
-six sections in a page that ships eight numbered slots come out numbered 01 to 06.
-
-**A slot more or a slot fewer, by hand.** `adapt(items=...)` does both as a side effect
-of the count; when the page was written another way, `add_unit(run_or_slide)` copies the
-run's last unit and lays the run out again -- pass `units(slide)[0]` or the slide for its
-longest run -- and `remove_unit(unit)` takes one out and closes the gap, where `drop_shape`
-would leave the hole. Both refuse a run that follows no grid. For one shape rather than a
-unit -- a second photo panel beside the first, a band repeated lower down -- `clone_shape(
-shape, box)` puts a copy on the same page at a page box, with ids the page does not hold
-yet; it is the `clone_panel` five builds wrote for themselves, and the copy takes
-`replace_text` and `replace_picture` like the original:
-
-```python
-slide = adapt(prs, prototype(tpl, 7), title="境外双案例", pictures={3: FIG / "jodd.jpg"})
-second = clone_shape(shape_at(slide, 3), (8.2, 1.73, 4.4, 2.7))      # the same frame, right half
-replace_picture(second, FIG / "borough.jpg", "cover")
-```
+**Repeated units, in detail.** A content page is usually one small group repeated, and
+each repeat is written like any other line: `replace_text(slide, "the words that unit
+holds", "yours")`, once per line. `ppt_template(pages=[N])` prints those words for every
+shape on the page, unit by unit, so the read-back is the list of keys.
 
 **Count as you read the render: units top row first and left to right, and inside a unit
-the same.** Both orders are the reader's, not the file's -- a card's 60pt number sits
-above its heading and is counted first however the designer happened to save it. A
-unit's number does not take a slot in a **shorter** list: `[number, heading, body]` filled
-with `["第一部分", "本文"]` keeps the number, renumbered for its position, and writes the two
-values into the heading and the body. A list as long as the unit addresses every shape
-one to one, so `["01", "第一部分", "本文"]` and `["", "第一部分", "本文"]` say the same thing and
-`["Q1", "第一部分", "本文"]` is how you write your own numbering. A list shorter than the
-unit leaves the remainder exactly as the template wrote it — what you want over a number
-and not what you want over example copy. An agenda unit holding three text shapes,
-`[number, heading, small-heading]`, filled with `items=[["第一部分"], ...]` ships the
-template's own `单击添加小标题` once per surviving slot; `["第一部分", ""]` empties it. Pass
-more values than the unit holds and it raises, naming each shape it found — the cheapest
-way to learn the count.
+the same.** That is the reader's order, not the file's -- a card's 60pt number sits above
+its heading whatever order the designer happened to save it in. It matters for reading the
+page back and for `units(slide)`, which returns the runs in that order.
 
-**`items` fills one run, and a page can have two.** It fills the longest —
-`max(units(slide), key=len)` — and every other run is shapes it was not told about, so
-their words get emptied like any other unnamed text. One template's four-card page is
-two runs of two (cards 01–02 and 03–04, grouped in pairs), where
-`adapt(..., items=[a, b])` ships two filled cards beside two blank ones. `fill(run,
-items)` is the second half:
+**A slot fewer, and a slot more.** `remove_unit(unit)` takes a slot out and closes the row
+up -- three cards left on a four-card row are re-spaced across the row's original width, a
+2x4 grid losing two closes to six. `drop_shape` removes and leaves the hole, which is what
+you want for a single shape and never for a slot. `add_unit(run_or_slide)` goes the other
+way, copying the run's last unit and laying the run out again -- pass `units(slide)[0]` or
+the slide for its longest run. Both refuse a run that follows no grid, because where the
+next pill on an S-curve goes is the design's to say; there, `clone_shape(run[-1], (left,
+top, width, height))` puts the copy where you say and the refusal prints where the existing
+units sit.
+
+**A number is the template's, and it does not renumber itself.** Cut an eight-slot agenda
+to six and the survivors still read 01 to 06 because they were the first six; cut from the
+middle and you write the numbers yourself, one `replace_text` each.
 
 ```python
-slide = adapt(prs, prototype(tpl, 4), title="四项发现",
-              items=[["01", "本文", "第一项"],          # the longest run
-                     ["02", "本文", "第二项"]])
-fill(units(slide)[1], [["03", "本文", "第三项"],       # every other run, by hand
-                       ["04", "本文", "第四项"]])
+s = clone_page(prs, prototype(tpl, 2))            # an agenda page of eight slots
+for old, new in zip(TEMPLATE_LINES, sections):    # six of them take this deck's sections
+    replace_text(s, old, new)
+for spare in max(units(s), key=len)[6:]:          # the seventh and eighth go
+    remove_unit(spare)
 ```
 
-`units(slide)` after `adapt` returns tells you how many runs there are — check it
-whenever the render shows more repeated cards than you passed items for. Two things
-change once it has run: those units hold no text, so **address them positionally and not
-by a dict keyed on the template's words** (every key such a dict could match now holds
-`''`, and it raises `KeyError` listing empty strings), and `""` no longer restates a
-number. Write `"03"` yourself.
+**A page can have two runs.** `units(slide)` returns them longest first, and a template's
+four-card page is often two runs of two (cards 01-02 and 03-04, grouped in pairs). Nothing
+special is needed -- `replace_text` is keyed on words and does not care which run a shape
+sits in -- but check `units(slide)` whenever the render shows more repeated cards than you
+wrote, because that is the page telling you there are slots you have not reached.
+
+**Some pages have no run at all that `units` can see.** Measured on one bundled template's
+page 5: the three content cards are not detected as a repeating unit, so `units(slide)`
+returns only the three icon badges beside them. `replace_text` reaches the cards anyway,
+because it asks the page what it says rather than how it repeats. This is the reason the
+route is words-first (§12, and the note under `remove_unit`): on such a page only
+`remove_unit` needs a run, and only if you are cutting slots.
 
 ## 5. Figures come from the sources
 
@@ -1054,7 +1031,8 @@ paper's Figure 1 pressed into its corner is smaller than the page it will get la
 **The cover and the closing page keep the template's composition.** Their title block,
 chips, marks and rules are the design; the illustration or photograph beside them is the
 placeholder. Put the page's picture into that slot -- `replace_picture(layout_pictures(slide)[0],
-image, "cover")` when the slot is on the layout, `pictures={n: image}` when it is on the page --
+image, "cover")` when the slot is on the layout, `replace_picture(shape_at(slide, n), image)` when
+it is on the page --
 and never drop the layout's art to make room for a full-bleed photograph (`drop_shape` refuses a
 layout shape): a live cover did exactly that and came out as black type on a washed skyline.
 What goes into the slot is decided by what the template put there, and the template can be
@@ -1092,7 +1070,7 @@ texture form, `backdrop(slide, image, alpha=0.1, scrim=None)`, and it stops bein
 0.12. Look at the render (§10): the contrast reading is taken off the pixels, so type that does
 not carry over the picture comes back as unreadable type. A body
 page dense with cards does not want one. The same knob exists for a picture already on the
-page: a photograph the template drew or `pictures=` filled that a title has to read over wants
+page: a photograph the template drew or `replace_picture` filled that a title has to read over wants
 a plane of ink over it and light type, the way `backdrop` lays one -- not `wash(shape_at(slide, n),
 0.3)`, which is fog; a picture at full strength again is `wash(shape, 1)`.
 
@@ -1378,7 +1356,7 @@ the template's furniture is the page's furniture -- leave it, and put the source
 one page of the deck that does have room, or on the page you composed yourself.
 
 ```python
-clone_page(prs, tpl, 7)                            # the template's page, filled in
+slide = clone_page(prs, prototype(tpl, 7))        # the template's page; replace_text per line
 strip = page().footer
 taken = shapes_in(slide, strip, share=0)           # anything of the template's reaching in
 if not taken:                                      # the band is the template's, or it is yours
@@ -1463,7 +1441,7 @@ add_icon(slide, "clock", Inches(0.7), Inches(2.1), Inches(0.42), ACCENT)
 ```
 
 **On a cloned page the icon is the template's, and `swap_icon` changes it.** A template's
-icon is a freeform path holding no text, so `adapt` passes it by and a page about supply
+icon is a freeform path holding no text, so `replace_text` passes it by and a page about supply
 chains keeps the trophy the template drew. `swap_icon(slide, shape, name)` draws `name`
 where that shape was, as large as it was and in its colour -- a theme slot stays a theme
 slot, so the icon keeps following the deck's palette -- and removes the old one. `shape`
@@ -1472,7 +1450,7 @@ of the read-back page:
 
 ```python
 from ppt_icons import swap_icon
-slide = adapt(prs, prototype(tpl, 12), title="存在问题", items=[...])
+slide = clone_page(prs, prototype(tpl, 12))       # then replace_text per line
 swap_icon(slide, shape_near(slide, 6.2, 2.0), "truck")        # the second badge's glyph
 ```
 
@@ -1549,7 +1527,7 @@ own; 6 of 17 read as "drawn by hand and ugly", and the six were exactly the comp
 17 of 17 read as "nothing but self-drawn layouts".
 
 **Even a page you compose starts on the template's page.** Clone the nearest example,
-`drop=` the units the page does not need, and draw into the region that frees -- the
+`remove_unit` the units the page does not need, and draw into the region that frees -- the
 header row, the panels, the marks and the ground stay the template's, and only the body
 is yours. A page drawn from primitives alone carries none of them, and on a live deck the
 six pages a reader singled out as drawn by hand were exactly the six composed that way.
@@ -1559,13 +1537,22 @@ six pages a reader singled out as drawn by hand were exactly the six composed th
 that would draw it** — up to six pages a call, and as many of them as fit one reply; the ones
 left out are named in `pages_not_read`, so ask for those in a second call. It is flat and literal: every position in
 inches, inherited sizes and colours resolved, groups opened, and a `# [n]` above each
-shape, which is the numbering `shape_at` and an integer key in `adapt` both use. The
+shape, which is the numbering `shape_at` uses. The
 page's own pictures are written into the build directory beside your script, so an
 `add_picture("template_00.png", ...)` line in it runs as pasted, and the imports it needs
 head the block as comments. Read a page this way when you need its real numbers -- a card
 row's pitch, the title's exact box, the accent it really uses. What it cannot reproduce is
 emitted as a comment naming itself -- a custom-drawn shape, a gradient, a pattern fill or
 a semi-transparent fill -- and those are the pages to clone rather than redraw.
+
+**A chart on a template page is the exception to that clone.** The layout may be cloned,
+but the chart must be redrawn with `ppt_charts` from your own data and placed in the same
+position; the read-back page and the line beside the render both name the box it occupies.
+Cloning it keeps the template's own numbers and nothing here rewrites them: a chart's
+labels live in its own part rather than in a text frame, so `replace_text` does not reach
+them, and no gate reads inside a chart either -- a page shipped this way shows the
+template's own categories and nothing refuses it. Drop it off the clone --
+`drop_shape(shape_near(slide, left, top))` -- and draw yours into that box.
 
 ### The pages you clone
 
@@ -1575,35 +1562,34 @@ Those four are what a reader recognises the house by: a deck that draws its own 
 announces itself as not the user's before a word of it is read.
 
 ```python
-from ppt_template import adapt, prototype, shape_at, units, fill
+from ppt_template import clone_page, drop_shape, prototype, remove_unit, replace_picture, replace_text, shape_at, units
 tpl = Presentation(os.environ["PPT_TEMPLATE_SOURCE"])   # the original, with its example pages
-adapt(prs, prototype(tpl, 1),                    # prototype(tpl, N) counts from 1, like the menu
-      title="项目标题",                            # the page's own title row, by role
-      texts={"探索通用行业创新创业新机遇": "本次汇报副标题"},   # a cover's second line, by its words
-      pictures={7: f"{FIGURES}/selected-figure.png"},
-      keep=["20XX.XX.XX"],                       # left exactly as the template wrote it
-      drop=["Presenter name"])                   # a key is the text the shape shows, or its
-                                                 # index -- drop=[3]. Never a shape's name
-adapt(prs, prototype(tpl, 2),                    # the contents page: one unit repeated
-      title="目录", subtitle="Agenda",
-      items=[["01", "第一部分", ""],              # one entry per unit, one value per text
-             ["02", "第二部分", ""],              # shape in it; the spare units are
-             ["03", "第三部分", ""]])             # deleted, not emptied
+
+s = clone_page(prs, prototype(tpl, 1))           # prototype(tpl, N) counts from 1, like the menu
+replace_text(s, "科幻未来·推动行业革新", "项目标题")     # the key is the text that shape holds NOW --
+replace_text(s, "探索通用行业创新创业新机遇", "本次汇报副标题")  # ppt_template(pages=[1]) prints it
+replace_picture(shape_at(s, 7), FIGURES / "selected-figure.png", "cover")
+drop_shape(shape_at(s, 3))                       # a line this cover does not use
+                                                 # "20XX.XX.XX" left alone stays as written
+
+s = clone_page(prs, prototype(tpl, 2))           # the contents page: one unit repeated
+replace_text(s, "目录", "目录")
+for old, new in (("第一部分标题", "市场现状"), ("第二部分标题", "需求侧"), ("第三部分标题", "落地路径")):
+    replace_text(s, old, new)                    # one call per line the page says
+for spare in max(units(s), key=len)[3:]:         # the slots this deck has no sections for
+    remove_unit(spare)                           # removed and the row closed up
 ```
 
-**Name the heading by its role, not by its shape.** `title=` and `subtitle=` write the
-page's own heading rows -- its title placeholder, or the topmost line in the top third.
-`texts={"单击此处添加页面标题": ...}` still works and needs you to know what the slot says now.
-Without either, `items` alone leaves the header empty, and writing "目录" and "Agenda" back
-as two new boxes over the clone is the one construction `template_underlay` refuses.
+**Every line is named by the words it is holding.** There is no by-role shortcut and none
+is needed: `ppt_template(pages=[N])` reads the page back with the text of every shape
+printed above it, and each of those strings is a key `replace_text` takes. Read the page,
+then write one call per line. Writing "目录" and "Agenda" back as two new boxes over the
+clone instead is the one construction `template_underlay` refuses.
 
-**Both land on a content page; `subtitle` runs out on a closing one.** `title` finds a row
-on nearly any page and `subtitle` on nearly any content page. Where `subtitle` has nothing
-to resolve to is a closing page, whose line under the title is the presenter's name, and a
-cover that centres its title mid-page; there `adapt` raises rather than guessing, listing
-every shape, so name that line in `texts={...}` off the render. A cover can resolve
-`title` onto the presenter credit above the real title -- if the render shows the wrong
-row rewritten, `texts` keyed on the words is the fix.
+**A string that matches nothing raises, and lists what the page does hold.** That listing is
+the fix: paste the string it prints. Matching is on the words in the box and never on a
+shape's name, so `drop_shape(shape_saying(s, "Presenter name"))` removes the cover line
+that says that, while a real shape name out of the file matches nothing.
 
 **Drawing into a cloned page means clearing the space first.** `replace_text` swaps
 words where they stand, and that is all it does; the moment a chart, a panel or a figure
@@ -1636,28 +1622,31 @@ A shape's own box is a region, so clearing exactly where the template drew somet
 `clear_region(slide, page_box(shape_at(slide, 3)))` -- `page_box` answers in the two
 corners a region is given in, with the scale the shape's group applies to it.
 
-**Numbering: an integer key is the shape's place on the page**, as the read-back page
-prints it (`# [n]`, groups opened, counting shapes that cannot be drawn as well as those
-that can). `shape_at(slide, n)` counts the slide as it stands **now**, so it is the same numbering only
-while nothing has been removed: `drop=` and a short `items=` both delete shapes, and every
-shape after a deleted one moves down by one. Number against the read-back page, then either
-name what you want in the same `adapt` call, or hold the shape `adapt` handed back.
+**Numbering: an integer is the shape's place on the page**, as the read-back prints it
+(`# [n]`, groups opened, counting shapes that cannot be drawn as well as those that can).
+`shape_at(slide, n)` counts the slide as it stands **now**, so it is the same numbering only
+while nothing has been removed -- `drop_shape` and `remove_unit` both renumber everything
+after them. Prefer `replace_text` keyed on words, which no deletion disturbs; where you do
+need an index, take the handle before you delete anything.
 
-**A string key is the text a shape holds, never the shape's name.** It matches on the words
-in the box, so `drop=["Presenter name"]` removes the cover line that says that, while
-`drop=["template-credit"]` raises `KeyError` listing every shape on the page — as does a
-real shape name out of the file, `drop=["标题 4"]`.
+**A cloned page keeps the template's words, so a line you did not replace is still saying
+them.** That is this route's safety rather than a nuisance: the miss is visible on the page,
+and the build refuses to publish it and quotes the line back (`placeholder_copy`, §12).
+There is no third answer -- a block is replaced, or taken off the page with `drop_shape`.
+The one line that stays is a structural page's own label: the `目录` or `Agenda` a template
+writes on its index page is what that page is called, and the check does not ask for it back.
+The alternative was measured and rejected: a call that emptied what it was not told about
+turned the same mistake into a page holding a title over twenty blank boxes with every
+check green, and a blank page is a page nothing can name.
 
-**Text you do not name is emptied**, because the words in a template page are its example
-copy; shapes you do not name keep what the template put there, which is how the page
-arrives designed.
-
-**An emptied shape is not a removed one.** `adapt` empties the text and leaves the box
-standing, because the box is often the design -- a tinted panel, a numbered circle. So
+**An emptied shape is not a removed one.** Writing `""` empties the text and leaves the
+box standing, because the box is often the design -- a tinted panel, a numbered circle. So
 `""` is not a spelling of delete: written into agenda slots a deck has no sections for, it
-ships the numbered bubbles anyway. `drop=` removes a shape before the clone is filled, by
-the same two keys as `texts`; `drop_shape(shape)` removes one afterwards, on the slide `adapt` handed back -- reach
-for that shape by the box you kept, not by counting to 7 again.
+ships the numbered bubbles anyway. `drop_shape(shape)` takes a shape off the page --
+reach it with `shape_saying(slide, "the words it holds")` or `shape_at(slide, n)`;
+`remove_unit(unit)` takes a whole slot out and closes the row up. Reach for a shape by the
+words it holds or by the box you kept, not by counting to 7 again after something was
+removed.
 
 **Never lay a new text box over a page you cloned.** The construction is `clone_page` for
 the background, `add_textbox` for the copy, `replace_text` never called — and it ships the
@@ -1667,7 +1656,8 @@ on it arrives by replacing a word that was there.
 
 **The template's photographs are placeholders.** A cover's stock photograph of a meeting
 table says nothing about the deck's subject: replace it with a figure from the sources or
-take the frame out — `pictures={7: f"{FIGURES}/fig3.png"}`, or `drop=[9]`. An image under a
+take the frame out — `replace_picture(shape_at(s, 7), f"{FIGURES}/fig3.png")`, or
+`drop_shape(shape_at(s, 9))`. An image under a
 tenth of the page is different: an icon, a corner flourish or a rule, and part of the
 design.
 
@@ -1677,15 +1667,15 @@ did -- contained it sits as a strip in an empty frame, cropped it loses about th
 of the figure -- and the warning comes back in the build reply's `warnings`. A photograph
 cropped to a banner is a crop a designer makes; a chart that lost its outer columns is
 not, so look at the render and, where the figure matters, give the frame the box it needs:
-`pictures={4: (f"{FIGURES}/fig2.png", (0.8, 1.6, 7.4, 4.2))}`, where the four numbers are
-`(left, top, width, height)` in inches — a **size**, the same one `place` takes, and not
+`replace_picture(shape_at(slide, 4), f"{FIGURES}/fig2.png", box=(0.8, 1.6, 7.4, 4.2))`, where the
+four numbers are `(left, top, width, height)` in inches — a **size**, the same one `place` takes, and not
 the two corners a `ppt_layout.Box` holds. A `Box` handed over whole is converted; what you
 must not do is unpack one into four numbers, because `Box.corners(0.72, 1.24, 12.6, 6.7)`
 read as a size draws a 12.6x6.7in frame off the side of a 13.33in page.
 
 **Some of a template's photographs are on its layouts, not its pages.** Several bundled
 templates carry the cover's, the section page's and the closing page's picture on the
-layout, so every page built on it inherits the same picture and `pictures={...}` on the
+layout, so every page built on it inherits the same picture and a `replace_picture` on the
 cloned page never reaches it -- `template_picture` cannot see it either; `layout_picture`
 names the layout, and `ppt_template` lists them as `layout_pictures`. `layout_pictures(slide)`
 returns those shapes, largest first, and `replace_picture(layout_pictures(slide)[0],
@@ -1709,13 +1699,11 @@ such clones rendered beside their sources, every fill on the reference pages is 
 colour or white.
 
 ```python
-from ppt_template import adapt, bundled, prototype
+from ppt_template import bundled, clone_page, prototype, replace_text
 
-slide = adapt(prs, prototype(bundled("gold_panel_year_end_summary"), 13),
-              title="五步落地路径",
-              items=[["选址", "客流热力图选点"], ["招商", "首批 120 户摊主"],
-                     ["运营", "统一收银与卫生"], ["推广", "短视频矩阵引流"],
-                     ["评估", "月度复盘迭代"]])
+slide = clone_page(prs, prototype(bundled("gold_panel_year_end_summary"), 13))
+for old, new in zip(read_back_keys, ["选址", "招商", "运营", "推广", "评估"]):
+    replace_text(slide, old, new)
 ```
 
 Record both on that page of the plan -- `borrowed: "gold_panel_year_end_summary"` and
@@ -1725,26 +1713,29 @@ file name without `.pptx` and names the ones that ship when it is wrong. Only th
 pages ppt_template listed are offered: the deck's cover, index and closing are always the
 bound template's own.
 
-Everything above about a cloned page holds for a borrowed one -- `items` fills its units
-and closes up the spares, `texts` names the rest, unnamed text is emptied, and the
-template's own photographs are placeholders to replace.
+Everything above about a cloned page holds for a borrowed one -- `replace_text` per line,
+`remove_unit` for the slots the content does not fill, whatever you replace in neither
+still says the source template's example copy, and its photographs are placeholders.
 
 **Two things do not follow the deck, and ppt_template names both against the pages they
 are true of.** A picture is a bitmap, so a reference page whose drawings are painted in
 its own template's accents arrives in those accents whatever deck it lands in --
-`pictures={...}` them out. And a page's ink is stated on its runs: a reference page
-labels its cards in white because nine of the ten bundled templates have an accent
-dark enough for that, so in a deck whose accent is paler the labels have to be set in
-the deck's own ink instead. Everything else -- fills, type, geometry, the filling
-ports -- comes across in this deck's palette; measured over all 252 cross-template
-clones of these pages, nothing else did not.
+`replace_picture` them out. And a page's ink is stated on its runs while its cards take
+the deck's palette, so a label that reads in the template it was cut from can arrive on
+a colour that cannot show it: measured over 486 clones of these pages into the ten
+bundled templates, 89 came out with copy under the 2:1 the build refuses, in every one
+of the ten -- on a pale accent, on a 60/40 tint of one, on the near-white second plane
+and on the page ground itself. ppt_template names the pairs your deck cannot show; reset
+those labels in its ink, or fill the card with one of its darker colours. Everything else
+-- fills, type, geometry, the filling ports -- comes across in this deck's palette, and
+over those 486 clones nothing else did not.
 
 ### The pages you compose
 
 **Adapt first, and compose what no example can carry.** A page started from the nearest
 example by information shape arrives already in the house style -- the pitch of its rows,
 its title's own box, its accents, the spacing its designer chose -- and none of that is
-work you then have to do. Filling one leaves nothing behind either: `adapt(items=...)` and
+work you then have to do. Filling one leaves nothing behind either: `remove_unit` and
 `fill` delete the units your content does not fill, so a six-card prototype carrying four
 cards comes out as four cards. Compose where no example carries the page's information
 shape, and say which example you looked at in `needs`; a deck none of whose pages came
@@ -1965,6 +1956,18 @@ after `ppt_review` there is no further pass, no stage that rearranges the pages 
 gates clear. So a page you send on unlooked-at ships as it is, and a deck you have read
 through -- and had read back to you -- and would not change is finished.
 
+**Where the user named the file's destination, the build delivers there.** State it once as
+`ppt_build(deliver_to="/absolute/dir/name.pptx")` -- or a directory ending in `/` to keep
+the deck's own name -- on any build, a draft included; it is kept for the deck, and every
+build that publishes writes `out/` and copies the same bytes there, the first time and on
+every revision after. The reply comes back with `delivered_to` and the slide count, and
+those are the words to give the user. Two files land, not one: the deck's PDF preview is
+written beside it under the same stem -- but only where nothing holds that `.pdf` name
+already. A file there is the user's own and is left untouched, the preview stays under
+`out/`, and the reply says so in `delivered_pdf_kept_back`; pass that on, because it is
+the user's directory and they are the one who knows what that file was. A copy you make
+with `exec` is recorded nowhere, is not the deliverable, and is called out as such.
+
 ## 11. The order is enforced, not suggested
 
 `ppt_build` refuses until `ppt_prepare` has read the task, and until `ppt_brief` holds the
@@ -1998,6 +2001,7 @@ is written:
 | when ingest extracted no figures at all, a **cited page nobody opened** | `web_fetch` each URL the materials cite and take its image links, then `ppt_fetch` what you will use -- or the PDF behind an abstract, so `ppt_ingest` extracts its figures |
 | with a template bound, a plan **composing more than a quarter of its content pages** from scratch -- neither a `prototype` nor a `borrowed` page | give the rest the nearest example by information shape and adapt it; keep composing only the pages whose shape no example carries, and say which in `needs` |
 | a **`borrowed` naming no bundled template, or a page of one that is not a content page** | take the template and page from `borrowable_pages` in the `ppt_template` reply; the bound template's own pages take `prototype` alone |
+| a plan starting **more of its content pages on one prototype** than on all the others together -- four pages at least, and only where this template's own unused examples can carry the repeats | the reply names an example per repeating page by what that page says it carries; record `prototype: N` on those pages. Keep the one prototype for pages that are a series a reader compares across, and say in `needs` which shape no other example carries |
 
 For each URL that holds nothing usable, or will not load, say so in `ppt_outline`'s
 `swept`:
@@ -2008,7 +2012,6 @@ The rest land on the built deck:
 
 - a page **citing one figure while showing another**;
 - a **length the brief did not agree**, or **the wrong language**;
-- a theme that is **not the bound template's**;
 - a page the build **cannot map back to** a block of your code;
 - a page whose **block raised** while the build ran it on its own (§4): a page saying so
   stands in its place and the rest of the deck was still drawn, so fix that block in the
@@ -2018,7 +2021,6 @@ The rest land on the built deck:
   plan the page again without it;
 - a page whose plan **planned a table and that shows none** -- draw it with
   `ppt_layout.table()`, or plan the page again without one;
-- copy **printing an escape** (`48.3\nOVIS` -- pass a real newline);
 - type a reader **cannot make out**: under 2:1 against the ground it landed on;
 - words **colliding in the render**, which is not answerable by shrinking them;
 - copy **set above where its box starts**: a frame anchored to the middle or the bottom
@@ -2028,7 +2030,12 @@ The rest land on the built deck:
   every neighbour stay as they are. Nothing here asks you to cut a line, and a frame that
   shrinks its own type to fit is not in this at all;
 - the template's own **placeholder text** still on a page you cloned, or that page
-  cloned for its background with **new text boxes laid over** it.
+  cloned for its background with **new text boxes laid over** it;
+- a page you **cloned and never wrote into**: under the copy its kind of page needs,
+  and holding more empty text frames than frames with words in them. A frame written
+  with `""` is emptied, not removed, and a page of them is a page that says nothing --
+  write every line of the page with `replace_text`, and `drop_shape` or `remove_unit`
+  what the page does not use.
 
 **Reported**, with a page number, and every one of them yours to judge:
 
@@ -2038,6 +2045,8 @@ The rest land on the built deck:
 | `type_floor` | **type under the floors** of §3 | a taller box, a wider column, less copy or a second page -- never a smaller size |
 | `type_scale` | body copy over the 14pt floor but under `BODY_PT`, at a size **not a step of the ramp** | `size=BODY_PT`, `size=LABEL_PT`, or `the_largest_step_this_copy_takes(text, box, font=F)` |
 | `type_drift` | **one slot the deck sets at several sizes** | give the boxes the height one size needs |
+| `row_type_drift` | **one row whose cards came out at different sizes**: the copies of one slot inside a single repeating unit, measured against each other rather than against the size the slot was drawn at. Every box is behaving -- each shrank its own copy to fit -- and the row is what reads wrong, so no per-box reading can see it | even out how much the units hold, or set that slot one size explicitly. Giving one card more height fixes that card and leaves the row uneven |
+| `outranked_title` | a page whose **title and the line under it came out at one size**, with the line under it the longer of the two, so a reader meets the caption as the heading. On a cloned page the title states no size at all -- it resolves through the layout and the master -- so the number your caption matched is one nothing in your program shows you; the finding names it | state the caption a step down (`size=BODY_PT`, or `size=LABEL_PT`), or shorten it until it reads as a caption. Where the caption box is the template's own, its size came with the page rather than from your program: state a smaller one there and leave the title alone |
 | `evidence` | a deck with **too few content pages showing anything** -- a figure, a table, a chart or a diagram, counted across the deck rather than page by page | `plane` is a filled shape like any other, so three cards come to three and the same three on a plane come to four |
 | `wide_table` | a **table too wide to read** | fewer columns, or the page turned over to it |
 | `native_table` | a table still **wearing Office's own look** | `ppt_layout.table()`, which takes the banding and gallery style off and keeps every row -- or draw the grid yourself, which never had them |
@@ -2046,6 +2055,9 @@ The rest land on the built deck:
 | `crowded_panel` | a line **crowding its panel**'s bottom rim | the padding your other panels have, or one line less |
 | `covered_shape` | content three fifths **hidden behind an opaque shape** drawn after it, read off the file's z-order rather than off the render | draw the covering shape first, or shrink it off what it hides. It reads the file and not the page, so a shape that covers nothing a reader was looking at is yours to dismiss -- the render-side check that can prove a reader lost something is `word_collision`, and that one refuses |
 | `off_page` | a shape **over the page edge** | inside `safe_area_corners_in` |
+| `house_style` | a theme that is **not the bound template's**, read off the theme's colour scheme slot by slot | open the deck with `Presentation(os.environ['PPT_TEMPLATE'])` rather than `Presentation()`. If you repainted the theme deliberately, this is the finding to leave alone -- `ppt_template(repaint=true)` is the way to do it that keeps the two in step |
+| `literal_escape` | copy **printing an escape** as characters (`48.3\nOVIS`, `&nbsp;`, `_x000B_`) | pass a real line break -- a newline in the string, which becomes a new paragraph -- or split the copy into two values. A paragraph carrying a quote or a bracket is read as showing code and is left alone |
+| `boxless_copy` | copy in a **box with no height**, or no width, so the page shows nothing of it however much it says | give the box the size its copy needs (`text_size`, `card_size`), or take the block off the page. Read off the declared geometry, so a box your own code sized to zero is the case it was written for |
 | `spilled_copy` | copy **painted off the page** by a `wrap=False` box | turn wrapping on and give the box a second line's height |
 | `over_layout_art` | copy **on the layout's artwork** | inside `safe_area_corners_in` |
 | `flat_formula` | an **expression set as prose**, so its subscripts are flat and the box may break it inside a symbol | `formula()` (§9) |
@@ -2062,7 +2074,8 @@ The rest land on the built deck:
 | `page_mapping` | a build whose **pages cannot be told apart** in what the run recorded -- a separate reading from the refusal above, which is about the `# SLIDE` blocks in your file where this one is about what the run made of them. The two can arrive together | one block per page, each composing its own page |
 
 | `template_adherence` | a deck **none of whose pages came from** the template's own structural pages | clone the cover, the contents list, the divider and the closing (§8) |
-| `template_picture` | the template's **photographs still showing** | `pictures={n: ...}` a figure in, or `drop=[n]` |
+| `template_picture` | the template's **photographs still showing** | `replace_picture(shape_at(s, n), ...)` a figure in, or `drop_shape` |
+| `placeholder_marks` | the template's **numerals and marks left on a page** -- its glyphs, its lone tokens -- said once per page with a few named, where a phrase of the template's refuses on its own | keep the ones the design draws, `replace_text` or `drop_shape` the rest |
 | `prototype_kept` | a page built on a **prototype other than the one its outline named** | either page reads, so build it or rewrite that outline line |
 
 At the plan, four more: a page planned with one line and nothing else, a deck spending a

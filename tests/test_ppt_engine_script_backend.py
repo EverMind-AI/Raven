@@ -817,3 +817,154 @@ async def test_a_crash_in_the_prelude_is_still_the_whole_builds(project: Project
 
     assert not outcome.ok
     assert "no prs yet" in outcome.stderr
+
+
+SAVES_HALFWAY = textwrap.dedent(
+    """
+    import os
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+
+
+    def new_slide(text):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        box = slide.shapes.add_textbox(Inches(0.8), Inches(0.6), Inches(11), Inches(1))
+        box.text_frame.text = text
+        return slide
+
+
+    # SLIDE 1
+    new_slide("First")
+    prs.save(os.environ["PPT_OUTPUT"])
+
+    # SLIDE 2
+    new_slide("Second")
+
+    # SLIDE 3
+    new_slide("Third")
+    raise KeyboardInterrupt("the caller stopped it")
+
+    prs.save(os.environ["PPT_OUTPUT"])
+    """
+).lstrip()
+
+
+@pytest.mark.asyncio
+async def test_a_script_that_saved_once_already_still_keeps_every_page_it_drew(project: Project) -> None:
+    """The rescue used to stand down whenever a file was already at PPT_OUTPUT, and a
+    script grown page by page keeps the `prs.save` it had when it was shorter. A live
+    16-page run had exactly that line after its eighth page: the file existed from page
+    8 on, so the rescue skipped, and the eight-page deck it wrote was kept as the record
+    of a run that had drawn ten. Two pages thrown away by the line meant to save them.
+
+    Now the rescue asks whether the script reached its own last save, not whether a file
+    is there."""
+    from pptx import Presentation
+
+    outcome = await _build(project, SAVES_HALFWAY)
+
+    assert not outcome.ok, "an interrupted build is not a deck"
+    kept = project.review_dir / "build_failures" / "failure-001" / "deck.pptx.building"
+    assert kept.is_file()
+    deck = Presentation(str(kept))
+    texts = [" ".join(s.text_frame.text for s in slide.shapes if s.has_text_frame) for slide in deck.slides]
+    assert len(texts) == 3, f"the stale one-page save was kept instead of the three pages that drew: {texts}"
+    assert "First" in texts[0] and "Second" in texts[1] and "Third" in texts[2]
+
+
+REWRITES_PAST_THE_SAVE = DECK.replace(
+    'prs.save(os.environ["PPT_OUTPUT"])',
+    'prs.save(os.environ["PPT_OUTPUT"])\ntitle(one, "rewritten past the save")',
+)
+
+
+@pytest.mark.asyncio
+async def test_a_build_that_finished_is_the_file_the_script_saved(project: Project) -> None:
+    """The other half of the rescue's condition. It now writes over whatever is at
+    PPT_OUTPUT, so it must not run at all on a build that finished -- a deck saved and
+    then edited in memory would otherwise be delivered as the edit, and no author writing
+    `prs.save` last expects the bytes on disk to be anything but what they saved.
+
+    The page is rewritten after the save here because that is the only difference a
+    second save would show."""
+    from pptx import Presentation
+
+    outcome = await _build(project, REWRITES_PAST_THE_SAVE)
+
+    assert outcome.ok and outcome.pages == 2, outcome.stderr
+    deck = Presentation(str(outcome.pptx_path))
+    texts = [" ".join(s.text_frame.text for s in slide.shapes if s.has_text_frame) for slide in deck.slides]
+    assert "Unified video segmentation" in texts[0], f"the deck was written again after the script saved it: {texts}"
+    assert "rewritten past the save" not in texts[0]
+
+
+STAND_IN_CANNOT_WRITE = textwrap.dedent(
+    """
+    import os
+    from pptx import Presentation
+    from pptx.shapes.shapetree import SlideShapes
+    from pptx.util import Inches
+
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+
+    _add_textbox = SlideShapes.add_textbox
+    _refused = []
+
+
+    def _refuse_once(self, *args, **kwargs):
+        if not _refused:
+            _refused.append(1)
+            raise RuntimeError("this deck cannot take a textbox")
+        return _add_textbox(self, *args, **kwargs)
+
+
+    def new_slide(text):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        box = slide.shapes.add_textbox(Inches(0.8), Inches(0.6), Inches(11), Inches(1))
+        box.text_frame.text = text
+        return slide
+
+
+    # SLIDE 1
+    new_slide("First")
+
+    # SLIDE 2
+    new_slide("Second")
+    SlideShapes.add_textbox = _refuse_once
+    raise ValueError("page two")
+
+    # SLIDE 3
+    new_slide("Third")
+
+    prs.save(os.environ["PPT_OUTPUT"])
+    """
+).lstrip()
+
+
+@pytest.mark.asyncio
+async def test_a_stand_in_that_cannot_be_written_on_still_holds_its_place(project: Project) -> None:
+    """The placeholder is drawn inside the `except` that caught the page, so a raise
+    while drawing it leaves the loop and every page after it goes with the one that
+    failed -- the whole thing the loop exists to prevent. What can raise in there is a
+    deck with no slide size or no layout the placeholder can use, which a script cannot
+    construct; refusing the textbox once is the same code path.
+
+    The page is added before anything is written on it, because the page is what keeps
+    page and block paired by position. The failure is named in the record either way."""
+    from pptx import Presentation
+
+    from raven_ppt.backends.script import page_failures
+
+    outcome = await _build(project, STAND_IN_CANNOT_WRITE)
+
+    assert outcome.ok and outcome.pages == 3, outcome.stderr
+    deck = Presentation(str(outcome.pptx_path))
+    texts = [" ".join(s.text_frame.text for s in slide.shapes if s.has_text_frame) for slide in deck.slides]
+    assert "First" in texts[0] and "Third" in texts[2], f"page 2's placeholder cost the pages around it: {texts}"
+    assert not texts[1].strip(), "the placeholder could not be written on, so it says nothing"
+    assert [entry["page"] for entry in page_failures(project)] == [2]
+    assert "ValueError: page two" in page_failures(project)[0]["error"]

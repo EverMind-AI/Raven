@@ -1,10 +1,12 @@
 """What the declared geometry alone can decide.
 
-Two things, and only two. A shape whose declared box leaves the canvas has left
-it however the copy inside reflows -- the frame's origin is not something the
-renderer negotiates. And a short label in a box narrower than the label needs
-wraps into a stacked mess that no render check can see, because nothing overlaps:
-the label is simply broken, so it has to be caught before it is drawn.
+Three things, and only three. A shape whose declared box leaves the canvas has
+left it however the copy inside reflows -- the frame's origin is not something the
+renderer negotiates. A box with no height at all cannot show what is in it, for
+the same reason and more plainly. And a short label in a box narrower than the
+label needs wraps into a stacked mess that no render check can see, because
+nothing overlaps: the label is simply broken, so it has to be caught before it is
+drawn.
 
 What used to be here as well, and is deliberately gone: the same module also
 measured text-on-text overlap and text running past its card off the *declared*
@@ -204,6 +206,59 @@ def off_page_shapes(pptx_path: Path) -> list[Finding]:
                     detail={"edges": tuple(crossed), "text": text[:40]},
                 )
             )
+    return findings
+
+
+def boxless_copy(pptx_path: Path) -> list[Finding]:
+    """Pages holding copy in a box with no height, or no width, to show it in.
+
+    The plainest way for a page to lose its words, and the one nothing measured. A
+    live build's page 12 came back as the template's background and its footer, and
+    read as an empty page; opened, it held the page's entire copy -- title and all --
+    in the closing prototype's title placeholder, declared at 11.88in wide and
+    exactly 0in tall. The renderer painted a sliver of it against the top edge.
+
+    Every check that could have caught it looked past it, and each for its own good
+    reason: `emptied_page` and `thin_copy` count the characters a page carries and
+    found them all; `placeholder_copy` found nothing of the template's left; `off_page`
+    measures a box against the canvas edges and this one is inside them; `unreadable`
+    reads the ink against the ground under a box that has an area.
+
+    Reported rather than refused. A box with no height shows nothing whatever the copy
+    inside it says, and the fix is a number in the author's program -- but the whole
+    calibration is one page out of 531, and that page's box was moved by the author
+    program's own safe-area constants rather than by anything here (D52).
+    """
+    presentation = open_deck(pptx_path)
+    findings: list[Finding] = []
+    for number, slide in enumerate(presentation.slides, start=1):
+        lost: list[str] = []
+        for shape in iter_shapes(slide.shapes):
+            if not getattr(shape, "has_text_frame", False):
+                continue
+            text = " ".join(shape.text_frame.text.split())
+            if not text:
+                continue
+            # None is "this shape states no geometry", which is not evidence of
+            # anything; a stated zero is.
+            if (shape.width is not None and shape.width <= 0) or (shape.height is not None and shape.height <= 0):
+                lost.append(text)
+        if not lost:
+            continue
+        findings.append(
+            Finding(
+                kind="boxless_copy",
+                severity=Severity.WARNING,
+                page=number,
+                message=(
+                    f"page {number} puts {'a block' if len(lost) == 1 else f'{len(lost)} blocks'} of its copy in a "
+                    f"box with no height or no width, so the page shows nothing of it: {lost[0][:60]!r}. "
+                    f"Give the box the size its copy needs -- `text_size` and `card_size` say how much that is -- "
+                    f"or take the block off the page"
+                ),
+                detail={"blocks": [text[:120] for text in lost]},
+            )
+        )
     return findings
 
 

@@ -25,6 +25,30 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- A Raven-PPT turn that changes nothing about an already published deck no
+  longer arrives carrying "compile the deck under out/ and end your final
+  reply with the MEDIA line": the prompt block reads the publish record and,
+  when a deck stands and the turn staged no material, says the deck stands
+  and a change is what needs another build. The turn after a delivery used
+  to publish the same deck again because it was told to. The guard that sends
+  a turn back for ending before its deck is published now follows the same
+  record: a turn that began with a deck standing and wrote no build of its
+  own ends where it stops, instead of being rolled back twice and told to
+  build and publish.
+
+- `adapt` is gone from the deck engine's template helpers. It cloned a template
+  page and filled it in one call, and it emptied every text frame the call did
+  not name -- the measured cause of a live deck's eight blank pages. The route
+  the skill teaches is `clone_page` and then `replace_text` keyed on the words
+  the page holds now, and that is now the only route there is: a route nobody
+  is taught is still a route a model reaches for from an older reference. The
+  author-facing `ppt_template` module is the engine's own source, so an
+  author's program calling `adapt` fails to import it. `title=`/`subtitle=`
+  went with it and has no replacement -- name the heading by the words the
+  template put there. The private helpers `clone_page` and `replace_text`
+  share are untouched. Every gate message, `ppt_template` reply and skill line
+  that spelled `texts=`, `items=`, `drop=`, `keep=` or `pictures=` now names a
+  call that exists.
 - The Raven-PPT launcher sizes the run's context window from the endpoint
   that will serve the model instead of a shipped number capped by the host
   catalog: OpenRouter is asked for the providers serving the model and the
@@ -87,6 +111,53 @@ All notable changes to Raven are documented here.
   chart was drawn in. The clone guidance in `ppt_template`'s reply, in a page read
   back as code, and in the authoring skill all name it.
 
+- A ppt-engine deck with a page the build could not draw is no longer
+  delivered as the finished deck. The tier's build cap releases what is wrong
+  with the pages that are there and holds `page_failed`, so a deck carrying a
+  "Page N did not draw" placeholder is still refused and the refusal names it;
+  the reply claims a delivery only when one happened. The build runner's rescue
+  save now asks whether the script reached its own last save instead of whether
+  a file is at the output path, so a script that saves halfway through no longer
+  leaves that shorter deck as the record of what was drawn; taking one page back
+  and standing in for it can no longer end the whole build.
+
+- A ppt-engine deck released at the tier's build cap is delivered without the
+  pages the build could not draw: the placeholder the runner stands in their
+  place is dropped from the published deck and from the PDF beside it, and the
+  reply names the pages left out and that the delivered file is shorter than
+  the deck the findings are numbered against. The built deck keeps every page.
+  The build runner's rescue save now asks whether the script reached its own
+  last save instead of whether a file is at the output path, so a script that
+  saves halfway through no longer leaves that shorter deck as the record of
+  what was drawn; taking one page back and standing in for it can no longer end
+  the whole build.
+- A ppt-engine draft build counts against the tier's build cap, and the build
+  that reaches the cap delivers the deck whether or not it asked for a draft.
+  Counting only finished builds left the cap inert on the runs it was for: two
+  measured runs made 13 and 7 builds without ever writing a build ledger, and
+  across four runs the author passed `draft: true` on 7/7, 13/13 and 5/5 of its
+  calls. A draft already costs a whole build, so there is one count rather than
+  two, and every reply now says how much of it is spent.
+- A ppt-engine draft build says that a draft is not what delivers the deck. The
+  one place that said so sat behind a check for a published path, which a draft
+  never has, so on the only path that needed it the sentence never appeared.
+
+- **A template page whose chart cannot be cloned is no longer told to clone it.**
+  Nothing in the ppt engine writes a chart's data, and `replace_text` cannot
+  reach a chart's labels, so a cloned chart arrives holding the template's own
+  numbers and no route empties them; the advice to clone one sent a live run to
+  a shell for 73 minutes measuring the template's axis type by hand. A chart is
+  now reported apart from what cloning keeps, with the box it occupies: the
+  layout may be cloned, but the chart is redrawn with `ppt_charts` from the
+  author's own data and placed in the same position. The pages stay on offer as
+  prototypes, and the line beside each render, the page read back as code and
+  `ppt_template`'s `next_step` all carry that instruction.
+- `ppt_outline` and `ppt_template`'s clone reply name `ppt_build`. Both told an
+  author to write the program and neither said where a program goes or what
+  runs it, which is the sentence the run above acted on last.
+- A theme id that is not in the build directory's `ppt_theme` raises a KeyError
+  naming the entries that are there, and says a palette of one's own is a copy
+  with fields changed rather than an edit to `themes.json`.
 - Four kinds of ppt-engine finding that six audited deck runs showed to churn
   without changing the deck are no longer repeated: findings about a page the
   runner stood in for (besides the failure itself), `repeated_layout` on
@@ -190,6 +261,22 @@ All notable changes to Raven are documented here.
   inherits the host's vendor choice and keys when its own config names none and
   the key resolves for it; the in-repo research plugin keeps its own separate
   search key.
+
+- The deck engine delivers to the path the user named. `ppt_build` takes a
+  `deliver_to` -- an absolute `.pptx` path, or a directory ending in `/` that
+  keeps the deck's own name -- states it once for the deck's life
+  (`deck/state/delivery.json`), and every build that publishes then writes
+  `out/` as before and copies the same bytes there, first delivery and every
+  revision after; a refused build leaves the last good deck standing there.
+  The deck's PDF preview is written beside it under the same stem, but only
+  where nothing holds that `.pdf` name already: a file there is the user's own
+  and nothing here replaces it, the preview stays under `out/`, and the reply
+  says so for the author to pass on. The copy is recorded in `published.json`
+  with `role: "delivery"`, the build reply tells the author the delivered
+  path and slide count in words to repeat to the user, and the turn hook
+  verifies a `MEDIA:` line naming that path by its digest while a copy made
+  with `exec` at any other path is named as not the deliverable and answered
+  with the argument that writes it there.
 
 ### Fixed
 

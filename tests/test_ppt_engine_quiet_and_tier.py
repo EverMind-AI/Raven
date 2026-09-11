@@ -105,6 +105,80 @@ def test_prototype_kept_is_said_once_per_page(tmp_path: Path) -> None:
     assert [f.page for f in second] == [34]
 
 
+# Where the two type baselines meet, stated as the boxes each finding is about -- the one
+# identity they share. A row's level is a slot inside a repeating unit and `type_drift`'s
+# group is a shape repeated anywhere in the deck, so `[width, height]` was the only thing
+# both could say and it does not identify either.
+CARDS = [[147.0, 288.0, 294.0, 335.0], [435.0, 288.0, 582.0, 335.0]]
+BODIES = [[147.0, 360.0, 294.0, 407.0], [435.0, 360.0, 582.0, 407.0]]
+
+
+def test_the_row_reading_wins_the_boxes_the_two_type_baselines_share(tmp_path: Path) -> None:
+    """The one rule here about two gates contradicting each other rather than repeating.
+
+    `type_drift` measures a slot against the size it was drawn at and asks for the height
+    that size needs; `row_type_drift` measures the row against itself and names that same
+    move as the one that fixes one card and leaves the row uneven. So on the boxes both
+    speak about, the row's answer is the one the author gets -- and every box the row
+    reading cannot see keeps its `type_drift` finding.
+    """
+    project = _project(tmp_path)
+    findings = [
+        _finding("type_drift", 3, slot_in=[2.04, 0.66], boxes=CARDS),
+        _finding("row_type_drift", 3, slot_in=[2.04, 0.66], boxes=CARDS),
+        _finding("type_drift", 3, slot_in=[2.04, 1.4], boxes=BODIES),
+        _finding("type_drift", 9, slot_in=[2.04, 0.66], boxes=CARDS),
+    ]
+
+    kept = quiet.quiet(project, findings)
+
+    assert [(f.kind, f.page, tuple(f.detail["slot_in"])) for f in kept] == [
+        ("row_type_drift", 3, (2.04, 0.66)),
+        ("type_drift", 3, (2.04, 1.4)),
+        ("type_drift", 9, (2.04, 0.66)),
+    ]
+
+
+def test_a_row_finding_leaves_a_level_of_its_own_page_drawn_the_same_size_standing(
+    tmp_path: Path,
+) -> None:
+    """Two levels of one page can be drawn to one size, and one of them was never read.
+
+    A card whose heading and body are both 3x0.6in is the ordinary case. Compared on
+    `[width, height]`, the row reading on the heading level silenced `type_drift` on the
+    body level of the same page -- a finding it had not looked at and does not contradict.
+    """
+    project = _project(tmp_path)
+    findings = [
+        _finding("row_type_drift", 1, slot_in=[3.0, 0.6], slot_at=1, boxes=CARDS),
+        _finding("type_drift", 1, slot_in=[3.0, 0.6], boxes=BODIES),
+    ]
+
+    kept = quiet.quiet(project, findings)
+
+    assert [(f.kind, tuple(f.detail["slot_in"]), f.detail["boxes"]) for f in kept] == [
+        ("row_type_drift", (3.0, 0.6), CARDS),
+        ("type_drift", (3.0, 0.6), BODIES),
+    ]
+
+
+def test_a_drift_finding_that_reaches_past_the_row_keeps_speaking(tmp_path: Path) -> None:
+    """Every box and not any: the copies the row reading never saw have had nothing said.
+
+    A `type_drift` finding covers the copies of one slot on one page, and where the row
+    holds some of them, the rest are still unanswered.
+    """
+    project = _project(tmp_path)
+    findings = [
+        _finding("row_type_drift", 1, slot_in=[3.0, 0.6], boxes=CARDS),
+        _finding("type_drift", 1, slot_in=[3.0, 0.6], boxes=[CARDS[0], BODIES[0]]),
+    ]
+
+    kept = quiet.quiet(project, findings)
+
+    assert [f.kind for f in kept] == ["row_type_drift", "type_drift"]
+
+
 def test_the_tier_file_round_trips_and_an_empty_overlay_clears_the_caps(tmp_path: Path) -> None:
     caps = tier.write_mode(tmp_path, {"buildCap": 10, "readingCap": 3}, "high")
     assert caps == tier.Caps(mode="high", build_cap=10, reading_cap=3)

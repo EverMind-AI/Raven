@@ -434,6 +434,23 @@ def test_every_check_produces_the_severity_it_declares(sample: Sample, tmp_path:
     # `displaced_copy` reads: every other fixture's copy is anchored to the top, where
     # copy that does not fit runs on downward and is `overset_copy`'s report instead.
     displaced = check_deck(DeckUnderReview(pptx_path=_a_label_set_above_where_its_box_starts(tmp_path)))
+    # The thirteenth keeps a title and empties the rest, which is the state `emptied_page`
+    # reads: every other fixture either fills the frames it draws or draws none, and the
+    # reading needs a plan to know what kind of page is being left blank.
+    emptied_path, emptied_plan = _a_page_whose_frames_were_emptied(tmp_path)
+    emptied = check_deck(DeckUnderReview(pptx_path=emptied_path, outline=emptied_plan))
+    # The fourteenth kept two of its template's marks and put one block of its copy in a
+    # box with no height: the first is what is left when a page has replaced the phrases
+    # and not the glyphs, and the second is a page that reads as empty while holding
+    # every word it was given.
+    kept_path, kept_template = _a_page_of_marks_and_a_box_with_no_height(tmp_path)
+    kept = check_deck(DeckUnderReview(pptx_path=kept_path, prototypes=kept_template))
+    # The fifteenth is the two readings about a *pair* of boxes: a title and the line under
+    # it at one size, and one repeating row whose members the renderer set apart. Its own
+    # file because both need a repeating unit or the layout's own title placeholder, and
+    # neither is a state a page of flat boxes can be in.
+    paired_path, paired_spans = _a_title_tied_to_a_row_that_disagrees(tmp_path)
+    paired = check_deck(DeckUnderReview(pptx_path=paired_path, type_spans=paired_spans))
 
     every = (
         *loaded,
@@ -448,6 +465,9 @@ def test_every_check_produces_the_severity_it_declares(sample: Sample, tmp_path:
         *marked,
         *fogged,
         *displaced,
+        *emptied,
+        *kept,
+        *paired,
     )
     assert {finding.kind for finding in every} == set(DISPATCH), "a row nothing produced"
     for finding in every:
@@ -553,6 +573,51 @@ def _a_body_nobody_divided(tmp_path: Path) -> tuple[Path, object]:
         )
     grid = Bands(title_top=0.0, title_bottom=1.2, body_bottom=6.6, footer_bottom=7.5, canvas_w=13.333, canvas_h=7.5)
     return builder.save("undivided.pptx"), grid
+
+
+def _a_page_whose_frames_were_emptied(tmp_path: Path) -> tuple[Path, object]:
+    """A card page holding its heading and four boxes with nothing in them.
+
+    What a live deck sent out eight times: the removed route cloned the prototype, wrote the
+    title, and emptied every text the call had not named, and the helper that was
+    meant to fill the rest looked for the template's own words and found none.
+    """
+    from raven_ppt.contracts.outline import Outline, PagePlan
+
+    builder = DeckBuilder(tmp_path)
+    page = builder.page()
+    builder.text(page, ("护城河是 CUDA。", 28.0), left=0.7, top=0.4, width=8.0, height=0.9)
+    for slot in range(4):
+        builder.text(page, ("", 14.0), left=0.7 + slot * 3.1, top=1.8, width=2.9, height=2.0, wrap=True)
+    plan = Outline(takeaway="一句话", pages=(PagePlan(page=1, claim="护城河是 CUDA。", carries="三张并列的卡片"),))
+    return builder.save("emptied.pptx"), plan
+
+
+def _a_page_of_marks_and_a_box_with_no_height(tmp_path: Path) -> tuple[Path, Path]:
+    """A page that replaced the template's phrases, kept its glyphs, and lost a box.
+
+    Two states no other fixture here is in. The glyphs are what `placeholder_marks`
+    folds into one line per page, and the block declared 0in tall is the page that
+    renders as its background while holding all of its copy.
+    """
+    from pptx.util import Emu
+
+    (tmp_path / "house").mkdir(exist_ok=True)
+    house = DeckBuilder(tmp_path / "house")
+    example = house.page()
+    house.text(example, ("单击此处添加文本", 24.0), left=0.7, top=0.4, width=8.0, height=0.9)
+    for index, mark in enumerate(("<", ">")):
+        house.text(example, (mark, 18.0), left=0.7 + index * 1.2, top=2.0, width=0.6, height=0.6)
+    template = house.save("house.pptx")
+
+    builder = DeckBuilder(tmp_path)
+    page = builder.page()
+    builder.text(page, ("单击此处添加文本", 24.0), left=0.7, top=0.4, width=8.0, height=0.9)
+    for index, mark in enumerate(("<", ">")):
+        builder.text(page, (mark, 18.0), left=0.7 + index * 1.2, top=2.0, width=0.6, height=0.6)
+    lost = builder.text(page, ("十二页的全部正文都在这一个框里。", 16.0), left=0.7, top=3.2, width=11.9, height=1.0)
+    lost.height = Emu(0)
+    return builder.save("marks.pptx"), template
 
 
 def _a_picture_mostly_cropped_away(tmp_path: Path) -> Path:
@@ -714,6 +779,51 @@ def _a_banded_table(tmp_path: Path) -> Path:
     return builder.save("banded.pptx")
 
 
+# Three cards, so the row is a row, and one line under a title that resolves to the
+# master's own 44pt -- which is the pair of states the two pair readings are about.
+_TIED_TITLE = "Network Status and the Global Fleet"
+_TIED_UNDER = "Systems in service, route kilometres, landings, and the ageing of the fleet"
+_TIED_CARDS = ("Systems in service", "Route kilometres", "Aging fleet")
+
+
+def _a_title_tied_to_a_row_that_disagrees(tmp_path: Path) -> tuple[Path, list[Span]]:
+    """One page carrying both pair defects, and the spans that say the renderer made them.
+
+    The title states no size, so it resolves through the master the way a cloned template
+    page does; the line under it states the same 44pt the master gave the title, and the
+    render sets both at 44pt. Under them three copies of a one-box unit are all drawn at
+    20pt and two of them come back at 16.8pt, which is a row nothing per-box can see.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[5])
+    title = slide.shapes.title
+    title.left, title.top, title.width, title.height = Inches(0.5), Inches(0.3), Inches(9.0), Inches(1.0)
+    title.text_frame.text = _TIED_TITLE
+    under = slide.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(9.0), Inches(0.6))
+    stated = under.text_frame.paragraphs[0].add_run()
+    stated.text = _TIED_UNDER
+    stated.font.size = Pt(44)
+    spans = [
+        Span(page=1, size_pt=44.0, text=_TIED_TITLE, x0=40, y0=25, x1=400, y1=69),
+        Span(page=1, size_pt=44.0, text=_TIED_UNDER, x0=40, y0=115, x1=600, y1=159),
+    ]
+    for index, (text, size) in enumerate(zip(_TIED_CARDS, (16.8, 16.8, 20.0))):
+        group = slide.shapes.add_group_shape()
+        card = group.shapes.add_textbox(Inches(1.0 + 3.0 * index), Inches(4.0), Inches(2.0), Inches(0.6))
+        run = card.text_frame.paragraphs[0].add_run()
+        run.text = text
+        run.font.size = Pt(20)
+        left = 72.0 * (1.0 + 3.0 * index) + 6
+        spans.append(Span(page=1, size_pt=size, text=text, x0=left, y0=295, x1=left + 100, y1=295 + size))
+    path = tmp_path / "paired.pptx"
+    presentation.save(str(path))
+    return path, spans
+
+
 def _a_page_under_a_washed_photograph(tmp_path: Path) -> Path:
     """One page, one photograph the size of it, washed to 30%: the live cover that read as fog."""
     from PIL import Image
@@ -785,15 +895,13 @@ def test_a_deck_with_nothing_behind_it_says_which_checks_did_not_run(sample: Sam
 def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample: Sample) -> None:
     """Design doc D3's blocking set, and nothing has crept into it.
 
-    Eleven kinds, in three groups. Provenance: a page crediting a figure it does not
-    show. What was agreed with the user -- its length, its language, and the
-    template it was to be built inside, which includes two ways of not building
-    inside it: pages still carrying the template's own placeholder copy, and pages
-    that cloned a template page for its background and laid new text boxes over it.
-    Both are refused for the same reason as `house_style`: the user handed over a
-    template, and a deck that ships "click here to add a title" is not the deck they
-    asked for. And the measurements: copy painted over copy in the render, content a
-    later shape paints over, and type a reader cannot make out against the ground it
+    Seven kinds, in three groups. Provenance: a page crediting a figure it does not
+    show. What was agreed with the user -- its length, its language, and two ways of
+    not building inside the template it was given: pages still carrying the
+    template's own placeholder copy, and pages that cloned a template page for its
+    background and laid new text boxes over it. A deck that ships "click here to add
+    a title" is not the deck the user asked for. And the measurements: copy painted
+    over copy in the render, and type a reader cannot make out against the ground it
     landed on -- #1A1A1A on #000000 is not a matter of degree.
 
     Two kinds left this set (D3b). `page_mapping` protects the ability to match a
@@ -819,6 +927,15 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
     a table and whose file holds none is not a page that is nearly right, nothing
     about it is answered by making the page smaller, and both ways out are one edit
     -- the same argument that already makes `unplaced_figure` fatal on every route.
+
+    Three more left the set (D52), and for one reason rather than three: none of them
+    had been measured against work it was wrong about. `boxless_copy` was calibrated
+    over 531 pages for a single finding, and that page's box was moved by the author
+    program's own safe-area constants. `literal_escape` fired zero times over the
+    seven runs D3b read one by one, and both pages it was written from were found by
+    a person rather than by the check. `house_style` has never been recorded firing
+    at all, and the one test for its ordinary case compared a deck against itself.
+    Each still reports, which is the half of them that stands on evidence.
     """
     findings = check_deck(sample.deck)
 
@@ -826,18 +943,20 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
         "citation",
         "page_budget",
         "language",
-        "house_style",
         "placeholder_copy",
         "template_underlay",
         "unreadable",
         "word_collision",
-        "literal_escape",
     }
     assert {finding.kind for finding in warnings(findings)} == {
         # Content behind something, inferred from the file's z-order rather than read
         # off the render. Reported and not refused: the inference has refused correct
         # work before, and its own message says nothing on the page collides.
         "covered_shape",
+        # The two D52 moved down, still measured and still said. Neither reading
+        # changed; what went is the refusal neither had the evidence for.
+        "house_style",
+        "literal_escape",
         # This deck has a template, so the band grid is there to be measured off it, and
         # a page of this one offers the eye nothing big enough to land on.
         "no_anchor",

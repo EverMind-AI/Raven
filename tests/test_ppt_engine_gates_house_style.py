@@ -55,9 +55,13 @@ def test_a_deck_in_the_template_says_nothing(deck, tmp_path: Path):
     assert house_style_findings(built, built) == []
 
 
-def test_a_deck_that_is_not_in_the_template_is_refused(deck, tmp_path: Path):
+def test_a_deck_that_is_not_in_the_template_is_reported(deck, tmp_path: Path):
     """`Presentation()` instead of `Presentation(os.environ['PPT_TEMPLATE'])`: a
-    white deck on a default canvas, which published clean before this."""
+    white deck on a default canvas, which published clean before this.
+
+    A warning since D52, and the negative control this file is missing is why: the
+    ordinary case is asserted by comparing a deck against itself, which is true by
+    construction, so nothing here could have found the false positive that matters."""
     deck.text(deck.page(), ("A page", 24.0))
     built = deck.save()
     template = _recolour(built, tmp_path / "house.pptx")
@@ -66,7 +70,7 @@ def test_a_deck_that_is_not_in_the_template_is_refused(deck, tmp_path: Path):
 
     assert len(findings) == 1
     assert findings[0].kind == "house_style"
-    assert findings[0].severity.value == "blocking"
+    assert findings[0].severity.value == "warning"
     assert "PPT_TEMPLATE" in findings[0].message
     assert "house.pptx" in findings[0].message
 
