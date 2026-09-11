@@ -49,12 +49,24 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from raven.tracing import artifact_v2
 from raven.tracing.store import BLOBS_DIR_NAME
+
+# Directories under ``audit-artifacts/`` that are content-addressed stores, not
+# ``<kind>/<day>/`` artifact trees. The walk has to name them because the two
+# shapes are indistinguishable: ``_messages/<sha1[:2]>/<sha1>.json`` matches
+# ``<kind>/<day>/<file>`` exactly. A message store left in is rehashed whole on
+# every run - unbounded against a corpus that only grows - and the first run
+# hard-links each message into ``_blobs/``, taking its link count to 2 and so
+# putting it inside the store whose orphan sweep it must stay out of.
 
 FRESH_SECONDS = 60
 _READ_CHUNK = 1 << 20
 _TMP_SUFFIX = ".compact.tmp"
 _MAX_ERRORS = 500
+
+
+_CONTENT_STORES = frozenset({BLOBS_DIR_NAME, artifact_v2.MESSAGES_DIR_NAME})
 
 
 @dataclass
@@ -130,7 +142,7 @@ def _iter_day_dirs(artifacts_dir: Path, result: CompactResult):
         _record_error(result, f"{artifacts_dir}: {exc}")
         return
     for kind_dir in kind_dirs:
-        if not kind_dir.is_dir() or kind_dir.name == BLOBS_DIR_NAME:
+        if not kind_dir.is_dir() or kind_dir.name in _CONTENT_STORES:
             continue
         try:
             day_dirs = sorted(kind_dir.iterdir())
