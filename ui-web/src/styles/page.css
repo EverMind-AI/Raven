@@ -3272,6 +3272,16 @@ details[open] summary { margin-bottom: 8px; }
   letter-spacing: .12em; text-transform: uppercase;
 }
 .sugrp > .hd .n { font-family: var(--mono); font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* The heading's one tool, in the slot the heading has always had room for.
+   Drawn as the eyebrow's own third word rather than as a button: it belongs to
+   a line of 11px mono small caps, and a `.mini` pill there would outweigh the
+   group it labels. */
+.sugrp > .hd .gfold {
+  margin-left: auto; background: none; border: 0; padding: 0; cursor: pointer;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--faint); transition: color .12s;
+}
+.sugrp > .hd .gfold:hover { color: var(--text); }
 .sulist { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--ink); }
 .surow {
   display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0 12px;
@@ -3533,6 +3543,13 @@ details[open] summary { margin-bottom: 8px; }
    class, not the provider cards' `.keyrow`: that one is a grid item of
    `.pcard` and reusing the name had this card's input styles landing on the
    settings page's provider rows. */
+/* The verdict and the button that renews it, on one line -- the same shape as
+   `.sukey` above and for the same reason: the section is one fact and one
+   control, and stacking them made the card scroll for no reading gained. The
+   verdict takes the slack so the buttons stay together on the right. */
+.sutest { display: flex; align-items: center; gap: 9px; font-size: 12.5px; }
+.sutest .vd { flex: 1; min-width: 0; color: var(--muted); }
+.sutest + .pmdesc { margin-top: 8px; }
 .sukey { display: flex; align-items: center; gap: 9px; }
 .sukey input {
   flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--line);

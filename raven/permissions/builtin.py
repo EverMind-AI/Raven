@@ -27,8 +27,8 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
 from raven.contracts.permissions import DecisionSource, Deny, NeedsApproval
+from raven.permissions.shell_policy import CommandDecision, ShellCommandPolicy
 
 # Windows del/rmdir are absent here on purpose too: an ordinary del /f or
 # rmdir /s is daily cleanup and answers to the tiers, so only a recursive

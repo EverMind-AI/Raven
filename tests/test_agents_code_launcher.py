@@ -3,8 +3,8 @@
 The B-side product holds the same launch contract as its vendored twin while
 consuming installed raven: secrets merge into a rendered 0600 config whose
 parent decides the data dir, the workspace is pinned to the hosting's state
-partition, the fork's TOOLS.md wording is seeded byte-for-byte, and the
-code-flow plugin is switched on through the rendered slice (verdict D6; the
+partition, the tool guide and coding conduct refresh untouched seeds, and the code-flow
+and its tool face are switched on through the rendered slice (verdict D6; the
 write gate and its worktree isolation retired, so nothing arms). The
 ACP hosting execs ``python -m raven acp``; the CLI hosting runs one
 adjudicated ``raven agent -m`` turn and owes the fork launcher's five
@@ -29,8 +29,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 RUN_PY = REPO / "agents" / "raven-code" / "run.py"
+# The vendored twin retired with its directory; what survives of it is the
+# fixture the roster-identity pin still reads.
 FORK = REPO / "tests" / "fixtures" / "vendored_fork" / "raven-code"
-FORK_TEMPLATE = FORK / "Raven-main" / "raven" / "templates" / "TOOLS.md"
 
 
 @pytest.fixture()
@@ -50,6 +51,7 @@ def grounded(launcher, tmp_path, monkeypatch):
     monkeypatch.setenv("CODE_API_KEY", "sk-own")
     monkeypatch.delenv("CODE_SERPER_API_KEY", raising=False)
     monkeypatch.delenv("CODE_JINA_API_KEY", raising=False)
+    monkeypatch.delenv("CODE_PROJECT_FILES", raising=False)
     for retired in (
         "RAVEN_WORKSPACE_ALLOC_BASE",
         "RAVEN_WORKSPACE_ALLOC_REPOS",
@@ -111,64 +113,171 @@ def _hermetic_build(rendered, tmp_path, monkeypatch):
     ec_config = load_raven_config(rendered)
     rt = runtime.build_runtime(config, ec_config, provider=_StubProvider())
     try:
-        visible = {d["function"]["name"] for d in rt.loop.tools.get_definitions()}
+        definitions = [dict(d) for d in rt.loop.tools.get_definitions()]
+        visible = {d["function"]["name"] for d in definitions}
         gates = [type(gate).__name__ for gate in rt.loop.tools.tool_gates]
     finally:
         rt.discard()
-    return visible, gates
+    return visible, gates, definitions
 
 
-# --- byte parity: the one prompt asset and the roster identity --------------
+# --- the prompt assets: the guide and the conduct ---------------------------
+#: The guide documents the product's real face and nothing the face lacks.
+#: The fork template taught exec sessions and the job workbench; those tools
+#: have not boarded (PENDING_WAVE_TOOLS below), so a guide still teaching them
+#: would promise what the model cannot call. When their wave lands, the
+#: sections come back with the tools.
+GUIDE_MUST_NAME = ("exec", "run_in_background", "read_file", "write_file", "edit_file", "grep", "glob", "todo")
+GUIDE_MUST_NOT_NAME = ("exec_write", "exec_read", "job_status", "job_wait", "job_cancel", "cron", "todowrite")
+CARRIED_GUIDE = RUN_PY.parent / "plugins" / "code-flow" / "prompts" / "TOOLS_CODE.md"
+CONDUCTS = {
+    "default": RUN_PY.parent / "plugins" / "code-flow" / "prompts" / "CODE_CONDUCT_default.md",
+    "anthropic": RUN_PY.parent / "plugins" / "code-flow" / "prompts" / "CODE_CONDUCT_anthropic.md",
+}
+#: Words that would tie the conduct to one evaluation harness rather than to
+#: engineering; the prompt-wording rule (generic engineering only) bans them.
+CONDUCT_MUST_NOT_NAME = ("TASK_COMPLETE", "SWE-bench", "benchmark", "harness", "grader")
+#: The discipline, held apart from the conduct that carries it (the fork's own
+#: shape) so it can be measured -- and dropped -- on its own.
+DISCIPLINE = RUN_PY.parent / "plugins" / "code-flow" / "prompts" / "CODE_DISCIPLINE.md"
 
 
-#: The only bytes where the carried guide may differ from the fork template:
-#: the search tool ships as find on trunk, and a guide teaching the fork's
-#: glob spelling would never self-heal (Rank A audit, G3). The workbench-tool
-#: mentions keep the fork's bytes -- their wave restores those tools.
-GUIDE_RESPELLINGS = [
-    (
-        "## grep / glob — search, truncation, spill",
-        "## grep / find — search, truncation, spill",
-    ),
-    (
-        "- When `grep`/`glob` results overflow the cap",
-        "- When `grep`/`find` results overflow the cap",
-    ),
-]
+def test_the_carried_guide_teaches_the_face_it_ships():
+    text = CARRIED_GUIDE.read_text()
+    for name in GUIDE_MUST_NAME:
+        assert name in text, f"the guide is silent about {name}"
+    for name in GUIDE_MUST_NOT_NAME:
+        assert name not in text, f"the guide promises {name}, which the face does not carry"
 
 
-def _respelled_fork_template() -> bytes:
-    text = FORK_TEMPLATE.read_text()
-    for fork_spelling, product_spelling in GUIDE_RESPELLINGS:
-        assert text.count(fork_spelling) == 1, fork_spelling
-        text = text.replace(fork_spelling, product_spelling)
-    return text.encode()
-
-
-def test_the_carried_guide_is_the_forks_template_modulo_the_respellings():
-    """The fork's TOOLS.md is a whole-file drift (exec sessions, background
-    jobs, the 30k spill), not an appended section like oncall's; the product
-    carries it as one asset, byte-equal after the enumerated respellings --
-    pinned from both ends so neither side can drift silently."""
-    carried = (RUN_PY.parent / "plugins" / "code-flow" / "prompts" / "TOOLS_CODE.md").read_bytes()
-    assert carried == _respelled_fork_template()
-    text = carried.decode()
-    for fork_spelling, product_spelling in GUIDE_RESPELLINGS:
-        assert fork_spelling not in text
-        assert text.count(product_spelling) == 1
-
-
-def test_the_seeded_guide_is_the_forks_wording(grounded, tmp_path):
-    """What lands in the state partition equals what the fork engine wrote,
-    modulo the same enumerated respellings the carried guide holds.
-
-    Raven writes workspace templates only for files still missing, so seeding
-    first keeps the fork's tool guidance in front of the model instead of the
-    trunk template that would otherwise land there.
-    """
+def test_the_seeded_guide_is_the_carried_asset(grounded, tmp_path):
+    """What lands in the state partition equals the carried guide byte for
+    byte. Raven writes workspace templates only for files still missing, so
+    seeding first keeps this guidance in front of the model instead of the
+    trunk template that would otherwise land there."""
     _render(grounded)
     seeded = (tmp_path / "home" / "subagent_sessions" / "raven-code" / "acp" / "TOOLS.md").read_bytes()
-    assert seeded == _respelled_fork_template()
+    assert seeded == CARRIED_GUIDE.read_bytes()
+
+
+def test_the_conduct_is_seeded_as_agent_md_for_the_configured_models_family(grounded, tmp_path):
+    """config.json routes an anthropic model, so the anthropic variant lands
+    as ``agent_memory/profile/agent.md`` -- the bootstrap file rendered right
+    after the host identity, which stays (the runtime facts live there)."""
+    _render(grounded)
+    partition = tmp_path / "home" / "subagent_sessions" / "raven-code" / "acp"
+    seeded = (partition / "agent_memory" / "profile" / "agent.md").read_text()
+    assert seeded == grounded.render_conduct("anthropic/claude-opus-5")
+    assert "## Software Engineering Discipline" in seeded, "the discipline is spliced in, not referenced"
+    assert "{{" not in seeded, "no sentinel survives the render"
+    soul = partition / "agent_memory" / "profile" / "soul.md"
+    assert soul.read_text() == grounded.SOUL.read_text(), "the product identity is seeded beside the conduct"
+    assert "personal AI assistant" not in soul.read_text()
+
+
+def test_the_soul_survives_the_cli_hostings_template_sync(grounded, tmp_path):
+    """The one-turn CLI hosting runs ``raven agent``, whose startup syncs the
+    workspace templates -- and trunk's SOUL.md template is a personal assistant
+    with a personality. The sync only creates what is missing, so the soul this
+    product seeds first is the one bootstrap reads, on this hosting as on ACP."""
+    from raven.utils.workspace import sync_workspace_templates
+
+    rendered = _render(grounded)
+    partition = rendered.parent
+    soul = partition / "agent_memory" / "profile" / "soul.md"
+    conduct = partition / "agent_memory" / "profile" / "agent.md"
+    before = (soul.read_bytes(), conduct.read_bytes())
+
+    sync_workspace_templates(partition, silent=True)
+
+    assert (soul.read_bytes(), conduct.read_bytes()) == before
+    assert soul.read_text().startswith("# Soul\n\nI am Raven-Code, a coding agent.")
+    assert "personal AI assistant" not in soul.read_text()
+
+
+def test_the_soul_speaks_engineering_not_evaluation(grounded):
+    text = grounded.SOUL.read_text()
+    for word in CONDUCT_MUST_NOT_NAME:
+        assert word not in text, f"the soul names {word}"
+
+
+def test_the_published_slice_names_the_checkouts_instruction_files(grounded):
+    """The coding set rides the flow slice, from the published file through
+    the render; the launcher's setting empties it without a config edit."""
+    published = json.loads((RUN_PY.parent / "config.json").read_text())
+    assert published["plugins"]["config"]["code-flow"]["projectFiles"] == ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]
+    data = json.loads(_render(grounded).read_text())
+    assert data["plugins"]["config"]["code-flow"]["projectFiles"] == ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]
+
+
+def test_the_checkouts_files_go_off_from_the_products_own_settings(grounded, monkeypatch):
+    monkeypatch.setenv("CODE_PROJECT_FILES", "off")
+    data = json.loads(_render(grounded).read_text())
+    assert data["plugins"]["config"]["code-flow"]["projectFiles"] == []
+
+
+def test_a_custom_config_without_the_names_still_gets_the_coding_set(grounded, tmp_path):
+    """Same shape as the flow and tool switches: the launcher fills the names
+    in for its own renders; an explicit empty list in a custom config wins."""
+    source = json.loads((RUN_PY.parent / "config.json").read_text())
+    del source["plugins"]["config"]["code-flow"]["projectFiles"]
+    custom = tmp_path / "custom.json"
+    custom.write_text(json.dumps(source))
+    data = json.loads(grounded.render_acp_config(custom).read_text())
+    assert data["plugins"]["config"]["code-flow"]["projectFiles"] == ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]
+
+    source["plugins"]["config"]["code-flow"]["projectFiles"] = []
+    custom.write_text(json.dumps(source))
+    data = json.loads(grounded.render_acp_config(custom).read_text())
+    assert data["plugins"]["config"]["code-flow"]["projectFiles"] == []
+
+
+def test_the_conduct_variant_follows_the_model_family(launcher):
+    assert launcher.conduct_source("anthropic/claude-opus-5") == CONDUCTS["anthropic"]
+    assert launcher.conduct_source("claude-sonnet-4") == CONDUCTS["anthropic"]
+    assert launcher.conduct_source("openai/gpt-5") == CONDUCTS["default"]
+    assert launcher.conduct_source("deepseek/deepseek-v4") == CONDUCTS["default"]
+    assert launcher.conduct_source(None) == CONDUCTS["default"]
+
+
+def test_the_conduct_is_seeded_once_and_never_overwritten(grounded, tmp_path):
+    _render(grounded)
+    conduct = tmp_path / "home" / "subagent_sessions" / "raven-code" / "acp" / "agent_memory" / "profile" / "agent.md"
+    conduct.write_text("operator tuned")
+    _render(grounded)
+    assert conduct.read_text() == "operator tuned"
+
+
+def _launcher_render_conduct(variant: str) -> str:
+    """The conduct as the launcher composes it, imported the way a test can."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("agents_code_run_render", RUN_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    model = "anthropic/claude-opus-5" if variant == "anthropic" else "deepseek/deepseek-v4"
+    return mod.render_conduct(model)
+
+
+@pytest.mark.parametrize("variant", sorted(CONDUCTS))
+def test_the_conduct_speaks_engineering_not_evaluation(variant):
+    """The wording rule: generic engineering only. No harness token, no
+    benchmark name -- the conduct reads the same to a model on a real task and
+    to one under measurement. And the stale-test rule carries its own baseline
+    requirement, so a gate asking for that baseline enforces the prompt rather
+    than contradicting it."""
+    # The rendered composition, not the carried file: the carried one holds the
+    # discipline sentinel, and what the wording rule binds is what the model
+    # actually reads.
+    text = _launcher_render_conduct(variant)
+    for word in CONDUCT_MUST_NOT_NAME:
+        assert word not in text, f"{variant}: {word!r} ties the conduct to a harness"
+    assert "git stash -u" in text, "the stale-test exception names the baseline evidence it needs"
+    for tool in ("glob", "grep", "read_file", "edit_file", "write_file", "run_in_background"):
+        assert tool in text, f"{variant}: the tool policy is silent about {tool}"
+    for absent in ("exec_write", "exec_read", "job_status", "session:"):
+        assert absent not in text, f"{variant}: the conduct teaches {absent}, which the face lacks"
+    assert "{{" not in text, "no unrendered sentinel"
 
 
 def test_the_guide_is_seeded_once_and_never_overwritten(grounded, tmp_path):
@@ -294,7 +403,7 @@ def test_a_config_without_the_flow_slice_still_enables_the_flow(grounded, tmp_pa
     rendered = grounded.render_acp_config(custom)
     flow = json.loads(rendered.read_text())["plugins"]["config"]["code-flow"]
     assert flow["enabled"] is True
-    _, gates = _hermetic_build(rendered, tmp_path, monkeypatch)
+    _, gates, _defs = _hermetic_build(rendered, tmp_path, monkeypatch)
     assert gates == [], "the flow casts no tool gate: the write gate retired with worktree isolation"
 
 
@@ -349,7 +458,15 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
     assert config.agents.defaults.model == "anthropic/claude-opus-5"
     extensions = load_raven_config(rendered)
     assert extensions.plugins.disabled == ["everos-memory"]
-    assert extensions.plugins.config["code-flow"] == {"enabled": True}
+    assert extensions.plugins.config["code-flow"] == {
+        "enabled": True,
+        "tools": {
+            "enabled": True,
+            "restrictToWorkspace": False,
+            "exec": {"maxTimeout": 1200, "timeout": 600, "pathAppend": "", "sandboxBackend": "none"},
+        },
+        "projectFiles": ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"],
+    }
     assert extensions.skill_forge.rewrite_enabled is False
     assert extensions.skill_forge.llm_gate_enabled is False
 
@@ -491,7 +608,15 @@ def test_the_cli_render_enables_the_flow_beside_the_conversation_state(cli_run, 
     calls["answer"] = "ok"
     invoke(_cli_args(workspace))
     state_dir = (tmp_path / "state" / "instance-conv-1").resolve()
-    assert calls["rendered"]["plugins"]["config"]["code-flow"] == {"enabled": True}
+    assert calls["rendered"]["plugins"]["config"]["code-flow"] == {
+        "enabled": True,
+        "tools": {
+            "enabled": True,
+            "restrictToWorkspace": False,
+            "exec": {"maxTimeout": 1200, "timeout": 600, "pathAppend": "", "sandboxBackend": "none"},
+        },
+        "projectFiles": ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"],
+    }
     assert calls["rendered"]["plugins"]["dirs"] == [str(RUN_PY.parent / "plugins")]
     assert calls["rendered"]["agents"]["defaults"]["workspace"] == str(state_dir)
 
@@ -695,24 +820,29 @@ FORK_CONFIG_INTENT = {
 }
 
 #: The fork face the trunk lane does not show yet: the exec workbench (PTY
-#: sessions, background jobs) and the todo list are FEASIBLE-TODAY product
-#: waves that have not boarded the code-flow plugin. Ledgered, not lost: each
-#: lands as a plugin contribution and leaves this set when it does.
+#: sessions, background jobs) needs the sandbox executor's session and job
+#: seams, an engine-level wave. Ledgered, not lost: each lands as a plugin
+#: contribution and leaves this set when it does. The todo list boarded as
+#: code-flow's own ``todo`` contribution (code_flow/tools/), respelled below.
 PENDING_WAVE_TOOLS = {
     "exec_read",
     "exec_write",
     "job_cancel",
     "job_status",
     "job_wait",
-    "todowrite",
 }
 
 #: One capability, two spellings: the fork's pathname-pattern tool answers to
-#: ``glob``, trunk's to ``find``.
-RESPELLED = {"glob": "find"}
+#: ``glob``, trunk's to ``find``. code-flow's tool face contributes ``glob``
+#: and the product config withholds ``find``, so that pair is not respelled.
+#: The checklist is: the fork itself renamed ``todowrite`` to ``todo`` (one
+#: read/write tool, Raven-X 40a035cc) and kept the old name as a hidden
+#: alias; the trunk registry has no hidden aliases, so the face carries the
+#: new name alone and ``cast_params`` still accepts the old call shape.
+RESPELLED: dict[str, str] = {"todowrite": "todo"}
 
 #: The product's visible tool face, hermetically rebuilt from the render:
-#: the fork's config intent minus the ledgered pending waves, respelled.
+#: the fork's config intent minus the ledgered pending waves.
 #: Trunk also grew six tools the fork never had, and every one must be
 #: disabled by the product config, not by luck; the two playbook tools only
 #: register outside this hermetic fixture, so their disable rows are the pin.
@@ -720,10 +850,11 @@ VENDORED_TOOL_FACE = {
     "ask_user",
     "edit_file",
     "exec",
-    "find",
+    "glob",
     "grep",
     "list_dir",
     "read_file",
+    "todo",
     "web_fetch",
     "write_file",
 }
@@ -757,16 +888,121 @@ def test_the_products_tool_face_is_the_forks_config_intent_minus_the_ledger(grou
     the ledgered face and nothing more, the code-flow plugin is discovered
     for real (and casts no tool gate), and the trunk-new six stay disabled
     by name."""
-    visible, gates = _hermetic_build(_render(grounded), tmp_path, monkeypatch)
+    visible, gates, definitions = _hermetic_build(_render(grounded), tmp_path, monkeypatch)
     assert visible == VENDORED_TOOL_FACE
     assert gates == [], "no tool gate is cast: the write gate retired with worktree isolation"
+    # The names alone are not the face: the plugin's tools replace the built-ins
+    # BY NAME, so a change that registers them before the built-ins instead of
+    # after leaves this set identical while every schema silently reverts to the
+    # host's spelling -- and the guide and the conduct teach the fork's.
+    schemas = {d["function"]["name"]: d["function"]["parameters"] for d in definitions}
+    assert schemas["read_file"]["required"] == ["file_path"]
+    assert schemas["write_file"]["required"] == ["file_path", "content"]
+    assert schemas["edit_file"]["required"] == ["file_path", "old_string", "new_string"]
+    assert "occurrence" in schemas["edit_file"]["properties"]
+    assert "path" not in schemas["read_file"]["properties"]
     disabled = set(json.loads((RUN_PY.parent / "config.json").read_text())["tools"]["disabledTools"])
     assert TRUNK_NEW_SIX <= disabled, "the trunk-new six stay disabled by config, not by luck"
+    rendered_disabled = set(json.loads(_render(grounded).read_text())["tools"]["disabledTools"])
+    superseded = grounded.superseded_host_tools()
+    assert set(superseded) <= rendered_disabled, "a host name this face replaces is withheld while it serves"
+    assert not set(superseded) & disabled, "and the withholding is rendered, not written into the product config"
+    assert set(superseded.values()) <= VENDORED_TOOL_FACE, "every replacement in the table is really served"
+    assert set(superseded) & VENDORED_TOOL_FACE == set(), "a name we serve ourselves needs no entry"
     assert ACP_HOST_EXTRAS <= disabled, "the acp assembly extras stay disabled by config, not by luck"
     assert {"exec", "ask_user"} & disabled == set(), "the coding lane and the asking channel stay open"
 
 
+# --- the permission gate: only the hosting with nobody to ask opens it ------------
+
+
+def test_the_acp_render_leaves_the_ask_tier_alone(grounded):
+    """Trunk's permission gate (permissions.mode, default ``ask``) prompts a
+    person before a write or a command, and refuses outright when the turn is
+    not interactive. The ACP hosting keeps that default on purpose: raven
+    dispatching a sub-agent answers those prompts itself
+    (``raven/acp_client/permissions.py`` approves every one), and a person in
+    an editor should still be asked -- opening the tier product-wide would
+    take their prompt away for good."""
+    from raven.config.loader import load_config
+
+    config = load_config(_render(grounded))
+    assert config.permissions.mode == "ask"
+    assert "permissions" not in json.loads((RUN_PY.parent / "config.json").read_text())
+
+
+def test_the_one_shot_render_opens_the_ask_tier_because_nobody_can_answer(grounded, tmp_path):
+    """One CLI turn prints a reply and exits, so there is no channel to ask on
+    and the gate refuses every write instead of prompting (measured
+    2026-09-08: the model could not edit one line and reported the task
+    incomplete). Trunk's own one-shot spine names this the operator's call.
+    Builtin refusals -- the catastrophic-command list -- hold in every mode."""
+    from raven.config.loader import load_config
+
+    rendered = grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "cli", unattended=True)
+    assert load_config(rendered).permissions.mode == "full"
+
+
+def test_an_explicit_permissions_block_wins_over_the_hosting_default(grounded, tmp_path):
+    source = tmp_path / "tight.json"
+    base = json.loads((RUN_PY.parent / "config.json").read_text())
+    base["permissions"] = {"mode": "smart"}
+    source.write_text(json.dumps(base))
+    from raven.config.loader import load_config
+
+    rendered = grounded.render_config(source, tmp_path / "cli2", unattended=True)
+    assert load_config(rendered).permissions.mode == "smart"
+
+
 # --- the effort tiers: the host's own ladder, declared for the agent to compose ---
+
+
+def test_the_tool_slice_carries_the_products_workspace_fence(grounded, tmp_path):
+    """The replacements are fenced exactly when the originals would have been.
+
+    The host grants its own file tools the workspace root only when
+    ``tools.restrictToWorkspace`` is on, and a plugin factory cannot read that
+    field (``ServiceLocator`` does not grant it), so the
+    launcher renders the answer into the slice. Without it a product that asked
+    for the fence got replacements with no fence at all, and no warning."""
+    data = json.loads(_render(grounded).read_text())
+    assert data["plugins"]["config"]["code-flow"]["tools"]["restrictToWorkspace"] is False
+    fenced = tmp_path / "fenced.json"
+    base = json.loads((RUN_PY.parent / "config.json").read_text())
+    base["tools"]["restrictToWorkspace"] = True
+    fenced.write_text(json.dumps(base))
+    rendered = json.loads(grounded.render_config(fenced, tmp_path / "part").read_text())
+    assert rendered["plugins"]["config"]["code-flow"]["tools"]["restrictToWorkspace"] is True
+
+
+def test_switching_the_tool_face_off_leaves_a_working_face(grounded, tmp_path):
+    """``find`` is withheld only while the plugin is serving ``glob``. Written
+    into the product config it would outlive the switch, and a product with the
+    tool face off had no way to find a file at all."""
+    off = tmp_path / "off.json"
+    base = json.loads((RUN_PY.parent / "config.json").read_text())
+    base["plugins"]["config"]["code-flow"] = {"enabled": True, "tools": {"enabled": False}}
+    off.write_text(json.dumps(base))
+    rendered = json.loads(grounded.render_config(off, tmp_path / "off-part").read_text())
+    withheld = set(rendered["tools"]["disabledTools"])
+    assert not set(grounded.superseded_host_tools()) & withheld, "the host's own names come straight back"
+
+
+def test_the_conduct_is_reseeded_when_the_model_family_changes(grounded, tmp_path):
+    """A partition is reused across renders, and seed-once alone froze whichever
+    variant the first render picked: pointing the product at another family
+    changed the rendered config and left the conduct behind, silently. A
+    pristine seed of the other variant is replaced; anything an operator
+    tuned in place is not."""
+    partition = tmp_path / "part"
+    grounded.seed_conduct(partition, "anthropic/claude-opus-5")
+    conduct = partition / "agent_memory" / "profile" / "agent.md"
+    assert conduct.read_text() == grounded.render_conduct("anthropic/claude-opus-5")
+    grounded.seed_conduct(partition, "deepseek/deepseek-v4")
+    assert conduct.read_text() == grounded.render_conduct("deepseek/deepseek-v4"), "the family switch is followed"
+    conduct.write_text("operator tuned")
+    grounded.seed_conduct(partition, "anthropic/claude-opus-5")
+    assert conduct.read_text() == "operator tuned", "an edited conduct is never overwritten"
 
 
 def test_the_render_declares_the_effort_tiers_on_the_hosts_ladder(grounded):
@@ -856,3 +1092,192 @@ def test_the_mode_flag_is_refused_off_the_acp_path(grounded, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["run.py", "--task", "x", "--mode", "medium"])
     with pytest.raises(SystemExit, match="--mode"):
         grounded.main()
+
+
+# --- the product's own settings: the supersede table and the conduct switches ----
+
+
+def test_the_supersede_table_lives_beside_the_tools_it_names(grounded):
+    """Adding a tool is a line beside the tool, not an edit in the launcher.
+
+    The table is the plugin's, and this pins the two ways it can go stale: an
+    entry whose replacement this face does not actually serve, and a host name
+    we serve ourselves (which needs no entry -- registering over it IS the
+    replacement)."""
+    table = grounded.superseded_host_tools()
+    assert table == {"find": "glob"}, "the one capability whose name differs from trunk's"
+    manifest = (RUN_PY.parent / "plugins" / "code-flow" / "raven-plugin.toml").read_text()
+    for replacement in table.values():
+        assert f'name = "{replacement}"' in manifest, replacement
+
+
+def test_the_conduct_and_the_discipline_are_each_switchable(grounded, tmp_path, monkeypatch):
+    """Two switches, because they answer different questions: whether this
+    product speaks its own working rules at all, and whether the phased
+    discipline for changing code is one of them. The fork held the discipline
+    apart for the same reason -- it is the section worth measuring alone."""
+    whole = grounded.render_conduct("deepseek/deepseek-v4")
+    without = grounded.render_conduct("deepseek/deepseek-v4", discipline=False)
+    assert "## Software Engineering Discipline" in whole and "## Software Engineering Discipline" not in without
+    assert "## Tool usage policy" in without, "dropping the discipline keeps everything else"
+    assert "{{" not in without and len(without) < len(whole)
+
+    partition = tmp_path / "p"
+    monkeypatch.setenv("CODE_CONDUCT_DISCIPLINE", "off")
+    grounded.seed_conduct(partition, "deepseek/deepseek-v4")
+    conduct = partition / "agent_memory" / "profile" / "agent.md"
+    assert conduct.read_text() == without
+
+    # Back on: the composition changes, and a pristine copy follows it.
+    monkeypatch.delenv("CODE_CONDUCT_DISCIPLINE")
+    grounded.seed_conduct(partition, "deepseek/deepseek-v4")
+    assert conduct.read_text() == whole
+
+
+def test_switching_the_conduct_off_removes_a_copy_this_product_wrote(grounded, tmp_path, monkeypatch):
+    """Off has to mean gone: a workspace asset an earlier render wrote would
+    keep reaching the model long after the switch said no."""
+    partition = tmp_path / "p"
+    grounded.seed_conduct(partition, "deepseek/deepseek-v4")
+    conduct = partition / "agent_memory" / "profile" / "agent.md"
+    assert conduct.exists()
+    monkeypatch.setenv("CODE_CONDUCT", "off")
+    grounded.seed_conduct(partition, "deepseek/deepseek-v4")
+    assert not conduct.exists()
+    # And off means nothing is written on a fresh partition either.
+    fresh = tmp_path / "fresh"
+    grounded.seed_conduct(fresh, "deepseek/deepseek-v4")
+    assert not (fresh / "agent_memory" / "profile" / "agent.md").exists()
+
+
+def test_an_edited_conduct_is_never_removed_by_the_switch(grounded, tmp_path, monkeypatch):
+    partition = tmp_path / "p"
+    grounded.seed_conduct(partition, "deepseek/deepseek-v4")
+    conduct = partition / "agent_memory" / "profile" / "agent.md"
+    conduct.write_text("operator tuned")
+    monkeypatch.setenv("CODE_CONDUCT", "off")
+    grounded.seed_conduct(partition, "deepseek/deepseek-v4")
+    assert conduct.read_text() == "operator tuned"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restricted", [True, False])
+async def test_workspace_restriction_reaches_real_product_file_tools(grounded, tmp_path, restricted):
+    from raven.agent import workdir
+    from raven.contracts.loop_hooks import AgentHookContext
+    from raven.plugins.context import PluginContext, ServiceLocator
+
+    source = tmp_path / "source.json"
+    base = json.loads((RUN_PY.parent / "config.json").read_text())
+    base["tools"]["restrictToWorkspace"] = restricted
+    base["plugins"]["config"]["code-flow"]["tools"]["restrictToWorkspace"] = not restricted
+    source.write_text(json.dumps(base))
+    home, repo = tmp_path / "part", tmp_path / "repo"
+    repo.mkdir()
+    rendered = json.loads(grounded.render_config(source, home).read_text())
+    from code_flow.flow import make_flow_hook
+    from code_flow.tools import plugin
+
+    ctx = PluginContext(
+        config=rendered["plugins"]["config"]["code-flow"],
+        services=ServiceLocator(workspace=home, user_id="u", agent_id="a"),
+    )
+    read, write, edit = plugin.make_read_file(ctx), plugin.make_write_file(ctx), plugin.make_edit_file(ctx)
+
+    def text(result):
+        return result.model_text if hasattr(result, "model_text") else str(result)
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside original")
+    with workdir.bind(repo):
+        await make_flow_hook(ctx).before_iteration(AgentHookContext(session_key="cli:files", messages=[]))
+        await write.execute(file_path="inside.txt", content="inside original")
+        assert "inside original" in text(await read.execute(file_path="inside.txt"))
+        await edit.execute(file_path="inside.txt", old_string="original", new_string="updated")
+        assert (repo / "inside.txt").read_text() == "inside updated"
+        result = text(await read.execute(file_path=str(outside)))
+        if restricted:
+            assert "outside allowed" in result.lower()
+            assert "outside allowed" in text(await write.execute(file_path=str(outside), content="changed")).lower()
+            assert (
+                "outside allowed"
+                in text(await edit.execute(file_path=str(outside), old_string="original", new_string="changed")).lower()
+            )
+            assert outside.read_text() == "outside original"
+        else:
+            assert "outside original" in result
+            await edit.execute(file_path=str(outside), old_string="original", new_string="updated")
+            assert outside.read_text() == "outside updated"
+            await write.execute(file_path=str(outside), content="allowed write")
+            assert outside.read_text() == "allowed write"
+
+
+def test_rerendered_exec_settings_follow_the_host_and_preserve_its_sandbox(grounded, tmp_path):
+    first = grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "first")
+    config = json.loads(first.read_text())
+    config["tools"]["sandbox"]["backend"] = "auto"
+    config["tools"]["exec"].update(timeout=23, pathAppend="/test/tools")
+    source = tmp_path / "custom.json"
+    source.write_text(json.dumps(config))
+    rendered = json.loads(grounded.render_config(source, tmp_path / "second").read_text())
+    section = rendered["plugins"]["config"]["code-flow"]
+    from code_flow.tools import plugin
+
+    from raven.plugins.context import PluginContext, ServiceLocator
+
+    ctx = PluginContext(config=section, services=ServiceLocator(tmp_path / "second", "u", "a"))
+    assert plugin.make_exec(ctx) is None, "a sandboxed shell must not be replaced with a host executor"
+    assert section["tools"]["exec"]["timeout"] == 23
+    assert section["tools"]["exec"]["pathAppend"] == "/test/tools"
+    assert section["tools"]["exec"]["maxTimeout"] == 1200
+
+
+def test_a_pristine_legacy_tool_guide_is_migrated_in_existing_partitions(grounded, tmp_path):
+    from raven.agent.context import ContextBuilder
+
+    partition = tmp_path / "existing"
+    partition.mkdir()
+    old = FORK / "Raven-main" / "raven" / "templates" / "TOOLS.md"
+    (partition / "TOOLS.md").write_bytes(old.read_bytes())
+    grounded.seed_guide(partition)
+    system = ContextBuilder(partition).build_system_prompt()
+    assert "run_in_background" in system
+    assert "exec_write" not in system
+    assert (partition / "TOOLS.md").read_text() == grounded.GUIDE.read_text()
+
+
+def test_a_managed_tool_guide_refreshes_but_an_operator_edit_is_preserved(grounded, tmp_path, monkeypatch):
+    partition = tmp_path / "part"
+    grounded.seed_guide(partition)
+    newer = tmp_path / "new-guide.md"
+    newer.write_text("Updated tool guidance")
+    monkeypatch.setattr(grounded, "GUIDE", newer)
+    grounded.seed_guide(partition)
+    assert (partition / "TOOLS.md").read_text() == "Updated tool guidance"
+    (partition / "TOOLS.md").write_text("operator guidance")
+    newer.write_text("Another product update")
+    grounded.seed_guide(partition)
+    assert (partition / "TOOLS.md").read_text() == "operator guidance"
+
+
+@pytest.mark.parametrize("tools_enabled", [True, False])
+def test_rendered_guidance_conditions_product_only_tools_on_the_actual_tool_list(
+    grounded, tmp_path, monkeypatch, tools_enabled
+):
+    from raven.agent.context import ContextBuilder
+
+    config = json.loads((RUN_PY.parent / "config.json").read_text())
+    config["plugins"]["config"]["code-flow"]["tools"]["enabled"] = tools_enabled
+    source = tmp_path / "config.json"
+    source.write_text(json.dumps(config))
+    partition = tmp_path / "part"
+    rendered = grounded.render_config(source, partition)
+    names, _gates, _definitions = _hermetic_build(rendered, tmp_path, monkeypatch)
+    assert ("todo" in names) is tools_enabled
+    assert ("glob" in names) is tools_enabled
+    assert ("find" in names) is not tools_enabled
+    system = ContextBuilder(partition).build_system_prompt()
+    assert "If the todo tool is available" in system
+    assert "You have access to the todo tool" not in system
+    assert "Only use tools and parameters exposed in the current function schemas" in system
+    assert "otherwise use find" in system

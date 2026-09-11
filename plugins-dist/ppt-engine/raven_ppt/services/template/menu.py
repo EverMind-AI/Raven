@@ -38,6 +38,7 @@ from raven_ppt.services.measure.geometry import (
     iter_shapes,
 )
 from raven_ppt.services.measure.variety import page_signature
+from raven_ppt.services.template.capacity import page_band
 from raven_ppt.services.template.compose import _all_shapes, _blip_fill, _is_cut_out, _is_drawing, _outermost
 
 # What a page is *for*, when the page says so itself. A deck built in someone's
@@ -125,6 +126,14 @@ class PageEntry:
     numbers a page is asked for by are its place in the file; offering it is what
     has to stop. The bundled templates each shipped two hidden pages of the
     vendor's own advertising, and an author could name one as a prototype."""
+    capacity: str = ""
+    """How much copy this page's tightest box and its widest row of matched boxes
+    take, from `capacity.page_band`.
+
+    Beside the shape counts because that is where an author looks up a box while
+    writing the `texts={...}` that fills it, and one page-choosing sentence further up
+    is a whole plan too early. The counts either side of it are shapes; this is
+    characters, and the two used the same verb until this field existed."""
 
     def line(self) -> str:
         parts = [f"[{self.number}]"]
@@ -137,13 +146,18 @@ class PageEntry:
         parts.append(f"layout {self.layout!r}")
         if self.arrangement:
             parts.append(self.arrangement + (f" ({self.slots} slots)" if self.slots else ""))
-        holds = [
+        # "carries", not "holds": these are shape counts, and `holds` is the word an
+        # author reads as capacity -- which the line now also carries, in characters,
+        # one part further on. One reply cannot spend the same verb on both.
+        carries = [
             f"{self.text_blocks} text" if self.text_blocks else "",
             f"{self.pictures} picture" if self.pictures else "",
             f"{self.tables} table" if self.tables else "",
             f"{self.shapes} drawn" if self.shapes else "",
         ]
-        parts.append("holds " + ", ".join(part for part in holds if part) if any(holds) else "empty")
+        parts.append("carries " + ", ".join(part for part in carries if part) if any(carries) else "empty")
+        if self.capacity:
+            parts.append(self.capacity)
         if self.picture_slots:
             parts.append("picture slots " + ", ".join(self.picture_slots))
         parts.append("clone it" if self.clone_only else "code can redraw it")
@@ -212,6 +226,10 @@ def _menu(path: Path, unwritable: dict[int, tuple[str, ...]] | None = None) -> t
                 slots=_slots(slide),
                 clone_only=number in named,
                 hidden=slide.element.get("show") == "0",
+                # Not for a page marked not-for-show: the line already says it is not
+                # for building on, and a band on it is characters spent on an offer
+                # the same line withdraws.
+                capacity="" if slide.element.get("show") == "0" else page_band(texts),
                 unwritable=tuple(named.get(number, ())),
                 role=_role(
                     number,
