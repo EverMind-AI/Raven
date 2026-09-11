@@ -14,6 +14,9 @@ const ICONS: Record<string, string> = {
   baichuan: 'baichuan',
   /* Zhipu's own mark, not Z.ai's: same vendor, two platforms and two logos. */
   bigmodel: 'zhipu',
+  /* Not a provider: the rail's Zhipu family addresses its heading mark by
+     this name, the company's rather than either platform's. */
+  zhipu: 'zhipu',
   baidu_cloud: 'baiducloud',
   burncloud: 'burncloud',
   cerebras: 'cerebras',

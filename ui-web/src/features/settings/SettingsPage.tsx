@@ -1671,13 +1671,24 @@ function ProvRow({ pv, s, selected }: { pv: ProviderRow; s: SettingsState; selec
    `openai_codex` share one too, and those are two things a reader picks
    between rather than one thing with variants. Members are listed in the order
    they should appear inside the group. */
-const RAIL_GROUPS: ReadonlyArray<{ key: string; label: string; members: readonly string[] }> = [
+/* Families the rail folds into one row. `icon` is for a family whose heading
+   names the vendor while no member's row does: Zhipu sells GLM as Z.ai abroad
+   and as BigModel at home, and neither brand is the company, so borrowing the
+   first member's mark would put one platform's logo on both. MiniMax needs
+   none -- its first member is the company row. */
+const RAIL_GROUPS: ReadonlyArray<{
+  key: string
+  label: string
+  members: readonly string[]
+  icon?: string
+}> = [
   { key: 'minimax', label: 'MiniMax', members: ['minimax', 'minimax_cn_api', 'minimax_global', 'minimax_cn'] },
+  { key: 'zhipu', label: 'Zhipu', members: ['zai', 'bigmodel'], icon: 'zhipu' },
 ]
 
 type RailEntry =
   | { kind: 'one'; key: string; pv: ProviderRow }
-  | { kind: 'group'; key: string; label: string; rows: ProviderRow[] }
+  | { kind: 'group'; key: string; label: string; rows: ProviderRow[]; icon?: string }
 
 /* The rail's rows, with each declared family collapsed into one entry.
  *
@@ -1697,7 +1708,7 @@ function railEntries(providers: ProviderRow[]): RailEntry[] {
     done.add(group.key)
     const rows = group.members.map((id) => byId.get(id)).filter((row): row is ProviderRow => !!row)
     if (rows.length < 2) entries.push({ kind: 'one', key: rows[0]!.id, pv: rows[0]! })
-    else entries.push({ kind: 'group', key: group.key, label: group.label, rows })
+    else entries.push({ kind: 'group', key: group.key, label: group.label, rows, ...(group.icon ? { icon: group.icon } : {}) })
   }
   return entries
 }
@@ -1770,7 +1781,7 @@ function ProvGroup({
     <div className="mgrp">
       <button className="mrow gh" type="button" aria-expanded={open} onClick={onToggle}>
         <span className="cv">⌄</span>
-        <ProviderIcon id={entry.rows[0]!.id} name={entry.label} />
+        <ProviderIcon id={entry.icon ?? entry.rows[0]!.id} name={entry.label} />
         <span className="nm">{entry.label}</span>
         <span className="gc">{entry.rows.length}</span>
         {/* Only while closed: the member row says it better when it is visible. */}

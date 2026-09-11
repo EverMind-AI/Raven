@@ -916,6 +916,74 @@ describe('settings island', () => {
       (row) => row.querySelector('.nm')?.textContent ?? '',
     )
 
+  /* Zhipu's two platforms, the second family the rail folds. Unlike MiniMax it
+     has no member row named after the company, which is what the group's own
+     `icon` is for. */
+  const withZhipu = (over: Partial<{ bigmodelOn: boolean }> = {}) =>
+    snap({
+      providers: [
+        { id: 'anthropic', name: 'Anthropic', models: [], on: true, kind: 'api_key' },
+        { id: 'zai', name: 'Z.ai', models: [], on: false, kind: 'api_key' },
+        { id: 'bigmodel', name: 'BigModel', models: [], on: !!over.bigmodelOn, kind: 'api_key' },
+        { id: 'openai', name: 'OpenAI', models: [], on: false, kind: 'api_key' },
+      ],
+      curProvider: 'anthropic',
+    })
+
+  it('folds the two Zhipu platforms into one rail row', async () => {
+    install(withZhipu())
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    expect(railNames()).toEqual(['Anthropic', 'Zhipu', 'OpenAI'])
+
+    const head = document.querySelector<HTMLButtonElement>('.mrail .mrow.gh')!
+    expect(head.querySelector('.gc')?.textContent).toBe('2')
+    expect(head.getAttribute('aria-expanded')).toBe('false')
+
+    await act(async () => {
+      head.click()
+    })
+    expect([...document.querySelectorAll<HTMLElement>('.mgsub .mrow')].map(
+      (row) => row.querySelector('.nm')?.textContent,
+    )).toEqual(['Z.ai', 'BigModel'])
+  })
+
+  it("wears the company's mark, not the first platform's", async () => {
+    install(withZhipu())
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    /* The heading says Zhipu, so it cannot wear Z.ai's logo -- that would put
+       one platform's brand on a row standing in for both. MiniMax needs no
+       such entry because its first member IS the company row. */
+    const head = document.querySelector<HTMLButtonElement>('.mrail .mrow.gh')!
+    expect(head.querySelector('img')?.getAttribute('src')).toBe('assets/providers/zhipu.svg')
+
+    await act(async () => {
+      head.click()
+    })
+    const members = [...document.querySelectorAll<HTMLElement>('.mgsub .mrow img')].map(
+      (img) => img.getAttribute('src'),
+    )
+    expect(members).toEqual(['assets/providers/zai.svg', 'assets/providers/zhipu.svg'])
+  })
+
+  it('lights the family dot when either platform is connected', async () => {
+    install(withZhipu({ bigmodelOn: true }))
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    /* The rail answers "can I use Zhipu", and which platform holds the
+       credential is the pane's business. Connected families sort first. */
+    expect(railNames()).toEqual(['Anthropic', 'Zhipu', 'OpenAI'])
+    const head = document.querySelector<HTMLElement>('.mrail .mrow.gh')!
+    expect(head.querySelector('.provider-status')?.className).toBe('provider-status on')
+  })
+
   it('folds the MiniMax sections into one rail row that opens on demand', async () => {
     install(withMiniMax())
     await mount()
