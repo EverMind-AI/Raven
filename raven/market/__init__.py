@@ -11,7 +11,8 @@ Modules:
 - :mod:`raven.market.catalog` — entry source (bundled JSON, hub override)
 - :mod:`raven.market.ledger`  — one JSON file per installed plugin
 - :mod:`raven.market.install` — atomic install / uninstall / toggle
-- :mod:`raven.market.vetting`   — what a hub endpoint and an entry may be
+- :mod:`raven.market.vetting`   — what a catalogue entry may ask for (the URL
+  rules it leans on are :mod:`raven.security.urls`)
 - :mod:`raven.market.connect` — install + connect + rollback, shared by every surface
 """
 
