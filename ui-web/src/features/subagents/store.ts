@@ -773,21 +773,18 @@ export function paintInstance(box: HTMLElement, agent: string, handle: string): 
 /* What the last paint of this box actually drew.
  *
  * A repaint is not free: the renderer holds a running turn's last assistant
- * message provisionally, and re-feeding it throws that row away and draws it
- * again from the messages. When this guard was written the redrawn row was a
- * new DOM node as well -- measured in the browser against the real renderer,
- * the same snapshot painted three times gave three different nodes for the same
- * sentence -- and each new node ran its entrance animation. The renderer now
- * hands the redrawn row the identity of the one it replaces
- * (transcript/store.ts `adoptIdentity`), so a repaint costs a re-read and a
- * re-render rather than a rebuilt node; an unchanged snapshot still has nothing
- * to pay either for, which is why this stays.
+ * message provisionally, and re-feeding it tears that row's node down and
+ * builds a new one. Measured in the browser against the real renderer -- the
+ * same snapshot painted three times gave three different DOM nodes for the same
+ * sentence.
  *
- * The pane repaints every 2s for as long as the instance reads `run`
- * (`InstanceConversation`'s poll effect). A turn that stops producing output
- * without ending -- a tool call that failed and a model that then narrates
- * instead of retrying -- was leaving the last thing it said being rebuilt every
- * two seconds, indefinitely. On screen that was a line of text flickering.
+ * That is fine while the answer is growing, because the row genuinely changes.
+ * It is not fine when nothing changed, and the pane repaints every 2s for as
+ * long as the instance reads `run` (`InstanceConversation`'s poll effect). A
+ * turn that stops producing output without ending -- a tool call that failed and
+ * a model that then narrates instead of retrying -- leaves the last thing it
+ * said being rebuilt every two seconds, indefinitely. On screen that is a line
+ * of text flickering.
  *
  * So an unchanged snapshot costs no paint. The same rule `refresh` and
  * `refreshInstances` already apply to their own reads, for the same reason and

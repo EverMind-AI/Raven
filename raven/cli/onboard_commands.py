@@ -103,7 +103,7 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
             {"name": "minimax_cn_api", "label": "MiniMax (CN)"},
             {"name": "deepseek", "label": "DeepSeek"},
             {"name": "zai", "label": "Z.ai (Zhipu)"},
-            {"name": "dashscope", "label": "Alibaba Cloud"},
+            {"name": "dashscope", "label": "DashScope"},
             {"name": "moonshot", "label": "Moonshot"},
             {"name": "nvidia_nim", "label": "NVIDIA"},
             {"name": "volcengine", "label": "VolcEngine"},
@@ -2638,7 +2638,7 @@ def register(app: typer.Typer) -> None:
         search_api_key: Optional[str] = typer.Option(
             None,
             "--search-api-key",
-            help="Key for the web_search vendor (the one --search-provider names, or the configured one)",
+            help="Key for the web_search vendor (the one --search-provider names, or the configured one); checked with one real search",
         ),
         fetch_api_key: Optional[str] = typer.Option(
             None,

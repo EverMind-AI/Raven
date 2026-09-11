@@ -81,7 +81,7 @@ The bilingual onboarding wizard configures seven areas without requiring manual 
 2. Sandbox or execution location
 3. Chat channels
 4. EverOS long-term memory
-5. Web access (pick a search vendor and a page reader, give each its key)
+5. Web access (pick a search vendor and a page reader, give each its key; the search key is checked with one real query)
 6. Sub-agents shipped in this checkout
 7. Cold-start import from other AI tools
 
@@ -322,7 +322,6 @@ benchmarks/             # Benchmark adapters, including AppWorld evolver wiring
 evolver/                # Benchmark-driven harness self-evolution: a tool over the library, not in the wheel
 agents/                 # Product definitions served over ACP: launcher + rendered config + product plugins
 plugins-dist/           # Standalone plugin distributions (everos-memory, ppt-engine) on the raven.plugins entry-point group
-schemas/                # Editor-facing JSON Schemas exported from the pydantic models (scripts/export_agent_schemas.py)
 ```
 
 <br>

@@ -80,7 +80,6 @@ from raven.agent.loop._shared import (
 )
 from raven.agent.loop.recovery import ContinuationGate, DraftGate, cut_reasoning_head
 from raven.agent.tools.registry import call_failed
-from raven.contracts.harness import ActionRequest, CapabilityRequest, PlanningRequest
 from raven.permissions.turn import set_current_tool_call_id
 from raven.providers.tool_calls import openai_tool_call
 
@@ -668,7 +667,7 @@ class TurnPathMixin:
             )
             self.context.add_tool_result(messages, call_id, autofill_resolver.TOOL_NAME, row.get("summary", ""))
 
-    async def _run_agent_loop(  # noqa: C901 (cc 100: pre-existing, above the ceiling)
+    async def _run_agent_loop(
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
@@ -983,8 +982,7 @@ class TurnPathMixin:
                 # building, and a snapshot of it would go quietly stale.
                 auto.set_snapshot(messages)
 
-            capability = await self.harness.capability.select(CapabilityRequest(messages=messages, iteration=iteration))
-            tool_defs = capability.tools
+            tool_defs = self.tools.get_definitions()
             iter_msg_base = len(messages)
 
             if hook_ctx is not None:
@@ -1047,27 +1045,23 @@ class TurnPathMixin:
                 if draft is None and cut_continuation and on_token_delta is not None
                 else None
             )
-            response = await self.harness.action.decide(
-                ActionRequest(
-                    provider=self.provider,
+            if on_token_delta is not None or on_reasoning_delta is not None:
+                response = await self._llm_call_stream(
+                    messages=call_messages,
+                    tools=call_tools,
+                    model=call_model,
+                    on_token_delta=draft or gate or on_token_delta,
+                    on_reasoning_delta=on_reasoning_delta,
+                    **gen_overrides,
+                )
+            else:
+                response = await self.provider.chat_with_retry(
                     messages=call_messages,
                     tools=call_tools,
                     model=call_model,
                     fallback_models=fallback_models,
-                    stream_call=self._llm_call_stream,
-                    # Spliced here rather than inside the module: both gates are
-                    # the shell's own, and which sink a delta reaches is not a
-                    # strategy decision. The module reads the field it is handed,
-                    # so the stream/retry branch stays exactly the one the loop
-                    # took -- neither gate is built unless ``on_token_delta``
-                    # already is, so the spliced value is None on exactly the
-                    # turns the raw sink was, and a reasoning sink alone still
-                    # streams.
-                    on_token_delta=draft or gate or on_token_delta,
-                    on_reasoning_delta=on_reasoning_delta,
-                    generation_overrides=gen_overrides,
+                    **gen_overrides,
                 )
-            )
             if cut_continuation:
                 cut_continuation = False
                 if gate is not None:
@@ -1810,7 +1804,7 @@ class TurnPathMixin:
     @trace.instrument(
         "session.turn", root=True, seed=semconv.turn_seed, on_open=semconv.turn_open, extract=semconv.turn
     )
-    async def _process_message(  # noqa: C901 (cc 47: pre-existing, above the ceiling)
+    async def _process_message(
         self,
         req: TurnRequest,
         session_key: str | None = None,
@@ -1922,7 +1916,7 @@ class TurnPathMixin:
                 "/help — Show available commands",
             ]
             return ("\n".join(lines), [])
-        if not self.harness.memory.owns_compaction:
+        if not self.context_engine.owns_compaction:
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
         # ── Personalization flow (global switch: self.enable_personalization) ──
@@ -2093,17 +2087,6 @@ class TurnPathMixin:
             last = initial_messages[-1]
             if last.get("role") == "user":
                 last[_ORIGIN_KEY] = origin_mark
-        # Planning's one seat, and deliberately after the stamp above: the
-        # origin mark belongs on the envelope the assembler built, so a planner
-        # that returns a different list must not be able to move which message
-        # gets marked. The default passes the list straight through, which is
-        # what Raven has always done -- planning is the model's own, and the
-        # position *ahead* of the turn was measured to be the wrong one for a
-        # harness to take it (see ``harness/planning.py``).
-        planning = await self.harness.planning.prepare(
-            PlanningRequest(task=content, session_key=key, messages=initial_messages)
-        )
-        initial_messages = planning.messages
         # Surface the skills SkillForge injected this turn to the web UI's skill
         # panel (populated into _last_injected_skill_ids by the assemble above).
         await self._emit_injected_skills(key)
@@ -2239,7 +2222,7 @@ class TurnPathMixin:
             session, all_msgs, turn_start_idx, received_at=turn_received_at, inbound_original=inbound_original
         )
         self.sessions.save(session)
-        await self.harness.memory.after_turn(
+        await self.context_engine.after_turn(
             key,
             {
                 "final_content": final_content,
@@ -2255,7 +2238,7 @@ class TurnPathMixin:
             key,
             self._collect_injected_skill_ids(selected_skills),
         )
-        if not self.harness.memory.owns_compaction:
+        if not self.context_engine.owns_compaction:
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
         # ── Step 4: post-action learning (background, non-blocking) ─────────────
@@ -2518,7 +2501,7 @@ class TurnPathMixin:
             session.record(entry)
         session.updated_at = self._now_fn()
 
-    async def _run_turn(  # noqa: C901 (cc 41: pre-existing, above the ceiling)
+    async def _run_turn(
         self,
         req: TurnRequest,
         emit: Emit,

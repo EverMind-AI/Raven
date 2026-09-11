@@ -1691,48 +1691,6 @@ describe("the turn's delivered files and file changes", () => {
     expect($('.arts')).toBeTruthy()
   })
 
-  /* The node, not just the id: a kept id is only worth something if React keeps
-     the element for it, and the entrance animation is on the element. */
-  it('keeps the same answer element while a delegated answer grows', () => {
-    const box = document.createElement('div')
-    document.body.append(box)
-    const at = (text: string) => ({ status: 'run', messages: [{ role: 'user' as const, text: 'Q' }, { role: 'assistant' as const, text }] })
-    act(() => { mount.agentStage(box, at('The quick'), { key: 'grow-1', reset: true }) })
-    const first = box.querySelector('.answer')
-    expect(first).toBeTruthy()
-    act(() => { mount.agentStage(box, at('The quick brown'), { key: 'grow-1' }) })
-    act(() => { mount.agentStage(box, at('The quick brown fox'), { key: 'grow-1' }) })
-    const answers = box.querySelectorAll('.answer')
-    expect(answers.length).toBe(1)
-    expect(answers[0]).toBe(first)
-    expect(first!.textContent).toContain('The quick brown fox')
-  })
-
-  it('keeps the step elements inside an open fold when the next call arrives', () => {
-    const box = document.createElement('div')
-    document.body.append(box)
-    const msgs = [
-      { role: 'user' as const, text: 'job' },
-      { role: 'assistant' as const, reasoning_content: 'think', text: 'reading', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
-      { role: 'tool' as const, tool_call_id: 'c1', text: 'ok' },
-    ]
-    act(() => { mount.agentStage(box, { status: 'run', messages: msgs }, { key: 'steps-1', reset: true }) })
-    const fold = box.querySelector('.tfold')
-    const steps = [...box.querySelectorAll('.tfold .step')]
-    expect(fold).toBeTruthy()
-    expect(steps.length).toBeGreaterThan(0)
-    act(() => {
-      mount.agentStage(box, {
-        status: 'run',
-        messages: [...msgs, { role: 'assistant', reasoning_content: 'more', text: 'and searching', tool_calls: [{ id: 'c2', name: 'find', arguments: '{}' }] }],
-      }, { key: 'steps-1' })
-    })
-    expect(box.querySelector('.tfold')).toBe(fold)
-    const again = [...box.querySelectorAll('.tfold .step')]
-    expect(again.slice(0, steps.length)).toEqual(steps)
-    expect(again.length).toBe(steps.length + 1)
-  })
-
   it('does not leak a main-turn file change into an agent turn with the same number', () => {
     PRODUCED.set(1, [wrote('main-only.md', '# Main only')])
     const box = document.createElement('div')

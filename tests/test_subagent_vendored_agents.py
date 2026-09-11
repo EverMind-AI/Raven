@@ -812,7 +812,7 @@ def test_a_stored_row_takes_hidden_and_routes_from_its_folder(tree: Path) -> Non
     from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
 
     _product(tree, "deck", manifest={**_ACP_MANIFEST, "name": "Deck", "hidden": True})
-    _product(tree, "design", manifest={**_ACP_MANIFEST, "name": "Design", "routes": [{"to": "Deck"}]})
+    _product(tree, "design", manifest={**_ACP_MANIFEST, "name": "Design", "routes": [{"to": "Deck", "match": "pptx"}]})
     discovered = discover_product_rows()
     stored = [
         next(r for r in discovered if r.name == "Deck").model_copy(update={"hidden": False}),
@@ -821,7 +821,7 @@ def test_a_stored_row_takes_hidden_and_routes_from_its_folder(tree: Path) -> Non
 
     merged = {r.name: r for r in merge_product_seeds(stored, discovered)}
     assert merged["Deck"].hidden is True
-    assert [r.to for r in merged["Design"].routes] == ["Deck"]
+    assert [(r.to, r.match) for r in merged["Design"].routes] == [("Deck", "pptx")]
     assert merged["Design"].description == "edited"
 
 

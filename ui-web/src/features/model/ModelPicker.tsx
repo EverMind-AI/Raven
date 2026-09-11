@@ -11,11 +11,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../shell/bridge'
-import { ModelTagDefs, ModelTags } from '../../shell/model-tags'
-import { ProviderIcon, ProviderStatus } from '../../shell/provider-mark'
+import { ProviderIcon, ProviderLink, ProviderStatus } from '../../shell/provider-mark'
 import * as store from './store'
-
-import { offered } from './types'
 
 import type { ApiProtocol, Provider } from './types'
 import type { JSX } from 'react'
@@ -38,18 +35,18 @@ function Pick(): JSX.Element {
   const box = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
-  const [prov, setProv] = useState(() => Math.max(0, providers.findIndex((p) => offered(p).includes(current))))
+  const [prov, setProv] = useState(() => Math.max(0, providers.findIndex((p) => p.models.includes(current))))
 
   const narrow = (term: string): string[][] => {
     const needle = term.trim().toLowerCase()
     return providers.map((p) =>
-      needle ? offered(p).filter((m) => store.short(m).toLowerCase().includes(needle)) : offered(p),
+      needle ? p.models.filter((m) => store.short(m).toLowerCase().includes(needle)) : p.models,
     )
   }
   const q = query.trim().toLowerCase()
   const hits = narrow(query)
   const list = hits[prov] || []
-  const currentProvider = providers.find((p) => offered(p).includes(current))
+  const currentProvider = providers.find((p) => p.models.includes(current))
 
   /* Measured, so it has to run after the paint that gives it a size. Above the
      anchor when it fits, which is where the composer chip wants it; clamped
@@ -91,7 +88,6 @@ function Pick(): JSX.Element {
 
   return (
     <div className="mpick" role="dialog" ref={box}>
-      <ModelTagDefs />
       <div className="find">
         <span style={{ color: 'var(--faint)' }}>⌕</span>
         <input
@@ -149,12 +145,9 @@ function Pick(): JSX.Element {
                   if (hits[i]!.length) setProv(i)
                 }}
               />
-              {/* A name, not a link. The row's whole job is to change the
-                  column beside it, and an anchor in the middle of it sent the
-                  reader out to a marketing page instead. */}
               <span className="nm">
                 <ProviderIcon id={p.id} name={p.name} />
-                <span>{p.name}</span>
+                <ProviderLink homepage={p.homepage} name={p.name} />
               </span>
               <span className="ct">{String(hits[i]!.length)}</span>
               {hits[i]!.includes(current) ? <span className="tick">•</span> : null}
@@ -176,25 +169,12 @@ function Pick(): JSX.Element {
             {!list.length ? (
               <div className="empty">{t(q ? 'gui.picker.no_match' : 'gui.picker.empty_provider')}</div>
             ) : (
-              list.map((m) => {
-                const facts = providers[prov]?.labels?.[m]
-                /* The label where the registry has one, the id where it does
-                   not, and the id on the title either way: the row is 340px
-                   wide with an icon row in it, and the reader who needs the
-                   exact string is hovering to copy it. */
-                return (
-                  <button
-                    key={m}
-                    className="row"
-                    title={facts?.label ? `${store.short(m)}${facts.description ? ` -- ${facts.description}` : ''}` : store.short(m)}
-                    onClick={() => void store.choose(m, providers[prov]!.id)}
-                  >
-                    <span className={'nm' + (facts?.label ? ' named' : '')}>{facts?.label || store.short(m)}</span>
-                    <ModelTags facts={facts} />
-                    {m === current ? <span className="tick">✓</span> : null}
-                  </button>
-                )
-              })
+              list.map((m) => (
+                <button key={m} className="row" onClick={() => void store.choose(m, providers[prov]!.id)}>
+                  <span className="nm">{store.short(m)}</span>
+                  {m === current ? <span className="tick">✓</span> : null}
+                </button>
+              ))
             )}
           </div>
         </div>

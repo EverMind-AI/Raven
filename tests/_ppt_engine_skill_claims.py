@@ -563,7 +563,6 @@ _KIND_PHRASES = {
     "orphan_line": "label the render broke",
     "wrapped_label": "in a box too narrow for it",
     "overset_copy": "copy that does not fit",
-    "displaced_copy": "set above where its box starts",
     "clipped_copy": "clips instead of wrapping",
     "excessive_whitespace": "large blank field",
     "unseparated_blocks": "no more air between them",
@@ -981,34 +980,6 @@ for _page, _text in _PAGES.items():
 
 # 12. canvas
 ok("13.3 x 7.5in" in skill, "canvas size claim changed")
-
-# 12z. The house brief's boxes, in one convention, under the names the skill uses.
-#
-# Two guards, and the second is the one with a cost behind it. A key the skill names
-# and the brief does not ship is a line an author cannot act on -- and this file has
-# already been the place that caught a skill naming `page_box(s)` when no such name
-# was importable. A *bare size* is worse than a missing key now that `_as_region`
-# refuses four bare numbers: `(left, top, width, height)` printed a line above a
-# `Box.corners(...)` built from the same rectangle is two readings of one rectangle a
-# line apart, one live run read the whole call by the two numbers they share and wrote
-# a size into a box of its own, and a skill still naming a size key would aim that
-# refusal at an author who did exactly as it was told. So the brief ships corners and
-# the skill says corners, and neither is allowed to drift back on its own.
-_house_src = (ROOT / "plugins-dist/ppt-engine/raven_ppt/services/template/house.py").read_text()
-_brief_keys = set(re.findall(r'payload\["(\w+)"\]', _house_src))
-for _named in sorted(set(re.findall(r"\b(\w+_(?:corners_in|as_code))\b", skill))):
-    ok(_named in _brief_keys, f"the skill names {_named} and the house brief ships no such key")
-for _stale in ("title_row_box_in", "subtitle_row_box_in", "safe_area_in", "body_area_in"):
-    ok(_stale not in skill, f"the skill names {_stale}, a bare size the brief does not ship")
-    ok(
-        f'payload["{_stale}"]' not in _house_src,
-        f"the brief ships {_stale}, a bare size beside a Box.corners line built from it",
-    )
-ok(
-    "_corners(" in _house_src and "def _corners(" in _house_src,
-    "the brief does the corner subtraction somewhere other than _corners",
-)
-
 
 # 13. frontmatter parses and says always.
 #

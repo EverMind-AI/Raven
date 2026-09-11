@@ -8,12 +8,6 @@ import pytest
 
 from raven_ppt.contracts import Finding, Project, Severity
 from raven_ppt.services.publish import PublishRefusedError, publish, stage
-from raven_ppt.services.publish.deliver import (
-    delivery_report,
-    published_digests,
-    tampered_delivery,
-    unrecorded_deliveries,
-)
 
 
 @pytest.fixture()
@@ -128,93 +122,3 @@ def test_an_empty_build_is_not_stageable(project: Project) -> None:
 def test_a_missing_build_says_where_it_looked(project: Project) -> None:
     with pytest.raises(PublishRefusedError, match="no deck at"):
         stage(project, project.build_dir / "nope.pptx")
-
-
-# --- the record against the file it names ---------------------------------------
-
-
-def test_the_record_names_the_bytes_that_reached_the_path(project: Project) -> None:
-    """Read back off the delivered file, not taken from the copy it was made from.
-
-    The record's whole promise is "this sha256 is the file at this path", and the only
-    way to keep it is to hash the file at that path after writing it.
-    """
-    import hashlib
-
-    staged = stage(project, _deck(project), pages=4)
-    out = publish(project, staged, project.exports_dir / "deck.pptx", findings=[], blocking_kinds=frozenset())
-
-    assert published_digests(project.state_dir) == {hashlib.sha256(out.read_bytes()).hexdigest()}
-    assert tampered_delivery(project.state_dir, out) is None
-
-
-def test_a_delivery_edited_where_it_lies_is_named_and_not_believed(project: Project) -> None:
-    """The live failure this reading exists for.
-
-    A run holding a deck it had already delivered ran `python3 - # Apply the same fix to
-    the published deck (out/deck.pptx) in place` through `exec` and rewrote the delivery
-    where it lay. Nothing was copied anywhere -- the build directory and the staged copy
-    both still held the recorded bytes -- so every record in the deck folder went on
-    describing a file that no longer existed, and the user held a deck no gate had seen.
-    """
-    staged = stage(project, _deck(project), pages=4)
-    out = publish(project, staged, project.exports_dir / "deck.pptx", findings=[], blocking_kinds=frozenset())
-
-    out.write_bytes(b"PK\x03\x04 edited in place")
-
-    report = tampered_delivery(project.state_dir, out)
-    assert report is not None
-    assert "changed after it was published" in report
-    assert "never in the delivered file" in report
-    assert unrecorded_deliveries(project.state_dir) == [report]
-    # And the same answer through the entry point the stage uses, which resolves the
-    # destination the way `publish` does.
-    assert delivery_report(project, project.exports_dir / "deck.pptx") == report
-
-
-def test_the_next_publish_puts_the_measured_deck_back_and_the_record_agrees(project: Project) -> None:
-    """The repair is the publish itself: the gated deck is written over the edited one.
-
-    Which is why this reads and never refuses -- the user must still get a deck, and the
-    deck they should get is the one that passed.
-    """
-    import hashlib
-
-    staged = stage(project, _deck(project), pages=4)
-    out = publish(project, staged, project.exports_dir / "deck.pptx", findings=[], blocking_kinds=frozenset())
-    out.write_bytes(b"PK\x03\x04 edited in place")
-
-    again = stage(project, _deck(project, b"PK\x03\x04 rebuilt"), pages=4)
-    out = publish(project, again, project.exports_dir / "deck.pptx", findings=[], blocking_kinds=frozenset())
-
-    assert out.read_bytes() == b"PK\x03\x04 rebuilt"
-    assert unrecorded_deliveries(project.state_dir) == []
-    assert hashlib.sha256(out.read_bytes()).hexdigest() in published_digests(project.state_dir)
-
-
-def test_a_record_that_cannot_be_written_is_not_a_silent_delivery(project: Project) -> None:
-    """A delivery with no record is one the harness reads as a copy the model made.
-
-    The write is small and the deck is megabytes, so this is the unlikely half of the
-    pair -- and it is the half that used to raise a bare OSError past a caller catching
-    only `PublishRefusedError`, leaving the file in place and the record describing the
-    build before it.
-    """
-    from raven_ppt.services.publish import deliver
-
-    staged = stage(project, _deck(project), pages=4)
-    record = project.state_dir / deliver.PUBLISHED_RECORD
-    record.mkdir()  # a directory where the record goes: os.replace onto it fails
-
-    with pytest.raises(PublishRefusedError, match="its record could not be"):
-        publish(project, staged, project.exports_dir / "deck.pptx", findings=[], blocking_kinds=frozenset())
-
-
-def test_a_deck_with_no_record_is_not_reported_as_changed(project: Project) -> None:
-    """Nothing recorded for a path is not a claim about it, so there is nothing to break."""
-    loose = project.exports_dir / "someone_elses.pptx"
-    loose.parent.mkdir(parents=True, exist_ok=True)
-    loose.write_bytes(b"PK\x03\x04 not ours")
-
-    assert tampered_delivery(project.state_dir, loose) is None
-    assert unrecorded_deliveries(project.state_dir) == []
