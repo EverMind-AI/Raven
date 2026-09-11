@@ -475,8 +475,13 @@ install_office() {
       # macOS path already installs it without asking. sudo's own password
       # prompt still stands between Enter and any change.
       printf 'Install LibreOffice for deck preview (needs sudo)? Without it a deck still builds, but no page is ever rendered, measured or checked. [Y/n] '
+      # A failed read is not an Enter: Ctrl-D, or a tty that closed after the
+      # gate passed, must decline -- only a deliberate empty Enter accepts.
       answer=""
-      read -r answer < /dev/tty || answer=""
+      read -r answer < /dev/tty || {
+        warn "Skipping LibreOffice (no answer read); deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+        return 0
+      }
       case "$answer" in
         n|N|[nN][oO])
           warn "Skipping LibreOffice; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"

@@ -61,6 +61,14 @@ def test_the_office_prompt_and_sudo_both_read_the_tty() -> None:
     assert "sudo apt-get install -y libreoffice < /dev/tty" in text
 
 
+def test_a_failed_tty_read_declines_instead_of_defaulting_yes() -> None:
+    """Ctrl-D and a tty lost after the gate are not consent: with a default-yes
+    prompt, read's failure branch must return, never fall through to sudo."""
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    assert "read -r answer < /dev/tty || {" in text
+    assert "no answer read" in text
+
+
 def test_the_tty_gate_probes_openability_not_existence() -> None:
     """/dev/tty can exist with no controlling terminal (CI, cron, `docker run
     -t` without -i), where a read on it errors or hangs -- the gate must open
