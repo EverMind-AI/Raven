@@ -74,6 +74,30 @@ DEFAULT_MAX_OUTPUT_TOKENS = 64_000
 # their window routinely.
 MIN_PROMPT_TOKENS = 16_384
 
+# How much of the window a single reply may reserve. A third question, distinct
+# from the two constants above: they say what a model is able to emit, this says
+# what one reply plausibly is. The unit is the Iteration, not the Turn -- a turn
+# runs one LLM call per round of tools, and every one of them reserves this
+# number again. Asking for the whole declared ceiling trades window for headroom
+# no reply reaches: a model declaring 131000 inside a 204800 window leaves the
+# prompt 73800, and a 73878-token prompt is a 400 no retry can fix.
+#
+# Asking short is the cheaper way to be wrong, not a free one. The loop
+# continues a reply that came back *empty* at the ceiling -- prefill, a
+# reasoning-effort descent, ``OUTPUT_LIMIT_NUDGE`` -- and it refuses a tool call
+# whose arguments were cut so ``Tool.truncation_hint`` reaches the model. A
+# non-empty reply that stopped at the ceiling gets none of that:
+# ``classify_empty_response`` answers COMPLETE on any visible text, so the loop
+# persists it, ends the turn, and the caller reads a truncated answer as a whole
+# one. Set this too low and that is what it buys.
+#
+# Measured over 4437 recorded calls: p95 is 7389, p99 is 16084, and the single
+# call past this number spent 45132 of its 45330 tokens reasoning to emit 198.
+# The largest output that was not reasoning is 25273, so the margin here is
+# about 30 percent rather than the comfortable multiple the percentiles alone
+# suggest -- raise this to DEFAULT_MAX_OUTPUT_TOKENS if that tail grows.
+MAX_OUTPUT_TOKENS_PER_ITERATION = 32_768
+
 #: Rate pair: (prompt_cost_per_token, completion_cost_per_token) in USD.
 #: Keep this table small -- it is a fallback for brand-new models that LiteLLM
 #: has not indexed yet. Check LiteLLM first before adding here.
@@ -752,17 +776,19 @@ def resolve_max_output_tokens(model: str | None, *, window: int | None = None, a
     """How many output tokens to ask for. Never ``None`` -- the caller is about
     to build a request with the result.
 
-    Two questions, asked in a documented order and answered from whatever can
-    answer them for *this* model, whoever serves it.
+    Three questions, asked in a documented order and answered from whatever can
+    answer them for *this* model, whoever serves it. The smallest answer wins,
+    and each is a bound on the one before rather than a replacement for it.
 
     **What does it declare?** ``declared_max_output_tokens`` walks the tables
     that also route the request -- LiteLLM's own metadata, then OpenRouter's
-    catalogue for an id naming OpenRouter -- and whatever they say is what a
-    request carries, as declared. A declaration is the serving side's own
-    answer to this exact question, so clamping it to a constant of ours made a
-    131072-token endpoint ask for 64000 on every call. Honouring one is safe
-    because the declaration is filtered first: ``_trustworthy_ceiling`` drops
-    the rows that file a window as a ceiling, which is where every absurd
+    catalogue for an id naming OpenRouter -- and whatever they say is the
+    ceiling the two bounds below apply to. A declaration is the serving side's
+    own answer, so it is never *substituted* for: standing our fallback in its
+    place had a 131072-token endpoint answered with a guess on every call, and
+    lost the declarations below the fallback along with it. Honouring one is
+    safe because the declaration is filtered first: ``_trustworthy_ceiling``
+    drops the rows that file a window as a ceiling, which is where every absurd
     figure came from. ``DEFAULT_MAX_OUTPUT_TOKENS`` answers only where nothing
     declares -- a self-hosted deployment, a gateway, a model newer than every
     catalogue.
@@ -774,6 +800,15 @@ def resolve_max_output_tokens(model: str | None, *, window: int | None = None, a
     behind -- or half the window where the window is too small to spare that
     much, which is the same number at 32768 and below it the only split that
     leaves both sides something.
+
+    **How much will one iteration use?** ``MAX_OUTPUT_TOKENS_PER_ITERATION``.
+    The bound above keeps the prompt from being squeezed to nothing, but it only
+    bites where the window is tight; a declaration well inside a large window
+    passes it untouched and still reserves far more than one reply emits. That
+    is the same trade seen from the other side -- window spent on headroom --
+    and it is what left a 1048576-token model running on 104858 tokens of
+    prompt. The unit is the Iteration: a turn pays this once per LLM call, not
+    once in total.
 
     ``window`` is that window, and it is why this generalizes past the models a
     catalogue knows: the caller passes the one the turn is actually running on
@@ -789,7 +824,8 @@ def resolve_max_output_tokens(model: str | None, *, window: int | None = None, a
     if not window and model:
         window = resolve_context_window(model, allow_fetch=allow_fetch)
     window = window or DEFAULT_CONTEXT_WINDOW_TOKENS
-    return max(1, min(ceiling, max(window - MIN_PROMPT_TOKENS, window // 2)))
+    room = max(window - MIN_PROMPT_TOKENS, window // 2)
+    return max(1, min(ceiling, room, MAX_OUTPUT_TOKENS_PER_ITERATION))
 
 
 def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int | None:
