@@ -39,7 +39,6 @@ _ENTRY = re.compile(
     r"^\s{2}(\w+):\s*\{\s*file:\s*'([^']+)'(?:,\s*tone:\s*'(mono|hybrid)')?\s*\},?$",
     re.MULTILINE,
 )
-_OWN = re.compile(r"^const OWN_MARK: \{ file: string \} = \{ file: '([^']+)' \}$", re.MULTILINE)
 _SHAPE = re.compile(r"<(?:path|rect|circle|ellipse|polygon)\b[^>]*>")
 
 
@@ -56,18 +55,6 @@ def _marks() -> dict[str, tuple[str, str | None]]:
     found = {key: (file, tone or None) for key, file, tone in _ENTRY.findall(body[start:end])}
     assert found, "the mark table did not parse -- has its shape changed?"
     return found
-
-
-def _own_mark() -> str:
-    """The mark for raven's own agents, which are keyed by a flag and not a preset.
-
-    Outside ``MARKS`` on purpose -- that table's contract is that it equals the
-    third-party presets exactly -- so it is parsed separately rather than by
-    widening the entry pattern above.
-    """
-    found = _OWN.findall(_TABLE.read_text(encoding="utf-8"))
-    assert len(found) == 1, "raven's own mark did not parse -- has its shape changed?"
-    return found[0]
 
 
 def _tone_of(file: str) -> str | None:
@@ -103,7 +90,7 @@ def test_no_asset_is_orphaned() -> None:
     ``ui-web/build.py`` copies the whole assets tree into the bundle, so a mark
     left behind by a removed preset ships to every user forever.
     """
-    named = {f"{file}.svg" for file, _ in _marks().values()} | {f"{_own_mark()}.svg"}
+    named = {f"{file}.svg" for file, _ in _marks().values()}
     assert {path.name for path in _ASSETS.glob("*.svg")} == named
 
 
@@ -125,27 +112,3 @@ def test_the_hybrid_tone_is_not_spent_on_a_file_that_does_not_need_it() -> None:
     declared = {key for key, (_, tone) in _marks().items() if tone == "hybrid"}
     derived = {key for key, (file, _) in _marks().items() if _tone_of(file) == "hybrid"}
     assert declared == derived
-
-
-def test_the_own_mark_ships() -> None:
-    assert (_ASSETS / f"{_own_mark()}.svg").is_file()
-
-
-def test_the_own_mark_answers_the_theme_from_inside_the_file() -> None:
-    """The two halves of that are one fact, and neither is safe alone.
-
-    A raven is black, and the dark theme's surface is ``#1e1c14`` -- 1.2:1, a
-    silhouette that leaves two white eyes floating in an empty frame. The mark
-    cannot be filtered into legibility the way a ``mono`` one is, because it is
-    not one colour, so it carries a ``prefers-color-scheme`` rule of its own,
-    as miromind.svg does; an ``<img>`` resolves that against the embedding
-    element's used colour-scheme, which the stylesheet pins to the chosen
-    theme.
-
-    The tone must therefore stay absent: a ``mono`` or ``hybrid`` here would
-    invert the file on top of the answer it already gave, which lands back at
-    black on black in exactly one theme -- and no DOM assertion sees a colour.
-    """
-    svg = (_ASSETS / f"{_own_mark()}.svg").read_text(encoding="utf-8")
-    assert "prefers-color-scheme: dark" in svg
-    assert _tone_of(_own_mark()) is None

@@ -4955,10 +4955,9 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    above has a guard for.
    The frame is the idea .provider-icon.fallback already uses for a provider
    with no icon, at this row's weight (--line-soft, like the kind pill beside
-   it, rather than --line): thirteen logos drawn by thirteen houses, plus this
-   project's own, share no silhouette, no weight and no margin, and a common
-   frame is what makes them read as one column instead of a ransom note. It
-   also settles miromind.svg,
+   it, rather than --line): thirteen logos drawn by thirteen houses share no
+   silhouette, no weight and no margin, and a common frame is what makes them
+   read as one column instead of a ransom note. It also settles miromind.svg,
    which came with a card of its own and was the one mark with a background
    before every mark had one. */
 .agent-mark { width: 20px; height: 20px; display: grid; place-items: center; flex: none;
@@ -4983,15 +4982,12 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   :root:not([data-theme="light"]) .agent-mark img[data-tone="mono"] { filter: invert(1); }
   :root:not([data-theme="light"]) .agent-mark img[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
 }
-/* Two marks answer the theme from inside their own file, each with a
-   prefers-color-scheme rule: miromind.svg, which is a favicon, and raven.svg,
-   which is a black bird and would otherwise sit at 1.2:1 on the dark surface --
-   no tone filter can help it, because it is not one colour to invert. An
-   <img>'s SVG evaluates that rule against the used color-scheme of the element
-   embedding it, NOT against this page's data-theme, so without these two lines
-   both follow the operating system while the rest of the roster follows the
-   switch -- and since the app's default is explicitly light, a fresh install on
-   a dark OS is a normal way to see it.
+/* One mark answers the theme from inside its own file: miromind.svg is a favicon
+   and carries a prefers-color-scheme rule. An <img>'s SVG evaluates that against
+   the used color-scheme of the element embedding it, NOT against this page's
+   data-theme, so without these two lines it follows the operating system while
+   the rest of the roster follows the switch -- and since the app's default is
+   explicitly light, a fresh install on a dark OS is a normal way to see it.
    Declared on the tile rather than on :root: there it would also hand every
    native scrollbar and form control to the dark palette, which is a change to
    the whole page and not to a mark. */

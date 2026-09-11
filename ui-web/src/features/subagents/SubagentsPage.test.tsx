@@ -544,30 +544,18 @@ describe('subagents island, the list', () => {
      row carries its agent's name and never its preset. */
   it('marks each instance row with the brand of the agent that ran it', async () => {
     instances(
-      [
-        inst({ handle: 'one', agent: 'Coder' }),
-        inst({ handle: 'two', agent: 'Raven-Code' }),
-        inst({ handle: 'three', agent: 'my local helper' }),
-      ],
+      [inst({ handle: 'one', agent: 'Coder' }), inst({ handle: 'two', agent: 'Raven-Code' })],
       {
-        roster: async () => [
-          { name: 'Coder', preset: 'claude_code' },
-          /* As the server sends it: a Discovered agent has no preset and says
-             so with `vendored`, which is what the roster row has to carry
-             through for the mark to survive the name lookup. */
-          { name: 'Raven-Code', vendored: true },
-          { name: 'my local helper' },
-        ] as SubagentRow[],
+        roster: async () => [{ name: 'Coder', preset: 'claude_code' }, { name: 'Raven-Code' }] as SubagentRow[],
       },
     )
     await mount()
 
-    /* The third row's agent is one the reader wrote: no preset and none of
-       raven's own flags, so it takes the generic glyph -- the same fallback the
-       roster draws, not a blank column. */
+    /* The second row's agent ships no preset, so it takes the generic glyph --
+       the same fallback the roster draws, not a blank column. */
     const rows = [...document.querySelectorAll('.salist .sarow')]
     expect(rows.map((r) => r.querySelector('.agent-mark img')?.getAttribute('src') ?? null))
-      .toEqual(['assets/agents/claudecode-color.svg', 'assets/agents/raven.svg', null])
+      .toEqual(['assets/agents/claudecode-color.svg', null])
     expect(rows.every((r) => !!r.querySelector('.agent-mark'))).toBe(true)
   })
 })
@@ -2001,31 +1989,6 @@ describe('the compact roster', () => {
       .toBe('assets/agents/claudecode-color.svg')
     expect(lookalike?.querySelector('.agent-mark img')).toBe(null)
     expect(lookalike?.querySelector('.agent-mark svg')).toBeTruthy()
-  })
-
-  /* The other field the head reads. Raven's own agents have no preset at all,
-     so a head that only consulted one left this install's own six wearing the
-     generic glyph -- the built-in loop and the five Discovered agents that
-     ship, which between them are most of a default roster. */
-  it('marks a head of raven s own from the flags instead', () => {
-    wire({ list: async () => [] })
-    render(
-      <AgentList
-        s={{
-          ...store.getState(),
-          roster: [
-            { name: 'raven', builtin: true },
-            { name: 'Raven-Code', vendored: true },
-          ] as SubagentRow[],
-          instances: [],
-        }}
-        compact
-      />,
-      { container: document.getElementById('wsBody')! },
-    )
-    for (const head of heads()) {
-      expect(head?.querySelector('.agent-mark img')?.getAttribute('src')).toBe('assets/agents/raven.svg')
-    }
   })
 })
 

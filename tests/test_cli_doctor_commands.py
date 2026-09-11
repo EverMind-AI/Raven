@@ -79,7 +79,7 @@ def test_doctor_help_lists_all_flags() -> None:
     """``--help`` exposes the full flag surface."""
     r = runner.invoke(app, ["doctor", "--help"])
     assert r.exit_code == 0, r.stdout
-    for flag in ("--probe", "--json", "--timeout"):
+    for flag in ("--probe", "--json", "--timeout", "--install-summary"):
         assert flag in r.stdout, f"missing flag in help: {flag}"
 
 
@@ -1285,3 +1285,225 @@ def test_doctor_finds_the_windows_install_the_remedy_it_prints_creates(
     monkeypatch.setenv("ProgramFiles", str(tmp_path / "Program Files"))
 
     assert doctor_commands._gather_external_tools().soffice == str(launcher)
+
+
+# --------------------------------------------------------------------------- chromium
+
+
+def _browsers_registry(directory: Path, *, chromium: str = "1234", shell: str = "1234") -> Path:
+    registry = directory / "browsers.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        json.dumps(
+            {
+                "browsers": [
+                    {"name": "chromium", "revision": chromium},
+                    {"name": "chromium-headless-shell", "revision": shell},
+                    {"name": "firefox", "revision": "9999"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return registry
+
+
+def _downloaded(root: Path, directory: str) -> None:
+    (root / directory).mkdir(parents=True, exist_ok=True)
+    (root / directory / "INSTALLATION_COMPLETE").write_text("")
+
+
+def test_both_chromium_markers_read_as_downloaded(tmp_path: Path) -> None:
+    registry = _browsers_registry(tmp_path)
+    root = tmp_path / "cache"
+    _downloaded(root, "chromium-1234")
+    _downloaded(root, "chromium_headless_shell-1234")
+
+    assert doctor_commands._chromium_markers(registry, root) == (True, True)
+
+
+def test_chromium_alone_is_not_a_working_browser(tmp_path: Path) -> None:
+    """raven's driver launches headless by default, which runs the separate
+    headless-shell install -- a cache holding only chromium-<rev> still cannot
+    serve the browser tool, so the shell's absence must be reported."""
+    registry = _browsers_registry(tmp_path)
+    root = tmp_path / "cache"
+    _downloaded(root, "chromium-1234")
+
+    assert doctor_commands._chromium_markers(registry, root) == (True, False)
+
+
+def test_a_marker_for_another_revision_does_not_count(tmp_path: Path) -> None:
+    """The revision comes from the installed package's own registry: a cache
+    left by an older playwright is not the browser this one would launch."""
+    registry = _browsers_registry(tmp_path, chromium="1300", shell="1300")
+    root = tmp_path / "cache"
+    _downloaded(root, "chromium-1234")
+    _downloaded(root, "chromium_headless_shell-1234")
+
+    assert doctor_commands._chromium_markers(registry, root) == (False, False)
+
+
+def test_the_browsers_path_env_is_honored(tmp_path: Path) -> None:
+    root = doctor_commands._resolve_browsers_root(tmp_path / "pkg", str(tmp_path / "elsewhere"))
+    assert root == tmp_path / "elsewhere"
+
+
+def test_browsers_path_zero_means_package_local(tmp_path: Path) -> None:
+    root = doctor_commands._resolve_browsers_root(tmp_path / "pkg", "0")
+    assert root == tmp_path / "pkg" / ".local-browsers"
+
+
+def test_no_env_falls_back_to_the_user_cache(tmp_path: Path) -> None:
+    root = doctor_commands._resolve_browsers_root(tmp_path / "pkg", None)
+    assert root.name == "ms-playwright"
+    assert Path.home() in root.parents
+
+
+def _fake_playwright(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, markers: tuple[str, ...]) -> Path:
+    """Install a fake playwright package dir plus a cache holding ``markers``."""
+    package_dir = tmp_path / "playwright"
+    _browsers_registry(package_dir / "driver" / "package")
+    cache = tmp_path / "pw-cache"
+    for name in markers:
+        _downloaded(cache, name)
+    monkeypatch.setattr(doctor_commands, "_playwright_package_dir", lambda: package_dir)
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(cache))
+    return cache
+
+
+def test_doctor_reports_a_missing_browser_package(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No playwright means no `playwright install` to run: the remedy is the
+    installer, whose engines carry the library. Non-fatal, like LibreOffice."""
+    monkeypatch.setattr(doctor_commands, "_playwright_package_dir", lambda: None)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0, result.stdout
+    external = " ".join(result.stdout.split("External tools")[1].split())
+    assert "Chromium:" in external
+    assert "install.sh" in external
+
+
+def test_doctor_reports_an_undownloaded_chromium_with_the_command_that_installs_it(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fake_playwright(tmp_path, monkeypatch, markers=("chromium-1234",))
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0, result.stdout
+    flat = " ".join(result.stdout.split())
+    assert "playwright install chromium" in flat
+    assert "install.sh" not in flat.split("Chromium:")[1].split("Design render:")[0]
+
+
+def test_doctor_names_the_browser_cache_it_found(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fake_playwright(tmp_path, monkeypatch, markers=("chromium-1234", "chromium_headless_shell-1234"))
+
+    result = runner.invoke(app, ["doctor"])
+
+    flat = " ".join(result.stdout.split())
+    chromium_row = flat.split("Chromium:")[1].split("Design render:")[0]
+    assert "pw-cache" in chromium_row
+    assert "playwright install" not in chromium_row
+    assert "install.sh" not in chromium_row
+
+
+def test_the_design_lane_is_its_own_row(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The browser tool and the design engine find chromium by different
+    policies, so one verdict labeled for both would be wrong for one of them."""
+    monkeypatch.setattr(doctor_commands, "_playwright_package_dir", lambda: None)
+    monkeypatch.setattr(doctor_commands.shutil, "which", lambda name: None)
+
+    result = runner.invoke(app, ["doctor"])
+
+    external = " ".join(result.stdout.split("External tools")[1].split())
+    assert "Design render:" in external
+    assert "no chromium found" in external
+
+
+def test_the_browser_state_reaches_the_json_output(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cache = _fake_playwright(tmp_path, monkeypatch, markers=("chromium-1234", "chromium_headless_shell-1234"))
+
+    r = runner.invoke(app, ["doctor", "--json"])
+
+    data = json.loads(r.stdout)
+    external = data["external_tools"]
+    assert external["browser_package"] is True
+    assert external["chromium"] is True
+    assert external["headless_shell"] is True
+    assert external["browsers_root"] == str(cache)
+
+
+# --------------------------------------------------------------------------- --install-summary
+
+_SUMMARY_LABELS = ("Long-term memory", "Design engine", "PPT engine", "Deck preview", "Browser")
+
+
+def test_install_summary_answers_without_a_config(tmp_config: Path) -> None:
+    """The whole point of the flag: five verdicts and exit 0 on a machine whose
+    missing config would fail every other doctor check."""
+    assert not tmp_config.exists()
+
+    r = runner.invoke(app, ["doctor", "--install-summary"])
+
+    assert r.exit_code == 0, r.stdout
+    for label in _SUMMARY_LABELS:
+        assert label in r.stdout, f"missing row: {label}"
+    assert "Paths" not in r.stdout
+    assert "raven onboard" not in r.stdout
+
+
+def test_install_summary_answers_on_an_invalid_config(tmp_config: Path) -> None:
+    tmp_config.write_text("{not json", encoding="utf-8")
+
+    r = runner.invoke(app, ["doctor", "--install-summary"])
+
+    assert r.exit_code == 0, r.stdout
+
+
+def test_install_summary_prints_exactly_five_rows(tmp_config: Path) -> None:
+    r = runner.invoke(app, ["doctor", "--install-summary"])
+
+    labeled = [line for line in r.stdout.splitlines() if any(label in line for label in _SUMMARY_LABELS)]
+    assert len(labeled) == 5, r.stdout
+
+
+def test_install_summary_browser_row_names_the_installer_when_the_package_is_missing(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(doctor_commands, "_playwright_package_dir", lambda: None)
+
+    r = runner.invoke(app, ["doctor", "--install-summary"])
+
+    browser_row = " ".join(r.stdout.split()).split("Browser:")[1]
+    assert "engines carry the browser library" in browser_row
+
+
+def test_install_summary_browser_row_names_the_download_when_only_the_binary_is_missing(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fake_playwright(tmp_path, monkeypatch, markers=())
+
+    r = runner.invoke(app, ["doctor", "--install-summary"])
+
+    browser_row = " ".join(r.stdout.split()).split("Browser:")[1]
+    assert "playwright install chromium" in browser_row
+
+
+def test_install_summary_browser_row_ticks_a_complete_download(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fake_playwright(tmp_path, monkeypatch, markers=("chromium-1234", "chromium_headless_shell-1234"))
+
+    r = runner.invoke(app, ["doctor", "--install-summary"])
+
+    browser_row = " ".join(r.stdout.split()).split("Browser:")[1]
+    assert "pw-cache" in browser_row
+    assert "playwright install" not in browser_row
+    assert "install.sh" not in browser_row

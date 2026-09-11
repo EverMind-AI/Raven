@@ -12,9 +12,15 @@ Exit codes:
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import shutil
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from importlib.util import find_spec
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 import typer
@@ -26,8 +32,6 @@ from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missi
 from raven.core.provider_stack import send_probe
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from raven.config.raven import RavenConfig
     from raven.config.schema import Config
 
@@ -63,17 +67,25 @@ class FeaturesInfo:
 class ExternalToolsInfo:
     """External programs raven runs, which no Python install can supply.
 
-    LibreOffice is the whole of it today, and it went undeclared for as long as
-    it has existed: nothing in the README, the installers, pyproject or docs
-    ever named it, while a deck run needs it to turn a deck into a PDF and
-    therefore to render, measure or preview one. Absent, a deck still builds
-    and publishes -- the render-truth gates simply do not run -- so this
-    reports and does not move the exit code, the same reading as a channel SDK
-    that is not installed.
+    LibreOffice went undeclared for as long as it existed: nothing in the
+    README, the installers, pyproject or docs ever named it, while a deck run
+    needs it to turn a deck into a PDF and therefore to render, measure or
+    preview one. Chromium is the second of the kind: the browser tool drives
+    the copy playwright downloads into its own cache, and the design engine
+    renders through whichever chromium its discovery finds. Absent, a deck
+    still builds and the agent still answers -- the render-truth gates and the
+    browser tool simply do not run -- so this reports and does not move the
+    exit code, the same reading as a channel SDK that is not installed.
     """
 
     soffice: Optional[str] = None
     install_hint: str = ""
+    browser_package: bool = False
+    chromium: bool = False
+    headless_shell: bool = False
+    browsers_root: str = ""
+    design_engine: bool = False
+    system_chrome: Optional[str] = None
 
 
 @dataclass
@@ -438,10 +450,83 @@ def _gather_tools(config: "Config") -> ToolsInfo:
     )
 
 
+_BROWSER_PACKAGE_FIX = "reinstall raven via install.sh (engines carry the browser library)"
+
+
+def _browser_binary_fix() -> str:
+    return f"{shlex.quote(sys.executable)} -m playwright install chromium"
+
+
+def _playwright_package_dir() -> Optional[Path]:
+    """Where the installed playwright package lives, or ``None`` without one.
+
+    A spec lookup, not an import: doctor asks on every run, and importing
+    playwright loads its whole sync API to answer a question about a directory.
+    """
+    spec = find_spec("playwright")
+    if spec is None or not spec.origin:
+        return None
+    return Path(spec.origin).parent
+
+
+def _resolve_browsers_root(package_dir: Path, env_value: Optional[str]) -> Path:
+    """The directory playwright downloads browsers into, resolved its way.
+
+    ``"0"`` is playwright's own spelling for "keep them inside the package",
+    not a path -- reading it as one would glob an empty directory named 0.
+    """
+    if env_value == "0":
+        return package_dir / ".local-browsers"
+    if env_value:
+        return Path(env_value)
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "ms-playwright"
+    if sys.platform == "win32":
+        return Path.home() / "AppData" / "Local" / "ms-playwright"
+    return Path.home() / ".cache" / "ms-playwright"
+
+
+def _chromium_markers(registry_path: Path, browsers_root: Path) -> tuple[bool, bool]:
+    """Whether playwright's chromium and its headless shell are downloaded.
+
+    Answered from the package's own registry rather than by launching anything:
+    ``browsers.json`` names the revision this playwright build runs, and
+    playwright writes ``INSTALLATION_COMPLETE`` only once a download finished.
+    The two installs matter separately because raven's driver launches headless
+    by default, and headless runs the shell install -- a cache holding only
+    ``chromium-<rev>`` still cannot serve the browser tool.
+    """
+    try:
+        browsers = json.loads(registry_path.read_text(encoding="utf-8")).get("browsers", [])
+    except (OSError, ValueError):
+        return False, False
+    revisions = {b.get("name"): b.get("revision") for b in browsers if isinstance(b, dict)}
+
+    def downloaded(directory: str, revision: Optional[str]) -> bool:
+        return bool(revision) and (browsers_root / f"{directory}-{revision}" / "INSTALLATION_COMPLETE").exists()
+
+    return (
+        downloaded("chromium", revisions.get("chromium")),
+        downloaded("chromium_headless_shell", revisions.get("chromium-headless-shell")),
+    )
+
+
 def _gather_external_tools() -> ExternalToolsInfo:
     from raven.utils.office import find_soffice, install_hint
 
-    return ExternalToolsInfo(soffice=find_soffice(), install_hint=install_hint())
+    info = ExternalToolsInfo(soffice=find_soffice(), install_hint=install_hint())
+    package_dir = _playwright_package_dir()
+    if package_dir is not None:
+        info.browser_package = True
+        root = _resolve_browsers_root(package_dir, os.environ.get("PLAYWRIGHT_BROWSERS_PATH"))
+        info.browsers_root = str(root)
+        info.chromium, info.headless_shell = _chromium_markers(package_dir / "driver/package/browsers.json", root)
+    info.design_engine = find_spec("raven_design") is not None
+    info.system_chrome = next(
+        (path for name in ("google-chrome", "chromium", "chromium-browser") if (path := shutil.which(name))),
+        None,
+    )
+    return info
 
 
 def _gather_static_checks() -> DoctorReport:
@@ -854,6 +939,21 @@ def _render_human_output(report: DoctorReport) -> None:
                 "  LibreOffice: [yellow]not found[/yellow]  "
                 f"[dim]decks build but cannot be rendered, measured or previewed; {external.install_hint}[/dim]"
             )
+        if not external.browser_package:
+            console.print(
+                "  Chromium:    [yellow]not installed[/yellow]  "
+                f"[dim]the browser tool cannot start; {_BROWSER_PACKAGE_FIX}[/dim]"
+            )
+        elif external.chromium and external.headless_shell:
+            console.print(f"  Chromium:    [green]{external.browsers_root}[/green]")
+        else:
+            console.print(
+                "  Chromium:    [yellow]not downloaded[/yellow]  "
+                f"[dim]the browser tool cannot start; {_browser_binary_fix()}[/dim]"
+            )
+        engine = "engine installed" if external.design_engine else "engine not installed"
+        found = "chromium found" if (external.system_chrome or external.chromium) else "no chromium found"
+        console.print(f"  Design render: [dim]{engine}, {found}[/dim]")
 
     gateway = report.gateway
     if gateway is not None:
@@ -932,12 +1032,47 @@ def _render_human_output(report: DoctorReport) -> None:
                 console.print(f"    [dim]- {line}[/dim]")
 
 
+def _render_install_summary() -> None:
+    """Five rows, one per optional capability the installer carries.
+
+    Runs instead of the report, not in front of it: the question it answers is
+    "did the install finish its optional halves", which must have an answer on
+    a machine whose config is missing or invalid -- so nothing here reads the
+    config, reaches the network, or moves the exit code.
+    """
+    external = _gather_external_tools()
+    ok = "[green]✓[/green]"
+    reinstall = "[yellow]✗[/yellow]  [dim]reinstall raven via install.sh (the installer carries the engines)[/dim]"
+
+    def row(label: str, verdict: str) -> None:
+        console.print(f"  {label + ':':<18}{verdict}")
+
+    row("Long-term memory", ok if everos_plugin_installed() else reinstall)
+    row("Design engine", ok if external.design_engine else reinstall)
+    row("PPT engine", ok if find_spec("raven_ppt") is not None else reinstall)
+    if external.soffice:
+        row("Deck preview", f"{ok}  {external.soffice}")
+    else:
+        row("Deck preview", f"[yellow]✗[/yellow]  [dim]{external.install_hint}[/dim]")
+    if not external.browser_package:
+        row("Browser", f"[yellow]✗[/yellow]  [dim]{_BROWSER_PACKAGE_FIX}[/dim]")
+    elif external.chromium and external.headless_shell:
+        row("Browser", f"{ok}  {external.browsers_root}")
+    else:
+        row("Browser", f"[yellow]✗[/yellow]  [dim]{_browser_binary_fix()}[/dim]")
+
+
 def register(app: typer.Typer) -> None:
     @app.command()
     def doctor(
         probe: bool = typer.Option(False, "--probe", help="Send a test message to verify the LLM responds."),
         json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON (CI-friendly)."),
         fix: bool = typer.Option(False, "--fix", help="Apply the config fixes this reports, where one exists."),
+        install_summary: bool = typer.Option(
+            False,
+            "--install-summary",
+            help="Print one row per optional install capability, then exit 0. Ignores --json.",
+        ),
         timeout: int = typer.Option(
             15,
             "--timeout",
@@ -951,6 +1086,10 @@ def register(app: typer.Typer) -> None:
         reported and nothing is written, because each one is a value somebody
         may have meant.
         """
+        if install_summary:
+            _render_install_summary()
+            raise typer.Exit(0)
+
         report = _gather_static_checks()
 
         if report.config_loaded:

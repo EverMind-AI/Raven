@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
-import { AgentMark, isOwnAgent } from '../../shell/agent-mark'
+import { AgentMark } from '../../shell/agent-mark'
 import { ds, t } from '../../shell/bridge'
 import { SendGlyph } from '../../shell/ico'
 import { composing, fmtSize } from '../composer/store'
@@ -101,16 +101,15 @@ function Tags({ it }: { it: InstanceRow }): JSX.Element | null {
   )
 }
 
-export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = false, preset, own }: {
+export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = false, preset }: {
   it: InstanceRow
   onOpen?: (row: InstanceRow) => void
   compact?: boolean
   /* Which agent ran this, as a brand rather than a name. Only the flat list
-     passes these: the grouped variant hangs each row under an agent head that
+     passes it: the grouped variant hangs each row under an agent head that
      already carries the mark, and a second copy on every child repeats what
      the heading above it has said. */
   preset?: string | null
-  own?: boolean
 }): JSX.Element {
   /* Through the store, so this row and the conversation's graph card decide the
      same way: a row that is a node's status rather than a conversation opens the
@@ -148,7 +147,7 @@ export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = 
       }}>
       {/* Identity first, then state -- the order the roster head and every
           setup row already read in. */}
-      <AgentMark preset={preset} own={own} />
+      <AgentMark preset={preset} />
       <Mark status={instanceMark(it.status ?? undefined)} />
       <div className="bd">
         <div className="nm" title={it.title || it.handle}>{it.title || it.nodeId || it.handle}</div>
@@ -195,21 +194,16 @@ export function AgentList({ s, onOpen, compact = false }: {
   }
   if (!compact) {
     /* The roster is what turns a row's agent name into a brand: an instance row
-       carries the name it was dispatched under and never the package behind it.
+       carries the name it was dispatched under and never the preset behind it.
        A name the roster does not hold -- an agent switched off since the run,
        or one this server no longer lists -- resolves to nothing and takes the
-       generic glyph. The whole row is the value rather than its preset alone:
-       raven's own agents have no preset, and the two flags stand in for one. */
-    const brand = new Map(s.roster.map((row) => [row.name, row]))
+       generic glyph, which is what a preset-less agent gets anyway. */
+    const brand = new Map(s.roster.map((row) => [row.name, row.preset]))
     return (
       <div className="salist">
-        {s.instances.map((it) => {
-          const of = brand.get(it.agent)
-          return (
-            <InstanceRowView key={`${it.agent}:${it.handle}`} it={it} onOpen={onOpen}
-              preset={of?.preset} own={isOwnAgent(of)} />
-          )
-        })}
+        {s.instances.map((it) => (
+          <InstanceRowView key={`${it.agent}:${it.handle}`} it={it} onOpen={onOpen} preset={brand.get(it.agent)} />
+        ))}
       </div>
     )
   }
@@ -244,7 +238,7 @@ export function AgentList({ s, onOpen, compact = false }: {
                     <path d="m5.5 6.5 2.5 3 2.5-3" />
                   </svg>
                 </span>
-                <AgentMark preset={registered?.preset} own={isOwnAgent(registered)} />
+                <AgentMark preset={registered?.preset} />
                 <b title={name}>{name}</b>
                 <span className="agent-kind">{registered?.kind || children[0]?.kind || 'agent'}</span>
               </button>

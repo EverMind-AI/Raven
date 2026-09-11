@@ -46,29 +46,6 @@ const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
   qwen_code: { file: 'qwen-color' },
 }
 
-/* Raven's own agents, which carry no preset because there is no third-party
-   package behind them to name: `builtin` is this process and `vendored` is a
-   Discovered agent under `agents/`. Each is a fact the server asserts about what
-   the row runs, exactly as a preset is, so it picks a mark on the same terms --
-   and a hand-written row that merely spells itself `Raven-Code` still gets
-   none, for the reason the table above is not keyed by name either.
-
-   raven.svg is this project's own mark rather than upstream's, so the `cmp`
-   against @lobehub/icons-static-svg that settles provenance for the thirteen
-   does not apply to it and LICENSES/README.md counts it separately. It answers
-   the theme from a prefers-color-scheme rule inside the file, the way
-   miromind.svg does: every shape carries its own fill, so no `tone` filter
-   reaches it, and a raven is black -- which on the dark theme's surface is a
-   silhouette at 1.2:1, two white eyes floating in an empty frame. */
-const OWN_MARK: { file: string } = { file: 'raven' }
-
-/* Spelled once, because four call sites read it off three different row types
-   and a fifth that forgets `vendored` loses the mark on every Discovered agent
-   while `builtin` keeps working -- a difference nobody reviewing one line would
-   see. */
-export const isOwnAgent = (row?: { builtin?: boolean; vendored?: boolean } | null): boolean =>
-  !!(row?.builtin || row?.vendored)
-
 /* `hasOwn`, not a bare index: a preset reaches this from config, and every
    object literal answers `constructor`, `toString` and `__proto__` from its
    prototype -- truthy, with no `file`, which renders a broken image at
@@ -77,20 +54,19 @@ export const isOwnAgent = (row?: { builtin?: boolean; vendored?: boolean } | nul
    is a guard in another language with nothing tying it to this one, and this
    costs a call. `noUncheckedIndexedAccess` does not cover it -- it models the
    miss, not the inherited hit. */
-function markFor(preset?: string | null, own?: boolean): { file: string; tone?: 'mono' | 'hybrid' } | undefined {
-  if (own) return OWN_MARK
+function markFor(preset?: string | null): { file: string; tone?: 'mono' | 'hybrid' } | undefined {
   return preset && Object.hasOwn(MARKS, preset) ? MARKS[preset] : undefined
 }
 
-export function agentMarkPath(preset?: string | null, own?: boolean): string | null {
-  const mark = markFor(preset, own)
+export function agentMarkPath(preset?: string | null): string | null {
+  const mark = markFor(preset)
   return mark ? `assets/agents/${mark.file}.svg` : null
 }
 
-/* The generic glyph, for a row with neither a preset nor one of raven's own
-   flags behind it: an agent the user configured themselves, and a group that
-   exists only because an instance reported it -- `InstanceRow` carries no
-   preset, so a group with no registration has nothing to look up. */
+/* The generic glyph, for a row with no preset behind it: an agent the user
+   configured themselves, and a group that exists only because an instance
+   reported it -- `InstanceRow` carries no preset, so a group with no
+   registration has nothing to look up. */
 function BotIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -102,13 +78,9 @@ function BotIcon(): JSX.Element {
 
 /* One slot for both shapes, which is what keeps a roster of presets and
    hand-written rows starting its names at one x. The size lives on the slot,
-   not on what fills it.
-
-   `own` is the row's `builtin || vendored`, not a name test: it is resolved by
-   the caller because the two flags live on the row and their spelling is the
-   server's, not this module's. */
-export function AgentMark({ preset, own }: { preset?: string | null; own?: boolean }): JSX.Element {
-  const mark = markFor(preset, own)
+   not on what fills it. */
+export function AgentMark({ preset }: { preset?: string | null }): JSX.Element {
+  const mark = markFor(preset)
   return (
     <span className="agent-mark" aria-hidden="true">
       {mark ? (
