@@ -46,7 +46,35 @@ What one agent directory carries:
   lines and this row. A fronting row is only as ready as its targets: a route
   to a folder that is missing, unready or switched off disables the row with
   the reason on it, so a half-installed agent does not run the missing
-  half's work on the wrong implementation. Both fields are manifest facts: a
+  half's work on the wrong implementation. A route entry may also carry
+  `"owes"` and `"note"`: what the work still owes when the entry keeps it on
+  this row instead of sending it, and what to tell this row's own
+  implementation when that happens, appended to the task under a `[host]`
+  marker. Both are the row's words, because the gate that closes a route
+  serves every row that declares one; a route that declares neither hands the
+  task over exactly as it arrived. Prose past a sentence goes in
+  `"noteFile": "<name>.md"` beside the manifest instead -- discovery reads that
+  file into `note`, so a requirement long enough to be worth writing stays
+  reviewable as a diff; declaring both is refused. What puts a route under that
+  gate at all is its own declaration, and the two halves are independent:
+  `"needs": ["image_generation", "image_search"]` names what the target's own
+  pipeline cannot work without, and `"minTier": "max"` the lowest tier the
+  route may open at. A route naming neither is dispatched exactly as routes
+  were before the gate existed -- never probed, never tiered -- because
+  `routes` is a general facility and a row routing for reasons of its own must
+  not inherit conditions it never asked for. The names in `needs` come from a
+  closed vocabulary (`ROUTE_REQUIREMENTS`), since the host is what answers
+  them; one outside it is warned about and treated as met, so a manifest
+  written for a later raven keeps its route on an older one. And the probe
+  answers for the *target's* lane, reading the product folder's own `.env`
+  first (`PPT_SERPER_API_KEY`, `PPT_IMAGE_API_KEY`) and falling back to the
+  host sections the launcher would inherit -- the host's own credentials
+  answer for the host loop, and a lane is free to be equipped differently.
+  It follows the launcher one branch further than the explicit keys: with no
+  image key anywhere and an OpenRouter endpoint, the key paying for the lane's
+  words pays for its pictures, so a folder holding only `PPT_API_KEY` still
+  counts as able to draw -- and towards any other gateway it does not.
+  All four fields are manifest facts: a
   stored row takes them from the folder on every merge. `raven-ppt` ships hidden behind
   `raven-design`'s routes, so the model sees one design agent and decks still
   build on the deck engine, its own model and key; the two halves share one

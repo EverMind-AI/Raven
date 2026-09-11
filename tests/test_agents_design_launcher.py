@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from raven.config.schema import ROUTE_REQUIREMENTS, TIER_LADDER
+
 REPO = Path(__file__).resolve().parent.parent
 RUN_PY = REPO / "agents" / "raven-design" / "run.py"
 FORK = REPO / "tests" / "fixtures" / "vendored_fork" / "raven-design"
@@ -143,7 +145,29 @@ def test_the_roster_row_carries_the_forks_identity_verbatim():
         "rendered three times a turn; procedure belongs in the engine's Skills, not here"
     )
     assert [route["to"] for route in ours["routes"]] == ["Raven-PPT"]
-    assert ours["routes"] == [{"to": "Raven-PPT"}]
+    # One route, and it declares what subjects it to the gate as well as what
+    # the deck is owed and what to tell this row when the gate keeps the deck
+    # here. What the note says is this row's business and is checked where the
+    # gate that appends it is (``test_subagent_routing_backend.py``); what
+    # belongs here is that there is no sixth key -- a field nothing reads would
+    # look like configuration.
+    ((route,)) = ours["routes"]
+    assert set(route) == {"to", "owes", "noteFile", "needs", "minTier"}
+    assert route["owes"] == ".pptx"
+    # The gate reaches this route because this route asked for it. Both are
+    # pinned here rather than left to the gate's own tests: the gate is generic,
+    # and a manifest that dropped either would close nothing while every test
+    # about the gate kept passing.
+    assert route["needs"] == ["image_generation", "image_search"]
+    assert route["minTier"] == "max"
+    assert set(route["needs"]) <= set(ROUTE_REQUIREMENTS)
+    assert route["minTier"] in TIER_LADDER
+    # The note is prose and lives beside the manifest, which discovery reads
+    # into the route. Its absence from the folder is the one thing that cannot
+    # be checked anywhere else: no note file, no requirement, and the row still
+    # starts.
+    note = (RUN_PY.parent / route["noteFile"]).read_text(encoding="utf-8")
+    assert note.startswith("This request is a deck.")
     assert "recommendedLlm" not in ours and "recommendedLlm" in fork
     assert ours["command"] == "{PYTHON} {SUBAGENT_DIR}/run.py --acp"
     assert ours["cwd"] == "{SUBAGENT_DIR}"
@@ -244,13 +268,26 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
     extensions = load_raven_config(rendered)
     assert extensions.plugins.config["design-engine"]["visualDomainSelector"]["enabled"] is True
     mounts = extensions.skill_forge.local_dirs
-    assert len(mounts) == 1 and mounts[0].always_enabled and mounts[0].path.endswith("skills")
+    assert len(mounts) == 2
+    assert all(mount.always_enabled and mount.path.endswith("skills") for mount in mounts)
 
 
-def test_iteration_tiers_all_inherit_host_reasoning_effort(grounded):
-    """Design tiers change iteration caps while keeping the host reasoning effort."""
+def test_only_medium_names_an_effort_and_the_other_tiers_inherit_the_hosts(grounded, tmp_path):
+    """Design tiers change iteration caps; medium alone pins its reasoning effort.
+
+    Below the top tier this agent designs the deck itself rather than handing it
+    to the template lane, and the cheapest tier is the one that must not also ask
+    for the host's full thinking budget. The host here is on ``high`` so an
+    inherited effort and a pinned one are different strings -- a host already on
+    ``low`` would let the pin pass by coincidence.
+    """
     from raven.config.loader import load_config
     from raven.config.mode_catalogue import build_mode_catalogue
+
+    _host_config(
+        tmp_path,
+        {"agents": {"defaults": {"model": "host-model", "provider": "custom", "reasoningEffort": "high"}}},
+    )
 
     data = _render(grounded)
     modes = data["acp"]["modes"]
@@ -258,13 +295,18 @@ def test_iteration_tiers_all_inherit_host_reasoning_effort(grounded):
     assert data["acp"]["defaultMode"] == "high"
     assert {m: (e["maxToolIterations"], e["reasoningEffort"]) for m, e in modes.items()} == {
         "medium": (60, "low"),
-        "high": (150, "low"),
-        "max": (300, "low"),
+        "high": (150, "high"),
+        "max": (300, "high"),
     }
+    # The overlay carries the cap it changed and not the effort: the effort is
+    # the trunk's own knob, dispensed off the entry, and a copy in the diff the
+    # engine reads would be a second place to change it.
+    assert modes["medium"]["overlay"]["agents"]["defaults"] == {"maxToolIterations": 60}
     # And the trunk reads them as the loop will enforce them.
     catalogue = build_mode_catalogue(load_config(grounded.render_config(RUN_PY.parent / "config.json")))
     assert catalogue.default == "high"
-    assert (catalogue.get("max").max_iterations, catalogue.get("max").reasoning_effort) == (300, "low")
+    assert (catalogue.get("max").max_iterations, catalogue.get("max").reasoning_effort) == (300, "high")
+    assert (catalogue.get("high").max_iterations, catalogue.get("high").reasoning_effort) == (150, "high")
     assert (catalogue.get("medium").max_iterations, catalogue.get("medium").reasoning_effort) == (60, "low")
 
 
@@ -388,11 +430,11 @@ def test_the_state_root_override_wins_and_the_default_sits_under_the_home(ground
 
 
 def test_the_render_pins_the_home_mounts_the_corpus_and_seats_task_state(grounded, tmp_path):
-    """The w109 home pin plus the swap wave's two data renders: the wheel's
-    corpus mounted through skillForge.localDirs (always-on, the engine's own
-    row), and taskState.stateRoot under the product state root so the
-    resident surface stops declining. plugins.dirs stays absent: the wheel
-    arrives by entry point."""
+    """The w109 home pin plus the swap wave's two data renders: both corpora
+    mounted through skillForge.localDirs (always-on -- the engine wheel's row
+    and this product's own, in that order), and taskState.stateRoot under the
+    product state root so the resident surface stops declining. plugins.dirs
+    stays absent: the wheel arrives by entry point."""
     import raven_design
 
     data = _render(grounded)
@@ -401,7 +443,8 @@ def test_the_render_pins_the_home_mounts_the_corpus_and_seats_task_state(grounde
     )
     mounts = data["skillForge"]["localDirs"]
     assert mounts == [
-        {"path": str(Path(raven_design.__file__).parent / "skills"), "name": "design-engine", "alwaysEnabled": True}
+        {"path": str(Path(raven_design.__file__).parent / "skills"), "name": "design-engine", "alwaysEnabled": True},
+        {"path": str(RUN_PY.parent / "skills"), "name": "raven-design", "alwaysEnabled": True},
     ]
     assert data["plugins"]["config"]["design-engine"]["taskState"]["stateRoot"] == str(tmp_path / "state")
     assert "dirs" not in data.get("plugins", {})
@@ -409,8 +452,8 @@ def test_the_render_pins_the_home_mounts_the_corpus_and_seats_task_state(grounde
 
 def test_an_operators_own_mounts_and_state_root_survive_the_render(grounded, tmp_path):
     """Both swap renders are defaults, never overrides: a mount list the
-    operator wrote keeps every row plus the engine's (path-keyed append),
-    and an explicit stateRoot wins outright."""
+    operator wrote keeps every row plus both corpora (path-keyed append), and
+    an explicit stateRoot wins outright."""
     import raven_design
 
     source = tmp_path / "carried.json"
@@ -420,7 +463,11 @@ def test_an_operators_own_mounts_and_state_root_survive_the_render(grounded, tmp
     source.write_text(json.dumps(config))
     data = json.loads(grounded.render_config(source).read_text())
     paths = [row["path"] for row in data["skillForge"]["localDirs"]]
-    assert paths == [str(tmp_path / "mine"), str(Path(raven_design.__file__).parent / "skills")]
+    assert paths == [
+        str(tmp_path / "mine"),
+        str(Path(raven_design.__file__).parent / "skills"),
+        str(RUN_PY.parent / "skills"),
+    ]
     assert data["plugins"]["config"]["design-engine"]["taskState"]["stateRoot"] == str(tmp_path / "elsewhere")
 
 

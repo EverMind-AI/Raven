@@ -825,6 +825,71 @@ def test_a_stored_row_takes_hidden_and_routes_from_its_folder(tree: Path) -> Non
     assert merged["Design"].description == "edited"
 
 
+class TestARouteWhoseNoteIsAFile:
+    """Prose long enough to be worth writing does not belong in a JSON string.
+
+    The manifest names a file beside it and discovery reads it, so the route
+    every consumer downstream sees is the route it always was.
+    """
+
+    @staticmethod
+    def _design(tree: Path, route: dict) -> Path:
+        return _product(tree, "design", manifest={**_ACP_MANIFEST, "name": "Design", "routes": [route]})
+
+    def test_the_named_file_is_read_into_the_note(self, tree: Path) -> None:
+        from raven.agent.subagent.vendored_agents import discover_product_rows
+
+        folder = self._design(tree, {"to": "Deck", "owes": ".pptx", "noteFile": "route-deck.md"})
+        (folder / "route-deck.md").write_text("Hand back a .pptx.\n\nAnd look at the page.\n", encoding="utf-8")
+        _product(tree, "deck", manifest={**_ACP_MANIFEST, "name": "Deck"})
+
+        (route,) = {r.name: r for r in discover_product_rows()}["Design"].routes
+        assert route.note == "Hand back a .pptx.\n\nAnd look at the page."
+        assert route.owes == ".pptx"
+        # The pointer does not survive into the row: one field carries the note,
+        # whichever form the author wrote it in.
+        assert route.note_file == ""
+
+    def test_a_note_file_that_is_not_there_leaves_the_row_up_and_the_note_empty(self, tree: Path) -> None:
+        """The row without its note is an agent running with one requirement
+        unstated; the row disabled is the agent gone. The first is the smaller
+        failure, and it is loud in the log."""
+        from raven.agent.subagent.vendored_agents import discover_product_rows
+
+        self._design(tree, {"to": "Deck", "noteFile": "gone.md"})
+        _product(tree, "deck", manifest={**_ACP_MANIFEST, "name": "Deck"})
+
+        rows = {r.name: r for r in discover_product_rows()}
+        assert rows["Design"].enabled is True
+        ((route,)) = rows["Design"].routes
+        # Consumed and found empty, not ignored: a row that never knew about the
+        # pointer would answer with the same empty note.
+        assert route.note_file == "" and route.note == ""
+
+    def test_a_note_file_outside_the_folder_is_refused(self, tree: Path) -> None:
+        """The folder is what gets copied, installed and packaged, so a note
+        above it is a note that does not travel with the agent."""
+        from raven.agent.subagent.vendored_agents import discover_product_rows
+
+        (tree / "elsewhere.md").write_text("read me", encoding="utf-8")
+        self._design(tree, {"to": "Deck", "noteFile": "../elsewhere.md"})
+        _product(tree, "deck", manifest={**_ACP_MANIFEST, "name": "Deck"})
+
+        ((route,)) = {r.name: r for r in discover_product_rows()}["Design"].routes
+        assert route.note_file == "" and route.note == ""
+
+    def test_declaring_the_note_twice_refuses_the_row_rather_than_picking_one(self, tree: Path) -> None:
+        """Two sources for one sentence is a manifest that will disagree with
+        itself the first time only one of them is edited."""
+        from raven.agent.subagent.vendored_agents import discover_product_rows
+
+        folder = self._design(tree, {"to": "Deck", "note": "inline", "noteFile": "route-deck.md"})
+        (folder / "route-deck.md").write_text("from the file", encoding="utf-8")
+        _product(tree, "deck", manifest={**_ACP_MANIFEST, "name": "Deck"})
+
+        assert [r.name for r in discover_product_rows()] == ["Deck"]
+
+
 class TestAFrontingRowIsOnlyAsReadyAsItsRoutes:
     """Its roster line claims the targets' work, and its routing entry drops a
     target that is not on the table; a product with nobody behind its door
@@ -1144,3 +1209,141 @@ def test_a_disabled_stored_row_for_an_unready_folder_stays_off(tree: Path) -> No
     row = next(r for r in merge_product_seeds([stored], discover_product_rows()) if r.name == "Scribe")
     assert row.kind == "acp"
     assert row.enabled is False
+
+
+class TestOneProductsOwnSettings:
+    """``product_secret`` reads a folder's ``.env`` the way its launcher does.
+
+    A caller asking whether a routed lane is equipped must read the file the
+    lane will be configured from. The host's credentials answer for the host
+    loop, and a product is free to be equipped by its folder alone, or
+    differently -- a key for a vendor the host never selected.
+    """
+
+    def test_a_folders_own_env_answers_for_it(self, tree: Path) -> None:
+        folder = _product(tree, "raven-deck", manifest={**_ACP_MANIFEST, "name": "Raven-Deck"})
+        (folder / ".env").write_text("DECK_SERPER_API_KEY=sk-lane\n", encoding="utf-8")
+
+        assert va.product_secret("Raven-Deck", "SERPER_API_KEY") == "sk-lane"
+
+    def test_a_setting_the_folder_does_not_carry_is_empty(self, tree: Path) -> None:
+        """Empty rather than an error: the caller's cue to fall back to whatever
+        the launcher would inherit from the host."""
+        folder = _product(tree, "raven-deck", manifest={**_ACP_MANIFEST, "name": "Raven-Deck"})
+        (folder / ".env").write_text("DECK_API_KEY=sk-llm\n", encoding="utf-8")
+
+        assert va.product_secret("Raven-Deck", "SERPER_API_KEY") == ""
+
+    def test_a_name_that_is_not_a_product_is_empty(self, tree: Path) -> None:
+        assert va.product_secret("Nobody", "SERPER_API_KEY") == ""
+
+    def test_the_prefix_is_the_folders_and_not_the_rows(self, tree: Path) -> None:
+        """The manifest names itself (``Raven-Deck``) and the folder is spelled
+        differently; every setting is spelled with the folder's stem, so a
+        prefix derived from the row name would read nothing."""
+        folder = _product(tree, "raven-slide-deck", manifest={**_ACP_MANIFEST, "name": "Raven-Deck"})
+        (folder / ".env").write_text("SLIDE_DECK_IMAGE_API_KEY=sk-lane\n", encoding="utf-8")
+
+        assert va.env_prefix(folder.name) == "SLIDE_DECK"
+        assert va.product_secret("Raven-Deck", "IMAGE_API_KEY") == "sk-lane"
+
+    def test_the_process_environment_wins_over_the_file(self, tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``env_value``'s own order, which is how an operator overrides one
+        setting without editing the file that holds the others."""
+        folder = _product(tree, "raven-deck", manifest={**_ACP_MANIFEST, "name": "Raven-Deck"})
+        (folder / ".env").write_text("DECK_SERPER_API_KEY=sk-file\n", encoding="utf-8")
+        monkeypatch.setenv("DECK_SERPER_API_KEY", "sk-env")
+
+        assert va.product_secret("Raven-Deck", "SERPER_API_KEY") == "sk-env"
+
+    def test_the_shipped_deck_lane_is_read_under_the_names_its_launcher_reads(self) -> None:
+        """The two settings the probe asks Raven-PPT about, against the launcher
+        that resolves them. A rename on either side would leave the probe reading
+        a name no ``.env`` ever carries, and every test above would still pass."""
+        launcher = (Path(__file__).resolve().parent.parent / "agents" / "raven-ppt" / "run.py").read_text(
+            encoding="utf-8"
+        )
+
+        for suffix in ("SERPER_API_KEY", "IMAGE_API_KEY"):
+            assert f'"{va.env_prefix("raven-ppt")}_{suffix}"' in launcher
+
+
+class TestWhatAFolderCanDrawWith:
+    """``product_image_key`` mirrors a launcher's ``configure_image_generation``.
+
+    The folder-side precedence, in one reader: the explicit image key, else the
+    key paying for the words -- but only towards OpenRouter, which the launcher
+    reads off both the image base pin and the gateway the provider blocks
+    address. Empty means "only the host can supply one", not "cannot draw".
+    """
+
+    def _folder(self, tree: Path, providers: dict | None = None, **settings: str) -> Path:
+        folder = _product(tree, "raven-deck", manifest={**_ACP_MANIFEST, "name": "Raven-Deck"})
+        if providers is not None:
+            (folder / "config.json").write_text(json.dumps({"providers": providers}), encoding="utf-8")
+        lines = [f"DECK_{name}={value}" for name, value in settings.items()]
+        (folder / ".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return folder
+
+    def test_an_explicit_image_key_is_the_answer(self, tree: Path) -> None:
+        self._folder(tree, IMAGE_API_KEY="sk-pictures", API_KEY="sk-own")
+
+        assert va.product_image_key("Raven-Deck") == "sk-pictures"
+
+    def test_the_llm_key_pays_when_its_own_base_is_openrouter(self, tree: Path) -> None:
+        self._folder(tree, API_KEY="sk-own", API_BASE="https://openrouter.ai/api/v1")
+
+        assert va.product_image_key("Raven-Deck") == "sk-own"
+
+    def test_the_llm_key_pays_nothing_towards_another_gateway(self, tree: Path) -> None:
+        self._folder(tree, API_KEY="sk-own", API_BASE="https://gateway.example/v1")
+
+        assert va.product_image_key("Raven-Deck") == ""
+
+    def test_an_image_base_pinned_elsewhere_declines_the_loan(self, tree: Path) -> None:
+        self._folder(
+            tree,
+            API_KEY="sk-own",
+            API_BASE="https://openrouter.ai/api/v1",
+            IMAGE_API_BASE="https://pics.example/v1",
+        )
+
+        assert va.product_image_key("Raven-Deck") == ""
+
+    def test_with_no_base_pinned_the_folders_own_block_names_the_gateway(self, tree: Path) -> None:
+        self._folder(tree, providers={"deck": {"apiBase": "https://openrouter.ai/api/v1"}}, API_KEY="sk-own")
+
+        assert va.product_image_key("Raven-Deck") == "sk-own"
+
+    def test_a_block_with_no_base_is_read_through_the_registry(self, tree: Path) -> None:
+        """The other half of how a block says which gateway it is. A block named
+        for a known provider and carrying no apiBase is the inherited shape, and
+        reading only the explicit field is what left that branch with no key."""
+        self._folder(tree, providers={"openrouter": {"models": ["vendor/model"]}}, API_KEY="sk-own")
+
+        assert va.product_image_key("Raven-Deck") == "sk-own"
+
+    def test_a_block_for_somewhere_else_lends_nothing(self, tree: Path) -> None:
+        self._folder(tree, providers={"deck": {"apiBase": "https://gateway.example/v1"}}, API_KEY="sk-own")
+
+        assert va.product_image_key("Raven-Deck") == ""
+
+    def test_a_folder_with_no_key_of_its_own_answers_empty(self, tree: Path) -> None:
+        """Empty is the caller's cue to ask the host, which is what the launcher
+        inherits on this branch."""
+        self._folder(tree, providers={"deck": {"apiBase": "https://openrouter.ai/api/v1"}}, SERPER_API_KEY="sk-x")
+
+        assert va.product_image_key("Raven-Deck") == ""
+
+    def test_a_name_that_is_not_a_product_answers_empty(self, tree: Path) -> None:
+        assert va.product_image_key("Nobody") == ""
+
+    def test_the_shipped_deck_lane_reads_the_names_its_launcher_reads(self) -> None:
+        """The four settings this reader asks Raven-PPT about, against the
+        launcher that resolves them, plus the gateway both sides compare on."""
+        ppt = Path(__file__).resolve().parent.parent / "agents" / "raven-ppt"
+        launcher = (ppt / "run.py").read_text(encoding="utf-8")
+
+        for suffix in ("IMAGE_API_KEY", "API_KEY", "IMAGE_API_BASE", "API_BASE"):
+            assert f'"{va.env_prefix("raven-ppt")}_{suffix}"' in launcher
+        assert f'_IMAGE_GATEWAY = "{va._IMAGE_GATEWAY}"' in launcher

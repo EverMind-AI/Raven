@@ -35,6 +35,11 @@ dependencies = [
     # pdfium (Apache-2.0), keeping the AGPL surface to reading source documents.
     "pillow>=11.3,<13",
     "pypdfium2>=4.30,<5",
+    # Not imported here. The design lane launches a browser and declares
+    # playwright in an extra, and an extra is one more thing an installer has to
+    # know to ask for; this distribution is already fetched unconditionally, so
+    # carrying the pin is what puts a browser in every install that renders.
+    "playwright>=1.58,<2",
     # ppt_fetch / ppt_generate_image / ppt_image_search speak HTTP themselves.
     "httpx>=0.28.0,<1.0.0",
     "matplotlib>=3.11.1",

@@ -50,6 +50,8 @@ from raven.agent.loop.mcp_glue import McpGlueMixin
 from raven.agent.loop.organ_glue import OrganGlueMixin
 from raven.agent.loop.turn_path import TurnPathMixin
 from raven.agent.loop.wiring import WiringMixin
+from raven.agent.subagent.charter import charter_scope
+from raven.agent.subagent.delegate import delegate_scope
 
 if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
@@ -551,6 +553,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             agents=agents,
             session_dir=self.sessions.session_dir,
             session_tier=self.session_tier,
+            target_ready=self._routed_target_ready,
         )
         # Reads the live direct chats through a lambda for the reason the identity
         # segment does: the manager is rebuilt on a hot config apply.
@@ -655,6 +658,11 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         )
 
         self._consolidation_tasks: set[asyncio.Task] = set()
+
+        # Charters staged by an inbound dispatch, by session. Keyed rather than
+        # global for the reason session tools are: one process serves every
+        # session on a connection.
+        self._session_charters: dict[str, Any] = {}
 
         # ``self.subagents``, ``self.context_engine`` and
         # ``self.memory_consolidator`` were each handed ``provider`` earlier in
@@ -920,10 +928,30 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             # The request handler that accepted them cannot open the scope itself --
             # it submits the turn onto the spine and the turn runs on a task that
             # inherits nothing from it.
+            # Written before the scopes below rather than inside the turn: the
+            # table has to be in hand by the time the tool array is rendered and
+            # the prompt assembled, and both happen under those scopes. Off, and
+            # on any failure, this is ``None`` -- which every reader treats as
+            # "no playbook this turn" and answers exactly as it did before.
+            # Resolved once, before the setup call, and used on both sides of it.
+            # The generation below awaits a model call, and a session that
+            # switched model while it was in flight would otherwise have the
+            # setup run on the old pair and the turn body on the new one --
+            # which is exactly what the Model Binding contract in CONTEXT.md
+            # forbids: a turn resolves its pair once and holds it for the whole
+            # turn tree.
+            binding = self.binding_for_session(session_key)
+            delegate_table = await self._write_worker_table(req, session_key, binding)
+            # The charter a dispatch staged for this session, taken for this turn
+            # only. Both scopes below are None on an ordinary turn, which is the
+            # path every reader answers to as "no playbook".
+            charter = self._take_session_charter(session_key)
             with (
-                use_binding(self.binding_for_session(session_key)),
+                use_binding(binding),
                 self.tools.session_scope_for(session_key),
                 self.tools.turn_scope(),
+                delegate_scope(delegate_table),
+                charter_scope(charter),
             ):
                 return await self._run_turn(
                     req,

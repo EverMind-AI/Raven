@@ -76,8 +76,36 @@
       "type": "object"
     },
     "SubagentRouteConfig": {
-      "description": "One candidate target offered to the host's route classifier.",
+      "description": "One candidate target offered to the host's route classifier.\n\nBeyond the target's name, a route says what the work is owed and what the\nrow's own implementation is to be told when the route is closed to a\ndispatch. Both are the *row's* words, not the gate's: the gate that closes a\nroute is one piece of code serving every row that declares one, and prose\nabout a deck written into it would be appended to the next row's requests\nfor something else entirely.",
       "properties": {
+        "minTier": {
+          "default": "",
+          "title": "Mintier",
+          "type": "string"
+        },
+        "needs": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Needs",
+          "type": "array"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        },
+        "noteFile": {
+          "default": "",
+          "title": "Notefile",
+          "type": "string"
+        },
+        "owes": {
+          "default": "",
+          "title": "Owes",
+          "type": "string"
+        },
         "to": {
           "title": "To",
           "type": "string"

@@ -6,7 +6,11 @@
   "enabled": true,
   "routes": [
     {
-      "to": "Raven-PPT"
+      "to": "Raven-PPT",
+      "owes": ".pptx",
+      "noteFile": "route-raven-ppt.md",
+      "needs": ["image_generation", "image_search"],
+      "minTier": "max"
     }
   ],
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py --acp",

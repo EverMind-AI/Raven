@@ -16,6 +16,12 @@ DS.knowledge = {
      the one spelling the gateway will read from. Adding is then told where the
      file is, never handed the bytes. */
   upload: async (baseId, file) => {
+    /* Refused before the read, not after: this is the path fed manuals and
+       reports, so it is the one that clears the limit often, and encoding a
+       file this large only to throw the result away is seconds of a frozen
+       tab. `File.size` is the exact count the base64 can only be derived to. */
+    const refusal = uploadRefusalBySize(file.name, file.size);
+    if (refusal) throw new Error(refusal);
     const b64 = await new Promise((resolve, reject) => {
       const fr = new FileReader();
       fr.onerror = () => reject(new Error('could not read the file'));

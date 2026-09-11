@@ -720,6 +720,17 @@ TIER_LADDER: tuple[str, ...] = ("medium", "high", "max")
 """The built-in tiers, cheapest first. The order is what makes a clamp possible,
 so it is a constant here rather than something read back off the catalogue."""
 
+ROUTE_REQUIREMENTS: tuple[str, ...] = ("image_generation", "image_search")
+"""What a route may declare its target's own pipeline spends.
+
+A closed vocabulary because the host is what answers it: each name is a
+question :meth:`raven.agent.loop.wiring.WiringMixin._routed_target_ready` knows
+how to ask of a routed lane. A route naming something outside it is not
+refused here -- a manifest written for a later raven must not take its whole
+row down on an older one -- and the probe warns and treats the unknown
+requirement as met, so the route keeps the pre-declaration behaviour.
+"""
+
 DEFAULT_TIER = "high"
 """Which built-in tier a session starts on. Applies to the built-in catalogue
 only -- a deployment bringing its own modes and naming no default degrades to
@@ -1670,9 +1681,79 @@ ACP_PROMPT_PLACEHOLDERS: tuple[str, ...] = ("{prompt}", "{prompt_file}", "{agent
 
 
 class SubagentRouteConfig(Base):
-    """One candidate target offered to the host's route classifier."""
+    """One candidate target offered to the host's route classifier.
+
+    Beyond the target's name, a route says what the work is owed and what the
+    row's own implementation is to be told when the route is closed to a
+    dispatch. Both are the *row's* words, not the gate's: the gate that closes a
+    route is one piece of code serving every row that declares one, and prose
+    about a deck written into it would be appended to the next row's requests
+    for something else entirely.
+    """
 
     to: str
+    owes: str = ""
+    """The file the work still owes when this route is closed and the row's own
+    implementation builds it instead -- ``".pptx"``. Declared rather than
+    inferred; the gate logs it so a closed route says in the log what it cost.
+    Empty is a route whose lanes owe nothing in particular."""
+
+    note: str = ""
+    """What the row's own implementation is told when it keeps work the
+    classifier named for this target.
+
+    Appended to the task text rather than filed in a document: a lane reads the
+    task on every turn and a document only when something sends it there. Empty
+    -- the default, and every route written before this field -- appends nothing,
+    so a route that declares no note hands the task over exactly as it arrived.
+
+    Anything past a sentence or two is written in ``note_file`` instead and
+    arrives here already read.
+    """
+
+    note_file: str = ""
+    """A file beside the folder's ``subagent.json`` holding :attr:`note`.
+
+    Discovery reads it and fills ``note``, so nothing downstream knows which of
+    the two an author used. The reason to have both: a note long enough to be
+    worth writing is prose, and prose inside a JSON string is one line with
+    ``\n`` in it -- unreviewable as a diff, unreadable in an editor, and
+    unformattable. The file is a real document; the manifest keeps the pointer.
+
+    Relative to the folder, and a path that climbs out of it is refused: the
+    folder is the unit that is copied, installed and packaged, so a note outside
+    it is a note that does not travel with the agent.
+    """
+
+    needs: tuple[str, ...] = ()
+    """What the target's own pipeline spends, from :data:`ROUTE_REQUIREMENTS`.
+
+    The route opts itself into the host's readiness probe by naming what its
+    target cannot work without; a deployment holding none of it keeps the task
+    on the row's own implementation. Empty -- the default, and every route
+    written before this field -- is never probed at all, so a route that
+    declares nothing routes exactly as it did before the gate existed.
+
+    Declared rather than inferred, and per route rather than per process: one
+    probe installed on the table would otherwise answer for every row that
+    routes, and a row routing for some other reason would be closed by a
+    credential its own target never spends."""
+
+    min_tier: str = ""
+    """The lowest tier of :data:`TIER_LADDER` this route may open at.
+
+    A target whose own pipeline is the expensive one is worth reaching only
+    where the dispatch is already paying for depth; below the declared rung the
+    work stays here. Empty is every tier, which is what a route that says
+    nothing about cost means."""
+
+    @model_validator(mode="after")
+    def _one_source_for_the_note(self) -> "SubagentRouteConfig":
+        if self.note and self.note_file:
+            raise ValueError("a route declares its note inline or in noteFile, not both")
+        if self.min_tier and self.min_tier not in TIER_LADDER:
+            raise ValueError(f"a route's minTier is one of {TIER_LADDER}, not {self.min_tier!r}")
+        return self
 
 
 class ThirdPartyAcpSubagentConfig(Base):
@@ -2011,6 +2092,22 @@ class PlaybookConfig(Base):
     because that is the user's own hand."""
 
     router: PlaybookRouterConfig = Field(default_factory=PlaybookRouterConfig)
+
+    agent_harness: Literal["default", "generate"] = "default"
+    """Whether each turn writes itself a worker table before it starts.
+
+    ``default`` is the flow this repo has always run: nothing is generated and
+    no new code is on the request path. ``generate`` spends one model call per
+    turn deciding which sub-agents the question needs and what each one's brief
+    is, then offers those workers -- rather than the bare roster -- to the
+    dispatching model.
+
+    What it does not do is configure the main agent: it keeps every tool it had
+    and decides for itself who to hand work to. The brief travels as a preamble
+    on the task a worker is given, so it shapes what a worker is told, not what
+    it is permitted -- narrowing what a model is shown was never a permission
+    in Raven, and the enforcement point is ``ToolRegistry.execute``.
+    """
 
 
 class SubagentsConfig(Base):
