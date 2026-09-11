@@ -49,6 +49,8 @@ class BoxliteExecutor(SandboxExecutor):
         verify_timeout: int = 30,
         create_timeout: int = 300,
         owned_ids: set[str] | None = None,
+        *,
+        sandbox_home: Path,
     ):
         self._image = image
         self._workspace = workspace
@@ -61,6 +63,7 @@ class BoxliteExecutor(SandboxExecutor):
         self._verify_timeout = verify_timeout
         self._create_timeout = create_timeout
         self._owned_ids = owned_ids
+        self._sandbox_home = sandbox_home
 
         self._box: Any | None = None  # boxlite.Box, lazy-imported
         self._stack = AsyncExitStack()
@@ -134,7 +137,7 @@ class BoxliteExecutor(SandboxExecutor):
                 image=self._image,
                 cpus=1,
                 memory_mib=256,
-                runtime=get_boxlite_runtime(),
+                runtime=get_boxlite_runtime(self._sandbox_home),
             ) as pull_box:
                 result = await pull_box.exec("sh", "-c", "echo ok", timeout=15)
                 if result.exit_code != 0 or result.stdout.strip() != "ok":
@@ -252,7 +255,7 @@ class BoxliteExecutor(SandboxExecutor):
             )
             from raven.sandbox._runtime import get_boxlite_runtime
 
-            runtime = get_boxlite_runtime()
+            runtime = get_boxlite_runtime(self._sandbox_home)
             self._box = await runtime.create(options)
             # Register cleanup *before* start() so a failure inside start() still
             # tears the box down — otherwise a partially-started VM leaks.
@@ -272,7 +275,7 @@ class BoxliteExecutor(SandboxExecutor):
                 await self._box.stop()
                 try:
                     # Box has no remove() in 0.8.2 — use the runtime
-                    await get_boxlite_runtime().remove(box_id)
+                    await get_boxlite_runtime(self._sandbox_home).remove(box_id)
                 except Exception:
                     pass  # box may already be gone after stop()
             except Exception as exc:

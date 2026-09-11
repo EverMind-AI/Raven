@@ -45,6 +45,7 @@ from raven.agent.subagent_memory import (
     record_memories,
     trace_session_id,
 )
+from raven.config.paths import get_sandbox_dir
 from raven.config.schema import TIER_LADDER, ExecToolConfig
 from raven.context_engine.segments.render import dispatch_language_line
 from raven.contracts.llm_provider import LLMProvider
@@ -1034,6 +1035,7 @@ class SubagentManager:
                         effective_workspace,
                         self._owned_ids,
                         self._home_volume(effective_workspace),
+                        sandbox_dir=get_sandbox_dir,
                     )
                     async with executor:
                         reply = await backend.run(
@@ -1357,6 +1359,7 @@ class SubagentManager:
                     effective_workspace,
                     self._owned_ids,
                     self._home_volume(effective_workspace),
+                    sandbox_dir=get_sandbox_dir,
                 )
                 async with executor:
                     dispatched = True

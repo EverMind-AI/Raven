@@ -300,89 +300,6 @@ def test_an_ordinary_catalog_id_still_resolves_inside_the_ledger_directory() -> 
     assert path.parent == _plugins_dir()
 
 
-# ---------------------------------------------------------------------------
-# what a hub endpoint may be, and what a catalogue entry may ask raven to run
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "https://hub.evermind.ai",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000/",
-        "http://[::1]:8000",
-    ],
-)
-def test_a_hub_endpoint_may_be_https_or_local_plaintext(url: str) -> None:
-    from raven.market.vetting import require_https
-
-    assert require_https(url, what="hub") == url
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "http://hub.example.com",
-        "http://10.0.0.5:8000",
-        "file:///etc/passwd",
-        "ftp://hub.example.com",
-        "hub.example.com",
-        "https://user:pass@hub.example.com",
-        # Hostile DNS can point *.localhost at a public address, so the suffix is
-        # not evidence of loopback and must not buy plaintext.
-        "http://evil.localhost",
-        # An address nobody agrees how to read: inet_aton says 8.0.0.1, some
-        # resolvers say 10.0.0.1. Guessing is worse than refusing.
-        "http://010.0.0.1",
-        "http://2130706433",
-    ],
-)
-def test_a_hub_endpoint_may_not_be_plaintext_remote_or_non_http(url: str) -> None:
-    """Whoever answers the endpoint dictates the catalogue, and every stdio entry
-    in it is a command line. Over plain http that is whoever is on the path."""
-    from raven.market.vetting import HubTrustError, require_https
-
-    with pytest.raises(HubTrustError):
-        require_https(url, what="hub")
-
-
-def test_an_absent_override_leaves_the_default_endpoint(monkeypatch) -> None:
-    from raven.market.vetting import hub_endpoint
-
-    assert hub_endpoint(None, "https://hub.evermind.ai/", what="X") == "https://hub.evermind.ai"
-    assert hub_endpoint("   ", "https://hub.evermind.ai", what="X") == "https://hub.evermind.ai"
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "https://127.0.0.1/a.zip",
-        "https://192.168.1.5/a.zip",
-        "https://169.254.169.254/",
-        "http://cdn.example.com/a",
-        # Legacy address spellings: ipaddress reads them as hostnames, resolvers
-        # do not, and they do not even agree with each other.
-        "https://127.1/z.zip",
-        "https://2130706433/z.zip",
-        "https://0x7f000001/z.zip",
-        "https://0/z.zip",
-        "https://010.0.0.1/z.zip",
-    ],
-)
-def test_a_hub_supplied_download_url_may_not_aim_inside_the_network(url: str) -> None:
-    from raven.market.vetting import HubTrustError, require_public_https
-
-    with pytest.raises(HubTrustError):
-        require_public_https(url, what="zip_url")
-
-
-def test_a_hub_supplied_download_url_may_be_an_ordinary_cdn() -> None:
-    from raven.market.vetting import require_public_https
-
-    assert require_public_https("https://cdn.example.com/a.zip", what="zip_url")
-
-
 @pytest.mark.parametrize("command", ["npx", "uvx", "bunx"])
 def test_a_catalog_entry_may_launch_a_package_runner(command: str) -> None:
     from raven.market.vetting import validate_mcp_connection
@@ -427,7 +344,8 @@ def test_a_catalog_entry_may_not_relocate_the_payload_its_name_describes(args: l
     dialog still shows a trustworthy package name -- and the same entry can be
     rendering the user's API key into that process's environment.
     """
-    from raven.market.vetting import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": args})
@@ -463,7 +381,8 @@ def test_a_package_name_may_not_hide_a_look_alike_letter(ascii_spec: str, look_a
     name passed the spec check exactly as its Latin twin does -- while the
     registry, which only knows the ASCII spelling, resolves the two to different
     packages if it resolves the look-alike at all."""
-    from raven.market.vetting import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     validate_mcp_connection({"type": "stdio", "command": "npx", "args": ["-y", ascii_spec]})
     with pytest.raises(HubTrustError):
@@ -491,7 +410,8 @@ def test_a_package_name_may_not_hide_a_look_alike_letter(ascii_spec: str, look_a
     ],
 )
 def test_a_catalog_entry_may_not_redirect_where_its_package_comes_from(name: str) -> None:
-    from raven.market.vetting import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": ["-y", "pkg"], "env": {name: "x"}})
@@ -511,7 +431,8 @@ def test_a_catalog_entry_may_not_redirect_where_its_package_comes_from(name: str
 def test_a_catalog_entry_may_not_launch_anything_it_likes(cfg: dict) -> None:
     """A stdio entry is a command line raven executes. The payload of a package
     runner is a visible package name in `args`; a shell's payload is not."""
-    from raven.market.vetting import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection(cfg)
@@ -519,7 +440,8 @@ def test_a_catalog_entry_may_not_launch_anything_it_likes(cfg: dict) -> None:
 
 @pytest.mark.parametrize("arg", ["-c", "--call", "--call=whoami", "-e", "--eval=1"])
 def test_a_package_runner_may_not_be_turned_back_into_an_evaluator(arg: str) -> None:
-    from raven.market.vetting import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": [arg, "whoami"]})
@@ -543,7 +465,8 @@ def test_a_package_runner_may_not_be_turned_back_into_an_evaluator(arg: str) -> 
     ],
 )
 def test_a_catalog_entry_may_not_set_an_environment_variable_that_loads_code(name: str) -> None:
-    from raven.market.vetting import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": [], "env": {name: "/tmp/x.so"}})
@@ -568,7 +491,8 @@ def test_a_catalog_entry_may_still_set_its_own_credential_variable() -> None:
     ],
 )
 def test_a_remote_catalog_entry_must_be_https_with_clean_headers(cfg: dict) -> None:
-    from raven.market.vetting import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection(cfg)
@@ -619,7 +543,7 @@ async def test_install_refuses_a_form_field_that_targets_a_loader_variable(_isol
 async def test_a_hub_that_may_not_be_trusted_does_not_become_one_we_read(monkeypatch) -> None:
     """An unreachable hub degrades to the bundled catalogue; a hub we refuse to
     talk to must not silently do the same, or the operator never learns."""
-    from raven.market.vetting import HubTrustError
+    from raven.security.urls import HubTrustError
 
     monkeypatch.setenv("RAVEN_PLUGHUB_URL", "http://hub.example.com")
     with pytest.raises(HubTrustError):
@@ -700,45 +624,13 @@ async def test_a_plugin_skill_piece_refuses_to_replace_an_existing_skill(_isolat
     assert result["pieces"] == [{"kind": "skill", "name": "notes", "skillhub_id": "hub-1"}]
 
 
-@pytest.mark.parametrize(
-    "url",
-    [
-        # IDNA maps the ideographic full stop onto ".", so urlsplit sees one
-        # ordinary-looking label while the client connects to 127.0.0.1.
-        "https://127。0。0。1/x.zip",
-        "https://127。1/x.zip",
-        "https://10。0。0。1/x.zip",
-        "https://169。254。169。254/latest/meta-data",
-        # localhost by name: loopback per RFC 6761, whatever the label in front.
-        "https://evil.localhost/x.zip",
-        "https://localhost./x.zip",
-    ],
-)
-def test_a_download_url_is_judged_on_the_host_the_client_will_use(url: str) -> None:
-    from raven.market.vetting import HubTrustError, require_public_https
-
-    with pytest.raises(HubTrustError):
-        require_public_https(url, what="zip_url")
-
-
-def test_the_plaintext_exemption_is_still_only_for_this_machine() -> None:
-    """The two questions have different answers for the same name: *.localhost is
-    loopback enough to refuse a hub-supplied target, and not trustworthy enough
-    to buy the http exemption (hostile DNS can point it anywhere)."""
-    from raven.market.vetting import HubTrustError, require_https
-
-    assert require_https("http://localhost:8000", what="hub")
-    assert require_https("http://127.0.0.1:8000", what="hub")
-    with pytest.raises(HubTrustError):
-        require_https("http://evil.localhost", what="hub")
-
-
 def test_pipx_is_not_a_runner_the_market_launches() -> None:
     """Its payload is the second positional (`pipx run <app>`), so the rule that
     the first non-flag token is the package would validate the word "run" and let
     `--python-args "-c ..."` through -- code execution under a name the confirm
     dialog still shows as trustworthy."""
-    from raven.market.vetting import ALLOWED_COMMANDS, HubTrustError, validate_mcp_connection
+    from raven.market.vetting import ALLOWED_COMMANDS, validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     assert "pipx" not in ALLOWED_COMMANDS
     with pytest.raises(HubTrustError):
@@ -760,7 +652,8 @@ def test_pipx_is_not_a_runner_the_market_launches() -> None:
     ],
 )
 def test_a_catalog_entry_may_not_point_a_runner_at_its_own_config(name: str) -> None:
-    from raven.market.vetting import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": ["-y", "pkg"], "env": {name: "/tmp/x"}})
@@ -770,7 +663,8 @@ def test_a_catalog_entry_may_not_point_a_runner_at_its_own_config(name: str) -> 
 def test_each_runners_own_spelling_of_relaxed_trust_is_refused(arg: str) -> None:
     """`--insecure` and `--cafile` were the generic names; these are what npm and
     uv actually call the same thing."""
-    from raven.market.vetting import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": ["-y", "pkg", arg, "v"]})
@@ -808,7 +702,8 @@ def test_a_catalog_entry_may_declare_its_authorization_server() -> None:
     ],
 )
 def test_a_catalog_entry_may_not_send_an_authorization_code_over_plaintext(overrides: dict) -> None:
-    from raven.market.vetting import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection(_oauth_stanza(**overrides))
@@ -818,7 +713,8 @@ def test_a_catalog_entry_may_not_send_an_authorization_code_over_plaintext(overr
 def test_a_catalog_entry_may_not_carry_an_oauth_client_secret(key: str) -> None:
     """A secret every user of the catalog holds is not a secret, and raven
     authorizes as a public client either way."""
-    from raven.market.vetting import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     with pytest.raises(HubTrustError, match="public client"):
         validate_mcp_connection(_oauth_stanza(**{key: "sh-1"}))
@@ -831,7 +727,8 @@ def test_a_catalog_entry_may_not_carry_an_oauth_client_secret(key: str) -> None:
 def test_a_catalog_entry_may_not_point_a_remote_server_inside_the_network(url: str) -> None:
     """The market installs remote content that is then connected to with the
     user's keys; a local or private address is where those keys must not go."""
-    from raven.market.vetting import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "streamableHttp", "url": url})

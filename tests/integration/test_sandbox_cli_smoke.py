@@ -22,6 +22,15 @@ from typer.testing import CliRunner
 from raven.cli.sandbox_commands import sandbox_app
 from raven.sandbox.debug_server import SandboxDebugServer
 
+# The boxlite runtime is mocked in every test below, so this path is inert data:
+# it names where a real backend would keep its state, and is never touched.
+_TEST_SANDBOX_HOME = Path(tempfile.gettempdir()) / "raven-test-boxlite-home"
+
+
+def _test_sandbox_dir(backend: str) -> Path:
+    return _TEST_SANDBOX_HOME / backend
+
+
 runner = CliRunner(mix_stderr=False)
 
 
@@ -38,7 +47,7 @@ def sock_dir():
 @pytest.fixture
 async def server(sock_dir):
     path = sock_dir / "debug.sock"
-    srv = SandboxDebugServer(path, {"b1"})
+    srv = SandboxDebugServer(path, {"b1"}, sandbox_home=_TEST_SANDBOX_HOME)
     await srv.start()
     yield path, srv
     await srv.stop()

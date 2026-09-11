@@ -61,6 +61,7 @@ def pre_pull_image():
     except ImportError:
         pytest.skip("boxlite not installed")
 
+    from raven.config.paths import get_sandbox_dir
     from raven.sandbox._runtime import get_boxlite_runtime
 
     async def _pull() -> None:
@@ -70,7 +71,7 @@ def pre_pull_image():
             image=_IMAGE,
             cpus=1,
             memory_mib=256,
-            runtime=get_boxlite_runtime(),
+            runtime=get_boxlite_runtime(get_sandbox_dir("boxlite")),
         ):
             pass  # __aenter__ pulls the image; __aexit__ removes the box
 
@@ -110,17 +111,18 @@ async def real_server(sock_dir):
     """
     import boxlite
 
+    from raven.config.paths import get_sandbox_dir
     from raven.sandbox._runtime import get_boxlite_runtime
     from raven.sandbox.debug_server import SandboxDebugServer
 
-    runtime = get_boxlite_runtime()
+    runtime = get_boxlite_runtime(get_sandbox_dir("boxlite"))
     box = await runtime.create(boxlite.BoxOptions(image=_IMAGE, cpus=1, memory_mib=512))
     # `create` leaves the VM in `configured` state; we need it `running` before
     # the CLI's `list` will show it as running and exec/shell can attach.
     await box.start()
 
     sock_path = sock_dir / "debug.sock"
-    server = SandboxDebugServer(sock_path, {box.id})
+    server = SandboxDebugServer(sock_path, {box.id}, sandbox_home=get_sandbox_dir("boxlite"))
     await server.start()
 
     try:
