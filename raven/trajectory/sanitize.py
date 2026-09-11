@@ -38,8 +38,6 @@ from typing import Iterable
 PATH_PLACEHOLDER = "[REDACTED:path]"
 
 # Characters that may legitimately precede an absolute path in text or JSON.
-# Closers (")", "]", "}") are deliberately absent: "[REDACTED:path]/name" must
-# not re-open a token after the placeholder.
 # ")" and "}" are here as well as their opening halves: a closing bracket ends a
 # path token (_BARE_END), so a path written straight after one -- a markdown
 # link, a parenthesised note -- has to be able to start one too, or it is never

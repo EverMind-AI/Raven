@@ -179,6 +179,17 @@ def test_a_path_glued_to_a_url_does_not_ride_out_in_an_export(tmp_path):
     assert tsan.PATH_PLACEHOLDER in written
 
 
+def test_a_parenthesised_url_segment_loses_its_tail():
+    """The accepted cost of letting ")" open a path token.
+
+    A URL whose own path carries parentheses has the remainder after them read
+    as a local path and redacted. Balanced-bracket tracking inside the URL run
+    would preserve it, and is not worth the parser: this direction loses a URL
+    tail in a report, while the other loses a path out of one.
+    """
+    assert tsan.sanitize_text("https://example.com/a_(b)/public/page") == "https://example.com/a_(b)[REDACTED:path]"
+
+
 def test_known_roots_replaced_wherever_they_appear(tmp_path):
     root = str(tmp_path)
     text = f"glued{root}/deep/file.txt end"
