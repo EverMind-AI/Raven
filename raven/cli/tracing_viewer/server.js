@@ -1042,13 +1042,82 @@ function isSafeArtifactPath(filePath) {
   return resolved.startsWith(path.resolve(ARTIFACTS_DIR) + path.sep) || resolved === path.resolve(ARTIFACTS_DIR);
 }
 
+// Mirror of raven/tracing/artifact_v2.py. A cross-language round-trip test
+// compares the two, so a rule changed there changes here in the same commit.
+const ARTIFACT_FORMAT_V2 = 'audit.artifact.v2';
+const MESSAGES_DIR = path.join(ARTIFACTS_DIR, '_messages');
+const MSG_REF_KEY = '$msg';
+const TEXT_FIELDS = ['systemPrompt', 'prompt'];
+const SHA1_RE = /^[0-9a-f]{40}$/;
+
+function refSha1(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const keys = Object.keys(value);
+  if (keys.length !== 1 || keys[0] !== MSG_REF_KEY) return null;
+  const sha1 = value[MSG_REF_KEY];
+  return typeof sha1 === 'string' && SHA1_RE.test(sha1) ? sha1 : null;
+}
+
+function coerceText(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  try {
+    // JSON.stringify emits no space after ':' or ',', which is exactly what
+    // artifact_v2.coerce_text produces via separators=(',', ':').
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function resolvePayload(payload) {
+  if (!payload || typeof payload !== 'object' || payload.artifactFormat !== ARTIFACT_FORMAT_V2) {
+    return payload;
+  }
+  const cache = new Map();
+  const load = (sha1) => {
+    if (!cache.has(sha1)) {
+      const file = path.join(MESSAGES_DIR, sha1.slice(0, 2), `${sha1}.json`);
+      let value;
+      try {
+        value = JSON.parse(fs.readFileSync(file, 'utf8'));
+      } catch {
+        value = { role: 'unknown', content: `[message blob missing: ${sha1}]` };
+      }
+      cache.set(sha1, value);
+    }
+    return cache.get(sha1);
+  };
+  const one = (value) => {
+    const sha1 = refSha1(value);
+    return sha1 === null ? value : load(sha1);
+  };
+
+  const out = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (key !== 'artifactFormat') out[key] = value;
+  }
+  if (Array.isArray(out.messages)) out.messages = out.messages.map(one);
+  for (const field of TEXT_FIELDS) {
+    if (field in out) {
+      const resolved = one(out[field]);
+      const content =
+        resolved && typeof resolved === 'object' && !Array.isArray(resolved)
+          ? resolved.content
+          : resolved;
+      out[field] = coerceText(content);
+    }
+  }
+  return out;
+}
+
 function readArtifact(filePath) {
   if (!filePath || !isSafeArtifactPath(filePath)) return null;
   if (!fs.existsSync(filePath)) return null;
   const content = fs.readFileSync(filePath, 'utf8');
   let parsed = null;
   try {
-    parsed = JSON.parse(content);
+    parsed = resolvePayload(JSON.parse(content));
   } catch {}
   return {
     path: filePath,
