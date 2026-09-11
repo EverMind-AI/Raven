@@ -26,7 +26,7 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 from pydantic.alias_generators import to_camel
-from pydantic.fields import PydanticUndefined
+from pydantic_core import PydanticUndefined
 
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import ProviderConfig, ProviderEndpoint, ProvidersConfig
