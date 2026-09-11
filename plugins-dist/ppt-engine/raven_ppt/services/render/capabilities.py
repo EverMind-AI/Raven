@@ -14,6 +14,7 @@ report exists to catch, and `find_spec` says yes to it.
 from __future__ import annotations
 
 import shutil
+import threading
 from dataclasses import dataclass
 from functools import cache
 from types import ModuleType
@@ -22,12 +23,34 @@ from raven.utils.office import find_soffice as _find_soffice
 from raven.utils.office import install_hint as soffice_install_hint
 
 __all__ = [
+    "PDFIUM_LOCK",
     "RenderCapabilities",
     "available",
     "find_soffice",
     "pdfium",
     "soffice_install_hint",
 ]
+
+# Held for the whole of every call into PDFium, by every caller, in this process.
+#
+# pypdfium2 states it in its own API contract: PDFium is not thread-safe, and two
+# threads must not be inside it at once even for different documents opened through
+# different wrappers -- it can crash or corrupt the process. So the serialisation
+# cannot live on whatever object a caller happens to hold. `LocalDeckRenderer` is
+# frozen and cheap to construct wherever one is wanted, `DeckViews` is made per stage,
+# and `publish.trim` reaches the module without either; a limit on any one of them
+# leaves the other two free to overlap with it.
+#
+# Measured on the path that found this: over a nine-template reference set, six of the
+# nine PDFs failed to open with "PDFium: Data format error" while two rasterisations
+# ran at once, every one of the nine opened when they were read one at a time, and an
+# earlier run on the same path took SIGSEGV. `pages_of` answers a failed read with an
+# empty dict, so the cost was a reference sheet quietly short of two thirds of its
+# pages rather than anything that looked like an error.
+#
+# Reentrant because a region that holds it may call a helper in this package that
+# takes it again, and the second take is the same thread rather than a second reader.
+PDFIUM_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)

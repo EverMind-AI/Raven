@@ -2463,6 +2463,37 @@ def test_page_box_reports_the_size_a_group_scales_and_not_the_declared_one(tmp_p
     assert (drawn.x1, drawn.y1) == pytest.approx((drawn.x0 + drawn.w, drawn.y0 + drawn.h))
 
 
+def test_a_page_box_answers_to_the_same_names_ppt_layouts_box_does(tmp_path: Path) -> None:
+    """`PageBox` says it reads the same as `ppt_layout.Box`, and a program that lifts a
+    corner off one box to place another reaches for `.x` and `.y` as readily as `.w` and
+    `.h`. Two of the four answering is the worst arrangement, because the line looks
+    right: a live run's build helper read `b.y` once, in one place it used for every
+    page, and all twenty pages of the deck failed to draw with `'PageBox' object has no
+    attribute 'y'`. `Box` was given the pair for the same reason after the same crash."""
+    import sys
+
+    from raven_ppt.services.assets.layout import layout_module_source
+    from raven_ppt.services.template.compose import PageBox
+
+    # The author's `Box` is the projected module's, not an importable class here, so it
+    # is read the way the author gets it -- which is also the only copy this promise is
+    # about.
+    (tmp_path / "ppt_layout.py").write_text(layout_module_source(), encoding="utf-8")
+    sys.path.insert(0, str(tmp_path))
+    try:
+        sys.modules.pop("ppt_layout", None)
+        box = __import__("ppt_layout").Box(1.5, 2.25, 5.5, 4.25)
+    finally:
+        sys.path.remove(str(tmp_path))
+        sys.modules.pop("ppt_layout", None)
+    page = PageBox(1.5, 2.25, 5.5, 4.25)
+
+    assert (page.x, page.y, page.w, page.h) == pytest.approx((1.5, 2.25, 4.0, 2.0))
+    assert (page.x, page.y, page.w, page.h) == pytest.approx((box.x, box.y, box.w, box.h)), (
+        "the two boxes are documented as one reading, so they answer to one set of names"
+    )
+
+
 def test_a_region_refuses_four_numbers_that_cannot_say_which_reading_they_are(tmp_path: Path) -> None:
     """`ppt_layout.Box` is two corners and every python-pptx call in the same script is a
     corner and a size, and four bare numbers are both. This used to guess, reading a bare
@@ -3222,6 +3253,40 @@ def test_an_opaque_picture_in_a_cut_outs_box_is_warned_about_and_a_cut_out_is_no
     assert not [w for w in caught if "cut-out" in str(w.message)], "a cut-out for a cut-out is what the slot wants"
 
 
+def test_the_cut_out_warning_survives_the_spelling_the_skill_documents(tmp_path: Path) -> None:
+    """`replace_picture(shape_at(slide, n), str(FIGURES / image), fit)` is the spelling
+    the skill shows and the one build scripts write. Every branch of `replace_picture`
+    takes it -- the ones that open the file hand it to PIL, which does -- and only the
+    cut-out warning's own text asked the argument for `.name`. So the guard that exists
+    to explain a mistake raised `'str' object has no attribute 'name'` over the top of
+    it, which is not a sentence an author can act on, and it took the page with it."""
+    import warnings
+
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.template.compose import replace_picture
+
+    cut = tmp_path / "cartoon.png"
+    canvas = Image.new("RGBA", (400, 300), (0, 0, 0, 0))
+    canvas.paste((30, 120, 120, 255), (100, 60, 300, 240))
+    canvas.save(cut)
+    photo = tmp_path / "skyline.png"
+    Image.new("RGB", (400, 300), (90, 90, 90)).save(photo)
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    frame = slide.shapes.add_picture(str(cut), Inches(7.1), Inches(1.0), Inches(5.0), Inches(3.3))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        replace_picture(frame, str(photo), "cover")
+
+    said = [str(w.message) for w in caught if "cut-out" in str(w.message)]
+    assert len(said) == 1, said
+    assert "skyline.png is an opaque picture" in said[0], said[0]
+
+
 def _bottom_anchored_title(anchor: str = "b", *, own_autofit: bool = False):
     """A page whose title placeholder takes its anchor from the layout, as templates do.
 
@@ -3794,3 +3859,76 @@ def test_replace_text_writing_nothing_back_leaves_a_paragraphless_frame_empty() 
     assert panel.text_frame.text == ""
     assert len(panel.text_frame.paragraphs) == 1, "the one paragraph the format requires, and no run in it"
     assert panel.text_frame.paragraphs[0].runs == ()
+
+
+def test_rasterising_runs_one_at_a_time_while_converting_still_runs_wide(tmp_path: Path) -> None:
+    """One gate covered both, and they are not the same kind of work. `to_pdf` spends its
+    time in a LibreOffice subprocess with a profile of its own, so several at once cost
+    nothing and buy wall clock. `to_pngs` spends its time in pypdfium2, in a thread of
+    this process, against a library that keeps state per process rather than per
+    document. Under the shared gate the second ran concurrently with itself: over a
+    nine-template reference set, six of the nine PDFs failed to open with `PDFium: Data
+    format error` while every one of the nine opened when read one at a time, and an
+    earlier run on the same path took SIGSEGV. `pages_of` answers a failed read with an
+    empty dict, so the cost was a reference sheet quietly short of two thirds of its
+    pages rather than anything that looked like an error.
+
+    Asserted on how many are in flight, which is the property, rather than on the width
+    of a semaphore, which is one way to get it."""
+    import asyncio
+    import threading
+    import time
+
+    from raven_ppt.stages._views import DeckViews
+
+    class _Renderer:
+        """Counts what overlaps. The signatures are the real ones on purpose -- a stub
+        that shapes itself to the caller agrees with a call the engine cannot make."""
+
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self.live = {"pdf": 0, "png": 0}
+            self.peak = {"pdf": 0, "png": 0}
+
+        def _busy(self, kind: str) -> None:
+            with self._lock:
+                self.live[kind] += 1
+                self.peak[kind] = max(self.peak[kind], self.live[kind])
+            time.sleep(0.05)
+            with self._lock:
+                self.live[kind] -= 1
+
+        def to_pdf(self, pptx: Path, out_dir: Path) -> Path:
+            self._busy("pdf")
+            made = out_dir / f"{pptx.stem}.pdf"
+            made.write_bytes(b"%PDF-1.4\n")
+            return made
+
+        def to_pngs(
+            self,
+            pdf: Path,
+            out_dir: Path,
+            dpi: int | None = None,
+            pages: list[int] | None = None,
+        ) -> list[Path]:
+            self._busy("png")
+            made = out_dir / f"{pdf.stem}-001.png"
+            made.write_bytes(b"\x89PNG\r\n")
+            return [made]
+
+    renderer = _Renderer()
+    views = DeckViews(renderer=renderer, concurrency=4)
+    decks = []
+    for n in range(4):
+        deck = tmp_path / f"deck{n}.pptx"
+        deck.write_bytes(b"PK\x03\x04")
+        decks.append(deck)
+
+    async def _all() -> list[dict[int, Path]]:
+        return await asyncio.gather(*(views.pages(d, tmp_path / f"out{n}", [1]) for n, d in enumerate(decks)))
+
+    rendered = asyncio.run(_all())
+
+    assert all(r for r in rendered), rendered
+    assert renderer.peak["png"] == 1, f"rasterising overlapped {renderer.peak['png']} deep"
+    assert renderer.peak["pdf"] > 1, "converting still runs several at once; the fix is not a global narrowing"
