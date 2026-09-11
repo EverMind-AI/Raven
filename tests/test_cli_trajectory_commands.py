@@ -15,6 +15,23 @@ from raven.trajectory import verdict as tverdict
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _wide_console(monkeypatch):
+    """Widen the listing console for the whole file.
+
+    ``env={"COLUMNS": ...}`` on the invoke cannot do it here: the suite runs
+    under xdist, whose workers export ``COLUMNS=80``, and ``Console()`` freezes
+    that into its own width when the module is imported -- long before any
+    invoke sets the variable. A narrow table folds ids across lines and the
+    assertions read the folded halves as missing.
+    """
+    from rich.console import Console
+
+    from raven.cli import trajectory_commands as tcmd
+
+    monkeypatch.setattr(tcmd, "console", Console(width=200))
+
+
 def _write_log(path, spans):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(s) + "\n" for s in spans), encoding="utf-8")

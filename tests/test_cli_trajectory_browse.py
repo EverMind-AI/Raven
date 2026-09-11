@@ -698,7 +698,7 @@ def test_artifact_action_outputs_confine_ids_to_paths(state, workspace, monkeypa
     monkeypatch.setattr(tbrowse.tcmd, "console", wide)
     cfg = tmp_path / "config.json"
     cfg.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
     monkeypatch.setattr("raven.trajectory.bundle._default_workspace", lambda: workspace)
     _two_turn_log(state)
     aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
