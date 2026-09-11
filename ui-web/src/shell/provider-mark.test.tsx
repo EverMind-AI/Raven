@@ -21,7 +21,7 @@ const BRANDED = [
   'minimax_cn', 'nvidia_nim', 'hosted_vllm', 'lm_studio', 'ollama_chat', 'groq',
   'xai', 'mistral', 'together_ai', 'fireworks_ai', 'perplexity', 'cerebras',
   'huggingface', 'poe', 'xiaomi_mimo', 'baichuan', 'baidu_cloud', 'stepfun',
-  'longcat', 'modelscope', 'qiniu',
+  'longcat', 'modelscope', 'qiniu', 'bigmodel',
   'ai302', 'burncloud', 'ppio', 'sophnet', 'tokenhub',
 ]
 

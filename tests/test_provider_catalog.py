@@ -68,12 +68,13 @@ EXPECTED_PROVIDER_NAMES = {
     "radeon_cloud",
     "gpustack",
     "ovms",
+    "bigmodel",
 }
 
 
-def test_registry_has_exactly_54_providers() -> None:
-    assert len(PROVIDERS) == 54
-    assert len(EXPECTED_PROVIDER_NAMES) == 54
+def test_registry_has_exactly_55_providers() -> None:
+    assert len(PROVIDERS) == 55
+    assert len(EXPECTED_PROVIDER_NAMES) == 55
 
 
 def test_registry_provider_name_set_is_pinned() -> None:

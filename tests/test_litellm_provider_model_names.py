@@ -69,6 +69,7 @@ BARE_MODEL = {
     "radeon_cloud": "deepseek-v3",
     "gpustack": "qwen3-8b",
     "ovms": "qwen3-8b",
+    "bigmodel": "glm-4.6",
 }
 
 # What `<section>/<bare>` must resolve to. The head is LiteLLM's route; whatever
@@ -143,6 +144,9 @@ QUALIFIED_RESOLUTION = {
     # sends the call to a box on the LAN instead of to OpenAI.
     "gpustack": "openai/qwen3-8b",
     "ovms": "openai/qwen3-8b",
+    # Zhipu's CN platform rides the same driver as Z.ai, so the route is
+    # that vendor's and the address in config is what picks the platform.
+    "bigmodel": "zai/glm-4.6",
 }
 
 # What a bare name resolves to. Pinned so that adding the qualified-name path
@@ -221,6 +225,9 @@ BARE_RESOLUTION = {
     "radeon_cloud": "openai/deepseek-v3",
     "gpustack": "openai/qwen3-8b",
     "ovms": "openai/qwen3-8b",
+    # A GLM id names its vendor either way, so both spellings agree here --
+    # which is why the platform has to be chosen by address, not by id.
+    "bigmodel": "zai/glm-4.6",
 }
 
 SPEC_NAMES = [spec.name for spec in PROVIDERS]

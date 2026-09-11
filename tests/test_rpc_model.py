@@ -956,6 +956,7 @@ ADDED_VENDORS = {
     "cerebras": "cerebras/gpt-oss-120b",
     "huggingface": "huggingface/deepseek-ai/DeepSeek-V4-Pro",
     "poe": "poe/anthropic/claude-opus-4.8",
+    "bigmodel": "bigmodel/glm-4.6",
     "xiaomi_mimo": "xiaomi-mimo/mimo-v2.5",
     "baidu_cloud": "baidu-cloud/ernie-5.1",
     "stepfun": "stepfun/step-3.7-flash",

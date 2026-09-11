@@ -85,6 +85,16 @@
       "vendorx/zz-probe-1": "vendorx/zz-probe-1",
       "zz-probe-1": "zz-probe-1"
     },
+    "bigmodel": {
+      "bigmodel-probe": "zai/bigmodel-probe",
+      "bigmodel/glm-4.6": "zai/glm-4.6",
+      "bigmodel/vendorx/zz-probe-1": "zai/vendorx/zz-probe-1",
+      "bigmodel/zz-probe-1": "zai/zz-probe-1",
+      "openrouter/zz-probe-1": "openrouter/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zai/zz-probe-1": "zai/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
     "burncloud": {
       "burncloud-probe": "openai/burncloud-probe",
       "burncloud/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",

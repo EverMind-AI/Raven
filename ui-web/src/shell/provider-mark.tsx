@@ -12,6 +12,8 @@ const ICONS: Record<string, string> = {
   anthropic: 'anthropic',
   azure_openai: 'azureai',
   baichuan: 'baichuan',
+  /* Zhipu's own mark, not Z.ai's: same vendor, two platforms and two logos. */
+  bigmodel: 'zhipu',
   baidu_cloud: 'baiducloud',
   burncloud: 'burncloud',
   cerebras: 'cerebras',
@@ -119,6 +121,7 @@ const VENDOR_ICONS: Record<string, string> = {
   /* Zhipu's own spelling of its namespace, which the snapshot uses and no
      entry above covered -- `zai-org` and `z-ai` are the other two. */
   'zhipuai': 'zai',
+  'zhipu': 'zhipu',
 }
 
 /* The asset tree's digest, appended to every asset URL.

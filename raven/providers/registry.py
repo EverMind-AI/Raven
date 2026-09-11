@@ -774,6 +774,32 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
         default_model="zai/glm-4.6",
     ),
+    # BigModel, the same vendor's Chinese platform. A sibling of Z.ai above and
+    # not a second spelling of it: the brands differ, the hosts differ, and an
+    # account on one does not authenticate against the other -- so a reader on
+    # BigModel had no row to pick, only Z.ai's with the address typed over it.
+    # Shaped like MiniMax (CN) for the same reason, down to borrowing the global
+    # vendor's driver and filing its metadata under that vendor: GLM is GLM
+    # whichever platform serves it, and the price book is written once.
+    #
+    # `zhipu` stays Z.ai's alias rather than moving here. It is what pre-rename
+    # model ids say, and repointing it would send a saved `zhipu/glm-*` to a
+    # different host on a key that was never issued for it.
+    ProviderSpec(
+        name="bigmodel",
+        native_api_bases=(("anthropic", "https://open.bigmodel.cn/api/anthropic"),),
+        keywords=("bigmodel",),
+        env_key="ZAI_API_KEY",
+        display_name="BigModel",
+        homepage="https://open.bigmodel.cn/",
+        via_driver="zai",
+        metadata_prefix="zai",
+        env_extras=(("ZHIPUAI_API_KEY", "{api_key}"),),
+        skip_prefixes=("openrouter/",),
+        default_api_base="https://open.bigmodel.cn/api/paas/v4",
+        passes_default_api_base=True,
+        default_model="bigmodel/glm-4.6",
+    ),
     # Alibaba Cloud: Qwen models over DashScope, which is the service and the
     # name every id and config section is written with -- so the section stays
     # `dashscope` while the shelf it appears on says who runs it.

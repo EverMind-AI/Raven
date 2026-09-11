@@ -570,6 +570,7 @@ class ProvidersConfig(Base):
         default_factory=ProviderConfig,
         validation_alias=AliasChoices("zai", "zhipu"),
     )
+    bigmodel: ProviderConfig = Field(default_factory=ProviderConfig)  # Zhipu's CN platform
     dashscope: ProviderConfig = Field(default_factory=ProviderConfig)  # Alibaba Cloud Tongyi Qianwen
     # LiteLLM's own names for these two, so a model id and a config section are
     # spelled the same. Configs written before the rename keep loading.
