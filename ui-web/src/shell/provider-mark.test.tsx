@@ -25,13 +25,11 @@ const BRANDED = [
   'ai302', 'burncloud', 'ppio', 'sophnet', 'tokenhub',
 ]
 
-/* The two providers still without a mark, and why each stays that way. DMXAPI
-   publishes its logo as a bitmap wrapped in an SVG -- 140 KB for one row, and
-   nothing a scaling vector can be made from. AMD GPU Cloud has no mark in
-   either icon set. Both render the fallback initial, which the mark component
-   supports deliberately -- pinned here so the state reads as a decision rather
-   than a line somebody forgot. */
-const UNBRANDED = ['dmxapi', 'radeon_cloud']
+/* The one provider still without a mark: AMD GPU Cloud appears in neither icon
+   set. It renders the fallback initial, which the mark component supports
+   deliberately -- pinned here so the state reads as a decision rather than a
+   line somebody forgot. */
+const UNBRANDED = ['radeon_cloud']
 
 afterEach(cleanup)
 

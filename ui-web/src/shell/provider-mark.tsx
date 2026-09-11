@@ -30,6 +30,7 @@ const ICONS: Record<string, string> = {
   cerebras: 'cerebras',
   dashscope: 'alibabacloud',
   deepseek: 'deepseek',
+  dmxapi: 'dmxapi',
   fireworks_ai: 'fireworks',
   gemini: 'gemini',
   github_copilot: 'githubcopilot',

@@ -22,6 +22,12 @@ history.
   `<name>-dark.svg` is upstream's `dark/` drawing of the same mark.
   The marks themselves are the vendors' trademarks, shown to identify the
   vendor whose row they sit on and not modified.
+  One exception to verbatim: `dmxapi.svg` is the only mark upstream publishes
+  as a raster in an SVG wrapper, at 342x342 for a slot drawn 20px wide, and
+  143 KB of the bundle for one row. The wrapper is upstream's byte for byte and
+  the artwork is unaltered in design or colour; only the embedded PNG is
+  resampled to 96x96, which `cmp` will therefore not match for this file alone.
+  Regenerate it with scripts/refresh_dmxapi_mark.py.
 - `MIT-lobe-icons.txt` - twelve of the fourteen sub-agent brand marks under
   `ui-web/src/assets/agents/`, and `providers/vllm.svg`. Those twelve keep
   upstream's filenames, so each is byte-identical to the one
