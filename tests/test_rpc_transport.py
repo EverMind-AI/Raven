@@ -613,3 +613,66 @@ async def test_a_rebuilt_asset_is_not_served_from_a_stale_browser_cache(tmp_path
         assert (await client.get("/")).status == 200
     finally:
         await client.close()
+
+
+class _EchoSize:
+    """Answers with the length of what arrived, so the assertion is about the
+    payload surviving the transport whole rather than about any one method."""
+
+    async def dispatch(self, frame: dict) -> dict:
+        return {
+            "jsonrpc": "2.0",
+            "id": frame["id"],
+            "result": {"bytes": len(frame["params"]["filler"])},
+        }
+
+
+async def test_the_socket_carries_a_frame_larger_than_aiohttp_would_allow_by_default(
+    gateway_client,
+) -> None:
+    """An attachment rides as base64 inside one JSON-RPC frame.
+
+    aiohttp defaults ``max_msg_size`` to 4 MiB, which capped uploads at roughly
+    3 MB of file while ``fs.upload`` advertised 25 MB -- and capped them by
+    closing the socket, so the page saw a reconnect and every other in-flight
+    call on that connection died with it. The frame below clears that default
+    and must come back answered, not disconnected.
+    """
+    gateway, client = gateway_client
+    gateway.dispatcher = _EchoSize()
+    filler = 5 * 1024 * 1024
+
+    async with client.ws_connect("/rpc", headers={"X-Raven-Token": gateway.session_token}) as ws:
+        await ws.send_str(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "system.ping", "params": {"filler": "x" * filler}})
+        )
+        answer = await ws.receive_json(timeout=30)
+
+    assert answer["result"]["bytes"] == filler
+
+
+def test_the_frame_ceiling_can_carry_the_largest_upload_the_method_accepts() -> None:
+    """The two limits are one limit, and this is what keeps them that way.
+
+    Sized arithmetically rather than by building a 25 MB payload: the envelope
+    is what has to fit around a maximal base64 body, and materialising one to
+    learn its length would cost the suite a second to answer a question about
+    two integers.
+    """
+    from raven.rpc.files import MAX_UPLOAD_BYTES, frame_ceiling_for_upload
+
+    envelope = len(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2**53,
+                "method": "fs.upload",
+                "params": {"name": "x" * 255, "content_b64": "", "session": "tui:" + "x" * 64},
+            }
+        )
+    )
+    body = -(-MAX_UPLOAD_BYTES // 3) * 4
+
+    assert envelope + body <= frame_ceiling_for_upload(), (
+        "a maximal upload must fit the frame the transport accepts, or the socket closes before fs.upload can refuse it"
+    )
