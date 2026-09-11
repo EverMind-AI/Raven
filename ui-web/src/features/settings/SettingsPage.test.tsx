@@ -166,6 +166,34 @@ describe('settings island', () => {
     expect(await screen.findByText('gui.set.nodata')).toBeTruthy()
   })
 
+  it('can open directly on the models tab', async () => {
+    install()
+    render(<SettingsApp />, { container: document.getElementById('spanels')! })
+
+    await act(async () => {
+      await store.openModels()
+    })
+
+    const cur = document.querySelector('#snavList [aria-current="true"]')!
+    expect(cur.textContent).toContain('gui.set.pg.model')
+    expect(document.getElementById('setTitle')!.textContent).toBe('gui.set.pg.model')
+  })
+
+  it('opens a requested connected provider and highlights its model-list action', async () => {
+    install(snap({
+      providers: [{ id: 'openai', name: 'OpenAI', models: [], configured: [], on: true, kind: 'api_key' }],
+    }))
+    render(<SettingsApp />, { container: document.getElementById('spanels')! })
+
+    await act(async () => {
+      await store.openProviderModels('openai')
+    })
+
+    expect(store.getState().provOpen).toBe('openai')
+    expect(store.getState().modelNudge).toBe('openai')
+    expect(document.querySelector('.mpanel .mini.nudge')?.textContent).toBe('gui.model.get_list')
+  })
+
   /* The one destructive button on the page, and it had no coverage: it used to
      leave through a shell verb, and now it leaves through DS.sessions. Either
      way what matters is that it goes out at all, and only after the confirm. */
@@ -546,6 +574,85 @@ describe('settings island', () => {
     expect(calls).toContainEqual(['provider', { op: 'save_key', params: { slug: 'openai', api_key: 'sk-x' } }])
   })
 
+  /* A key that saves onto an empty model list leaves a provider that is
+     connected, looks right, and lends the picker nothing. */
+  const bareProvider = (over: Partial<{ configured: string[]; on: boolean }> = {}) =>
+    snap({
+      providers: [{
+        id: 'openai',
+        name: 'OpenAI',
+        models: [],
+        configured: over.configured ?? [],
+        on: over.on ?? false,
+        kind: 'api_key',
+      }],
+      curProvider: '',
+    })
+
+  const getListButton = () =>
+    [...document.querySelectorAll<HTMLButtonElement>('.mpanel [data-sec="models"] .mbtns button')].find(
+      (b) => b.textContent === 'gui.model.get_list',
+    )!
+
+  it('marks Get model list after a key saves onto an empty model list', async () => {
+    const data = bareProvider()
+    install(data, {
+      provider: async () => bareProvider({ on: true }),
+    })
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    expect(getListButton().className).toBe('mini ghost')
+
+    const key = document.querySelector<HTMLInputElement>('.mpanel .pform input[type="password"]')!
+    await act(async () => type(key, 'sk-x'))
+    await act(async () => {
+      screen.getByText('gui.model.connect').click()
+    })
+    expect(getListButton().className).toBe('mini ghost nudge')
+  })
+
+  it('leaves the button alone when the key saves onto a list that has models', async () => {
+    install(bareProvider(), {
+      provider: async () => bareProvider({ on: true, configured: ['gpt-5'] }),
+    })
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    const key = document.querySelector<HTMLInputElement>('.mpanel .pform input[type="password"]')!
+    await act(async () => type(key, 'sk-x'))
+    await act(async () => {
+      screen.getByText('gui.model.connect').click()
+    })
+    expect(getListButton().className).toBe('mini ghost')
+    /* The pane's own emptiness check would hide the mark either way. Asserted
+       on the store too, so a rule that raised it for every save would fail
+       here rather than survive behind that guard. */
+    expect(store.getState().modelNudge).toBeNull()
+  })
+
+  it('drops the mark once the catalogue drawer is opened', async () => {
+    install(bareProvider(), {
+      provider: async () => bareProvider({ on: true }),
+      fetchModels: async () => ({ models: [], status: 'ok', error: '' }),
+    })
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    const key = document.querySelector<HTMLInputElement>('.mpanel .pform input[type="password"]')!
+    await act(async () => type(key, 'sk-x'))
+    await act(async () => {
+      screen.getByText('gui.model.connect').click()
+    })
+    expect(getListButton().className).toBe('mini ghost nudge')
+
+    await act(async () => getListButton().click())
+    expect(getListButton().className).toBe('mini ghost')
+  })
+
   it('resets LM Studio to the backend-provided default endpoint', async () => {
     const local = snap({
       providers: [{
@@ -722,9 +829,13 @@ describe('settings island', () => {
     ])
   })
 
-  it('leaves the host field off a provider that ships no address', async () => {
+  /* It used to be left off, which meant Gemini, OpenAI, Anthropic, DeepSeek,
+     Z.ai and Groq could only be pointed at a proxy with the CLI -- and the
+     field then appeared, because a stored address is one the pane will show.
+     The control turned up only after the job had been done elsewhere. */
+  it('offers the host field to a provider that ships no address of its own', async () => {
     const bare = snap({
-      providers: [{ id: 'openai', name: 'OpenAI', models: [], on: false, kind: 'key' }],
+      providers: [{ id: 'gemini', name: 'Gemini', models: [], on: false, kind: 'api_key' }],
       curProvider: '',
     })
     install(bare)
@@ -732,8 +843,57 @@ describe('settings island', () => {
     await act(async () => {
       screen.getByText('gui.set.pg.model').click()
     })
-    expect(document.querySelector('.mpanel .pform .hostfield')).toBeNull()
-    expect(document.querySelector('.mpanel .pform [data-sec="host"]')).toBeNull()
+    const field = document.querySelector<HTMLInputElement>('.mpanel .pform .hostfield input')!
+    expect(field).toBeTruthy()
+    expect(field.value).toBe('')
+    expect(field.placeholder).toBe('gui.model.base_ph')
+  })
+
+  /* Shown is not the same as written. An untouched field on a provider that
+     ships no address must send nothing, or every connect would store an empty
+     base for a vendor that never had one. */
+  it('sends no host when the offered field is left alone', async () => {
+    const { calls } = install(
+      snap({
+        providers: [{ id: 'gemini', name: 'Gemini', models: [], on: false, kind: 'api_key' }],
+        curProvider: '',
+      }),
+    )
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    await act(async () =>
+      type(document.querySelector<HTMLInputElement>('.mpanel .pform input[type="password"]')!, 'sk-g'),
+    )
+    await act(async () => {
+      screen.getByText('gui.model.connect').click()
+    })
+    expect(calls).toContainEqual(['provider', { op: 'save_key', params: { slug: 'gemini', api_key: 'sk-g' } }])
+  })
+
+  it('sends the host once it is typed into that same field', async () => {
+    const { calls } = install(
+      snap({
+        providers: [{ id: 'gemini', name: 'Gemini', models: [], on: false, kind: 'api_key' }],
+        curProvider: '',
+      }),
+    )
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    document.querySelector<HTMLInputElement>('.mpanel .pform .hostfield input')!.value = 'https://proxy.example/v1'
+    await act(async () =>
+      type(document.querySelector<HTMLInputElement>('.mpanel .pform input[type="password"]')!, 'sk-g'),
+    )
+    await act(async () => {
+      screen.getByText('gui.model.connect').click()
+    })
+    expect(calls).toContainEqual([
+      'provider',
+      { op: 'save_key', params: { slug: 'gemini', api_key: 'sk-g', api_base: 'https://proxy.example/v1' } },
+    ])
   })
 
   /* Four MiniMax sections -- global and CN, each by key and by OAuth -- are one

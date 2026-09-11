@@ -16,6 +16,42 @@ const loadProvidersSrc = match[0]
 const permMatch = src.match(/async function loadPermMode[\s\S]*?\n}/)
 if (!permMatch) throw new Error('loadPermMode is absent from the live layer')
 const loadPermModeSrc = permMatch[0]
+const providerGuardSrc = src.match(/function openModelsForMissingProvider\(\) \{[\s\S]*?\n\}/)
+if (!providerGuardSrc) throw new Error('openModelsForMissingProvider is absent from the live layer')
+
+function providerGuardHarness({ configured = null, providers = [] } = {}) {
+  let opened = 0
+  const build = Function(
+    'deps',
+    `let providerConfiguredLive = deps.configured;
+     let providersLive = deps.providers;
+     const RavenIslands = { settings: { openModels: () => { deps.opened() } } };
+     ${providerGuardSrc[0]}
+     return { openModelsForMissingProvider };`,
+  )
+  const api = build({ configured, providers, opened: () => { opened += 1 } })
+  return { ...api, opened: () => opened }
+}
+
+describe('the first-run provider guard', () => {
+  it('opens Models when setup reports no configured provider', () => {
+    const h = providerGuardHarness({ configured: false })
+    expect(h.openModelsForMissingProvider()).toBe(true)
+    expect(h.opened()).toBe(1)
+  })
+
+  it('stops redirecting as soon as a provider refresh authenticates one', () => {
+    const h = providerGuardHarness({ configured: false, providers: [{ on: true }] })
+    expect(h.openModelsForMissingProvider()).toBe(false)
+    expect(h.opened()).toBe(0)
+  })
+
+  it('does not redirect while first-run status is still unknown', () => {
+    const h = providerGuardHarness()
+    expect(h.openModelsForMissingProvider()).toBe(false)
+    expect(h.opened()).toBe(0)
+  })
+})
 
 function harness() {
   const calls = []

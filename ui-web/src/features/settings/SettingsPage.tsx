@@ -1021,12 +1021,16 @@ function DocsMark(): JSX.Element {
  * click with nothing is worse than one that says it cannot yet. `+` opens the
  * drawer, which is the one way to add a model here.
  */
-function ModelList({ pv }: { pv: ProviderRow }): JSX.Element {
+function ModelList({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Element {
   /* This section's own list, not the picker's offer: before anything is added
      the offer already holds a curated shortlist, and showing it here read as
      seven models already added to a provider with no key. */
   const models = pv.configured ?? []
   const [isFolded, toggleFold] = useFolds()
+  /* A key that just saved onto an empty list. The store raises this; the
+     emptiness is re-read here so the mark goes out the moment a model lands,
+     whichever of the two ways added it. */
+  const nudge = s.modelNudge === pv.id && !models.length
   return (
     <div className="msec" data-sec="models">
       <div className="mhead">
@@ -1048,7 +1052,10 @@ function ModelList({ pv }: { pv: ProviderRow }): JSX.Element {
           </a>
         )}
         <div className="mbtns">
-          <button className="mini ghost" onClick={() => void store.fetchModelsOpen(pv.id)}>
+          <button
+            className={'mini ghost' + (nudge ? ' nudge' : '')}
+            onClick={() => void store.fetchModelsOpen(pv.id)}
+          >
             {t('gui.model.get_list')}
           </button>
           <button
@@ -1500,13 +1507,6 @@ function ProvPanel({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Elemen
     }
     void store.providerRun('save_key', params)
   }
-  /* Every provider that has an address shows it, not only the ones that cannot
-     work without one: "what is this pointed at" is a question asked of a
-     working provider as often as a broken one, and the answer was previously
-     visible for three of them. Providers with no address of their own (the
-     vendors LiteLLM reaches by SDK default) still show no field -- there is
-     nothing to put in it. */
-  const showBase = baseRequired || !!initialBase
   const keyRequired = acceptsApiKey && pv.kind !== 'local'
   return (
     <div className="mpanel">
@@ -1578,37 +1578,46 @@ function ProvPanel({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Elemen
                 {pv.env && <div className="pnote">{t('gui.model.env_hint', { env: pv.env })}</div>}
               </div>
             )}
-            {showBase && (
-              <div className="msec" data-sec="host">
-                <div className="mhead">
-                  <div className="t">{t('gui.model.api_host')}</div>
-                </div>
-                <div className="keyrow">
-                  <HostInput
-                    inputRef={base}
-                    value={initialBase}
-                    placeholder={t(pv.kind === 'local' ? 'gui.model.base_ph_local' : 'gui.model.base_ph')}
-                  />
-                  {/* The host icon restores the initial value rather than saving
-                      a separate action -- the address travels with the key, on
-                      the button above. */}
-                  <button
-                    className="mini update"
-                    type="button"
-                    aria-label={t('gui.model.update')}
-                    title={t('gui.model.update')}
-                    onClick={() => {
-                      if (base.current) base.current.value = initialBase
-                    }}
-                  >
-                    <UpdateIcon />
-                  </button>
-                </div>
+            {/* Every provider that can be pointed somewhere shows the field,
+                which inside this branch is all of them -- an OAuth provider
+                renders a login command instead and never reaches here.
+                Previously it appeared only where the spec shipped an address,
+                so Gemini, OpenAI, Anthropic, DeepSeek, Z.ai and Groq had no way
+                to reach a proxy from this pane even though `get_api_base`
+                serves one for each of them and `raven provider set --api-base`
+                writes it. The control turned up only after a person had already
+                done the job with another tool, which is the wrong way round --
+                and `gui.model.base_ph`, "for your own gateway", is written for
+                exactly the providers it was hidden from. */}
+            <div className="msec" data-sec="host">
+              <div className="mhead">
+                <div className="t">{t('gui.model.api_host')}</div>
               </div>
-            )}
+              <div className="keyrow">
+                <HostInput
+                  inputRef={base}
+                  value={initialBase}
+                  placeholder={t(pv.kind === 'local' ? 'gui.model.base_ph_local' : 'gui.model.base_ph')}
+                />
+                {/* The host icon restores the initial value rather than saving
+                    a separate action -- the address travels with the key, on
+                    the button above. */}
+                <button
+                  className="mini update"
+                  type="button"
+                  aria-label={t('gui.model.update')}
+                  title={t('gui.model.update')}
+                  onClick={() => {
+                    if (base.current) base.current.value = initialBase
+                  }}
+                >
+                  <UpdateIcon />
+                </button>
+              </div>
+            </div>
           </>
         )}
-        <ModelList pv={pv} />
+        <ModelList pv={pv} s={s} />
         {pv.on && (
           <button
             className="mini ghost danger"

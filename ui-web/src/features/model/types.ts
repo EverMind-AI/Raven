@@ -56,4 +56,5 @@ export interface ModelSource {
      picker was opened from the composer chip, since the settings page opening
      itself is not a way out of it. */
   openSettings(): void
+  openProviderModels?(provider: string): void
 }

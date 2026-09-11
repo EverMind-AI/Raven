@@ -128,6 +128,17 @@ def test_make_resolving_provider_returns_one():
     assert isinstance(make_resolving_provider(_config()), ResolvingProvider)
 
 
+def test_factory_can_defer_first_run_credentials_to_the_model_call():
+    from raven.config.schema import Config
+    from raven.providers.auth import MissingCredentialsError
+
+    config = Config()
+    with pytest.raises(MissingCredentialsError):
+        make_resolving_provider(config)
+
+    assert isinstance(make_resolving_provider(config, allow_unconfigured=True), ResolvingProvider)
+
+
 class TestCredentialsAreLiveWithASupplier:
     """The gateway's default lane rotates its keys without a restart: each pick
     compares the providers fingerprint and rebuilds the per-vendor adapters

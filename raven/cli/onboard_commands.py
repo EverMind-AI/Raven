@@ -532,7 +532,7 @@ def _prompt_local_api_base(spec: Any, *, current: str = "", allow_back: bool = F
 
     url = questionary.text(
         t("{a0} server URL:", a0=spec.label),
-        default=current or spec.default_api_base or "",
+        default=current or spec.display_api_base or "",
         validate=_validate,
         placeholder=_back_placeholder(allow_back),
         style=RAVEN_STYLE,
@@ -2638,7 +2638,7 @@ def register(app: typer.Typer) -> None:
         search_api_key: Optional[str] = typer.Option(
             None,
             "--search-api-key",
-            help="Key for the web_search vendor (the one --search-provider names, or the configured one); checked with one real search",
+            help="Key for the web_search vendor (the one --search-provider names, or the configured one)",
         ),
         fetch_api_key: Optional[str] = typer.Option(
             None,

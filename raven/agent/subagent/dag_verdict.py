@@ -34,7 +34,6 @@ CATEGORIES = (
     "missing_credential",
     "tool_failure",
     "dependency_output_unusable",
-    "output_limit",
     "other",
 )
 
@@ -150,55 +149,19 @@ def _evidence_block(evidence: str, evidence_complete: bool) -> str:
     return "Tail of what the sub-agent did, one message per line:\n" + wrap_untrusted(evidence, source="subagent")
 
 
-# Stated outside the untrusted fences on purpose, and the only block here that
-# is: it is read off the run's transport -- this process's provider layer for a
-# run it hosts, the prompt response's stop reason for one behind ACP -- rather
-# than out of the answer the sub-agent composed. Position carries that meaning,
-# so the block is a constant and is never assembled from sub-agent text.
-#
-# What it does NOT claim is first-party measurement for every lane: a delegated
-# agent's stop reason is that agent reporting why its own turn ended, and the
-# wording says so. Calling it a harness measurement would hand any conforming
-# agent a way to assert an unfenced fact about itself.
-_OUTPUT_LIMIT_NOTE = (
-    "Read off this run's transport rather than out of the answer text: the generation stopped "
-    "at the model's output token limit, so whatever it was writing at that point was cut off. "
-    "For a delegated agent this is that agent's own report of why its turn ended."
-)
-
-# Only appended when the ceiling was actually hit. A standing clause would tell
-# every judge call how to weigh a truncation that did not happen, and the note
-# above would then have to be read as hypothetical.
-_OUTPUT_LIMIT_RULE = (
-    " One fact accompanies this material from outside the sub-agent's answer, stated outside "
-    "the fenced data: this run's generation stopped at the model's output token limit. It "
-    "tells you the run was cut off and nothing about what the task owed or what reached you "
-    "-- judge that from the material exactly as you would otherwise, and do not read the cut "
-    "as excusing work that is not there. Report category 'output_limit' when the work is "
-    "unfinished."
-)
-
-
-def _messages(
-    *,
-    instruction: str,
-    prompt: str,
-    body_label: str,
-    body: str,
-    evidence: str,
-    evidence_complete: bool,
-    output_limited: bool = False,
-):
-    blocks = [
-        "The task the sub-agent was given:\n" + wrap_untrusted(prompt, source="subagent"),
-        f"{body_label}:\n" + wrap_untrusted(body, source="subagent"),
-        _evidence_block(evidence, evidence_complete),
-    ]
-    if output_limited:
-        blocks.insert(0, _OUTPUT_LIMIT_NOTE)
+def _messages(*, instruction: str, prompt: str, body_label: str, body: str, evidence: str, evidence_complete: bool):
     return [
         {"role": "system", "content": instruction},
-        {"role": "user", "content": "\n\n".join(blocks)},
+        {
+            "role": "user",
+            "content": "\n\n".join(
+                [
+                    "The task the sub-agent was given:\n" + wrap_untrusted(prompt, source="subagent"),
+                    f"{body_label}:\n" + wrap_untrusted(body, source="subagent"),
+                    _evidence_block(evidence, evidence_complete),
+                ]
+            ),
+        },
     ]
 
 
@@ -246,24 +209,15 @@ async def judge(
     evidence_complete: bool,
     model: str | None = None,
     timeout_s: float = 180.0,
-    output_limited: bool = False,
 ) -> Verdict:
-    """Whether a node that returned actually accomplished its task.
-
-    ``output_limited`` is the run's transport reporting that its generation hit
-    the model's output ceiling -- measured here for a run this process hosts,
-    and the agent's own stop reason for one behind ACP. Absent for a transport
-    that cannot report it, so ``False`` means "not known to have been cut",
-    never "ran to completion".
-    """
+    """Whether a node that returned actually accomplished its task."""
     messages = _messages(
-        instruction=_JUDGE_INSTRUCTION + (_OUTPUT_LIMIT_RULE if output_limited else ""),
+        instruction=_JUDGE_INSTRUCTION,
         prompt=prompt,
         body_label="What it returned as its answer",
         body=output,
         evidence=evidence,
         evidence_complete=evidence_complete,
-        output_limited=output_limited,
     )
     try:
         response = await _call(provider, messages, model, timeout_s)
@@ -295,13 +249,8 @@ async def describe_failure(
     evidence_complete: bool,
     model: str | None = None,
     timeout_s: float = 180.0,
-    output_limited: bool = False,
 ) -> Verdict:
-    """A crashed node's traceback as the same structured report.
-
-    Takes ``output_limited`` for the same reason ``judge`` does: a run can crash
-    *because* it was cut, and naming why is this call's whole job.
-    """
+    """A crashed node's traceback as the same structured report."""
     raw = Verdict(
         accomplished=False,
         category="other",
@@ -310,13 +259,12 @@ async def describe_failure(
         evidence_complete=evidence_complete,
     )
     messages = _messages(
-        instruction=_DESCRIBE_INSTRUCTION + (_OUTPUT_LIMIT_RULE if output_limited else ""),
+        instruction=_DESCRIBE_INSTRUCTION,
         prompt=prompt,
         body_label="The error it died with",
         body=error,
         evidence=evidence,
         evidence_complete=evidence_complete,
-        output_limited=output_limited,
     )
     try:
         response = await _call(provider, messages, model, timeout_s)

@@ -21,15 +21,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.contracts.tool import RAW_ARGUMENTS_KEY
-from raven.providers.base import (
-    CallRecord,
-    ErrorClassification,
-    LLMResponse,
-    RunMeta,
-    ToolCallRequest,
-    format_llm_error,
-    send_max_tokens,
-)
+from raven.providers.base import ErrorClassification, LLMResponse, RunMeta, ToolCallRequest
 from raven.providers.reasoning import split_orphan_think
 from raven.providers.tool_names import normalized_tool_name
 from raven.providers.transport_failure import flag_transport_failure, prompt_chars
@@ -130,10 +122,6 @@ async def stream_llm_call(
 
     final_usage: dict[str, Any] | None = None
     thinking_blocks: list[dict[str, Any]] | None = None
-    # The transport facts of the stream currently open. Latest wins: the provider
-    # sends them once when the stream opens, and again with the retained chunks
-    # attached when the stream turns out to have delivered nothing.
-    record: CallRecord | None = None
     had_error = False
     error_content: str | None = None
     error_classification: ErrorClassification | None = None
@@ -160,8 +148,6 @@ async def stream_llm_call(
                         had_error = True
                         error_content = delta.content
                         error_classification = delta.error_classification
-                        if getattr(delta, "call_record", None) is not None:
-                            record = delta.call_record
                         if delta.usage is not None:
                             final_usage = {
                                 **(final_usage or {}),
@@ -198,10 +184,6 @@ async def stream_llm_call(
                         final_usage = merge_usage(final_usage, delta.usage)
                     if getattr(delta, "thinking_blocks", None):
                         thinking_blocks = delta.thinking_blocks
-                    # getattr for the same reason thinking_blocks uses one: a
-                    # duck-typed provider need not carry the field at all.
-                    if getattr(delta, "call_record", None) is not None:
-                        record = delta.call_record
             # The upstream closed the stream before its terminal chunk and nothing
             # deliverable had arrived: a reply cut mid-thought, not a model that
             # chose silence. Measured on 2026-09-06: nine deck-build calls ended
@@ -230,7 +212,6 @@ async def stream_llm_call(
                     error_classification=ErrorClassification("network", retryable=True, should_fallback=True),
                     usage=final_usage or {},
                     reasoning_ms=reasoning_ms,
-                    call_record=record,
                 )
             # Asked inside the attempt loop so the answer can be acted on. The
             # verdict requires that nothing was emitted, so a second attempt
@@ -252,11 +233,10 @@ async def stream_llm_call(
                 tool_call_slots.clear()
                 final_usage = None
                 thinking_blocks = None
-                record = None
                 upstream_finish_reason = None
                 continue
             break
-        except TimeoutError as exc:
+        except TimeoutError:
             # The idle cap already waited the full timeout; reconnecting would
             # double an already-long stall, so a stall ends the call. After output
             # it ends the turn too, unless the caller asked for a retry: handed back
@@ -265,20 +245,10 @@ async def stream_llm_call(
             # the branch below holds and this one did not.
             if (content_buf or reasoning_buf or tool_call_slots) and not retry_after_output:
                 raise
-            # Classified from the live exception rather than a fresh
-            # TimeoutError, and its text kept when nothing was streamed: a
-            # first-byte timeout says which bound it was and how long it waited,
-            # and a stall before the first chunk leaves an empty buffer -- so
-            # throwing both away left the loop logging an error whose message was
-            # the empty string, which is how fifteen minutes of silence came to be
-            # recorded as nothing at all.
-            classification = provider.classify_error(exc)
-            streamed = "".join(content_buf)
             return LLMResponse(
-                content=streamed or format_llm_error(exc, classification),
+                content="".join(content_buf),
                 finish_reason="error",
-                error_classification=classification,
-                call_record=record,
+                error_classification=provider.classify_error(TimeoutError()),
             )
         except Exception as exc:
             # Every path out of here but one is a bare `raise` so the provider's
@@ -310,7 +280,6 @@ async def stream_llm_call(
                 tool_call_slots.clear()
                 final_usage = None
                 thinking_blocks = None
-                record = None
                 upstream_finish_reason = None
             if classification.strip_images:
                 # The one recovery this function cannot make: the picture has to
@@ -322,7 +291,6 @@ async def stream_llm_call(
                     content=f"Error calling LLM ({classification.category}): {exc}",
                     finish_reason="error",
                     error_classification=classification,
-                    call_record=record,
                 )
             if not classification.retryable:
                 raise
@@ -360,25 +328,18 @@ async def stream_llm_call(
             finish_reason="error",
             error_classification=error_classification,
             usage=final_usage or {},
-            call_record=record,
         )
 
     tool_calls = _finalize_tool_calls(tool_call_slots)
 
-    # Asked of the same owner the request body asks, rather than passed in: the
-    # loop calls chat_stream with no ceiling, and the provider resolves its own
-    # from this function. Two calls to one owner agree by construction, which is
-    # why ``send_max_tokens`` exists; leaving it out is what made every one of a
-    # deck run's truncation lines read ``max_tokens=None``.
+    # No ceiling is passed in: the main loop deliberately lets chat_stream's own
+    # defaults stand (see the caller's docstring), so the number this turn
+    # carried is not knowable here. Nothing is compared against it, so nothing
+    # is missing.
     sent_max_tokens, truncated = flag_truncation(
         finish_reason=upstream_finish_reason,
         usage=final_usage,
         tool_calls=tool_calls,
-        sent=stream_kwargs.get("max_tokens")
-        or send_max_tokens(
-            getattr(provider, "generation", None),
-            getattr(provider, "wire_model_id", lambda m: m)(model or getattr(provider, "default_model", "") or ""),
-        ),
     )
 
     # No terminal reason arrived means none may be fabricated: a reply that died
@@ -413,7 +374,6 @@ async def stream_llm_call(
         truncated=truncated,
         max_tokens=sent_max_tokens,
         reasoning_ms=reasoning_ms,
-        call_record=record,
     )
 
 

@@ -14,21 +14,12 @@ the turn before giving up, in three bounded modes:
            it continues into the answer.
   NUDGE    post-tool empty — the model ran a tool then returned nothing. Inject a
            short user nudge so it processes the tool result.
-  RETRY    plain empty — re-request with less reasoning asked for than the
-           call that came back empty (:func:`lower_reasoning_effort`), and less
-           on the wire rather than only in the label. Re-sent as-is it was the
-           same bytes, so three retries were three guaranteed repeats of one
-           failure.
+  RETRY    plain empty — re-request as-is.
 
 A provider that refuses a trailing assistant message (its
 ``supports_assistant_prefill`` answers False: Anthropic with thinking on) never
 gets PREFILL. The same thinking-only turn takes NUDGE after a tool, else RETRY,
 so the request handed back never ends on an assistant message.
-
-Spending every budget without a word coming back is FAIL, and the loop ends the
-turn as an error. It is not a fourth mode -- there is nothing left to try -- it
-is the answer to the question the caller asks next, which is whether this turn
-produced anything.
 
 This is distinct from Sentinel's NudgeInjector / NudgePolicy, which inject
 *proactive suggestions* onto an outbound reply; this module instead recovers an
@@ -38,7 +29,6 @@ empty turn before it is ever sent.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -58,103 +48,19 @@ _THINK_BLOCK_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: Reasoning efforts this repo sends, strongest first. The set the Anthropic
-#: transport can map a thinking budget for, and the set OpenRouter accepts in
-#: its native reasoning object, so a rung taken from here is a value every
-#: backend the loop talks to already understands.
-REASONING_EFFORT_LADDER: tuple[str, ...] = ("max", "xhigh", "high", "medium", "low", "minimal")
-
-
-def lower_reasoning_effort(
-    current: str | None,
-    wire_keys: Callable[[str | None], object] | None = None,
-) -> str | None:
-    """One rung less reasoning than ``current``, or None when there is none left.
-
-    The plain empty retry's way of asking a different question. An empty body
-    with reasoning behind it is a call whose thinking spent the output ceiling
-    before the answer began -- measured, five in a row at exactly the ceiling --
-    so the request that has to change is the one deciding how much of that
-    ceiling thinking may take.
-
-    ``None`` in means the turn named no effort and the backend applied its own,
-    which is the case the log showed: not a low request, an unstated one. It
-    descends to the lowest rung this repo documents in config rather than to the
-    floor, so the first retry is a stated request for little thinking and the
-    next one can still differ from it.
-
-    An effort this ladder does not carry returns None: a value a caller invented
-    is not one we can reason about a rung below.
-
-    ``wire_keys`` is the provider's answer to "what would a request for this
-    effort carry" (``LLMProvider.reasoning_wire_keys``), and a rung whose answer
-    equals ``current``'s is skipped rather than sent: a request that has not
-    changed gets the answer that has not changed. It is a rung the label hides
-    -- on the Anthropic Messages wire ``minimal`` and ``low`` both serialize to
-    ``effort: low``, so descending by label alone bought a second retry that was
-    the first failure again at full price. Skipping is not descending twice:
-    when every rung below collapses onto this one there is nothing left to
-    change and this returns None, which the caller reads as the same dead end as
-    a spent budget. Without ``wire_keys`` the labels stand on their own, which is
-    right for every wire that sends the effort as the caller named it.
-    """
-    candidate = _next_rung(current)
-    if candidate is None or wire_keys is None:
-        return candidate
-    here = wire_keys(current)
-    while candidate is not None and wire_keys(candidate) == here:
-        candidate = _next_rung(candidate)
-    return candidate
-
-
-def _next_rung(current: str | None) -> str | None:
-    """The next label down, before any question about what it sends."""
-    if current is None:
-        return "low"
-    try:
-        index = REASONING_EFFORT_LADDER.index(current.strip().lower())
-    except (AttributeError, ValueError):
-        return None
-    if index + 1 >= len(REASONING_EFFORT_LADDER):
-        return None
-    return REASONING_EFFORT_LADDER[index + 1]
-
-
 POST_TOOL_NUDGE = (
     "You executed tool calls but returned an empty response. Use the tool "
     "results above to continue the task, or give your final answer now."
-)
-
-# A turn that ended empty at the output ceiling: no visible text, no tool call,
-# nothing kept. The effort descent above changes what the next request asks
-# *for*; this is the only thing that tells the model what happened, and the only
-# place a payload too large to finish is named -- no rung of the ladder can
-# shrink a write. `Tool.truncation_hint` says the same thing better but rides a
-# refused tool call, and a turn cut before any call produced none.
-#
-# Every sentence here is held to what the trigger proves, which is only that an
-# empty turn hit the ceiling. It does not say the reasoning spent the budget:
-# true for a reasoning model and false for one whose answer simply ran long, and
-# the trigger cannot tell them apart. It does not name a tool call as the owed
-# reply either -- a plain question arrives here too. Both were review findings,
-# in that order; a third would be the same mistake again.
-OUTPUT_LIMIT_NUDGE = (
-    "Your previous turn was cut off at the output token limit before it produced "
-    "any reply or tool call, so nothing from it was kept. Keep this turn short: "
-    "answer briefly, or make the tool call the task needs. If a payload you were "
-    "writing is too large to finish in one call, send it across several smaller "
-    "calls instead of one."
 )
 
 
 class RecoveryAction(Enum):
     """What the loop should do about an empty assistant response."""
 
-    COMPLETE = auto()  # visible text present, or recovery off → finish the turn
+    COMPLETE = auto()  # visible text present, or budgets spent → finish the turn
     PREFILL = auto()  # thinking-only → re-feed reasoning, re-request
     NUDGE = auto()  # post-tool empty → inject (empty) + user nudge, re-request
     RETRY = auto()  # plain empty → re-request as-is
-    FAIL = auto()  # budgets spent with nothing to show → end the turn as an error
 
 
 @dataclass(frozen=True)
@@ -272,17 +178,6 @@ def classify_empty_response(
     Ordering puts PREFILL before NUDGE so a thinking-only response is continued
     via prefill rather than spending the post-tool nudge on it; the
     ``not thinking`` guard on NUDGE keeps them mutually exclusive.
-
-    Spending the budgets without ever getting a word back returns FAIL, not
-    COMPLETE. The two used to be the same answer, which is how a measured deck
-    run reported ``end_turn`` for a turn that never produced a token: five calls
-    of about 16.8 MB each came back HTTP 200 with empty content and usage all
-    zeros, the ladder ran itself out, and the turn was filed as a completion
-    holding a canned line. Nothing downstream could then tell "the model
-    finished" from "the model never answered". COMPLETE keeps the two cases that
-    really are ends: a response with text in it, and a turn whose recovery is
-    switched off -- where no budget was spent and there is nothing to have
-    exhausted.
     """
     if visible or not limits.enabled:
         return RecoveryAction.COMPLETE
@@ -301,7 +196,7 @@ def classify_empty_response(
             return RecoveryAction.NUDGE
         if empty_retries < limits.empty_content_max_retries:
             return RecoveryAction.RETRY
-        return RecoveryAction.FAIL
+        return RecoveryAction.COMPLETE
 
     # thinking-only prefill — the model reasoned but produced no body.
     if thinking and prefill_retries < limits.thinking_prefill_max_retries:
@@ -319,7 +214,7 @@ def classify_empty_response(
     if empty_retries < limits.empty_content_max_retries and (not thinking or prefill_exhausted):
         return RecoveryAction.RETRY
 
-    return RecoveryAction.FAIL
+    return RecoveryAction.COMPLETE
 
 
 # A continuation after reasoning cut at the output ceiling picks up mid-thought:

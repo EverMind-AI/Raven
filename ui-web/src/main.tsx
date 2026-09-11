@@ -362,6 +362,8 @@ window.RavenIslands = {
   },
   settings: {
     open: settings.open,
+    openModels: settings.openModels,
+    openProviderModels: settings.openProviderModels,
     redraw: settings.redraw,
   },
   onboard: {

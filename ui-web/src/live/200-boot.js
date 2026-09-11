@@ -62,21 +62,18 @@ DS.onboard = {
     const back = RavenIslands.view.landing(sessionRows().map((s) => s.id));
     if (back) await openLiveSession(sess(back));
     else startDraft();
-    /* First run: the same gate the TUI boots through. setup.status decides;
-       the flow itself drives model.options / model.save_key / config.set --
-       one server-side setup logic, two faces. Not awaited: the overlay
-       resolves on its own while the rest of boot continues underneath.
-       ?onboard=1 forces the flow for a design pass on a configured machine.
-       Errors leave the gate open (v0.1 fallback, same as the TUI). */
+    /* Remember whether task actions need to send the reader to Models. The
+       page itself stays available on first run; ?onboard=1 retains the
+       standalone onboarding flow for an explicit design or support pass. */
     try {
       const setup = await rpc.call('setup.status', {});
+      providerConfiguredLive = setup.provider_configured !== false;
       /* ?onboard=demo asked for the canned flow, which the demo shell has
          already put on screen. Both write into #onb, so opening this one would
          replace it -- and the reader who asked for the version that writes
          nothing would get the version that writes. */
       const cannedInstead = /[?&]onboard=demo/.test(location.search);
-      if (!cannedInstead && (setup.provider_configured === false
-          || /[?&]onboard=1/.test(location.search))) {
+      if (!cannedInstead && /[?&]onboard=1/.test(location.search)) {
         showOnboard();
       }
     } catch (e) {

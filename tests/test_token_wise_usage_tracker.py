@@ -273,22 +273,3 @@ async def test_buffered_delegated_usage_keeps_each_sessions_owner_and_destinatio
         assert rows[0]["session_key"] == "tool-" + name
         assert "_telemetry_dir" not in rows[0]
     assert not (tmp_path / "local").exists()
-
-
-async def test_the_row_carries_the_reasoning_count_and_why_the_call_ended(tmp_path: Path):
-    """The row had a reasoning_tokens column that nothing ever filled, so every
-    call read as "did not think"; and no field at all for how the call ended."""
-    tracker = UsageTracker(telemetry_dir=tmp_path)
-    await tracker.after_llm_call(
-        {"content": "", "finish_reason": "tool_calls", "usage": {}},
-        _snap(input_tokens=256, output_tokens=417, reasoning_tokens=235),
-    )
-    await tracker.after_llm_call({}, _snap(input_tokens=10))
-    tracker.close()
-
-    rows = [
-        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
-    ]
-    assert [row["reasoning_tokens"] for row in rows] == [235, 0]
-    assert [row["finish_reason"] for row in rows] == ["tool_calls", None]
-    assert tracker.snapshot("sess1").reasoning_tokens == 235

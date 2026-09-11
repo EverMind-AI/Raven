@@ -27,7 +27,7 @@ task needs deeper investigation.
 
 > Raven is pre-alpha. Interfaces and configuration may change quickly.
 
-## Benchmarks
+## 📊 Benchmarks
 
 | Benchmark | Raven Result | Comparison |
 | --- | --- | --- |
@@ -39,9 +39,9 @@ Results describe the published test configurations; model, task set, and evaluat
 
 https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
-## Quick Start
+## 🚀 Quick Start
 
-### Install
+### 📦 Install
 
 Linux, macOS, or WSL2:
 
@@ -67,7 +67,7 @@ checkout reads the tree in place. Setup asks about each product and registers
 the ones you take up, on the model it is tuned for or on this raven's LLM.
 See [`agents/README.md`](agents/README.md).
 
-### Onboard and run
+### 🧭 Onboard and run
 
 ```bash
 raven
@@ -81,7 +81,7 @@ The bilingual onboarding wizard configures seven areas without requiring manual 
 2. Sandbox or execution location
 3. Chat channels
 4. EverOS long-term memory
-5. Web access (pick a search vendor and a page reader, give each its key; the search key is checked with one real query)
+5. Web access (pick a search vendor and a page reader, give each its key)
 6. Sub-agents shipped in this checkout
 7. Cold-start import from other AI tools
 
@@ -95,7 +95,7 @@ Provider setup includes an in-step connectivity check. Optional steps can be ski
 raven doctor
 ```
 
-### Upgrade
+### ⬆️ Upgrade
 
 ```bash
 raven upgrade --check
@@ -104,7 +104,7 @@ raven upgrade
 
 Upgrades preserve configuration, sessions, and memory. Raven does not update automatically.
 
-## Deep Research
+## 🔎 Deep Research
 
 Deep Research gives Raven a dedicated path for open-ended questions that require broad web search, source reading, analysis, and multi-source cross-checking. It uses [MiroThinker](https://miromind.ai/) and returns a self-contained answer with inline citations and references.
 
@@ -125,7 +125,7 @@ Delivery adapts to where Raven is running:
 
 Use regular search for a single fact or URL. Use Deep Research for comparisons, landscape reviews, technical investigations, and questions where source agreement matters.
 
-## Tracing
+## 🔬 Tracing
 
 Tracing makes Raven's reasoning path inspectable without sending trace data to a hosted service. Open the local dashboard with:
 
@@ -146,7 +146,7 @@ Tracing is enabled by default and is designed to never interrupt Raven's control
 
 The schema follows a small, versioned semantic contract. See the [Tracing Standard API](docs/TRACING_STANDARD_API.md) for span names, attributes, artifact behavior, and extension rules.
 
-## Core Systems
+## 🧩 Core Systems
 
 | System | What it adds |
 | --- | --- |
@@ -164,7 +164,7 @@ The schema follows a small, versioned semantic contract. See the [Tracing Standa
 
 </div>
 
-## Providers and Gateways
+## 🔌 Providers and Gateways
 
 Raven supports API-key, OAuth, local, and OpenAI-compatible providers. The onboarding catalog includes OpenRouter, OpenAI, Anthropic, Gemini, MiniMax, DeepSeek, Z.ai, DashScope, Moonshot, VolcEngine, SiliconFlow, Groq, AiHubMix, Azure OpenAI, GitHub Copilot OAuth, OpenAI Codex OAuth, Ollama, and hosted vLLM.
 
@@ -176,7 +176,7 @@ raven channels enable <adapter>
 raven gateway
 ```
 
-## Command Reference
+## 📋 Command Reference
 
 | Command | Purpose |
 | --- | --- |
@@ -197,7 +197,100 @@ raven gateway
 
 Run `raven --help` or `raven <command> --help` for the complete CLI surface.
 
-## Documentation
+## 🏠 Self-Hosting
+
+Raven can run directly from a checkout or as a single Docker Compose service. The
+Compose deployment serves the built page through nginx, keeps the Raven engine
+and its child services in one container, and stores durable state in a named
+volume.
+
+### 📝 Prerequisites
+
+For a Docker deployment, install Docker Engine and Docker Compose v2. For a
+source deployment, install Python 3.12, `uv`, Node.js, and npm. A source
+checkout also needs the repository dependencies installed before starting the
+engine.
+
+### 🚀 Start the server from source
+
+From the repository root:
+
+```bash
+make install-deps
+make build-ui
+uv run raven web
+```
+
+`raven web` opens the local page and leaves the engine running after the
+terminal exits. It defaults to `http://127.0.0.1:18792`. Use
+`uv run raven web --foreground` when debugging, or `uv run raven web --stop` to
+stop the resident engine. The first run can start without a configured model;
+add one from **Settings > Models** or run `uv run raven onboard`.
+
+To run only the engine without the browser launcher, use
+`uv run raven gateway`.
+
+### 🐳 Start with Docker Compose
+
+The repository Compose setup builds the page and Python environment as part of
+the image, so no separate host-side build is required:
+
+```bash
+cd docker
+docker compose up --build
+```
+
+Open <http://127.0.0.1:18793>. The Compose container runs the full `gateway`
+engine so providers added from **Settings > Models** are available on the next
+turn without restarting.
+
+For the detailed container layout, sign-in flow, provider setup, and operational
+notes, see [`docker/README.md`](docker/README.md).
+
+### ⚙️ Configuration
+
+Docker reads committed defaults from [`docker/.env`](docker/.env), then loads
+the optional, git-ignored `docker/.env.local` over them.
+Put credentials and deployment-specific overrides in `.env.local`, not in the
+committed file. Common settings include:
+
+| Variable | Purpose |
+| --- | --- |
+| `RAVEN_WEB_PORT` | Host port published by Compose (default `18793`) |
+| `RAVEN_AUTO_LOGIN` | Automatically sign in local browsers; set to `0` for remote exposure |
+| `RAVEN_EXTRAS` | Optional image extras such as `channels`, `tools`, `sandbox`, `browser`, or `eval` |
+| `RAVEN_PLUGINS` | Bundled plugins to install in the image, including `everos-memory` |
+| `RAVEN_PROVIDER` | Optional provider seeded into `config.json` at container startup |
+| `RAVEN_API_KEY` | Optional provider key; local providers may leave it empty |
+| `RAVEN_API_BASE` | Optional custom endpoint, sufficient by itself for keyless local providers |
+
+Raven stores its configuration, sessions, workspace, logs, and memory under
+`RAVEN_HOME`. The Compose image maps this to `/data` through the `raven-data`
+volume. Keep that volume for upgrades and restarts; `docker compose down -v`
+deletes it and its data.
+
+### 🛠️ Build a Docker image
+
+Build the image using the Makefile target:
+
+```bash
+make docker-build
+```
+
+The default tag is `raven:local`. To select a different tag or optional
+dependency set:
+
+```bash
+make docker-build DOCKER_IMAGE=raven:dev
+docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
+```
+
+Run the locally built image through Compose by exporting
+`RAVEN_IMAGE=raven:local` (or prefixing the command with that assignment) and
+running `docker compose up` from `docker/`. The Makefile shortcut is
+`RAVEN_IMAGE=raven:local make docker-up`. Stop the stack with `make docker-down`.
+
+## 📚 Documentation
 
 - [Documentation index](docs/README.md)
 - [Developer workflow](docs/dev.md)
@@ -214,7 +307,7 @@ Run `raven --help` or `raven <command> --help` for the complete CLI surface.
 
 </div>
 
-## Repo layout
+## 🗂️ Repo layout
 
 The top-level packages under `raven/`, in one line each. This list is the
 canonical set of commit scopes (see `AGENTS.md`); a change living wholly in a
@@ -266,7 +359,7 @@ import which) are recorded under **Layer Seats** in `CONTEXT.md`, routed from
 | `updates` | The install's own lifecycle: release lookup, upgrade plan and handoff, update nudge |
 | `utils` | Shared helpers, including the atomic write primitive |
 
-## Architecture
+## 🏗️ Architecture
 
 ```text
 CLI / TUI / Messaging Gateways
@@ -332,7 +425,7 @@ schemas/                # Editor-facing JSON Schemas exported from the pydantic 
 
 </div>
 
-## EverMind Ecosystem
+## 🌐 EverMind Ecosystem
 
 Raven is part of the [EverMind](https://evermind.ai/) open-source ecosystem. Explore [EverOS](https://github.com/EverMind-AI/EverOS), [EverAlgo](https://github.com/EverMind-AI/EverAlgo), [HyperMem](https://github.com/EverMind-AI/HyperMem), [EvoAgentBench](https://github.com/EverMind-AI/EvoAgentBench), [EverMemBench](https://github.com/EverMind-AI/EverMemBench), and [EverMe](https://github.com/EverMind-AI/EverMe).
 
@@ -343,10 +436,10 @@ Raven is part of the [EverMind](https://evermind.ai/) open-source ecosystem. Exp
 
 </div>
 
-## Contributing
+## 🤝 Contributing
 
 Issues and pull requests are welcome. Start with the [developer workflow](docs/dev.md), follow [AGENTS.md](AGENTS.md) for repository rules, and use [GitHub Discussions](https://github.com/EverMind-AI/Raven/discussions) for design conversations.
 
-## License
+## ⚖️ License
 
 [Apache License 2.0](LICENSE)

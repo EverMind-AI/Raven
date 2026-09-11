@@ -60,7 +60,7 @@ def _disabled_in(cfg: Path) -> list[str]:
 def test_playbook_help_lists_all_subcommands():
     r = runner.invoke(app, ["playbook", "--help"])
     assert r.exit_code == 0
-    for sub in ("list", "get", "validate", "create", "enable", "disable", "run", "delete", "secret", "auth"):
+    for sub in ("list", "get", "validate", "create", "enable", "disable", "run", "delete"):
         assert sub in r.stdout, f"missing subcommand in --help: {sub}"
 
 
@@ -456,7 +456,7 @@ def test_run_reports_a_server_waiting_on_authorization_and_does_not_wait_for_it(
 
     captured: dict = {}
 
-    async def fake_provider_for(server, cfg, notify=None, interactive=False, can_park=True, scope=None):
+    async def fake_provider_for(server, cfg, notify=None, interactive=False, can_park=True):
         captured["notify"] = notify
         return None
 
@@ -479,150 +479,3 @@ def test_run_reports_a_server_waiting_on_authorization_and_does_not_wait_for_it(
     # CliRunner folds stderr into one stream, which is where err_console writes.
     assert "deepwiki" in r.output and "auth_required" in r.output
     assert "raven plugin auth deepwiki" in r.output
-
-
-# ── secret / auth: the machine-held half of a carried server's credential ────
-
-
-def _write_carried_md(root: Path, name: str) -> None:
-    target = root / name
-    target.mkdir(parents=True)
-    (target / "playbook.md").write_text(
-        f"---\nname: {name}\ndescription: carries a tokened server\n---\n\nbody\n\n"
-        "```yaml playbook-spec\n"
-        "version: 1\nmode: dag\nconfirm: false\n"
-        "taskSummary: reach the carried server\n"
-        f"triggers:\n  keywords: [{name}]\n"
-        "params:\n  PROBE_TOKEN:\n    type: secret\n    required: true\n    description: the bearer\n"
-        "  topic:\n    type: string\n    description: plain\n"
-        "mcpServers:\n  tokened:\n    type: streamableHttp\n    url: http://127.0.0.1:8932/mcp\n"
-        "    headers:\n      Authorization: Bearer {{ params.PROBE_TOKEN }}\n"
-        "  sentry:\n    type: streamableHttp\n    url: https://mcp.sentry.dev/mcp\n    auth: oauth\n"
-        "nodes:\n- id: a\n  subagent: Raven\n  nodeSummary: s\n  promptTemplate: p\n  mcps: [tokened]\n"
-        "```\n",
-        encoding="utf-8",
-    )
-
-
-@pytest.fixture
-def carried(library, tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
-    _write_carried_md(library["user"], "carried")
-    return library
-
-
-def test_secret_set_with_value_stores_it_under_the_playbook(carried):
-    from raven.playbook.credentials import stored_secret_param_names
-
-    r = runner.invoke(app, ["playbook", "secret", "set", "carried", "PROBE_TOKEN", "--value", "s3cr3t"])
-    assert r.exit_code == 0, r.output
-    assert "stored PROBE_TOKEN" in r.output
-    assert stored_secret_param_names("carried") == {"PROBE_TOKEN"}
-
-
-def test_secret_set_prompts_without_echo_when_no_value_is_given(carried):
-    from raven.playbook.credentials import stored_secret_param_names
-
-    r = runner.invoke(app, ["playbook", "secret", "set", "carried", "PROBE_TOKEN"], input="typed\n")
-    assert r.exit_code == 0, r.output
-    assert "typed" not in r.output.replace("PROBE_TOKEN", "")
-    assert stored_secret_param_names("carried") == {"PROBE_TOKEN"}
-
-
-def test_secret_set_refuses_a_param_that_is_not_secret(carried):
-    r = runner.invoke(app, ["playbook", "secret", "set", "carried", "topic", "--value", "x"])
-    assert r.exit_code == 1
-    assert "no secret param named topic" in r.output
-
-
-def test_secret_clear_forgets_it(carried):
-    from raven.playbook.credentials import stored_secret_param_names
-
-    runner.invoke(app, ["playbook", "secret", "set", "carried", "PROBE_TOKEN", "--value", "v"])
-    r = runner.invoke(app, ["playbook", "secret", "clear", "carried", "PROBE_TOKEN"])
-    assert r.exit_code == 0, r.output
-    assert stored_secret_param_names("carried") == frozenset()
-
-
-def test_auth_refuses_a_server_the_playbook_does_not_carry_or_that_is_not_oauth(carried):
-    r = runner.invoke(app, ["playbook", "auth", "carried", "ghost"])
-    assert r.exit_code == 1
-    assert "carries no MCP server named ghost" in r.output
-    r = runner.invoke(app, ["playbook", "auth", "carried", "tokened"])
-    assert r.exit_code == 1
-    assert "only an oauth server" in r.output
-
-
-def test_auth_drives_a_manager_scoped_to_the_playbook(carried, monkeypatch):
-    from raven.mcp import manager as manager_mod
-
-    built = []
-
-    class FakeManager:
-        def __init__(self, registry, **kwargs):
-            built.append(kwargs)
-
-        async def connect(self, name, cfg, **kwargs):
-            built[0]["connect_kwargs"] = kwargs
-            return {"name": name, "state": "connected", "tool_count": 9}
-
-        async def aclose(self):
-            pass
-
-    monkeypatch.setattr(manager_mod, "MCPConnectionManager", FakeManager)
-    r = runner.invoke(app, ["playbook", "auth", "carried", "sentry"])
-    assert r.exit_code == 0, r.output
-    assert "authorized" in r.output and "9 tools" in r.output
-    assert built[0]["credential_scope"] == "playbooks/carried"
-    # A person ran this command and is at the terminal: the flow opens their
-    # browser instead of parking on a URL nobody is shown.
-    assert built[0]["connect_kwargs"].get("interactive") is True
-
-
-def test_run_reads_a_stored_secret_and_scopes_the_carried_servers_credentials(library, monkeypatch, tmp_path):
-    """The pre-flight dials before the executor runs, so what the executor would
-    merge later is too late: the stored secret has to be in the definition the
-    pre-flight renders, and the carried server has to dial under the playbook's
-    credential scope while the host's server keeps the host's."""
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
-    from raven.mcp import manager as manager_mod
-    from raven.playbook.credentials import set_secret_param
-
-    _write_dag_md(library["user"], "audit")
-    library["config"].write_text(
-        json.dumps(
-            {
-                "playbooks": {"dir": str(library["user"])},
-                "tools": {"mcpServers": {"deepwiki": {"url": "https://deepwiki.test/mcp"}}},
-            }
-        ),
-        encoding="utf-8",
-    )
-    set_secret_param("audit", "PG_PASSWORD", "from-the-store")
-    monkeypatch.setattr("raven.providers.factory.make_provider", lambda config: _FakeProvider())
-    monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
-    seen = _capture_source(monkeypatch)
-
-    scopes: dict = {}
-    real = manager_mod.MCPConnectionManager
-
-    class Recording(real):
-        def __init__(self, *args, **kwargs):
-            scopes["fn"] = kwargs.get("credential_scope")
-            super().__init__(*args, **kwargs)
-
-    monkeypatch.setattr(manager_mod, "MCPConnectionManager", Recording)
-
-    async def connect(name, cfg, registry, stack, executor=None, http_auth=None):
-        return _connected([])
-
-    with patch("raven.mcp.manager.connect_mcp_server", new=connect):
-        r = runner.invoke(app, ["playbook", "run", "audit"])
-
-    assert r.exit_code == 0, r.stdout
-    assert seen["source"].server("local-pg").config.env == {"PGPASSWORD": "from-the-store"}
-    assert seen["source"].server("local-pg").scope == "playbooks/audit"
-    assert seen["source"].server("deepwiki").scope is None
-    assert "from-the-store" not in r.stdout
-    assert scopes["fn"]("local-pg") == "playbooks/audit"
-    assert scopes["fn"]("deepwiki") is None

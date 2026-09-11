@@ -91,32 +91,23 @@ def _raven_state_roots() -> tuple[Path, ...]:
     return tuple(dict.fromkeys(roots))
 
 
-def in_state_dir(resolved: Path, workspace: str | Path, *also_written: str | Path) -> bool:
+def in_state_dir(resolved: Path, workspace: str | Path) -> bool:
     """Whether ``resolved`` is inside raven's state directory and not exempt.
 
     One fence, not one per surface. The viewer, ``fs.reveal`` and the ``fs.*``
     panel all have to answer alike for a given file: two of them refusing while
     the one that renders bytes allowed it is how ``serve.json`` reached the page.
 
-    ``workspace`` is agent home, not a session's working directory. The two
-    exemptions are derived from it, and both exist for one reason: they are
-    where the agent itself writes. The workspace lives *at* ``~/.raven/workspace``
-    by default, and a turn's working directory at ``~/.raven/tmp/<channel>`` -- a
-    sibling of the workspace since agent home and the working directory were
-    split apart. Exempting only the first left the second denied, which is every
-    artifact a chat has produced since that split: the page drew the delivery and
-    then refused to open it. Anchoring on the working directory instead broke
-    the other way: the derived exemptions then covered ``~/.raven/tmp/<channel>``
-    and a sibling that does not exist, and every file the DAG runner writes under
-    ``~/.raven/workspace/sessions/`` -- a sub-agent's report among them -- read
-    as state. The state directory's secrets (``config.json``, ``oauth/``,
-    ``serve.json``) are siblings of both, never inside either.
-
-    ``also_written`` adds a session's pinned working directory when a caller has
-    one, so a session bound to a directory under the state root keeps its files.
-    Every exemption, derived or added, is held to the same direction check: only
-    a subtree the state root contains earns one. A directory that IS the state
-    root, or sits above it, would otherwise ride the exemption and expose
+    Two subtrees are exempt, and both for one reason: they are where the agent
+    itself writes. The workspace lives *at* ``~/.raven/workspace`` by default,
+    and a turn's working directory at ``~/.raven/tmp/<channel>`` -- a sibling of
+    the workspace since agent home and the working directory were split apart.
+    Exempting only the first left the second denied, which is every artifact a
+    chat has produced since that split: the page drew the delivery and then
+    refused to open it. The state directory's secrets (``config.json``,
+    ``oauth/``, ``serve.json``) are siblings of both, never inside either. Only
+    the nested-in-home layout earns an exemption: a home that itself sits inside
+    one of these, or IS one of them, would otherwise ride it and expose
     ``serve.json`` through it.
 
     Two roots rather than one, because two are in use and they do not always
@@ -126,7 +117,7 @@ def in_state_dir(resolved: Path, workspace: str | Path, *also_written: str | Pat
     tokens as ordinary paths.
     """
     ws = Path(workspace).resolve()
-    written = (ws, default_channel_root(ws).resolve(), *(Path(p).resolve() for p in also_written))
+    written = (ws, default_channel_root(ws).resolve())
     for home in _raven_state_roots():
         if resolved != home and home not in resolved.parents:
             continue
@@ -146,13 +137,6 @@ def resolve_readable(raw: str, *, workspace: Path | None = None) -> Path:
     page would hand a cookie-holder the shared secret the cookie is not supposed
     to be worth, collapsing the split between the two.
 
-    ``workspace`` is the session's working directory when the caller has one:
-    it anchors relative paths and the ``restrict_to_workspace`` fence. The
-    state-directory fence is anchored on agent home regardless, because its
-    exemptions are derived from where the agent writes, and a working directory
-    handed to it in that role turned every sub-agent report under
-    ``~/.raven/workspace/sessions/`` into a refusal.
-
     Raises:
         ValueError: the request names nothing.
         PermissionError: the path resolves outside the allowed directory, or
@@ -166,8 +150,7 @@ def resolve_readable(raw: str, *, workspace: Path | None = None) -> Path:
     # `workspace_path`, not the raw config string: one derivation of where the
     # workspace is, so a fence cannot end up pointing somewhere the agent never
     # writes.
-    home = cfg.workspace_path
-    workspace = workspace or home
+    workspace = workspace or cfg.workspace_path
     # A tuple of roots, which is what the fence takes since the agent's working
     # directory was split out of agent home. A single path silently became a
     # TypeError *inside* the check, so the viewer answered 500 where it meant 403
@@ -176,7 +159,7 @@ def resolve_readable(raw: str, *, workspace: Path | None = None) -> Path:
     resolved = resolve_path(raw.strip(), workspace, allowed)
     # After resolve_path, so a symlink pointing into the state dir is caught by
     # where it lands rather than by how it was spelled.
-    if in_state_dir(resolved, home, workspace):
+    if in_state_dir(resolved, workspace):
         raise PermissionError(f"{resolved} is inside raven's state directory")
     if not resolved.exists():
         raise FileNotFoundError(str(resolved))

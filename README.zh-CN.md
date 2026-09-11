@@ -30,9 +30,9 @@ Agent 可以在需要深度调查的任务中使用 MiroThinker-backed、多来�
 
 > Raven 目前处于 pre-alpha 阶段，接口和配置可能快速变化。
 
-## 快速开始
+## 🚀 快速开始
 
-### 安装
+### 📦 安装
 
 Linux、macOS 或 WSL2：
 
@@ -52,7 +52,7 @@ Windows PowerShell 5.1 可能拒绝重定向，请改用直连安装地址：
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
 ```
 
-### 完成引导并运行
+### 🧭 完成引导并运行
 
 ```bash
 raven
@@ -75,7 +75,7 @@ Provider 配置包含向导内连通性检查。可选步骤可以跳过，之�
 raven doctor
 ```
 
-### 升级
+### ⬆️ 升级
 
 ```bash
 raven upgrade --check
@@ -84,16 +84,101 @@ raven upgrade
 
 升级会保留配置、sessions 和 memory。Raven 不会自动更新。
 
-## 文档
+## 🏠 自托管
 
-本页只保留简介与快速开始。规范性内容——仓库布局、命令参考、贡献规则——以英文
+Raven 可以直接从源码仓库运行，也可以作为单个 Docker Compose 服务运行。
+Compose 部署通过 nginx 提供页面，在同一个容器中运行 Raven 引擎及其子服务，
+并将持久化数据保存到命名卷中。
+
+### 📝 前置条件
+
+使用 Docker 部署时，请安装 Docker Engine 和 Docker Compose v2。使用源码部署时，
+请安装 Python 3.12、`uv`、Node.js 和 npm，并在启动引擎前安装仓库依赖。
+
+### 🚀 从源码启动服务
+
+在仓库根目录运行：
+
+```bash
+make install-deps
+make build-ui
+uv run raven web
+```
+
+`raven web` 会打开本地页面，并在终端退出后保持引擎运行。默认地址是
+`http://127.0.0.1:18792`。调试时可以使用 `uv run raven web --foreground`，
+使用 `uv run raven web --stop` 停止常驻引擎。首次启动时可以暂时不配置模型，
+在 **Settings > Models** 中添加，或运行 `uv run raven onboard`。
+
+如果只需要启动引擎而不打开浏览器页面，请使用 `uv run raven gateway`。
+
+### 🐳 使用 Docker Compose 启动
+
+仓库中的 Compose 配置会在构建镜像时完成页面和 Python 环境的构建，因此不需要
+在宿主机上单独构建：
+
+```bash
+cd docker
+docker compose up --build
+```
+
+然后打开 <http://127.0.0.1:18793>。Compose 容器始终运行完整的 `gateway`
+引擎，因此在 **Settings > Models** 中添加 Provider 后，无需重启即可在下一轮
+对话中使用。
+
+容器布局、登录流程、Provider 配置和运维说明请参阅
+[`docker/README.md`](docker/README.md)。
+
+### ⚙️ 配置
+
+Docker 使用 [`docker/.env`](docker/.env) 中的已提交默认值，然后加载可选的、
+被 git 忽略的 `docker/.env.local` 覆盖这些默认值。请将凭据和部署相关的覆盖项
+写入 `.env.local`，不要写入已提交的文件。常用配置包括：
+
+| 变量 | 用途 |
+| --- | --- |
+| `RAVEN_WEB_PORT` | Compose 对外发布的页面端口，默认为 `18793` |
+| `RAVEN_AUTO_LOGIN` | 是否自动为本地浏览器登录；远程暴露时设为 `0` |
+| `RAVEN_EXTRAS` | 可选镜像扩展，例如 `channels`、`tools`、`sandbox`、`browser` 或 `eval` |
+| `RAVEN_PLUGINS` | 要安装到镜像中的内置插件，例如 `everos-memory` |
+| `RAVEN_PROVIDER` | 可选 Provider，在容器启动时写入 `config.json` |
+| `RAVEN_API_KEY` | 可选 Provider 密钥；本地 Provider 可以留空 |
+| `RAVEN_API_BASE` | 可选自定义端点；无密钥的本地 Provider 只需设置此项 |
+
+Raven 会将配置、sessions、workspace、日志和 memory 保存在 `RAVEN_HOME` 下。
+Compose 镜像将其映射到 `raven-data` 卷中的 `/data`。升级或重启时请保留该卷；
+`docker compose down -v` 会删除卷及其中的数据。
+
+### 🛠️ 构建 Docker 镜像
+
+使用 Makefile 目标构建镜像：
+
+```bash
+make docker-build
+```
+
+默认标签是 `raven:local`。如需指定其他标签或可选依赖，可以运行：
+
+```bash
+make docker-build DOCKER_IMAGE=raven:dev
+docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
+```
+
+要通过 Compose 运行本地构建的镜像，请设置 `RAVEN_IMAGE=raven:local`（也可以在
+命令前直接设置该变量），然后在 `docker/` 目录运行 `docker compose up`。对应的
+Makefile 快捷方式是 `RAVEN_IMAGE=raven:local make docker-up`。使用
+`make docker-down` 停止服务。
+
+## 📚 文档
+
+本页保留简介、快速开始和自托管入口。规范性内容——仓库布局、命令参考、贡献规则——以英文
 [README.md](README.md) 与 [AGENTS.md](AGENTS.md) 为准，不再在此维护中文副本，
 以免两份文档漂移。完整文档见 `docs/` 目录，领域术语从 `CONTEXT-MAP.md` 入口查阅。
 
-## 参与贡献
+## 🤝 参与贡献
 
 欢迎提交 issues 和 pull requests。请先阅读[开发工作流](docs/dev.md)，按照 [AGENTS.md](AGENTS.md) 中的仓库规则进行协作，并在 [GitHub Discussions](https://github.com/EverMind-AI/Raven/discussions) 讨论设计方案。
 
-## 许可证
+## ⚖️ 许可证
 
 [Apache License 2.0](LICENSE)

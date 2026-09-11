@@ -48,7 +48,7 @@ from loguru import logger
 
 from oncall_flow import wakes, watched
 from oncall_flow.escalation import append_note, unanswered_question
-from oncall_flow.instrument import is_concluded, log_event
+from oncall_flow.instrument import log_event
 from oncall_flow.tools import base as tools_base
 from oncall_flow.window import campaign_for_window, task_fingerprint
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
@@ -79,47 +79,9 @@ _VERDICT_KEY = "oncall_watched"
 # at persist time (hook surface v3).
 _ACCOUNT_KEY = "oncall_turn"
 
-# The ACP layer's own observer stash and the one key of it that layer acts on
-# (raven/contracts/loop_hooks.py, ``metadata``): a turn that files this ended
-# with a wake armed, so the ``session/prompt`` that carried it is kept open --
-# the on-call agent sleeps, the prompt does not end -- until a later turn on
-# the session ends with no wake pending. Same literal the code-flow plugin
-# carries for the stash; nothing in raven/ knows this plugin exists.
-_ACP_META_OBSERVER = "acp_meta"
-_HOLD_TURN_META = "raven.holdTurn"
-
 
 def _account(ctx: AgentHookContext) -> dict[str, Any]:
     return ctx.metadata.setdefault(_ACCOUNT_KEY, {})
-
-
-def _hold_after_turn(session_key: str) -> dict[str, Any] | None:
-    """Whether this window's campaign has a wake pending once this turn ends.
-
-    The fork ended the turn on ``ops_check_later`` and let the wake run a later
-    turn on its own; over ACP that read as "finished" to the caller, who judged
-    the wait a failure (a DAG node spent every continuation on "still watching",
-    2026-09-08). The answer here is what the ACP layer holds the prompt open
-    on: the campaign this window claimed, not concluded, with one pending wake
-    -- read the same way the owner's answer pulls that wake forward. None when
-    there is nothing to wait for, or nothing can be read.
-    """
-    if not session_key:
-        return None
-    try:
-        home = tools_base.ops_home()
-        campaign = campaign_for_window(home, session_key)
-        if not campaign or is_concluded(home / campaign):
-            return None
-        job = wakes.pending_look(tools_base.granted_scheduler(), campaign)
-        if job is None:
-            return None
-        state = getattr(job, "state", None)
-        until = getattr(state, "next_run_at_ms", None) or getattr(getattr(job, "schedule", None), "at_ms", None)
-        return {"untilMs": int(until) if until else None, "why": f"waiting for campaign {campaign}'s next look"}
-    except Exception:  # noqa: BLE001 -- a wait that cannot be read is not thereby over; the caller sees an ended turn
-        logger.debug("oncall-flow: could not read the pending wake for {}", session_key, exc_info=True)
-        return None
 
 
 def _tool_payload(content: Any) -> str:
@@ -292,12 +254,6 @@ class TurnAccountingHook(AgentHook):
         acct = ctx.metadata.pop(_ACCOUNT_KEY, None)
         if acct:
             ctx.metadata.setdefault("observers", {})["oncall_flow"] = dict(acct)
-        hold = _hold_after_turn(ctx.session_key or "")
-        if hold is not None:
-            observers = ctx.metadata.setdefault("observers", {})
-            observers.setdefault(_ACP_META_OBSERVER, {})[_HOLD_TURN_META] = hold
-            if "oncall_flow" in observers:
-                observers["oncall_flow"]["held"] = True
         return HookDecision()
 
 

@@ -105,6 +105,15 @@ const HIDDEN_PROVIDERS = new Set(['hosted_vllm']);
 let providersLive = [];
 let defaultModelLive = '';
 let defaultProviderLive = '';
+let providerConfiguredLive = null;
+
+function openModelsForMissingProvider() {
+  const connected = providersLive.some((p) => p.on);
+  const knownMissing = providerConfiguredLive === false || providersLive.length > 0;
+  if (connected || !knownMissing) return false;
+  void RavenIslands.settings.openModels();
+  return true;
+}
 
 async function loadProviders(sid, gen) {
   // The model is per conversation, so ask for the visible one's -- model.options
@@ -454,6 +463,12 @@ DS.model = {
     await loadProviders();
   },
   openSettings: () => RavenIslands.settings.open(),
+  openProviderModels: (provider) => RavenIslands.settings.openProviderModels(provider),
 };
 
-$('#modelChip').onclick = () => openModelPicker(null, setModelLabel);
+DS.composer.beforeSend = openModelsForMissingProvider;
+
+$('#modelChip').onclick = () => {
+  if (openModelsForMissingProvider()) return;
+  openModelPicker(null, setModelLabel);
+};

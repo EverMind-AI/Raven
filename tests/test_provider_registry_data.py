@@ -124,6 +124,33 @@ def test_every_provider_key_in_the_data_is_spelled_the_way_a_lookup_asks_for_it(
     assert not offenders, f"keys no lookup can produce: {sorted(set(offenders))[:10]}"
 
 
+def test_a_shown_address_reaches_the_pane_and_nothing_else() -> None:
+    """The pane shows each vendor's address so the field it offers is not blank.
+    That is display data and must stay display data.
+
+    `default_api_base` is not the place for it: the catalogue probe pings that
+    one, `env_extras` interpolates it, and with `passes_default_api_base` the
+    router sends to it. Putting these six there sent Gemini's probe to
+    /v1/models instead of the /v1beta/models its catalogue shape asks for, and
+    started probing three vendors that publish no catalogue at all.
+    """
+    from raven.providers.registry import find_by_name
+
+    shown = {
+        "openai": "https://api.openai.com/v1",
+        "anthropic": "https://api.anthropic.com",
+        "gemini": "https://generativelanguage.googleapis.com",
+        "deepseek": "https://api.deepseek.com/beta",
+        "zai": "https://api.z.ai/api/paas/v4",
+        "groq": "https://api.groq.com/openai/v1",
+    }
+    for slug, address in shown.items():
+        spec = find_by_name(slug)
+        assert spec.display_api_base == address, slug
+        assert spec.default_api_base == "", f"{slug} would now be probed and interpolated at that address"
+        assert spec.usable_default_api_base == "", f"{slug} would now send its own base to the router"
+
+
 def test_a_hyphenated_vendor_still_reaches_its_rows() -> None:
     """The case that went wrong, named. nano-gpt is the one vendor in the file
     whose upstream name carries a hyphen, and it is reachable only because the

@@ -367,23 +367,10 @@ class PlaybookRuntime:
         """One playbook as the tool description renders it."""
         parts = [spec.description]
         if spec.params:
-            from raven.playbook.credentials import stored_secret_param_names
-
-            # Read once per playbook, not per param. A secret is never "required":
-            # a model told so asks the user to type it into the conversation, which
-            # is the one place it may not pass -- the stored one is filled in at
-            # load, the unset one is set on the playbook page.
-            stored = stored_secret_param_names(spec.name)
             rows = []
             for name, p in spec.params.items():
                 bits = [p.type]
-                if p.type == "secret":
-                    bits.append(
-                        "stored on this machine -- do not ask for it"
-                        if name in stored
-                        else "not set on this machine -- the user sets it on the playbook page, do not ask for it"
-                    )
-                elif p.required and p.default is None:
+                if p.required and p.default is None:
                     bits.append("required")
                 elif p.default is not None:
                     bits.append(f"default={p.default!r}")

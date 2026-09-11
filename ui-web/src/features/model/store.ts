@@ -87,7 +87,13 @@ export function open(anchor?: HTMLElement | null, after?: () => void, marked?: s
        connected with nothing added is a list to go and build. Saying "no
        account" to somebody whose keys all work sends them to fix what is not
        broken. */
-    toast(t(accounts.length ? 'gui.picker.no_models' : 'gui.picker.no_account'))
+    if (accounts.length) {
+      const provider = accounts[0]!
+      source().openProviderModels?.(provider.id)
+      toast(t('gui.picker.no_models_for', { name: provider.name }))
+    } else {
+      toast(t('gui.picker.no_account'))
+    }
     return
   }
   const host = anchor || document.getElementById('modelChip')

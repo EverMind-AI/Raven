@@ -261,48 +261,14 @@ def _credentials_dir() -> Path:
     return d
 
 
-def credentials_path(server: str, *, scope: str | None = None) -> Path:
-    """Where ``server``'s credential file lives.
-
-    ``scope`` moves the file under ``<credentials>/<scope>/mcp/`` instead of the
-    host's ``<credentials>/mcp/``. A playbook-carried server passes its playbook
-    scope so that a carried ``sentry`` and the host's ``sentry`` -- the same name,
-    possibly different services -- never share a token file.
-    """
-    from raven.utils.paths import safe_path_segment
-
-    # One rule for every read and write: the name is a filename, never a path.
-    # A playbook is distributed data, and ``../../mcp/host`` under a playbook
-    # scope would otherwise resolve to the host's own token file.
-    if not server or safe_path_segment(server) != server:
-        raise ValueError(f"MCP server name {server!r} is not a safe path segment")
-    if scope is None:
-        return _credentials_dir() / f"{server}.json"
-    from raven.config.paths import get_runtime_subdir
-
-    d = get_runtime_subdir("credentials") / scope / "mcp"
-    d.mkdir(mode=0o700, parents=True, exist_ok=True)
-    return d / f"{server}.json"
+def credentials_path(server: str) -> Path:
+    return _credentials_dir() / f"{server}.json"
 
 
-def has_stored_tokens(server: str, *, scope: str | None = None) -> bool:
-    """Whether a credential file for ``server`` holds an access token.
-
-    A file read, never a request: callers ask this on every dispatch, and whether
-    the token still works is the provider's business when it dials.
-    """
-    try:
-        data = json.loads(credentials_path(server, scope=scope).read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
-        return False
-    tokens = data.get("tokens") if isinstance(data, dict) else None
-    return bool(isinstance(tokens, dict) and tokens.get("access_token"))
-
-
-def delete_credentials(server: str, *, scope: str | None = None) -> None:
+def delete_credentials(server: str) -> None:
     from raven.utils.atomic_io import remove_with_lock
 
-    remove_with_lock(credentials_path(server, scope=scope))
+    remove_with_lock(credentials_path(server))
 
 
 class FileTokenStorage:
@@ -315,8 +281,8 @@ class FileTokenStorage:
     ``_drop_drifted_registration``.
     """
 
-    def __init__(self, server: str, redirect_uri: str, *, scope: str | None = None) -> None:
-        self._path = credentials_path(server, scope=scope)
+    def __init__(self, server: str, redirect_uri: str) -> None:
+        self._path = credentials_path(server)
         self._redirect_uri = redirect_uri
         self._preregistered: Any = None
 
@@ -1272,7 +1238,6 @@ async def provider_for(
     *,
     interactive: bool = False,
     can_park: bool = True,
-    scope: str | None = None,
 ):
     """Build the SDK's OAuth provider for one server (an ``httpx.Auth``).
 
@@ -1289,7 +1254,7 @@ async def provider_for(
 
     uri = redirect_uri() or await _ensure_callback_endpoint()
     flow = _Flow(server, notify, interactive=interactive, can_park=can_park)
-    storage = FileTokenStorage(server, uri, scope=scope)
+    storage = FileTokenStorage(server, uri)
     seed = _seed_for(server, cfg, uri, storage)
     kwargs: dict[str, Any] = {}
     cls: Any = _coordinated_provider_class(OAuthClientProvider)

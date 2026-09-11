@@ -555,7 +555,10 @@ DS.sessions.archive = async function (s) {
   }
 };
 
-$('#newBtn').onclick = () => { showPage(null); startDraft(); };
+$('#newBtn').onclick = () => {
+  if (openModelsForMissingProvider()) return;
+  showPage(null); startDraft();
+};
 
 /* Persist a manual rename made through the title editor. The editor is the
    rail island's, and this used to wrap its entry point to hang a blur listener

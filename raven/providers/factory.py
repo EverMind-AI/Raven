@@ -235,7 +235,6 @@ def make_provider(config: Config, model: str | None = None):
         reasoning_effort=defaults.reasoning_effort,
         timeout=defaults.llm_call_timeout,
         stream_idle_timeout=defaults.stream_idle_timeout,
-        first_byte_timeout=defaults.llm_first_byte_timeout,
     )
     return provider
 
@@ -263,7 +262,6 @@ def make_lazy_provider(config: Config):
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
             stream_idle_timeout=defaults.stream_idle_timeout,
-            first_byte_timeout=defaults.llm_first_byte_timeout,
         ),
         initial_endpoint_label=initial_endpoint_label,
     )
@@ -271,14 +269,17 @@ def make_lazy_provider(config: Config):
     return provider
 
 
-def make_resolving_provider(config: Config, config_supplier=None):
+def make_resolving_provider(config: Config, config_supplier=None, *, allow_unconfigured: bool = False):
     """Provider that resolves each call's vendor from its model name. Used by the
     gateway, where different sessions can be on different vendors at once.
     ``config_supplier`` makes its per-vendor credentials live -- see
-    ``ResolvingProvider._refresh_credentials``."""
+    ``ResolvingProvider._refresh_credentials``. A long-running gateway may be
+    allowed to start before credentials exist so its settings UI can add them;
+    the first model call still validates through ``make_provider``."""
     from raven.providers.resolving_provider import ResolvingProvider
 
-    check_provider_credentials(config)
+    if not allow_unconfigured:
+        check_provider_credentials(config)
     return ResolvingProvider(config, config_supplier=config_supplier)
 
 

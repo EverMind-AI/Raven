@@ -2,7 +2,7 @@
 
 The ``gateway`` command spawns the full agent loop + channel manager + cron +
 heartbeat stack and runs forever. Smoke-level coverage only: ``--help`` works,
-options are surfaced, the no-API-key path exits cleanly.
+options are surfaced, and first-run startup reaches runtime construction.
 """
 
 from __future__ import annotations
@@ -69,22 +69,27 @@ def test_gateway_config_short_alias_removed() -> None:
     assert "--config" in r.stdout
 
 
-def test_gateway_without_api_key_exits_with_error(tmp_config: Path) -> None:
-    """With no provider configured, gateway must exit non-zero — and crucially
-    must not raise a crash-class exception (NameError / AttributeError /
-    ImportError). Those would indicate a regression like a missing import.
-    """
+def test_gateway_without_api_key_reaches_runtime_construction(tmp_config: Path, monkeypatch) -> None:
+    """The hosted settings page must start before its first provider exists."""
+    from raven.cli import gateway_commands
     from raven.config.loader import save_config
     from raven.config.schema import Config
 
-    save_config(Config())  # default config, no keys
+    class RuntimeReached(Exception):
+        pass
+
+    seen: list[bool] = []
+
+    def resolving_provider(_config, _supplier=None, *, allow_unconfigured: bool = False, **_kwargs):
+        seen.append(allow_unconfigured)
+        raise RuntimeReached
+
+    monkeypatch.setattr(gateway_commands, "make_resolving_provider", resolving_provider)
+    save_config(Config())
 
     r = runner.invoke(app, ["gateway"])
-    if r.exception is not None:
-        assert not isinstance(r.exception, (NameError, AttributeError, ImportError)), (
-            f"Crash-class exception leaked through: {r.exception!r}"
-        )
-    assert r.exit_code != 0
+    assert isinstance(r.exception, RuntimeReached)
+    assert seen == [True]
 
 
 # Deeper coverage (mocked provider + early-exit) was attempted but hangs:

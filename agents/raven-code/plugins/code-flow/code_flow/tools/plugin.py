@@ -95,7 +95,7 @@ def make_glob(ctx: "PluginContext") -> GlobTool | None:
 
 
 def make_exec(ctx: "PluginContext") -> CodeExecTool | None:
-    """The shell, with the clamped ceiling, the partial-output marker and the
+    """The shell, with the clamped ceiling, partial output on timeout and the
     30,000-character budget with spill. Served only where the host's own exec
     would run on the host too (``tools.sandbox.backend == "none"``): the
     replacement runs on the host, and a configured sandbox must not be

@@ -38,7 +38,18 @@ botpy.log
 nano.*.save
 swebench_jobs/
 *.env
+# The local override every env template points a credential at. It needs its
+# own rule: `*.env` above matches a name ending in `.env`, and these end in
+# `.local`, so nothing here reached them and `git add -A` would have staged a
+# real key. Whole family, not just docker's -- the agents ship `.env.example`
+# files that ask for the same neighbour, and the wheel publisher already treats
+# a packaged `.env.local` as a leaked secret.
+*.env.local
 key.env
+# The Compose template, and the only env file in the repo. It carries settings
+# and empty placeholders, never a credential -- a real key belongs in
+# docker/.env.local, which the `*.env.local` rule above ignores.
+!docker/.env
 sty_readme.md
 CLAUDE.local.md
 logs/

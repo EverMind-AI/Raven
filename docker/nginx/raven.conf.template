@@ -1,0 +1,80 @@
+# The one server block. Rendered by the entrypoint with envsubst, which
+# substitutes ${RAVEN_DIST_ROOT}, ${RAVEN_PAGE_PORT}, and
+# ${RAVEN_AUTO_LOGIN_COOKIE} -- nginx's own $variables are left alone.
+
+server {
+    listen 80;
+    server_name _;
+    root ${RAVEN_DIST_ROOT};
+
+    gzip on;
+    gzip_min_length 1k;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/javascript application/javascript application/json image/svg+xml;
+    gzip_vary on;
+
+    include /etc/nginx/proxy.conf;
+
+    # The engine answers only to an Origin naming its own loopback port
+    # (`_origin_ok` in raven/rpc/transports/ws.py), which no browser reaching
+    # this container through a published port or a hostname can send. Rewriting
+    # it here is what makes the proxy work at all.
+    #
+    # What that gives up is a defence-in-depth layer, not the gate: the session
+    # cookie is SameSite=Strict, so a page on another site gets no cookie
+    # attached to its WebSocket, and a browser cannot set X-Raven-Token itself.
+    # An unauthenticated upgrade is still refused. Publish this port only where
+    # you would have published the engine's.
+    proxy_set_header Origin http://127.0.0.1:${RAVEN_PAGE_PORT};
+
+    # The RPC socket. Everything the page does after it loads goes through here.
+    location = /rpc {
+        proxy_pass http://127.0.0.1:${RAVEN_PAGE_PORT};
+    }
+
+    # Sign-in: /auth burns a one-time nonce and sets the session cookie.
+    location = /auth {
+        proxy_pass http://127.0.0.1:${RAVEN_PAGE_PORT};
+    }
+
+    location /auth/ {
+        proxy_pass http://127.0.0.1:${RAVEN_PAGE_PORT};
+    }
+
+    location = /health {
+        proxy_pass http://127.0.0.1:${RAVEN_PAGE_PORT};
+    }
+
+    # The file viewer and the deliverables shelf. Both are engine-served and
+    # both carry their own Content-Security-Policy, so they are proxied rather
+    # than read off disk here.
+    location = /file {
+        proxy_pass http://127.0.0.1:${RAVEN_PAGE_PORT};
+    }
+
+    location /files/ {
+        proxy_pass http://127.0.0.1:${RAVEN_PAGE_PORT};
+    }
+
+    location = /oauth/callback {
+        proxy_pass http://127.0.0.1:${RAVEN_PAGE_PORT};
+    }
+
+    # The page's icons and fonts. Content-hashed in the URL by ui-web/build.py
+    # (?v=<digest>), so a long max-age cannot serve a stale drawing.
+    location /assets/ {
+        expires 30d;
+        access_log off;
+        try_files $uri =404;
+    }
+
+    # dist/index.html is the whole page: one file, everything inlined.
+    location / {
+        # Compose defaults to local auto-login so opening the published page is
+        # enough to configure the first provider. An empty value emits no
+        # header when RAVEN_AUTO_LOGIN is disabled.
+        add_header Set-Cookie "${RAVEN_AUTO_LOGIN_COOKIE}" always;
+        index index.html;
+        try_files $uri $uri/ /index.html;
+    }
+}

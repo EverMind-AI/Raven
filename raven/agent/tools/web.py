@@ -228,34 +228,6 @@ class WebSearchTool(Tool):
             logger.error("WebSearch error: {}", e)
             return f"Error: {e}"
 
-    async def probe(self, query: str = "raven ai agent") -> tuple[bool, str]:
-        """One real search, to learn whether the key is live.
-
-        Returns ``(ok, detail)``. No search vendor offers a free metadata
-        endpoint the way chat providers offer ``/v1/models``, so this spends
-        one query -- the smallest one the request shape allows. The detail
-        carries the vendor and the status only, never exception text, for the
-        reason ``execute`` gives: SerpApi puts the key in the request URL.
-        """
-        try:
-            client = httpx.AsyncClient(proxy=self.proxy)
-        except Exception as e:
-            # httpx names the proxy URL in the message, and a proxy URL can
-            # carry its own credentials, so only the class goes out.
-            return False, f"the configured web proxy is not usable ({type(e).__name__})"
-        try:
-            async with client:
-                r = await self._provider_request(client, query, 1)
-                r.raise_for_status()
-            hits = len(self._normalise_response(r.json()).get("organic", []))
-        except httpx.HTTPStatusError as e:
-            return False, f"{self.spec.label} answered HTTP {e.response.status_code}"
-        except httpx.HTTPError as e:
-            return False, f"{self.spec.label} could not be reached ({type(e).__name__})"
-        except ValueError as e:
-            return False, f"{self.spec.label} answered without results: {e}"
-        return True, f"{hits} result(s)"
-
     async def _provider_request(self, client: httpx.AsyncClient, query: str, n: int) -> httpx.Response:
         """One search request, built the way the selected provider expects."""
         if self.provider == "serper":

@@ -228,6 +228,18 @@ describe('the send button', () => {
     store.fireSend()
     expect(calls.sent).toEqual([])
   })
+
+  it('preserves the draft when the page redirects an unavailable send', () => {
+    const beforeSend = vi.fn(() => true)
+    const { calls } = wire({ beforeSend })
+    ta().value = 'configure a provider first'
+
+    store.fireSend()
+
+    expect(beforeSend).toHaveBeenCalledOnce()
+    expect(calls.sent).toEqual([])
+    expect(ta().value).toBe('configure a provider first')
+  })
 })
 
 describe('composer drafts', () => {

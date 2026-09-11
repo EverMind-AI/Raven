@@ -31,6 +31,7 @@ interface Harness {
   persistedScopes: string[]
   local: string[]
   settings: number
+  providerSettings: string[]
   after: number
   model: () => string
 }
@@ -38,7 +39,7 @@ interface Harness {
 function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harness {
   const h: Harness = {
     toasts: [], persisted: [], persistedProviders: [], persistedScopes: [],
-    local: [], settings: 0, after: 0, model: store.current,
+    local: [], settings: 0, providerSettings: [], after: 0, model: store.current,
   }
   toastWriter.items = h.toasts
   let last = store.current()
@@ -55,6 +56,9 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
     },
     openSettings: () => {
       h.settings += 1
+    },
+    openProviderModels: (provider) => {
+      h.providerSettings.push(provider)
     },
     ...over,
   }
@@ -496,7 +500,8 @@ describe('the picker with nothing to offer', () => {
     mount()
     openIt()
     expect(pick()).toBeNull()
-    expect(h.toasts).toEqual(['gui.picker.no_models'])
+    expect(h.providerSettings).toEqual(['anthropic'])
+    expect(h.toasts).toEqual(['gui.picker.no_models_for'])
   })
 
   it('still says "no account" when nothing is connected at all', () => {

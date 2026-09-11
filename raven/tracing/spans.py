@@ -133,12 +133,5 @@ def persist_artifact(kind: str, meta: dict[str, Any], payload: Any, *, label: st
         return None
 
 
-def address_items(items: list[Any]) -> list[Any]:
-    try:
-        return _get_store().address_items(items)
-    except Exception:  # noqa: BLE001
-        return items
-
-
 def artifact_attributes(prefix: str, artifact: dict[str, Any] | None) -> dict[str, Any]:
     return TraceStore.artifact_attributes(prefix, artifact)

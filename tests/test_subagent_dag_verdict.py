@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import re
 
 from raven.agent.subagent.dag_verdict import (
     CATEGORIES,
@@ -193,59 +192,3 @@ def test_verdict_tool_schema_separates_a_negative_answer_from_undone_work():
     outcome = verdict_tool_schema()[0]["function"]["parameters"]["properties"]["outcome"]
     assert "could not be done is 'not_accomplished'" in outcome["description"]
     assert "the answer is negative is 'accomplished'" in outcome["description"]
-
-
-async def test_judge_is_told_when_the_node_ran_out_of_output_budget():
-    provider = _Provider(_accomplished())
-    await judge(provider, prompt="p", output="", evidence="e", evidence_complete=True, output_limited=True)
-    sent = json.dumps(provider.calls[0]["messages"])
-    assert "output token limit" in sent
-
-
-async def test_judge_says_nothing_about_an_output_limit_that_did_not_happen():
-    provider = _Provider(_accomplished())
-    await judge(provider, prompt="p", output="o", evidence="e", evidence_complete=True)
-    sent = json.dumps(provider.calls[0]["messages"])
-    assert "output token limit" not in sent
-
-
-async def test_judge_reads_the_output_limit_fact_outside_the_untrusted_fence():
-    provider = _Provider(_accomplished())
-    await judge(provider, prompt="p", output="", evidence="e", evidence_complete=True, output_limited=True)
-    body = provider.calls[0]["messages"][1]["content"]
-    unfenced = re.sub(r"\[BEGIN UNTRUSTED .*?\[END UNTRUSTED [^\]]*\]", "", body, flags=re.DOTALL)
-    assert "output token limit" in unfenced
-
-
-async def test_judge_is_told_an_output_limit_does_not_excuse_unfinished_work():
-    provider = _Provider(_accomplished())
-    await judge(provider, prompt="p", output="", evidence="e", evidence_complete=True, output_limited=True)
-    instruction = provider.calls[0]["messages"][0]["content"]
-    assert "excusing work that is not there" in instruction
-
-
-def test_output_limit_is_a_verdict_category():
-    assert "output_limit" in CATEGORIES
-
-
-def test_extract_verdict_reads_the_output_limit_category():
-    response = _Response([_Call(json.dumps({"outcome": "not_accomplished", "category": "output_limit"}))])
-    assert extract_verdict(response).category == "output_limit"
-
-
-async def test_describe_failure_is_told_when_the_node_ran_out_of_output_budget():
-    """A crashed node can also have been cut, and naming why it crashed is
-    exactly this call's job."""
-    provider = _Provider(_not_accomplished())
-    await describe_failure(
-        provider, prompt="p", error="boom", evidence="e", evidence_complete=True, output_limited=True
-    )
-    sent = json.dumps(provider.calls[0]["messages"])
-    assert "output token limit" in sent
-
-
-async def test_describe_failure_says_nothing_about_an_output_limit_that_did_not_happen():
-    provider = _Provider(_not_accomplished())
-    await describe_failure(provider, prompt="p", error="boom", evidence="e", evidence_complete=True)
-    sent = json.dumps(provider.calls[0]["messages"])
-    assert "output token limit" not in sent

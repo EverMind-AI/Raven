@@ -79,6 +79,18 @@ describe('the assembled page boot order', () => {
   })
 })
 
+describe('first-run model setup', () => {
+  it('records missing-provider state without opening onboarding automatically', () => {
+    expect(live).toContain('providerConfiguredLive = setup.provider_configured !== false;')
+    expect(live).not.toMatch(/setup\.provider_configured === false\s*\|\|/)
+  })
+
+  it('guards New Task, Send, and the model selector with the same redirect', () => {
+    expect(live).toContain('DS.composer.beforeSend = openModelsForMissingProvider;')
+    expect(live.match(/if \(openModelsForMissingProvider\(\)\) return;/g)).toHaveLength(2)
+  })
+})
+
 /* Where the live layer starts recording which conversation the tab is on.
    An ordering rule no unit test can hold: the demo shell has already opened its
    canned session by the time this file runs, and the line above it clears the

@@ -438,64 +438,18 @@ _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it pro
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
 The opt-in policy for when the model returns no text: re-feed its reasoning (PREFILL),
 inject a nudge after a tool call (NUDGE), or plain RETRY — each bounded by
-`RecoveryLimits`. A response with text in it, or recovery switched off, COMPLETEs;
-spending every budget with nothing ever returned is FAIL, and the Agent Loop ends the turn
-with status `error` and a reply naming the failure. PREFILL is asked of the provider first
+`RecoveryLimits`; otherwise the turn COMPLETEs. PREFILL is asked of the provider first
 (`LLMProvider.supports_assistant_prefill`): the Anthropic family rejects a trailing
 assistant message while thinking is on, and through a gateway that rejection can arrive as
 a stream that never yields a byte, so a provider that answers no never gets PREFILL -- the
 same thinking-only turn takes NUDGE after a tool, else RETRY, and no request handed to it
-ends on an assistant message. RETRY descends the effort ladder by what a rung *sends*, not by
-its label: the provider is asked (`LLMProvider.reasoning_wire_keys`) and a rung whose request
-this wire cannot tell apart from the one that failed is skipped -- when none is left, the
-turn has nothing to change and FAILs rather than paying for the same call twice. A retry
-after a turn cut at the output ceiling also carries `OUTPUT_LIMIT_NUDGE`, once per turn. The
-descent changes what the request asks *for*; the nudge is the only thing that tells the model
-its last turn was cut and that a payload too large to finish has to be split -- which no
-effort rung can do, and which `Tool.truncation_hint` cannot reach because a turn cut before
-any call produced no tool result to carry it.
-_Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes; and reading
-FAIL as a fourth mode — it is the answer given when there is nothing left to try;
-`OUTPUT_LIMIT_NUDGE` rides RETRY rather than being the NUDGE mode.
-
-**Call Record** (`contracts/llm_provider.py`, `providers/call_record.py`):
-What the transport did on one model call, carried on `LLMResponse.call_record` and stored
-under `call` in the `llm.output` audit artifact: HTTP status, the backend that served it and
-the model it served, each only where the *response* named one (`served_by`, `served_model`
--- a stream names no model at all, because the client library substitutes the request's),
-the upstream's generation id, the response headers, and the response body when the call
-delivered nothing. Built only by
-`providers/call_record.py`, which owns the caps (`MAX_BODY_CHARS`, `MAX_HEADERS`,
-`MAX_HEADER_VALUE_CHARS`), replaces the value of any credential-named header, and scrubs
-the body. The request half is not in it: `observability/semconv.request_facts` derives the
-messages+tools payload's size and a picture count from the messages, on the `llm.input`
-side -- the conversation as the provider received it, not the body the client serialized.
-_Avoid_: "transport failure" for this — that is the *verdict*
-(`providers/transport_failure.py`) reached about a call; a Call Record is the evidence, and
-is written for every call whether or not any verdict was reached.
-
-**No-Progress Ladder** (`agent/loop/no_progress.py`):
-The three bounded steps `NoProgressGuard` takes against a call that keeps working and keeps
-answering the same thing: append a nudge to the working result (`_NO_PROGRESS_THRESHOLD`
-identical answers), refuse the call without running it (`_NO_PROGRESS_REFUSE`), then end the
-turn (`_NO_PROGRESS_REFUSALS_MAX` chances spent). Keyed on the call *and* its
-answer, so a poll whose answer moves is never a repeat; the refusal additionally requires that
-nothing else answered anything new in between, which is what keeps a wait loop's identical
-`sleep` alive **while the check beside it answers something new** -- a poll answering
-byte-identically satisfies neither half, and freezes with the sleep. The freeze is evidence
-rather than a verdict: it stores the novelty count that established it, and `check` runs the
-pair again once that count has moved, so intervening real work rescues a call the model needs.
-Each rescue spends from the same `_NO_PROGRESS_REFUSALS_MAX` budget the refusals spend, so a
-turn producing one new answer per `_NO_PROGRESS_REFUSE` repeats is still bounded. The turn is
-the largest thing it stops -- it never ends the run.
-_Avoid_: "loop break" — that is the sibling guard for a call that keeps *failing*
-(`agent/loop/failure_streak.py`), and it counts consecutively where this counts per turn.
+ends on an assistant message.
+_Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes.
 
 **Synthesis**:
-The tools-disabled final LLM call the Agent Loop makes when a turn has to stop early — it hit
-`max_iterations` (default 40), or the No-Progress Ladder ended it: it summarizes progress and
-returns partial results, and the turn ends with status `interrupted`. The prompt names which
-reason, because a model told the wrong one summarizes the wrong thing.
+The tools-disabled final LLM call the Agent Loop makes when a turn hits `max_iterations`
+(default 40): it summarizes progress and returns partial results, and the turn ends with
+status `interrupted`.
 _Avoid_: "timeout" — Synthesis is iteration-bounded, not time-bounded.
 
 **Personalizer** (`agent/personalizer/`):
@@ -1467,26 +1421,6 @@ lands on one, and is recorded on the call's tool.call span as
 wait on a human, and answers with a full ToolResult.
 _Avoid_: "tool gate" for this -- that name is the plugin paper's.
 
-**Credential scope**:
-Which credential store an MCP server's secrets are read from and written to.
-`None` is the host's own -- `<credentials>/mcp/<server>.json` for OAuth tokens,
-`tools.mcpServers` for everything else. A playbook that carries its own servers
-passes `playbooks/<playbook>` (`raven.playbook.credentials.credential_scope`),
-so its tokens land in `<credentials>/playbooks/<playbook>/mcp/<server>.json` and
-its `secret` params in `params.json` beside them, both 0600. It travels as
-`scope=` on `credentials_path` / `FileTokenStorage` / `provider_for` /
-`has_stored_tokens` / `delete_credentials`, as `credential_scope` on
-`MCPConnectionManager` (a name, or a callable answering per server when one
-manager dials host and carried servers side by side), and as `scope` on
-`McpServerView` / `GrantedServer` / `MissingServer` so a grant hands the bridge
-endpoint the scope its upstream was dialled under. Exists because a carried
-server may shadow a host server of the same name: keyed by name alone, a
-carried `sentry` would read and overwrite the host's `sentry.json`.
-_Avoid_: "OAuth scope" for this. That is the permission list an authorization
-server grants (`oauth.scopes`, `scopes_supported` in `mcp/oauth.py`) and is a
-different axis entirely -- a credential scope says *where the token is kept*, an
-OAuth scope says *what the token may do*.
-
 **Permission Mode**:
 How the gate reads the ask tier, and only the ask tier: `ask` prompts a human
 for everything in it, `smart` has an LLM reviewer (`permissions/judge.py`,
@@ -1578,44 +1512,14 @@ _Avoid_: confusing with JudgeVerdict (the EvalEngine's completed/failed/unknown)
 **Trajectory Pin** (`raven/trajectory/store.py`):
 The retention promise for an Attempt or trace id, recorded in `pins.json` in the trace
 state dir: pinned ids are corpus, not diagnostics — purge tooling must never delete
-their spans or the artifacts those spans reference, nor anything those artifacts
-reference in turn. An `audit.artifact.v2` shell holds no messages of its own, so
-deleting a Message Blob it addresses destroys the pinned trajectory while leaving
-the artifact file in place.
+their spans or the artifacts those spans reference.
 
 **Trajectory Bundle** (`raven/trajectory/bundle.py`):
 The self-contained offline directory `collect_bundle` / `raven trajectory save` packs
 for one Attempt: `manifest.json` + `spans.jsonl` (artifact references rewritten to
 bundle-relative paths) + `artifacts/` + the session's conversation record + its
-verdicts. An `audit.artifact.v2` artifact is resolved on the way in, so a bundle
-depends on no Message Blob and reads on a machine that has none; a blob that is gone
-becomes a labelled placeholder at its own index and its sha1 is listed under the
-manifest's `missing_messages`. Bundling declares the trajectory corpus, so the id is
-auto-pinned.
+verdicts. Bundling declares the trajectory corpus, so the id is auto-pinned.
 _Avoid_: "archive" — that names the tracing store's rotated-log directory.
-
-**Message Blob** (`raven/tracing/artifact_v2.py`):
-One model-input message stored once, at
-`<state_dir>/logs/audit-artifacts/_messages/<sha1[:2]>/<sha1>.json`, addressed by the
-sha1 of `json.dumps(message, ensure_ascii=False, default=str)` — key order
-preserved, since sorting would make resolution hand back a reordered copy. Beside
-`_blobs/` and never inside it: `raven.tracing.compact` sweeps a blob whose link count
-is 1, and a Message Blob's is permanently 1 because a shell references it from its
-JSON text rather than by hard link. `compact` names both stores in
-`_CONTENT_STORES` and walks neither as an artifact tree -- their layout is
-indistinguishable from `<kind>/<day>/<file>`, so a store left in the walk is rehashed
-whole on every run and hard-linked into `_blobs/`, breaking this boundary. No reclaim path yet; growth is bounded only by use.
-_Avoid_: storing one under `_blobs/` — that directory holds whole-artifact
-payloads, and `compact` sweeps any member of it whose link count is 1.
-
-**Artifact Shell** (`raven/observability/semconv.py`):
-An `llm.input` artifact in `audit.artifact.v2` form: the call's identity plus one
-`{"$msg": "<sha1>"}` reference per message, with `systemPrompt` and `prompt` aliasing
-their own element rather than restating its text. Resolving a shell reproduces the v1
-payload exactly, which is the invariant the format rests on. The envelope is a dict so
-a reader ignoring `artifactFormat` fails loudly instead of rendering a sha1 as prompt
-text, and so one shell can mix references with a message inlined because its blob
-could not be written.
 
 **Trajectory Redaction** (`raven/trajectory/redact.py`):
 The three-layer sanitization `redact_bundle` applies to a **copy** of a Trajectory
@@ -2303,15 +2207,10 @@ the record's directory - a task id no reader of a *conversation* ever sees.
 _Avoid_: reading the absence of live rows as "the turn ended" - a transport with no per-step
 visibility reports none for the whole of every turn.
 
-**Stop Reason** (`raven/acp_client/acp_agent.py`, `raven/acp/methods.py`):
+**Stop Reason** (`raven/acp_client/acp_agent.py`):
 What an ACP agent reports at the end of a turn. Only `end_turn` means it finished; every
 other value (`cancelled`, `max_tokens`, `refusal`, ...) leaves a reply that reads complete
-and is not. Raven serving the agent side sends `max_tokens` for a turn whose generation
-stopped at the model's output ceiling, refined from `end_turn` and never over a reason that
-already says why the turn ended; driving the agent side it reads that value as the
-delegated run's ceiling report, which is the seam the node verdict is told about. The
-protocol's own field rather than a private `_meta` key, because Response Meta is the
-agent's record that the host decides nothing from. Such a reply is kept and carries an appended `[raven]` notice naming the stop
+and is not. Such a reply is kept and carries an appended `[raven]` notice naming the stop
 reason, budgeted before the reply is clamped to `maxOutputChars` so the notice cannot be
 the part that is cut. Kept rather than raised because a partial answer is worth having;
 noticed rather than returned bare because neither the main agent nor a person in a Direct
@@ -2341,16 +2240,9 @@ name from when only a graph could claim one.
 
 **verdict** -- the judgement on whether a finished DAG node accomplished the task
 its prompt set. Made by one constrained model call over the node's prompt, its
-output, the tail of its transcript, and one fact read off the run's transport
-rather than out of its answer -- whether the generation stopped at the model's
-output ceiling (`raven/agent/subagent/dag_verdict.py`). That fact is stated outside
-the untrusted fence the other three arrive in, because it does not come from the
-text the sub-agent composed; the wording says whose report it is, since for a
-delegated agent it is that agent's own Stop Reason rather than a measurement made
-here. It explains a cut and never excuses unfinished work: `output_limit` is a
-not-accomplished category. It is absent for a transport that cannot report it, so
-its absence is "not known to have been cut" and never "ran to completion". A node whose backend returned without raising is
-not thereby successful; the verdict is what decides.
+output, and the tail of its transcript (`raven/agent/subagent/dag_verdict.py`). A node whose
+backend returned without raising is not thereby successful; the verdict is what
+decides.
 _Avoid_: confusing with JudgeVerdict or Trajectory Verdict -- both name a different
 judgement (a turn's completion, an Attempt's pass/fail) made by a different
 subsystem; this one judges a single DAG node's output against its own prompt.

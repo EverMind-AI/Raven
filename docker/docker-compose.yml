@@ -1,0 +1,67 @@
+# Raven, whole, from this directory:
+#
+#   cd docker
+#   docker compose up --build
+#
+# Then open http://localhost:18793. Settings live in .env beside this file; put
+# credentials in .env.local, which is git-ignored.
+#
+# One service, two processes. nginx serves the built page and proxies /rpc to
+# the engine over the loopback they share -- the engine binds 127.0.0.1 only,
+# so a proxy in a second container would have no address to reach it on. See
+# the header of ../Dockerfile.
+
+name: raven
+
+services:
+  raven:
+    image: ${RAVEN_IMAGE:-everminbd/raven:dev}
+    build:
+      # The build needs the whole checkout (raven/, agents/, ui-web/, the
+      # lockfile), so the context is the repository root, not this directory.
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        RAVEN_EXTRAS: ${RAVEN_EXTRAS:-channels,tools}
+        RAVEN_PLUGINS: ${RAVEN_PLUGINS:-everos-memory}
+    restart: unless-stopped
+
+    # Bind the local auto-login page to loopback. Port 18793 deliberately stays
+    # clear of a host-installed Raven engine, whose page defaults to 18792.
+    ports:
+      - "127.0.0.1:${RAVEN_WEB_PORT:-18793}:80"
+
+    environment:
+      # Keep the URL printed by the entrypoint aligned with a shell override of
+      # the published port.
+      RAVEN_WEB_PORT: ${RAVEN_WEB_PORT:-18793}
+
+    env_file:
+      # Everything in .env reaches the container, so a provider key added there
+      # needs no second entry below.
+      - path: .env
+        required: true
+      # Your own overrides and secrets. Absent by default, never committed.
+      - path: .env.local
+        required: false
+
+    volumes:
+      # config.json, the workspace, sessions, logs and the memory store. The
+      # only thing worth keeping when the container is replaced.
+      - raven-data:/data
+
+    healthcheck:
+      # Through nginx, so this fails if either half is down.
+      test: ["CMD-SHELL", "curl -fsS -m 3 http://127.0.0.1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      # A first boot builds the agent loop, the plugin stack and the memory
+      # store before anything answers.
+      start_period: 180s
+      retries: 3
+
+    # A turn in flight and the memory store both want to close cleanly.
+    stop_grace_period: 30s
+
+volumes:
+  raven-data:

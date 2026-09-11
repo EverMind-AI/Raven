@@ -74,6 +74,18 @@ class ProviderSpec:
     detect_by_key_prefix: str = ""  # match api_key prefix, e.g. "sk-or-"
     detect_by_base_keyword: str = ""  # match substring in api_base URL
     default_api_base: str = ""  # fallback base URL
+    #: The vendor's public address, for the settings field alone.
+    #:
+    #: Separate from `default_api_base` because that one is not display data:
+    #: the catalogue probe pings it, `env_extras` interpolates it, and with
+    #: `passes_default_api_base` the router sends to it. A direct vendor whose
+    #: address LiteLLM keeps inside its own driver must state none of those --
+    #: filling `default_api_base` in for the pane sent Gemini's catalogue probe
+    #: to /v1/models instead of the /v1beta/models its shape asks for.
+    #:
+    #: So this says only "show this when the field would otherwise be blank".
+    #: Read through `display_api_base`, never directly.
+    shown_api_base: str = ""
     native_api_bases: tuple[tuple[str, str], ...] = ()
     passes_default_api_base: bool = False  # send the shipped default as a per-call api_base
     strip_api_base_trailing_slash: bool = False
@@ -141,6 +153,15 @@ class ProviderSpec:
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
+
+    @property
+    def display_api_base(self) -> str:
+        """The address to show in a settings field, or "" for none.
+
+        `default_api_base` first: where a spec states one it is the real answer,
+        and several are addresses this project chose rather than the vendor's.
+        """
+        return self.default_api_base or self.shown_api_base
 
     @property
     def usable_default_api_base(self) -> str:
@@ -329,6 +350,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("anthropic", "claude"),
         env_key="ANTHROPIC_API_KEY",
         display_name="Anthropic",
+        shown_api_base="https://api.anthropic.com",
         homepage="https://anthropic.com/",
         skip_prefixes=(),
         env_extras=(),
@@ -349,6 +371,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("openai", "gpt"),
         env_key="OPENAI_API_KEY",
         display_name="OpenAI",
+        shown_api_base="https://api.openai.com/v1",
         homepage="https://openai.com/",
         skip_prefixes=(),
         env_extras=(),
@@ -413,6 +436,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("deepseek",),
         env_key="DEEPSEEK_API_KEY",
         display_name="DeepSeek",
+        shown_api_base="https://api.deepseek.com/beta",
         homepage="https://deepseek.com/",
         skip_prefixes=("deepseek/",),  # avoid double-prefix
         env_extras=(),
@@ -430,6 +454,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("gemini",),
         env_key="GEMINI_API_KEY",
         display_name="Gemini",
+        shown_api_base="https://generativelanguage.googleapis.com",
         homepage="https://gemini.google.com/",
         skip_prefixes=("gemini/",),  # avoid double-prefix
         env_extras=(),
@@ -453,6 +478,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         name_aliases=("zhipu",),  # model ids written before the rename
         env_key="ZAI_API_KEY",
         display_name="Z.ai",
+        shown_api_base="https://api.z.ai/api/paas/v4",
         homepage="https://z.ai",
         skip_prefixes=("zhipu/", "zai/", "openrouter/", "hosted_vllm/"),
         env_extras=(("ZHIPUAI_API_KEY", "{api_key}"),),
@@ -653,6 +679,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("groq",),
         env_key="GROQ_API_KEY",
         display_name="Groq",
+        shown_api_base="https://api.groq.com/openai/v1",
         homepage="https://groq.com/",
         skip_prefixes=("groq/",),  # avoid double-prefix
         env_extras=(),

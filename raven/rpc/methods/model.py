@@ -374,7 +374,9 @@ def _build_provider_entry(
         "auth_type": kind,
         "key_env": (spec.env_key or None) if spec else None,
         "api_base": info.get("api_base"),
-        "default_api_base": (spec.default_api_base or None) if spec else None,
+        # `display_api_base`, not `default_api_base`: the pane wants the vendor
+        # address even where the spec states none for its own use.
+        "default_api_base": (spec.display_api_base or None) if spec else None,
         "models": models,
         # What this section actually lists, which is a different question from
         # the offer above: the settings page manages a list, the picker offers

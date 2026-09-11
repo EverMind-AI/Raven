@@ -46,6 +46,7 @@ export interface ComposerSource {
      backend for. Absent in live mode, which installs `upload` instead. */
   pickHint?: string
   upload?(req: UploadReq): Promise<UploadRes>
+  beforeSend?(): boolean
   /* The two actions the go button is. Required, not optional like `upload`:
      both modes install them, because a composer that cannot send is not a
      composer. They were shell verbs until the page layer stopped owning the

@@ -1,4 +1,4 @@
-.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate
+.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
@@ -9,6 +9,7 @@ COVERAGE_BASE_REF ?= origin/main
 COVERAGE_DIFF_THRESHOLD ?= 90
 # Allowed line or branch regression in percentage points to absorb rounding noise.
 COVERAGE_RATCHET_TOLERANCE ?= 0.05
+DOCKER_IMAGE ?= raven:local
 COVERAGE_REPORT_ARGS = --cov=raven --cov=raven_everos --cov-branch --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=json --cov-report=html
 
 help:
@@ -30,6 +31,9 @@ help:
 	@echo "  check-source-language Validate PR-added lines stay English outside the exemption zones"
 	@echo "  check-core-wheel  Build the raven-core wheel and smoke it in a clean venv"
 	@echo "  fetch-templates Pull the deck engine's eight bundled templates from the package registry (needs GITLAB_TOKEN)"
+	@echo "  docker-build   Build the container image (page + engine + nginx)"
+	@echo "  docker-up      Build if needed and start the stack from docker/"
+	@echo "  docker-down    Stop the stack (the data volume is kept)"
 	@echo "  beta           Build this checkout and publish it to the beta channel"
 	@echo "  ci             Run the local CI gate"
 	@echo "  clean          Remove generated caches and build output"
@@ -129,6 +133,17 @@ check-source-language:
 # venv); this target is what CI and `make ci` run so the artifact stays honest.
 check-core-wheel:
 	uv run --frozen --python $(PYTHON_VERSION) pytest tests/integration/test_kernel_wheel_smoke.py -q -o addopts=""
+
+# The image builds the page and the Python environment itself, so these need
+# no prior `make build`. Compose reads docker/.env for ports and extras.
+docker-build:
+	docker build -t $(DOCKER_IMAGE) .
+
+docker-up:
+	cd docker && docker compose up --build $(COMPOSE_ARGS)
+
+docker-down:
+	cd docker && docker compose down
 
 beta:
 	PYTHONPATH=. uv run python scripts/publish_beta.py $(BETA_ARGS)

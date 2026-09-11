@@ -60,6 +60,13 @@ export interface SettingsState {
   provErr: string
   provBusy: boolean
   provFocus: boolean
+  /* The provider whose key was just saved while its model list was empty, or
+     null. A connected provider that lends the picker nothing is the one dead
+     end this pane can leave you in -- the key worked, so nothing looks wrong,
+     and the next question ("why is it not in the model picker") is asked
+     somewhere else entirely. Held here rather than in the panel because the
+     save remounts it. */
+  modelNudge: string | null
 }
 
 const initial = (): SettingsState => ({
@@ -82,6 +89,7 @@ const initial = (): SettingsState => ({
   provErr: '',
   provBusy: false,
   provFocus: false,
+  modelNudge: null,
 })
 
 let state: SettingsState = initial()
@@ -141,6 +149,17 @@ export async function open(): Promise<void> {
      page read them on every draw. The poll only keeps them current after
      that, and only while the dialog stays open. */
   if (state.tab === 'usage') void usageLoad()
+}
+
+export async function openModels(): Promise<void> {
+  setTab('model')
+  await open()
+}
+
+export async function openProviderModels(slug: string): Promise<void> {
+  setTab('model')
+  set({ provOpen: slug, modelNudge: slug })
+  await open()
 }
 
 export function setTab(id: string): void {
@@ -210,11 +229,11 @@ export function provSelect(id: string): void {
      forty threw the list back to the first one. Nothing here needs the rebuild:
      the pane is keyed by the provider it shows, so it remounts on its own and
      its fields pick up the new section. */
-  set({ provOpen: id, provErr: '', provFocus: true })
+  set({ provOpen: id, provErr: '', provFocus: true, modelNudge: null })
 }
 
 export function addModelOpen(slug: string): void {
-  set({ drawer: { slug, mode: 'add' }, addErr: '' })
+  set({ drawer: { slug, mode: 'add' }, addErr: '', modelNudge: null })
 }
 
 export function addModelClose(): void {
@@ -232,6 +251,7 @@ export async function fetchModelsOpen(slug: string): Promise<void> {
     drawer: { slug, mode: 'list' },
     addErr: '',
     fetch: { busy: true, rows: [], status: '', error: '' },
+    modelNudge: null,
   })
   const ask = source().fetchModels
   if (!ask) {
@@ -322,10 +342,23 @@ export async function providerRun(op: ProviderOp, params: Record<string, unknown
   set({ provBusy: true, provErr: '' })
   try {
     const snap = await source().provider(op, params)
-    set({ snap, provBusy: false, epoch: state.epoch + 1 })
+    set({ snap, provBusy: false, epoch: state.epoch + 1, modelNudge: emptyAfterConnect(op, params, snap) })
   } catch (e) {
     set({ provBusy: false, provErr: errText(e), epoch: state.epoch + 1 })
   }
+}
+
+/* Which provider to point at its model list, after a write that answered.
+ *
+ * Only a key save raises it: that is the moment a provider becomes usable and
+ * therefore the moment an empty list starts costing something. A removal that
+ * empties the list is the reader deliberately emptying it, and nagging them
+ * about what they just did is not a reminder. */
+function emptyAfterConnect(op: ProviderOp, params: Record<string, unknown>, snap: SettingsSnapshot): string | null {
+  if (op !== 'save_key') return null
+  const slug = typeof params.slug === 'string' ? params.slug : ''
+  const row = snap.providers.find((p) => p.id === slug)
+  return row && !(row.configured ?? []).length ? slug : null
 }
 
 /* The default-model picker is legacy live chrome; the source hands the

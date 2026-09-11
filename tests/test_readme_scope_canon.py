@@ -17,9 +17,11 @@ TABLE_ROW = re.compile(r"^\| `([a-z0-9_]+)` \|", re.MULTILINE)
 
 def _repo_layout_section() -> str:
     text = (REPO / "README.md").read_text(encoding="utf-8")
-    _, _, after = text.partition("## Repo layout")
+    heading = re.search(r"^## (?:\S+\s+)?Repo layout\s*$", text, re.MULTILINE)
+    assert heading is not None, "README.md lost its 'Repo layout' section"
+    after = text[heading.end() :]
     section, _, _ = after.partition("\n## ")
-    assert section, "README.md lost its '## Repo layout' section"
+    assert section, "README.md lost its 'Repo layout' section"
     return section
 
 

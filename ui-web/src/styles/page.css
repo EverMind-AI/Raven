@@ -3457,6 +3457,25 @@ details[open] summary { margin-bottom: 8px; }
 .mini[disabled] { opacity: .55; pointer-events: none; }
 .mini.ghost { border-color: var(--line); color: var(--muted); }
 .mini.ghost:hover { color: var(--text); border-color: var(--faint); }
+/* The one thing left to do. Raised when a key saves onto an empty model list:
+   the provider is connected, nothing looks wrong, and it still lends the picker
+   nothing -- so the button that fixes that stops being ghost-quiet and says so.
+
+   Three pulses, then a standing amber outline. An animation that never stops
+   reads as a defect in the page rather than a prompt, and one that only plays
+   once is missed by anyone who was looking at the key field they just filled. */
+.mini.nudge {
+  border-color: var(--amber); color: var(--amber); font-weight: 600;
+  animation: nudge-pulse 1.1s ease-out 3;
+}
+.mini.nudge:hover { background: var(--amber); border-color: var(--amber); color: var(--ink); }
+@keyframes nudge-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--amber) 55%, transparent); }
+  70%  { box-shadow: 0 0 0 6px color-mix(in oklab, var(--amber) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--amber) 0%, transparent); }
+}
+/* The outline still carries it for a reader who has asked for no motion. */
+@media (prefers-reduced-motion: reduce) { .mini.nudge { animation: none; } }
 .mini.update { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 28px; padding: 4px; }
 .mini.update svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 

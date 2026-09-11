@@ -459,59 +459,6 @@ def test_a_working_directory_root_that_contains_the_state_root_earns_no_exemptio
         resolve_readable(str(home / "serve.json"))
 
 
-def test_a_session_workdir_does_not_move_the_fence_off_agent_home(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``/file`` resolves against the session's working directory when the page
-    names a session. That directory anchors relative paths; it must not anchor
-    the state-dir fence, whose exemptions are derived from agent home. Handed
-    the working directory in that role, the fence exempted ``~/.raven/tmp/tui``
-    and a sibling that does not exist, and refused every file the DAG runner
-    writes under ``~/.raven/workspace/sessions/`` -- a sub-agent's report among
-    them -- while the page had just drawn it as a delivery. The secrets stay
-    refused under the same call."""
-    from raven.rpc import files as files_module
-
-    home = tmp_path / "raven-home"
-    ws = home / "workspace"
-    node_dir = ws / "sessions" / "tui" / "20260910_063841_52ef08" / "subagents" / "nodes"
-    node_dir.mkdir(parents=True)
-    report = node_dir / "research_step_v2.out.md"
-    report.write_text("# delivered by a sub-agent")
-    workdir = home / "tmp" / "tui"
-    workdir.mkdir(parents=True)
-    (home / "serve.json").write_text(json.dumps({"token": "s3cret"}))
-    monkeypatch.setenv("RAVEN_HOME", str(home))
-    monkeypatch.setattr(files_module, "load_config", lambda: _workspace_config(ws, restrict=False))
-
-    assert resolve_readable(str(report), workspace=workdir) == report.resolve()
-    with pytest.raises(PermissionError):
-        resolve_readable(str(home / "serve.json"), workspace=workdir)
-
-
-def test_a_pinned_workdir_under_the_state_root_keeps_its_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A session can be pinned to a directory of its own. One that sits under
-    raven's home but outside both derived exemptions is still where the agent
-    writes for that session, so the viewer keeps serving it -- as it did while
-    the working directory stood in for agent home. Pinning the session to the
-    state root itself earns nothing: that directory holds ``serve.json``."""
-    from raven.rpc import files as files_module
-
-    home = tmp_path / "raven-home"
-    ws = home / "workspace"
-    ws.mkdir(parents=True)
-    pinned = home / "projects" / "demo"
-    pinned.mkdir(parents=True)
-    (pinned / "notes.md").write_text("# written in the pinned directory")
-    (home / "serve.json").write_text(json.dumps({"token": "s3cret"}))
-    monkeypatch.setenv("RAVEN_HOME", str(home))
-    monkeypatch.setattr(files_module, "load_config", lambda: _workspace_config(ws, restrict=False))
-
-    assert resolve_readable(str(pinned / "notes.md"), workspace=pinned) == (pinned / "notes.md").resolve()
-    with pytest.raises(PermissionError):
-        resolve_readable(str(home / "serve.json"), workspace=home)
-
-
 async def test_the_sign_in_cookie_outlives_the_browser_session(gateway_client) -> None:
     """Without a max-age this is a session cookie: closing the browser signs the
     user out of a gateway that never went anywhere, and the page then reports a

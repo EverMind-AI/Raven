@@ -1,0 +1,50 @@
+# What the build context carries. The image installs raven from this tree
+# (editable, the way a checkout runs), so the runtime source has to be here --
+# raven/, agents/, plugins-dist/, i18n/ and the packaging manifests all stay.
+# Everything listed below is rebuilt inside the image, host-specific, or a tree
+# the runtime never opens.
+
+.git
+.github
+.venv
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.vitest-cache
+**/.uv-cache
+
+# Assembled by the web stage. A host build copied in would shadow it, and the
+# two are not always the same commit.
+ui-web/dist
+ui-web/.modern
+
+# Not reached from `raven serve` / `raven gateway`.
+ui-tui
+bridge/dist
+benchmarks
+demos
+docs
+evolver
+tests
+# The retired vendored fork tree (500+ MB). The products the runtime discovers
+# live in agents/; see raven/agent/subagent/vendored_agents.py.
+subagents
+
+dist
+build
+htmlcov
+coverage.xml
+coverage.json
+coverage-baseline-candidate.json
+
+# Host state and credentials. docker/.env is the shipped template and is the
+# one env file the image is allowed to see -- and even that is read by Compose
+# on the host, not baked in.
+.env
+**/*.env
+!docker/.env
+docker/.env.local

@@ -177,7 +177,7 @@ def page_target(page_config: "GatewayPageConfig", page_port: int | None) -> int 
     return page_config.port if page_config.enabled else None
 
 
-def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, above the ceiling)
+def register(app: typer.Typer) -> None:
     """Attach the ``gateway`` group to ``app``: the daemon as the bare command,
     the control-plane verbs (reload / status / stop) as sub-commands."""
     from raven.cli import gateway_control_commands
@@ -191,7 +191,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
     gateway_control_commands.register(gateway_app)
 
     @gateway_app.callback()
-    def gateway(  # noqa: C901 (cc 86: pre-existing, above the ceiling)
+    def gateway(
         ctx: typer.Context,
         port: int | None = typer.Option(None, "--port", "-p", help="Gateway port"),
         page_port: int | None = typer.Option(
@@ -281,7 +281,11 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
         if banner is not None:
             console.print(banner, style="bold red", markup=False)
         sync_workspace_templates(config.workspace_path, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))
-        provider = make_resolving_provider(config, config_supplier=lambda: load_runtime_config(None, None))
+        provider = make_resolving_provider(
+            config,
+            config_supplier=lambda: load_runtime_config(None, None),
+            allow_unconfigured=True,
+        )
         session_manager = SessionManager(config.workspace_path)
         session_root = None
         if workspace:
@@ -453,7 +457,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     exc,
                 )
 
-        async def run():  # noqa: C901 (cc 68: pre-existing, above the ceiling)
+        async def run():
             # `raven web --stop` and a systemd stop deliver SIGTERM. Parity
             # with Ctrl-C means cancelling THIS task in-loop so the graceful
             # chain below runs: the stdlib runner converts only SIGINT into a
@@ -805,7 +809,9 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     new_config = load_runtime_config(config_path_arg, home=home)
                     new_ec = load_raven_config()
                     new_provider = make_resolving_provider(
-                        new_config, config_supplier=lambda: load_runtime_config(None, None)
+                        new_config,
+                        config_supplier=lambda: load_runtime_config(None, None),
+                        allow_unconfigured=True,
                     )
                     new_router, new_provider = build_model_routing(new_config, new_provider)
                     nxt = build_runtime(

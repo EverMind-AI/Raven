@@ -495,6 +495,7 @@ export function fireSend(): void {
   const ta = field()
   const v = ta ? ta.value.trim() : ''
   if (!v && !hasAtts()) return
+  if (source().beforeSend?.()) return
   /* The tray is this island's, and so is what becomes of a staged file when the
      message leaves: the note is what the reader's own bubble renders from and
      what survives into session history. The page layer used to do this by

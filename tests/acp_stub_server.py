@@ -302,10 +302,6 @@ def handle_prompt(request_id, params) -> None:
             },
         )
         return
-    if MODE == "output_limit":
-        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pong"}})
-        ok(request_id, {"stopReason": "max_tokens"})
-        return
     if MODE == "asks":
         send(
             {
