@@ -3790,7 +3790,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0,<3.0" },
     { name = "orjson", specifier = ">=3.11.6,<4.0" },
     { name = "pillow", specifier = ">=10.0.0" },
-    { name = "playwright", marker = "extra == 'browser'", specifier = ">=1.49,<2.0" },
+    { name = "playwright", marker = "extra == 'browser'", specifier = ">=1.58,<2" },
     { name = "portalocker", specifier = ">=3.2.0" },
     { name = "ppt-engine", marker = "extra == 'dev'", editable = "plugins-dist/ppt-engine" },
     { name = "prompt-toolkit", specifier = ">=3.0.0" },

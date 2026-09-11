@@ -18,6 +18,10 @@ brew install --cask libreoffice                  # macOS
 winget install TheDocumentFoundation.LibreOffice # Windows
 ```
 
+The browser tool's chromium binary is also not a Python package: a source
+checkout downloads it with `uv run playwright install chromium` (install.sh
+does this for tool installs).
+
 `raven doctor` reports it under **External tools**.
 
 ### 1. Install dependencies

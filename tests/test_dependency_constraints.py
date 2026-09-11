@@ -56,3 +56,34 @@ def test_every_constraint_is_satisfied_by_the_locked_version() -> None:
         assert req.specifier.contains(Version(version), prereleases=True), (
             f"uv.lock pins {name}=={version}, which {req} excludes"
         )
+
+
+_PLAYWRIGHT_PINS = (
+    ("host browser extra", "pyproject.toml", ("project", "optional-dependencies", "browser")),
+    (
+        "design-engine render extra",
+        "plugins-dist/design-engine/pyproject.toml",
+        ("project", "optional-dependencies", "render"),
+    ),
+    ("ppt-engine carrier", "plugins-dist/ppt-engine/pyproject.toml", ("project", "dependencies")),
+)
+
+
+def test_the_three_playwright_pins_read_as_one_specifier() -> None:
+    """playwright is declared three times on purpose: the host browser extra,
+    the design render extra that imports it, and the ppt-engine carrier whose
+    comment explains why an unimported dependency is not a stale one. The one
+    environment they meet in resolves a single version, so the three specifiers
+    must stay byte-identical -- whoever moves one moves all three in the same
+    change, and a cleanup that drops the carrier turns this red before it turns
+    a rendering install broken.
+    """
+    seen: dict[str, str] = {}
+    for label, path, keys in _PLAYWRIGHT_PINS:
+        table: object = tomllib.loads((_ROOT / path).read_text(encoding="utf-8"))
+        for key in keys:
+            table = table[key]  # type: ignore[index]
+        entries = [entry for entry in table if Requirement(entry).name == "playwright"]  # type: ignore[union-attr]
+        assert len(entries) == 1, f"{label}: expected exactly one playwright entry, got {entries}"
+        seen[label] = entries[0]
+    assert len(set(seen.values())) == 1, f"the playwright pins drifted apart: {seen}"

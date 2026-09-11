@@ -126,7 +126,7 @@ sandbox = [
 # of its own, which no other capability needs. raven.browser imports it lazily
 # and reports the extra as missing rather than failing to start.
 browser = [
-    "playwright>=1.49,<2.0",
+    "playwright>=1.58,<2",
 ]
 dev = [
     "pytest>=8.0,<10.0",
