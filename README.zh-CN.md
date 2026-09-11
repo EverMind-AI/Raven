@@ -129,7 +129,7 @@ uv run raven web
 
 ```bash
 cd docker
-docker compose up --build
+docker compose up
 ```
 
 然后打开 <http://127.0.0.1:18793>。Compose 容器始终运行完整的 `gateway`
@@ -170,7 +170,7 @@ make docker-build
 默认标签是 `raven:local`。如需指定其他标签或可选依赖，可以运行：
 
 ```bash
-make docker-build DOCKER_IMAGE=raven:dev
+make docker-build DOCKER_IMAGE=raven:local
 docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
 ```
 
