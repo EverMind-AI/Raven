@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -258,6 +259,18 @@ def test_a_cropped_image_becomes_a_content_warning() -> None:
     assert warnings[0]["details"] == ["demo.png: 960x720 shown in a 480x720 box with object-fit cover, 50% cropped"]
 
 
+@pytest.fixture
+def _browsers_from_the_real_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The suite redirects HOME to a temp dir; playwright keeps its browsers
+    under the real one. Point discovery there unless the caller already did."""
+    if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        import pwd
+
+        real_home = pwd.getpwuid(os.getuid()).pw_dir
+        monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", os.path.join(real_home, "Library", "Caches", "ms-playwright"))
+
+
+@pytest.mark.usefixtures("_browsers_from_the_real_home")
 def test_the_browser_reports_images_that_object_fit_crops() -> None:
     """A height attribute overriding a CSS aspect-ratio turned a 4:3 frame into a
     2:3 box and object-fit: cover cut half the frame away; the runtime metadata
@@ -317,6 +330,7 @@ def test_the_opening_visual_facts_become_one_detail_line() -> None:
     assert warnings[0]["details"] == ["opening visual: hero.png — 48% of viewport; headline overlap 0%"]
 
 
+@pytest.mark.usefixtures("_browsers_from_the_real_home")
 def test_the_browser_measures_where_the_headline_sits_on_the_opening_visual() -> None:
     """Text over a full-bleed image reads as overlap 100 with a uniform backdrop
     for a flat fill; text beside an image reads as overlap 0."""
@@ -384,3 +398,117 @@ def test_render_measurements_travel_as_facts_not_errors(tmp_path: Path) -> None:
     ]
     metadata = json.loads(preview_tool_result(outcome, max_inline_bytes=10)[0]["text"])
     assert "errors" not in metadata and metadata["facts"] == result["facts"]
+
+
+_CFT_MAC_ARM64 = "chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+
+
+def _stage_chromium(root: Path, relative: str) -> Path:
+    executable = root / relative
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_bytes(b"")
+    return executable
+
+
+def test_discovery_reaches_the_playwright_env_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven_design.rendering.models import _discover_chromium
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    env_root = tmp_path / "browsers"
+    executable = _stage_chromium(env_root, _CFT_MAC_ARM64)
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(env_root))
+
+    assert _discover_chromium() == str(executable)
+
+
+@pytest.mark.parametrize("cache", ["Library/Caches/ms-playwright", ".cache/ms-playwright"])
+def test_unset_or_zero_env_root_falls_through_to_the_home_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cache: str
+) -> None:
+    from raven_design.rendering.models import _discover_chromium
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    executable = _stage_chromium(home / cache, _CFT_MAC_ARM64)
+
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+    assert _discover_chromium() == str(executable)
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "0")
+    assert _discover_chromium() == str(executable)
+
+
+def test_env_zero_resolves_the_package_local_browsers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven_design.rendering import models
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    pkg_root = tmp_path / "pkg" / ".local-browsers"
+    executable = _stage_chromium(pkg_root, _CFT_MAC_ARM64)
+    monkeypatch.setattr(models, "_package_local_root", lambda: pkg_root)
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "0")
+
+    assert models._discover_chromium() == str(executable)
+
+
+def test_a_set_env_root_wins_over_the_home_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven_design.rendering.models import _discover_chromium
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    _stage_chromium(home / "Library" / "Caches" / "ms-playwright", _CFT_MAC_ARM64)
+    env_root = tmp_path / "browsers"
+    from_env = _stage_chromium(env_root, "chromium-1234/chrome-linux/chrome")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(env_root))
+
+    assert _discover_chromium() == str(from_env)
+
+
+def test_the_vm_root_outranks_the_user_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven_design.rendering.models import _CACHE_PATTERN_GROUPS, _VM_PATTERN_GROUPS, _discover_chromium
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    vm_root = tmp_path / "ms-playwright"
+    from_vm = _stage_chromium(vm_root, "chromium-1234/chrome-linux/chrome")
+    cache_root = tmp_path / "cache"
+    _stage_chromium(cache_root, _CFT_MAC_ARM64)
+    roots = ((vm_root, _VM_PATTERN_GROUPS), (cache_root, _CACHE_PATTERN_GROUPS))
+
+    assert _discover_chromium(roots) == str(from_vm)
+
+
+def test_the_legacy_chromium_app_layout_is_still_discovered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven_design.rendering.models import _discover_chromium
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    env_root = tmp_path / "browsers"
+    executable = _stage_chromium(env_root, "chromium-1105/chrome-mac/Chromium.app/Contents/MacOS/Chromium")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(env_root))
+
+    assert _discover_chromium() == str(executable)
+
+
+def test_the_missing_browser_refusal_says_how_to_fix_it(tmp_path: Path) -> None:
+    from raven_design.rendering.browser import BrowserAdapter
+    from raven_design.rendering.models import RenderConfig, RenderError, RenderRequest
+
+    config = RenderConfig(chrome_path="", libreoffice_path=None)
+    detection = Detection(
+        format="html",
+        family="browser",
+        mime="text/html",
+        declared_extension=".html",
+        support_level="guaranteed",
+        metadata={},
+    )
+    request = RenderRequest(path=tmp_path / "page.html", output_dir=tmp_path)
+
+    with pytest.raises(RenderError) as raised:
+        BrowserAdapter(config).render(tmp_path / "page.html", tmp_path, detection, request)
+
+    assert raised.value.code == "renderer_unavailable"
+    assert "playwright install chromium" in raised.value.message
+    assert "chromePath" in raised.value.message

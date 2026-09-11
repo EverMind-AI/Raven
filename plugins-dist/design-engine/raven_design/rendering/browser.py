@@ -108,7 +108,8 @@ class BrowserAdapter:
         if not self.config.chrome_path:
             raise RenderError(
                 "renderer_unavailable",
-                "No Chromium executable is available.",
+                "No Chromium executable is available; run `playwright install chromium` "
+                "or point the render config's `chromePath` at a Chromium binary.",
             )
         browser_root = bundle_root / ".worker" / "browser-root"
         relative_source = _stage_assets(

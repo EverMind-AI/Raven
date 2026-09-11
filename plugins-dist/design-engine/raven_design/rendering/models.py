@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NotRequired, Protocol, TypedDict
@@ -13,27 +16,69 @@ DEFAULT_PREVIEW_COUNT = 6
 DEFAULT_VIEWPORT = (1440, 900)
 MOTION_MODES = frozenset({"auto", "static", "dynamic"})
 
+_VM_BROWSER_ROOT = Path("/ms-playwright")
+_VM_PATTERN_GROUPS = (
+    (
+        "chromium-*/chrome-linux/chrome",
+        "chromium-*/chrome-linux64/chrome",
+    ),
+    (
+        "chromium_headless_shell-*/chrome-headless-shell-linux/headless_shell",
+        "chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
+    ),
+)
+# playwright >= 1.58 installs macOS Chromium as a Chrome for Testing app
+# bundle; older caches still carry the pre-CfT Chromium.app layout, so
+# every pattern must end at the executable the config will exec.
+_CACHE_PATTERN_GROUPS = (
+    ("chromium-*/chrome-linux/chrome",),
+    ("chromium-*/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",),
+    ("chromium-*/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",),
+    ("chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium",),
+)
 
-def _discover_chromium() -> str | None:
+DiscoveryRoots = Sequence[tuple[Path, tuple[tuple[str, ...], ...]]]
+
+
+def _package_local_root() -> Path | None:
+    # PLAYWRIGHT_BROWSERS_PATH="0" is playwright's spelling for "keep browsers
+    # inside the package", not a path: resolve the package the way doctor does,
+    # so the two detectors cannot disagree about the same environment.
+    spec = importlib.util.find_spec("playwright")
+    if spec is None or not spec.origin:
+        return None
+    return Path(spec.origin).parent / ".local-browsers"
+
+
+def _playwright_roots() -> DiscoveryRoots:
+    # /ms-playwright is the boxlite VM image layout and worker.py re-runs
+    # discovery inside that VM, so it outranks the PLAYWRIGHT_BROWSERS_PATH
+    # override, which in turn outranks the per-user host caches.
+    roots: list[tuple[Path, tuple[tuple[str, ...], ...]]] = [(_VM_BROWSER_ROOT, _VM_PATTERN_GROUPS)]
+    env_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+    if env_root == "0":
+        local = _package_local_root()
+        if local is not None:
+            roots.append((local, _CACHE_PATTERN_GROUPS))
+    elif env_root:
+        roots.append((Path(env_root), _CACHE_PATTERN_GROUPS))
+    home = Path.home()
+    roots.append((home / "Library" / "Caches" / "ms-playwright", _CACHE_PATTERN_GROUPS))
+    roots.append((home / ".cache" / "ms-playwright", _CACHE_PATTERN_GROUPS))
+    return roots
+
+
+def _discover_chromium(roots: DiscoveryRoots | None = None) -> str | None:
     executable = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
     if executable:
         return executable
-    browser_root = Path("/ms-playwright")
-    if not browser_root.is_dir():
-        return None
-    for patterns in (
-        (
-            "chromium-*/chrome-linux/chrome",
-            "chromium-*/chrome-linux64/chrome",
-        ),
-        (
-            "chromium_headless_shell-*/chrome-headless-shell-linux/headless_shell",
-            "chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
-        ),
-    ):
-        candidates = sorted(candidate for pattern in patterns for candidate in browser_root.glob(pattern))
-        if candidates:
-            return str(candidates[-1])
+    for browser_root, pattern_groups in _playwright_roots() if roots is None else roots:
+        if not browser_root.is_dir():
+            continue
+        for patterns in pattern_groups:
+            candidates = sorted(candidate for pattern in patterns for candidate in browser_root.glob(pattern))
+            if candidates:
+                return str(candidates[-1])
     return None
 
 
