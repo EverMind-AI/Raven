@@ -48,23 +48,22 @@ def pdf_without_pages(rendered: Path, pages: Sequence[int], target: Path) -> boo
     delivered beside it, and one page longer than that file is a preview of a deck
     nobody has. The caller drops the preview instead of showing a wrong one.
     """
-    from raven_ppt.services.render.capabilities import PDFIUM_LOCK, pdfium
+    from raven_ppt.services.render.capabilities import pdfium
 
     module = pdfium()
     if module is None:
         return False
-    with PDFIUM_LOCK:
+    try:
+        document = module.PdfDocument(str(rendered), autoclose=True)
         try:
-            document = module.PdfDocument(str(rendered), autoclose=True)
-            try:
-                count = len(document)
-                for index in sorted({int(page) for page in pages}, reverse=True):
-                    if 1 <= index <= count:
-                        document.del_page(index - 1)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                document.save(str(target))
-            finally:
-                document.close()
-        except Exception:  # noqa: BLE001 -- no preview is better than the wrong one
-            return False
+            count = len(document)
+            for index in sorted({int(page) for page in pages}, reverse=True):
+                if 1 <= index <= count:
+                    document.del_page(index - 1)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            document.save(str(target))
+        finally:
+            document.close()
+    except Exception:  # noqa: BLE001 -- no preview is better than the wrong one
+        return False
     return target.is_file()

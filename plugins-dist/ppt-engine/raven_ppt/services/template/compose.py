@@ -237,21 +237,6 @@ class PageBox(NamedTuple):
     def h(self) -> float:
         return self.y1 - self.y0
 
-    # The docstring above promises this reads the same as `ppt_layout.Box`, and that
-    # box answers to `.x` and `.y` as well as `.w` and `.h`. Without these two a
-    # program that reads a corner off one box and hands it to another gets half its
-    # names back and an AttributeError for the rest: a live run's helper did
-    # `round(b.y, 3), round(b.x, 3)` once, in one place, and every page of a
-    # twenty-page deck failed to draw. `Box` was given the same pair for the same
-    # reason; the promise was the part that did not travel.
-    @property
-    def x(self) -> float:
-        return self.x0
-
-    @property
-    def y(self) -> float:
-        return self.y0
-
 
 def page_box(shape) -> PageBox:
     """Where `shape` is drawn and how big it is drawn, in page inches.
@@ -1215,7 +1200,7 @@ def _transparent_share(source) -> float | None:
         return None
 
 
-def _check_cut_out(shape, image: Path | str) -> None:
+def _check_cut_out(shape, image: Path) -> None:
     """Warn when an opaque picture takes a cut-out's box.
 
     A template's cartoon is a transparent PNG floating on the page's own ground, and its
@@ -1235,7 +1220,7 @@ def _check_cut_out(shape, image: Path | str) -> None:
     warnings.warn(
         f"{getattr(shape, 'name', 'this frame')!r} held a cut-out illustration on the page's own ground "
         f"({(shape.width or 0) / 914400:.1f}x{(shape.height or 0) / 914400:.1f}in at {left:.2f}, {top:.2f}), and "
-        f"{Path(image).name} is an opaque picture: in the cut-out's box it lands on whatever the drawing floated over "
+        f"{image.name} is an opaque picture: in the cut-out's box it lands on whatever the drawing floated over "
         "-- a title row, a band. Either give the photograph a box of its own, clear of the copy "
         "(replace_picture(shape, image, box=(left, top, width, height)) or place(shape, box)), or fill the slot with a "
         "cut-out: ppt_generate_image(..., transparent=true).",

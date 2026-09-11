@@ -11,17 +11,10 @@ argument threaded through every call site.
 **These calls block, for seconds.** LibreOffice on a real deck takes single-digit
 seconds cold; rasterising forty pages takes a few more. A stage must therefore
 reach them through `asyncio.to_thread`, not call them directly on the event loop --
-an agent whose loop is parked for eleven seconds stops answering.
-
-Threads are safe here, but only one half of the chain is safe by construction. Every
-conversion is its own process with its own profile directory and its own temporary
-space, and nothing in this package holds mutable state between calls. Reading the PDF
-is the other half: PDFium keeps its state per process rather than per document, and
-pypdfium2's API contract forbids two threads inside the library at once even for
-different documents opened through different wrappers. So every call into it is
-serialised by `capabilities.PDFIUM_LOCK` -- including from an instance of this class
-that knows nothing of any other -- and a caller that reaches the module by some other
-route has to take that lock as well.
+an agent whose loop is parked for eleven seconds stops answering. Threads are safe
+here by construction: every conversion is its own process with its own profile
+directory and its own temporary space, and nothing in this package holds mutable
+state between calls.
 """
 
 from __future__ import annotations
