@@ -274,8 +274,8 @@ async def install_and_connect(entry_id: Any, form: Any, loop: "McpHost | None") 
     """
     from raven.market import catalog_detail, install_plugin, uninstall_plugin
     from raven.market.install import PlugInstallError
-    from raven.market.vetting import HubTrustError
     from raven.mcp.oauth import auth_wait_servers
+    from raven.security.urls import HubTrustError
 
     entry_id = validated_catalog_id(entry_id)
     form = form or {}
