@@ -125,27 +125,6 @@ POST_TOOL_NUDGE = (
     "results above to continue the task, or give your final answer now."
 )
 
-# A turn that ended empty at the output ceiling: no visible text, no tool call,
-# nothing kept. The effort descent above changes what the next request asks
-# *for*; this is the only thing that tells the model what happened, and the only
-# place a payload too large to finish is named -- no rung of the ladder can
-# shrink a write. `Tool.truncation_hint` says the same thing better but rides a
-# refused tool call, and a turn cut before any call produced none.
-#
-# Every sentence here is held to what the trigger proves, which is only that an
-# empty turn hit the ceiling. It does not say the reasoning spent the budget:
-# true for a reasoning model and false for one whose answer simply ran long, and
-# the trigger cannot tell them apart. It does not name a tool call as the owed
-# reply either -- a plain question arrives here too. Both were review findings,
-# in that order; a third would be the same mistake again.
-OUTPUT_LIMIT_NUDGE = (
-    "Your previous turn was cut off at the output token limit before it produced "
-    "any reply or tool call, so nothing from it was kept. Keep this turn short: "
-    "answer briefly, or make the tool call the task needs. If a payload you were "
-    "writing is too large to finish in one call, send it across several smaller "
-    "calls instead of one."
-)
-
 
 class RecoveryAction(Enum):
     """What the loop should do about an empty assistant response."""

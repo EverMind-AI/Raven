@@ -127,7 +127,7 @@ def test_silence_with_honest_usage_is_left_to_the_loop() -> None:
 
     An empty response whose prompt was billed truthfully is a model that said
     nothing -- `recovery.py` recovers that by changing the request (a prefill,
-    a post-tool nudge, a note that the output limit cut the turn) or retrying it. Reporting it as an error takes all of
+    a post-tool nudge) or retrying it. Reporting it as an error takes all of
     that out of service, because the loop breaks on an error response before
     `classify_empty_response` runs. Retrying the identical request, the only
     thing this verdict can ask for, is also the one thing that does not help.

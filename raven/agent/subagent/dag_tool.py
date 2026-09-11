@@ -1644,7 +1644,9 @@ class SubAgentDagTool(Tool):
         if self._provider_for is None or not cfg.verdict_enabled:
             return None
 
-        async def _judge(*, node: Any, store: Any, output: str, error: str, crashed: bool) -> Verdict:
+        async def _judge(
+            *, node: Any, store: Any, output: str, error: str, crashed: bool, output_limited: bool = False
+        ) -> Verdict:
             # Resolved here, not when this tool was built: the loop's provider is
             # a property over the running turn's binding, so a session that
             # switched model must reach the judge.
@@ -1662,6 +1664,7 @@ class SubAgentDagTool(Tool):
                     evidence_complete=complete,
                     model=cfg.verdict_model,
                     timeout_s=cfg.verdict_timeout_seconds,
+                    output_limited=output_limited,
                 )
             return await judge(
                 provider,
@@ -1671,6 +1674,7 @@ class SubAgentDagTool(Tool):
                 evidence_complete=complete,
                 model=cfg.verdict_model,
                 timeout_s=cfg.verdict_timeout_seconds,
+                output_limited=output_limited,
             )
 
         return _judge

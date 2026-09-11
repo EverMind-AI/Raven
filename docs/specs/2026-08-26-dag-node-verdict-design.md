@@ -29,9 +29,11 @@ to do when it did not.
 1. **The graph pauses rather than fails.** A node judged to have hit an exception
    enters a non-terminal state; its dependents stay `pending` instead of cascading to
    `skipped`, and unrelated branches keep running.
-2. **The judge reads prompt + output + a bounded transcript tail.** A budget, not the
-   whole transcript: a node with dozens of tool rounds would otherwise cost more to
-   judge than to run. Nodes whose backend publishes no transcript degrade to
+2. **The judge reads prompt + output + a bounded transcript tail, plus one fact read
+   off the run's transport rather than out of its answer: whether the generation
+   stopped at the model's output ceiling.** A budget, not the whole
+   transcript: a node with dozens of tool rounds would otherwise cost more to judge
+   than to run. Nodes whose backend publishes no transcript degrade to
    prompt + output and say so in the report.
 3. **Adjudication may involve the user.** "Missing key user information" is not
    something Raven can resolve alone, so the wait is long and configurable (600s by
@@ -182,7 +184,7 @@ comment states that `status` is for placement, not verdict.
 
 - `run_id`, `node_id`, `subagent`, `instance`;
 - `category`: `missing_user_input` / `missing_credential` / `tool_failure` /
-  `dependency_output_unusable` / `other`;
+  `dependency_output_unusable` / `output_limit` / `other`;
 - `what_is_missing`, one sentence -- this is what Raven uses to decide whether it can
   supply the answer itself or has to ask the user;
 - `evidence` drawn from the transcript, or the evidence-incomplete marker;

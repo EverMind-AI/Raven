@@ -1250,6 +1250,13 @@ class AcpAgentBackend:
                 # The agent's own metadata on the response, kept for the run
                 # record as sent; the host reads none of it.
                 activity.note_response_meta(result.get("_meta") if isinstance(result, dict) else None)
+                # The ceiling, from the protocol's own field rather than from the
+                # agent's metadata table: every conforming agent reports it here,
+                # and the stop reason is a value this design already acts on --
+                # where `_meta` is the agent's record the host decides nothing
+                # from, which is what the Response Meta term's `_Avoid_` names.
+                if stop_reason == "max_tokens":
+                    activity.note_output_limit()
                 text = collector.text
                 frames = self._frames(journal, connection, session_id, frames_start)
                 self._record(span, collector, stop_reason=stop_reason, started=started, frames=frames)

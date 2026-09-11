@@ -448,15 +448,9 @@ same thinking-only turn takes NUDGE after a tool, else RETRY, and no request han
 ends on an assistant message. RETRY descends the effort ladder by what a rung *sends*, not by
 its label: the provider is asked (`LLMProvider.reasoning_wire_keys`) and a rung whose request
 this wire cannot tell apart from the one that failed is skipped -- when none is left, the
-turn has nothing to change and FAILs rather than paying for the same call twice. A retry
-after a turn cut at the output ceiling also carries `OUTPUT_LIMIT_NUDGE`, once per turn. The
-descent changes what the request asks *for*; the nudge is the only thing that tells the model
-its last turn was cut and that a payload too large to finish has to be split -- which no
-effort rung can do, and which `Tool.truncation_hint` cannot reach because a turn cut before
-any call produced no tool result to carry it.
+turn has nothing to change and FAILs rather than paying for the same call twice.
 _Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes; and reading
-FAIL as a fourth mode — it is the answer given when there is nothing left to try;
-`OUTPUT_LIMIT_NUDGE` rides RETRY rather than being the NUDGE mode.
+FAIL as a fourth mode — it is the answer given when there is nothing left to try.
 
 **Call Record** (`contracts/llm_provider.py`, `providers/call_record.py`):
 What the transport did on one model call, carried on `LLMResponse.call_record` and stored
@@ -1578,44 +1572,14 @@ _Avoid_: confusing with JudgeVerdict (the EvalEngine's completed/failed/unknown)
 **Trajectory Pin** (`raven/trajectory/store.py`):
 The retention promise for an Attempt or trace id, recorded in `pins.json` in the trace
 state dir: pinned ids are corpus, not diagnostics — purge tooling must never delete
-their spans or the artifacts those spans reference, nor anything those artifacts
-reference in turn. An `audit.artifact.v2` shell holds no messages of its own, so
-deleting a Message Blob it addresses destroys the pinned trajectory while leaving
-the artifact file in place.
+their spans or the artifacts those spans reference.
 
 **Trajectory Bundle** (`raven/trajectory/bundle.py`):
 The self-contained offline directory `collect_bundle` / `raven trajectory save` packs
 for one Attempt: `manifest.json` + `spans.jsonl` (artifact references rewritten to
 bundle-relative paths) + `artifacts/` + the session's conversation record + its
-verdicts. An `audit.artifact.v2` artifact is resolved on the way in, so a bundle
-depends on no Message Blob and reads on a machine that has none; a blob that is gone
-becomes a labelled placeholder at its own index and its sha1 is listed under the
-manifest's `missing_messages`. Bundling declares the trajectory corpus, so the id is
-auto-pinned.
+verdicts. Bundling declares the trajectory corpus, so the id is auto-pinned.
 _Avoid_: "archive" — that names the tracing store's rotated-log directory.
-
-**Message Blob** (`raven/tracing/artifact_v2.py`):
-One model-input message stored once, at
-`<state_dir>/logs/audit-artifacts/_messages/<sha1[:2]>/<sha1>.json`, addressed by the
-sha1 of `json.dumps(message, ensure_ascii=False, default=str)` — key order
-preserved, since sorting would make resolution hand back a reordered copy. Beside
-`_blobs/` and never inside it: `raven.tracing.compact` sweeps a blob whose link count
-is 1, and a Message Blob's is permanently 1 because a shell references it from its
-JSON text rather than by hard link. `compact` names both stores in
-`_CONTENT_STORES` and walks neither as an artifact tree -- their layout is
-indistinguishable from `<kind>/<day>/<file>`, so a store left in the walk is rehashed
-whole on every run and hard-linked into `_blobs/`, breaking this boundary. No reclaim path yet; growth is bounded only by use.
-_Avoid_: storing one under `_blobs/` — that directory holds whole-artifact
-payloads, and `compact` sweeps any member of it whose link count is 1.
-
-**Artifact Shell** (`raven/observability/semconv.py`):
-An `llm.input` artifact in `audit.artifact.v2` form: the call's identity plus one
-`{"$msg": "<sha1>"}` reference per message, with `systemPrompt` and `prompt` aliasing
-their own element rather than restating its text. Resolving a shell reproduces the v1
-payload exactly, which is the invariant the format rests on. The envelope is a dict so
-a reader ignoring `artifactFormat` fails loudly instead of rendering a sha1 as prompt
-text, and so one shell can mix references with a message inlined because its blob
-could not be written.
 
 **Trajectory Redaction** (`raven/trajectory/redact.py`):
 The three-layer sanitization `redact_bundle` applies to a **copy** of a Trajectory
@@ -2303,10 +2267,15 @@ the record's directory - a task id no reader of a *conversation* ever sees.
 _Avoid_: reading the absence of live rows as "the turn ended" - a transport with no per-step
 visibility reports none for the whole of every turn.
 
-**Stop Reason** (`raven/acp_client/acp_agent.py`):
+**Stop Reason** (`raven/acp_client/acp_agent.py`, `raven/acp/methods.py`):
 What an ACP agent reports at the end of a turn. Only `end_turn` means it finished; every
 other value (`cancelled`, `max_tokens`, `refusal`, ...) leaves a reply that reads complete
-and is not. Such a reply is kept and carries an appended `[raven]` notice naming the stop
+and is not. Raven serving the agent side sends `max_tokens` for a turn whose generation
+stopped at the model's output ceiling, refined from `end_turn` and never over a reason that
+already says why the turn ended; driving the agent side it reads that value as the
+delegated run's ceiling report, which is the seam the node verdict is told about. The
+protocol's own field rather than a private `_meta` key, because Response Meta is the
+agent's record that the host decides nothing from. Such a reply is kept and carries an appended `[raven]` notice naming the stop
 reason, budgeted before the reply is clamped to `maxOutputChars` so the notice cannot be
 the part that is cut. Kept rather than raised because a partial answer is worth having;
 noticed rather than returned bare because neither the main agent nor a person in a Direct
@@ -2336,9 +2305,16 @@ name from when only a graph could claim one.
 
 **verdict** -- the judgement on whether a finished DAG node accomplished the task
 its prompt set. Made by one constrained model call over the node's prompt, its
-output, and the tail of its transcript (`raven/agent/subagent/dag_verdict.py`). A node whose
-backend returned without raising is not thereby successful; the verdict is what
-decides.
+output, the tail of its transcript, and one fact read off the run's transport
+rather than out of its answer -- whether the generation stopped at the model's
+output ceiling (`raven/agent/subagent/dag_verdict.py`). That fact is stated outside
+the untrusted fence the other three arrive in, because it does not come from the
+text the sub-agent composed; the wording says whose report it is, since for a
+delegated agent it is that agent's own Stop Reason rather than a measurement made
+here. It explains a cut and never excuses unfinished work: `output_limit` is a
+not-accomplished category. It is absent for a transport that cannot report it, so
+its absence is "not known to have been cut" and never "ran to completion". A node whose backend returned without raising is
+not thereby successful; the verdict is what decides.
 _Avoid_: confusing with JudgeVerdict or Trajectory Verdict -- both name a different
 judgement (a turn's completion, an Attempt's pass/fail) made by a different
 subsystem; this one judges a single DAG node's output against its own prompt.

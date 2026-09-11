@@ -25,7 +25,6 @@ from raven.agent.loop._shared import (
     _TOOL_DURATION_MS_KEY,
     _TOOL_METADATA_KEY,
     _TOOL_PREVIEW_MAX_CHARS,
-    OUTPUT_LIMIT_NUDGE,
     POST_TOOL_NUDGE,
     SKIPPED_AFTER_BLOCKED_CALL,
     Any,
@@ -895,10 +894,6 @@ class TurnPathMixin:
         # only to tell a reader why the elisions that follow are all this turn
         # has left; the retry budget itself is ``compress_retries``.
         head_summary_failures = 0
-        # Said once per turn, not once per retry: three identical copies
-        # of it in one transcript are noise, and the escalation for advice
-        # that did not work is `loop_break_nudge`, not repetition.
-        output_limit_told = False
         # The watch-work judgement's state, owned by this turn: the loop is a
         # singleton and turns from other sessions run concurrently, so anything
         # on `self` here would let one session's dispatch silence another's
@@ -1228,6 +1223,15 @@ class TurnPathMixin:
                     generation_overrides=gen_overrides,
                 )
             )
+            # Assigned, not latched: the fact this carries is that the turn's
+            # own last word was cut, so a call that recovers clears it. Latching
+            # would report a cut to a reader whose question is what the turn
+            # delivered, and an earlier iteration that was cut and then answered
+            # in full delivered it. Read off `response.truncated` rather than
+            # `finish_reason`, because an upstream can answer a ceiling hit with
+            # a success claim instead.
+            if hook_metadata is not None:
+                hook_metadata["output_limited"] = bool(getattr(response, "truncated", False))
             if cut_continuation:
                 cut_continuation = False
                 if gate is not None:
@@ -1910,25 +1914,6 @@ class TurnPathMixin:
                             call_reasoning_effort or "unstated",
                             lowered,
                         )
-                        if response.truncated and not output_limit_told:
-                            # The descent above changes how much thinking the next
-                            # call may buy, which is nothing to a model that does no
-                            # reasoning and nothing to a write whose payload is the
-                            # thing that overran. Neither case leaves a tool call for
-                            # `Tool.truncation_hint` to ride, so this is the only
-                            # channel that reaches the model at all.
-                            # Read off `response.truncated`, not `finish_reason`: the
-                            # contract has one field for "stopped at the ceiling" and
-                            # says an upstream may claim success instead.
-                            # Same assistant-then-user shape as the nudge above, for
-                            # the same reason: a bare tool->user pair is a 400 on most
-                            # APIs, and the prefill may have left an assistant last.
-                            output_limit_told = True
-                            messages = self.context.add_assistant_message(messages, "(empty)")
-                            messages[-1]["_recovery_synthetic"] = True
-                            messages.append(
-                                {"role": "user", "content": OUTPUT_LIMIT_NUDGE, "_recovery_synthetic": True}
-                            )
                         prev_had_tool_calls = False
                         continue
                 if action is RecoveryAction.FAIL:
@@ -2521,6 +2506,24 @@ class TurnPathMixin:
             _stamp_turn_observers(all_msgs, turn_hook_meta, turn_start_idx)
 
         prev_len = len(session.messages)
+        # Session-level because this turn may persist no assistant row at all --
+        # a turn whose whole budget went to reasoning has no message to hang a
+        # record on. Stamped with the index this turn's rows start at, so a
+        # reader can tell the fact apart from an earlier turn's.
+        #
+        # Written OR cleared every turn, which is what actually makes it
+        # turn-scoped: the index alone would only be enough if it never went
+        # backwards, and `Session.clear()` (what `/new` calls) resets it while
+        # `undo_last_turn` rewinds it, neither touching metadata. An old marker
+        # could then sit at an index a later turn's own start satisfies, and
+        # that turn would be reported as cut -- a false fact, which is worse
+        # than the missing one this exists to supply. Cleared here rather than
+        # at those two call sites because every turn passes through here, and a
+        # third way to move the index would not.
+        if turn_hook_meta.get("output_limited"):
+            session.metadata["output_limit_turn_at"] = prev_len
+        else:
+            session.metadata.pop("output_limit_turn_at", None)
         self._save_turn(
             session, all_msgs, turn_start_idx, received_at=turn_received_at, inbound_original=inbound_original
         )

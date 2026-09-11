@@ -6322,7 +6322,7 @@ async def test_the_judge_sees_the_current_attempts_transcript(tmp_path):
     async def _announce(run_id, node_id, report, origin, **_):
         desk.resolve(node_id, "continue", "use the staging token")
 
-    async def _judge(*, node, store, output, error, crashed):
+    async def _judge(*, node, store, output, error, crashed, **_):
         try:
             text = await store.read_text(store.transcript_path(node.id))
         except Exception:
@@ -7905,7 +7905,7 @@ async def _run_replanned_dag(
 
     backend = _Backend()
 
-    async def _judge(*, node, store, output, error, crashed):
+    async def _judge(*, node, store, output, error, crashed, **_):
         return Verdict(accomplished=node.id != "a", what_is_missing="the wrong tool was used")
 
     async def _announce(run_id, node_id, text, origin, *, awaiting_decision):
@@ -8038,7 +8038,7 @@ async def test_a_run_that_was_not_replanned_reports_no_successor(tmp_path) -> No
 
     desk = AdjudicationDesk()
 
-    async def _judge(*, node, store, output, error, crashed):
+    async def _judge(*, node, store, output, error, crashed, **_):
         return Verdict(accomplished=True)
 
     async def _announce(*_a, **_kw):
@@ -8420,3 +8420,74 @@ async def test_any_acp_frame_marks_the_run_alive() -> None:
         did.last_event_ms = None
         await collector(PERMISSION_METHOD, {"toolCall": {"toolCallId": "t1"}})
         assert did.last_event_ms is not None
+
+
+class _CutExec(_FakeExec):
+    """A backend whose run reports that it hit its output ceiling."""
+
+    async def run(self, task: str, **kwargs):
+        from raven.agent.subagent import activity
+
+        activity.note_output_limit()
+        return await super().run(task, **kwargs)
+
+
+async def test_a_nodes_output_limit_reaches_the_judge(tmp_path):
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    seen = []
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "abandon", None)
+
+    async def _judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=True)
+
+    await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, exec_backend=_CutExec()
+    )
+
+    assert seen and all(call.get("output_limited") is True for call in seen)
+
+
+async def test_a_node_that_was_not_cut_tells_the_judge_nothing(tmp_path):
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    seen = []
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "abandon", None)
+
+    async def _judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=True)
+
+    await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+
+    assert seen and all(call.get("output_limited") is False for call in seen)
+
+
+async def test_a_judge_with_a_stale_signature_does_not_read_as_accomplished(tmp_path):
+    """The verdict fail-open covers a judgement that could not be made, not a
+    judge that could not be called. Swallowing the second silently marks every
+    node accomplished -- the verdict system switched off with nothing failing.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    async def _judge(*, node, store, output, error, crashed):
+        raise AssertionError("unreachable: the call itself must fail")
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "abandon", None)
+
+    desk = AdjudicationDesk()
+
+    result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+
+    assert result.summary["completed"] == 0, "an unjudgeable node must not pass"
+    assert result.summary["failed"] == 1

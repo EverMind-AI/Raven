@@ -2069,3 +2069,43 @@ class TestHeldTurnEdges:
         rig.engine.sessions.get_or_create(sid).messages.append({"role": "assistant", "content": "done"})
         rig.translator.settle_turn(sid, "end_turn")
         await asyncio.wait_for(task, 2)
+
+
+class _MetaSessions:
+    """Just enough SessionManager for ``_turn_meta``: one record with messages
+    and a metadata table."""
+
+    def __init__(self, messages, metadata):
+        self._record = type("_Rec", (), {"messages": messages, "metadata": metadata})()
+
+    def get_or_create(self, _key):
+        return self._record
+
+
+def test_a_cut_turn_is_reported_with_the_protocols_own_stop_reason():
+    sessions = _MetaSessions([{"role": "user", "content": "hi"}], {"output_limit_turn_at": 0})
+    assert AcpMethods._stop_reason("end_turn", sessions, "k", 0) == "max_tokens"
+
+
+def test_an_output_limit_left_by_an_earlier_turn_does_not_answer_this_prompt():
+    """The slot is session-level but the fact is turn-level: a prompt that
+    started after the cut turn must not inherit its answer."""
+    messages = [{"role": "user", "content": str(n)} for n in range(6)]
+    sessions = _MetaSessions(messages, {"output_limit_turn_at": 0})
+    assert AcpMethods._stop_reason("end_turn", sessions, "k", 5) == "end_turn"
+
+
+def test_a_more_specific_stop_reason_is_never_overwritten_by_the_ceiling():
+    """`cancelled` and `refusal` say why the turn ended; the ceiling only
+    refines the one value that claims the turn finished."""
+    sessions = _MetaSessions([{"role": "user", "content": "hi"}], {"output_limit_turn_at": 0})
+    for stop in ("cancelled", "refusal"):
+        assert AcpMethods._stop_reason(stop, sessions, "k", 0) == stop
+
+
+def test_turn_meta_reads_only_what_hooks_filed():
+    """Back to the documented contract: the table is the hooks' stash and
+    nothing else, so nothing the host decides from rides in it."""
+    messages = [{"role": "assistant", "content": "x", "observers": {"acp_meta": {"vendor.k": 1}}}]
+    sessions = _MetaSessions(messages, {"output_limit_turn_at": 0})
+    assert AcpMethods._turn_meta(sessions, "k", 0) == {"vendor.k": 1}

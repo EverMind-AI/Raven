@@ -775,7 +775,11 @@ class AcpMethods:
             # that is the whole of what the key decided.
             meta.pop(HOLD_TURN_META, None)
         self._announce_title(session.session_id)
-        result: dict[str, Any] = {"stopReason": stop}
+        # Asked after the hold loop, never before it: a held prompt spans several
+        # turns, and both `stop` and `filed_before` are reassigned per held turn,
+        # so this reads the ceiling of the turn that actually ended rather than
+        # of the one that armed the wake. Only that last turn's answer is sent.
+        result: dict[str, Any] = {"stopReason": self._stop_reason(stop, sessions, session.session_key, filed_before)}
         if meta:
             result["_meta"] = meta
         return result
@@ -894,6 +898,31 @@ class AcpMethods:
             if isinstance(meta, dict) and meta:
                 return dict(meta)
         return None
+
+    @staticmethod
+    def _stop_reason(stop: Any, sessions: Any, session_key: str, filed_before: int) -> Any:
+        """``stop``, refined to ``max_tokens`` when this turn hit the ceiling.
+
+        The protocol already has a word for it, and the schema's own enum
+        carries it -- so a turn cut at the output ceiling is reported the way
+        every conforming agent reports one, rather than through a private
+        ``_meta`` key the client would have to be taught and that no other agent
+        would send. It also refuses the alternative: ``_meta`` is the agent's own
+        record, which the Response Meta term says the host reads none of.
+
+        Only ``end_turn`` is refined. ``cancelled`` and ``refusal`` say why the
+        turn ended and the ceiling does not override them; ``end_turn`` is the
+        one value that claims the turn simply finished, which a cut one did not.
+
+        Read off the session, not a message: a turn that spent its whole budget
+        reasoning persists no assistant row, so there is nothing to hang it on.
+        Scoped by the same index the stash above is -- a slot written before this
+        prompt began belongs to an earlier turn and must not answer this one.
+        """
+        if stop != "end_turn" or sessions is None:
+            return stop
+        at = getattr(sessions.get_or_create(session_key), "metadata", {}).get("output_limit_turn_at")
+        return "max_tokens" if isinstance(at, int) and at >= filed_before else stop
 
     async def _session_cancel(self, params: dict[str, Any]) -> None:
         """Cancel the session's turn, and make sure its prompt is answered.
