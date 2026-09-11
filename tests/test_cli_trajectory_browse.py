@@ -1154,12 +1154,14 @@ def test_table_min_width_boundary_and_growth():
 
 
 def test_table_cjk_cells_stay_within_budget():
-    rows = [_mk_attempt(preview="宽字符预览" * 8, verdict="pass")]
+    """Escaped rather than literal: AGENTS.md 1.3 keeps repo source English,
+    and the glyphs are the measurement here, not text to read."""
+    rows = [_mk_attempt(preview="\u5bbd\u5b57\u7b26\u9884\u89c8" * 8, verdict="pass")]
 
     _header, row_tokens = tbrowse._attempt_table(rows, 80)
     assert tbrowse._cell_width(_flat(row_tokens[0])) <= _row_cap(80)
 
-    sessions = [tbrowse.SessionRow(key="cli:a", title="中文标题" * 12, attempts=rows, end=None)]
+    sessions = [tbrowse.SessionRow(key="cli:a", title="\u4e2d\u6587\u6807\u9898" * 12, attempts=rows, end=None)]
     _sh, srows = tbrowse._session_table(sessions, 80)
     assert tbrowse._cell_width(_flat(srows[0])) <= _row_cap(80)
 

@@ -110,7 +110,7 @@ def _decide_all(suspected_action=treview.ACTION_KEPT):
         "macos /private/var/folders/ab/T/x.log tmp",
         "mount /mnt/company/project/source.py",
         "opt /opt/internal/model/config.yaml",
-        "unicode /客户资料/项目 path",
+        "unicode /\u5ba2\u6237\u8d44\u6599/\u9879\u76ee path",
         'quoted "/Project Files/data.json" path',
         "user dir /Users/alice/project/config.json",
         "win C:\\Users\\alice\\f.txt path",
