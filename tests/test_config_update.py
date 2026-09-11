@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from raven.config.update import (
+    allow_exec_pattern,
     reset_cron_config,
     set_default_model,
     set_memory_backend,
@@ -323,3 +324,26 @@ def test_playbook_disabled_preserves_sibling_fields(cfg_path: Path) -> None:
     data = _read(cfg_path)["playbooks"]
     assert data["enabled"] is True and data["dir"] == "/x"
     assert data["disabled"] == ["a"]
+
+
+def test_allow_exec_pattern_writes_and_is_idempotent(cfg_path: Path) -> None:
+    cfg_path.write_text("{}", encoding="utf-8")
+    assert allow_exec_pattern("git push *", config_path=cfg_path) is True
+    assert allow_exec_pattern("git push *", config_path=cfg_path) is False
+    data = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert data["permissions"]["tools"]["exec"] == {"git push *": "allow"}
+
+
+def test_allow_exec_pattern_refuses_to_overwrite_a_plain_tier_the_user_set(cfg_path: Path) -> None:
+    cfg_path.write_text(json.dumps({"permissions": {"tools": {"exec": "ask"}}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="not a table"):
+        allow_exec_pattern("git push *", config_path=cfg_path)
+    assert json.loads(cfg_path.read_text(encoding="utf-8"))["permissions"]["tools"]["exec"] == "ask"
+
+
+def test_allow_exec_pattern_roundtrips_through_the_loader(cfg_path: Path) -> None:
+    from raven.config.loader import load_config
+
+    cfg_path.write_text("{}", encoding="utf-8")
+    allow_exec_pattern("git push *", config_path=cfg_path)
+    assert load_config(cfg_path).permissions.tools == {"exec": {"git push *": "allow"}}

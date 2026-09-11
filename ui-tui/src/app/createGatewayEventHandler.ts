@@ -556,7 +556,8 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
             command: String(ev.payload.command ?? ''),
             conversationId: String(ev.payload.conversation_id ?? ''),
             description,
-            expiresAt: Number(ev.payload.expires_at) * 1000
+            expiresAt: Number(ev.payload.expires_at) * 1000,
+            ...(ev.payload.suggested_pattern ? { suggestedPattern: String(ev.payload.suggested_pattern) } : {})
           }
         })
         setStatus('approval needed')

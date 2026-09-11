@@ -620,6 +620,7 @@ export type GatewayEvent =
         conversation_id: string
         description: string
         expires_at: number
+        suggested_pattern?: string
         tool_call_id: string
         turn_id: string
       }

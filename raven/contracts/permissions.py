@@ -46,6 +46,7 @@ class DecisionSource(StrEnum):
     JUDGE_ERROR = "judge_error"
     UNATTENDED = "unattended"
     APPROVAL = "approval"
+    SESSION = "session"
     DEFAULT = "default"
 
 
@@ -77,16 +78,19 @@ class NeedsApproval:
     description: str
     digest: str
     family: str = ""
+    session_keys: tuple[str, ...] = ()
+    suggested_pattern: str = ""
 
 
 Decision = Allow | Deny | NeedsApproval
 
 
 class ApprovalChoice(StrEnum):
-    """What the human's click meant. ``DENY_STOP`` is the one path that ends
-    the turn; every other refusal continues it."""
+    """What the human's click meant; the two ``ALLOW_*`` grants outlast the call, ``DENY_STOP`` alone ends the turn."""
 
     ALLOW = "allow"
+    ALLOW_SESSION = "allow_session"
+    ALLOW_ALWAYS = "allow_always"
     DENY = "deny"
     DENY_STOP = "deny_stop"
 
@@ -99,10 +103,11 @@ class ApprovalOutcome:
     choice: ApprovalChoice
     feedback: str = ""
     answered: bool = True
+    pattern: str = ""
 
     @property
     def approved(self) -> bool:
-        return self.choice is ApprovalChoice.ALLOW
+        return self.choice in (ApprovalChoice.ALLOW, ApprovalChoice.ALLOW_SESSION, ApprovalChoice.ALLOW_ALWAYS)
 
 
 __all__ = [

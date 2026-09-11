@@ -1,4 +1,5 @@
-"""The permission mode one conversation runs in, when it differs from the default.
+"""What one conversation has settled for itself: its permission mode, and the
+actions it has allowed for the rest of the session.
 
 Set from a settings surface (``/perm smart`` in the TUI, the composer chip on
 the web) through ``config.set`` with a ``session_id``; read by the gate on every
@@ -11,16 +12,24 @@ by the RPC handler) so a restart does not undo it. The loop registers the
 reader for that record at construction; a conversation this process has not
 heard of is looked up once, and the answer -- either way -- is remembered.
 ``permissions.mode`` in config stays the default a new conversation starts on.
+
+The grants are memory only, on purpose. A key is the identity of one part of an
+action -- for exec, one segment together with the machine and the directory it
+runs in -- and an action is allowed when every one of its keys was granted; a
+segment that a rule or the read-only list already covers needs no key. Nothing
+is remembered about a refusal, and nothing survives the process: what should
+outlive it is a rule in the config, which the same prompt can write.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from loguru import logger
 
 _MODES: dict[str, str] = {}
 _LOOKED_UP: set[str] = set()
+_GRANTS: dict[str, set[str]] = {}
 _RESTORE: Callable[[str], str | None] | None = None
 
 
@@ -57,4 +66,25 @@ def session_mode(conversation_id: str) -> str | None:
     return stored or None
 
 
-__all__ = ["session_mode", "set_session_mode", "set_session_mode_restorer"]
+def remember_allowed(conversation_id: str, keys: Iterable[str]) -> None:
+    """Grant these keys for the rest of the conversation."""
+    if conversation_id:
+        _GRANTS.setdefault(conversation_id, set()).update(keys)
+
+
+def session_allows(conversation_id: str, keys: Iterable[str]) -> bool:
+    """Whether every key was granted earlier in this conversation."""
+    granted = _GRANTS.get(conversation_id)
+    if not granted:
+        return False
+    keys = tuple(keys)
+    return bool(keys) and all(key in granted for key in keys)
+
+
+__all__ = [
+    "remember_allowed",
+    "session_allows",
+    "session_mode",
+    "set_session_mode",
+    "set_session_mode_restorer",
+]

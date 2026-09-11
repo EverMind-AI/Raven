@@ -38,6 +38,7 @@ class ApprovalResponder(Protocol):
         tool_call_id: str,
         command: str,
         description: str,
+        suggested_pattern: str = "",
     ) -> ApprovalOutcome: ...
 
 

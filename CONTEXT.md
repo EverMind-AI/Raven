@@ -1506,7 +1506,17 @@ the mode reads it), `deny` is refused. Resolved from the user's
 `permissions.tools` node -- a tool name to a tier, or for `exec` a table of
 command prefix patterns where specific matches resolve strictest-wins and `*`
 is the fallback -- with read-only tools defaulting to allow and everything
-else, unknown tools included, to ask. One tool defaults to allow without being
+else, unknown tools included, to ask. `exec` is the one tool whose default
+reads its argument: a command whose every segment only reads (`ls`, `cat`,
+`git status`; no redirection, no command substitution, no wrapper) defaults to
+allow, and every other command asks. A grant from the approval prompt outlasts
+the click two ways. `allow_session` remembers the still-asking parts of the
+action on the conversation (`permissions/session.py`: for `exec` one key per
+segment no rule covers, with the machine and the directory it runs in; for a
+file tool its path), and a later call whose every such part was granted runs
+without asking. `allow_always` also writes the prefix rule the human confirmed
+-- suggested by the gate, editable, validated the same way -- into
+`permissions.tools.exec`, which the gate reads live. One tool defaults to allow without being
 a read: `deliver_files`, whose recipient is the user themself and which is the
 only route a finished file has to them, so asking there loses the file rather
 than guarding it. A user rule still outranks the default in both directions.

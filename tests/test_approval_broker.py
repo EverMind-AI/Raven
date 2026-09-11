@@ -94,6 +94,8 @@ async def test_duplicate_and_invalid_responses_are_rejected() -> None:
     approval_id = (await _wait_for_frame(frames))["params"]["approval_id"]
 
     assert broker.resolve(approval_id, "always", conversation_id="session-a") is False
+    # allow_always with nothing to persist is not an answer this side can act on.
+    assert broker.resolve(approval_id, "allow_always", conversation_id="session-a") is False
     assert broker.resolve(approval_id, "allow", conversation_id="session-a") is True
     assert broker.resolve(approval_id, "deny", conversation_id="session-a") is False
     assert (await waiting).approved
@@ -411,3 +413,48 @@ async def test_feedback_rides_along_on_a_refusal() -> None:
     assert outcome.answered is True
     assert outcome.choice is ApprovalChoice.DENY
     assert outcome.feedback == "keep it, move it aside"
+
+
+@pytest.mark.asyncio
+async def test_the_session_grant_and_the_pattern_travel_back() -> None:
+    frames: list[dict] = []
+
+    async def send(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = ApprovalBroker(send, visible_timeout_s=1.0, hard_timeout_s=2.0)
+    waiting = asyncio.ensure_future(
+        broker.await_approval(
+            conversation_id="session-a",
+            turn_id="turn-a",
+            tool_call_id="call-1",
+            command="git push origin HEAD",
+            description="Push",
+            suggested_pattern="git push *",
+        )
+    )
+    await asyncio.sleep(0)
+    params = frames[0]["params"]
+    assert params["suggested_pattern"] == "git push *"
+
+    assert (
+        broker.resolve(params["approval_id"], "allow_always", conversation_id="session-a", pattern=" git push * ")
+        is True
+    )
+    outcome = await waiting
+    assert outcome.choice is ApprovalChoice.ALLOW_ALWAYS
+    assert outcome.approved is True
+    assert outcome.pattern == "git push *"
+
+    waiting = asyncio.ensure_future(
+        broker.await_approval(
+            conversation_id="session-a", turn_id="turn-a", tool_call_id="call-2", command="git push", description="Push"
+        )
+    )
+    await asyncio.sleep(0)
+    assert frames[-1]["params"]["suggested_pattern"] == ""
+    assert broker.resolve(frames[-1]["params"]["approval_id"], "allow_session", conversation_id="session-a") is True
+    outcome = await waiting
+    assert outcome.choice is ApprovalChoice.ALLOW_SESSION
+    assert outcome.approved is True
+    assert outcome.pattern == ""

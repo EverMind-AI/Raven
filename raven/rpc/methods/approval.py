@@ -1,8 +1,9 @@
 """Resolve Raven-owned shell approval requests at the TUI RPC boundary.
 
 This handler does not classify commands or grant authority by itself. It only
-forwards an explicit allow-once or deny response to the broker that owns the
-pending request. The opaque approval ID and conversation binding keep stale or
+forwards the human's choice -- allow once, for this session, always with the
+confirmed pattern, or a refusal -- to the broker that owns the pending
+request. The opaque approval ID and conversation binding keep stale or
 cross-session UI responses from resolving a different request.
 """
 
@@ -28,6 +29,7 @@ async def approval_respond(
     conversation_id = str(params.get("session_id") or params.get("conversation_id") or "")
     choice = str(params.get("choice", ""))
     feedback = str(params.get("feedback", "") or "")
+    pattern = str(params.get("pattern", "") or "")
     if not approval_id or not conversation_id:
         return {"ok": False}
     return {
@@ -36,6 +38,7 @@ async def approval_respond(
             choice,
             conversation_id=conversation_id,
             feedback=feedback,
+            pattern=pattern,
         )
     }
 

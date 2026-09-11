@@ -1,10 +1,13 @@
 """Runtime-owned approval round-trip for protected shell commands.
 
-``ExecTool`` reaches this broker only after ``ShellCommandPolicy`` classifies
-an exact command as ``REQUIRE_APPROVAL``. The broker mints an ``approval_id``,
-emits ``approval.request`` to the TUI, and blocks that tool call until the user
-answers or the backend hard limit expires. Approval is deliberately scoped to
-that one command and one conversation; there is no "always allow" state.
+The permission gate reaches this broker when a call lands on the ask tier.
+The broker mints an ``approval_id``, emits ``approval.request`` to the TUI, and
+blocks that tool call until the user answers or the backend hard limit expires.
+The broker grants nothing itself: it carries the human's choice back -- once,
+for this session, or a prefix rule to persist -- and the gate is what remembers
+or writes. ``suggested_pattern`` on the request is the prefix the gate found
+safe to offer; a client that shows no editor for it simply never sends
+``allow_always``.
 
 Timeouts have two layers:
 
@@ -39,7 +42,7 @@ SendFrame = Callable[[dict[str, Any]], Awaitable[None]]
 @dataclass
 class _PendingApproval:
     conversation_id: str
-    future: asyncio.Future[tuple[str, str]]
+    future: asyncio.Future[tuple[str, str, str]]
 
 
 class ApprovalBroker:
@@ -69,16 +72,17 @@ class ApprovalBroker:
         tool_call_id: str,
         command: str,
         description: str,
+        suggested_pattern: str = "",
     ) -> ApprovalOutcome:
         """Wait for an approval decision and fail closed on every error path.
 
-        ``ALLOW`` means the exact action may execute once. User denial, visible
-        timeout forwarded by the TUI, backend timeout, connection failure, and
-        broker cancellation all resolve to a deny; ``DENY_STOP`` is the one
-        choice that additionally ends the turn, and only a human's click can
-        produce it. Exceptions are contained here because an approval transport
-        failure must never turn into tool execution or leave the agent loop
-        waiting indefinitely.
+        A grant comes back as the human chose it: once, for this session, or
+        with the pattern to persist. User denial, visible timeout forwarded by
+        the TUI, backend timeout, connection failure, and broker cancellation
+        all resolve to a deny; ``DENY_STOP`` is the one choice that additionally
+        ends the turn, and only a human's click can produce it. Exceptions are
+        contained here because an approval transport failure must never turn
+        into tool execution or leave the agent loop waiting indefinitely.
         """
         approval_id = uuid4().hex
         future = asyncio.get_running_loop().create_future()
@@ -102,16 +106,17 @@ class ApprovalBroker:
                         "command": command,
                         "description": description,
                         "action_digest": hashlib.sha256(command.encode()).hexdigest(),
+                        "suggested_pattern": suggested_pattern,
                         "created_at": created_at,
                         "expires_at": created_at + self._visible_timeout_s,
                     },
                 }
             )
             request_sent = True
-            choice, feedback = await asyncio.wait_for(future, self._hard_timeout_s)
+            choice, feedback, pattern = await asyncio.wait_for(future, self._hard_timeout_s)
             close_reason = choice
             try:
-                return ApprovalOutcome(choice=ApprovalChoice(choice), feedback=feedback)
+                return ApprovalOutcome(choice=ApprovalChoice(choice), feedback=feedback, pattern=pattern)
             except ValueError:
                 # Not a wire choice, so not a person's answer: `cancel_all` puts
                 # the synthetic "cancelled" here during teardown, and a client
@@ -146,20 +151,32 @@ class ApprovalBroker:
                 except Exception:
                     logger.exception("approval_broker: close notification failed for {}", approval_id)
 
-    def resolve(self, approval_id: str, choice: str, *, conversation_id: str, feedback: str = "") -> bool:
+    def resolve(
+        self,
+        approval_id: str,
+        choice: str,
+        *,
+        conversation_id: str,
+        feedback: str = "",
+        pattern: str = "",
+    ) -> bool:
         """Resolve a live request only when both opaque id and conversation match.
 
         Returning ``False`` for stale, duplicate, cross-conversation, or invalid
         responses makes late UI input harmless and keeps resolution idempotent.
         ``feedback`` rides along on a refusal for the model to read; it is
         clipped rather than refused, because a long sentence is still an answer.
+        ``allow_always`` without a pattern is not an answer this side can act
+        on, so it is refused here rather than turned into a plain allow.
         """
-        if choice not in {"allow", "deny", "deny_stop"}:
+        if choice not in {"allow", "allow_session", "allow_always", "deny", "deny_stop"}:
+            return False
+        if choice == "allow_always" and not pattern.strip():
             return False
         pending = self._pending.get(approval_id)
         if pending is None or pending.conversation_id != conversation_id or pending.future.done():
             return False
-        pending.future.set_result((choice, feedback[:2000]))
+        pending.future.set_result((choice, feedback[:2000], pattern.strip()[:500]))
         return True
 
     def cancel_all(self) -> None:
@@ -170,7 +187,7 @@ class ApprovalBroker:
         """
         for pending in list(self._pending.values()):
             if not pending.future.done():
-                pending.future.set_result(("cancelled", ""))
+                pending.future.set_result(("cancelled", "", ""))
 
 
 __all__ = ["ApprovalBroker", "SendFrame"]
