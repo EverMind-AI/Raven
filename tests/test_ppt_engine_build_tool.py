@@ -1056,6 +1056,111 @@ async def test_a_deck_released_at_the_cap_is_returned_as_delivered(project: Proj
 
 
 @pytest.mark.asyncio
+async def test_a_build_that_lost_a_page_to_a_crash_is_not_charged_the_cap(project: Project) -> None:
+    """The same argument as the script that produced no deck, applied to a page.
+
+    A live medium run spent its tenth and last build on two pages lost to one undefined
+    name: the deck published because the cap had been reached, the reply said nothing
+    refused it, and the author never saw either the crash or the five copy findings on
+    the pages that did draw. A build that lost a page is not a whole build of the deck,
+    so it goes against its own allowance -- and the reply says which, either way.
+    """
+    from raven_ppt.services import tier
+
+    tier.write_mode(project.workspace, {"buildCap": 3, "readingCap": 3}, "medium")
+    raised = Finding(kind="page_failed", severity=Severity.BLOCKING, message="page 2's block raised", page=2)
+    tool = _tool(project, replace(_ok(project, findings=(raised,), released=["page_failed"]), ok=True))
+
+    first = _body(await tool.execute(project="tarvis"))
+    assert tier.whole_builds_taken(project) == 0, "the build that lost page 2 is not one of the three"
+    assert tier.reprieves_taken(project) == 1
+    assert "reprieve 1 of 2" in first["lost_pages_not_counted"]
+    assert "page(s) 2 did not draw" in first["lost_pages_not_counted"]
+
+    _body(await tool.execute(project="tarvis"))
+    assert (tier.whole_builds_taken(project), tier.reprieves_taken(project)) == (0, 2)
+
+    # And the third is charged, which is what bounds the total at the cap plus the
+    # allowance: a deck cannot buy builds by crashing.
+    third = _body(await tool.execute(project="tarvis"))
+    assert tier.whole_builds_taken(project) == 1
+    assert "all 2 of its reprieve(s)" in third["lost_pages_counted"]
+    assert "lost_pages_not_counted" not in third
+
+
+@pytest.mark.asyncio
+async def test_a_published_build_that_lost_pages_does_not_read_as_finished(project: Project) -> None:
+    """What the cap's release turned into, and the whole of defect two.
+
+    `stages/build.py` empties the blocking list when it releases at the cap -- rightly,
+    because the user gets a deck rather than nothing -- and the reply then told the
+    author the deck was delivered and nothing refused it. That is the wrong answer to a
+    stand-in page: publication is not the question a `NameError` asks, and the next step
+    is one edit and one more build.
+    """
+    from raven_ppt.services import tier
+
+    tier.write_mode(project.workspace, {"buildCap": 1, "readingCap": 3}, "medium")
+    raised = Finding(kind="page_failed", severity=Severity.BLOCKING, message="page 10's block raised", page=10)
+    released = replace(_ok(project, findings=(raised,), released=["page_failed"]), ok=True)
+    tool = _tool(project, released)
+    tool.review = _Reader()
+
+    body = _body(await tool.execute(project="tarvis"))
+
+    assert body["ok"] is True and body["pptx_path"].endswith("deck.pptx"), "the deck still goes out"
+    assert "page(s) 10 are not in it" in body["next_step"]
+    assert "nothing refuses it" not in body["next_step"]
+    assert "not counted against this tier's builds" in body["next_step"]
+
+
+@pytest.mark.asyncio
+async def test_the_last_permitted_build_losing_a_page_still_delivers(project: Project) -> None:
+    """What happens when the reprieves are gone and the build crashes anyway.
+
+    It publishes, and it says so: the deck the user keeps is the one with the stand-in
+    page in it, and the reply says that in as many words rather than asking for a build
+    the deck no longer has. That is the terminating end of the allowance -- the run
+    always ends with a deck, never with nothing and never with an unbounded budget.
+    """
+    from raven_ppt.services import tier
+
+    tier.write_mode(project.workspace, {"buildCap": 1, "readingCap": 3}, "medium")
+    raised = Finding(kind="page_failed", severity=Severity.BLOCKING, message="page 10's block raised", page=10)
+    released = replace(_ok(project, findings=(raised,), released=["page_failed"]), ok=True)
+    tool = _tool(project, released)
+    tool.review = _Reader()
+    for _ in range(tier.CRASH_REPRIEVES):
+        await tool.execute(project="tarvis")
+
+    body = _body(await tool.execute(project="tarvis"))
+
+    assert body["ok"] is True and body["pptx_path"].endswith("deck.pptx")
+    assert "reprieves for a lost page are spent" in body["next_step"]
+    assert "what is delivered now is what the user keeps" in body["next_step"]
+
+
+@pytest.mark.asyncio
+async def test_an_edited_delivery_is_named_first_in_the_reply(project: Project) -> None:
+    """The stage's reading has to reach the author, and above the page findings.
+
+    It is not about a page: the deck the user was holding had a change in it that no
+    gate and no reader ever saw, and the answer is to put that change in the program.
+    """
+    changed = "out/deck.pptx was not the deck this route delivered: its bytes changed after it was published"
+    tool = _tool(project, _ok(project, delivery_changed=changed))
+    tool.review = _Reader()
+
+    body = _body(await tool.execute(project="tarvis"))
+
+    assert body["delivery_changed"] == changed
+    # First of the instructions, ahead of the page findings and the delivery line.
+    step = body["next_step"]
+    assert changed in step
+    assert step.index(changed) < step.index("this deck is delivered at")
+
+
+@pytest.mark.asyncio
 async def test_a_script_that_produced_no_deck_is_not_a_whole_build(project: Project) -> None:
     """The count that reaches the cap is of decks built, not of scripts run: two syntax
     errors under a cap of two must not release the first deck that exists past its

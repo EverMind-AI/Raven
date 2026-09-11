@@ -62,6 +62,21 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- **A cloned template page can have a space cleared in it.** `replace_text` swaps
+  words where they stand, but drawing a chart, a panel or a figure into a cloned
+  page needs the space emptied first and there was no supported way to say so. A
+  live deck wrote two sweeps of its own instead -- one keyed on whether a shape's
+  text was Chinese, the other on whether the shape was over 1.0x0.7in -- which
+  kept every arrow, every number label and, a rule having one zero dimension,
+  every connector, and drew two charts on top of them. `ppt_template` now offers
+  `clear_region(slide, box)`, which drops every shape drawn in the box with groups
+  walked into and reports both what it removed and what still lies over the box;
+  `shapes_in(container, box)` is the finder behind it, `shape_near`'s plural, and
+  `page_box(shape)` gives a shape's drawn rectangle with the scale a group applies
+  to it. The shape the box sits inside is kept: on a template that is the card the
+  chart was drawn in. The clone guidance in `ppt_template`'s reply, in a page read
+  back as code, and in the authoring skill all name it.
+
 - Four kinds of ppt-engine finding that six audited deck runs showed to churn
   without changing the deck are no longer repeated: findings about a page the
   runner stood in for (besides the failure itself), `repeated_layout` on

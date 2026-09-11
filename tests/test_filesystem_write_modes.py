@@ -36,6 +36,98 @@ async def test_default_mode_still_overwrites(workspace) -> None:
 
 
 @pytest.mark.asyncio
+async def test_rewriting_identical_content_reports_no_change(workspace) -> None:
+    """A rewrite that changes nothing has to say so.
+
+    ``model_text`` is the only account of the call the model gets, and a byte
+    count reads as progress. An edit loop that is rewriting the same bytes can
+    then spend several rounds before anything tells it so.
+    """
+    tool = WriteFileTool(str(workspace))
+    target = workspace / "a.txt"
+
+    await tool.execute(path=str(target), content="same")
+    result = await tool.execute(path=str(target), content="same")
+
+    assert "unchanged" in result.model_text
+    assert target.read_bytes() == b"same"
+
+
+@pytest.mark.asyncio
+async def test_crlf_on_disk_is_not_read_as_an_unchanged_write(workspace) -> None:
+    """Text equality hides a rewrite that changes the bytes.
+
+    Path.read_text() applies universal-newline translation, so a file holding
+    CRLF reads back equal to the LF content being written. The overwrite it
+    stands in for does change the file, and skipping it keeps the old bytes.
+    """
+    tool = WriteFileTool(str(workspace))
+    target = workspace / "crlf.txt"
+    target.write_bytes(b"a\r\n")
+
+    result = await tool.execute(path=str(target), content="a\n")
+
+    assert target.read_bytes() == b"a\n"
+    assert "unchanged" not in result.model_text
+
+
+@pytest.mark.asyncio
+async def test_crlf_content_already_on_disk_is_a_no_op(workspace) -> None:
+    """A text gate in front of the byte check answers the question itself.
+
+    read_text() normalizes, so content that carries CRLF never equals the text
+    read back from the file already holding exactly those bytes -- and a
+    pre-filter on that comparison turns an identical write into a rewrite.
+    """
+    tool = WriteFileTool(str(workspace))
+    target = workspace / "crlf.txt"
+    target.write_bytes(b"a\r\n")
+
+    result = await tool.execute(path=str(target), content="a\r\n")
+
+    assert "unchanged" in result.model_text
+    assert target.read_bytes() == b"a\r\n"
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_file_can_still_be_overwritten(workspace, monkeypatch) -> None:
+    """Reading to decide whether to write must not become a precondition.
+
+    A POSIX mode-0200 file is writable and not readable, and overwriting one
+    worked before the no-op check existed: the failed read left no previous
+    content and the write went ahead. Driven by a denied read rather than by
+    a real chmod, because the suite runs as root, where 0200 blocks nothing.
+    """
+    tool = WriteFileTool(str(workspace))
+    target = workspace / "write-only.txt"
+    target.write_text("old")
+
+    def _denied(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "read_text", _denied)
+    monkeypatch.setattr(Path, "read_bytes", _denied)
+
+    result = await tool.execute(path=str(target), content="new")
+
+    monkeypatch.undo()
+    assert target.read_bytes() == b"new"
+    assert "Successfully wrote" in result.model_text
+
+
+@pytest.mark.asyncio
+async def test_a_rewrite_that_changes_something_still_reports_the_write(workspace) -> None:
+    tool = WriteFileTool(str(workspace))
+    target = workspace / "a.txt"
+
+    await tool.execute(path=str(target), content="first")
+    result = await tool.execute(path=str(target), content="second")
+
+    assert "Successfully wrote" in result.model_text
+    assert target.read_text() == "second"
+
+
+@pytest.mark.asyncio
 async def test_append_adds_to_the_end(workspace) -> None:
     tool = WriteFileTool(str(workspace))
     target = workspace / "a.txt"

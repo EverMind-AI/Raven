@@ -470,8 +470,8 @@ class SubagentManager:
     async def _classify(self, menu: list[tuple[str, str]], task: str, default: str) -> str | None:
         """Pick between a routing entry's targets and its own implementation.
 
-        The classifier a ``RoutingBackend`` calls when neither a reused handle
-        nor a target's ``match`` pattern settled the task. One short call on the
+        The classifier a ``RoutingBackend`` calls when no reused handle
+        has already bound the task to an implementation. One short call on the
         host's own model, reading the targets' roster lines and the task; the
         entry itself is the answer for "none of these", so its line -- written to
         pull work toward it -- is not in the menu.
@@ -487,7 +487,7 @@ class SubagentManager:
             },
             {"role": "user", "content": f"Specialists:\n{lines}\n\nTask:\n{task}"},
         ]
-        reply = await self.provider.chat(messages, model=self.model, max_tokens=64, temperature=0.0)
+        reply = await self.provider.chat(messages, model=self.model, max_tokens=4096, temperature=0.0)
         return (reply.content or "").strip().strip("`'\"") or None
 
     def _resolve_backend(self, agent: str) -> SubagentBackend:

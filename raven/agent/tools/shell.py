@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent import workdir
-from raven.agent.tools.shell_policy import executable_text
 from raven.contracts.tool import STOP_RETRY_INSTRUCTION, Continuation, Tool, ToolOutput, ToolResult
+from raven.permissions.shell_policy import executable_text
 from raven.sandbox import DirectExecutor, SandboxExecutor
 
 

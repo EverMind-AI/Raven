@@ -1,58 +1,39 @@
 # Tool Usage Notes
 
 Tool signatures are provided automatically via function calling.
-This file documents non-obvious constraints and usage patterns.
+Only use tools and parameters exposed in the current function schemas.
+The active tool descriptions and result messages take precedence over the
+product defaults below; some configurations serve the host's tools instead.
 
 ## exec — Safety Limits
 
-- Commands have a configurable timeout (default 60s, max 600s by default).
-  Requests above the ceiling are clamped, not rejected — for genuinely longer
-  work use `background: true`
+The timeout clamp, partial timeout output and full-output spill below apply
+when the exec description advertises those extensions. A sandbox can serve
+the host exec instead; follow that tool's stated limits and failure behavior.
+
+- The product defaults are a 600s timeout and a 1200s ceiling; the exec
+  description states the configured ceiling. A larger
+  `timeout` is clamped to it and the result says so. For work that needs
+  longer than the ceiling use `run_in_background: true`
+- A command that hits its time limit is killed, but the output it had produced
+  by then is returned with a note saying it is partial — read it as partial
 - Catastrophic commands are blocked (`rm -rf /`, mkfs, format, raw writes to a
   block device, shutdown — matched only when actually invoked, not as flags or
   arguments). Ordinary destructive work such as `rm -f build/*.o` is allowed
-- Output is truncated at 30,000 characters, keeping the head and the tail. The
-  full output is saved to a file named in the truncation marker — grep it or
-  page through it with `read_file`
-- `restrictToWorkspace` config can limit file access to the workspace
+- Output is truncated at 30,000 characters, keeping the head and the tail.
+  When that happens the COMPLETE output is saved to a file under the agent's
+  own home directory and the result names the path — `grep` or `read_file`
+  that file instead of re-running blind. A test runner prints its summary at
+  the end, so check the tail first and the saved file when the middle matters
+- Each `exec` call is a separate process: `cd` and `export` do not survive to
+  the next call. Chain them in one command (`cd dir && make`) when they matter
+- `run_in_background: true` detaches the process: its output goes to a log
+  file named in the result, and it keeps running after the call returns. Use it
+  for a server that must still be up when you finish, or for work longer than
+  the timeout ceiling; poll its log with `read_file`. Stop the ones that were
+  only scaffolding before you finish
 
-## exec sessions — persistent state and stdin
-
-Each plain `exec` call is a separate process: `cd`, `export` and background jobs
-do not survive to the next call. Pass `session: "<name>"` to run inside a
-persistent shell instead, then:
-
-- `exec_write` sends input to it — passwords and other prompts, REPL/debugger
-  input, or the ETX control character (0x03) to send Ctrl-C
-- `exec_read` returns whatever it has printed since your last read
-
-Sessions are capped (8 at a time) and all close when the agent exits; pass
-`close: true` to `exec_read` to release one early. Anything that has to still be
-running afterwards belongs in a background job, not a session.
-
-## background jobs — work that outlives the run
-
-Use `background: true` for a server or a long build. The process is detached: it
-has no terminal, its output goes to a log file, and it keeps running after the
-call returns, after you stop working on the task, and after the run ends. This is
-also the way around the per-command timeout ceiling.
-
-`background: true` always creates a detached job — combining it with `session`
-just names the job (the process does NOT live in that shell, and has no stdin;
-if you need to type into a long-running program, use a session without
-`background` and drive it with `exec_write`).
-
-- `job_status` lists jobs, or with a name returns the log written since your last
-  check
-- `job_wait` blocks until a job finishes — for a build you now need the result of,
-  never for a server you meant to leave running
-- `job_cancel` stops one (SIGTERM, then SIGKILL)
-
-Because jobs survive, cancel the ones that were only scaffolding. Leave any
-service the task asked you to have running — something will check it after you are
-done, and stopping it on the way out fails the task.
-
-## read_file / write_file — truncation and paging
+## read_file / write_file / edit_file — paging, reading before editing
 
 - `read_file` returns 2000 lines per call by default. A large file is NOT fully
   read in one call — page through it with `offset`/`limit` until the output no
@@ -61,13 +42,54 @@ done, and stopping it on the way out fails the task.
   marker; use `exec` with `cut -c` or `grep -o` when the tail of a long line
   matters
 - Absence of a truncation marker means you saw the complete requested range
+- When `edit_file` advertises read-before-edit enforcement, it checks the
+  current session's read record in this Raven-Code instance. Read the file
+  yourself, then edit the text you actually saw. Other sessions' reads do not
+  count; session deletion and a runtime restart discard the record. A new
+  session has its own read records.
+  A file changed externally must be read again. `old_string` is the file's
+  content, never the `N| ` line-number prefix `read_file` prints
+- `write_file` with `mode: overwrite` supplies the complete new content and
+  permits subsequent edits in this session. `mode: append` adds only a tail:
+  on an existing file it preserves a current read record but cannot establish
+  one for unseen or externally changed content. Appending to a new file
+  supplies its complete content and permits edits
+- When `old_string` matches several places, pass `replace_all: true` to change
+  every one, or, when its schema offers `occurrence`, pass `occurrence: <n>`
+  to change only the nth non-overlapping exact
+  match, counted from 1 in file order. `occurrence` normalizes CRLF to LF but
+  does not use fuzzy whitespace matching; do not combine it with `replace_all`
+- If a write or edit reports a Python syntax error, fix it before moving on.
+  An absent syntax note is not a successful test; run the relevant checks
 
-## grep / find — search, truncation, spill
+## grep / glob — search, truncation, spill
 
-- When `grep`/`find` results overflow the cap, the COMPLETE result is saved to a
-  file whose path appears in the output — `grep`/`read_file` that file instead of
-  re-running blind with a narrower pattern when the cut part may matter
+- When available, `glob` finds files by pathname pattern (`*.py`, `src/**/*.ts`), newest
+  first; otherwise use find. `grep` searches content. Use them instead of `find`/`grep` through
+  `exec` — their results are capped, with truncation notices
+- Neither tool spills a complete result to a file. `grep` cuts its output at
+  30,000 characters and says so in a trailing note; a result marked PARTIAL is
+  not the full set — use `output_mode='count'` for exact totals, or narrow the
+  pattern or path. `glob` returns at most `limit` entries; raise `limit` or
+  narrow the pattern when you need the rest. Brace alternatives such as
+  `*.{py,ts}` share one limit after deduplication and recency sorting. If any
+  alternative was truncated, the merged result is marked PARTIAL too;
+  an error means the search failed, not that there are no matching files
+- A `grep` result that begins "Warning: search incomplete" means the fallback
+  scanner ran out of time: absence of a match is NOT conclusive there — narrow
+  the search path and run it again
 
-## cron — Scheduled Reminders
+## todo — the checklist
 
-- Please refer to cron skill for usage.
+If the todo tool is available, use the actions below. Otherwise keep the
+plan in your response; do not call a tool that is absent from the schemas.
+
+- One tool, two actions: `{"action": "read"}` shows the saved checklist without
+  changing it; `{"action": "write", "todos": [...]}` replaces it, and `[]` clears it
+- Pass the ENTIRE list every write; it replaces the previous one. Keep exactly
+  one item `in_progress` while work remains, and mark an item `completed` only
+  once the work is actually done and verified
+- The checklist is saved the moment a write is acknowledged and survives the
+  rest of the tool batch and a restart. Each conversation has its own checklist;
+  an unbound call returns an error and saves nothing. If it drops out of your context, the
+  system restores it in a `<system-reminder>`; when unsure, `read` it

@@ -103,7 +103,7 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
             {"name": "minimax_cn_api", "label": "MiniMax (CN)"},
             {"name": "deepseek", "label": "DeepSeek"},
             {"name": "zai", "label": "Z.ai (Zhipu)"},
-            {"name": "dashscope", "label": "DashScope"},
+            {"name": "dashscope", "label": "Alibaba Cloud"},
             {"name": "moonshot", "label": "Moonshot"},
             {"name": "nvidia_nim", "label": "NVIDIA"},
             {"name": "volcengine", "label": "VolcEngine"},

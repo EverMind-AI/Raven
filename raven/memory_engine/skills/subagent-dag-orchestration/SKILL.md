@@ -52,6 +52,32 @@ Every install can run a graph: raven's own agents are on the roster whether or n
 third-party agent is configured, so `run_subagent_dag` is always available. Which agents
 exist is still the tool description's answer, not this file's — read the roster there.
 
+## Write the brief as the owner gave it
+
+A node sees only its prompt. Whatever the owner asked for, and whatever the owner allowed
+the node to change, reaches the node only if the prompt carries it -- and the prompt is where
+a whole run's search space gets narrowed without anyone deciding to narrow it. Three rules,
+each from a measured loss on 2026-09-08, where a two-round search left the one knob worth
+most of the result untouched:
+
+- **The owner's words and scope go in as written; your steer is marked as yours.** Quote
+  the owner's request in every node's brief, not only the first round's. Your own reading of
+  where the gains are is welcome as a suggestion, and it stays a suggestion: "gains can only
+  come from ..." is a boundary the owner never drew. That day the owner allowed "training
+  configuration, data mix, architecture, algorithm"; the round-one brief added "the
+  hyperparameters are exhausted, so gains can only come from three classes outside the
+  falsified list", and the round-two brief to the experiment runner opened with "you change
+  no case". The runner changed nothing in 26 scored runs. One plain training setting, the
+  kind the runner owned, was worth most of the gap to the best known result. It was never tried.
+- **A list of tried things stays a list; it does not become a category.** When a handover
+  names settings already swept, pass the list itself and ask the node to check what is *not*
+  on it before it picks directions. Eighteen named hyperparameter groups became "the
+  hyperparameters are exhausted"; the setting that mattered was on neither.
+- **Each role's brief states the whole of its role, not this round's chores.** If the owner
+  gave the experiment runner the training configuration, the runner's brief says so every
+  round, whether or not you expect it to matter this round. A duty left out of the brief is
+  a duty the node takes to be someone else's.
+
 ## How it works
 
 You submit a flat list of `nodes`. A scheduler runs every node whose dependencies are
@@ -327,42 +353,48 @@ Three things follow, and getting any of them wrong wastes a node's turn:
 ## Examples
 
 The `subagent` values below are placeholders — substitute the names the tool reports
-as available.
+as available. Every prompt opens with the owner's request as written (see `Write the
+brief as the owner gave it`); the node's own part follows it.
 
 ### Fan-out then aggregate
 
-Two researchers run in parallel; a writer waits for both and reads their outputs by path:
+The owner asked: "Pick a web framework for the new service. Compare the candidates on
+benchmarks and on what recent papers say about async runtimes, and recommend one." Two
+researchers run in parallel; a writer waits for both and reads their outputs by path:
 
 ```json
 [
   {
     "id": "research_web",
     "subagent": "Raven",
-    "prompt_template": "Research recent web-framework benchmarks and report your findings."
+    "prompt_template": "Owner's request, as written: \"Pick a web framework for the new service. Compare the candidates on benchmarks and on what recent papers say about async runtimes, and recommend one.\"\nYour part: research recent web-framework benchmarks and report your findings."
   },
   {
     "id": "research_papers",
     "subagent": "Raven",
-    "prompt_template": "Summarize the latest papers on async runtimes."
+    "prompt_template": "Owner's request, as written: \"Pick a web framework for the new service. Compare the candidates on benchmarks and on what recent papers say about async runtimes, and recommend one.\"\nYour part: summarize the latest papers on async runtimes."
   },
   {
     "id": "synthesize",
     "subagent": "Raven",
     "depends_on": ["research_web", "research_papers"],
-    "prompt_template": "Write a briefing merging these two sources.\nWeb findings: {{ research_web.output_path }}\nPaper summary: {{ research_papers.output_path }}"
+    "prompt_template": "Owner's request, as written: \"Pick a web framework for the new service. Compare the candidates on benchmarks and on what recent papers say about async runtimes, and recommend one.\"\nYour part: write the recommendation, merging these two sources.\nWeb findings: {{ research_web.output_path }}\nPaper summary: {{ research_papers.output_path }}"
   }
 ]
 ```
 
 `research_web` and `research_papers` have no dependencies, so they run at the same
 time. `synthesize` runs once both finish; as the terminal node, its output comes back
-to you inline.
+to you inline. Each node sees the whole request, so the writer knows a recommendation
+is wanted and the researchers know what it is for.
 
 ### Pipeline with a reused stateful instance
 
-A draft is written, reviewed, then revised. The same session (`instance: "author"`)
-carries context from the draft into the revision. This shape needs an agent tagged
-`[stateful]`; on a `[stateless]` one the graph is rejected before anything runs:
+The owner asked: "Write the introduction for our report on multi-agent systems: about
+200 words, for readers who know software but not agents." A draft is written, reviewed,
+then revised. The same session (`instance: "author"`) carries context from the draft
+into the revision. This shape needs an agent tagged `[stateful]`; on a `[stateless]`
+one the graph is rejected before anything runs:
 
 ```json
 [
@@ -370,20 +402,20 @@ carries context from the draft into the revision. This shape needs an agent tagg
     "id": "draft",
     "subagent": "Raven",
     "instance": "author",
-    "prompt_template": "Draft a 200-word introduction for a report on multi-agent systems."
+    "prompt_template": "Owner's request, as written: \"Write the introduction for our report on multi-agent systems: about 200 words, for readers who know software but not agents.\"\nYour part: draft it."
   },
   {
     "id": "review",
     "subagent": "Raven",
     "depends_on": ["draft"],
-    "prompt_template": "Critique this draft for clarity and accuracy:\n{{ draft.output }}"
+    "prompt_template": "Owner's request, as written: \"Write the introduction for our report on multi-agent systems: about 200 words, for readers who know software but not agents.\"\nYour part: critique this draft against that request, for clarity and accuracy:\n{{ draft.output }}"
   },
   {
     "id": "revise",
     "subagent": "Raven",
     "instance": "author",
     "depends_on": ["review"],
-    "prompt_template": "Revise your earlier draft using this critique:\n{{ review.output }}"
+    "prompt_template": "Owner's request, as written: \"Write the introduction for our report on multi-agent systems: about 200 words, for readers who know software but not agents.\"\nYour part: revise your earlier draft using this critique:\n{{ review.output }}"
   }
 ]
 ```

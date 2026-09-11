@@ -1,0 +1,24 @@
+# my-agent-engine: My-Agent's tool and hook contributions, wheel-shaped.
+#
+# This file must live INSIDE the my_agent_engine package: the host resolves
+# the raven.plugins entry point to a package name and reads the manifest out
+# of that package with importlib.resources.
+#
+# Config slice (plugins.config["my-agent-engine"]): enabled, greeting,
+# stateRoot. config_schema stays empty on purpose: admission with an empty
+# declaration is verbatim pass-through, and the slice is validated by the
+# plugin's own code.
+
+[plugin]
+id = "my-agent-engine"
+version = "0.1.0"
+display_name = "My-Agent Engine"
+enabled_by_default = true
+
+[[plugin.contributes.hooks]]
+name = "my_agent_engine"
+factory = "my_agent_engine.plugin:make_hook"
+
+[[plugin.contributes.tools]]
+name = "my_agent_hello"
+factory = "my_agent_engine.tools.hello:make_hello"

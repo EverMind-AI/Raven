@@ -691,17 +691,31 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .provider-choice-row .provider-link { pointer-events: auto; }
 .provider-choice-action { position: absolute; z-index: 0; inset: 0; width: 100%; border: 0;
   border-radius: inherit; background: transparent; cursor: pointer; }
+
+/* What a model can do, one 13px stroke drawing per capability. Faint by
+   default and only as loud as the row it annotates: the reader is scanning
+   names, and an icon row that competes with them costs more than it tells. */
+.model-tag-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+.model-tags { display: inline-flex; align-items: center; gap: 5px; flex: none; }
+.model-tag { width: 13px; height: 13px; flex: none; color: var(--faint);
+  fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.row:hover .model-tag, [aria-selected="true"] ~ .model-tags .model-tag { color: var(--muted); }
+.model-window { flex: none; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px;
+  color: var(--faint); font-family: var(--mono); font-size: 10px; line-height: 15px; }
 .provider-choice-row:has(> .provider-choice-action:focus-visible) { outline: 1px solid var(--amber);
   outline-offset: 1px; }
-.provider-status { width: 7px; height: 7px; border-radius: 50%; background: var(--clay); flex: none;
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--clay) 16%, transparent); }
-.provider-status.on { background: var(--moss);
+/* Only ever drawn for a connected provider -- see `ProviderStatus`, which
+   renders nothing for the rest. The `.on` class is kept on the element so the
+   selector still says which state it is. */
+.provider-status.on { width: 7px; height: 7px; border-radius: 50%; background: var(--moss); flex: none;
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--moss) 16%, transparent); }
 :root[data-theme="dark"] img.provider-icon { filter: invert(1); }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) img.provider-icon { filter: invert(1); }
 }
-:root img.provider-icon[data-provider="nvidia_nim"] { filter: none; }
+/* Every mark in the bundle is monochrome, so every one of them inverts. The
+   exception that used to sit here was for NVIDIA's green drawing; the black one
+   that replaced it wants the same inversion as the rest. */
 
 /* Context is a quantity, so it gets a quantity's shape: a ring that fills --
    and only the ring. The fill and its colour already answer "is this fine?"
@@ -1918,6 +1932,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    the direction nobody is waiting to look at. */
 @keyframes paneInL { from { opacity: 0; transform: translateX(-14px); } }
 @keyframes paneInR { from { opacity: 0; transform: translateX(14px); } }
+@keyframes fadein { from { opacity: 0; } }
+/* A drawer arrives from the edge it lives on, all the way -- the 14px nudge
+   above is for a panel that was already there, which is a different motion. */
+@keyframes drawerin { from { transform: translateX(100%); } }
 .rail { animation: paneInL .19s ease backwards; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2175,6 +2193,8 @@ textarea:focus, textarea:focus-visible,
 .mpick .row .tick { color: var(--amber); flex: none; }
 .mpick .models .row { font-family: var(--mono); font-size: 12px; }
 .mpick .models .row .sub { font-size: 10.5px; color: var(--faint); }
+.mpick .models .row .nm.named { font-family: var(--sans); font-size: 12.5px; }
+.mpick .models .row .model-tags { margin-left: auto; }
 .mpick .empty { padding: 18px 12px; font-size: 12.5px; color: var(--faint); text-align: center; }
 .mpick .foot { border-top: 1px solid var(--line-soft); padding: 7px 12px;
   display: flex; justify-content: space-between; align-items: center; }
@@ -3252,6 +3272,16 @@ details[open] summary { margin-bottom: 8px; }
   letter-spacing: .12em; text-transform: uppercase;
 }
 .sugrp > .hd .n { font-family: var(--mono); font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* The heading's one tool, in the slot the heading has always had room for.
+   Drawn as the eyebrow's own third word rather than as a button: it belongs to
+   a line of 11px mono small caps, and a `.mini` pill there would outweigh the
+   group it labels. */
+.sugrp > .hd .gfold {
+  margin-left: auto; background: none; border: 0; padding: 0; cursor: pointer;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--faint); transition: color .12s;
+}
+.sugrp > .hd .gfold:hover { color: var(--text); }
 .sulist { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--ink); }
 .surow {
   display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0 12px;
@@ -3427,6 +3457,8 @@ details[open] summary { margin-bottom: 8px; }
 .mini[disabled] { opacity: .55; pointer-events: none; }
 .mini.ghost { border-color: var(--line); color: var(--muted); }
 .mini.ghost:hover { color: var(--text); border-color: var(--faint); }
+.mini.update { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 28px; padding: 4px; }
+.mini.update svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 .adv { margin-top: 30px; border-top: 1px solid var(--line-soft); padding-top: 16px; }
 .adv .row { display: flex; gap: 9px; margin-top: 12px; flex-wrap: wrap; }
@@ -3498,6 +3530,7 @@ details[open] summary { margin-bottom: 8px; }
    half-panel of nothing. */
 .detail[data-fill="true"] .dpanel { height: min(78vh, 740px); }
 @media (prefers-reduced-motion: reduce) { .detail, .detail .dpanel { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .mdrawer .dpane, .mdrawer .scrim { animation: none; } }
 .detail header { flex: none; display: flex; align-items: center; gap: 10px; padding: 16px 16px 0 22px; }
 .detail header b { flex: 1; font-size: 13.5px; }
 /* When the body carries its own pmdhead identity block, the header title is
@@ -3510,6 +3543,13 @@ details[open] summary { margin-bottom: 8px; }
    class, not the provider cards' `.keyrow`: that one is a grid item of
    `.pcard` and reusing the name had this card's input styles landing on the
    settings page's provider rows. */
+/* The verdict and the button that renews it, on one line -- the same shape as
+   `.sukey` above and for the same reason: the section is one fact and one
+   control, and stacking them made the card scroll for no reading gained. The
+   verdict takes the slack so the buttons stay together on the right. */
+.sutest { display: flex; align-items: center; gap: 9px; font-size: 12.5px; }
+.sutest .vd { flex: 1; min-width: 0; color: var(--muted); }
+.sutest + .pmdesc { margin-top: 8px; }
 .sukey { display: flex; align-items: center; gap: 9px; }
 .sukey input {
   flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--line);
@@ -3553,6 +3593,9 @@ details[open] summary { margin-bottom: 8px; }
    independently, so a long panel never drags the section list off screen. */
 .setveil { background: var(--scrim-soft); backdrop-filter: blur(3px); }
 .smodal {
+  /* The containing block for the add-model drawer, which is clipped by this
+     dialog rather than floating over the window. */
+  position: relative;
   width: min(1000px, 94vw); height: min(680px, 88vh);
   display: grid; grid-template-columns: 208px 1fr;
   background: var(--ink); border: 1px solid var(--line); border-radius: 16px;
@@ -3615,6 +3658,13 @@ details[open] summary { margin-bottom: 8px; }
 /* A card is a grid, so a lone button in one would stretch edge to edge and read
    as a bar rather than as something to press. */
 .scard > button { justify-self: start; }
+/* ...and where the card holds nothing but that one control, it sits on the
+   heading's line instead of under it, hard against the right edge. A label
+   stacked over a lone button spends a row restating what the button already
+   shows. The note a refused write leaves still drops to its own line. */
+.scard.inline { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.scard.inline > button { justify-self: end; }
+.scard.inline > .nlmsg { grid-column: 1 / -1; }
 .snote {
   display: flex; align-items: flex-start; gap: 7px; font-size: 11.5px; color: var(--faint);
   line-height: 1.5; border-top: 1px solid var(--line-soft); padding-top: 10px;
@@ -3939,9 +3989,221 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .keyrow { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 9px; }
 .keyrow input { flex: 1; min-width: 0; }
 
+/* An API key field: the input as it was, plus an eye sitting in its right-hand
+   gutter. A wrapper rather than a sibling button, so the eye reads as part of
+   the field and every layout that used to hold one input still holds one box.
+   Each of those layouts sized the input directly, so the wrapper is told to
+   take the same room. */
+.keyfield { position: relative; display: block; min-width: 0; }
+.keyrow .keyfield, .sukey .keyfield, .tkrow .keyfield { flex: 1 1 auto; }
+.mrole .ff .keyfield, .ob-form .keyfield { width: 100%; }
+/* `[type]` only to outrank the container rules that set the input's padding --
+   `.sukey input` and `.ob-in` are as specific as a bare `.keyfield > input`,
+   and the gutter has to win or the eye sits on top of the text. */
+.keyfield > input[type] { width: 100%; padding-right: 32px; }
+.keyfield .peek {
+  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+  display: grid; place-items: center; width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: 6px; background: none; color: var(--faint); cursor: pointer;
+}
+.keyfield .peek:hover { background: var(--raised); color: var(--text); }
+.keyfield .peek svg { width: 15px; height: 15px; fill: none; stroke: currentColor;
+  stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+/* Lit while the key is readable, so the state is legible without hovering for
+   the tooltip. */
+.keyfield .peek[aria-pressed="true"] { color: var(--amber); }
+
+/* The API host field: same gutter as the key field, holding a copy instead of
+   an eye. Quiet until the field is pointed at or focused -- an address is a
+   value to read, and a button parked on every one of them turns the pane into
+   a toolbar. Kept in the DOM rather than mounted on hover so a keyboard reader
+   can still reach it. */
+.hostfield { position: relative; display: block; flex: 1 1 auto; min-width: 0; }
+.hostfield > input[type] { width: 100%; padding-right: 32px; }
+.hostfield .hcopy {
+  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+  display: grid; place-items: center; width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: 6px; background: none; color: var(--faint); cursor: pointer;
+  opacity: 0; transition: opacity .12s, background .12s, color .12s;
+}
+.hostfield:hover .hcopy, .hostfield:focus-within .hcopy { opacity: 1; }
+.hostfield .hcopy:hover { background: var(--raised); color: var(--text); }
+.hostfield .hcopy svg { width: 15px; height: 15px; fill: none; stroke: currentColor;
+  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+
 /* provider card, expanded: credentials, model list, disconnect */
 .pcard.open { background: var(--surface); }
-.pcard .tagm {
+
+/* ── models: providers on the left, one provider's settings on the right ──
+   A rail and a pane rather than a column of folds: the old accordion answered
+   "what is this provider set to" only after a click, and comparing two of them
+   meant opening both and scrolling between them.
+
+   The height is fixed and each side scrolls inside it. Left to grow, a rail of
+   forty providers pushed the tuning card below it off the bottom of a page
+   that scrolls as one. */
+.msplit {
+  display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 14px;
+  height: min(56vh, 520px); margin-top: 14px;
+  border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px;
+}
+/* 10px of right padding, not 4: the overlay thumb is drawn 8px in from the
+   scroller's right edge, and a narrower gutter put it on top of the divider
+   that separates the rail from the pane. */
+.mrail { overflow-y: auto; display: grid; gap: 2px; align-content: start;
+  padding-right: 10px; border-right: 1px solid var(--line-soft); }
+.mrow {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  padding: 8px 9px; border: 0; border-radius: 8px; background: none; cursor: pointer;
+  font: inherit; font-size: 13px; color: var(--text);
+}
+.mrow:hover { background: color-mix(in oklab, var(--text) 6%, transparent); }
+.mrow[aria-current="true"] { background: var(--surface); font-weight: 600; }
+.mrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mrow .provider-icon { width: 20px; height: 20px; }
+.mrow .tagm { flex: none; }
+/* A folded family in the rail. The header borrows `.mrow` whole -- while the
+   group is closed it stands in for a provider row, so it has to weigh the same
+   -- and adds the chevron and a count. The members indent under it, hung off a
+   rule, so an open group reads as one block rather than as four more rows. */
+.mgrp { display: grid; gap: 2px; }
+/* Every top-level row is indented by the chevron's column, group or not, so one
+   foldable family does not knock the other marks out of line. */
+.mrail > .mrow { padding-left: 26px; }
+.mrow.gh .cv { flex: none; width: 8px; color: var(--faint); font-size: 11px; line-height: 1;
+  text-align: center; transition: transform .15s ease; }
+.mrow.gh[aria-expanded="false"] .cv { transform: rotate(-90deg); }
+.mrow.gh:hover .cv { color: var(--text); }
+.mrow.gh .gc { flex: none; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+.mgsub { display: grid; gap: 2px; margin-left: 13px; padding-left: 9px;
+  border-left: 1px solid var(--line-soft); }
+.mgsub .mrow { font-size: 12.5px; }
+@media (prefers-reduced-motion: reduce) { .mrow.gh .cv { transition: none; } }
+.mpanel { overflow-y: auto; min-width: 0; padding: 4px 6px 8px 4px; display: grid;
+  gap: 14px; align-content: start; }
+.mtitle { display: flex; align-items: center; gap: 9px; font-size: 14.5px; font-weight: 600; }
+.mtitle .provider-status { margin-left: auto; }
+.msub { margin-top: -8px; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.mpanel .pform { grid-column: auto; margin-top: 0; gap: 14px; }
+/* Each block of the pane -- key, host, models -- is a label row over its
+   fields, so the pane reads as three answers rather than one long form. */
+.msec { display: grid; gap: 8px; }
+.mhead { display: flex; align-items: center; gap: 10px; }
+.mhead .t { font-size: 13px; font-weight: 600; }
+.mdocs { font-size: 11.5px; color: var(--amber); text-decoration: none; }
+.mdocs:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* The icon form: same link, drawn instead of written. Faint until pointed at,
+   like the capability icons -- it annotates the heading rather than competing
+   with it. */
+.mdocs.icon { display: inline-flex; color: var(--faint); }
+.mdocs.icon:hover { color: var(--amber); text-decoration: none; }
+.mdocs.icon svg { width: 15px; height: 15px; fill: none; stroke: currentColor;
+  stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.mbtns { margin-left: auto; display: flex; gap: 6px; }
+.mbtns button[disabled] { opacity: .45; cursor: not-allowed; }
+.msec .keyrow { margin-top: 0; }
+.mempty { padding: 14px 2px; font-size: 12px; color: var(--faint); }
+/* One row per model: the mark, the name, what it can do, and the way out.
+   A row rather than a chip because a chip has nowhere to put an icon row. */
+.mlist { display: grid; gap: 2px; }
+.mitem { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 8px; }
+.mitem:hover { background: color-mix(in oklab, var(--text) 5%, transparent); }
+.mitem .provider-icon { width: 18px; height: 18px; }
+.mitem .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12.5px; }
+.mitem .rm { flex: none; width: 20px; height: 20px; border: 0; border-radius: 6px; background: none;
+  color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer; }
+.mitem .rm:hover { background: var(--raised); color: var(--clay); }
+
+/* ── add-model drawer ───────────────────────────────────────────────────
+   Over the settings dialog, from the right: adding a model is a detour from
+   reading the provider, and the pane behind it is the context for what is
+   being added. Absolute inside `.smodal`, so it is clipped by the dialog it
+   belongs to rather than floating over the whole window. */
+.mdrawer { position: absolute; inset: 0; z-index: 2; display: flex; justify-content: flex-end; }
+.mdrawer .scrim { flex: 1; border: 0; background: var(--scrim); cursor: default;
+  animation: fadein .18s ease both; }
+.mdrawer .dpane {
+  width: min(460px, 82%); display: flex; flex-direction: column; min-height: 0;
+  background: var(--ink); border-left: 1px solid var(--line);
+  box-shadow: -18px 0 48px -24px rgba(0, 0, 0, .5); animation: drawerin .22s cubic-bezier(.22, .61, .36, 1) both;
+}
+.mdrawer header { flex: none; display: flex; align-items: center; gap: 9px;
+  padding: 15px 16px 12px 18px; border-bottom: 1px solid var(--line-soft); }
+.mdrawer header b { font-size: 14px; }
+.mdrawer header .ct { flex: none; font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+.mdrawer header .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 11.5px; color: var(--faint); }
+.mdrawer header .icb { flex: none; border: 0; background: none; color: var(--faint); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 4px 6px; border-radius: 6px; }
+.mdrawer header .icb:hover { background: var(--raised); color: var(--text); }
+.mdrawer .body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px 20px;
+  display: grid; gap: 16px; align-content: start; }
+.mdrawer .fld { display: grid; gap: 6px; }
+.mdrawer .fld .k { font-size: 12px; color: var(--muted); }
+.mdrawer .fld .k i { color: var(--clay); font-style: normal; }
+.mdrawer .grp { display: grid; gap: 8px; }
+.mdrawer .gt { font-size: 12px; color: var(--muted); }
+.togs { display: flex; flex-wrap: wrap; gap: 7px; }
+.mtog {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; background: none;
+  font: inherit; font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.mtog .model-tag { width: 14px; height: 14px; color: inherit; }
+button.mtog:hover:not([disabled]) { border-color: var(--faint); color: var(--text); }
+/* Closed rather than merely empty: an embedding model that also called tools
+   would be a state the form let a person build and the icon row then drew. */
+button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
+.mdrawer .grp[data-off] .gt { opacity: .5; }
+.mtog[aria-pressed="true"] { border-color: var(--amber); color: var(--text);
+  background: color-mix(in oklab, var(--amber) 12%, transparent); }
+.mdrawer footer { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  padding: 12px 16px; border-top: 1px solid var(--line-soft); }
+.mdrawer footer .pnote { margin-right: auto; }
+
+/* the fetched catalogue: search, one filter row, and the models under it */
+.msearch { width: 100%; }
+/* Not an error: a provider with no key yet is the ordinary state of one being
+   set up, and the rows below it are real either way. */
+.mnote { font-size: 11.5px; line-height: 1.55; color: var(--muted);
+  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px; padding: 8px 10px; }
+.mkinds { display: flex; flex-wrap: wrap; gap: 6px; }
+.mkind {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 7px;
+  border: 1px solid transparent; background: none; font: inherit; font-size: 11.5px;
+  color: var(--muted); cursor: pointer;
+}
+.mkind:hover { background: color-mix(in oklab, var(--text) 6%, transparent); }
+.mkind[aria-pressed="true"] { border-color: var(--line); background: var(--surface); color: var(--text); }
+.mkind .model-tag { width: 13px; height: 13px; color: inherit; }
+.mkind i { font-style: normal; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+/* A row already in the list reads as done rather than as offered: the button
+   at its end is the way back out, not the way in. */
+/* The vendor heading over a run of rows. Quiet: it separates the list rather
+   than competing with the names in it. */
+.mgroup { display: flex; align-items: center; gap: 4px; padding: 10px 8px 4px; }
+.mgroup .gt { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 2px 4px;
+  border: 0; border-radius: 6px; background: none; font: inherit; text-align: left; cursor: pointer; }
+.mgroup .gt:hover { background: color-mix(in oklab, var(--text) 6%, transparent); }
+.mgroup .cv { flex: none; color: var(--faint); font-size: 11px; line-height: 1;
+  transition: transform .15s ease; }
+.mgroup .gt:hover .cv { color: var(--text); }
+.mgroup .gt[aria-expanded="false"] .cv { transform: rotate(-90deg); }
+.mgroup .gn { font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--muted); }
+.mgroup .gc { font-family: var(--mono); font-size: 10px; color: var(--faint); }
+/* One button for the whole vendor: most of these decisions have that shape --
+   all of a gateway's BAAI embedders, none of its voice models. */
+.mgroup .ga { flex: none; width: 22px; height: 22px; border: 0; border-radius: 6px; background: none;
+  color: var(--faint); font-size: 14px; line-height: 1; cursor: pointer; }
+.mgroup .ga:hover:not([disabled]) { background: var(--raised); color: var(--text); }
+.mgroup .ga[disabled] { opacity: .3; cursor: not-allowed; }
+.mgroup + .mitem { border-top: 1px solid var(--line-soft); padding-top: 8px; }
+@media (prefers-reduced-motion: reduce) { .mgroup .cv { transition: none; } }
+.mitem[data-on] .nm { color: var(--muted); }
+.mitem .rm[disabled] { opacity: .4; cursor: not-allowed; }
+.pcard .tagm, .mrow .tagm, .mtitle .tagm {
   font-family: var(--mono); font-size: 10px; letter-spacing: .08em; color: var(--amber);
   border: 1px solid var(--amber-dp); border-radius: 999px; padding: 1px 6px; font-weight: 500;
 }
@@ -4387,6 +4649,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .ob-row .nm { min-width: 0; display: flex; align-items: center; gap: 9px;
   font-size: 14px; font-weight: 500; color: var(--text); }
 .ob-row .nm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ob-row .model-tags { margin-left: auto; }
 .ob-row .bd { margin-left: auto; flex: none; font-family: var(--mono);
   font-size: 10px; letter-spacing: .04em; color: var(--faint); }
 .ob-row .bd.on { color: var(--moss); }

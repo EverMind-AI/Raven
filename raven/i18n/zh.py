@@ -12,7 +12,7 @@ MESSAGES: dict[str, str] = {
     "MiniMax (Global, open-source partner)": "MiniMax Global(开源合作伙伴)",
     "MiniMax (CN)": "MiniMax 中国",
     "Z.ai (Zhipu)": "Z.ai(智谱)",
-    "DashScope": "阿里云百炼",
+    "Alibaba Cloud": "阿里云百炼",
     "Moonshot": "Moonshot(月之暗面)",
     "VolcEngine": "火山方舟",
     "SiliconFlow": "硅基流动",

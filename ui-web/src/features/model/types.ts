@@ -6,20 +6,39 @@
  * draws from.
  */
 
+import type { ModelTagFacts } from '../../shell/model-tags'
+
 export interface Provider {
   id: string
   name: string
   homepage?: string
+  /* Everything this provider could serve: its configured list plus a curated
+     shortlist plus a catalogue. The picker does not offer this -- see
+     `offered` below -- but the onboarding step, which runs before anything has
+     been added, does. */
   models: string[]
+  /* What was actually added to this provider, which is what the picker offers.
+     A model is chosen from the list somebody built in settings, not from
+     everything the vendor has ever published. */
+  configured?: string[]
   /* Authenticated. A provider without an account is not offered: picking one of
      its models would fail on the next turn rather than at the click. */
   on: boolean
   kind?: string
   protocols?: Record<string, string>
   protocolOverrides?: Record<string, string>
+  /* Keyed by the id as it appears in `models`. Absent for a model the registry
+     knows nothing about, which is why every reader treats a miss as "no tags"
+     rather than as an empty model. */
+  labels?: Record<string, ModelTagFacts & { label?: string; description?: string }>
 }
 
 export type ApiProtocol = 'auto' | 'chat' | 'responses' | 'anthropic'
+
+/* The models a picker offers for a provider: the added ones. Older sources
+   that predate the split hand back only `models`, and falling through to it
+   keeps them working rather than emptying their picker. */
+export const offered = (p: Provider): string[] => p.configured ?? p.models
 
 export interface ModelSource {
   providers(): Provider[]
