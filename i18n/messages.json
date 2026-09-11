@@ -867,6 +867,10 @@
       "en": "show every attachment",
       "zh": "展开全部附件"
     },
+    "gui.att.too_big": {
+      "en": "{name} is {size}; the most this connection carries is {limit}",
+      "zh": "{name} 有 {size}，这条连接最多只能传 {limit}"
+    },
     "gui.att.uploading": {
       "en": "uploading...",
       "zh": "上传中…"
