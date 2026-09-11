@@ -61,6 +61,24 @@ def is_inline_image(part: Any) -> bool:
     return isinstance(url, str) and url.startswith("data:image/")
 
 
+def inline_image_bytes(part: Any) -> int:
+    """Decoded size of an inline picture, 0 for anything else.
+
+    A remote reference has no known size without fetching it, so it weighs
+    nothing here -- the callers that count bytes are budgets and records, and
+    both must under-report rather than invent a number.
+
+    Decoded, not encoded: this is the number the image window's budget is
+    written in. What went on the wire is 4/3 of it, which is the gap a measured
+    incident fell through -- 11.24 MB decoded passed a 12 MB budget while 16.8 MB
+    went out -- so anything comparing the two has to say which it means.
+    """
+    if not is_inline_image(part):
+        return 0
+    payload = part["image_url"]["url"].partition(",")[2]
+    return len(payload) * 3 // 4
+
+
 # Vision models bill images by patch area, not by the size of the transport
 # encoding. Counting a data URI as text charges ~350x the real cost (a 1000x1000
 # JPEG is ~1.3k image tokens but ~460k base64 characters), which starves the
@@ -160,6 +178,7 @@ __all__ = [
     "estimate_content_part_tokens",
     "estimate_image_tokens",
     "image_block",
+    "inline_image_bytes",
     "is_image_part",
     "is_inline_image",
     "text_block",

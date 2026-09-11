@@ -155,6 +155,11 @@ class AgentHookContext:
     #: reaches the filed record. The entry ``observers["acp_meta"]`` (a dict)
     #: additionally travels to an ACP client as the prompt response's
     #: ``_meta`` (raven/acp/methods.py reads it back from the filed record).
+    #: One key of it the ACP layer reads for itself rather than passing on:
+    #: ``acp_meta["raven.holdTurn"]`` (``{"untilMs": int | None, "why": str}``)
+    #: on a turn that ended normally says the agent's work goes on without it
+    #: (a wake it armed runs a later turn on this session), so the layer keeps
+    #: the ``session/prompt`` open until a later turn ends without the key.
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

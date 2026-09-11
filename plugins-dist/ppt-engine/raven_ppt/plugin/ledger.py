@@ -52,6 +52,20 @@ SUMMARY_MARKER = "[Context summary — earlier steps were compacted to fit the c
 #: The ledger quotes the user, never trims them; this is the safety stop for a
 #: session of hundreds of long messages, and the note says when it was hit.
 WORDS_CAP_CHARS = 24_000
+
+# The loop writes user-role messages of its own -- the synthetic message that
+# carries a tool's pictures, and empty-response recovery scaffolding -- and marks
+# each with a private key, which is how the trunk keeps them out of a filed turn.
+# Read the mark rather than the prose: a live run put 29 image-withdrawal notices
+# and nothing else into a journal of 34 items, and matching their wording would
+# only hold until the wording changed. Spelled here so the plugin does not import
+# loop internals; the test suite pins these against the trunk.
+LOOP_AUTHORED_KEYS = ("_attached_image", "_recovery_synthetic")
+
+# What the loop's deterministic prune writes over a tool result it elides. It
+# overwrites the body in place and leaves no key behind, so unlike the two above
+# the body is the only evidence there is that the tool did not say this.
+ELIDED_TOOL_BODY = "[earlier tool output elided to fit the context window]"
 _ASK_SPLIT = re.compile(r"\s*User answered: ")
 _ASK_TAIL = re.compile(r"[\s.]*(?:Continue\.)?\s*$")
 _ASK_WRAPPER = re.compile(r"\[(?:BEGIN|END) UNTRUSTED ask_user[^\]]*\]\s*")
@@ -166,9 +180,17 @@ def users_words(history: list[dict[str, Any]] | None) -> list[str]:
     the user's own words. ``ask_user`` answers arrive as the tool's result
     text; the wrapper the host puts around untrusted data is dropped, the
     question and answer are kept as the tool printed them.
+
+    A user-role message is not proof the user spoke: the loop writes its own
+    (``LOOP_AUTHORED_KEYS``), and it overwrites an elided tool body in place
+    (``ELIDED_TOOL_BODY``). Both are skipped, because the journal is fed from
+    the live window where the trunk has not yet stripped them, and the ledger
+    spends a 24k budget on what it finds.
     """
     words: list[str] = []
     for message in history or []:
+        if any(message.get(key) for key in LOOP_AUTHORED_KEYS):
+            continue
         role = message.get("role")
         if role == "user":
             text = _text(message.get("content")).strip()
@@ -176,6 +198,8 @@ def users_words(history: list[dict[str, Any]] | None) -> list[str]:
                 words.append(f"User: {text}")
         elif role == "tool" and message.get("name") == "ask_user":
             text = _ASK_WRAPPER.sub("", _text(message.get("content"))).strip()
+            if text == ELIDED_TOOL_BODY:
+                continue
             parts = _ASK_SPLIT.split(text)
             answers = [_ASK_TAIL.sub("", part).strip() for part in parts[1:]] if len(parts) > 1 else [text]
             words.extend(f"Answered: {answer}" for answer in answers if answer)

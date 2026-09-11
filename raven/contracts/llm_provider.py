@@ -72,6 +72,48 @@ class TruncationInfo:
 
 
 @dataclass(frozen=True)
+class CallRecord:
+    """What the transport did on one model call, kept so a failure can be read back.
+
+    Everything here was already at the provider boundary and was thrown away
+    before the tracing extractor ran, which is how a measured incident became
+    undiagnosable: five calls of about 16.8 MB each came back HTTP 200 with
+    empty content, ``finish_reason: "stop"`` and usage all zeros, and the
+    recorded ``llm.output`` held no status, no serving provider and no body --
+    so "the gateway rejected the payload" and "one backend in the fallback
+    order misbehaved" could not be told apart after the fact.
+
+    A paper describes: the fields are already bounded and scrubbed when they get
+    here. :mod:`raven.providers.call_record` is the only production constructor
+    and owns the caps, the header allow list and the credential scrub.
+
+    ``body`` is the response as the client library parsed it, and is filled only
+    when the response is not usable (no content and no tool call, or an error) --
+    a usable answer is already in ``content`` and copying it here would double
+    every record. Request-side facts (the messages+tools payload size, not the
+    provider-final body, and how many pictures rode along) are not here: they are
+    derived from the messages by ``observability.semconv`` on the ``llm.input``
+    side, where the messages are.
+    """
+
+    http_status: int | None = None
+    #: The backend that actually served the call, when the response names one
+    #: (OpenRouter puts ``provider`` in the body). Distinct from ``llm.provider``,
+    #: which is the gateway raven addressed.
+    served_by: str | None = None
+    #: The model id the response came back stamped with, which a gateway is free
+    #: to change from the one asked for.
+    served_model: str | None = None
+    #: The upstream's own id for this generation -- what a gateway's support desk
+    #: asks for, and the only handle on a call that left no other trace.
+    response_id: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)
+    body: str | None = None
+    #: The body hit the cap and what is stored is its head.
+    body_truncated: bool = False
+
+
+@dataclass(frozen=True)
 class RunMeta:
     """What happened around a call, as opposed to what the call asks for.
 
@@ -147,6 +189,10 @@ class LLMResponse:
     # chat() sees one arrival time for the whole response -- so None means
     # "not measured", never "instant".
     reasoning_ms: int | None = None
+    # What the transport did, for the record. None means the provider does not
+    # report it (a duck-typed stub, an adapter yet to fill it in), which is not
+    # the same as a call that had no transport facts.
+    call_record: CallRecord | None = None
 
     @property
     def has_tool_calls(self) -> bool:
@@ -181,6 +227,11 @@ class ChatDelta:
     # upstream closed the stream without sending one; the consumer then knows
     # the reply was cut, not finished.
     finish_synthesized: bool = False
+    # The transport facts of the call this stream belongs to, carried on the
+    # first delta only (like ``usage`` on the terminal one): the response
+    # headers and the serving backend are known once the stream opens, and the
+    # accumulator has no other way to reach the wrapper they sit on.
+    call_record: CallRecord | None = None
 
 
 @dataclass(frozen=True)
@@ -208,6 +259,15 @@ class GenerationSettings:
     #: it for its per-chunk watchdog; an adapter with no streaming path does
     #: not read it at all.
     stream_idle_timeout: float = 180.0
+    #: The longest wait for the *first* byte of a call, separate again from
+    #: ``stream_idle_timeout``: a stream that has not started is not the same
+    #: event as one that stopped mid-answer, and it is recognisable far sooner.
+    #: Getting started is measured in seconds even on a 210k-token prompt
+    #: (2026-09-10: 17.45 s worst of 110 calls), so this can be tight while
+    #: ``timeout`` stays in the tens of minutes for the generation itself.
+    #: ``raven.providers.first_byte`` reads it, clamps it to ``timeout`` and
+    #: says what each path can and cannot bound with it.
+    first_byte_timeout: float = 120.0
 
 
 class LLMProvider(ABC):

@@ -33,13 +33,14 @@ _REAL_FETCH = rates._fetch_openrouter_models
 class UsageProvider(LLMProvider):
     """Returns a fixed reply with a known usage snapshot. No tool calls."""
 
-    def __init__(self, model: str, prompt_tokens: int, completion_tokens: int):
+    def __init__(self, model: str, prompt_tokens: int, completion_tokens: int, extra: dict | None = None):
         super().__init__(api_key="test")
         self._model = model
         self._usage = {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
+            **(extra or {}),
         }
 
     async def chat(
@@ -107,6 +108,44 @@ async def test_usage_sink_carries_context_gauge_and_cost(workspace):
     assert sink["context_percent"] == 20
     assert sink["cost_usd"] is None
     assert sink["cost_missing_calls"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extra", "used", "percent"),
+    [
+        ({"cache_read_input_tokens": 30000, "total_tokens": 38000, "prompt_tokens_include_cache": False}, 38000, 95),
+        ({"cache_read_input_tokens": 30000}, 8000, 20),
+    ],
+    ids=["cache_reported_apart_from_prompt_tokens", "cache_already_inside_prompt_tokens"],
+)
+async def test_the_gauge_measures_the_window_not_the_bill(workspace, extra, used, percent):
+    """A warm cache bills a fraction of the prompt and occupies all of it.
+
+    The gauge divides by the context window, so it must count the cached prompt
+    the provider reports apart from ``prompt_tokens`` -- and must not count it
+    twice where ``prompt_tokens`` already contains it, which is why the
+    add-back reads the provider's own ``prompt_tokens_include_cache``. The
+    billed counts on the wire are untouched either way.
+    """
+    provider = UsageProvider("stub", prompt_tokens=6000, completion_tokens=2000, extra=extra)
+    agent = _make_agent(workspace, provider, model="stub", window=40000)
+    sink: dict = {}
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+        usage_sink=sink,
+    )
+
+    assert sink["context_used"] == used
+    assert sink["context_percent"] == percent
+    assert sink["prompt_tokens"] == 6000
+    assert sink["completion_tokens"] == 2000
 
 
 def _patch_live_openrouter_window(monkeypatch, window: int) -> None:

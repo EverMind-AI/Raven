@@ -983,6 +983,7 @@ async def _apply_verdict(
     adjudication_timeout_s: float,
     control_reachable: "Callable[[], bool] | None" = None,
     control_advert: "Callable[[str], str | None] | None" = None,
+    output_limited: bool = False,
 ) -> None:
     """Turn a finished node's verdict into a status, and report a bad one.
 
@@ -1000,7 +1001,20 @@ async def _apply_verdict(
             output=node_output or "",
             error=errors.get(node.id, ""),
             crashed=crashed,
+            output_limited=output_limited,
         )
+    except TypeError as exc:
+        # Not fail-open, and not raised either: raising here is swallowed further
+        # out and the node stays `completed`, which is the failure this guards
+        # against. The call itself being wrong is not the judgement being
+        # unavailable -- read as accomplished it switches the whole verdict
+        # system off with nothing anywhere failing, so the node fails instead
+        # and says why.
+        logger.opt(exception=True).error("DAG node {} judge call does not accept what the runner passes", node.id)
+        status[node.id] = "failed"
+        errors[node.id] = f"the DAG judge could not be called, so this node was never judged: {exc}"
+        output_paths.pop(node.id, None)
+        return
     except Exception as exc:  # noqa: BLE001 - matches _verdict.judge's own fail-open contract
         logger.opt(exception=True).warning("DAG node {} verdict call raised, judging it accomplished: {}", node.id, exc)
         verdict = Verdict(accomplished=True)
@@ -1710,6 +1724,11 @@ async def _run_node(
                 adjudication_timeout_s=adjudication_timeout_s,
                 control_reachable=control_reachable,
                 control_advert=control_advert,
+                # Read off the dispatch's own activity rather than the transcript:
+                # a turn that spent its whole budget thinking leaves a record that
+                # looks merely empty, and the cut is the difference between "it
+                # produced nothing" and "it was stopped before it could".
+                output_limited=bool(getattr(did, "output_limited", False)),
             )
         turn = await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id), node_output)
         ended_at_ms = _now_ms()

@@ -157,6 +157,63 @@ def test_artifact_reference_attached(trace_dir):
     assert "llm.input.artifact_path" in spans[0]["attributes"]
 
 
+def test_llm_span_records_what_the_call_asked_for(trace_dir):
+    """A trace kept the conversation and nothing about the request, so a truncated
+    turn could not be attributed to a ceiling, an effort or a backend pin. The
+    scalars go on the span so the question is a grep, and the artifact keeps the
+    reasoning shape beside them. Credentials are in neither."""
+    from raven.observability import semconv
+
+    class _Provider:
+        _SENTINEL = object()
+        api_key = "sk-or-v1-secret"
+        api_base = "https://openrouter.ai/api/v1"
+
+        def request_generation(self, **asked):
+            assert "temperature" not in asked and asked["reasoning_effort"] == "high"
+            return {
+                "max_tokens": 16384,
+                "temperature": 0.95,
+                "reasoning_effort": "high",
+                "reasoning": {"effort": "high"},
+                "provider_fence": {"order": ["Z.AI"], "allow_fallbacks": False},
+            }
+
+    provider = _Provider()
+    bound = {
+        "self": provider,
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": None,
+        "model": "z-ai/glm-5.3-flash",
+        "max_tokens": _Provider._SENTINEL,
+        "reasoning_effort": "high",
+    }
+    with trace.span("llm.call") as span:
+        semconv.llm_call(span, bound, None, None)
+
+    written = next(x for x in _spans_written(trace_dir) if x["name"] == "llm.call")
+    attrs = written["attributes"]
+    assert attrs["llm.request.max_tokens"] == 16384
+    assert attrs["llm.request.reasoning_effort"] == "high"
+    assert attrs["llm.request.temperature"] == 0.95
+    assert attrs["llm.request.effort_sent"] == "reasoning.effort=high"
+    assert "Z.AI" in attrs["llm.request.provider_fence"]
+    payload = json.loads(Path(attrs["llm.input.artifact_path"]).read_text(encoding="utf-8"))
+    assert payload["generation"]["reasoning"] == {"effort": "high"}
+    assert "secret" not in json.dumps(attrs) and "openrouter.ai" not in json.dumps(attrs)
+
+
+def test_a_provider_that_answers_nothing_leaves_the_llm_span_as_it_was(trace_dir):
+    """The record is best-effort: a duck-typed provider with no
+    ``request_generation`` (test stubs, thin adapters) must not lose its span."""
+    from raven.observability import semconv
+
+    with trace.span("llm.call") as span:
+        semconv.llm_call(span, {"self": object(), "messages": [], "tools": None, "model": "m"}, None, None)
+    attrs = next(x for x in _spans_written(trace_dir) if x["name"] == "llm.call")["attributes"]
+    assert attrs["llm.model"] == "m" and not [k for k in attrs if k.startswith("llm.request.")]
+
+
 def test_custom_node_uses_explicit_kind(trace_dir):
     with trace.span("raven.sentinel.tick", {"sentinel.reason": "x"}, kind="plugin"):
         pass
@@ -499,6 +556,67 @@ def test_span_kind_vocabulary_is_frozen():
     }
 
 
+def test_llm_input_payload_carries_the_call_identity_verbatim(trace_dir):
+    """Everything that is not a message reference passes straight through.
+
+    The message fields are covered by the aliasing and round-trip tests; this
+    guards the plain ones, which have no reference indirection to get wrong.
+    """
+    from raven.observability import semconv
+
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "latest"},
+    ]
+
+    payload = semconv.llm_input_payload("openrouter", "openrouter/x", msgs, None, "LiteLLMProvider")
+
+    assert payload["provider"] == "openrouter"
+    assert payload["providerClass"] == "LiteLLMProvider"
+    assert payload["model"] == "openrouter/x"
+    assert payload["tools"] is None
+    assert len(payload["messages"]) == len(msgs), "one reference per message, in order"
+
+
+def test_llm_input_payload_gives_messages_one_constant_type(trace_dir):
+    """A non-list argument addresses ``[]`` rather than passing through.
+
+    v1 returned it verbatim, so ``messages`` could be any type. One constant
+    type spares both resolvers a special case, and the extractors always hand
+    this a real call's message list, so the branch is unreachable in practice.
+    """
+    from raven.observability import semconv
+
+    payload = semconv.llm_input_payload("p", "m", None, None)
+
+    assert payload["messages"] == []
+    assert payload["systemPrompt"] == ""
+    assert payload["prompt"] == ""
+
+
+def test_the_system_field_takes_the_first_system_message_even_when_it_is_empty(trace_dir):
+    """A deliberate inversion of the v1 rule, forced by referencing.
+
+    v1 lifted the first *non-empty* system message's text. A reference has no
+    notion of emptiness - there is nothing to alias for "the first non-empty
+    text" - and synthesising one would mean a second address for content that
+    is already stored. So the field addresses the first system message, and
+    resolution yields whatever that message holds.
+    """
+    from raven.observability import semconv
+
+    payload = semconv.llm_input_payload(
+        "p",
+        "m",
+        [{"role": "system", "content": ""}, {"role": "system", "content": "real"}],
+        None,
+    )
+
+    assert payload["systemPrompt"] == payload["messages"][0]
+
+
 def test_standard_span_required_attributes(trace_dir):
     from raven.observability import semconv
 
@@ -520,6 +638,52 @@ def test_standard_span_required_attributes(trace_dir):
     assert by["tool.call"]["attributes"]["tool.name"] == "grep"
     output_path = Path(by["llm.call"]["attributes"]["llm.output.artifact_path"])
     assert json.loads(output_path.read_text(encoding="utf-8"))["thinking_blocks"] == _Resp.thinking_blocks
+
+
+def test_llm_span_carries_the_request_size_and_the_transport_facts(trace_dir):
+    """Both halves of a call are greppable from the span, not only the artifact.
+
+    Answering "how big was the request, and who served it" used to mean opening
+    one artifact per call and stat-ing the file -- and the artifact's own size is
+    not the request's, since the payload repeats the system prompt and the latest
+    user message beside the full messages list.
+    """
+    from raven.observability import semconv
+    from raven.providers.base import CallRecord, LLMResponse
+    from raven.utils.images import image_block
+
+    messages = [
+        {"role": "user", "content": "look at this"},
+        {"role": "tool", "content": [image_block("data:image/png;base64," + "A" * 400)]},
+    ]
+    response = LLMResponse(
+        content="",
+        finish_reason="stop",
+        usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        call_record=CallRecord(http_status=200, served_by="Z.AI", response_id="gen-1", body='{"choices": []}'),
+    )
+
+    with trace.span("llm.call") as s:
+        semconv.llm_call(
+            s, {"self": None, "messages": messages, "tools": None, "model": "openrouter/z-ai/glm"}, response, None
+        )
+
+    attrs = _spans_written(trace_dir)[0]["attributes"]
+    assert attrs["llm.http_status"] == 200
+    assert attrs["llm.served_by"] == "Z.AI"
+    assert attrs["llm.response_id"] == "gen-1"
+    assert attrs["llm.request_images"] == 1
+    assert attrs["llm.request_image_bytes"] == 300
+    assert attrs["llm.request_bytes"] > 400
+
+    input_payload = json.loads(Path(attrs["llm.input.artifact_path"]).read_text(encoding="utf-8"))
+    assert input_payload["request"] == {
+        "bytes": attrs["llm.request_bytes"],
+        "images": 1,
+        "imageBytes": 300,
+    }
+    output_payload = json.loads(Path(attrs["llm.output.artifact_path"]).read_text(encoding="utf-8"))
+    assert output_payload["call"]["body"] == '{"choices": []}'
 
 
 def test_tracing_disabled_is_passthrough(monkeypatch):
@@ -870,3 +1034,178 @@ def test_suppress_is_task_local(trace_dir):
 
     names = [sp["name"] for sp in _spans_written(trace_dir)]
     assert names == ["session.turn"], "only the live task's span may be emitted"
+
+
+def test_address_items_publishes_one_blob_per_distinct_message(trace_dir):
+    from raven.tracing import artifact_v2 as v2
+
+    store = _store_mod.TraceStore(trace_dir)
+    first = {"role": "system", "content": "sys"}
+    second = {"role": "user", "content": "hi"}
+
+    refs = store.address_items([first, second, first])
+
+    assert [v2.ref_sha1(r) for r in refs] == [
+        v2.message_sha1(first),
+        v2.message_sha1(second),
+        v2.message_sha1(first),
+    ]
+    written = sorted(p.name for p in store.messages_dir.rglob("*.json"))
+    assert written == sorted([f"{v2.message_sha1(first)}.json", f"{v2.message_sha1(second)}.json"])
+
+
+def test_address_items_writes_beside_blobs_never_inside(trace_dir):
+    """Inside ``_blobs/`` the corpus would be swept: compact removes any blob
+    whose link count is 1, and a message blob's is permanently 1."""
+    store = _store_mod.TraceStore(trace_dir)
+    store.address_items([{"role": "user", "content": "hi"}])
+
+    assert store.messages_dir.parent == store.artifacts_dir
+    assert store.messages_dir.name != store.blobs_dir.name
+    written = list(store.messages_dir.rglob("*.json"))
+    assert len(written) == 1
+    assert store.blobs_dir not in written[0].parents
+
+
+def test_a_message_blob_is_never_hard_linked(trace_dir):
+    store = _store_mod.TraceStore(trace_dir)
+    store.address_items([{"role": "user", "content": "hi"}])
+
+    blob = next(store.messages_dir.rglob("*.json"))
+    assert blob.stat().st_nlink == 1
+
+
+def test_address_items_inlines_a_message_it_cannot_store(trace_dir, monkeypatch):
+    def _boom(*_args, **_kwargs):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(_store_mod.TraceStore, "_publish_blob", _boom)
+    store = _store_mod.TraceStore(trace_dir)
+    message = {"role": "user", "content": "hi"}
+
+    refs = store.address_items([message])
+
+    assert refs == [message], "the message itself, so the record stays complete"
+    assert not list(store.messages_dir.rglob("*.json")) if store.messages_dir.exists() else True
+
+
+def test_address_items_repairs_a_mutated_message_blob(trace_dir):
+    from raven.tracing import artifact_v2 as v2
+
+    store = _store_mod.TraceStore(trace_dir)
+    message = {"role": "user", "content": "hi"}
+    store.address_items([message])
+    blob = v2.message_path(store.artifacts_dir, v2.message_sha1(message))
+    blob.write_text("tampered", encoding="utf-8")
+
+    store_2 = _store_mod.TraceStore(trace_dir)
+    store_2.address_items([message])
+
+    assert blob.read_text(encoding="utf-8") == v2.message_text(message)
+
+
+def test_spans_address_items_returns_the_input_when_the_store_fails(trace_dir, monkeypatch):
+    def _boom():
+        raise RuntimeError("no store")
+
+    monkeypatch.setattr(_spans, "_get_store", _boom)
+    items = [{"role": "user", "content": "hi"}]
+
+    assert _spans.address_items(items) == items
+
+
+def test_llm_input_payload_v2_key_set_is_frozen(trace_dir):
+    """The v2 shell's keys are a gate, as the v1 key set was.
+
+    Nothing may restate a slice of ``messages``: a second serialization of the
+    same turns is what this format exists to remove.
+    """
+    from raven.observability import semconv
+    from raven.tracing import artifact_v2 as v2
+
+    payload = semconv.llm_input_payload(
+        "openrouter",
+        "openrouter/x",
+        [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+        None,
+    )
+
+    assert payload["artifactFormat"] == v2.ARTIFACT_FORMAT
+    assert set(payload) == {
+        "artifactFormat",
+        "provider",
+        "providerClass",
+        "model",
+        "systemPrompt",
+        "prompt",
+        "messages",
+        "tools",
+        # Carried verbatim rather than referenced: three integers and the
+        # parameters the provider resolved, neither holding message content.
+        "request",
+        "generation",
+    }
+
+
+def test_llm_input_payload_aliases_the_text_fields_onto_message_refs(trace_dir):
+    from raven.observability import semconv
+    from raven.tracing import artifact_v2 as v2
+
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "first"},
+        {"role": "user", "content": "latest"},
+    ]
+
+    payload = semconv.llm_input_payload("openrouter", "openrouter/x", msgs, None)
+
+    assert payload["messages"][0] == v2.make_ref(v2.message_sha1(msgs[0]))
+    assert payload["systemPrompt"] == payload["messages"][0]
+    assert payload["prompt"] == payload["messages"][2]
+
+
+def test_a_recorded_llm_input_round_trips_back_to_the_v1_payload(trace_dir):
+    from raven.observability import semconv
+    from raven.tracing import artifact_v2 as v2
+
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "latest"},
+    ]
+
+    payload = semconv.llm_input_payload("openrouter", "openrouter/x", msgs, None)
+    assert v2.is_v2(payload), "otherwise resolve_payload is a no-op and this proves nothing"
+    resolved = v2.resolve_payload(payload, _spans._get_store().artifacts_dir)
+
+    assert resolved["messages"] == msgs
+    assert resolved["systemPrompt"] == "sys"
+    assert resolved["prompt"] == "latest"
+
+
+def test_the_request_size_signal_survives_the_shell(trace_dir):
+    """``artifact_bytes`` measures the shell; ``llm.request_bytes`` the conversation.
+
+    Before v2 the two were one number. They are separate facts now, and a span
+    carrying only the first would say a 5 KB request was a few hundred bytes.
+    ``llm.request_bytes`` is measured from the messages rather than from the
+    artifact, so addressing them does not move it.
+    """
+    from raven.observability import semconv
+
+    class _Resp:
+        content = "hi"
+        tool_calls: list = []
+        usage = None
+        finish_reason = "stop"
+        reasoning_content = None
+        thinking_blocks = None
+
+    msgs = [{"role": "user", "content": "x" * 5000}]
+    with trace.span("llm.call") as s:
+        semconv.llm_call(s, {"self": None, "messages": msgs, "tools": None, "model": "openrouter/x"}, _Resp(), None)
+
+    attrs = _spans_written(trace_dir)[0]["attributes"]
+    assert attrs["llm.request_bytes"] > 5000
+    assert attrs["llm.input.artifact_bytes"] < attrs["llm.request_bytes"]

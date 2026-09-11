@@ -29,8 +29,9 @@ from raven.agent.loop.failure_streak import (
     is_hard_tool_failure,
     loop_break_nudge,
 )
-from raven.agent.loop.no_progress import no_progress_key, no_progress_nudge
+from raven.agent.loop.no_progress import NoProgressAction, NoProgressGuard
 from raven.agent.loop.recovery import (
+    OUTPUT_LIMIT_NUDGE,
     POST_TOOL_NUDGE,
     RecoveryAction,
     RecoveryLimits,
@@ -255,6 +256,25 @@ _MAX_ITER_SYNTHESIS_PROMPT = (
 _MAX_ITER_STATIC_FALLBACK = (
     "I reached the maximum number of tool call iterations ({n}) without "
     "completing the task. You can try breaking the task into smaller steps."
+)
+
+# The same wrap-up, for a turn stopped because one call was repeating to no
+# effect. Its own wording because the max-iter prompt opens by telling the model
+# it used up its budget, which here would be false: the budget is not what ran
+# out, and a model told the wrong reason writes the wrong summary.
+_STALLED_SYNTHESIS_PROMPT = (
+    "One tool call was repeating with an identical result and has been stopped, "
+    "so no tools are available now. Using only what you've already gathered, "
+    "give your best final answer: summarize what you accomplished, deliver any "
+    "partial results, and briefly note what's left undone. Do not ask questions "
+    "— there is no further turn to answer them. Reply in the same language as "
+    "the user's request (this instruction is in English, but it is not the "
+    "conversation language)."
+)
+
+_STALLED_STATIC_FALLBACK = (
+    "I stopped because `{tool}` kept returning the same result and the task was "
+    "not moving forward. Tell me what to change and I'll retry."
 )
 
 # Origins whose turns skip the user-inbound hooks (engagement / decision): a turn

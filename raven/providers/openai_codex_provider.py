@@ -31,6 +31,11 @@ from raven.providers.base import (
     ToolCallRequest,
     format_llm_error,
 )
+from raven.providers.first_byte import (
+    FirstByteTimeoutError,
+    httpx_timeout,
+    stream_first_byte_budget,
+)
 from raven.providers.tool_names import normalized_tool_name
 from raven.providers.usage import merge_usage
 
@@ -100,17 +105,22 @@ class OpenAICodexProvider(LLMProvider):
         # its per-line watchdog, so a silent Codex stream still waited 600 s
         # with streamIdleTimeout set to 180).
         idle_timeout = getattr(self.generation, "stream_idle_timeout", None) or timeout
+        # And the third: getting started. The client's own float bounded every
+        # httpx phase at the call budget, so a dead route or a queued gateway
+        # cost the whole of it before anyone noticed.
+        first_byte = stream_first_byte_budget(self.generation)
+        caps = httpx_timeout(self.generation) or timeout
         try:
             try:
                 content, tool_calls, finish_reason = await _request_codex(
-                    url, headers, body, verify=True, timeout=timeout, idle_timeout=idle_timeout
+                    url, headers, body, verify=True, timeout=caps, idle_timeout=idle_timeout, first_byte=first_byte
                 )
             except Exception as e:
                 if "CERTIFICATE_VERIFY_FAILED" not in str(e):
                     raise
                 logger.warning("SSL certificate verification failed for Codex API; retrying with verify=False")
                 content, tool_calls, finish_reason = await _request_codex(
-                    url, headers, body, verify=False, timeout=timeout, idle_timeout=idle_timeout
+                    url, headers, body, verify=False, timeout=caps, idle_timeout=idle_timeout, first_byte=first_byte
                 )
             return LLMResponse(
                 content=content,
@@ -158,12 +168,16 @@ async def _request_codex(
     headers: dict[str, str],
     body: dict[str, Any],
     verify: bool,
-    timeout: float,
+    timeout: Any,
     idle_timeout: float | None = None,
+    first_byte: float = 0.0,
 ) -> tuple[str, list[ToolCallRequest], str]:
     """One Codex request. ``timeout`` bounds the call; ``idle_timeout`` (the
     stream-idle budget, defaulting to the call budget) bounds the silence
-    between two SSE lines, which is the watchdog ``_iter_sse`` runs."""
+    between two SSE lines, which is the watchdog ``_iter_sse`` runs; and
+    ``first_byte`` bounds the wait for that stream's first event. ``timeout``
+    may be an ``httpx.Timeout`` so the pre-generation phases can be narrower
+    than the read."""
     async with httpx.AsyncClient(timeout=timeout, verify=verify) as client:
         async with client.stream("POST", url, headers=headers, json=body) as response:
             if response.status_code != 200:
@@ -171,7 +185,7 @@ async def _request_codex(
                 raise ProviderHTTPError(
                     response.status_code, _friendly_error(response.status_code, text.decode("utf-8", "ignore"))
                 )
-            return await _consume_sse(response, idle_timeout or timeout)
+            return await _consume_sse(response, idle_timeout or timeout, first_byte=first_byte)
 
 
 def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -345,17 +359,32 @@ def _prompt_cache_key(system_prompt: str) -> str:
     return hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
 
 
-async def _iter_sse(response: httpx.Response, timeout: float) -> AsyncGenerator[dict[str, Any], None]:
+async def _iter_sse(
+    response: httpx.Response, timeout: float, first_byte: float = 0.0
+) -> AsyncGenerator[dict[str, Any], None]:
     buffer: list[str] = []
     # Per-event idle cap: aiter_lines resets httpx's read timer on every byte,
     # so a trickle/keepalive stall never trips it. wait_for on each line bounds
     # the silence between SSE lines without penalizing a long, progressing run.
+    # The *first* line gets its own, much shorter bound where one is configured
+    # (``llmFirstByteTimeout``): a stream that never started is a different
+    # event from one that stopped mid-answer. 0 leaves both on the idle cap.
     lines = response.aiter_lines()
+    started = asyncio.get_running_loop().time()
+    opening = first_byte > 0
     while True:
         try:
-            line = await asyncio.wait_for(lines.__anext__(), timeout)
+            line = await asyncio.wait_for(lines.__anext__(), first_byte if opening else timeout)
         except StopAsyncIteration:
             break
+        except TimeoutError as exc:
+            if not opening:
+                raise
+            waited = asyncio.get_running_loop().time() - started
+            raise FirstByteTimeoutError(
+                phase="waiting for the first stream event", budget=first_byte, waited=waited
+            ) from exc
+        opening = False
         if line == "":
             if buffer:
                 data_lines = [ln[5:].strip() for ln in buffer if ln.startswith("data:")]
@@ -378,13 +407,14 @@ async def _consume_sse(
     timeout: float,
     *,
     usage_sink: dict[str, Any] | None = None,
+    first_byte: float = 0.0,
 ) -> tuple[str, list[ToolCallRequest], str]:
     content = ""
     tool_calls: list[ToolCallRequest] = []
     tool_call_buffers: dict[str, dict[str, Any]] = {}
     finish_reason = "stop"
 
-    async for event in _iter_sse(response, timeout):
+    async for event in _iter_sse(response, timeout, first_byte):
         raw_usage = (event.get("response") or {}).get("usage")
         if usage_sink is not None and isinstance(raw_usage, dict):
             usage_sink.update(merge_usage(usage_sink, raw_usage))

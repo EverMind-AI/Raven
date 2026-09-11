@@ -303,3 +303,232 @@ async def test_get_refuses_an_unknown_name(library: PlaybookStore) -> None:
         await mod.playbooks_get({"name": "nope"})
     with pytest.raises(RpcError):
         await mod.playbooks_get({})
+
+
+# ── playbooks.credentials.* / playbooks.oauth.* ────────────────────────────────
+
+
+def _carried_spec(name: str = "carried") -> PlaybookSpec:
+    return PlaybookSpec(
+        name=name,
+        description="a playbook that carries its own servers",
+        task_summary="prove the carried servers reach a node",
+        mode="dag",
+        triggers=Triggers(keywords=["carried"]),
+        params={
+            "PROBE_TOKEN": ParamSpec(type="secret", required=True, description="the bearer the server demands"),
+            "topic": ParamSpec(type="string", required=False, description="not a secret"),
+        },
+        mcp_servers={
+            "tokened": MCPServerConfig(
+                type="streamableHttp",
+                url="http://127.0.0.1:8932/mcp",
+                headers={"Authorization": "Bearer {{ params.PROBE_TOKEN }}"},
+            ),
+            "sentry": MCPServerConfig(type="streamableHttp", url="https://mcp.sentry.dev/mcp", auth="oauth"),
+            "memory": MCPServerConfig(command="npx", args=["-y", "@modelcontextprotocol/server-memory"]),
+        },
+        nodes=[NodeSpec(id="a", subagent="Raven", node_summary="s", prompt_template="p", mcps=["tokened", "sentry"])],
+    )
+
+
+@pytest.fixture
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(mod, "_host_mcp_server_names", lambda: ["sentry"])
+    return tmp_path / "home"
+
+
+async def test_credentials_get_names_what_is_held_and_never_a_value(library: PlaybookStore, home: Path) -> None:
+    from raven.playbook.credentials import set_secret_param
+
+    library.save(_carried_spec())
+    set_secret_param("carried", "PROBE_TOKEN", "s3cr3t")
+
+    out = await mod.playbooks_credentials_get({"name": "carried"})
+
+    assert out["params"] == [{"name": "PROBE_TOKEN", "set": True, "description": "the bearer the server demands"}]
+    assert "s3cr3t" not in str(out)
+    by_name = {s["name"]: s for s in out["servers"]}
+    assert by_name["sentry"] == {
+        "name": "sentry",
+        "auth": "oauth",
+        "enabled": True,
+        "authorized": False,
+        "shadows_host": True,
+    }
+    assert by_name["tokened"]["auth"] == "none" and by_name["tokened"]["shadows_host"] is False
+    assert by_name["memory"]["authorized"] is False
+
+
+async def test_credentials_get_reports_an_authorized_carried_oauth_server(library: PlaybookStore, home: Path) -> None:
+    from raven.mcp.oauth import credentials_path
+    from raven.playbook.credentials import credential_scope
+
+    library.save(_carried_spec())
+    credentials_path("sentry", scope=credential_scope("carried")).write_text(
+        json.dumps({"tokens": {"access_token": "t"}})
+    )
+    out = await mod.playbooks_credentials_get({"name": "carried"})
+    assert {s["name"]: s["authorized"] for s in out["servers"]}["sentry"] is True
+    # The host's own file is untouched and unread.
+    assert not credentials_path("sentry").exists()
+
+
+async def test_credentials_set_and_clear_round_trip(library: PlaybookStore, home: Path) -> None:
+    from raven.playbook.credentials import stored_secret_param_names
+
+    library.save(_carried_spec())
+    assert await mod.playbooks_credentials_set({"name": "carried", "param": "PROBE_TOKEN", "value": "v"}) == {
+        "ok": True
+    }
+    assert stored_secret_param_names("carried") == {"PROBE_TOKEN"}
+    assert await mod.playbooks_credentials_clear({"name": "carried", "param": "PROBE_TOKEN"}) == {"ok": True}
+    assert stored_secret_param_names("carried") == frozenset()
+
+
+async def test_credentials_set_refuses_a_param_the_spec_does_not_declare_secret(
+    library: PlaybookStore, home: Path
+) -> None:
+    library.save(_carried_spec())
+    with pytest.raises(RpcError, match="no secret param named topic"):
+        await mod.playbooks_credentials_set({"name": "carried", "param": "topic", "value": "v"})
+    with pytest.raises(RpcError, match="no secret param named nope"):
+        await mod.playbooks_credentials_set({"name": "carried", "param": "nope", "value": "v"})
+    with pytest.raises(RpcError, match="value is required"):
+        await mod.playbooks_credentials_set({"name": "carried", "param": "PROBE_TOKEN", "value": ""})
+
+
+async def test_credentials_methods_refuse_an_unknown_playbook(library: PlaybookStore, home: Path) -> None:
+    with pytest.raises(RpcError, match="no playbook named ghost"):
+        await mod.playbooks_credentials_get({"name": "ghost"})
+    with pytest.raises(RpcError, match="name is required"):
+        await mod.playbooks_credentials_get({})
+
+
+async def test_oauth_authorize_refuses_a_server_that_is_not_carried_or_not_oauth(
+    library: PlaybookStore, home: Path
+) -> None:
+    library.save(_carried_spec())
+    with pytest.raises(RpcError, match="carries no MCP server named ghost"):
+        await mod.playbooks_oauth_authorize({"name": "carried", "server": "ghost"})
+    with pytest.raises(RpcError, match="only an oauth server"):
+        await mod.playbooks_oauth_authorize({"name": "carried", "server": "tokened"})
+
+
+async def test_oauth_authorize_runs_a_scoped_throwaway_manager(library: PlaybookStore, home: Path, monkeypatch) -> None:
+    """The flow is driven by a manager keyed to the playbook's credential scope,
+    never the host's manager, and the call answers with the parked URL."""
+    from raven.mcp import manager as manager_mod
+
+    library.save(_carried_spec())
+    built: list[dict] = []
+
+    class FakeManager:
+        def __init__(self, registry, **kwargs):
+            built.append(kwargs)
+            self._state = None
+
+        def status(self):
+            return [{"name": "sentry", "state": self._state}] if self._state else []
+
+        async def connect(self, name, cfg, **kwargs):
+            self._state = "auth_required"
+            return {"name": name, "state": "auth_required", "error": "needs authorization"}
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(manager_mod, "MCPConnectionManager", FakeManager)
+    monkeypatch.setattr(
+        "raven.mcp.oauth.pending_url", lambda server: "https://auth.example/consent" if server == "sentry" else None
+    )
+    monkeypatch.setattr("raven.market.connect.CONNECT_WAIT", 0.2)
+
+    out = await mod.playbooks_oauth_authorize({"name": "carried", "server": "sentry"})
+
+    assert out["server"] == "sentry"
+    assert out["state"] == "auth_required"
+    assert out["auth_url"] == "https://auth.example/consent"
+    assert built and built[0]["credential_scope"] == "playbooks/carried"
+
+
+async def test_oauth_authorize_says_why_a_connect_failed_inside_the_window(
+    library: PlaybookStore, home: Path, monkeypatch
+) -> None:
+    """A connect that failed rather than parked must carry its reason to the
+    caller. Unretrieved, the exception is only an asyncio warning on shutdown
+    and the page shows a bare "error" with the cause in a log nobody reads."""
+    from raven.mcp import manager as manager_mod
+
+    library.save(_carried_spec())
+    closed: list[bool] = []
+
+    class FailingManager:
+        def __init__(self, registry, **kwargs):
+            pass
+
+        def status(self):
+            return []
+
+        async def connect(self, name, cfg, **kwargs):
+            raise RuntimeError("the sandbox could not start: no such image")
+
+        async def aclose(self):
+            closed.append(True)
+
+    monkeypatch.setattr(manager_mod, "MCPConnectionManager", FailingManager)
+    monkeypatch.setattr("raven.market.connect.CONNECT_WAIT", 0.2)
+
+    from raven.rpc.dispatcher import Dispatcher
+
+    d = Dispatcher()
+    mod.register_playbooks_methods(d)
+    resp = await d.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "playbooks.oauth.authorize",
+            "params": {"name": "carried", "server": "sentry"},
+        }
+    )
+
+    # Through the real dispatcher, because that is the boundary that loses a
+    # diagnostic: anything but this surface's own vocabulary arrives as
+    # internal_error with the reason in a traceback tail the page drops.
+    # Through the frame the page actually receives: the reason has to be
+    # somewhere the page shows. It toasts result.error for a state that is not
+    # connected, and for a raised error it toasts only the code name, so the
+    # reason rides in the result.
+    assert "error" not in resp, resp
+    assert resp["result"]["state"] == "error"
+    assert "no such image" in resp["result"]["error"], resp
+    assert resp["result"]["auth_url"] is None
+    assert closed, "the throwaway manager is closed even when the connect raises"
+
+
+async def test_oauth_clear_drops_the_scoped_tokens_only(library: PlaybookStore, home: Path) -> None:
+    from raven.mcp.oauth import credentials_path
+    from raven.playbook.credentials import credential_scope
+
+    library.save(_carried_spec())
+    host = credentials_path("sentry")
+    host.write_text(json.dumps({"tokens": {"access_token": "host"}}))
+    scoped = credentials_path("sentry", scope=credential_scope("carried"))
+    scoped.write_text(json.dumps({"tokens": {"access_token": "carried"}}))
+
+    assert await mod.playbooks_oauth_clear({"name": "carried", "server": "sentry"}) == {"ok": True}
+
+    assert not scoped.exists()
+    assert host.exists()
+
+
+def test_the_new_methods_are_declared_in_the_contract() -> None:
+    for method in (
+        "playbooks.credentials.get",
+        "playbooks.credentials.set",
+        "playbooks.credentials.clear",
+        "playbooks.oauth.authorize",
+        "playbooks.oauth.clear",
+    ):
+        assert method in METHOD_MODELS

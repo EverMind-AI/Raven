@@ -551,7 +551,7 @@ def _capture_oauth_notify(monkeypatch):
 
     captured: dict[str, Any] = {}
 
-    async def fake_provider_for(server, cfg, notify=None, interactive=False, can_park=True):
+    async def fake_provider_for(server, cfg, notify=None, interactive=False, can_park=True, scope=None):
         captured["notify"] = notify
         captured["interactive"] = interactive
         return None
@@ -1088,3 +1088,46 @@ async def test_a_connect_started_during_the_reap_is_reaped_too():
         t.cancel()
         with suppress(BaseException):
             await t
+
+
+# ── Credential scope and per-instance handshake budget ─────────────────────────
+
+
+async def test_the_oauth_provider_is_built_under_the_managers_credential_scope(monkeypatch):
+    """A manager built for a playbook's carried server hands its scope to the
+    provider, so the tokens land under the playbook and never under the host's
+    file of the same name."""
+    from types import SimpleNamespace
+
+    from raven.mcp import oauth
+
+    seen = []
+
+    async def fake_provider_for(server, cfg, notify=None, *, interactive=False, can_park=True, scope=None):
+        seen.append({"server": server, "scope": scope, "can_park": can_park})
+        return object()
+
+    monkeypatch.setattr(oauth, "provider_for", fake_provider_for)
+    cfg = _cfg(type="streamableHttp", url="https://mcp.example.test/mcp", auth="oauth")
+    conn = SimpleNamespace(name="sentry", config=cfg, auth_parked=None)
+
+    scoped = MCPConnectionManager(ToolRegistry(), credential_scope="playbooks/scan")
+    await scoped._auth_for(conn)
+    plain = MCPConnectionManager(ToolRegistry())
+    await plain._auth_for(conn)
+    # One manager dialling host and carried servers side by side answers per name.
+    per_name = MCPConnectionManager(
+        ToolRegistry(), credential_scope=lambda name: "playbooks/scan" if name == "sentry" else None
+    )
+    await per_name._auth_for(conn)
+    await per_name._auth_for(SimpleNamespace(name="deepwiki", config=cfg, auth_parked=None))
+
+    assert [s["scope"] for s in seen] == ["playbooks/scan", None, "playbooks/scan", None]
+
+
+def test_the_handshake_budget_defaults_to_the_module_bound_and_can_be_narrowed():
+    from raven.mcp import manager as manager_mod
+
+    assert MCPConnectionManager(ToolRegistry())._handshake_timeout is None  # the module bound, read at watchdog time
+    assert manager_mod._HANDSHAKE_TIMEOUT == 90.0
+    assert MCPConnectionManager(ToolRegistry(), handshake_timeout=45.0)._handshake_timeout == 45.0

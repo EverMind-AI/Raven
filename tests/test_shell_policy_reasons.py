@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import pytest
 
-from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
+from raven.permissions.shell_policy import CommandDecision, ShellCommandPolicy
 
 
 @pytest.fixture
 def policy() -> ShellCommandPolicy:
-    from raven.agent.tools.shell_policy import DELETE_MATCHERS
+    from raven.permissions.shell_policy import DELETE_MATCHERS
 
     policy = ShellCommandPolicy(deny_patterns=[r"\b(mkfs|diskpart)\b"])
     for name, matcher in DELETE_MATCHERS:
@@ -160,7 +160,7 @@ async def test_the_refusal_the_user_reads_says_which_rule_fired(command, phrase)
 async def test_an_unknown_reason_falls_back_rather_than_guessing(monkeypatch) -> None:
     """A refusal from a rule this map does not know about says less rather than
     something wrong -- the same stance `_APPROVAL_DESCRIPTIONS` takes."""
-    from raven.agent.tools import shell_policy
+    from raven.permissions import shell_policy
 
     gate = _gate()
     monkeypatch.setattr(

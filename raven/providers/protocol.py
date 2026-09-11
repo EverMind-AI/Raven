@@ -60,9 +60,19 @@ def configured_protocol(section: Any, model: str | None) -> ApiProtocol | None:
 
 
 def inferred_protocol(model: str | None) -> ApiProtocol:
-    """The protocol a model's family name suggests, before any provider is consulted."""
+    """The protocol a model's family name suggests, before any provider is consulted.
+
+    Only Anthropic's own family is inferred onto the Anthropic wire. ``glm`` was
+    in that list too, and it is not an Anthropic-family model: on the Messages
+    transport its reasoning effort had to be turned into a ``thinking``
+    budget_tokens number, which the gateway serving it does not honour -- 42
+    measured calls produced 261,980 characters of reasoning against a budget of
+    1024 tokens. Over chat the effort travels as an effort and the vendor sizes
+    it. A vendor with its own Anthropic-compatible address is still reachable by
+    naming ``protocol`` explicitly; it is the guess that was wrong.
+    """
     model_id = _model_id(model)
-    if model_id.startswith(("claude", "glm")):
+    if model_id.startswith("claude"):
         return "anthropic"
     if model_id.startswith(("qwen", "seed", "doubao-seed", "minimax", "deepseek", "gpt", "kimi")):
         return "responses"

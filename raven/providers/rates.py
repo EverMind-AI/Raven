@@ -32,25 +32,47 @@ from raven.providers import model_catalog_cache
 #: this many tokens of headroom rather than a number invented at the call site.
 DEFAULT_CONTEXT_WINDOW_TOKENS = 65_536
 
-# Output ceiling for a model the catalogue does not know -- self-hosted
-# deployments, gateways, models newer than the table. Not a default in the
-# sense the surveyed agents use one (theirs applies to every model, mapped or
-# not); this only answers where the catalogue cannot, so it is picked for
-# breadth rather than for any single model: Claude Code defaults to 16000, the
-# Anthropic SDK suggests ~16000 non-streaming, and gpt-4o's real ceiling is
-# also 16384. Unmapped backends are OpenAI-compatible servers in practice,
-# which clamp an over-large value rather than rejecting it.
-DEFAULT_MAX_OUTPUT_TOKENS = 16384
+# How much room one call is given to answer when *nothing* can answer for the
+# model. A declaration is honoured as declared (see
+# ``resolve_max_output_tokens``), so this is no longer a bound on every call --
+# it is the answer for a self-hosted deployment, a gateway, or a model newer
+# than every catalogue.
+#
+# 64000 was 16384 until a measured deck run spent 18m33s and 81920 output
+# tokens on five calls that returned an empty body: the model reasoned to a
+# 16384-token wall every time and the answer never started. That wall was not
+# this constant -- captured request bodies show no ``max_tokens`` reaching the
+# wire on either path -- it was applied downstream, and the only established
+# way to move it is to ask: the same endpoint served 40000 in full when a
+# request named it, and accepts 64000 without refusing.
+#
+# Deliberately not raised past 64000, which was measured rather than assumed.
+# This number answers exactly the rows ``_trustworthy_ceiling`` rejects, and
+# ``openrouter/anthropic/claude-sonnet-4.5`` is one of them: it files 1000000
+# for both its window and its ceiling where Anthropic's real ceiling is 64000,
+# and a request carrying more classifies as ``invalid_request`` -- not
+# retryable, so the turn dies rather than degrades. 64000 is the smallest
+# ceiling among the current claude models, so no vendor refuses it, and it is
+# room for a whole file.
+DEFAULT_MAX_OUTPUT_TOKENS = 64_000
 
-# The claude half of that fallback. Anthropic's Messages API requires
-# ``max_tokens`` on every request, so a claude model the catalogue does not
-# know still needs a number the request can carry -- and 16384 is a guess
-# sized for OpenAI-compatible servers that clamp, not for a vendor that cuts
-# the answer at exactly what was asked. 64000 is the smallest ceiling among
-# the current claude models (Haiku 4.5), so none of them refuses it, and it
-# leaves room for a whole file. Here rather than in the Anthropic transport so
-# the request and the loop's reservation keep reading one number.
-CLAUDE_MAX_OUTPUT_TOKENS = 64000
+# How much of the window a ceiling must leave for the prompt beside it. Both
+# walls a request can hit are stated as the *sum*: OpenRouter refuses with
+# "maximum context length is 1048576 tokens, however you requested about
+# 10000008 (8 of text input, 10000000 in the output)", and a vLLM endpoint
+# publishes only ``max_model_len``, with no separate output cap at all. So a
+# ceiling is not bounded by a fraction of the window, it is bounded by what the
+# prompt cannot do without.
+#
+# 16384 is the measured floor with room to work in: this repo's default agent
+# spends 8606 tokens before any conversation at all (7279 on 20 tool
+# definitions, 1327 on the system prompt), and what is left over is the turn's
+# own text and a tool result. It replaces a blanket half-the-window rule, which
+# was measured to clamp 30.5% of the OpenRouter rows and 33.1% of the LiteLLM
+# rows whose declarations we honour -- ``x-ai/grok-4.3`` declares 900000 of a
+# 1000000 window and was being cut to 500000, and vendors declare up to 0.9 of
+# their window routinely.
+MIN_PROMPT_TOKENS = 16_384
 
 #: Rate pair: (prompt_cost_per_token, completion_cost_per_token) in USD.
 #: Keep this table small -- it is a fallback for brand-new models that LiteLLM
@@ -309,6 +331,12 @@ def _fetch_openrouter_models(*, allow_fetch: bool = True) -> dict[str, dict]:
             # states itself for every model it lists -- see
             # ``capabilities.supports_vision``.
             "input_modalities": list(mods) if isinstance(mods, list) and mods else None,
+            # What the endpoint OpenRouter routes to first says it will emit,
+            # and the number a request for that model carries (see
+            # ``declared_max_output_tokens``). A cache written before this key
+            # existed answers None, which reads as "declares nothing" and falls
+            # back rather than raising.
+            "max_completion_tokens": (model.get("top_provider") or {}).get("max_completion_tokens"),
         }
         cache[model_id] = entry
         if "/" in model_id:
@@ -579,24 +607,34 @@ def token_rates(model: str, input_tokens: int = 0, output_tokens: int = 0) -> tu
 def _trustworthy_ceiling(entry: dict | None) -> int | None:
     """A row's output ceiling, unless the row is filing a window as one.
 
-    984 of the 3040 rows in the pinned LiteLLM carry ``max_output_tokens >=
-    max_input_tokens``; measured, ``openrouter/anthropic/claude-sonnet-4.5``
-    reports 1000000 for both where Anthropic's real ceiling is 64000. A request
-    carrying that number is refused, and the refusal classifies as
-    ``invalid_request`` -- not retryable, not fallback-worthy, not compressible
-    -- so the turn dies rather than degrades.
+    A row claiming it can emit its whole window is not stating an output
+    ceiling, whatever the size of the number: an output ceiling is room *inside*
+    the window, so a row where the two are equal has filed one field twice.
+    1036 of the 2708 rows in the pinned LiteLLM do it, at every scale --
+    ``openrouter/anthropic/claude-sonnet-4.5`` reports 1000000 for both where
+    Anthropic's real ceiling is 64000, and 535 more do it below 64000, down to
+    123 rows shaped ``4096/4096``. Two rows go further and claim 32000 on an
+    8192-token window.
 
-    The second condition is what makes this safe rather than merely suspicious.
-    Rejecting only rows at or above the fallback guarantees the replacement is
-    never larger than what the row claimed; without it, 252 small rows
-    (``4096/4096`` shapes) are raised past their real ceiling, trading one
-    refused request for another.
+    Rejecting the row is not the same as guessing in its place: the next tier
+    down is OpenRouter's own routing catalogue, which answers 64000 for that
+    same claude model -- the real number. Measured over its 435 rows, none
+    files a window as a ceiling, which is why that tier reads this guard and
+    passes it.
+
+    Deliberately not "reject only the rows at or above our fallback", which is
+    what this did while the fallback was also the bound on every call. That
+    made the constant's own value decide which rows were believed, so moving it
+    silently moved the census -- and it had to let the ``4096/4096`` shapes
+    through to keep them from being raised. Neither is needed now: the caller
+    bounds every ceiling by the window it has to fit inside, which is what
+    holds those rows to their real size (see ``resolve_max_output_tokens``).
     """
     ceiling = _numeric(entry, "max_output_tokens", "max_tokens")
     if not ceiling:
         return None
     window = _numeric(entry, "max_input_tokens")
-    if window and ceiling >= window and ceiling >= DEFAULT_MAX_OUTPUT_TOKENS:
+    if window and ceiling >= window:
         return None
     return int(ceiling)
 
@@ -655,24 +693,103 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
     return None
 
 
-def resolve_max_output_tokens(model: str | None, *, allow_fetch: bool = True) -> int:
+def _try_openrouter_max_output(model: str, *, allow_fetch: bool = True) -> int | None:
+    """The output ceiling the serving endpoint publishes, or None.
+
+    OpenRouter states it per model as ``top_provider.max_completion_tokens``,
+    in the same catalogue row this module already fetches and caches for
+    prices, which is why no second fetch and no second cache appear here. The
+    per-endpoint listing (``/models/{id}/endpoints``) states it per provider
+    too and is deliberately not read: it is one request per model, and the
+    figure it adds over this one is which of several providers would answer --
+    a distinction that cannot raise our ceiling and so cannot change the
+    request.
+
+    ``top_provider`` is the endpoint OpenRouter routes to first, not the best
+    of the 26 a popular model has, which is what makes one row enough. Checked
+    against the per-endpoint listing for the models this repo ships: it reports
+    131072 for ``z-ai/glm-5.3-flash``, matching all three providers the deck
+    agent fences itself to (Z.AI, DeepInfra, Novita) exactly, where the maximum
+    across every endpoint would have been 1179648 and the minimum 128000.
+
+    Filtered through ``_trustworthy_ceiling`` like the LiteLLM tier, on a row
+    shaped the way that guard reads. Measured over the 435 rows OpenRouter
+    lists: 429 declare a ceiling, none of them files its window as one, and 137
+    declare less than 64000 -- those 137 are the models this tier exists for.
+    """
+    entry = _lookup_openrouter_entry(model, allow_fetch=allow_fetch)
+    if not entry:
+        return None
+    return _trustworthy_ceiling(
+        {
+            "max_output_tokens": entry.get("max_completion_tokens"),
+            "max_input_tokens": entry.get("context_length"),
+        }
+    )
+
+
+def declared_max_output_tokens(model: str | None, *, allow_fetch: bool = True) -> int | None:
+    """What this model itself says it will emit, or None when nothing says.
+
+    LiteLLM's table first -- it also routes the request, so its answer and the
+    call agree by construction -- then OpenRouter's catalogue, and only for an
+    id that names OpenRouter (the rule the whole module keeps: reading another
+    vendor's row is what priced a self-hosted deployment at a hosted model's
+    rate).
+
+    Separate from :func:`resolve_max_output_tokens` because the two questions
+    differ: this one may answer "nothing declares", where the resolver must
+    hand back a number a request can carry.
+    """
+    if not model:
+        return None
+    return _try_litellm_max_output(model, allow_import=allow_fetch) or _try_openrouter_max_output(
+        model, allow_fetch=allow_fetch
+    )
+
+
+def resolve_max_output_tokens(model: str | None, *, window: int | None = None, allow_fetch: bool = True) -> int:
     """How many output tokens to ask for. Never ``None`` -- the caller is about
     to build a request with the result.
 
-    Table first, fixed fallback second, which is the shape LiteLLM's own
-    Anthropic path uses and for the same reason: one constant cannot fit every
-    model. Too large for a small model is a 400; too small for a large one
-    truncates silently, which is the failure this whole module's callers exist
-    to avoid. See ``DEFAULT_MAX_OUTPUT_TOKENS`` for how that fallback is
-    chosen; it only ever answers for a model the catalogue has no row for.
+    Two questions, asked in a documented order and answered from whatever can
+    answer them for *this* model, whoever serves it.
+
+    **What does it declare?** ``declared_max_output_tokens`` walks the tables
+    that also route the request -- LiteLLM's own metadata, then OpenRouter's
+    catalogue for an id naming OpenRouter -- and whatever they say is what a
+    request carries, as declared. A declaration is the serving side's own
+    answer to this exact question, so clamping it to a constant of ours made a
+    131072-token endpoint ask for 64000 on every call. Honouring one is safe
+    because the declaration is filtered first: ``_trustworthy_ceiling`` drops
+    the rows that file a window as a ceiling, which is where every absurd
+    figure came from. ``DEFAULT_MAX_OUTPUT_TOKENS`` answers only where nothing
+    declares -- a self-hosted deployment, a gateway, a model newer than every
+    catalogue.
+
+    **How much of the window may it take?** A ceiling is room asked for
+    *inside* the window: both walls a request can hit are stated as the sum of
+    prompt and reply, and the loop reserves exactly this number and hands the
+    prompt whatever is left. So it is bounded to leave ``MIN_PROMPT_TOKENS``
+    behind -- or half the window where the window is too small to spare that
+    much, which is the same number at 32768 and below it the only split that
+    leaves both sides something.
+
+    ``window`` is that window, and it is why this generalizes past the models a
+    catalogue knows: the caller passes the one the turn is actually running on
+    (``ModelBinding.context_window``, which honours an explicit
+    ``contextWindowTokens`` first), so a custom OpenAI-compatible endpoint --
+    a volc vLLM deployment publishing only ``max_model_len``, a self-hosted
+    server -- is sized by its operator's own number rather than by a catalogue
+    that has never heard of it. Absent that, the catalogue answers, and absent
+    that too, ``DEFAULT_CONTEXT_WINDOW_TOKENS``.
     """
-    if not model:
-        return DEFAULT_MAX_OUTPUT_TOKENS
-    return _try_litellm_max_output(model, allow_import=allow_fetch) or _fallback_max_output(model)
-
-
-def _fallback_max_output(model: str) -> int:
-    return CLAUDE_MAX_OUTPUT_TOKENS if "claude" in model.lower() else DEFAULT_MAX_OUTPUT_TOKENS
+    declared = declared_max_output_tokens(model, allow_fetch=allow_fetch)
+    ceiling = DEFAULT_MAX_OUTPUT_TOKENS if declared is None else declared
+    if not window and model:
+        window = resolve_context_window(model, allow_fetch=allow_fetch)
+    window = window or DEFAULT_CONTEXT_WINDOW_TOKENS
+    return max(1, min(ceiling, max(window - MIN_PROMPT_TOKENS, window // 2)))
 
 
 def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int | None:

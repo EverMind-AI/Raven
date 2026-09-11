@@ -135,6 +135,12 @@ class RunActivity:
     # The truncation as meta.json states it -- set together with `full_output`
     # and empty whenever it is, so one test answers "was anything dropped".
     truncation: dict[str, Any] = field(default_factory=dict)
+    # A different truncation, deliberately not folded into the field above: that
+    # one is the host capping the answer it hands back, this one is the run's own
+    # last generation stopping at the model's output ceiling. `False` is "not
+    # known to have been cut" -- a transport that cannot report it says nothing
+    # -- and never "ran to completion".
+    output_limited: bool = False
 
     @property
     def tokens(self) -> int | None:
@@ -359,6 +365,19 @@ def note_frames(frames: dict[str, Any] | None) -> None:
         activity.frames = dict(frames)
 
 
+def note_output_limit() -> None:
+    """Record that this run's generation stopped at the model's output ceiling.
+
+    Says the run's LAST response was cut, which is why nothing here clears it:
+    the caller decides that by choosing when to call, and a run that was cut and
+    then answered in full must simply not call. The reader that matters -- the
+    node verdict -- is asking what this run has to show for itself.
+    """
+    activity = _current.get()
+    if activity is not None:
+        activity.output_limited = True
+
+
 def note_response_meta(meta: Any) -> None:
     """Record the agent's prompt-response ``_meta``. Replaced, not merged; a
     response without one leaves the record as it was."""
@@ -521,6 +540,7 @@ __all__ = [
     "note_closing",
     "note_console",
     "note_frames",
+    "note_output_limit",
     "note_response_meta",
     "note_output_truncation",
     "note_steps",
