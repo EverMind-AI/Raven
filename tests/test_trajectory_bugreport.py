@@ -201,6 +201,10 @@ def test_a_url_path_used_as_a_query_value_is_redacted_too():
         tsan.sanitize_text("go https://x.com/a?redirect=/login now")
         == "go https://x.com/a?redirect=[REDACTED:path] now"
     )
+    # A single-page-app route in a fragment reads the same way. Pinned so that
+    # someone reading a report later, wondering where a redirect target went,
+    # finds the answer here rather than filing it as a rendering bug.
+    assert tsan.sanitize_text("open https://x.com/a#/spa/route/here now") == "open https://x.com/a#[REDACTED:path] now"
 
 
 def test_a_parenthesised_url_segment_loses_its_tail():
