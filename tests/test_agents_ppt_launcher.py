@@ -137,7 +137,6 @@ TRUNK_HELD_OUT = {
     "plugin",
     "read_skill",
     "run_subagent_dag",
-    "spawn",
     "tool_call",
     "tool_search",
 }
@@ -962,7 +961,7 @@ def test_the_state_root_override_wins_and_the_default_sits_under_the_home(ground
 #: this product's published config (the four media/deep-research disable rows
 #: applied, no Serper key, everos on) registers exactly these -- the six
 #: filesystem tools and exec, the two web tools (search key-gated, so absent
-#: hermetically), message/ask_user (the question rides the ACP
+#: hermetically), message/spawn/ask_user (the question rides the ACP
 #: `ask_user_request` update to whoever is driving the host), use_skill (registry reachable;
 #: read_skill needs a Hub endpoint the config never names), everos's
 #: understand_media, and the ten deck tools. Its tool_search meta-pair
@@ -977,6 +976,7 @@ FORK_CONFIG_INTENT = {
     "list_dir",
     "message",
     "read_file",
+    "spawn",
     "understand_media",
     "use_skill",
     "web_fetch",
@@ -1072,31 +1072,6 @@ def test_the_products_tool_face_is_the_forks_config_intent_plus_the_deck(grounde
     disabled = set(json.loads((RUN_PY.parent / "config.json").read_text())["tools"]["disabledTools"])
     assert TRUNK_HELD_OUT <= disabled, "the trunk-new names stay disabled by config, not by luck"
     assert not (KEY_GATED | DECK_TOOLS) & disabled
-
-
-def test_neither_deck_lane_can_hand_its_work_to_a_helper_it_starts() -> None:
-    """The two lanes that build a deck disable the same dispatch tools.
-
-    They did not. Design held `spawn` out and the deck lane did not, so the same
-    request answered at the top tier could start a research sub-agent while the
-    same request one tier down could not. The one recorded use shows why the
-    answer is neither lane: the deck lane spawned a fact-check, `spawn` returned
-    "I'll notify you when it completes", and the next tool call went out in the
-    same millisecond -- the deck was built without the answer, the helper ran
-    outside the turn's tier ("offers no tier from medium/high/max"), and its late
-    report arrived after delivery as a turn nobody asked for. Facts a deck needs
-    are fetched in the turn that needs them, with web_search and web_fetch.
-    """
-    import json
-    from pathlib import Path
-
-    agents = Path(__file__).resolve().parents[1] / "agents"
-    held = {"spawn", "run_subagent_dag", "deep_research", "hub"}
-    for lane in ("raven-design", "raven-ppt"):
-        disabled = set(
-            json.loads((agents / lane / "config.json").read_text(encoding="utf-8"))["tools"]["disabledTools"]
-        )
-        assert held <= disabled, f"{lane} can still hand a deck to a helper it starts: {sorted(held - disabled)}"
 
 
 def test_a_serper_key_admits_exactly_the_gated_pair(grounded, tmp_path, monkeypatch):

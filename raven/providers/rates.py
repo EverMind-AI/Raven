@@ -867,6 +867,10 @@ def resolve_context_window(model: str, *, allow_fetch: bool = True) -> int | Non
     return None
 
 
+_DEFAULT_WINDOW_WARNED: set[str] = set()
+"""Models already warned about falling back to the default window."""
+
+
 def effective_context_window(model: str, configured: int | None, *, allow_fetch: bool = True) -> int:
     """The context window to size trimming with -- the decision ladder's front door.
 
@@ -886,7 +890,24 @@ def effective_context_window(model: str, configured: int | None, *, allow_fetch:
     """
     if configured:
         return configured
-    return resolve_context_window(model, allow_fetch=allow_fetch) or DEFAULT_CONTEXT_WINDOW_TOKENS
+    window = resolve_context_window(model, allow_fetch=allow_fetch)
+    if window:
+        return window
+    # Said once per model, and only when the catalogues were actually asked
+    # (``allow_fetch=False`` callers take the cheap tiers and would report a
+    # miss the next call may fill). The default is a guess that is wrong in
+    # both directions -- 2026-09-11 it gave a 1,048,576-token model one
+    # sixteenth of its window and the history was trimmed until every request
+    # carried an orphan tool result -- so a guess is not taken silently.
+    if allow_fetch and model and model not in _DEFAULT_WINDOW_WARNED:
+        _DEFAULT_WINDOW_WARNED.add(model)
+        logger.warning(
+            "No catalogue knows the context window of {}; history is sized against the {:,}-token default. "
+            "Pin the real window with agents.defaults.contextWindowTokens.",
+            model,
+            DEFAULT_CONTEXT_WINDOW_TOKENS,
+        )
+    return DEFAULT_CONTEXT_WINDOW_TOKENS
 
 
 def reset_openrouter_cache() -> None:

@@ -2,7 +2,7 @@
 
 ```bash
 cd docker
-docker compose up
+docker compose up --build
 ```
 
 Then open <http://localhost:18793>. The local Compose default signs that browser

@@ -15,7 +15,7 @@ name: raven
 
 services:
   raven:
-    image: ${RAVEN_IMAGE:-evermindshanda/raven:dev}
+    image: ${RAVEN_IMAGE:-everminbd/raven:dev}
     build:
       # The build needs the whole checkout (raven/, agents/, ui-web/, the
       # lockfile), so the context is the repository root, not this directory.

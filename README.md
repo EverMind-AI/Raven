@@ -248,7 +248,7 @@ the image, so no separate host-side build is required:
 
 ```bash
 cd docker
-docker compose up 
+docker compose up --build
 ```
 
 Open <http://127.0.0.1:18793>. The Compose container runs the full `gateway`
@@ -292,7 +292,7 @@ The default tag is `raven:local`. To select a different tag or optional
 dependency set:
 
 ```bash
-make docker-build DOCKER_IMAGE=raven:local
+make docker-build DOCKER_IMAGE=raven:dev
 docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
 ```
 
