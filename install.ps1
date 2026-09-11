@@ -5,6 +5,8 @@
 #
 # A piped run always installs the published release wheel, even from inside a
 # clone. Set RAVEN_LOCAL_SRC=<dir> to force an editable install of a checkout.
+# Set RAVEN_MINIMAL=1 to skip the chromium download and the LibreOffice offer;
+# the wheel install itself is unchanged.
 #
 # Goal: a clean Windows machine ends up able to run `raven` / `raven tui`
 # without admin rights. The script is idempotent: it reuses existing tools when
@@ -12,6 +14,8 @@
 #   1. uv            (Python toolchain + package manager)
 #   2. Node.js >= 22 (TUI runtime; installed privately if the system lacks it)
 #   3. raven         (installed as a global uv tool)
+#   4. chromium      (browser-tool runtime; downloaded by playwright)
+#   5. LibreOffice   (deck preview; offered via winget)
 
 $ErrorActionPreference = "Stop"
 
@@ -445,6 +449,94 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
     Write-Ok "Raven installed"
 }
 
+# Both optional installs are best-effort: raven itself is already installed by
+# the time they run, so a failed download or a declined offer must never abort
+# a completed install. RAVEN_MINIMAL skips both.
+function Install-Browser([string]$UvPath) {
+    # The browser tool drives chromium through the playwright library inside
+    # the raven tool venv, so both the probe and the download must use that
+    # venv's python -- the system python knows nothing about this install.
+    $toolDir = ""
+    try { $toolDir = [string](& $UvPath tool dir 2>$null) } catch { $toolDir = "" }
+    $py = if ($toolDir) { Join-Path $toolDir "raven\Scripts\python.exe" } else { $null }
+    if (-not $py -or -not (Test-Path $py)) {
+        Write-Warn "raven tool venv python not found; skipping the chromium download."
+        return
+    }
+    # A pinned RAVEN_WHEEL_URL and the release-page fallback install no engine
+    # wheels, so playwright can be absent even after a green install. Windows
+    # PowerShell turns redirected native stderr into a terminating error under
+    # $ErrorActionPreference = "Stop", so a failed import lands in the catch.
+    try {
+        & $py -c "import playwright" 2>$null
+        if ($LASTEXITCODE -ne 0) { throw "playwright is not importable" }
+    } catch {
+        Write-Warn "This install carries no browser library (a pinned wheel URL or the release-page fallback installs no engines); the browser tool stays off."
+        return
+    }
+    Write-Info "Downloading chromium for the browser tool..."
+    try {
+        & $py -m playwright install chromium
+        if ($LASTEXITCODE -ne 0) { throw "playwright install chromium exited $LASTEXITCODE" }
+    } catch {
+        Write-Warn "Chromium download failed; the browser tool stays off. Retry later with: $py -m playwright install chromium"
+    }
+}
+
+function Install-Office {
+    # soffice and libreoffice are the two launcher names the runtime resolves
+    # (raven/utils/office.py); either one means deck preview already works. The
+    # winget MSI registers no PATH entry, so also probe the install roots
+    # find_soffice reads before deciding LibreOffice is absent.
+    if (Get-Command soffice, libreoffice -ErrorAction SilentlyContinue) { return }
+    foreach ($root in @($env:ProgramFiles, ${env:ProgramW6432}, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA)) {
+        if ($root -and (Test-Path (Join-Path $root "LibreOffice\program\soffice.exe"))) { return }
+    }
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Warn "LibreOffice not found; deck preview stays off. Install it later with: winget install TheDocumentFoundation.LibreOffice"
+        return
+    }
+    # Installing can raise a UAC prompt, so ask first -- and only when a real
+    # console is attached: under `irm | iex` Read-Host still reads the console,
+    # but CI has none, and a prompt there must skip cleanly, never hang.
+    if (-not ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)) {
+        Write-Warn "LibreOffice not found; deck preview stays off. Install it later with: winget install TheDocumentFoundation.LibreOffice"
+        return
+    }
+    $answer = Read-Host "Install LibreOffice for deck preview (may raise a UAC prompt)? [y/N]"
+    if ($answer -notmatch "^[yY]$") {
+        Write-Warn "Skipping LibreOffice; deck preview stays off. Install it later with: winget install TheDocumentFoundation.LibreOffice"
+        return
+    }
+    try {
+        winget install TheDocumentFoundation.LibreOffice
+        if ($LASTEXITCODE -ne 0) { throw "winget exited $LASTEXITCODE" }
+    } catch {
+        Write-Warn "LibreOffice install failed; deck preview stays off. Retry later with: winget install TheDocumentFoundation.LibreOffice"
+    }
+}
+
+# One mouth for what actually landed: `raven doctor --install-summary` reads
+# only what is importable/installed, needs no config, and always exits 0. The
+# raven shim lands in `uv tool dir --bin`, which this session's PATH may not
+# carry yet, so invoke it by absolute path. Purely informational -- every
+# branch degrades to a warning so it can never fail a completed install.
+function Show-CapabilitySummary([string]$UvPath) {
+    $binDir = ""
+    try { $binDir = [string](& $UvPath tool dir --bin 2>$null) } catch { $binDir = "" }
+    $bin = if ($binDir) { Join-Path $binDir "raven.exe" } else { $null }
+    if (-not $bin -or -not (Test-Path $bin)) { $bin = Join-Path $HOME ".local\bin\raven.exe" }
+    if (-not (Test-Path $bin)) { return }
+    Write-Host ""
+    Write-Info "Capabilities:"
+    try {
+        & $bin doctor --install-summary
+        if ($LASTEXITCODE -ne 0) { throw "raven doctor exited $LASTEXITCODE" }
+    } catch {
+        Write-Warn "capability summary unavailable (raven doctor failed)"
+    }
+}
+
 function Main {
     # Read before installing so the closing hint can tell a first run from an
     # upgrade; the install itself never writes config.json (the wizard does).
@@ -453,6 +545,11 @@ function Main {
     $uv = Ensure-Uv
     $node = Ensure-Node
     Install-Raven $uv $node
+
+    # The summary is not gated: a minimal install still sees what it skipped.
+    if (-not $env:RAVEN_MINIMAL) { Install-Browser $uv }
+    if (-not $env:RAVEN_MINIMAL) { Install-Office }
+    Show-CapabilitySummary $uv
 
     $toolBin = Join-Path $HOME ".local\bin"
     Add-ProcessPath $toolBin

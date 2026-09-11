@@ -1,4 +1,4 @@
-"""Tripwires for the root installer's shell source.
+"""Tripwires for the two root installers (install.sh and install.ps1).
 
 install.sh builds uv option pairs in scalar variables and expands them
 unquoted (POSIX sh has no arrays), so a requirement carried that way must
@@ -16,6 +16,12 @@ from /dev/tty (stdin is the script itself under `curl | sh`), and they stay
 above the closing "All set" block -- tests/test_cli_onboard_commands.py scans
 that block for first-run wording, so new code after it would land inside a
 region another test owns.
+
+install.ps1 mirrors the capability steps for Windows (Install-Browser,
+Install-Office, Show-CapabilitySummary): same decisions, same degrade-loudly
+warns, with the /dev/tty gate traded for a console gate -- under `irm | iex`
+Read-Host still reads the console, but CI has none, so the guard must make a
+non-interactive run skip the winget offer cleanly instead of hanging on it.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ from __future__ import annotations
 from pathlib import Path
 
 INSTALL_SH = Path(__file__).resolve().parents[1] / "install.sh"
+INSTALL_PS1 = Path(__file__).resolve().parents[1] / "install.ps1"
 
 
 def test_the_installer_is_where_this_tripwire_thinks_it_is() -> None:
@@ -56,6 +63,35 @@ def test_the_office_prompt_and_sudo_both_read_the_tty() -> None:
 
 def test_the_capability_steps_stay_above_the_closing_hint() -> None:
     closing = INSTALL_SH.read_text(encoding="utf-8")
+    closing = closing[closing.index("All set") :].lower()
+    assert "playwright" not in closing
+    assert "libreoffice" not in closing
+
+
+def test_the_windows_installer_is_where_this_tripwire_thinks_it_is() -> None:
+    assert INSTALL_PS1.is_file()
+
+
+def test_the_windows_capability_steps_exist_and_are_skippable() -> None:
+    text = INSTALL_PS1.read_text(encoding="utf-8")
+    for fn in ("Install-Browser", "Install-Office", "Show-CapabilitySummary"):
+        assert f"function {fn}" in text
+    assert "if (-not $env:RAVEN_MINIMAL) { Install-Browser $uv }" in text
+    assert "if (-not $env:RAVEN_MINIMAL) { Install-Office }" in text
+
+
+def test_the_windows_summary_speaks_through_doctor() -> None:
+    text = INSTALL_PS1.read_text(encoding="utf-8")
+    assert "doctor --install-summary" in text
+
+
+def test_the_windows_office_offer_needs_a_real_console() -> None:
+    text = INSTALL_PS1.read_text(encoding="utf-8")
+    assert "[Environment]::UserInteractive -and -not [Console]::IsInputRedirected" in text
+
+
+def test_the_windows_capability_steps_stay_above_the_closing_hint() -> None:
+    closing = INSTALL_PS1.read_text(encoding="utf-8")
     closing = closing[closing.index("All set") :].lower()
     assert "playwright" not in closing
     assert "libreoffice" not in closing
