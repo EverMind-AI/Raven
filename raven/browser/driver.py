@@ -12,13 +12,16 @@ Design notes worth keeping:
 * **Nothing starts until something asks.** Chromium is launched on the first
   navigation, so a Raven that never opens a page never pays for one.
 * **Playwright is an extra.** Every entry point raises ``BrowserUnavailableError``
-  with the exact install command rather than an ImportError traceback.
+  with an install hint the reader can actually run rather than an ImportError
+  traceback.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import shlex
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,7 +30,15 @@ from loguru import logger
 
 from raven.browser.policy import NavigationRefusedError, check_navigation, navigation_refusal
 
-INSTALL_HINT = "uv sync --extra browser && uv run playwright install chromium"
+# sys.executable is the venv that has playwright in both install shapes -- a uv
+# tool install (the engines carry it) and a source checkout -- whereas `uv sync`
+# exists only in the checkout, so the hint names the interpreter itself.
+CHROMIUM_INSTALL_HINT = f"{shlex.quote(sys.executable)} -m playwright install chromium"
+# When the package itself is missing (install.sh's bare-raven fallback rung),
+# `python -m playwright` cannot work either; point at the installers instead.
+PACKAGE_INSTALL_HINT = (
+    "reinstall raven via install.sh (engines carry the browser library); from a source checkout: uv sync --all-extras"
+)
 
 # One profile on disk: logins survive restarts, and -- because pop-out is a
 # relaunch -- they survive the panel/window switch too.
@@ -162,7 +173,7 @@ class Browser:
         try:
             import playwright  # noqa: F401
         except ImportError:
-            return False, f"playwright is not installed. Run: {INSTALL_HINT}"
+            return False, f"playwright is not installed: {PACKAGE_INSTALL_HINT}"
         return True, ""
 
     @property
@@ -254,7 +265,7 @@ class Browser:
             await self.close()
             hint = f"{exc}"
             if "Executable doesn't exist" in hint or "playwright install" in hint:
-                raise BrowserUnavailableError(f"Chromium is not installed. Run: {INSTALL_HINT}") from None
+                raise BrowserUnavailableError(f"Chromium is not installed. Run: {CHROMIUM_INSTALL_HINT}") from None
             raise BrowserUnavailableError(f"could not start Chromium: {hint}") from None
         logger.info("browser: chromium started ({}x{})", w, h)
         return self._s.page

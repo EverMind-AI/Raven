@@ -147,12 +147,16 @@ describe('browser island, embedded shape (the rpc source)', () => {
     expect(await screen.findByText('gui.br.absent_h')).toBeTruthy()
   })
 
-  it('shows the install note when the server has no chromium', async () => {
-    chromium({ frame: async () => ({ available: false, reason: 'no chromium' }) })
+  it('shows the unavailable note and the server-computed fix when there is no chromium', async () => {
+    chromium({
+      frame: async () => ({ available: false, reason: 'Chromium is not installed. Run: /srv/venv/bin/python -m playwright install chromium' }),
+    })
     mount()
     expect(await screen.findByText('gui.br.unavail')).toBeTruthy()
-    expect(screen.getByText('uv sync --extra browser && uv run playwright install chromium')).toBeTruthy()
-    expect(await screen.findByText('no chromium')).toBeTruthy()
+    expect(screen.getByText('gui.br.unavail_w')).toBeTruthy()
+    expect(
+      await screen.findByText('Chromium is not installed. Run: /srv/venv/bin/python -m playwright install chromium'),
+    ).toBeTruthy()
   })
 
   it('idles on the fetched links and opens one through browser.open', async () => {

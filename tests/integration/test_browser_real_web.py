@@ -1,8 +1,8 @@
 """The browser against a real page, with a real Chromium.
 
-Skipped unless the optional extra and its Chromium are both installed:
-
-    uv sync --extra browser && uv run playwright install chromium
+Skipped unless playwright and its Chromium are both installed: from a source
+checkout `uv sync --all-extras && uv run playwright install chromium`; on an
+installed raven, `<raven's python> -m playwright install chromium`.
 
 What this pins is the loop the agent actually walks -- navigate, read the page
 into refs, click a ref, land somewhere else -- because that is the part that

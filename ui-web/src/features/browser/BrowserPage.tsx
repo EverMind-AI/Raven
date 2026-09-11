@@ -102,8 +102,9 @@ function Chromium({ s }: { s: BrowserState }): JSX.Element {
   }, [gate, s.started, s.headful])
 
   /* Absent is not the same as uninstalled, and the difference is the whole
-     point of telling the reader anything: chromium is worth an install
-     command, a server without the surface is not. */
+     point of telling the reader anything: a missing chromium is worth a fix
+     (the server's reason carries the command for the host it computed it on),
+     a server without the surface is not. */
   if (s.absent) {
     return (
       <div className="bnote">
@@ -117,7 +118,6 @@ function Chromium({ s }: { s: BrowserState }): JSX.Element {
       <div className="bnote">
         <div className="h">{t('gui.br.unavail')}</div>
         <div className="w">{t('gui.br.unavail_w')}</div>
-        <code>uv sync --extra browser && uv run playwright install chromium</code>
         {s.reason ? <div className="w">{s.reason}</div> : null}
       </div>
     )

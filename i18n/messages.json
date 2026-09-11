@@ -976,8 +976,8 @@
       "zh": "浏览器未安装"
     },
     "gui.br.unavail_w": {
-      "en": "Raven drives a real Chromium for this panel and for its browser tools. It ships as an optional extra:",
-      "zh": "这个面板和 agent 的浏览器工具用的是一个真实 Chromium，它是可选组件，装一下："
+      "en": "Raven drives a real Chromium for this panel and for its browser tools. The browser runtime is not available on the gateway host.",
+      "zh": "这个面板和 agent 的浏览器工具用的是一个真实 Chromium，但浏览器运行时在网关主机上不可用。"
     },
     "gui.br.url_ph": {
       "en": "Enter a URL",

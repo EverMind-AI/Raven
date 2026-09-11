@@ -33,8 +33,12 @@ def test_get_browser_is_one_page_per_process() -> None:
     assert get_browser() is get_browser()
 
 
-def test_probe_reports_a_missing_extra_with_the_install_command(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A missing extra is a sentence the user can act on, not an ImportError."""
+def test_probe_reports_a_missing_package_with_a_recovery_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing package is a sentence the user can act on, not an ImportError.
+
+    No `playwright install` here: without the library that command cannot run.
+    The honest fix is reinstalling (install.sh's engines carry the library) or,
+    from a source checkout, syncing the extras."""
     import builtins
 
     real_import = builtins.__import__
@@ -49,7 +53,9 @@ def test_probe_reports_a_missing_extra_with_the_install_command(monkeypatch: pyt
     ok, why = Browser.probe()
 
     assert ok is False
-    assert "playwright install chromium" in why
+    assert "install.sh" in why
+    assert "uv sync --all-extras" in why
+    assert "playwright install chromium" not in why
 
 
 async def test_state_does_not_start_a_browser() -> None:
@@ -315,6 +321,34 @@ async def test_driver_raises_unavailable_when_the_extra_is_missing(monkeypatch: 
 
     with pytest.raises(BrowserUnavailableError):
         await b._ensure()
+
+
+async def test_launch_reports_missing_chromium_with_the_interpreter_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The binary hint names sys.executable: that venv has playwright in both a
+    uv tool install and a source checkout, while `uv sync` exists only in the
+    latter."""
+    import shlex
+    import sys
+    import types
+
+    class _Starter:
+        async def start(self) -> None:
+            raise RuntimeError("Executable doesn't exist at /nowhere/chrome")
+
+    fake_api = types.ModuleType("playwright.async_api")
+    fake_api.async_playwright = _Starter
+    fake_pkg = types.ModuleType("playwright")
+    fake_pkg.async_api = fake_api
+    monkeypatch.setitem(sys.modules, "playwright", fake_pkg)
+    monkeypatch.setitem(sys.modules, "playwright.async_api", fake_api)
+
+    b = get_browser()
+    with pytest.raises(BrowserUnavailableError) as exc:
+        await b._ensure()
+
+    why = str(exc.value)
+    assert "Chromium is not installed" in why
+    assert f"{shlex.quote(sys.executable)} -m playwright install chromium" in why
 
 
 # ── tabs ────────────────────────────────────────────────────────────────
