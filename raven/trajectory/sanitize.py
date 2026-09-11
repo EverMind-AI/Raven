@@ -40,7 +40,14 @@ PATH_PLACEHOLDER = "[REDACTED:path]"
 # Characters that may legitimately precede an absolute path in text or JSON.
 # Closers (")", "]", "}") are deliberately absent: "[REDACTED:path]/name" must
 # not re-open a token after the placeholder.
-_BOUNDARY = set("\"'`=:([{,<>")
+# ")" and "}" are here as well as their opening halves: a closing bracket ends a
+# path token (_BARE_END), so a path written straight after one -- a markdown
+# link, a parenthesised note -- has to be able to start one too, or it is never
+# considered and the export assertion reports CLEAN on a tree that holds it.
+# "]" is deliberately NOT here: PATH_PLACEHOLDER ends with it, and the redacted
+# form keeps the basename ("[REDACTED:path]/report.png"), so admitting "]" would
+# re-redact every placeholder's own tail.
+_BOUNDARY = set("\"'`=:([{,<>)}")
 _QUOTES = ('"', "'", "`")
 # Where a bare (unquoted) token ends. Quotes end a bare token too — a path
 # glued to a closing quote was not part of the quoted string.

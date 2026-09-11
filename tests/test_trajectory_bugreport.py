@@ -118,6 +118,8 @@ def _decide_all(suspected_action=treview.ACTION_KEPT):
         "file url file:///etc/passwd leaks",
         '{"u":"https://api.x.com/v1","p":"/etc/raven/license.key"}',
         "log https://x.com/v1,/var/db/raven/secrets.sqlite end",
+        "[docs](https://x.com/d)/opt/secret/key.pem",
+        "note (see below)/srv/raven/keys.json end",
     ],
     ids=[
         "tmp",
@@ -133,6 +135,8 @@ def _decide_all(suspected_action=treview.ACTION_KEPT):
         "file-url",
         "json-after-url",
         "comma-after-url",
+        "after-markdown-link",
+        "after-parens",
     ],
 )
 def test_parser_hits_absolute_paths(text):
