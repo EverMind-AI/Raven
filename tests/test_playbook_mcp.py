@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from raven.agent.subagent.mcp_grant import raven_cli_target, resolve_grant
+from raven.agent.subagent.mcp_grant import acp_target, raven_cli_target, resolve_grant
 from raven.config.schema import MCPServerConfig
 from raven.playbook.mcp import (
     declared_mcp_names,
@@ -256,7 +256,7 @@ async def test_the_preflight_returns_while_a_server_is_still_waiting_on_a_browse
 
     captured: dict[str, Any] = {}
 
-    async def fake_provider_for(server, cfg, notify=None, interactive=False, can_park=True):
+    async def fake_provider_for(server, cfg, notify=None, interactive=False, can_park=True, scope=None):
         captured["notify"] = notify
         captured["can_park"] = can_park
         return None
@@ -303,7 +303,7 @@ async def test_a_server_waiting_on_authorization_is_not_delivered(monkeypatch):
 
     captured: dict[str, Any] = {}
 
-    async def fake_provider_for(server, cfg, notify=None, interactive=False, can_park=True):
+    async def fake_provider_for(server, cfg, notify=None, interactive=False, can_park=True, scope=None):
         captured["notify"] = notify
         return None
 
@@ -333,3 +333,85 @@ async def test_a_server_waiting_on_authorization_is_not_delivered(monkeypatch):
     finally:
         released.set()
         await asyncio.sleep(0.05)
+
+
+@pytest.mark.asyncio
+async def test_the_preflight_scopes_only_the_carried_servers_credentials(monkeypatch):
+    """One manager dials the host's servers and the playbook's; the playbook's
+    scope must reach the carried ones and none of the host's."""
+    from raven.mcp import manager as manager_mod
+
+    seen: dict[str, Any] = {}
+    real = manager_mod.MCPConnectionManager
+
+    class Recording(real):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            seen["scope"] = kwargs.get("credential_scope")
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(manager_mod, "MCPConnectionManager", Recording)
+    host = {"deepwiki": MCPServerConfig(command="host-wiki")}
+    playbook = {"local-pg": MCPServerConfig(command="playbook-pg")}
+    with patch(_CONNECT, new=_noop_connect):
+        async with _preflight(
+            host_servers=host,
+            playbook_servers=playbook,
+            declared={"deepwiki", "local-pg"},
+            credential_scope="playbooks/audit",
+        ):
+            pass
+
+    assert seen["scope"]("local-pg") == "playbooks/audit"
+    assert seen["scope"]("deepwiki") is None
+
+
+@pytest.mark.asyncio
+async def test_the_preflight_source_reports_the_scope_the_carried_server_was_dialled_under():
+    """What the grant reads is what the endpoint dials with: a carried server's
+    view carries the playbook scope, a host server's carries none."""
+    host = {"deepwiki": MCPServerConfig(command="host-wiki")}
+    playbook = {"local-pg": MCPServerConfig(command="playbook-pg")}
+    with patch(_CONNECT, new=_noop_connect):
+        async with _preflight(
+            host_servers=host,
+            playbook_servers=playbook,
+            declared={"deepwiki", "local-pg"},
+            credential_scope="playbooks/audit",
+        ) as source:
+            assert source.server("local-pg").scope == "playbooks/audit"
+            assert source.server("deepwiki").scope is None
+            grant = resolve_grant(["local-pg", "deepwiki"], source, acp_target(allow_secrets=False, stdio_path=None))
+            assert {g.name: g.scope for g in grant.granted} == {"local-pg": "playbooks/audit", "deepwiki": None}
+
+
+def test_a_server_is_named_when_its_credential_reference_did_not_resolve():
+    from raven.playbook.mcp import servers_missing_a_credential
+
+    spec = _spec(
+        params={
+            "TOK": ParamSpec(type="secret", description="a bearer token"),
+            "PW": ParamSpec(type="secret", description="a database password"),
+        },
+        mcp_servers={
+            "tokened": MCPServerConfig(url="https://x.test/mcp", headers={"Authorization": "Bearer {{ params.TOK }}"}),
+            "local-pg": MCPServerConfig(command="pg-mcp", env={"PGPASSWORD": "{{ params.PW }}"}),
+            "plain": MCPServerConfig(command="wiki"),
+        },
+    )
+    assert servers_missing_a_credential(spec, {}) == frozenset({"tokened", "local-pg"})
+    assert servers_missing_a_credential(spec, {"TOK": "t", "PW": "p"}) == frozenset()
+    assert servers_missing_a_credential(spec, {"TOK": "t"}) == frozenset({"local-pg"})
+    # An optional secret resolves to the empty string, so the placeholder is
+    # gone and the header renders as "Bearer " -- no credential at all. Only
+    # the referenced name tells that apart from a filled one.
+    assert servers_missing_a_credential(spec, {"TOK": "", "PW": ""}) == frozenset({"tokened", "local-pg"})
+    assert playbook_mcp_servers(spec, {"TOK": "", "PW": ""})["tokened"].headers == {}
+
+    # Only a secret earns the withholding: it is answered by a place to put the
+    # value. An ordinary param left empty drops its entry and the server runs.
+    plain = _spec(
+        params={"REGION": ParamSpec(type="string", description="which region")},
+        mcp_servers={"wiki": MCPServerConfig(command="wiki", env={"REGION": "{{ params.REGION }}"})},
+    )
+    assert servers_missing_a_credential(plain, {"REGION": ""}) == frozenset()
+    assert playbook_mcp_servers(plain, {"REGION": ""})["wiki"].env == {}

@@ -10,7 +10,8 @@
         "triggerRatio": 0.8,
         "reservedTokens": 8192,
         "preserveRecentTokens": 52429
-      }
+      },
+      "temperature": 0.95
     }
   },
   "tools": {

@@ -438,18 +438,58 @@ _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it pro
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
 The opt-in policy for when the model returns no text: re-feed its reasoning (PREFILL),
 inject a nudge after a tool call (NUDGE), or plain RETRY — each bounded by
-`RecoveryLimits`; otherwise the turn COMPLETEs. PREFILL is asked of the provider first
+`RecoveryLimits`. A response with text in it, or recovery switched off, COMPLETEs;
+spending every budget with nothing ever returned is FAIL, and the Agent Loop ends the turn
+with status `error` and a reply naming the failure. PREFILL is asked of the provider first
 (`LLMProvider.supports_assistant_prefill`): the Anthropic family rejects a trailing
 assistant message while thinking is on, and through a gateway that rejection can arrive as
 a stream that never yields a byte, so a provider that answers no never gets PREFILL -- the
 same thinking-only turn takes NUDGE after a tool, else RETRY, and no request handed to it
-ends on an assistant message.
-_Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes.
+ends on an assistant message. RETRY descends the effort ladder by what a rung *sends*, not by
+its label: the provider is asked (`LLMProvider.reasoning_wire_keys`) and a rung whose request
+this wire cannot tell apart from the one that failed is skipped -- when none is left, the
+turn has nothing to change and FAILs rather than paying for the same call twice.
+_Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes; and reading
+FAIL as a fourth mode — it is the answer given when there is nothing left to try.
+
+**Call Record** (`contracts/llm_provider.py`, `providers/call_record.py`):
+What the transport did on one model call, carried on `LLMResponse.call_record` and stored
+under `call` in the `llm.output` audit artifact: HTTP status, the backend that served it and
+the model it served, each only where the *response* named one (`served_by`, `served_model`
+-- a stream names no model at all, because the client library substitutes the request's),
+the upstream's generation id, the response headers, and the response body when the call
+delivered nothing. Built only by
+`providers/call_record.py`, which owns the caps (`MAX_BODY_CHARS`, `MAX_HEADERS`,
+`MAX_HEADER_VALUE_CHARS`), replaces the value of any credential-named header, and scrubs
+the body. The request half is not in it: `observability/semconv.request_facts` derives the
+messages+tools payload's size and a picture count from the messages, on the `llm.input`
+side -- the conversation as the provider received it, not the body the client serialized.
+_Avoid_: "transport failure" for this — that is the *verdict*
+(`providers/transport_failure.py`) reached about a call; a Call Record is the evidence, and
+is written for every call whether or not any verdict was reached.
+
+**No-Progress Ladder** (`agent/loop/no_progress.py`):
+The three bounded steps `NoProgressGuard` takes against a call that keeps working and keeps
+answering the same thing: append a nudge to the working result (`_NO_PROGRESS_THRESHOLD`
+identical answers), refuse the call without running it (`_NO_PROGRESS_REFUSE`), then end the
+turn (`_NO_PROGRESS_REFUSALS_MAX` chances spent). Keyed on the call *and* its
+answer, so a poll whose answer moves is never a repeat; the refusal additionally requires that
+nothing else answered anything new in between, which is what keeps a wait loop's identical
+`sleep` alive **while the check beside it answers something new** -- a poll answering
+byte-identically satisfies neither half, and freezes with the sleep. The freeze is evidence
+rather than a verdict: it stores the novelty count that established it, and `check` runs the
+pair again once that count has moved, so intervening real work rescues a call the model needs.
+Each rescue spends from the same `_NO_PROGRESS_REFUSALS_MAX` budget the refusals spend, so a
+turn producing one new answer per `_NO_PROGRESS_REFUSE` repeats is still bounded. The turn is
+the largest thing it stops -- it never ends the run.
+_Avoid_: "loop break" — that is the sibling guard for a call that keeps *failing*
+(`agent/loop/failure_streak.py`), and it counts consecutively where this counts per turn.
 
 **Synthesis**:
-The tools-disabled final LLM call the Agent Loop makes when a turn hits `max_iterations`
-(default 40): it summarizes progress and returns partial results, and the turn ends with
-status `interrupted`.
+The tools-disabled final LLM call the Agent Loop makes when a turn has to stop early — it hit
+`max_iterations` (default 40), or the No-Progress Ladder ended it: it summarizes progress and
+returns partial results, and the turn ends with status `interrupted`. The prompt names which
+reason, because a model told the wrong one summarizes the wrong thing.
 _Avoid_: "timeout" — Synthesis is iteration-bounded, not time-bounded.
 
 **Personalizer** (`agent/personalizer/`):
@@ -1420,6 +1460,26 @@ lands on one, and is recorded on the call's tool.call span as
 (`contracts/tool_gate.py`): the gate is platform authority, runs first, can
 wait on a human, and answers with a full ToolResult.
 _Avoid_: "tool gate" for this -- that name is the plugin paper's.
+
+**Credential scope**:
+Which credential store an MCP server's secrets are read from and written to.
+`None` is the host's own -- `<credentials>/mcp/<server>.json` for OAuth tokens,
+`tools.mcpServers` for everything else. A playbook that carries its own servers
+passes `playbooks/<playbook>` (`raven.playbook.credentials.credential_scope`),
+so its tokens land in `<credentials>/playbooks/<playbook>/mcp/<server>.json` and
+its `secret` params in `params.json` beside them, both 0600. It travels as
+`scope=` on `credentials_path` / `FileTokenStorage` / `provider_for` /
+`has_stored_tokens` / `delete_credentials`, as `credential_scope` on
+`MCPConnectionManager` (a name, or a callable answering per server when one
+manager dials host and carried servers side by side), and as `scope` on
+`McpServerView` / `GrantedServer` / `MissingServer` so a grant hands the bridge
+endpoint the scope its upstream was dialled under. Exists because a carried
+server may shadow a host server of the same name: keyed by name alone, a
+carried `sentry` would read and overwrite the host's `sentry.json`.
+_Avoid_: "OAuth scope" for this. That is the permission list an authorization
+server grants (`oauth.scopes`, `scopes_supported` in `mcp/oauth.py`) and is a
+different axis entirely -- a credential scope says *where the token is kept*, an
+OAuth scope says *what the token may do*.
 
 **Permission Mode**:
 How the gate reads the ask tier, and only the ask tier: `ask` prompts a human

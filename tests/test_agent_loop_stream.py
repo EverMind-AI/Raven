@@ -18,7 +18,7 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.recovery import RecoveryLimits
 from raven.providers.base import ChatDelta, ErrorClassification, LLMProvider, LLMResponse
-from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS
+from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS, resolve_max_output_tokens
 
 
 class _FakeProvider:
@@ -476,6 +476,74 @@ async def test_llm_call_stream_timeout_does_not_reconnect() -> None:
     assert response.error_classification.category == "network"
 
 
+async def test_llm_call_stream_first_byte_timeout_keeps_its_record() -> None:
+    """A stall before the first chunk has an empty buffer, so the response used
+    to carry no message at all -- the loop logged an error whose text was the
+    empty string, which is how fifteen minutes of silence got recorded as
+    nothing (2026-09-10). The verdict is still retryable and still does not
+    reconnect; what changed is that the content names the bound and the wait."""
+    from raven.providers.first_byte import FirstByteTimeoutError
+
+    class _FirstByteStallProvider:
+        classify_error = LLMProvider.classify_error
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat_stream(self, **_kwargs: Any):
+            self.calls += 1
+            raise FirstByteTimeoutError(phase="waiting for the first chunk", budget=120, waited=120.4)
+            yield  # pragma: no cover - makes this an async generator
+
+    provider = _FirstByteStallProvider()
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert provider.calls == 1, "no reconnect: the bound already waited its whole budget"
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None
+    assert response.error_classification.category == "first_byte_timeout"
+    assert response.error_classification.retryable is True
+    assert "llmFirstByteTimeout=120s" in (response.content or "")
+    assert "120.4s" in (response.content or "")
+
+
+async def test_llm_call_stream_mid_answer_stall_still_keeps_the_words() -> None:
+    """The other side of that change: after output, the content stays the words
+    the reader already saw, not the error text."""
+
+    class _StallAfterOutput:
+        classify_error = LLMProvider.classify_error
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat_stream(self, **_kwargs: Any):
+            self.calls += 1
+            yield ChatDelta(content="half an ans")
+            raise TimeoutError
+
+    provider = _StallAfterOutput()
+    fake_self = SimpleNamespace(
+        provider=provider,
+        _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
+        _recovery_limits=RecoveryLimits(llm_retry_after_output=True),
+    )
+    call = AgentLoop._llm_call_stream.__get__(fake_self)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.finish_reason == "error"
+    assert (response.content or "") == "half an ans"
+
+
 async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
     """Provider yields zero chunks → response.content == '' + finish_reason='unknown'.
 
@@ -748,7 +816,9 @@ async def test_a_clean_stop_with_no_unparsed_call_is_not_truncation() -> None:
     )
 
     assert response.truncated is False
-    assert response.max_tokens is None, "no ceiling is claimed when the loop sent none"
+    assert response.max_tokens == resolve_max_output_tokens("not/in-any-catalogue"), (
+        "the loop names no ceiling, so the flagger asks the same owner the provider asks"
+    )
 
 
 def _two_calls_last_one_cut() -> list[ChatDelta]:

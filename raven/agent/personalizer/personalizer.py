@@ -174,7 +174,7 @@ class Personalizer:
                 messages=[{"role": "user", "content": prompt}],
                 model=self.model,
                 temperature=0.0,  # classification needs deterministic output
-                max_tokens=100,  # JSON is short; cap tokens to save cost
+                max_tokens=200,  # JSON is short; cap tokens to save cost
             )
             result = self._parse_json(
                 response.content or "",
@@ -209,7 +209,7 @@ class Personalizer:
                 messages=[{"role": "user", "content": prompt}],
                 model=self.model,
                 temperature=0.3,  # slight randomness makes the question more natural
-                max_tokens=120,
+                max_tokens=240,
             )
             question = (response.content or "").strip()
             logger.debug("Personalizer.generate_question: {}", question)
@@ -238,7 +238,7 @@ class Personalizer:
                 messages=[{"role": "user", "content": prompt}],
                 model=self.model,
                 temperature=0.0,
-                max_tokens=200,
+                max_tokens=400,
             )
             result = self._parse_json(
                 response.content or "",
@@ -286,7 +286,7 @@ class Personalizer:
                 messages=[{"role": "user", "content": prompt}],
                 model=self.model,
                 temperature=0.0,
-                max_tokens=250,
+                max_tokens=500,
             )
             result = self._parse_json(
                 response.content or "",

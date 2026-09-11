@@ -68,6 +68,14 @@ The reference SDK sends exactly this when a request's cancellation signal
 fires, which is what makes it the right thing for raven to send too.
 """
 
+STEER_METHOD = "_raven/session/steer"
+STEER_CAPABILITY = "raven.steer"
+"""raven's steer extension: text for a turn already in flight on a session.
+
+The same names raven's own ACP client uses (raven/acp_client/protocol.py); the
+capability is advertised by presence under ``agentCapabilities._meta``.
+"""
+
 STOP_REASONS = frozenset(
     {
         "end_turn",

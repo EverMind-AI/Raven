@@ -213,6 +213,68 @@ async def test_a_status_error_never_echoes_the_key(vendor: str, monkeypatch: pyt
     assert rendered == f"Error: {SEARCH_PROVIDERS[vendor].label} answered HTTP 401"
 
 
+@pytest.mark.parametrize("vendor", sorted(_SEARCH_REQUESTS))
+async def test_probe_spends_exactly_one_result_on_the_vendors_own_request(
+    vendor: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The onboard wizard's key check is a real search, so it must be the same
+    request ``execute`` sends -- a probe built any other way could pass a key
+    the tool then fails with -- and the smallest one the shape allows."""
+    method, url, _body, auth = _SEARCH_REQUESTS[vendor]
+    with _patched(monkeypatch, {"organic": [{"title": "t", "link": "u"}]}) as client:
+        ok, detail = await WebSearchTool(api_key="k", provider=vendor).probe("q1")
+
+    assert ok is True
+    got_method, got_url, kwargs = client.calls[0]
+    assert (got_method, got_url) == (method, url)
+    size = kwargs.get("json") or kwargs.get("params")
+    assert 1 in size.values(), "one result is the whole budget of a probe"
+    for header, value in auth.items():
+        assert kwargs["headers"][header] == value
+    assert detail == ("1 result(s)" if vendor == "serper" else "0 result(s)")
+
+
+@pytest.mark.parametrize("vendor", sorted(SEARCH_PROVIDERS))
+async def test_probe_reports_a_refused_key_without_echoing_it(vendor: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _patched(monkeypatch, {}, status=401):
+        ok, detail = await WebSearchTool(api_key="SECRET-KEY-123", provider=vendor).probe()
+
+    assert ok is False
+    assert "SECRET-KEY-123" not in detail
+    assert detail == f"{SEARCH_PROVIDERS[vendor].label} answered HTTP 401"
+
+
+async def test_probe_reports_an_unreachable_vendor_as_not_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Down(_Recorder):
+        def _answer(self, method: str, url: str, kwargs: dict[str, Any]) -> httpx.Response:
+            raise httpx.ConnectError("refused", request=httpx.Request(method, url))
+
+    monkeypatch.setattr(web_mod.httpx, "AsyncClient", _Down({}))
+
+    ok, detail = await WebSearchTool(api_key="k", provider="brave").probe()
+
+    assert ok is False
+    assert detail == "Brave Search could not be reached (ConnectError)"
+
+
+async def test_probe_reports_an_unusable_proxy_without_echoing_its_url() -> None:
+    """A proxy URL can carry credentials, and httpx quotes the URL in its
+    error, so the detail names the class of failure and nothing else."""
+    ok, detail = await WebSearchTool(api_key="k", provider="serper", proxy="ftp://user:secret@proxy").probe()
+
+    assert ok is False
+    assert detail == "the configured web proxy is not usable (ValueError)"
+    assert "secret" not in detail
+
+
+async def test_probe_reads_a_firecrawl_refusal_inside_a_200_as_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _patched(monkeypatch, {"success": False, "error": "Unauthorized"}):
+        ok, detail = await WebSearchTool(api_key="k", provider="firecrawl").probe()
+
+    assert ok is False
+    assert "Unauthorized" in detail
+
+
 def test_every_search_vendor_is_covered_by_the_request_table() -> None:
     assert set(_SEARCH_REQUESTS) == set(SEARCH_PROVIDERS)
 

@@ -24,6 +24,7 @@ import pytest
 
 from raven.providers.base import ChatDelta, GenerationSettings, LLMProvider, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider
+from raven.providers.rates import resolve_max_output_tokens
 
 # ---------- Test doubles modelling OpenAI ChatCompletionChunk shape ----------
 
@@ -425,14 +426,18 @@ async def test_upstream_length_does_not_trip_the_error_path(
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_omits_the_ceiling_when_nobody_asked_for_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The OpenAI-compatible shape treats `max_tokens` as optional, and every
-    surveyed agent leaves it out there rather than volunteering a number.
+async def test_chat_stream_names_the_ceiling_when_nobody_asked_for_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The OpenAI-compatible shape treats `max_tokens` as optional, and this
+    branch once left it out on the reasoning that the server would then answer
+    with the model's own limit.
 
-    Volunteering one is what this whole branch has been paying for: the number
-    has to be right, has to match what any check compares against, and has to
-    add up with whatever the prompt was allowed to grow to. Omitted, the server
-    answers with its own limit and none of that applies.
+    An omitted ceiling is not the model's ceiling. Captured request bodies
+    confirm nothing reached the wire, and a deck run's answers were still cut
+    at exactly 16384 -- by a component that was never identified, which is the
+    argument: a bound we do not send is one we can neither move nor report
+    (`flag_truncation` could only log `max_tokens=None`). Asking does move it:
+    the same endpoint served 40000 in full to a request that named it. So one
+    is named, and `send_max_tokens` is what bounds it.
     """
     captured: dict[str, Any] = {}
 
@@ -448,26 +453,29 @@ async def test_chat_stream_omits_the_ceiling_when_nobody_asked_for_one(monkeypat
     async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
         pass
 
-    assert "max_tokens" not in captured, "no ceiling was asked for and none is volunteered"
+    wire_id = provider.wire_model_id("openai/gpt-4o")
+    assert captured["max_tokens"] == resolve_max_output_tokens(wire_id), "the owner's number, on the wire"
+    assert resolve_max_output_tokens(wire_id) != resolve_max_output_tokens("openai/gpt-4o"), (
+        "the id the request goes out under, not the stored name: LiteLLM files 4096 for "
+        "openrouter/openai/gpt-4o and 16384 for openai/gpt-4o, so naming a ceiling makes "
+        "the gateway spelling's own row the one that reaches the wire"
+    )
 
 
 @pytest.mark.asyncio
-async def test_no_ceiling_is_volunteered_even_where_the_api_requires_one(
+async def test_the_ceiling_is_named_on_a_route_that_would_have_filled_it_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Anthropic's Messages API does require `max_tokens` -- and LiteLLM's own
-    transformation supplies it, which is where that knowledge belongs.
+    """Anthropic's Messages API requires `max_tokens`, and LiteLLM's own
+    transformation would supply it -- measured, its number and ours agree on
+    all 26 rows it files under `litellm_provider == "anthropic"`, because both
+    read the same table.
 
-    Measured across all 26 rows LiteLLM files under `litellm_provider ==
-    "anthropic"`, its number and ours agree on every one, because both read the
-    same table. They can only differ on a model it does not know, and there
-    both sides are guessing from a constant; ours is not the better guess.
-
-    Deciding it here meant carrying a copy of LiteLLM's routing knowledge --
-    which vendor speaks which API -- and then keeping the copy aligned. That
-    alignment is what `wire_model_id` and three invariants existed for. The
-    surveyed agents do not have this problem because each protocol adapter owns
-    its own required fields; ours is LiteLLM, so it owns them.
+    Named here anyway, so there is one rule rather than a per-route exemption:
+    they can only differ on a model LiteLLM does not know, and there its guess
+    is unstated while ours is `DEFAULT_MAX_OUTPUT_TOKENS` -- the smallest
+    ceiling among the current claude models, which is the number this repo
+    already sends on its own Anthropic transport.
     """
     captured: dict[str, Any] = {}
 
@@ -483,7 +491,7 @@ async def test_no_ceiling_is_volunteered_even_where_the_api_requires_one(
     async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
         pass
 
-    assert "max_tokens" not in captured, "LiteLLM's anthropic transformation fills this in"
+    assert captured["max_tokens"] == resolve_max_output_tokens("anthropic/claude-opus-4-5")
 
 
 @pytest.mark.asyncio

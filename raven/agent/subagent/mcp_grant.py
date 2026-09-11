@@ -21,6 +21,7 @@ MissingReason = Literal[
     "invalid_transport",
     "not_connected",
     "auth_required",
+    "credential_missing",
     "no_tools",
     "command_not_found",
 ]
@@ -32,11 +33,17 @@ WithheldReason = Literal[
 
 @dataclass(frozen=True)
 class McpServerView:
-    """One configured MCP server and its host-side connection state."""
+    """One configured MCP server and its host-side connection state.
+
+    ``scope`` is set only when a run-scoped definition answered to the name: it
+    is the credential scope that run's playbook owns, and the sign that
+    ``state`` describes nothing (the host's manager never dials such a server).
+    """
 
     name: str
     config: MCPServerConfig = field(repr=False)
     state: str | None
+    scope: str | None = None
 
 
 class McpSource(Protocol):
@@ -82,6 +89,7 @@ class LiveMcpSource:
         disabled_tools_getter: Callable[[], frozenset[str]],
         executor_provider: Any | None = None,
         run_servers: Callable[[], Mapping[str, MCPServerConfig]] | None = None,
+        scope_of: Callable[[str], str | None] | None = None,
     ) -> None:
         self._config_getter = config_getter
         self._manager_getter = manager_getter
@@ -89,6 +97,12 @@ class LiveMcpSource:
         self._disabled_tools_getter = disabled_tools_getter
         self._executor_provider = executor_provider
         self._run_servers = run_servers
+        # The credential scope of a server the host's own manager dialled, by
+        # name. The host loop leaves it unset (every server is the host's); the
+        # playbook pre-flight dials carried servers through the same manager and
+        # answers their playbook's scope, so the grant hands the endpoint the
+        # scope the pre-flight already dialled under, not the host's.
+        self._scope_of = scope_of
 
     def _selected(self, name: str) -> tuple[MCPServerConfig | None, bool]:
         """The definition answering to ``name``, and whether host live state describes it.
@@ -105,22 +119,34 @@ class LiveMcpSource:
         there is no provenance to confuse. That is what keeps a portable playbook
         -- one that ships a definition so it runs anywhere -- from costing an
         in-process node the wrappers it would have had on a host that also has it.
+
+        Except for an OAuth server under a run credential scope: its credential
+        lives outside the definition, in the token file under the playbook's
+        scope, so an equal definition still names a possibly different account
+        and the host's connection cannot stand in for it.
         """
         host = self._config_getter().get(name)
         run = self._run_servers().get(name) if self._run_servers is not None else None
         if run is None:
             return host, True
-        return run, run == host
+        if run != host:
+            return run, False
+        from raven.agent.subagent.dag_mcp_scope import run_mcp_credential_scope
+
+        return run, not (run.auth == "oauth" and run_mcp_credential_scope() is not None)
 
     def server(self, name: str) -> McpServerView | None:
         config, host_state_applies = self._selected(name)
         if config is None:
             return None
         if not host_state_applies:
-            return McpServerView(name=name, config=config, state=None)
+            from raven.agent.subagent.dag_mcp_scope import run_mcp_credential_scope
+
+            return McpServerView(name=name, config=config, state=None, scope=run_mcp_credential_scope())
         manager = self._manager_getter()
         states = {row["name"]: row.get("state") for row in manager.status()} if manager is not None else {}
-        return McpServerView(name=name, config=config, state=states.get(name))
+        scope = self._scope_of(name) if self._scope_of is not None else None
+        return McpServerView(name=name, config=config, state=states.get(name), scope=scope)
 
     def tools(self, name: str) -> tuple["GrantedTool", ...]:
         if not self._selected(name)[1]:
@@ -188,6 +214,9 @@ class GrantedServer:
     socket_path: str | None = None
     """The endpoint a bridged sub-agent connects to, filled in by
     :meth:`McpGrant.with_endpoints` once the host has opened it."""
+    scope: str | None = None
+    """The credential scope the host dials this server's upstream under -- the
+    owning playbook's for a carried server, None for one of the host's own."""
 
 
 @dataclass(frozen=True)
@@ -196,6 +225,9 @@ class MissingServer:
 
     name: str
     reason: MissingReason
+    scope: str | None = None
+    """Set for a run-scoped server, so the note can say which playbook's tab
+    holds the authorization the host cannot perform on its own."""
 
 
 @dataclass(frozen=True)
@@ -353,6 +385,15 @@ def resolve_grant(names: Sequence[str] | None, source: McpSource | None, target:
         if transport is None:
             missing.append(MissingServer(name, "invalid_transport"))
             continue
+        if view.scope is not None:
+            from raven.agent.subagent.dag_mcp_scope import run_mcp_credential_gaps
+
+            # Withheld rather than dialled headerless: the note names where the
+            # credential is set, which the reader can act on, where a 401 on the
+            # first tool call reads as a broken server.
+            if name in run_mcp_credential_gaps():
+                missing.append(MissingServer(name, "credential_missing", scope=view.scope))
+                continue
         if target.require_connected:
             if view.state == "auth_required":
                 missing.append(MissingServer(name, "auth_required"))
@@ -373,13 +414,25 @@ def resolve_grant(names: Sequence[str] | None, source: McpSource | None, target:
             if (cfg.auth == "apikey" or cfg.env or cfg.headers) and not target.allow_secrets:
                 withheld.append(WithheldServer(name, "secret_export_denied", transport))
                 continue
-        elif cfg.auth == "oauth" and view.state != "connected":
+        elif cfg.auth == "oauth":
             # A bridged receiver never sees the credential, so the ``auth`` label
             # decides nothing on its own -- but an endpoint whose upstream is
             # still unauthorized hands the sub-agent a server that 401s on its
             # first call, which reads as a broken tool rather than a missing one.
-            missing.append(MissingServer(name, "auth_required"))
-            continue
+            #
+            # A run-scoped server has no host connection to read (``view.state``
+            # is None by construction), so the credential file under its
+            # playbook's scope is the only fact there is: tokens present means
+            # the endpoint will dial with them.
+            if view.scope is not None:
+                from raven.mcp.oauth import has_stored_tokens
+
+                if not has_stored_tokens(name, scope=view.scope):
+                    missing.append(MissingServer(name, "auth_required", scope=view.scope))
+                    continue
+            elif view.state != "connected":
+                missing.append(MissingServer(name, "auth_required"))
+                continue
         command = None
         if target.kind == "acp":
             # What has to be findable is raven, not the server: the adapter is
@@ -390,7 +443,7 @@ def resolve_grant(names: Sequence[str] | None, source: McpSource | None, target:
                 missing.append(MissingServer(name, "command_not_found"))
                 continue
             command = argv[0]
-        granted.append(GrantedServer(name, transport, cfg, command=command))
+        granted.append(GrantedServer(name, transport, cfg, command=command, scope=view.scope))
 
     return McpGrant(tuple(granted), tuple(missing), tuple(withheld), _disabled_tools(source, target))
 
@@ -424,10 +477,27 @@ def _missing_note(item: MissingServer) -> str:
         "invalid_transport": "has no valid transport",
         "not_connected": "is not connected on the host",
         "auth_required": "is waiting for host authorization",
+        "credential_missing": "is filled from a secret param that is not set on this machine",
         "no_tools": "has no tools to share with an in-process agent",
         "command_not_found": "needs raven on the ACP adapter PATH to reach the host bridge",
     }
-    return f"MCP server {item.name!r} was not delivered because it {reasons[item.reason]}"
+    note = f"MCP server {item.name!r} was not delivered because it {reasons[item.reason]}"
+    if item.reason == "credential_missing" and item.scope is not None:
+        playbook = item.scope.removeprefix("playbooks/")
+        return (
+            note + f"; set it on the Credentials tab of playbook {playbook!r} (or with `raven playbook secret set "
+            f"{playbook} <param>`), then continue this node -- nothing needs to be typed into this conversation"
+        )
+    if item.reason == "auth_required" and item.scope is not None:
+        # Carried by a playbook: the host never authorizes it on its own, so the
+        # reader is told where the one-time authorization lives and that a
+        # continue after it is enough -- the credential is read at dispatch.
+        playbook = item.scope.removeprefix("playbooks/")
+        note += (
+            f"; this server is carried by playbook {playbook!r} -- authorize it on that playbook's Credentials tab "
+            f"(or `raven playbook auth {playbook} {item.name}`), then continue this node"
+        )
+    return note
 
 
 def _withheld_note(item: WithheldServer) -> str:

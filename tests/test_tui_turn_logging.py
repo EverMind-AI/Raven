@@ -190,3 +190,67 @@ def test_suppress_noisy_watchers_raises_watchfiles_level() -> None:
         assert logging.getLogger(name).level >= logging.INFO, name
     # A DEBUG record on watchfiles.main is now below the logger's threshold.
     assert not logging.getLogger("watchfiles.main").isEnabledFor(logging.DEBUG)
+
+
+# ---------------------------------------------------------------------------
+# REQ-3: what the model said, not only what it did
+# ---------------------------------------------------------------------------
+
+
+async def test_the_assistant_text_and_reasoning_are_logged(workspace) -> None:
+    """A log of 300 tool calls with no assistant voice cannot be read back into
+    an intent. Both fields are truncated and state their full length."""
+    from raven.agent.loop.turn_path import _SAID_LOG_MAX_CHARS
+
+    tool = _FakeTool("exec")
+    responses = [
+        LLMResponse(
+            content="Inspecting the template first.",
+            tool_calls=[ToolCallRequest(id="c1", name="exec", arguments={})],
+            finish_reason="tool_calls",
+            reasoning_content="Y" * (_SAID_LOG_MAX_CHARS + 500),
+            usage={"reasoning_tokens": 235},
+        ),
+        LLMResponse(content="final", finish_reason="stop"),
+    ]
+    agent = _make_agent(workspace, responses, tool)
+    captured, sink_id = _capture("INFO")
+    try:
+        await agent._run_agent_loop([{"role": "user", "content": "x"}])
+    finally:
+        logger.remove(sink_id)
+
+    said = [c for c in captured if c.startswith("Assistant (")]
+    assert [c.strip() for c in said] == [
+        "Assistant (30 chars): Inspecting the template first.",
+        "Assistant (5 chars): final",
+    ], captured
+    thought = [c for c in captured if c.startswith("Assistant reasoning (")]
+    assert len(thought) == 1, captured
+    assert f"({_SAID_LOG_MAX_CHARS + 500} chars)" in thought[0]
+    assert "Y" * (_SAID_LOG_MAX_CHARS + 1) not in thought[0]
+    assert thought[0].strip().endswith("...")
+
+
+async def test_a_silent_turn_says_how_many_tokens_it_thought_for(workspace) -> None:
+    """The reading that made the incident undiagnosable: no text, no prose, and
+    nothing saying the model had spent 235 tokens thinking before it acted."""
+    tool = _FakeTool("exec")
+    responses = [
+        LLMResponse(
+            content="",
+            tool_calls=[ToolCallRequest(id="c1", name="exec", arguments={})],
+            finish_reason="tool_calls",
+            usage={"reasoning_tokens": 235},
+        ),
+        LLMResponse(content="ok", finish_reason="stop"),
+    ]
+    agent = _make_agent(workspace, responses, tool)
+    captured, sink_id = _capture("INFO")
+    try:
+        await agent._run_agent_loop([{"role": "user", "content": "x"}])
+    finally:
+        logger.remove(sink_id)
+
+    assert [c.strip() for c in captured if c.startswith("Assistant (")] == ["Assistant (2 chars): ok"]
+    assert [c for c in captured if "thought for 235 tokens" in c], captured
