@@ -151,6 +151,16 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     set_config_path(None)  # type: ignore[arg-type]
 
 
+@pytest.fixture(autouse=True)
+def _search_key_probe_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default: the web step's one real search finds the key live.
+
+    The probe is a paid request against the vendor, so no test reaches it;
+    the tests about the probe itself replace this with a failing one.
+    """
+    monkeypatch.setattr(onboard_web, "_probe_search", lambda vendor, key: (True, "1 result(s)"))
+
+
 @pytest.fixture
 def stub_verify(monkeypatch: pytest.MonkeyPatch):
     """Default: provider verification succeeds with an empty catalog.
@@ -7380,6 +7390,108 @@ def test_step5_empty_answer_keeps_the_key_already_configured(tmp_env: Path, monk
     assert web["search"]["apiKey"] == "sk-existing"
     assert web["jinaApiKey"] == "jina-existing"
     assert "export SERPER_API_KEY=sk-existing" in (Path.home() / ".raven" / "env").read_text(encoding="utf-8")
+
+
+def test_step5_a_typed_search_key_is_spent_on_one_real_search(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The key is probed through the vendor it was typed for, before anything
+    is written: a rejected key surfacing here is the whole point of the probe."""
+    probed: list[tuple[str, str]] = []
+
+    def _probe(vendor: str, key: str) -> tuple[bool, str]:
+        probed.append((vendor, key))
+        return True, "1 result(s)"
+
+    monkeypatch.setattr(onboard_web, "_probe_search", _probe)
+    monkeypatch.setattr(onboard_web, "_pick_provider", lambda kind, current: "tavily")
+    monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: "tv-key")
+    monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _rc: False)
+
+    onboard_web._step5_web(skip=False, non_interactive=False)
+
+    assert probed == [("tavily", "tv-key")], "one search, through the picked vendor, with the typed key"
+
+
+def test_step5_a_rejected_search_key_can_be_typed_again(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-enter loops back to the prompt, and only the key that passed lands
+    in config -- the rejected one is never written."""
+    answers = iter(["sk-typo", "sk-good", "jina-abc"])
+    verdicts = {"sk-typo": (False, "Serper answered HTTP 401"), "sk-good": (True, "1 result(s)")}
+    choices: list[list[str]] = []
+
+    def _choose(options, *, non_interactive):
+        choices.append([value for _label, value in options])
+        return "rekey"
+
+    monkeypatch.setattr(onboard_web, "_probe_search", lambda vendor, key: verdicts[key])
+    monkeypatch.setattr(_onboard_shared, "_failure_choice", _choose)
+    monkeypatch.setattr(onboard_web, "_pick_provider", lambda kind, current: current)
+    monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: next(answers))
+    monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _rc: False)
+
+    onboard_web._step5_web(skip=False, non_interactive=False)
+
+    web = json.loads(tmp_env.read_text())["tools"]["web"]
+    assert web["providers"]["serper"]["apiKey"] == "sk-good"
+    assert choices == [["rekey", "retry", "continue"]], "asked once, for the key that failed"
+
+
+def test_step5_continue_anyway_keeps_a_key_the_probe_refused(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A vendor outage must not hold the wizard hostage: the user can keep the
+    key they typed and move on."""
+    answers = iter(["sk-serper", ""])
+    monkeypatch.setattr(onboard_web, "_probe_search", lambda vendor, key: (False, "Serper could not be reached"))
+    monkeypatch.setattr(_onboard_shared, "_failure_choice", lambda options, *, non_interactive: "continue")
+    monkeypatch.setattr(onboard_web, "_pick_provider", lambda kind, current: current)
+    monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: next(answers))
+    monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _rc: False)
+
+    onboard_web._step5_web(skip=False, non_interactive=False)
+
+    assert json.loads(tmp_env.read_text())["tools"]["web"]["providers"]["serper"]["apiKey"] == "sk-serper"
+
+
+def test_step5_a_kept_search_key_is_probed_and_no_key_is_not(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Enter on a stored key re-checks it (it may have been revoked since);
+    Enter on an empty slot probes nothing, because leaving web_search off is a
+    choice and there is no key to spend."""
+    probed: list[str] = []
+
+    def _probe(vendor: str, key: str) -> tuple[bool, str]:
+        probed.append(key)
+        return True, "1 result(s)"
+
+    monkeypatch.setattr(onboard_web, "_probe_search", _probe)
+    monkeypatch.setattr(onboard_web, "_pick_provider", lambda kind, current: current)
+    monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: "")
+    monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _rc: False)
+
+    onboard_web._step5_web(skip=False, non_interactive=False)
+    assert probed == []
+
+    _set_keys(tmp_env, serper="sk-existing")
+    onboard_web._step5_web(skip=False, non_interactive=False)
+    assert probed == ["sk-existing"]
+
+
+def test_step5_a_search_key_flag_is_probed_and_a_failure_only_warns(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A scripted run has nobody to re-enter the key, so the flag's value is
+    written as asked and the refusal is reported, not acted on."""
+    monkeypatch.setattr(onboard_web, "_probe_search", lambda vendor, key: (False, "Exa answered HTTP 401"))
+    monkeypatch.setattr(
+        _onboard_shared,
+        "_failure_choice",
+        lambda options, *, non_interactive: (
+            pytest.fail("no menu in a scripted run") if not non_interactive else options[-1][1]
+        ),
+    )
+
+    onboard_web._step5_web(skip=False, non_interactive=True, search_provider="exa", search_api_key="exa-flag")
+
+    assert json.loads(tmp_env.read_text())["tools"]["web"]["providers"]["exa"]["apiKey"] == "exa-flag"
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Couldn't verify Exa API key: Exa answered HTTP 401" in out
 
 
 def test_step5_leaves_the_rc_alone_unless_the_user_confirms(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:

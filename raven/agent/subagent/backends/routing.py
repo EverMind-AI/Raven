@@ -16,16 +16,11 @@ in this order:
 1. a reused ``instance`` handle continues the conversation it was opened on --
    the implementation whose transport already bound the handle in this
    session wins, and nothing is classified;
-2. a route whose ``match`` pattern is found in the authored text, with file
-   references (paths, ``@ref`` tokens, template placeholders) taken out first,
-   takes it without a model call -- a task that names its deliverable cannot be
-   misrouted, and a source that happens to be a deck is not a deck being asked
-   for;
-3. otherwise the host's classifier (set by the manager, which holds the host
+2. otherwise the host's classifier (set by the manager, which holds the host
    model) picks between the targets and this row's own implementation, reading
    the targets' roster lines only: the fronting row's line is written for the
    dispatching model and argues the opposite case;
-4. no classifier, no answer, or an answer outside the set keeps the task on the
+3. no classifier, no answer, or an answer outside the set keeps the task on the
    row's own implementation -- a route can redirect, never lose, a task.
 
 The wrapper is the row's backend as far as the host is concerned: binders and
@@ -36,7 +31,6 @@ every other attribute reads off the row's own implementation.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -48,20 +42,6 @@ from raven.contracts.subagent_backend import SubagentBackend
 
 #: ``(menu, task, default) -> chosen name or None``; ``menu`` is ``[(name, description), ...]``.
 Router = Callable[[list[tuple[str, str]], str, str], Awaitable[str | None]]
-
-# What a file reference looks like in a task: a template placeholder, an @ref
-# token, a POSIX or Windows path, or a bare filename with an extension. Taken out
-# before a route pattern is searched, so ``/data/keynote.pptx`` names a source
-# and ``a .pptx`` (no stem) still names a deliverable.
-_FILE_REFERENCE_RE = re.compile(
-    r"\{\{.*?\}\}|@\S+|(?<![\w])(?:~|\.{1,2})?/[^\s'\"<>]+|\b[A-Za-z]:\\[^\s'\"<>]+|\b[\w-]+\.[A-Za-z0-9]{1,5}\b",
-    re.DOTALL,
-)
-
-
-def without_file_references(text: str) -> str:
-    return _FILE_REFERENCE_RE.sub(" ", text)
-
 
 _BROADCAST = (
     "bind_session_dir",
@@ -78,14 +58,14 @@ class RoutingBackend(SubagentBackend):
         self,
         name: str,
         primary: SubagentBackend,
-        targets: list[tuple[str, str, str, SubagentBackend]],
+        targets: list[tuple[str, str, SubagentBackend]],
         *,
         instances: Any,
     ) -> None:
-        """``targets`` are ``(name, match pattern, description, backend)`` in route order."""
+        """``targets`` are ``(name, description, backend)`` in route order."""
         self.name = name
         self._primary = primary
-        self._targets = [(n, re.compile(m, re.IGNORECASE) if m else None, d, b) for n, m, d, b in targets]
+        self._targets = list(targets)
         self._instances = instances
         self._router: Router | None = None
 
@@ -97,7 +77,7 @@ class RoutingBackend(SubagentBackend):
         self._router = router
 
     def implementations(self) -> list[SubagentBackend]:
-        return [self._primary, *(b for _, _, _, b in self._targets)]
+        return [self._primary, *(b for _, _, b in self._targets)]
 
     def __getattr__(self, attr: str) -> Any:
         if attr.startswith("_"):
@@ -119,19 +99,14 @@ class RoutingBackend(SubagentBackend):
         """The ``(name, backend)`` that runs this task; see the module docstring for the order."""
         if instance and (bound := await self._bound(session_key, instance)) is not None:
             return bound
-        phrasing = without_file_references(task)
-        for name, pattern, _, backend in self._targets:
-            if pattern is not None and pattern.search(phrasing):
-                logger.info("{!r}: task names {!r}'s deliverable; routing there", self.name, name)
-                return name, backend
         if self._router is not None and self._targets:
-            menu = [(name, description) for name, _, description, _ in self._targets]
+            menu = [(name, description) for name, description, _ in self._targets]
             try:
                 answer = await self._router(menu, task, self.name)
             except Exception as exc:  # noqa: BLE001 - a routing failure must not lose the task
                 logger.warning("{!r}: the route classifier failed; running here: {}", self.name, exc)
                 answer = None
-            for name, _, _, backend in self._targets:
+            for name, _, backend in self._targets:
                 if answer == name:
                     logger.info("{!r}: classified for {!r}; routing there", self.name, name)
                     return name, backend
@@ -155,7 +130,7 @@ class RoutingBackend(SubagentBackend):
             logger.warning("{!r}: could not read the instance registry: {}", self.name, exc)
             return None
         bound = {r.get("agent") for r in records if r.get("handle") == instance and r.get("agentId")}
-        for name, _, _, backend in self._targets:
+        for name, _, backend in self._targets:
             if name in bound:
                 return name, backend
         if self.name in bound:
@@ -189,4 +164,4 @@ class RoutingBackend(SubagentBackend):
         )
 
 
-__all__ = ["Router", "RoutingBackend", "without_file_references"]
+__all__ = ["Router", "RoutingBackend"]

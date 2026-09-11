@@ -4931,7 +4931,10 @@
       "en": "Tool calls",
       "zh": "工具调用"
     },
-    "gui.set.usg.all_tasks": {"en": "All tasks", "zh": "全部任务"},
+    "gui.set.usg.all_tasks": {
+      "en": "All tasks",
+      "zh": "全部任务"
+    },
     "gui.set.usg.window": {
       "en": "last {d} days",
       "zh": "近 {d} 天"
@@ -6131,6 +6134,86 @@
     "gui.set.usg.legacy": {
       "en": "Historical estimates excluded",
       "zh": "历史估算未计入"
+    },
+    "gui.pb.tab_credentials": {
+      "en": "Credentials",
+      "zh": "凭据"
+    },
+    "gui.pb.cred_intro": {
+      "en": "What this machine holds for the servers this playbook carries. Values never enter the playbook file or a conversation.",
+      "zh": "本机为此剧本自带的 MCP 服务器保存的凭据。值不会进入剧本文件,也不会进入对话。"
+    },
+    "gui.pb.cred_none": {
+      "en": "This playbook declares no secret params and carries no OAuth server.",
+      "zh": "此剧本没有声明 secret 参数,也没有自带 OAuth 服务器。"
+    },
+    "gui.pb.cred_sec_params": {
+      "en": "Secret params",
+      "zh": "Secret 参数"
+    },
+    "gui.pb.cred_sec_servers": {
+      "en": "Carried OAuth servers",
+      "zh": "自带的 OAuth 服务器"
+    },
+    "gui.pb.cred_set": {
+      "en": "set",
+      "zh": "已设置"
+    },
+    "gui.pb.cred_unset": {
+      "en": "not set",
+      "zh": "未设置"
+    },
+    "gui.pb.cred_save": {
+      "en": "Save",
+      "zh": "保存"
+    },
+    "gui.pb.cred_replace": {
+      "en": "Replace",
+      "zh": "替换"
+    },
+    "gui.pb.cred_clear": {
+      "en": "Clear",
+      "zh": "清除"
+    },
+    "gui.pb.cred_authorize": {
+      "en": "Authorize",
+      "zh": "授权"
+    },
+    "gui.pb.cred_reauthorize": {
+      "en": "Re-authorize",
+      "zh": "重新授权"
+    },
+    "gui.pb.cred_authorized": {
+      "en": "authorized",
+      "zh": "已授权"
+    },
+    "gui.pb.cred_unauthorized": {
+      "en": "not authorized",
+      "zh": "未授权"
+    },
+    "gui.pb.cred_authorizing": {
+      "en": "waiting for the browser…",
+      "zh": "等待浏览器授权…"
+    },
+    "gui.pb.cred_open_link": {
+      "en": "Open the authorization link",
+      "zh": "打开授权链接"
+    },
+    "gui.pb.cred_shadows_host": {
+      "en": "shadows a host server of the same name",
+      "zh": "遮蔽了主机上同名的服务器"
+    },
+    "gui.pb.cred_saved": {
+      "en": "Saved {name}.",
+      "zh": "已保存 {name}。"
+    },
+    "gui.pb.cred_cleared": {
+      "en": "Cleared {name}.",
+      "zh": "已清除 {name}。"
+    },
+    "gui.pb.cred_disabled": {
+      "en": "disabled",
+      "zh": "已停用"
     }
   }
 }

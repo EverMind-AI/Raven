@@ -36,14 +36,13 @@ What one agent directory carries:
   Two manifest fields shape how the row is reached rather than what it runs:
   `"hidden": true` keeps the row off the roster the dispatching model reads
   (and off the WebUI's sub-agent page) while a task routed to it still runs
-  there; `"routes": [{"to": "<name>", "match": "<regex>"}, ...]` makes this
+  there; `"routes": [{"to": "<name>"}, ...]` makes this
   row's backend a routing entry (`agent/subagent/backends/routing.py`): every
   caller -- `spawn`, a DAG node, a direct chat -- runs the row, and the entry
   picks the implementation on `run`, reading the task as the model wrote it
   (`authored_task`), never the rendering with file contents inlined. A reused
-  instance handle stays where its transport bound it; a task whose wording
-  (file references taken out) matches a route's `match` goes there without a
-  model call; otherwise the host's own model picks between the targets' roster
+  instance handle stays where its transport bound it; otherwise the host's
+  own model picks between the targets' roster
   lines and this row. A fronting row is only as ready as its targets: a route
   to a folder that is missing, unready or switched off disables the row with
   the reason on it, so a half-installed agent does not run the missing

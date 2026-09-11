@@ -291,8 +291,7 @@ It reads the task as the model wrote it (`authored_task` on `SubagentBackend.run
 hands it over through `optional_keyword`, so only a `run` that declares it or takes `**kwargs`
 receives it and a backend typed against the earlier paper keeps running; the rendered `task`
 only where a caller has no other text). The order is fixed:
-a reused instance handle continues where its transport bound it; a task whose wording, file
-references taken out, matches a route's `match` pattern goes there without a model call;
+a reused instance handle continues where its transport bound it;
 otherwise the manager's classifier (the host's own model) picks between the targets' roster
 lines and the entry itself, and any other answer keeps the task on the entry. A fronting row is only as ready as its
 targets (readiness kind `route`): a missing, unready or switched-off target disables the row
@@ -1461,6 +1460,26 @@ lands on one, and is recorded on the call's tool.call span as
 (`contracts/tool_gate.py`): the gate is platform authority, runs first, can
 wait on a human, and answers with a full ToolResult.
 _Avoid_: "tool gate" for this -- that name is the plugin paper's.
+
+**Credential scope**:
+Which credential store an MCP server's secrets are read from and written to.
+`None` is the host's own -- `<credentials>/mcp/<server>.json` for OAuth tokens,
+`tools.mcpServers` for everything else. A playbook that carries its own servers
+passes `playbooks/<playbook>` (`raven.playbook.credentials.credential_scope`),
+so its tokens land in `<credentials>/playbooks/<playbook>/mcp/<server>.json` and
+its `secret` params in `params.json` beside them, both 0600. It travels as
+`scope=` on `credentials_path` / `FileTokenStorage` / `provider_for` /
+`has_stored_tokens` / `delete_credentials`, as `credential_scope` on
+`MCPConnectionManager` (a name, or a callable answering per server when one
+manager dials host and carried servers side by side), and as `scope` on
+`McpServerView` / `GrantedServer` / `MissingServer` so a grant hands the bridge
+endpoint the scope its upstream was dialled under. Exists because a carried
+server may shadow a host server of the same name: keyed by name alone, a
+carried `sentry` would read and overwrite the host's `sentry.json`.
+_Avoid_: "OAuth scope" for this. That is the permission list an authorization
+server grants (`oauth.scopes`, `scopes_supported` in `mcp/oauth.py`) and is a
+different axis entirely -- a credential scope says *where the token is kept*, an
+OAuth scope says *what the token may do*.
 
 **Permission Mode**:
 How the gate reads the ask tier, and only the ask tier: `ask` prompts a human

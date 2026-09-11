@@ -6,7 +6,12 @@ the agent loop withholds the tool entirely without one -- while the page
 reader defaults to Jina, which works unauthenticated at a lower rate limit, so
 its key only raises the ceiling; the other readers refuse without one. The
 screen says so, because presenting the keys as equal blanks invites skipping
-the one that actually costs a capability.
+the one that actually costs a capability. The search key is then spent on
+one real query before it is kept: no search vendor has a free ``/v1/models``,
+and a key rejected here would otherwise surface as the tool's first failure
+inside a conversation. The page reader is not probed -- Jina, the default,
+needs no key, and a keyed reader whose key does not resolve is replaced by
+Jina at registration rather than left to fail.
 
 Providers and keys land in ``config.json`` through ``update_tools``, keyed by
 vendor (``tools.web.providers.<vendor>.apiKey``), and the keys are then mirrored
@@ -168,6 +173,46 @@ def _pick_provider(kind: str, current: str) -> Optional[str]:
     ).ask()
 
 
+def _probe_search(vendor: str, api_key: str) -> tuple[bool, str]:
+    """One real query through ``vendor``, sent the way ``web_search`` sends it.
+
+    The proxy is the tool's own (``tools.web.proxy``): a key probed around the
+    proxy the tool will use would pass here and fail in the conversation.
+    """
+    import asyncio
+
+    from raven.agent.tools.web import WebSearchTool
+
+    proxy = ((oc._load_raw_config().get("tools") or {}).get("web") or {}).get("proxy") or None
+    return asyncio.run(WebSearchTool(api_key=api_key, provider=vendor, proxy=proxy).probe())
+
+
+def _verify_search_key(vendor: str, api_key: str, *, non_interactive: bool) -> bool:
+    """Spend one search on the key; ``False`` means the user wants to re-enter it."""
+    from raven.agent.tools.web import SEARCH_PROVIDERS
+
+    label = t("{label} API key", label=SEARCH_PROVIDERS[vendor].label)
+    while True:
+        oc.console.print(t("  [dim]⏳ Verifying {label}…[/dim]", label=label))
+        ok, detail = _probe_search(vendor, api_key)
+        if ok:
+            oc.console.print(t("  [green]✓ {label} connected.[/green]", label=label))
+            return True
+        oc.console.print(t("  [yellow]✗ Couldn't verify {label}: {detail}[/yellow]", label=label, detail=detail))
+        choice = oc._failure_choice(
+            [
+                (t("Re-enter"), "rekey"),
+                (t("Retry"), "retry"),
+                (t("Continue anyway"), "continue"),
+            ],
+            non_interactive=non_interactive,
+        )
+        if choice == "rekey":
+            return False
+        if choice == "continue":
+            return True
+
+
 def _write(
     *,
     search_provider: Optional[str] = None,
@@ -245,6 +290,12 @@ def _step5_web(
         if fetch_api_key:
             keys[fetch_provider or _stored_provider("fetch")] = fetch_api_key
         _report(_write(search_provider=search_provider, fetch_provider=fetch_provider, keys=keys))
+        # Written first, then probed: a flag is an explicit instruction and a
+        # scripted run has nobody to re-enter the key, so a failed probe is a
+        # warning on the way out, not a reason to drop what was asked for.
+        vendor = search_provider or _stored_provider("search")
+        if keys.get(vendor):
+            _verify_search_key(vendor, keys[vendor], non_interactive=True)
         return None
 
     if skip or non_interactive:
@@ -267,15 +318,22 @@ def _step5_web(
         raise typer.Exit(1)
     spec = SEARCH_PROVIDERS[search]
     keys = {}
-    search_key = _prompt_key(
-        label=t("{label} API key", label=spec.label),
-        obtain_from=spec.signup,
-        current=_stored_key(search),
-        optional_note=t(" enables web_search"),
-    )
-    if search_key is None:
-        raise typer.Exit(1)
-    keys[search] = search_key.strip()
+    while True:
+        search_key = _prompt_key(
+            label=t("{label} API key", label=spec.label),
+            obtain_from=spec.signup,
+            current=_stored_key(search),
+            optional_note=t(" enables web_search"),
+        )
+        if search_key is None:
+            raise typer.Exit(1)
+        keys[search] = search_key.strip()
+        # A stored key that Enter kept is probed too: it may have been revoked
+        # since it was typed. No key at all means web_search stays withheld,
+        # which is a choice, not a failure.
+        live = keys[search] or _stored_key(search)
+        if not live or _verify_search_key(search, live, non_interactive=non_interactive):
+            break
 
     fetch = _pick_provider("fetch", _stored_provider("fetch"))
     if fetch is None:

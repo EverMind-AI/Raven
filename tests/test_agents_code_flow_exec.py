@@ -110,12 +110,14 @@ def test_a_timed_out_command_keeps_the_output_it_produced(tmp_path):
     assert getattr(out, "ok", None) is False
 
 
-def test_trunks_executor_would_have_dropped_that_output():
-    """The reason the executor is replaced, pinned so a trunk fix can retire it."""
+def test_trunks_executor_preserves_output_on_timeout():
+    """The shared executor preserves output produced before the timeout."""
     from raven.sandbox.direct_executor import DirectExecutor
 
     result = _run(DirectExecutor().exec("echo started; sleep 30", timeout=1))
-    assert result.stdout == "" and "Timed out" in result.stderr
+    assert result.stdout == "started\n"
+    assert "Timed out" in result.stderr
+    assert result.exit_code == -1
 
 
 def test_a_finished_command_reports_its_exit_code_and_both_streams(tmp_path):
