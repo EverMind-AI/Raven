@@ -95,12 +95,18 @@ async function loadSettings() {
   try { await loadProviders(); } catch { /* model options unavailable — keep the rows already shown */ }
 }
 
-/* Providers the page does not offer. `custom` reaches any OpenAI-compatible
-   endpoint with an address of your own, which is the whole of what vLLM/Local
-   was for -- two rows for one job, and the reader has to guess which. Hidden
-   here rather than dropped from the registry: a section already configured
-   under it keeps loading, keeps being served, and keeps routing. */
-const HIDDEN_PROVIDERS = new Set(['hosted_vllm']);
+/* Providers the page does not offer. Both are the generic "some endpoint of
+   your own" row, and the page answers that question twice over without them:
+   the runtimes have named rows of their own -- Ollama, LM Studio, GPUStack,
+   OpenVINO -- and every row carries an API Host field for pointing a vendor at
+   a gateway you run. What was left was a row whose name says nothing about
+   what it reaches, next to fifty that do.
+
+   Hidden here rather than dropped from the registry: a section already
+   configured under either name keeps loading, keeps being served, and keeps
+   routing, and `raven provider list` and the onboarding wizard still offer
+   both -- which is also where a vendor Raven carries no spec for is set up. */
+const HIDDEN_PROVIDERS = new Set(['hosted_vllm', 'custom']);
 
 let providersLive = [];
 let defaultModelLive = '';

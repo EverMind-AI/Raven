@@ -18,6 +18,8 @@ if (!permMatch) throw new Error('loadPermMode is absent from the live layer')
 const loadPermModeSrc = permMatch[0]
 const providerGuardSrc = src.match(/function openModelsForMissingProvider\(\) \{[\s\S]*?\n\}/)
 if (!providerGuardSrc) throw new Error('openModelsForMissingProvider is absent from the live layer')
+const hiddenSrc = src.match(/const HIDDEN_PROVIDERS = new Set\(\[[^\]]*\]\);/)
+if (!hiddenSrc) throw new Error('HIDDEN_PROVIDERS is absent from the live layer')
 
 function providerGuardHarness({ configured = null, providers = [] } = {}) {
   let opened = 0
@@ -244,6 +246,55 @@ describe('the live settings snapshot', () => {
     const snap = h.settingsSnapshot()
     expect(snap.model).toBe('default-b')
     expect(snap.curProvider).toBe('openrouter')
+  })
+})
+
+/* `loadProviders` names HIDDEN_PROVIDERS but does not declare it, and every
+   other harness here answers with an empty provider list -- `[].filter` never
+   runs its callback, so the reference is never resolved. A harness that hands
+   it real rows has to supply the declaration, which is also what lets this
+   assert against the page's own list rather than a copy of it. */
+function hiddenHarness(providers) {
+  const build = Function(
+    'deps',
+    `let viewGen = 0, providersLive = [], defaultModelLive = '', defaultProviderLive = '';
+     const { rpc, sessionCurrent, modelSet, setModelLabel } = deps;
+     ${hiddenSrc[0]}
+     ${loadProvidersSrc}
+     return { loadProviders, rows: () => providersLive, hidden: [...HIDDEN_PROVIDERS] };`,
+  )
+  return build({
+    rpc: { call: () => Promise.resolve({ model: '', provider: '', providers }) },
+    sessionCurrent: () => 'sess-1',
+    modelSet: () => {},
+    setModelLabel: () => {},
+  })
+}
+
+describe('providers the page does not offer', () => {
+  const row = (slug) => ({ slug, name: slug, authenticated: false, models: [] })
+
+  it('keeps the generic endpoint rows out of the rail and every other row in', async () => {
+    const h = hiddenHarness([row('anthropic'), row('custom'), row('hosted_vllm'), row('ollama_chat')])
+    await h.loadProviders()
+
+    expect(h.rows().map((p) => p.id)).toEqual(['anthropic', 'ollama_chat'])
+  })
+
+  it('hides exactly the two it declares, so the list cannot drift from the page', async () => {
+    /* Read off the source rather than restated: a copy here would agree with
+       itself while the page shipped something else. */
+    expect(hiddenHarness([]).hidden).toEqual(['hosted_vllm', 'custom'])
+  })
+
+  it('leaves a hidden provider configured and routable, only unlisted', async () => {
+    /* The row goes; the section does not. `model.options` still reports it --
+       which is what keeps an existing `custom` deployment serving -- and the
+       page simply does not draw it. */
+    const h = hiddenHarness([{ ...row('custom'), authenticated: true, models: ['custom/local-7b'] }])
+    await h.loadProviders()
+
+    expect(h.rows()).toEqual([])
   })
 })
 
