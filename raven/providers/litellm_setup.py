@@ -63,50 +63,6 @@ def _use_local_model_cost_map() -> None:
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 
-# Rows the installed LiteLLM catalogue lacks and raven vouches for itself.
-# ``deepseek/deepseek-flash`` is DeepSeek's own API name for V4.1-Flash (the
-# retired ``deepseek-v4-flash`` routes to it); LiteLLM files nothing under it,
-# so the window resolver fell back to 65,536 for a 1,048,576-token model and
-# the cost recorder wrote 0 (2026-09-11). Prices are DeepSeek's peak-hour
-# rates per token -- off-peak is half, and a flat table cannot say so, so the
-# recorded cost is an upper bound. Keyed by the exact ids the wire uses; the
-# OpenRouter-routed ``openrouter/deepseek/...`` ids are deliberately absent,
-# OpenRouter prices those itself.
-_DEEPSEEK_FLASH_ROW = {
-    "max_tokens": 384_000,
-    "max_input_tokens": 1_048_576,
-    "max_output_tokens": 384_000,
-    "input_cost_per_token": 0.30 / 1_000_000,
-    "output_cost_per_token": 1.20 / 1_000_000,
-    "cache_read_input_token_cost": 0.006 / 1_000_000,
-    "input_cost_per_token_cache_hit": 0.006 / 1_000_000,
-    "litellm_provider": "deepseek",
-    "mode": "chat",
-    "supports_function_calling": True,
-    "supports_parallel_function_calling": True,
-    "supports_prompt_caching": True,
-    "supports_reasoning": True,
-    "source": "https://api-docs.deepseek.com/quick_start/pricing (peak-hour rates)",
-}
-RAVEN_MODEL_ROWS: dict[str, dict] = {
-    "deepseek/deepseek-flash": _DEEPSEEK_FLASH_ROW,
-    "deepseek-flash": _DEEPSEEK_FLASH_ROW,
-}
-
-
-def _register_raven_model_rows(litellm) -> None:
-    """Add :data:`RAVEN_MODEL_ROWS` to LiteLLM's live table, once per row.
-
-    ``register_model`` writes into ``litellm.model_cost`` -- the dict the
-    window resolver, the output-ceiling resolver and the cost recorder all
-    read -- so one registration answers all three. A row already present
-    (a newer LiteLLM that learned the id) is left as it is.
-    """
-    missing = {mid: row for mid, row in RAVEN_MODEL_ROWS.items() if mid not in litellm.model_cost}
-    if missing:
-        litellm.register_model(missing)
-
-
 def import_litellm():
     """Import litellm with its banner disabled and its terminal handler detached."""
     _point_oauth_tokens_at_raven()
@@ -119,7 +75,6 @@ def import_litellm():
         import litellm
 
         litellm.suppress_debug_info = True
-        _register_raven_model_rows(litellm)
     finally:
         for lg, prev in zip(loggers, prev_levels):
             lg.setLevel(prev)

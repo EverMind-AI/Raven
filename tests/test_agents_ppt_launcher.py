@@ -83,7 +83,7 @@ TRUNK_MODEL = "z-ai/glm-5.3-flash"
 
 
 def test_the_roster_row_is_the_vendored_twins_modulo_the_ledgered_deltas():
-    """The whole row, not a field list, with exactly three ledgered deltas. The
+    """The whole row, not a field list, with exactly four ledgered deltas. The
     ``engine`` declaration product discovery probes readiness with (the fork
     twin's venv gate has no counterpart here, so the wheel probe is what keeps
     an engineless install listed-but-disabled instead of failing at dispatch);
@@ -93,9 +93,23 @@ def test_the_roster_row_is_the_vendored_twins_modulo_the_ledgered_deltas():
     the audience, the length, the style and an outline the user never stated --
     measured on a live instance: "make a deck about Shanghai's city plan" became
     a 13-point brief, the deck agent had nothing left to ask, and the user was
-    never asked anything. This product's row tells it to hand over the user's own
-    words and leave the asking to the deck agent, which has ask_user and the
-    host relays it. Everything the host router reads stays the twin's:
+    never asked anything. This row carries no briefing sentence at all. It once
+    carried the opposite instruction, to hand over the user's own words; making
+    the row ``hidden`` then put it out of the delegating agent's reach, and the
+    instruction has been inert since. Raven-Design's row is the one that agent
+    reads and carries the same instruction, so the behaviour is delivered there
+    and repeating it here only lengthens the one prompt this text does reach.
+
+    The fourth is the routing half of that same description. This row is hidden
+    and reached only through Raven-Design's ``routes``, so the one reader of its
+    text is the host's route classifier, and the fork opens by inviting source
+    paths -- "name existing absolute paths in the task text when you have source
+    documents" -- which that classifier reads as a deck request whenever a task
+    merely cites a .pptx. Measured over 40 bilingual tasks at 5 repeats on two
+    models: the fork's opening sent "design a brand style guide from
+    /data/keynote.pptx" to the deck agent 10 times out of 10, while naming the
+    deliverable, denying the source case and covering deck-template wording
+    scored 400/400 on the same set. Everything the host router reads stays the twin's:
     ownsWatchedWork stays absent on both sides, and recommendedLlm.provider
     keeps the load-bearing name ``ppt`` (C2: gateway detection and prompt
     caching key on it)."""
@@ -114,9 +128,15 @@ def test_the_roster_row_is_the_vendored_twins_modulo_the_ledgered_deltas():
     told = ours.pop("description")
     fork_told = theirs.pop("description")
     assert "give detailed requirements" in fork_told
-    assert "hand it the user's request in the user's own words" in told
-    assert "Do not fill in what the user did not say" in told
-    assert told.startswith(fork_told.split("IMPORTANT:")[0]), "only the briefing sentence differs"
+    assert "IMPORTANT:" not in told
+    assert "name existing absolute paths" in fork_told
+    assert "name existing absolute paths" not in told
+    assert "named only as source material is not such a request" in told
+    # The other half of the same delta, and the one with no negative form to
+    # lean on: naming the shapes a deck request takes is what stopped template
+    # decks being classified away from this agent.
+    for shape in ("a presentation", "slides", "a keynote", "a deck template"):
+        assert shape in told, shape
     assert ours == theirs
     assert "ownsWatchedWork" not in ours
     assert ours["recommendedLlm"]["provider"] == "ppt"
@@ -137,7 +157,6 @@ TRUNK_HELD_OUT = {
     "plugin",
     "read_skill",
     "run_subagent_dag",
-    "spawn",
     "tool_call",
     "tool_search",
 }
@@ -962,7 +981,7 @@ def test_the_state_root_override_wins_and_the_default_sits_under_the_home(ground
 #: this product's published config (the four media/deep-research disable rows
 #: applied, no Serper key, everos on) registers exactly these -- the six
 #: filesystem tools and exec, the two web tools (search key-gated, so absent
-#: hermetically), message/ask_user (the question rides the ACP
+#: hermetically), message/spawn/ask_user (the question rides the ACP
 #: `ask_user_request` update to whoever is driving the host), use_skill (registry reachable;
 #: read_skill needs a Hub endpoint the config never names), everos's
 #: understand_media, and the ten deck tools. Its tool_search meta-pair
@@ -977,6 +996,7 @@ FORK_CONFIG_INTENT = {
     "list_dir",
     "message",
     "read_file",
+    "spawn",
     "understand_media",
     "use_skill",
     "web_fetch",
@@ -1072,31 +1092,6 @@ def test_the_products_tool_face_is_the_forks_config_intent_plus_the_deck(grounde
     disabled = set(json.loads((RUN_PY.parent / "config.json").read_text())["tools"]["disabledTools"])
     assert TRUNK_HELD_OUT <= disabled, "the trunk-new names stay disabled by config, not by luck"
     assert not (KEY_GATED | DECK_TOOLS) & disabled
-
-
-def test_neither_deck_lane_can_hand_its_work_to_a_helper_it_starts() -> None:
-    """The two lanes that build a deck disable the same dispatch tools.
-
-    They did not. Design held `spawn` out and the deck lane did not, so the same
-    request answered at the top tier could start a research sub-agent while the
-    same request one tier down could not. The one recorded use shows why the
-    answer is neither lane: the deck lane spawned a fact-check, `spawn` returned
-    "I'll notify you when it completes", and the next tool call went out in the
-    same millisecond -- the deck was built without the answer, the helper ran
-    outside the turn's tier ("offers no tier from medium/high/max"), and its late
-    report arrived after delivery as a turn nobody asked for. Facts a deck needs
-    are fetched in the turn that needs them, with web_search and web_fetch.
-    """
-    import json
-    from pathlib import Path
-
-    agents = Path(__file__).resolve().parents[1] / "agents"
-    held = {"spawn", "run_subagent_dag", "deep_research", "hub"}
-    for lane in ("raven-design", "raven-ppt"):
-        disabled = set(
-            json.loads((agents / lane / "config.json").read_text(encoding="utf-8"))["tools"]["disabledTools"]
-        )
-        assert held <= disabled, f"{lane} can still hand a deck to a helper it starts: {sorted(held - disabled)}"
 
 
 def test_a_serper_key_admits_exactly_the_gated_pair(grounded, tmp_path, monkeypatch):
