@@ -71,6 +71,9 @@ jobs:
       - name: Import contracts (layer boundaries)
         run: make lint-imports
 
+      - name: Dependency hygiene (no direct import of a transitive dep)
+        run: make lint-deps
+
   unit:
     name: unit (py${{ matrix.python }} / ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
