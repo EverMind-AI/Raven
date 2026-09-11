@@ -1,7 +1,7 @@
 {
   "name": "Raven-PPT",
   "kind": "acp",
-  "description": "A powerful deck-building agent that turns your given material into a .pptx, reviewing every rendered page before it publishes. Use this agent to get a presentation deck; name existing absolute paths in the task text when you have source documents. IMPORTANT: hand it the user's request in the user's own words. Do not fill in what the user did not say -- audience, length, language, style, structure -- and do not answer for them: the deck agent asks the user itself for what it needs and records what they answer.",
+  "description": "Builds a PowerPoint deck: turns the user's material into a .pptx, reviewing every rendered page before it publishes. Use when the deliverable the user asks for is a .pptx -- a presentation, slides, a keynote, or a deck template all count. A .pptx named only as source material is not such a request.",
   "owns": "owns decks and slides. Do not build the deck yourself.",
   "enabled": true,
   "hidden": true,

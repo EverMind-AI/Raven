@@ -311,7 +311,7 @@ def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
     guess under a more confident name.
     """
     from raven.config.loader import get_config_path, read_raw_or_raise
-    from raven.providers.rates import resolve_context_window
+    from raven.providers.rates import DEFAULT_CONTEXT_WINDOW_TOKENS, resolve_context_window
 
     health = ConfigHealth()
     defaults = config.agents.defaults
@@ -327,6 +327,14 @@ def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
                 f"starts paying for a slow path, and when memory consolidation archives."
             )
             health.fixes.append("remove agents.defaults.contextWindowTokens so the window follows each model")
+    elif model and resolve_context_window(model) is None:
+        # The other failure of the same knob: unpinned and unknown, so every
+        # budget is sized against a default that fits no model in particular.
+        health.findings.append(
+            f"No catalogue knows the context window of {model}, so history is sized against the "
+            f"{DEFAULT_CONTEXT_WINDOW_TOKENS:,}-token default -- one sixteenth of a 1M-token model. "
+            f"Pin the real window with agents.defaults.contextWindowTokens."
+        )
 
     provider = (getattr(defaults, "provider", "") or "").strip()
     # ``auto`` counts as unset, the way ``Config._match_provider`` counts it. The
@@ -746,6 +754,23 @@ def _server_log_hint() -> str:
     return str(server_log_path())
 
 
+def _describe_window(routing) -> str:
+    """The window a request is sized against, and where the number came from.
+
+    ``auto`` alone hid the case that mattered: an id no catalogue knows falls
+    back to a default, and the report read the same as a model whose real
+    window had been found.
+    """
+    from raven.providers.rates import DEFAULT_CONTEXT_WINDOW_TOKENS, resolve_context_window
+
+    if routing.context_window_tokens:
+        return f"{routing.context_window_tokens:,} (pinned)"
+    real = resolve_context_window(routing.model) if routing.model else None
+    if real:
+        return f"auto ({real:,} from the catalogue)"
+    return f"auto -> {DEFAULT_CONTEXT_WINDOW_TOKENS:,} default [yellow](no catalogue knows this model)[/yellow]"
+
+
 def _render_human_output(report: DoctorReport) -> None:
     console.print(f"\n{__logo__} Raven Doctor\n")
 
@@ -801,7 +826,7 @@ def _render_human_output(report: DoctorReport) -> None:
         else:
             console.print("  Routes to:    [red]<unresolved>[/red]")
         console.print(f"  Max tokens:   {routing.max_tokens}")
-        console.print(f"  Context win:  {routing.context_window_tokens if routing.context_window_tokens else 'auto'}")
+        console.print(f"  Context win:  {_describe_window(routing)}")
 
     features = report.features
     if features is not None:

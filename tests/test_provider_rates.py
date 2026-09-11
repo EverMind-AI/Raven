@@ -1191,3 +1191,68 @@ def test_dotted_variants_are_a_fallback_not_a_rewrite():
     # Only digit-to-digit boundaries count: the hyphen in "x-1" joins a letter
     # to a digit and is left alone.
     assert rates._dotted_version_variants("x-1-2-3") == ["x-1.2-3", "x-1-2.3", "x-1.2.3"]
+
+
+# --- The default window is a guess, and a guess is said out loud ------------------
+#
+# 2026-09-11: ``deepseek/deepseek-flash`` (DeepSeek's own id, 1,048,576 tokens) was
+# in no catalogue, so trimming was sized against the 65,536 default -- one
+# sixteenth of the window -- and nothing in raven's own output said so; only
+# LiteLLM's DEBUG noise did. The fallback stays (a request has to be sized with
+# something), but it is announced once per model, with the knob that pins it.
+
+
+def _warning_sink():
+    from loguru import logger
+
+    lines: list[str] = []
+    handle = logger.add(lambda m: lines.append(str(m)), level="WARNING")
+    return lines, handle
+
+
+def test_falling_back_to_the_default_window_warns_once_per_model(monkeypatch):
+    from loguru import logger
+
+    _patch_litellm_blind(monkeypatch)
+    monkeypatch.setattr(rates, "_DEFAULT_WINDOW_WARNED", set())
+    lines, handle = _warning_sink()
+    try:
+        assert rates.effective_context_window("nobody/unmapped-model", None) == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
+        assert rates.effective_context_window("nobody/unmapped-model", None) == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
+    finally:
+        logger.remove(handle)
+
+    mine = [line for line in lines if "nobody/unmapped-model" in line]
+    assert len(mine) == 1
+    assert "65,536" in mine[0]
+    assert "agents.defaults.contextWindowTokens" in mine[0]
+
+
+def test_a_pinned_window_is_not_a_fallback_and_says_nothing(monkeypatch):
+    from loguru import logger
+
+    _patch_litellm_blind(monkeypatch)
+    monkeypatch.setattr(rates, "_DEFAULT_WINDOW_WARNED", set())
+    lines, handle = _warning_sink()
+    try:
+        assert rates.effective_context_window("nobody/unmapped-model", 1_048_576) == 1_048_576
+    finally:
+        logger.remove(handle)
+
+    assert not [line for line in lines if "nobody/unmapped-model" in line]
+
+
+def test_the_cheap_tier_does_not_report_a_miss_the_next_call_may_fill(monkeypatch):
+    """``allow_fetch=False`` answers from what is loaded; a None there is not the
+    catalogues' verdict, so it is not announced as one."""
+    from loguru import logger
+
+    _patch_litellm_blind(monkeypatch)
+    monkeypatch.setattr(rates, "_DEFAULT_WINDOW_WARNED", set())
+    lines, handle = _warning_sink()
+    try:
+        rates.effective_context_window("nobody/unmapped-model", None, allow_fetch=False)
+    finally:
+        logger.remove(handle)
+
+    assert not [line for line in lines if "nobody/unmapped-model" in line]

@@ -13,7 +13,8 @@ which session messages reach the model:
   result;
 - **budget trimming** (:meth:`trim`) — build the prompt, estimate its
   token cost, and drop the lowest-priority non-protected messages until
-  it fits.
+  it fits -- a tool call and its results as one unit (:meth:`tool_group`),
+  so what fits is also what the provider accepts.
 
 This is the *only* code path that selects ``*history``. The
 ``# Curator Working State`` section is rendered by
@@ -149,6 +150,58 @@ class HistoryTrimmer:
         return history
 
     @staticmethod
+    def tool_group(messages: list[dict[str, Any]], mid: int) -> set[int]:
+        """The ids that stand or fall with ``mid``.
+
+        An assistant carrying ``tool_calls`` goes with every result answering
+        it; a tool result goes with its parent and the parent's other results;
+        any other message stands alone. Dropping one member without the rest
+        leaves the provider a dangling call or an orphan result, which a strict
+        backend refuses outright -- measured 2026-09-11 on DeepSeek's API,
+        where one such request failed every turn until the history was
+        re-selected.
+        """
+        if not (0 <= mid < len(messages)):
+            return {mid}
+        msg = messages[mid]
+        parent: int | None = None
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            parent = mid
+        elif msg.get("role") == "tool" and msg.get("tool_call_id"):
+            call_id = str(msg["tool_call_id"])
+            for idx in range(mid - 1, -1, -1):
+                calls = messages[idx].get("tool_calls") or [] if messages[idx].get("role") == "assistant" else []
+                if any(isinstance(tc, dict) and str(tc.get("id")) == call_id for tc in calls):
+                    parent = idx
+                    break
+        if parent is None:
+            return {mid}
+        call_ids = {
+            str(tc["id"]) for tc in (messages[parent].get("tool_calls") or []) if isinstance(tc, dict) and tc.get("id")
+        }
+        group = {parent}
+        for idx in range(parent + 1, len(messages)):
+            m = messages[idx]
+            if m.get("role") == "tool" and str(m.get("tool_call_id", "")) in call_ids:
+                group.add(idx)
+        return group
+
+    @classmethod
+    def _offenders(cls, messages: list[dict[str, Any]], ids: list[int]) -> set[int]:
+        """Selected ids whose tool pairing is broken *within the selection*:
+        a parent missing any of its results, or a result whose parent is not
+        selected. Empty when the selection is provider-safe."""
+        selected = set(ids)
+        offenders: set[int] = set()
+        for mid in ids:
+            group = cls.tool_group(messages, mid)
+            if len(group) > 1 and not group <= selected:
+                offenders |= group & selected
+            elif messages[mid].get("role") == "tool" and group == {mid}:
+                offenders.add(mid)  # a result whose parent the session no longer holds
+        return offenders
+
+    @staticmethod
     def structural_errors(messages: list[dict[str, Any]]) -> list[str]:
         """Tool-call closure validation over a built message list."""
         errors: list[str] = []
@@ -168,13 +221,55 @@ class HistoryTrimmer:
             errors.append(f"assistant tool_calls missing results: {sorted(open_calls)}")
         return errors
 
-    @staticmethod
-    def _first_droppable(ids: list[int], protected_ids: set[int]) -> int | None:
-        """Position of the first non-protected id (falls back to 0)."""
-        for pos, mid in enumerate(ids):
-            if mid not in protected_ids:
-                return pos
-        return 0 if ids else None
+    @classmethod
+    def _choose_drop(
+        cls,
+        messages: list[dict[str, Any]],
+        ids: list[int],
+        protected_ids: set[int],
+    ) -> tuple[set[int], list[int], list[int]] | None:
+        """The next drop: ``(group, remaining, reclosed)`` or None when ``ids`` is empty.
+
+        Whole group, not one id: the closure that selected these ids kept every
+        call beside its results, and a drop has to undo it the same way or the
+        next request carries an orphan. Re-closing afterwards adds nothing back
+        (neither parent nor results are selected any more) and re-anchors the
+        history on a user message.
+
+        Ranked by the group a candidate would remove, not by the candidate:
+        a group with any protected member is a protected group, so a
+        protection boundary that falls inside a parallel-call exchange
+        (``protect_first_n`` counting the call but not its results) cannot be
+        used to take the protected call out through an unprotected result.
+        Unprotected groups go first, in selection order,
+        skipping one whose removal would re-anchor a protected id out of the
+        history; protected groups go only after that, under the same rule;
+        when nothing goes cleanly the first candidate goes anyway -- the last
+        resort trimming has always had, so a prompt that cannot fit still
+        shrinks.
+        """
+        if not ids:
+            return None
+        seen: set[int] = set()
+        unprotected: list[tuple[set[int], list[int], list[int]]] = []
+        protected: list[tuple[set[int], list[int], list[int]]] = []
+        for candidate in ids:
+            if candidate in seen:
+                continue
+            group = cls.tool_group(messages, candidate)
+            seen |= group
+            remaining = [mid for mid in ids if mid not in group]
+            choice = (group, remaining, cls.canonical_ids(messages, remaining))
+            (protected if group & protected_ids else unprotected).append(choice)
+        # Unprotected groups first, then protected ones, each only if it leaves
+        # every other protected id anchored; when nothing goes cleanly the first
+        # candidate goes anyway, so a prompt that cannot fit still shrinks.
+        for tier in (unprotected, protected):
+            for group, remaining, reclosed in tier:
+                lost = (protected_ids & set(remaining)) - set(reclosed)
+                if not lost:
+                    return group, remaining, reclosed
+        return (unprotected + protected)[0]
 
     # ------------------------------------------------------------------
     # Budget-driven trimming
@@ -225,11 +320,16 @@ class HistoryTrimmer:
         warnings: list[str] = []
         trimmed_ids = list(canon)
         while estimated > max_prompt and trimmed_ids:
-            drop_idx = self._first_droppable(trimmed_ids, protected_ids)
-            if drop_idx is None:
+            choice = self._choose_drop(session_messages, trimmed_ids, protected_ids)
+            if choice is None:
                 break
-            dropped = trimmed_ids.pop(drop_idx)
-            warnings.append(f"dropped message {dropped} to fit budget")
+            group, remaining, reclosed = choice
+            for mid in sorted(group):
+                label = "protected message" if mid in protected_ids else "message"
+                warnings.append(f"dropped {label} {mid} to fit budget")
+            for mid in sorted(set(remaining) - set(reclosed)):
+                warnings.append(f"dropped message {mid}: nothing before the first remaining user message is kept")
+            trimmed_ids = reclosed
             history = self.history_from_ids(session_messages, trimmed_ids)
             messages = build_messages(history)
             estimated, source = estimate_prompt_tokens_chain(
@@ -238,6 +338,24 @@ class HistoryTrimmer:
                 messages,
                 self.get_tool_definitions(),
             )
+
+        # A selection that arrived broken -- a plan naming a result whose parent
+        # the session no longer holds -- is not shipped either; each pass drops
+        # at least one id, so this ends.
+        offenders = self._offenders(session_messages, trimmed_ids)
+        while offenders:
+            trimmed_ids = [mid for mid in trimmed_ids if mid not in offenders]
+            for mid in sorted(offenders):
+                warnings.append(f"dropped message {mid}: its tool call or result is not in the selection")
+            history = self.history_from_ids(session_messages, trimmed_ids)
+            messages = build_messages(history)
+            estimated, source = estimate_prompt_tokens_chain(
+                self.provider,
+                self.model,
+                messages,
+                self.get_tool_definitions(),
+            )
+            offenders = self._offenders(session_messages, trimmed_ids)
 
         return messages, TrimOutcome(
             history=history,
