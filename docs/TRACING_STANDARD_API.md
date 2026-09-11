@@ -56,7 +56,6 @@ root of a turn is a `session.turn` span; everything else nests beneath it.
 |---|---|
 | `s.set(attrs=None, **kw)` | merge attributes onto the span (dotted-key mapping and/or bare kwargs) |
 | `s.artifact(key, payload, *, kind="json")` | persist a large payload out-of-line; attach `<key>.artifact_path/_sha1/_bytes` + a truncated `preview`. Use for prompts / tool IO / recall results. |
-| `_spans.address_items(items)` | content-address a list of messages under `audit-artifacts/_messages/`; returns `{"$msg": sha1}` references to embed in a payload. See `audit.artifact.v2` below. |
 | `s.event(name)` | append a timeline event `{time, name}` |
 | `s.error(exc)` | mark `status = ERROR` (done automatically if the block raises) |
 
@@ -128,46 +127,12 @@ adds richer rendering.
 | name | kind | required | optional attributes |
 |---|---|---|---|
 | `session.turn` | `session` | — | `turn.input_preview`, `turn.output_preview`, `turn.in_progress`, `turn.capabilities.{tools,plugins,skills}` |
-| `llm.call` | `model` | `llm.provider`, `llm.model` | `llm.provider_class`, `llm.finish_reason`, `llm.call_id`, `llm.invocation_source`, `llm.usage.{input,output,total,cache_read,cache_write}_tokens`, `llm.usage.cost_total`, `llm.request_{bytes,images,image_bytes}`, `llm.http_status`, `llm.served_by`, `llm.response_id`; artifacts `llm.input` (`audit.artifact.v2`: message references + tools, plus `request` = the messages+tools payload size and picture count, not the provider-final body, and `generation` = what the call asked the model for; see below), `llm.output` (plus `call` = the transport record) |
+| `llm.call` | `model` | `llm.provider`, `llm.model` | `llm.provider_class`, `llm.finish_reason`, `llm.call_id`, `llm.invocation_source`, `llm.usage.{input,output,total,cache_read,cache_write}_tokens`, `llm.usage.cost_total`, `llm.request_{bytes,images,image_bytes}`, `llm.http_status`, `llm.served_by`, `llm.response_id`; artifacts `llm.input` (messages+tools, plus `request` = the messages+tools payload size and picture count, not the provider-final body), `llm.output` (plus `call` = the transport record) |
 | `tool.call` | `tool` | `tool.name` | `tool.call_id`, `tool.duration_ms`, `tool.error`; artifacts `tool.input` (params), `tool.output` (result) |
 | `subagent.run` / `subagent.call` | `subagent` | — | `subagent.id`, `subagent.label`, `subagent.task`, `subagent.session_id`, `subagent.parent_trace_id`, `subagent.parent_span_id`, `subagent.trace_id`, `subagent.status` |
 | `skill.read` / `skill.inject` | `skill` | — | `skill.name`, `skill.id`, `skill.source`, `skill.path`, `skill.scripts_dir` (present => a runnable bundle was materialized, vs instructions-only), `skill.read.via_tool` (`use_skill`/`read_skill`/`read_file`), `skill.inject.{names,count,via}` |
 | `memory.recall` / `.store` / `.feedback` / `.extract` / `.consolidate` / `.profile_refresh` | `memory` | — | `memory.scope`, `memory.hits`, `memory.message_count`, `memory.kind`, `memory.deposit_summary`, `memory.deposit_status`, `memory.surface`, `memory.sections_rewritten`; artifacts per op |
 | `plugin.load` / `tracing.bootstrap` | `plugin` | — | `plugin.name`, `plugin.contribution`, `plugin.id` |
-
-### Artifact formats
-
-An artifact is either a plain JSON payload (v1, no discriminator) or
-`audit.artifact.v2`, which carries `"artifactFormat": "audit.artifact.v2"` and
-replaces each message with a `{"$msg": "<sha1>"}` reference to
-`audit-artifacts/_messages/<sha1[:2]>/<sha1>.json`. Only `llm.input` is written
-this way; every other kind stays v1, and a v1 artifact already on disk is never
-rewritten. A shell's `request` and `generation` are carried verbatim: neither
-holds message content, so referencing them would cost an indirection and save
-nothing.
-
-`raven/tracing/artifact_v2.py` is the format's single authority - canonical
-serialization, envelope, reference validation, resolution - because the bundled
-viewer mirrors it in JavaScript and a cross-language round-trip test compares
-the two. A consumer that resolves a shell must apply two rules: `messages`
-resolves to the list of message objects, while `systemPrompt` and `prompt`
-resolve to their message's `content` coerced to text. A reference whose sha1 is
-not 40 lowercase hex characters is data, not an address, and is passed through
-untouched; a shell may also carry a raw message inline where its blob could not
-be written.
-
-For `llm.input`, `artifact_sha1` and `artifact_bytes` describe the shell, not
-the conversation it references; `llm.request_bytes` is the request-size signal,
-measured from the messages themselves and so unaffected by the shell. The shell
-hashes over the references it lists, so tamper evidence localizes to one
-message rather than only proving the payload changed.
-
-Two resolution points turn a shell back into its v1 equivalent:
-`raven/trajectory/bundle.py` when packing a trajectory (so a bundle carries no
-dependency on the message store) and `readArtifact` in the bundled viewer's
-`server.js` (so the UI never sees a reference). Consumers downstream of either
-- replay, cassette minimization, the viewer's UI - read v1 shapes and need no
-knowledge of v2.
 
 **Provider labeling:** `llm.provider` is the *logical backend* the call routes to
 (e.g. `openrouter`), derived from the model's gateway prefix; `llm.provider_class`

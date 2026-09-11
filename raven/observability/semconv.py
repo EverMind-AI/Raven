@@ -14,8 +14,7 @@ from collections import Counter
 from typing import Any
 
 from raven.observability import usage as usage_mod
-from raven.tracing import artifact_v2, config
-from raven.tracing import spans as _spans
+from raven.tracing import config
 from raven.tracing.store import preview_text
 from raven.utils.images import inline_image_bytes, is_image_part
 
@@ -249,6 +248,19 @@ def _generation_attrs(facts: dict[str, Any]) -> dict[str, Any]:
     return attrs
 
 
+def _coerce_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        import json as _json
+
+        return _json.dumps(value, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        return str(value)
+
+
 def _llm_input_payload(
     provider: str,
     model: str | None,
@@ -258,54 +270,44 @@ def _llm_input_payload(
     facts: dict[str, int] | None = None,
     generation: dict[str, Any] | None = None,
 ) -> dict:
-    """Artifact payload for the model-input card, in ``audit.artifact.v2``.
+    """Artifact payload for the model-input card.
 
-    Each message is stored once under ``_messages/`` and referenced here, so a
-    turn that appends one message no longer rewrites the whole conversation.
-    ``systemPrompt`` and ``prompt`` alias their element of ``messages`` rather
-    than restating its text - the same reference object, so there is no second
-    address that could disagree.
-
-    Two rules differ from v1 on purpose. The system field takes the first
-    system message, where v1 took the first non-empty one: a reference has no
-    notion of emptiness, and synthesising one would mean a second address.
-    ``messages`` is always a list, where v1 passed a non-list argument
-    through: one constant type spares both resolvers a special case, and the
-    extractors always hand this a real call's message list.
-
-    ``request`` and ``generation`` ride along unaddressed. Neither holds
-    message content - three integers and the parameters the provider resolved -
-    so referencing them would cost an indirection and save nothing.
-    ``request.bytes`` is also what ``llm.request_bytes`` reports, which is the
-    request-size signal ``artifact_bytes`` stopped carrying once it began
-    measuring the shell.
-
-    The referenced list is not what went on the wire: the provider adds or
-    removes prompt-cache breakpoints on copies (``providers.prompt_cache``)
-    after this is recorded. Neither the presence nor the absence of
-    ``cache_control`` here says what was sent.
+    raven passes ONE flat ``messages`` list (system + prior turns + current).
+    We split it into three non-overlapping views for the viewer:
+      - ``systemPrompt``: the system message,
+      - ``prompt``: the latest user message (the current input to this call),
+      - ``historyMessages``: the prior turns only — everything EXCEPT the system
+        message and that latest user message (so it doesn't duplicate them).
+    ``messages`` keeps the full raw list as handed to the provider, which is not
+    what went on the wire: the provider adds or removes prompt-cache breakpoints
+    on copies (``providers.prompt_cache``) after this is recorded. Neither the
+    presence nor the absence of ``cache_control`` here says what was sent.
     """
     msgs = messages if isinstance(messages, list) else []
-    refs = _spans.address_items(msgs)
-    system_ref: Any = ""
-    prompt_ref: Any = ""
-    for index, m in enumerate(msgs):
+    system_prompt = ""
+    user_prompt = ""
+    system_idxs: set[int] = set()
+    last_user_idx: int | None = None
+    for i, m in enumerate(msgs):
         if isinstance(m, dict) and m.get("role") == "system":
-            system_ref = refs[index]
-            break
-    for index in range(len(msgs) - 1, -1, -1):
-        m = msgs[index]
+            system_idxs.add(i)
+            if not system_prompt:
+                system_prompt = _coerce_text(m.get("content"))
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i]
         if isinstance(m, dict) and m.get("role") == "user":
-            prompt_ref = refs[index]
+            user_prompt = _coerce_text(m.get("content"))
+            last_user_idx = i
             break
+    history = [m for i, m in enumerate(msgs) if i not in system_idxs and i != last_user_idx]
     return {
-        "artifactFormat": artifact_v2.ARTIFACT_FORMAT,
         "provider": provider,
         "providerClass": provider_class,
         "model": model,
-        "systemPrompt": system_ref,
-        "prompt": prompt_ref,
-        "messages": refs,
+        "systemPrompt": system_prompt,
+        "prompt": user_prompt,
+        "historyMessages": history,
+        "messages": messages,
         "tools": tools,
         # Taken from the caller when it has already measured them for the span's
         # attributes, so one request is not walked twice.

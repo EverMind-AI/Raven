@@ -21,6 +21,7 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import (
+    OUTPUT_LIMIT_NUDGE,
     POST_TOOL_NUDGE,
     RecoveryAction,
     RecoveryLimits,
@@ -427,6 +428,248 @@ async def test_a_continuation_after_complete_reasoning_is_left_whole(workspace):
         session_key="s1",
     )
     assert out is not None and out[0] == "lowercase start. Then the rest."
+
+
+class _AlwaysCutThinkingProvider(LLMProvider):
+    """Every call spends the whole output budget inside the reasoning block.
+
+    The shape a reasoning model takes at its own ceiling: no visible text, no
+    tool call, ``finish_reason="length"``.
+    """
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+        self.seen: list[list[dict]] = []
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        self.calls += 1
+        self.seen.append([dict(m) for m in messages])
+        return LLMResponse(
+            content="",
+            reasoning_content="deciding how to lay out the file",
+            finish_reason="length",
+        )
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_turn_cut_at_the_output_limit_is_told_so(workspace):
+    """The ladder's retries carried no reason, so a model that had spent its
+    whole budget thinking was asked again under the conditions that had just
+    failed -- measured on one run as six generations and no tool call.
+
+    ``write_file``'s ``truncation_hint`` covers the other shape, a call present
+    and cut mid-arguments. A turn cut before any call has no tool result to
+    carry advice on, so the ladder has to say it itself.
+    """
+    provider = _AlwaysCutThinkingProvider()
+    agent = _make_agent(workspace, provider)
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="write eight files",
+        ),
+        session_key="s1",
+    )
+
+    assert provider.calls > 1, "the ladder did not ask again at all"
+    assert any(any(m.get("content") == OUTPUT_LIMIT_NUDGE for m in seen) for seen in provider.seen), (
+        "no request in the ladder told the model it had been cut at the output limit"
+    )
+    # scaffolding, so it must not reach persisted history either
+    session = agent.sessions.get_or_create("s1")
+    for m in session.messages:
+        assert not m.get("_recovery_synthetic")
+        assert m.get("content") != OUTPUT_LIMIT_NUDGE
+
+
+@pytest.mark.asyncio
+async def test_the_output_limit_nudge_does_not_presume_a_tool_call_was_owed(workspace):
+    """The nudge fires on ``finish_reason`` "length" alone, and that carries no
+    evidence about what the cut turn owed -- a plain question whose reasoning ate
+    the budget reaches it too. Wording that tells such a turn to emit a call
+    points it at a tool the task never needed, which is a worse outcome than the
+    silence it replaces.
+    """
+    provider = _AlwaysCutThinkingProvider()
+    agent = _make_agent(workspace, provider)
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="which year did the timezone database begin",
+        ),
+        session_key="s1",
+    )
+
+    delivered = [m for seen in provider.seen for m in seen if m.get("content") == OUTPUT_LIMIT_NUDGE]
+    assert delivered, "an answer-only turn never reached the nudge"
+    text = str(delivered[0]["content"])
+    assert "answer" in text, "the nudge offers the answer-only turn no valid recovery"
+    assert "tool call" in text, "the nudge no longer names the call recovery"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_turn_that_was_not_cut_gets_no_output_limit_nudge(workspace):
+    """The trigger is the ceiling, not emptiness. An empty turn that stopped
+    honestly was not cut, so every sentence the nudge opens with would be false
+    about it -- and a message that says the wrong thing is worse than the silence
+    it replaces. The fix's other tests all enter through a cut turn, so without
+    this one the condition itself is unheld.
+    """
+
+    class _Recording(_AlwaysEmptyProvider):
+        def __init__(self):
+            super().__init__()
+            self.seen: list[list[dict]] = []
+
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+            reasoning_effort=None,
+            tool_choice=None,
+        ):
+            self.seen.append([dict(m) for m in messages])
+            return await super().chat(
+                messages,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
+                tool_choice=tool_choice,
+            )
+
+    provider = _Recording()
+    agent = _make_agent(workspace, provider)
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+    )
+
+    assert provider.calls > 1, "the ladder never asked again, so this guard proves nothing"
+    assert not any(m.get("content") == OUTPUT_LIMIT_NUDGE for seen in provider.seen for m in seen), (
+        "an empty turn that was never cut was told it had hit the output limit"
+    )
+
+
+class _ToolThenAlwaysCutProvider(LLMProvider):
+    """One tool call, then every later call ends empty on the ceiling.
+
+    Built so the retry is reached with a ``tool`` message last: the post-tool
+    nudge is switched off in the test's limits, so a post-tool empty turn falls
+    straight to RETRY and nothing has been appended after the tool result.
+    """
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+        self.seen: list[list[dict]] = []
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        self.calls += 1
+        self.seen.append([dict(m) for m in messages])
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="c1", name="no_such_tool", arguments={})],
+                finish_reason="tool_calls",
+            )
+        return LLMResponse(content="", finish_reason="length")
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_the_output_limit_nudge_never_follows_a_tool_message(workspace):
+    """A bare tool->user pair is a 400 on most APIs, which is why a synthetic
+    assistant sits between them. That failure is at the provider boundary, so
+    what a unit test can hold is the shape rather than the API.
+
+    The scenario is the point: reached through a turn with no tool call, the
+    message before the nudge is never a tool result, so the assertion passes
+    whether or not the placeholder is written. Driven this way -- tool result
+    last, post-tool nudge switched off so RETRY is reached directly -- removing
+    the placeholder puts a `tool` immediately before the nudge and this fails.
+    """
+    provider = _ToolThenAlwaysCutProvider()
+    agent = _make_agent(workspace, provider, limits=RecoveryLimits(post_tool_empty_max_nudges=0))
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="use the tool",
+        ),
+        session_key="s1",
+    )
+
+    checked = 0
+    for seen in provider.seen:
+        for i, m in enumerate(seen):
+            if m.get("content") == OUTPUT_LIMIT_NUDGE:
+                assert i > 0, "the nudge opened the request with no turn before it"
+                assert seen[i - 1].get("role") != "tool", (
+                    f"a bare tool->user pair reached the provider: {[x.get('role') for x in seen[max(0, i - 3) : i + 1]]}"
+                )
+                checked += 1
+    assert checked, "the nudge was never delivered, so the shape was never checked"
+
+
+@pytest.mark.asyncio
+async def test_the_output_limit_nudge_is_said_once_not_once_per_retry(workspace):
+    """Three retries share one explanation. Appending it again per retry fills
+    the window the advice is asking the model to spend less of, and the
+    escalation for advice that did not land is ``loop_break_nudge``.
+    """
+    provider = _AlwaysCutThinkingProvider()
+    agent = _make_agent(workspace, provider)
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="write eight files",
+        ),
+        session_key="s1",
+    )
+
+    per_request = [sum(1 for m in seen if m.get("content") == OUTPUT_LIMIT_NUDGE) for seen in provider.seen]
+    assert max(per_request) == 1, f"nudge accumulated across retries: {per_request}"
 
 
 # --------------------------------------------------------------------------- #
