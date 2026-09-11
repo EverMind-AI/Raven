@@ -20,7 +20,7 @@ import { cardPlan, edge } from './shape'
 import * as store from './store'
 
 import type { Dims } from '../dag/graph'
-import type { PlaybookDetail, PlaybookNode, PlaybookRow } from './types'
+import type { PlaybookCredentialParam, PlaybookCredentialServer, PlaybookDetail, PlaybookNode, PlaybookRow } from './types'
 import type { JSX } from 'react'
 
 /* One geometry, always. The card's diagram has two metrics because a card
@@ -849,6 +849,7 @@ function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
   const s = store.getState()
   const node = detail.nodes.find((n) => n.id === s.pickedNode) || null
   const onGraph = s.tab === 'graph'
+  const onCreds = s.tab === 'credentials'
   return (
     <>
       <div className="pbcrumb">
@@ -889,9 +890,18 @@ function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
               of naming a picture that is not there. */}
           {t(detail.mode === 'dag' ? 'gui.pb.tab_graph' : 'gui.pb.tab_assembly')}
         </button>
-        <button className="pbtab" role="tab" aria-selected={!onGraph} onClick={() => store.showTab('contract')}>
+        <button className="pbtab" role="tab" aria-selected={s.tab === 'contract'} onClick={() => store.showTab('contract')}>
           {t('gui.pb.tab_contract')}
         </button>
+        {/* Only where there is something to hold: a playbook with no secret
+            params and no carried OAuth server has no credentials to manage,
+            and a tab that opens on "nothing here" teaches the reader to skip
+            tabs. */}
+        {hasCredentialSlots(detail) ? (
+          <button className="pbtab" role="tab" aria-selected={onCreds} onClick={() => store.showTab('credentials')}>
+            {t('gui.pb.tab_credentials')}
+          </button>
+        ) : null}
       </div>
 
       {/* Hidden rather than unmounted: the board holds the reader's own pan and
@@ -912,8 +922,153 @@ function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
           </div>
         )}
       </div>
-      {onGraph ? null : <Contract detail={detail} />}
+      {s.tab === 'contract' ? <Contract detail={detail} /> : null}
+      {onCreds ? <Credentials detail={detail} s={s} /> : null}
     </>
+  )
+}
+
+function hasCredentialSlots(detail: PlaybookDetail): boolean {
+  const secret = Object.values(detail.params).some((p) => p.type === 'secret')
+  const oauth = Object.values(detail.mcp_servers || {}).some((sv) => sv.auth === 'oauth')
+  return secret || oauth
+}
+
+/* What this machine holds for the servers this playbook carries. Two lists,
+   because the two credential kinds enter at different layers: a secret param
+   is substituted into a header or env when the host dials, an OAuth token is
+   attached by the host's provider. Neither value is ever shown -- the page
+   reads booleans and writes values, and the file keeps them at 0600. */
+function Credentials({ detail, s }: { detail: PlaybookDetail; s: store.PlaybooksState }): JSX.Element {
+  const creds = s.creds
+  /* Null both while the first read is in flight and when the engine has no
+     credentials surface (loadCredentials leaves it null then). */
+  if (!creds) return <p className="pbnone">{s.credsLoading ? '…' : t('gui.pb.cred_none')}</p>
+  const oauthServers = creds.servers.filter((sv) => sv.auth === 'oauth')
+  return (
+    <>
+      <p className="pbsum">{t('gui.pb.cred_intro')}</p>
+      {creds.params.length ? (
+        <section className="pbsec">
+          <h2>{t('gui.pb.cred_sec_params')}</h2>
+          <table className="pbtbl">
+            <tbody>
+              {creds.params.map((p) => (
+                <SecretRow key={p.name} row={p} busy={!!s.busy['p:' + p.name]} />
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ) : null}
+      {oauthServers.length ? (
+        <section className="pbsec">
+          <h2>{t('gui.pb.cred_sec_servers')}</h2>
+          <table className="pbtbl">
+            <tbody>
+              {oauthServers.map((sv) => (
+                <OauthRow
+                  key={sv.name}
+                  row={sv}
+                  url={s.authUrls[sv.name]}
+                  busy={!!s.busy['s:' + sv.name]}
+                  carried={detail.mcp_servers?.[sv.name]}
+                />
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ) : null}
+    </>
+  )
+}
+
+function SecretRow({ row, busy }: { row: PlaybookCredentialParam; busy: boolean }): JSX.Element {
+  const box = useRef<HTMLInputElement>(null)
+  const save = (): void => {
+    const v = (box.current?.value || '').trim()
+    if (!v) {
+      box.current?.focus()
+      return
+    }
+    void store.saveSecret(row.name, v)
+    if (box.current) box.current.value = ''
+  }
+  return (
+    <tr>
+      <td className="nm">
+        {row.name}
+        <span className={'tag' + (row.set ? '' : ' warn')}>{t(row.set ? 'gui.pb.cred_set' : 'gui.pb.cred_unset')}</span>
+      </td>
+      <td className="ds">{row.description}</td>
+      <td className="ds">
+        <input
+          ref={box}
+          type="password"
+          autoComplete="off"
+          aria-label={row.name}
+          disabled={busy}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save()
+          }}
+        />
+        <button className="mini gold" disabled={busy} onClick={save}>
+          {t(row.set ? 'gui.pb.cred_replace' : 'gui.pb.cred_save')}
+        </button>
+        {row.set ? (
+          <button className="mini ghost" disabled={busy} onClick={() => void store.clearSecret(row.name)}>
+            {t('gui.pb.cred_clear')}
+          </button>
+        ) : null}
+      </td>
+    </tr>
+  )
+}
+
+function OauthRow({
+  row,
+  url,
+  busy,
+  carried
+}: {
+  row: PlaybookCredentialServer
+  url: string | undefined
+  busy: boolean
+  carried: NonNullable<PlaybookDetail['mcp_servers']>[string] | undefined
+}): JSX.Element {
+  return (
+    <tr className={row.enabled ? undefined : 'dim'}>
+      <td className="nm">
+        {row.name}
+        <span className={'tag' + (row.authorized ? '' : ' warn')}>
+          {t(row.authorized ? 'gui.pb.cred_authorized' : 'gui.pb.cred_unauthorized')}
+        </span>
+        {row.enabled ? null : <span className="tag warn">{t('gui.pb.cred_disabled')}</span>}
+        {/* The same name exists among the host's servers. Said here because
+            authorizing the host's copy does nothing for this playbook's runs --
+            the carried definition wins, and its tokens live under this
+            playbook. */}
+        {row.shadows_host ? <span className="tag">{t('gui.pb.cred_shadows_host')}</span> : null}
+      </td>
+      <td className="ds">{carried?.url || ''}</td>
+      <td className="ds">
+        <button className="mini gold" disabled={busy} onClick={() => void store.authorize(row.name)}>
+          {t(row.authorized ? 'gui.pb.cred_reauthorize' : 'gui.pb.cred_authorize')}
+        </button>
+        {row.authorized ? (
+          <button className="mini ghost" disabled={busy} onClick={() => void store.clearOauth(row.name)}>
+            {t('gui.pb.cred_clear')}
+          </button>
+        ) : null}
+        {url ? (
+          <span className="en">
+            {t('gui.pb.cred_authorizing')}{' '}
+            <a href={url} target="_blank" rel="noreferrer">
+              {t('gui.pb.cred_open_link')}
+            </a>
+          </span>
+        ) : null}
+      </td>
+    </tr>
   )
 }
 

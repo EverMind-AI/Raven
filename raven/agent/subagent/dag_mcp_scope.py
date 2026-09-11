@@ -38,7 +38,7 @@ other run's.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -46,11 +46,34 @@ from raven.config.schema import MCPServerConfig
 
 _EMPTY: Mapping[str, MCPServerConfig] = {}
 
-_RUN_SERVERS: ContextVar[Mapping[str, MCPServerConfig]] = ContextVar("dag_run_mcp_servers", default=_EMPTY)
+
+# A callable, not a mapping: the definitions are re-rendered on every read, so a
+# credential stored after the run started reaches a node that is re-dispatched
+# (``continue``) without anyone re-entering the scope. The background task a
+# dispatch leaves behind copied this context, so it holds the callable and calls
+# it fresh each time.
+_RUN_SERVERS: ContextVar[Callable[[], Mapping[str, MCPServerConfig]]] = ContextVar(
+    "dag_run_mcp_servers", default=lambda: _EMPTY
+)
+# The playbook whose credentials the run's definitions may use, or None for a
+# run that carries none. Read where an OAuth server is dialled or its tokens
+# are looked for, so a carried server never touches the host's token file.
+_RUN_SCOPE: ContextVar[str | None] = ContextVar("dag_run_mcp_scope", default=None)
+# The run's carried servers whose credential reference did not resolve. Read
+# where a grant is decided, so such a server is reported as not delivered with
+# the sentence that says where the credential is set, rather than handed over
+# to 401 on its first call. A callable for the same reason the definitions are:
+# a credential stored mid-run must change the answer for a continued node.
+_RUN_GAPS: ContextVar[Callable[[], frozenset[str]]] = ContextVar("dag_run_mcp_gaps", default=frozenset)
 
 
 @contextmanager
-def run_mcp_scope(servers: Mapping[str, MCPServerConfig] | None) -> Iterator[None]:
+def run_mcp_scope(
+    servers: Mapping[str, MCPServerConfig] | Callable[[], Mapping[str, MCPServerConfig]] | None,
+    *,
+    scope: str | None = None,
+    credential_gaps: "Callable[[], frozenset[str]] | None" = None,
+) -> Iterator[None]:
     """Make ``servers`` resolvable by name for the duration of one run.
 
     Entries that are not already validated :class:`MCPServerConfig` objects are
@@ -61,17 +84,37 @@ def run_mcp_scope(servers: Mapping[str, MCPServerConfig] | None) -> Iterator[Non
     a stdio definition is a command line. Wire data cannot arrive as a
     ``MCPServerConfig`` instance, so requiring one is the whole gate.
     """
-    scoped = {name: cfg for name, cfg in (servers or {}).items() if isinstance(cfg, MCPServerConfig)}
-    token = _RUN_SERVERS.set(scoped or _EMPTY)
+    render: Callable[[], Mapping[str, MCPServerConfig]] = servers if callable(servers) else (lambda: servers or {})
+
+    def guarded() -> Mapping[str, MCPServerConfig]:
+        # The gate holds on every read, not only at entry: a callable is where a
+        # later reader could otherwise slip an unvalidated definition in.
+        return {name: cfg for name, cfg in (render() or {}).items() if isinstance(cfg, MCPServerConfig)}
+
+    token = _RUN_SERVERS.set(guarded)
+    scope_token = _RUN_SCOPE.set(scope)
+    gaps_token = _RUN_GAPS.set(credential_gaps or frozenset)
     try:
         yield
     finally:
+        _RUN_GAPS.reset(gaps_token)
+        _RUN_SCOPE.reset(scope_token)
         _RUN_SERVERS.reset(token)
 
 
 def run_mcp_servers() -> Mapping[str, MCPServerConfig]:
-    """This run's own definitions, empty outside a run."""
-    return _RUN_SERVERS.get()
+    """This run's own definitions as they read right now, empty outside a run."""
+    return _RUN_SERVERS.get()()
 
 
-__all__ = ["run_mcp_scope", "run_mcp_servers"]
+def run_mcp_credential_scope() -> str | None:
+    """The credential scope of the run in progress, None outside one or for a run with none."""
+    return _RUN_SCOPE.get()
+
+
+def run_mcp_credential_gaps() -> frozenset[str]:
+    """This run's carried servers whose credential is not set on this machine."""
+    return _RUN_GAPS.get()()
+
+
+__all__ = ["run_mcp_credential_gaps", "run_mcp_credential_scope", "run_mcp_scope", "run_mcp_servers"]

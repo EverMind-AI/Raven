@@ -1421,6 +1421,26 @@ lands on one, and is recorded on the call's tool.call span as
 wait on a human, and answers with a full ToolResult.
 _Avoid_: "tool gate" for this -- that name is the plugin paper's.
 
+**Credential scope**:
+Which credential store an MCP server's secrets are read from and written to.
+`None` is the host's own -- `<credentials>/mcp/<server>.json` for OAuth tokens,
+`tools.mcpServers` for everything else. A playbook that carries its own servers
+passes `playbooks/<playbook>` (`raven.playbook.credentials.credential_scope`),
+so its tokens land in `<credentials>/playbooks/<playbook>/mcp/<server>.json` and
+its `secret` params in `params.json` beside them, both 0600. It travels as
+`scope=` on `credentials_path` / `FileTokenStorage` / `provider_for` /
+`has_stored_tokens` / `delete_credentials`, as `credential_scope` on
+`MCPConnectionManager` (a name, or a callable answering per server when one
+manager dials host and carried servers side by side), and as `scope` on
+`McpServerView` / `GrantedServer` / `MissingServer` so a grant hands the bridge
+endpoint the scope its upstream was dialled under. Exists because a carried
+server may shadow a host server of the same name: keyed by name alone, a
+carried `sentry` would read and overwrite the host's `sentry.json`.
+_Avoid_: "OAuth scope" for this. That is the permission list an authorization
+server grants (`oauth.scopes`, `scopes_supported` in `mcp/oauth.py`) and is a
+different axis entirely -- a credential scope says *where the token is kept*, an
+OAuth scope says *what the token may do*.
+
 **Permission Mode**:
 How the gate reads the ask tier, and only the ask tier: `ask` prompts a human
 for everything in it, `smart` has an LLM reviewer (`permissions/judge.py`,

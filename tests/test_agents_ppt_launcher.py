@@ -1061,7 +1061,7 @@ def test_copying_a_published_deck_is_not_denied():
     with the refusal as its answer. What defends delivery now is the publish record:
     the hook announces only decks whose sha256 the publish step wrote (see
     test_ppt_engine_plugin), so a copy is harmless and the exec policy is the trunk's own."""
-    from raven.permissions.shell_policy import CommandDecision, ShellCommandPolicy
+    from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
 
     config = json.loads((RUN_PY.parent / "config.json").read_text())
     assert "extraDenyPatterns" not in config["tools"]["exec"]

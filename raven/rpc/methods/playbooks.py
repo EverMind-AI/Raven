@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 if TYPE_CHECKING:
     from raven.playbook import PlaybookSpec, PlaybookStore
     from raven.rpc.dispatcher import Dispatcher
@@ -199,13 +201,174 @@ async def playbooks_get(params: dict) -> dict:
     }
 
 
+# ── playbooks.credentials.* / playbooks.oauth.* ─────────────────────────────
+#
+# The machine-held half of a carried server's credential (raven/playbook/
+# credentials.py). Nothing here returns a secret's value: ``get`` says which
+# params are set and which OAuth servers hold tokens, and that is all a page
+# needs to draw the tab.
+
+
+def _spec_or_raise(name: str):
+    from raven.rpc.errors import ConfigValidationError
+
+    name = str(name or "").strip()
+    if not name:
+        raise ConfigValidationError("name is required")
+    store = _store()
+    if store.origin_of(name) is None:
+        raise ConfigValidationError(f"no playbook named {name}")
+    return store.load(name)
+
+
+async def playbooks_credentials_get(params: dict) -> dict:
+    """Which of a playbook's secret params and OAuth servers this machine holds -- never the values."""
+    from raven.playbook.credentials import has_oauth_tokens, stored_secret_param_names
+    from raven.playbook.params import secret_param_names
+
+    spec = _spec_or_raise(params.get("name"))
+    stored = stored_secret_param_names(spec.name)
+    host_names = set(_host_mcp_server_names())
+    return {
+        "params": [
+            {"name": pname, "set": pname in stored, "description": spec.params[pname].description}
+            for pname in sorted(secret_param_names(spec))
+        ],
+        "servers": [
+            {
+                "name": sname,
+                "auth": cfg.auth,
+                "enabled": cfg.enabled,
+                "authorized": bool(cfg.auth == "oauth" and has_oauth_tokens(sname, spec.name)),
+                "shadows_host": sname in host_names,
+            }
+            for sname, cfg in sorted((spec.mcp_servers or {}).items())
+        ],
+    }
+
+
+def _host_mcp_server_names() -> list[str]:
+    try:
+        from raven.config.loader import load_config
+
+        return list((load_config().tools.mcp_servers or {}).keys())
+    except Exception:  # noqa: BLE001 - a page without a readable host config still gets the tab
+        return []
+
+
+async def playbooks_credentials_set(params: dict) -> dict:
+    """Store one secret param's value for a playbook. Refused for a param the spec does not declare secret."""
+    from raven.playbook.credentials import set_secret_param
+    from raven.rpc.errors import ConfigValidationError
+
+    spec = _spec_or_raise(params.get("name"))
+    pname = str(params.get("param") or "").strip()
+    declared = spec.params.get(pname)
+    if declared is None or declared.type != "secret":
+        raise ConfigValidationError(f"{spec.name} declares no secret param named {pname or '<empty>'}")
+    value = params.get("value")
+    if not isinstance(value, str) or not value:
+        raise ConfigValidationError("value is required")
+    set_secret_param(spec.name, pname, value)
+    return {"ok": True}
+
+
+async def playbooks_credentials_clear(params: dict) -> dict:
+    from raven.playbook.credentials import clear_secret_param
+
+    spec = _spec_or_raise(params.get("name"))
+    pname = str(params.get("param") or "").strip()
+    if pname:
+        clear_secret_param(spec.name, pname)
+    return {"ok": True}
+
+
+def _carried_oauth_server(spec, server: str):
+    from raven.rpc.errors import ConfigValidationError
+
+    cfg = (spec.mcp_servers or {}).get(server)
+    if cfg is None:
+        raise ConfigValidationError(f"{spec.name} carries no MCP server named {server or '<empty>'}")
+    if cfg.auth != "oauth":
+        raise ConfigValidationError(f"{server} has auth={cfg.auth!r}; only an oauth server can be authorized")
+    return cfg
+
+
+async def playbooks_oauth_authorize(params: dict) -> dict:
+    """Start the browser OAuth flow for a carried server, under the playbook's own credential scope.
+
+    A throwaway manager rather than the host's: the host's is keyed by bare
+    server name, and a carried server may shadow a host server of that name.
+    The call answers within ``_AUTHORIZE_WAIT_S`` with what the connect reached
+    -- usually the URL it parked on, which the page shows; the flow itself keeps
+    running behind the answer and the tokens land in the scoped file.
+    """
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.market.connect import PlugConnectError, await_authorization
+    from raven.mcp.manager import MCPConnectionManager
+    from raven.mcp.oauth import pending_url
+    from raven.playbook.credentials import credential_scope
+
+    spec = _spec_or_raise(params.get("name"))
+    server = str(params.get("server") or "").strip()
+    cfg = _carried_oauth_server(spec, server)
+    manager = MCPConnectionManager(ToolRegistry(), credential_scope=credential_scope(spec.name))
+
+    async def _connect_then_close() -> dict:
+        try:
+            return await manager.connect(server, cfg, interactive=True)
+        finally:
+            await manager.aclose()
+
+    # The same wait ``plug.auth`` gets, and the failure reported the way this
+    # method already reports a degraded state: in ``error``. Raising instead
+    # loses the diagnostic at the wire, where a frame carries the code name in
+    # ``message`` and the reason in ``data`` -- and the page toasts
+    # ``message``, so the reader would see ``config_validation_error`` where the
+    # truth is "the sandbox could not start".
+    try:
+        snap = await await_authorization(manager, server, _connect_then_close)
+    except PlugConnectError as e:
+        logger.warning("playbooks.oauth.authorize: {!r} failed: {}", server, e.detail)
+        return {"server": server, "state": "error", "auth_url": None, "error": e.detail}
+    except Exception as e:  # noqa: BLE001 - the reason is the whole point of catching it
+        logger.warning("playbooks.oauth.authorize: {!r} failed: {}", server, e)
+        return {"server": server, "state": "error", "auth_url": None, "error": str(e)}
+    return {
+        "server": server,
+        "state": (snap or {}).get("state") or "connecting",
+        "auth_url": pending_url(server),
+        "error": (snap or {}).get("error"),
+    }
+
+
+async def playbooks_oauth_clear(params: dict) -> dict:
+    from raven.playbook.credentials import clear_oauth_tokens
+
+    spec = _spec_or_raise(params.get("name"))
+    server = str(params.get("server") or "").strip()
+    _carried_oauth_server(spec, server)
+    clear_oauth_tokens(server, spec.name)
+    return {"ok": True}
+
+
 def register_playbooks_methods(dispatcher: Dispatcher) -> None:
     dispatcher.register("playbooks.list", playbooks_list)
     dispatcher.register("playbooks.get", playbooks_get)
+    dispatcher.register("playbooks.credentials.get", playbooks_credentials_get)
+    dispatcher.register("playbooks.credentials.set", playbooks_credentials_set)
+    dispatcher.register("playbooks.credentials.clear", playbooks_credentials_clear)
+    dispatcher.register("playbooks.oauth.authorize", playbooks_oauth_authorize)
+    dispatcher.register("playbooks.oauth.clear", playbooks_oauth_clear)
 
 
 __all__ = [
+    "playbooks_credentials_clear",
+    "playbooks_credentials_get",
+    "playbooks_credentials_set",
     "playbooks_get",
     "playbooks_list",
+    "playbooks_oauth_authorize",
+    "playbooks_oauth_clear",
     "register_playbooks_methods",
 ]
