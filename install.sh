@@ -6,6 +6,8 @@
 #
 # A piped run always installs the published release wheel, even from inside a
 # clone. Set RAVEN_LOCAL_SRC=<dir> to force an editable install of a checkout.
+# Set RAVEN_MINIMAL=1 to skip the chromium download and the LibreOffice offer;
+# the wheel install itself is unchanged.
 #
 # Goal: a clean machine ends up able to run `raven` / `raven tui` from any
 # directory with no manual steps. The script is idempotent -- it detects what
@@ -13,6 +15,8 @@
 #   1. uv            (Python toolchain + package manager)
 #   2. Node.js >= 22 (TUI runtime; installed privately if the system lacks it)
 #   3. raven         (installed as a global uv tool -> ~/.local/bin/raven)
+#   4. chromium      (browser-tool runtime; downloaded by playwright)
+#   5. LibreOffice   (deck preview; installed on macOS, offered on Linux)
 #
 # POSIX sh on purpose (runs under dash/ash, not just bash).
 set -eu
@@ -409,6 +413,95 @@ install_raven() {
   ok "raven installed"
 }
 
+# --- 4. optional capabilities: browser + LibreOffice -------------------------
+# Both installs are best-effort: raven itself is already installed by the time
+# they run, so a failed download or a declined offer must never abort a
+# completed install. RAVEN_MINIMAL skips both.
+
+install_browser() {
+  # The browser tool drives chromium through the playwright library inside the
+  # raven tool venv, so both the probe and the download must use that venv's
+  # python -- the system python knows nothing about this install.
+  py="$(uv tool dir 2>/dev/null || true)/raven/bin/python"
+  if [ ! -x "$py" ]; then
+    warn "raven tool venv python not found; skipping the chromium download."
+    return 0
+  fi
+  # A pinned RAVEN_WHEEL_URL and the release-page fallback install no engine
+  # wheels, so playwright can be absent even after a green install.
+  if ! "$py" -c "import playwright" 2>/dev/null; then
+    warn "This install carries no browser library (a pinned wheel URL or the release-page fallback installs no engines); the browser tool stays off."
+    return 0
+  fi
+  info "Downloading chromium for the browser tool..."
+  # On Linux chromium may additionally need system libraries; playwright prints
+  # the exact sudo command for them (--with-deps). We never run sudo ourselves.
+  "$py" -m playwright install chromium \
+    || warn "Chromium download failed; the browser tool stays off. Retry later with: $py -m playwright install chromium"
+}
+
+install_office() {
+  # soffice and libreoffice are the two launcher names the runtime resolves
+  # (raven/utils/office.py); either one means deck preview already works.
+  have soffice && return 0
+  have libreoffice && return 0
+  case "$NODE_OS" in
+    darwin)
+      if have brew; then
+        info "Installing LibreOffice (deck preview)..."
+        # A cask needs no sudo, so install directly rather than prompting.
+        brew install --cask libreoffice \
+          || warn "LibreOffice install failed; deck preview stays off. Retry later with: brew install --cask libreoffice"
+      else
+        warn "LibreOffice not found; deck preview stays off. Install it later with: brew install --cask libreoffice"
+      fi
+      ;;
+    linux)
+      if ! have apt-get; then
+        warn "LibreOffice not found; deck preview stays off. Install it with your system package manager (package: libreoffice)."
+        return 0
+      fi
+      # Installing needs sudo, so ask first -- and under `curl | sh` stdin is
+      # the script itself, so the answer must come from the terminal. No
+      # terminal (CI, piped, cron) means skip cleanly, never hang on a prompt.
+      if [ ! -e /dev/tty ] || ! have sudo; then
+        warn "LibreOffice not found; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+        return 0
+      fi
+      printf 'Install LibreOffice for deck preview (needs sudo)? [y/N] '
+      answer=""
+      read -r answer < /dev/tty || answer=""
+      case "$answer" in
+        y|Y)
+          # sudo's password prompt also reads stdin: give it the tty too.
+          # shellcheck disable=SC2024  # input redirect on purpose; opening /dev/tty needs no elevation.
+          sudo apt-get install -y libreoffice < /dev/tty \
+            || warn "LibreOffice install failed; deck preview stays off. Retry later with: sudo apt-get install -y libreoffice"
+          ;;
+        *)
+          warn "Skipping LibreOffice; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+          ;;
+      esac
+      ;;
+  esac
+}
+
+# --- 5. capability summary ---------------------------------------------------
+# One mouth for what actually landed: `raven doctor --install-summary` reads
+# only what is importable/installed, needs no config, and always exits 0. The
+# raven shim lands in `uv tool dir --bin`, which this shell's PATH may not
+# carry yet, so invoke it by absolute path. Purely informational -- the caller
+# guards the whole call so it can never fail a completed install.
+print_capability_summary() {
+  bin="$(uv tool dir --bin 2>/dev/null || true)/raven"
+  [ -x "$bin" ] || bin="$HOME/.local/bin/raven"
+  [ -x "$bin" ] || return 0
+  printf '\n'
+  info "Capabilities:"
+  "$bin" doctor --install-summary \
+    || warn "capability summary unavailable (raven doctor failed)"
+}
+
 # --- main ------------------------------------------------------------------
 main() {
   have curl || die "curl is required; please install it first"
@@ -423,6 +516,11 @@ main() {
   ensure_uv
   ensure_node
   install_raven
+
+  # The summary is not gated: a minimal install still sees what it skipped.
+  [ -n "${RAVEN_MINIMAL:-}" ] || install_browser
+  [ -n "${RAVEN_MINIMAL:-}" ] || install_office
+  print_capability_summary || true
 
   printf '\n'
   if [ "$had_config" = 1 ]; then
