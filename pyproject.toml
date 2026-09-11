@@ -66,6 +66,9 @@ dependencies = [
     # retrieval keeps working if that chain ever changes.
     "lancedb>=0.33,<1.0",
     "ripgrep-bin>=15.2.0,<16.0.0",
+    "aiohttp>=3.13.4",
+    "click>=8.1",
+    "pyarrow>=17",
 ]
 
 [project.optional-dependencies]
@@ -236,6 +239,52 @@ constraint-dependencies = [
 # the raven package, so a member is installed into the dev environment (as a
 # dev dependency) and published on its own.
 members = ["plugins-dist/*"]
+
+[tool.deptry]
+# Only DEP003 is a gate. It catches a direct import of a package that only
+# reaches us through someone else's dependency table: the day that package
+# drops it, the install stops carrying it and raven fails at import time, far
+# from the cause. pyproject already carried three hand-written pins against
+# exactly this ("transitive dep of litellm -- pinning it directly so ..."), so
+# this rule is that habit automated rather than a new policy.
+#
+# DEP001 is on beside it, and the two only work together. deptry classifies from
+# installed distribution metadata, so a package that is not present is reported
+# as missing rather than transitive: with DEP001 off, an import of anything the
+# environment does not carry passed silently -- the very hole this gate exists to
+# close. That is also why lint-deps runs under --all-extras; the optional channel
+# adapters are absent from a plain dev sync, and their imports would land in the
+# same blind spot. With every extra installed, deptry resolves nio, botpy and
+# socketio to their distributions on its own, so no package_module_name_map is
+# needed.
+#
+# DEP002 stays off: it would report the deliberate pins above as unused
+# dependencies, which is the opposite of their intent.
+ignore = ["DEP002", "DEP004"]
+
+# Three imports are deliberately guarded rather than declared, and the exemption
+# has to name both rules. deptry classifies from installed distribution metadata,
+# so one guarded import reads as DEP003 while something else happens to pull the
+# package in and as DEP001 the day nothing does -- one condition, two spellings.
+# Listing only DEP003 would turn an upstream dropping the package into a red
+# gate here instead of the shrug the guard was written for.
+#
+# raven_everos: the everos memory backend is its own distribution, discovered
+#   through the raven.plugins entry-point group. Every import of it is inside a
+#   function for that reason; declaring it would turn an optional plugin into a
+#   hard runtime requirement.
+# requests: probed under `try: import ... except ImportError` in
+#   channels/errors.py so that, when the host happens to carry it, its
+#   connection errors join the transient set. Absent, the set is smaller and
+#   nothing breaks.
+# cryptography: fallback AES path in the weixin adapter, reached under
+#   `with suppress(ImportError)` when pycryptodome is not present.
+#
+# The list is per-module, not per-file, so a later unguarded import of any other
+# package is still caught by both rules.
+[tool.deptry.per_rule_ignores]
+DEP001 = ["raven_everos", "requests", "cryptography"]
+DEP003 = ["raven_everos", "requests", "cryptography"]
 
 [tool.ruff]
 line-length = 120
@@ -413,6 +462,7 @@ output = "coverage.json"
 
 [dependency-groups]
 dev = [
+    "deptry>=0.25.1",
     "grimp>=3.16",
     "hatchling>=1.32.0",
     "import-linter>=2.14",

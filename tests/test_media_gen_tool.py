@@ -11,6 +11,7 @@ prefix test against ``api_base``, which is host-substitutable as soon as
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import wave
@@ -251,6 +252,284 @@ async def test_a_chat_routed_image_model_still_takes_chat_completions(monkeypatc
     tool = _image_tool(monkeypatch, handler, model="google/gemini-2.5-flash-image", workspace=tmp_path / "ws")
     assert json.loads(await tool.execute("a poster"))["success"]
     assert seen == ["/api/v1/chat/completions"]
+
+
+# ── the image path: several pictures in one call ──
+
+
+def _chat_reply(*, count: int = 1) -> dict:
+    return {"choices": [{"message": {"images": [{"image_url": {"url": "data:image/png;base64," + _B64}}] * count}}]}
+
+
+def _prompt_of(request: httpx.Request) -> str:
+    content = json.loads(request.content)["messages"][0]["content"]
+    return content if isinstance(content, str) else content[0]["text"]
+
+
+async def test_one_prompt_still_answers_exactly_the_way_it_always_did(monkeypatch, tmp_path) -> None:
+    """The single-prompt form is what every existing caller sends, the deck engine
+    included; a batch answer reaching it would be read as a failed generation."""
+    tool = _image_tool(
+        monkeypatch,
+        lambda _r: httpx.Response(200, json=_chat_reply()),
+        model="google/gemini-2.5-flash-image",
+        workspace=tmp_path / "ws",
+    )
+
+    out = json.loads(await tool.execute("a poster"))
+
+    assert set(out) == {"success", "model", "quality", "paths"}
+    assert out["success"] and len(out["paths"]) == 1
+    # A prompts list carrying exactly one picture is the same one ask, so it is
+    # answered in the same shape rather than as a batch of one.
+    single = json.loads(await tool.execute(prompts=[{"prompt": "a poster"}]))
+    assert set(single) == {"success", "model", "quality", "paths"}
+
+
+async def test_a_batch_comes_back_as_every_path_in_one_call(monkeypatch, tmp_path) -> None:
+    asked: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(_prompt_of(request))
+        return httpx.Response(200, json=_chat_reply())
+
+    tool = _image_tool(monkeypatch, handler, model="google/gemini-2.5-flash-image", workspace=tmp_path / "ws")
+    out = json.loads(
+        await tool.execute(prompts=[{"prompt": "cover"}, {"prompt": "chapter one"}, {"prompt": "closing"}])
+    )
+
+    assert sorted(asked) == ["chapter one", "closing", "cover"]
+    assert out["success"] and len(out["paths"]) == 3 and "failed" not in out
+    assert [item["index"] for item in out["results"]] == [0, 1, 2]
+    assert [item["prompt"] for item in out["results"]] == ["cover", "chapter one", "closing"]
+    assert [len(item["paths"]) for item in out["results"]] == [1, 1, 1]
+    assert all(Path(p).read_bytes() == _PNG for p in out["paths"])
+
+
+async def test_a_top_level_prompt_is_generated_as_the_first_picture_of_the_batch(monkeypatch, tmp_path) -> None:
+    tool = _image_tool(
+        monkeypatch,
+        lambda _r: httpx.Response(200, json=_chat_reply()),
+        model="google/gemini-2.5-flash-image",
+        workspace=tmp_path / "ws",
+    )
+
+    out = json.loads(await tool.execute("cover", prompts=[{"prompt": "closing"}]))
+
+    assert [item["prompt"] for item in out["results"]] == ["cover", "closing"]
+
+
+async def test_one_picture_failing_does_not_take_the_batch_with_it(monkeypatch, tmp_path) -> None:
+    """The reason a batch exists is that eight pictures are one wait; a ninth that
+    the provider refuses must not throw the eight away."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _prompt_of(request) == "chapter one":
+            return httpx.Response(500, text="upstream exploded")
+        return httpx.Response(200, json=_chat_reply())
+
+    tool = _image_tool(monkeypatch, handler, model="google/gemini-2.5-flash-image", workspace=tmp_path / "ws")
+    out = json.loads(
+        await tool.execute(prompts=[{"prompt": "cover"}, {"prompt": "chapter one"}, {"prompt": "closing"}])
+    )
+
+    assert out["success"] and out["failed"] == 1
+    assert len(out["paths"]) == 2
+    assert "paths" in out["results"][0] and "paths" in out["results"][2]
+    assert "500" in out["results"][1]["error"] and "paths" not in out["results"][1]
+    assert "1 of 3" in out["note"]
+
+
+async def test_a_picture_that_raises_is_that_picture_s_answer(monkeypatch, tmp_path) -> None:
+    """A reference outside a confined workspace raises rather than returning; the
+    batch gathers the exception as one result instead of losing every sibling."""
+    outside = tmp_path / "out.png"
+    outside.write_bytes(_PNG)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    tool = _image_tool(
+        monkeypatch,
+        lambda _r: httpx.Response(200, json=_chat_reply()),
+        model="google/gemini-2.5-flash-image",
+        workspace=workspace,
+    )
+    tool._restrict_to_workspace = True
+
+    out = json.loads(await tool.execute(prompts=[{"prompt": "cover"}, {"prompt": "logo", "images": [str(outside)]}]))
+
+    assert out["success"] and out["failed"] == 1 and len(out["paths"]) == 1
+    assert "outside the workspace" in out["results"][1]["error"]
+
+
+async def test_the_pictures_of_a_batch_are_in_flight_at_once(monkeypatch, tmp_path) -> None:
+    """Serially, eight backdrops measured 645 seconds of pure waiting. What makes a
+    batch worth having is that the calls overlap, so that is what is asserted."""
+    inflight, peak = 0, 0
+    released = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        if inflight >= 3:
+            released.set()
+        await released.wait()
+        inflight -= 1
+        return httpx.Response(200, json=_chat_reply())
+
+    tool = _image_tool(monkeypatch, handler, model="google/gemini-2.5-flash-image", workspace=tmp_path / "ws")
+    out = json.loads(
+        await asyncio.wait_for(
+            tool.execute(prompts=[{"prompt": "one"}, {"prompt": "two"}, {"prompt": "three"}]), timeout=10
+        )
+    )
+
+    assert peak == 3 and len(out["paths"]) == 3
+
+
+async def test_more_pictures_than_the_cap_wait_their_turn(monkeypatch, tmp_path) -> None:
+    """One key answers a wide fan-out with 429s, so the batch holds at
+    _BATCH_CONCURRENCY in flight and the rest queue behind it."""
+    inflight, peak = 0, 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        await asyncio.sleep(0.01)
+        inflight -= 1
+        return httpx.Response(200, json=_chat_reply())
+
+    tool = _image_tool(monkeypatch, handler, model="google/gemini-2.5-flash-image", workspace=tmp_path / "ws")
+    out = json.loads(await tool.execute(prompts=[{"prompt": f"page {i}"} for i in range(9)]))
+
+    assert len(out["paths"]) == 9
+    assert peak == media_gen._BATCH_CONCURRENCY
+
+
+async def test_a_picture_overrides_only_what_it_names(monkeypatch, tmp_path) -> None:
+    """The call's aspect_ratio and quality are the batch's; an item that names its
+    own overrules them for itself alone."""
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(monkeypatch, handler, model="openai/gpt-image-2", workspace=tmp_path / "ws")
+    out = json.loads(
+        await tool.execute(
+            aspect_ratio="16:9",
+            quality="low",
+            prompts=[{"prompt": "wide"}, {"prompt": "tall", "aspect_ratio": "3:4", "quality": "high"}],
+        )
+    )
+
+    assert len(out["paths"]) == 2
+    sent = {body["prompt"]: (body["aspect_ratio"], body["quality"]) for body in seen}
+    assert sent == {"wide": ("16:9", "low"), "tall": ("3:4", "high")}
+
+
+async def test_a_named_file_keeps_its_name_and_cannot_leave_the_output_dir(monkeypatch, tmp_path) -> None:
+    """A batch of eight uuid-named files tells the caller nothing about which is
+    which. The name is the model's, so a directory inside it is dropped."""
+    tool = _image_tool(
+        monkeypatch,
+        lambda _r: httpx.Response(200, json=_chat_reply(count=2)),
+        model="google/gemini-2.5-flash-image",
+        workspace=tmp_path / "ws",
+    )
+
+    out = json.loads(
+        await tool.execute(
+            output_dir="art",
+            prompts=[{"prompt": "cover", "filename": "cover.png"}, {"prompt": "end", "filename": "../../escape.png"}],
+        )
+    )
+
+    made = sorted(Path(p) for p in out["paths"])
+    assert [p.name for p in made] == ["cover-2.png", "cover.png", "escape-2.png", "escape.png"]
+    assert {p.parent for p in made} == {(tmp_path / "ws" / "art").resolve()}
+
+
+def _distinct_payloads(monkeypatch, tmp_path, *, workspace: str = "ws"):
+    """Every answer carries a different picture, so a file written over is visible
+    as content that went missing rather than only as a path returned twice."""
+    seen = {"n": 0}
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        seen["n"] += 1
+        payload = base64.b64encode(f"picture-{seen['n']}".encode()).decode()
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"images": [{"image_url": {"url": "data:image/png;base64," + payload}}]}}]},
+        )
+
+    return _image_tool(monkeypatch, handler, model="google/gemini-2.5-flash-image", workspace=tmp_path / workspace)
+
+
+async def test_one_filename_shared_by_a_batch_still_makes_a_file_each(monkeypatch, tmp_path) -> None:
+    """The call's top-level `filename` falls through to every item that named none,
+    so the whole batch aimed at one path and all but the last picture was written
+    over -- with the same path handed back for each of them."""
+    tool = _distinct_payloads(monkeypatch, tmp_path)
+
+    out = json.loads(await tool.execute(filename="shared.png", prompts=[{"prompt": "one"}, {"prompt": "two"}]))
+
+    assert [Path(p).name for p in out["paths"]] == ["shared.png", "shared-2.png"]
+    made = tmp_path / "ws" / "generated"
+    assert (made / "shared.png").read_bytes() == b"picture-1"
+    assert (made / "shared-2.png").read_bytes() == b"picture-2"
+
+
+async def test_two_items_asking_for_one_name_are_told_apart_by_their_place(monkeypatch, tmp_path) -> None:
+    """Naming the same file twice collides the same way. The picture that keeps the
+    bare name is the earlier one in `prompts` rather than whichever answered first,
+    and the one that moves takes the number of its place in the batch -- the same
+    number its `results` entry is filed under -- so the suffix says which prompt it
+    came from. A name only one picture asked for is left exactly as it was asked."""
+    tool = _distinct_payloads(monkeypatch, tmp_path)
+
+    out = json.loads(
+        await tool.execute(
+            prompts=[
+                {"prompt": "a", "filename": "dup.png"},
+                {"prompt": "b", "filename": "keep.png"},
+                {"prompt": "c", "filename": "dup.png"},
+            ]
+        )
+    )
+
+    assert [Path(p).name for p in out["paths"]] == ["dup.png", "keep.png", "dup-3.png"]
+    assert [r["index"] for r in out["results"]] == [0, 1, 2]
+    assert len(set(out["paths"])) == 3
+
+
+async def test_a_name_already_on_disk_is_numbered_rather_than_written_over(monkeypatch, tmp_path) -> None:
+    """The uuid names this tool used before `filename` existed could never land on
+    anything; a name the caller chooses can, and the workspace it writes into is
+    the one the user keeps their own files in."""
+    tool = _distinct_payloads(monkeypatch, tmp_path)
+    settled = tmp_path / "ws" / "generated"
+    settled.mkdir(parents=True)
+    (settled / "hero.png").write_bytes(b"a file the user already had")
+
+    out = json.loads(await tool.execute(prompt="hero shot", filename="hero.png"))
+
+    assert [Path(p).name for p in out["paths"]] == ["hero-2.png"]
+    assert (settled / "hero.png").read_bytes() == b"a file the user already had"
+
+
+async def test_a_call_with_no_prompt_at_all_says_what_to_send(monkeypatch, tmp_path) -> None:
+    tool = _image_tool(
+        monkeypatch,
+        lambda _r: httpx.Response(200, json=_chat_reply()),
+        model="google/gemini-2.5-flash-image",
+        workspace=tmp_path / "ws",
+    )
+
+    assert "nothing to generate" in json.loads(await tool.execute())["error"]
+    assert "index 1" in json.loads(await tool.execute(prompts=[{"prompt": "a"}, {"prompt": "  "}]))["error"]
 
 
 # ── the speech path: what the stream carries, and what the file becomes ──
