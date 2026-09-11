@@ -12,10 +12,21 @@ history.
 
 - `MIT-hermes-agent.txt` - Hermes Agent license notice.
 - `MIT-ink.txt` - Ink license notice.
-- `MIT-lobe-icons.txt` - Lobe Icons 1.95.0 provider SVGs under `ui-web/src/assets/providers/`,
-  and twelve of the fourteen sub-agent brand marks under `ui-web/src/assets/agents/`. Those
-  twelve keep upstream's filenames, so each is byte-identical to the one
+- `MIT-cherry-studio.txt` - the provider and model brand marks under
+  `ui-web/src/assets/providers/`, taken from `@cherrystudio/ui`
+  (CherryHQ/cherry-studio, commit 6beb5e1b7e, 2026-09-07) at
+  `packages/ui/icons/{providers,models}/{light,dark}`. That package declares
+  MIT in its own `package.json` and README; the repository root is AGPL-3.0 and
+  does not reach it. Files are copied verbatim, so each is byte-identical to
+  the one upstream ships and the attribution is checkable with `cmp`. A
+  `<name>-dark.svg` is upstream's `dark/` drawing of the same mark.
+  The marks themselves are the vendors' trademarks, shown to identify the
+  vendor whose row they sit on and not modified.
+- `MIT-lobe-icons.txt` - twelve of the fourteen sub-agent brand marks under
+  `ui-web/src/assets/agents/`, and `providers/vllm.svg`. Those twelve keep
+  upstream's filenames, so each is byte-identical to the one
   `@lobehub/icons-static-svg@1.95.0` ships under that name and the attribution is checkable
   with `cmp` rather than by trust. `raven.svg` is this project's own mark, drawn here and
-  not upstream's, so no `cmp` applies to it.
+  not upstream's, so no `cmp` applies to it. The rest of `providers/` moved to the vendors'
+  own colour marks; see the Cherry Studio entry above.
 - `MIT-nanobot.txt` - Nanobot license notice.

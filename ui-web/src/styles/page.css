@@ -709,13 +709,28 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    selector still says which state it is. */
 .provider-status.on { width: 7px; height: 7px; border-radius: 50%; background: var(--moss); flex: none;
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--moss) 16%, transparent); }
-:root[data-theme="dark"] img.provider-icon { filter: invert(1); }
+/* The marks are the vendors' own colours now, so the blanket invert that used
+   to sit here is gone -- it would take every brand somewhere it does not go.
+   Two narrower answers replace it, both keyed to facts the mark carries.
+
+   A mark that ships the vendor's dark drawing renders both and shows one. The
+   pair is in the markup because which theme is on is a CSS question here:
+   nothing publishes it to React, and `system` follows the OS with no one told.
+
+   A mark drawn in black with no dark drawing of its own still needs lifting,
+   which is what `data-tone` says; `hybrid` rotates the hue back for the part of
+   the mark that is a real colour. Only two marks still take this path. */
+.mark-dark { display: none; }
+:root[data-theme="dark"] img.provider-icon[data-tone="mono"] { filter: invert(1); }
+:root[data-theme="dark"] img.provider-icon[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
+:root[data-theme="dark"] .mark-light { display: none; }
+:root[data-theme="dark"] .mark-dark { display: inline-block; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) img.provider-icon { filter: invert(1); }
+  :root:not([data-theme="light"]) img.provider-icon[data-tone="mono"] { filter: invert(1); }
+  :root:not([data-theme="light"]) img.provider-icon[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
+  :root:not([data-theme="light"]) .mark-light { display: none; }
+  :root:not([data-theme="light"]) .mark-dark { display: inline-block; }
 }
-/* Every mark in the bundle is monochrome, so every one of them inverts. The
-   exception that used to sit here was for NVIDIA's green drawing; the black one
-   that replaced it wants the same inversion as the rest. */
 
 /* Context is a quantity, so it gets a quantity's shape: a ring that fills --
    and only the ring. The fill and its colour already answer "is this fine?"

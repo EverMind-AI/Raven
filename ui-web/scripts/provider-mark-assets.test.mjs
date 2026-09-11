@@ -36,6 +36,12 @@ const mapValues = (name) => [...body(name, '{', '}').matchAll(/:\s*'([a-z0-9-]+)
 const patternValues = () => [...body('VENDOR_BY_NAME', '[', ']').matchAll(/,\s*'([a-z0-9-]+)'\]/g)].map((m) => m[1])
 
 const named = new Set([...mapValues('const ICONS'), ...mapValues('const VENDOR_ICONS'), ...patternValues()])
+/* A vendor's dark drawing is named by the pair set rather than by an icon map,
+   so it is folded in here under the one spelling the component builds. */
+const pairBlock = MARK.match(/const DARK_PAIRED = new Set\(\[([\s\S]*?)\]\)/)
+if (!pairBlock) throw new Error('DARK_PAIRED is gone from provider-mark.tsx')
+const paired = [...pairBlock[1].matchAll(/'([a-z0-9-]+)'/g)].map((m) => `${m[1]}-dark`)
+paired.forEach((name) => named.add(name))
 const onDisk = new Set(readdirSync(join(SRC, 'assets', 'providers')).map((f) => f.replace(/\.svg$/, '')))
 
 describe('provider logo assets', () => {

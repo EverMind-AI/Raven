@@ -25,14 +25,13 @@ const BRANDED = [
   'ai302', 'burncloud', 'ppio', 'sophnet', 'tokenhub',
 ]
 
-/* Resale gateways with no license-compatible logo: lobe-icons carries none,
-   and Cherry Studio's own drawings are AGPL-3.0 against this project's
-   Apache-2.0. They render the fallback initial, which the mark component
-   supports deliberately -- pinned here so the state is a decision on record
-   rather than a line somebody forgot. */
-const UNBRANDED = [
-  'dmxapi', 'ocoolai', 'lanyun', 'alayanew', 'xirang', 'ph8', 'aionly', 'radeon_cloud',
-]
+/* The two providers still without a mark, and why each stays that way. DMXAPI
+   publishes its logo as a bitmap wrapped in an SVG -- 140 KB for one row, and
+   nothing a scaling vector can be made from. AMD GPU Cloud has no mark in
+   either icon set. Both render the fallback initial, which the mark component
+   supports deliberately -- pinned here so the state reads as a decision rather
+   than a line somebody forgot. */
+const UNBRANDED = ['dmxapi', 'radeon_cloud']
 
 afterEach(cleanup)
 

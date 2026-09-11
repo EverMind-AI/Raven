@@ -965,7 +965,7 @@ describe('settings island', () => {
     await act(async () => {
       head.click()
     })
-    const members = [...document.querySelectorAll<HTMLElement>('.mgsub .mrow img')].map(
+    const members = [...document.querySelectorAll<HTMLElement>('.mgsub .mrow img:not(.mark-dark)')].map(
       (img) => img.getAttribute('src'),
     )
     expect(members).toEqual(['assets/providers/zai.svg', 'assets/providers/zhipu.svg'])
@@ -1983,7 +1983,11 @@ describe('the models pane', () => {
     /* Alibaba Cloud publishes flat ids, so there is no namespace to read and
        every row wore the same provider mark. The last one is Alibaba's own
        model and correctly keeps it. */
-    expect([...document.querySelectorAll('.mdrawer .mitem img')].map((i) => i.getAttribute('src'))).toEqual([
+    /* The light drawing of each: a mark that ships the vendor's dark one
+       renders both and the stylesheet shows one, so an unscoped `img` here
+       would count the pair twice. */
+    expect([...document.querySelectorAll('.mdrawer .mitem img:not(.mark-dark)')].map((i) =>
+      i.getAttribute('src'))).toEqual([
       'assets/providers/qwen.svg',
       'assets/providers/deepseek.svg',
       'assets/providers/zai.svg',

@@ -9,6 +9,8 @@ import type { JSX } from 'react'
 const ICONS: Record<string, string> = {
   ai302: 'ai302',
   aihubmix: 'aihubmix',
+  aionly: 'aionly',
+  alayanew: 'alayanew',
   anthropic: 'anthropic',
   azure_openai: 'azureai',
   baichuan: 'baichuan',
@@ -16,6 +18,12 @@ const ICONS: Record<string, string> = {
   bigmodel: 'zhipu',
   /* Not a provider: the rail's Zhipu family addresses its heading mark by
      this name, the company's rather than either platform's. */
+  gpustack: 'gpustack',
+  lanyun: 'lanyun',
+  ocoolai: 'ocoolai',
+  ovms: 'ovms',
+  ph8: 'ph8',
+  xirang: 'xirang',
   zhipu: 'zhipu',
   baidu_cloud: 'baiducloud',
   burncloud: 'burncloud',
@@ -144,6 +152,44 @@ const stamp = (): string => {
 
 const assetUrl = (icon: string): string => `assets/providers/${icon}.svg${stamp()}`
 
+/* Marks that ship a second drawing for the dark theme, and marks that instead
+   lean on a filter.
+ *
+ * Both are facts about the files, derived from their shapes by
+ * tests/test_ui_provider_marks.py rather than kept by hand. A vendor logo is
+ * mostly its own colours and wants neither -- it is legible on both grounds and
+ * a filter would only take the brand somewhere it does not go. What needs
+ * answering is ink: a mark drawn in black disappears on a dark ground. The
+ * vendor's own dark drawing is the right answer where there is one, and an
+ * invert is the fallback where there is not. */
+const DARK_PAIRED = new Set([
+  'cerebras',
+  'codex',
+  'githubcopilot',
+  'grok',
+  'kimi',
+  'longcat',
+  'minimax',
+  'moonshot',
+  'ocoolai',
+  'ollama',
+  'openai',
+  'openrouter',
+  'poe',
+  'xai',
+  'xiaomimimo',
+  'zai',
+  'zhipu',
+])
+
+const TONES: Record<string, 'mono' | 'hybrid'> = {
+  anthropic: 'hybrid',
+  vllm: 'mono',
+}
+
+const darkUrl = (icon: string): string | null =>
+  DARK_PAIRED.has(icon) ? `assets/providers/${icon}-dark.svg${stamp()}` : null
+
 /* Which vendor made a model, read off its name.
  *
  * A gateway that files ids under a namespace says so in the id itself --
@@ -196,8 +242,10 @@ export function vendorFromName(model: string): string {
   return ''
 }
 
+const vendorIcon = (vendor: string): string | undefined => VENDOR_ICONS[vendor.toLowerCase()]
+
 export function vendorIconPath(vendor: string): string | null {
-  const icon = VENDOR_ICONS[vendor.toLowerCase()]
+  const icon = vendorIcon(vendor)
   return icon ? assetUrl(icon) : null
 }
 
@@ -212,19 +260,44 @@ export function providerIconPath(id: string): string | null {
  * bundle is a separate question, and one this cannot answer before the request.
  * So a load failure falls through to the same initial an unmapped name gets --
  * which is what makes "drop the svg in" the whole of adding a vendor. */
-function Mark({ src, tag, letter }: { src: string | null; tag: string; letter: string }): JSX.Element {
+function Mark({ src, icon, tag, letter }: {
+  src: string | null
+  icon?: string | null
+  tag: string
+  letter: string
+}): JSX.Element {
   const [broken, setBroken] = useState(false)
   if (src && !broken) {
+    const dark = icon ? darkUrl(icon) : null
+    const tone = icon ? TONES[icon] : undefined
+    /* Both drawings are in the markup and the stylesheet shows one, because
+       which theme is on is a CSS question here: nothing publishes it to React,
+       and `system` follows the OS without anyone being told. The light one
+       keeps the error handler -- a pair that 404s should fall back to the
+       initial exactly as a lone mark does. */
     return (
-      <img
-        className="provider-icon"
-        src={src}
-        alt=""
-        aria-hidden="true"
-        draggable="false"
-        data-provider={tag}
-        onError={() => setBroken(true)}
-      />
+      <>
+        <img
+          className={'provider-icon' + (dark ? ' mark-light' : '')}
+          src={src}
+          alt=""
+          aria-hidden="true"
+          draggable="false"
+          data-provider={tag}
+          {...(tone ? { 'data-tone': tone } : {})}
+          onError={() => setBroken(true)}
+        />
+        {dark && (
+          <img
+            className="provider-icon mark-dark"
+            src={dark}
+            alt=""
+            aria-hidden="true"
+            draggable="false"
+            data-provider={tag}
+          />
+        )}
+      </>
     )
   }
   return (
@@ -235,7 +308,7 @@ function Mark({ src, tag, letter }: { src: string | null; tag: string; letter: s
 }
 
 export function ProviderIcon({ id, name }: { id: string; name: string }): JSX.Element {
-  return <Mark src={providerIconPath(id)} tag={id} letter={name} />
+  return <Mark src={providerIconPath(id)} icon={ICONS[id]} tag={id} letter={name} />
 }
 
 /* One row of a model list: the model's own vendor where that is known, the
@@ -261,9 +334,12 @@ export function ModelIcon({
   /* The vendor's own mark, else the provider serving it. The initial, when it
      comes to that, is the vendor's: a column of identical letters is the same
      problem as a column of identical logos. */
+  /* Whichever mark won decides which pair and tone apply -- the model's own
+     where it has one, the provider's where it does not. */
   return (
     <Mark
       src={own || providerIconPath(provider)}
+      icon={own ? vendorIcon(key) : ICONS[provider]}
       tag={own ? key : provider}
       letter={vendor || name}
     />
