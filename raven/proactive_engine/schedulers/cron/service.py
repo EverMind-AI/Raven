@@ -500,7 +500,6 @@ class CronService:
             self._load_store()
             if self._store is None:
                 return
-            rearmed = False
             for j in self._store.jobs:
                 if j.id == job.id and j.state.claimed_by_pid == my_pid:
                     j.state.claimed_by_pid = None
@@ -508,18 +507,6 @@ class CronService:
                     j.state.last_run_at_ms = job.state.last_run_at_ms
                     j.state.last_status = job.state.last_status
                     j.state.last_error = job.state.last_error
-                    # A keyed wake re-armed DURING its own run -- the turn it
-                    # fired called schedule_wake / advance_wake_to_now under the
-                    # same key, which is the same job id -- is a new wake, not
-                    # the one that just ran. It shows as a schedule this run
-                    # never had. Its claim is cleared (above) and its record of
-                    # the run kept; its schedule, enabled flag and next run are
-                    # its own, and it is not the one-shot to delete below.
-                    # Without this the re-arm was overwritten with the finished
-                    # run's state and then removed (reviewed 2026-09-10).
-                    if j.schedule.kind == "at" and job.schedule.kind == "at" and j.schedule.at_ms != job.schedule.at_ms:
-                        rearmed = True
-                        break
                     # A store-side disable is sticky: record_fire's auto-disable
                     # (or a user disabling mid-run) lands between claim and this
                     # writeback, and the in-memory copy must not resurrect it.
@@ -528,10 +515,8 @@ class CronService:
                     j.updated_at_ms = job.updated_at_ms
                     break
             # Handle "at"-kind delete_after_run (_execute_job removed from
-            # our local store; reflect on the reloaded store) -- unless the id
-            # now names a wake armed during the run, which has its own turn to
-            # fire.
-            if job.schedule.kind == "at" and job.delete_after_run and not rearmed:
+            # our local store; reflect on the reloaded store).
+            if job.schedule.kind == "at" and job.delete_after_run:
                 self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
             self._save_store()
 

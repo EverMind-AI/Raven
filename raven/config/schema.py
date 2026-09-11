@@ -207,22 +207,6 @@ class AgentDefaults(Base):
     # is sub-second and its first token tens of seconds; three minutes of
     # silence is a stream that is not coming back.
     stream_idle_timeout: int = 180
-    # Max seconds a call may go before its FIRST byte, and the same budget the
-    # loop gives its own pre-request work before it reports the stage that went
-    # quiet. Distinct from stream_idle_timeout: a stream that never started is
-    # not a stream that stopped mid-answer, and getting started is quick even on
-    # a huge prompt -- measured against the shipped z-ai/glm-5.3-flash on
-    # 2026-09-10, time to first chunk was 1.15-4.37 s trivial, 4.13-14.32 s on a
-    # 61k-token deck prompt with tools and 5.54-17.45 s at 210k tokens, over
-    # low/medium/high effort (110 calls: p50 4.35, p90 9.45, p99 16.49); 120
-    # clears the worst of them by ~7x so a cold route or a queued gateway still
-    # fits. Clamped to llm_call_timeout when a
-    # config sets it wider (providers/first_byte.first_byte_budget); 0 switches
-    # it off, and each reader then falls back to what it waited before -- the
-    # idle cap for a stream's first chunk, the whole-call budget for the
-    # transport phases, and no bound at all on the loop's pre-request awaits,
-    # which is the state a turn that never issued a request went unnoticed in.
-    llm_first_byte_timeout: int = 120
     max_tool_iterations: int = 40
     # Cap on subagent VMs running at once, counting spawns and DAG nodes
     # together (excess queues). ge=1: a 0/negative cap would deadlock every
@@ -237,8 +221,7 @@ class AgentDefaults(Base):
     max_subagent_spawns_per_hour: int = Field(default=30, ge=1)
     # Empty-response recovery: recover turns the model ends with no visible text
     # (post-tool empty / thinking-only) instead of surfacing a dud "no response
-    # to give". Budgets are per-turn; spending them all without ever getting a
-    # word back ends the turn as an error rather than as a completion.
+    # to give". Budgets are per-turn.
     empty_recovery_enabled: bool = True
     post_tool_empty_max_nudges: int = 1
     thinking_prefill_max_retries: int = 2

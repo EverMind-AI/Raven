@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
-from raven.agent.subagent.dag_mcp_scope import run_mcp_credential_scope, run_mcp_scope, run_mcp_servers
+from raven.agent.subagent.dag_mcp_scope import run_mcp_scope, run_mcp_servers
 from raven.agent.subagent.dag_store import SessionNodes
 from raven.agent.subagent.dag_tool import SubAgentDagTool
 from raven.agent.subagent.mcp_grant import (
@@ -131,45 +131,6 @@ def test_wire_data_is_not_accepted_as_a_definition() -> None:
     with run_mcp_scope({"evil": {"command": "curl", "args": ["http://attacker.example"]}}):  # type: ignore[dict-item]
         assert source.server("evil") is None
         assert run_mcp_servers() == {}
-
-
-def test_a_callable_hand_off_is_re_rendered_on_every_read() -> None:
-    # A credential stored after the run started must reach a node that is
-    # re-dispatched, so the scope holds a renderer rather than a snapshot.
-    current = {"local-pg": _pg("v1")}
-    source = _loop_source({}, ToolRegistry())
-    with run_mcp_scope(lambda: current):
-        assert source.server("local-pg").config.args == ["--db", "v1"]  # type: ignore[union-attr]
-        current["local-pg"] = _pg("v2")
-        assert source.server("local-pg").config.args == ["--db", "v2"]  # type: ignore[union-attr]
-        assert run_mcp_servers()["local-pg"].args == ["--db", "v2"]
-
-
-def test_the_gate_holds_on_what_a_callable_renders_later() -> None:
-    current: dict = {"local-pg": _pg("run")}
-    with run_mcp_scope(lambda: current):
-        current["evil"] = {"command": "curl"}
-        assert sorted(run_mcp_servers()) == ["local-pg"]
-
-
-def test_a_run_carries_its_credential_scope_and_drops_it_on_exit() -> None:
-    source = _loop_source({"local-pg": _pg("host")}, ToolRegistry())
-    assert run_mcp_credential_scope() is None
-    with run_mcp_scope({"local-pg": _pg("run")}, scope="playbooks/competitor-scan"):
-        assert run_mcp_credential_scope() == "playbooks/competitor-scan"
-        # The view of a run-scoped server carries the scope; a host server's view never does.
-        assert source.server("local-pg").scope == "playbooks/competitor-scan"  # type: ignore[union-attr]
-    assert run_mcp_credential_scope() is None
-    assert source.server("local-pg").scope is None  # type: ignore[union-attr]
-
-
-def test_a_run_without_carried_servers_has_no_scope_even_if_one_is_named() -> None:
-    # Scope travels with definitions: a host server answering inside a run that
-    # carries nothing of its own keeps its host state and no scope.
-    source = _loop_source({"deepwiki": MCPServerConfig(url="https://deepwiki.example/mcp")}, ToolRegistry())
-    with run_mcp_scope({}, scope="playbooks/x"):
-        view = source.server("deepwiki")
-        assert view is not None and view.scope is None
 
 
 def test_a_valid_definition_beside_a_bogus_one_still_arrives() -> None:
@@ -622,74 +583,3 @@ async def test_an_in_process_node_is_denied_a_shadowed_server_through_the_graph_
     assert not result.startswith("Error"), result
     assert "is not connected on the host" in result
     assert backend.wrappers == [], "the host's wrapper must never reach a node that shadowed the name"
-
-
-async def test_a_node_dispatches_with_the_grant_as_it_resolves_now_not_the_preflight_one():
-    # A node continued after its credential landed must dial with the definition
-    # as it reads at that attempt. The pre-flight grant wrote the notices; it is
-    # not what every attempt is handed. The acp backend resolves asynchronously,
-    # the cli backend synchronously; both refresh.
-    from types import SimpleNamespace
-
-    from raven.agent.subagent.dag_tool import _DispatchBackend
-
-    async def dispatch_twice(backend) -> list[int]:
-        wrapped = _DispatchBackend(backend, mcp_grant={"attempt": 0})
-        await wrapped.run("task", mcps=["tokened"])
-        await wrapped.run("task", mcps=["tokened"])
-        return [k["mcp_grant"] for k in backend.seen]
-
-    attempts = iter(range(1, 10))
-
-    def resolve(mcps):
-        return {"attempt": next(attempts), "mcps": mcps}
-
-    async def resolve_async(mcps):
-        return resolve(mcps)
-
-    async def run(*args, **kwargs):
-        seen.append(kwargs)
-        return "ok"
-
-    seen: list[dict] = []
-    acp = SimpleNamespace(
-        kind="acp", resolve_mcp_grant_async=resolve_async, resolve_mcp_grant=resolve, run=run, seen=seen
-    )
-    assert await dispatch_twice(acp) == [{"attempt": 1, "mcps": ["tokened"]}, {"attempt": 2, "mcps": ["tokened"]}]
-
-    seen = []
-    cli = SimpleNamespace(kind="cli", resolve_mcp_grant=resolve, run=run, seen=seen)
-    assert [g["attempt"] for g in await dispatch_twice(cli)] == [3, 4]
-
-
-async def test_a_carried_server_whose_secret_is_unset_is_withheld_with_the_place_to_set_it():
-    # Handing it over means the sub-agent gets a server that 401s on its first
-    # call and reports "no tools", leaving the reader to guess. The note names
-    # where the credential is set instead, and says not to type it in the chat.
-    from raven.agent.subagent.dag_mcp_scope import run_mcp_scope, run_mcp_servers
-    from raven.agent.subagent.mcp_grant import LiveMcpSource, acp_target, resolve_grant
-
-    carried = MCPServerConfig(
-        type="streamableHttp", url="http://127.0.0.1:8932/mcp", headers={"Authorization": "Bearer {{ params.TOK }}"}
-    )
-    source = LiveMcpSource(dict, lambda: None, ToolRegistry(), frozenset, run_servers=run_mcp_servers)
-
-    target = acp_target(allow_secrets=False, stdio_path=None)
-    with run_mcp_scope(
-        {"tokened": carried}, scope="playbooks/carried-token", credential_gaps=lambda: frozenset({"tokened"})
-    ):
-        grant = resolve_grant(["tokened"], source, target)
-        assert grant.granted == ()
-        assert [(m.name, m.reason) for m in grant.missing] == [("tokened", "credential_missing")]
-        note = grant.note_text()
-        assert "not set on this machine" in note
-        assert "Credentials tab of playbook 'carried-token'" in note
-        assert "''" not in note, "a possessive after !r doubles the quote"
-        assert "typed into this conversation" in note
-
-    # The gap set is re-read, so a credential stored mid-run reaches a continued node.
-    gaps: set[str] = {"tokened"}
-    with run_mcp_scope({"tokened": carried}, scope="playbooks/carried-token", credential_gaps=lambda: frozenset(gaps)):
-        assert resolve_grant(["tokened"], source, target).granted == ()
-        gaps.clear()
-        assert [g.name for g in resolve_grant(["tokened"], source, target).granted] == ["tokened"]

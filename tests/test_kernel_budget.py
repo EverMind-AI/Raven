@@ -66,19 +66,6 @@ the package is 37 lines, so the slack cannot absorb a second one: the next
 paper trips this gate and lands in this docstring the way this one did, while
 a field or a docstring line on an existing paper still fits without a review
 nobody would learn anything from.
-
-It moved again, 2,730 -> 2,791, and this is that review. Two additions, both
-about a call the loop could not describe once it was over. A failed model call
-had no shape anything could carry: the loop knew a provider had raised and the
-record kept a turn that simply stopped, so a run read back afterwards could not
-say which call failed or what the provider said. ``CallRecord`` is that shape,
-50 lines, with the two fields on the provider paper that hand it over. The
-second is a single field, ``first_byte_timeout`` on ``GenerationSettings``,
-with the prose for why a stream that never started is not a stream that
-stopped: 9 lines.
-
-The count is 2,771, and the twenty above it is the same headroom this docstring
-argued for the first time, not room set aside to spend.
 """
 
 from __future__ import annotations
@@ -89,7 +76,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 2_791
+CONTRACTS_LINE_CEILING = 2_730
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

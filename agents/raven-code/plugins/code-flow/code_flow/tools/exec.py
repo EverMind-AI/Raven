@@ -1,25 +1,19 @@
-"""exec -- the host's shell tool with the fork's fixes, served by name.
+"""exec -- the host's shell tool with the fork's three fixes, served by name.
 
 The trunk ``ExecTool`` is kept whole (its guards, its background lane, its
-machine lane); this subclass changes what a coding run kept tripping over, and
-does it on the executor seam ``ExecTool.__init__`` already exposes:
+machine lane); this subclass changes three things a coding run kept tripping
+over, and does it on the executor seam ``ExecTool.__init__`` already exposes:
 
 *A long timeout is clamped, not refused.* Trunk's schema says ``maximum: 600``,
 so a model asking for 900 seconds for a slow test suite is answered with a
 validation error and learns nothing. Here the schema carries no maximum, the
 request is clamped to the configured ceiling, and the result says so.
 
-*A timed-out command says so, in as many words.* Trunk's executor used to wait
-on ``communicate()``, so when that raised on timeout the buffered output was
-gone and the model read ``Timed out after 600s`` with nothing else -- for a
-test suite that printed forty passes and one hang, the forty passes vanished.
-Trunk drains the pipes itself now and hands back what arrived, so the output is
-no longer what separates the two. What remains here is the reading: trunk
-signals the kill through ``exit_code`` and a stderr line, while
-``CodeExecResult`` flags ``timed_out`` and renders ``TIMED_OUT_NOTE``, which
-tells the model the output is a fragment rather than the whole run. The drain
-below therefore duplicates trunk's; retiring it is the fork owners' call, and
-nothing depends on which of the two performs it.
+*A timed-out command keeps the output it produced.* Trunk's executor waits on
+``communicate()``; when that raises on timeout the buffered output is gone and
+the model reads ``Timed out after 600s`` with nothing else -- for a test suite
+that printed forty passes and one hang, the forty passes vanish. This executor
+drains the pipes as it goes and hands back what arrived, flagged as partial.
 
 *A large output is saved whole, not lost in the middle.* Trunk keeps the head
 and the tail of 10,000 characters; the middle is nowhere. Here the budget is

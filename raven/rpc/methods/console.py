@@ -1217,14 +1217,17 @@ def _resolve_inside(root: Path, rel: str) -> Path:
     function, because a second copy of it drifted immediately: the first one
     here lacked the workspace carve-out, so with the root at the default
     ``~/.raven/workspace`` it refused every file the agent had written, which is
-    this bug mirrored.
+    this bug mirrored. Anchored the same way, too: agent home decides what the
+    fence exempts, and the session root is only added to that, never put in
+    home's place -- which is how the viewer came to refuse the session directory.
     """
+    from raven.config.loader import load_config
     from raven.rpc.files import in_state_dir
 
     p = (root / rel.lstrip("/")).resolve()
     if p != root and root not in p.parents:
         raise ConfigValidationError("path escapes workspace")
-    if in_state_dir(p, root):
+    if in_state_dir(p, load_config().workspace_path, root):
         raise ConfigValidationError(f"{p} is inside raven's state directory")
     return p
 

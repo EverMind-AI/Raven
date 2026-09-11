@@ -1,16 +1,17 @@
 """How much of the context window a turn holds back for the answer.
 
-A request names an output ceiling, so the reservation is that exact number: the
-prompt and that reply have to fit the window together, and handing out more
-means the sum is refused at request time -- a refusal whose recovery only
-elides tool bodies, so a history grown on conversation dies there.
+Requests do not name an output ceiling, so the one that applies is the model's
+own -- whatever the vendor, or LiteLLM's transformation, fills in. The prompt
+and that reply have to fit the window together, which fixes the reservation at
+the ceiling itself: hand out more and the sum is refused at request time, and
+the recovery from that refusal only elides tool bodies, so a history grown on
+conversation dies there.
 
-Which makes the *spelling* load-bearing, not only the arithmetic. The
-reservation and the request have to resolve from the same model id, and the id
-a request goes out under is not always the one it was configured with (see
-`_wire_output_ceiling`). What the catalogue's implausible rows used to make of
-this -- a ceiling equal to the window, leaving nothing for history -- is
-handled upstream, where such a row is distrusted (see `providers.rates`).
+A share of the window would be enough only if the request carried that share as
+its ceiling. It did, briefly, and stopping the request from naming one is what
+put this back. What the catalogue's implausible rows used to make of this --
+a ceiling equal to the window, leaving nothing for history -- is handled
+upstream now, where such a row is distrusted (see `providers.rates`).
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import pytest
 import raven.agent.harness.memory as budget_owner
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
-from raven.providers.base import LLMProvider, LLMResponse, send_max_tokens
+from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding
 
 
@@ -54,52 +55,6 @@ def _loop(workspace: Path, *, window: int, ceiling: int, monkeypatch) -> AgentLo
     # rather than on the loop -- which no longer has one of its own.
     agent._default_binding = ModelBinding(agent._default_binding.provider, agent._default_binding.model, window)
     return agent
-
-
-def test_the_reservation_reads_the_id_the_request_goes_out_under(workspace, monkeypatch) -> None:
-    """The reservation and the request have to resolve from one spelling.
-
-    Measured on the deck agent's own model: configured `z-ai/glm-5.3-flash` has
-    no catalogue row under that name, so the reservation fell to half the
-    default window (32768) while the request -- built from the wire spelling
-    `openrouter/z-ai/glm-5.3-flash`, which does have one -- carried 64000. The
-    loop then handed out a prompt sized against a reply twice as large as it
-    had reserved for.
-    """
-    import litellm
-
-    from raven.providers import rates
-
-    # Nothing in LiteLLM under either spelling, which is the deck model's real
-    # situation: the declaration lives only in OpenRouter's catalogue, and that
-    # tier answers for an id naming OpenRouter and for no other.
-    monkeypatch.setattr(litellm, "model_cost", {})
-    monkeypatch.setattr(litellm, "get_model_info", lambda *a, **k: {})
-    rates.reset_openrouter_cache()
-    monkeypatch.setattr(
-        rates,
-        "_OPENROUTER_CACHE",
-        {"vendor/thing": {"context_length": 400_000, "max_completion_tokens": 100_000}},
-        raising=False,
-    )
-    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0, raising=False)
-
-    class _PrefixingProvider(_StubProvider):
-        def wire_model_id(self, model: str) -> str:
-            return model if model.startswith("openrouter/") else f"openrouter/{model}"
-
-    agent = AgentLoop(
-        provider=_PrefixingProvider(),
-        workspace=workspace,
-        model="vendor/thing",
-        policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
-    )
-
-    assert agent._wire_output_ceiling() == 100_000, "the wire spelling reaches the catalogue, so it answers"
-    assert send_max_tokens(None, "vendor/thing", allow_fetch=False) == 49_152, (
-        "the configured spelling reaches nothing and falls back to the default window's reserve"
-    )
 
 
 def test_a_ceiling_as_large_as_the_window_still_leaves_room_for_history(workspace, monkeypatch) -> None:

@@ -53,50 +53,6 @@ def test_the_marker_is_the_hosts_own_spelling() -> None:
     assert ledger.SUMMARY_MARKER == SUMMARY_MARKER
 
 
-def test_the_loop_authored_keys_are_the_trunks_own() -> None:
-    """The two private marks the trunk puts on user-role messages it writes."""
-    import inspect
-
-    from raven.agent.loop import turn_path
-    from raven.agent.loop._shared import _ATTACHED_IMAGE_KEY
-
-    assert _ATTACHED_IMAGE_KEY in ledger.LOOP_AUTHORED_KEYS
-    # The recovery mark has no module constant to import; it is written as a
-    # literal where the scaffolding is built and where the trunk strips it.
-    assert '"_recovery_synthetic"' in inspect.getsource(turn_path)
-    assert "_recovery_synthetic" in ledger.LOOP_AUTHORED_KEYS
-
-
-def test_the_elided_tool_body_is_the_trunks_own() -> None:
-    """The prune's placeholder, taken from the prune rather than transcribed."""
-    from raven.agent.loop.main import AgentLoop
-
-    messages = [{"role": "tool", "tool_call_id": f"c{i}", "content": "body " * 50} for i in range(8)]
-    shrunk, elided = AgentLoop._emergency_shrink(messages)
-
-    assert elided > 0
-    assert shrunk[0]["content"] == ledger.ELIDED_TOOL_BODY
-
-
-def test_the_loops_own_user_messages_are_not_the_users_words() -> None:
-    """A live run journaled 29 image-withdrawal notices and one elided ask_user
-    body as things the user had said, 21735 of 35913 characters against a 24000
-    cap, which is a cap that can evict the brief in favour of bookkeeping."""
-    history = [
-        {"role": "user", "content": "make it 25 pages"},
-        {
-            "role": "user",
-            "content": [{"type": "text", "text": '[image no longer in context: "Page 1 of 15" from ppt_build]'}],
-            "_attached_image": True,
-        },
-        {"role": "user", "content": "Continue.", "_recovery_synthetic": True},
-        {"role": "tool", "name": "ask_user", "content": "[earlier tool output elided to fit the context window]"},
-        {"role": "tool", "name": "ask_user", "content": "User answered: dark cover. Continue."},
-    ]
-
-    assert ledger.users_words(history) == ["User: make it 25 pages", "Answered: dark cover"]
-
-
 def test_the_users_words_are_quoted_in_order_and_never_paraphrased() -> None:
     words = ledger.users_words(HISTORY)
     assert words == [

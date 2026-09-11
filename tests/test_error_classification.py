@@ -169,37 +169,6 @@ def test_jitter_zero_stays_zero():
 # --- format_llm_error / parse_llm_error / _strip_json_error_body ------------- #
 
 
-def test_a_first_byte_timeout_is_retryable_and_named() -> None:
-    """The bound the loop's ladder reads. A ``TimeoutError`` subclass would land
-    on the network bucket regardless, with the same retryable/fallback verdict;
-    the named category is so the record can say which bound fired -- "never
-    started" is not the same event as a mid-answer stall."""
-    from raven.providers.first_byte import FirstByteTimeoutError
-
-    exc = FirstByteTimeoutError(phase="waiting for the first chunk", budget=120, waited=120.4)
-    verdict = LLMProvider.classify_error(exc)
-    assert verdict.category == "first_byte_timeout"
-    assert verdict.retryable is True
-    assert verdict.should_fallback is True
-    assert verdict.should_compress is False
-
-
-def test_the_first_byte_error_content_names_the_bound_and_the_wait() -> None:
-    """Half the 2026-09-10 defect was that nothing was recorded. The content the
-    provider hands back is what the loop logs and what the llm.output artefact
-    keeps, so the bound and the wait have to survive into it."""
-    from raven.providers.base import format_llm_error, parse_llm_error
-    from raven.providers.first_byte import FirstByteTimeoutError
-
-    exc = FirstByteTimeoutError(phase="opening the stream", budget=120, waited=120.4)
-    content = format_llm_error(exc, LLMProvider.classify_error(exc), provider="ppt")
-    assert "first_byte_timeout@ppt" in content
-    assert "120.4s" in content
-    assert "llmFirstByteTimeout=120s" in content
-    parsed = parse_llm_error(content)
-    assert parsed is not None and parsed[0] == "first_byte_timeout"
-
-
 def test_format_llm_error_collapses_prefixes_and_json_body():
     from raven.providers.base import format_llm_error, parse_llm_error
 

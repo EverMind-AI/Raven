@@ -361,12 +361,6 @@ class EndpointRotorProvider(LLMProvider):
         inner was built from, not of the endpoint that happens to answer."""
         return self._inners[0].supports_prompt_caching(model)
 
-    def reasoning_wire_keys(self, model: str | None, reasoning_effort: str | None) -> Any:
-        """Delegates to the first endpoint's inner, like ``supports_assistant_prefill``:
-        which efforts a wire sends as one request is a property of the section
-        every inner was built from."""
-        return self._inners[0].reasoning_wire_keys(model, reasoning_effort)
-
     def supports_assistant_prefill(self, model: str | None = None) -> bool:
         """Delegates to the first endpoint's inner, like ``supports_prompt_caching``:
         the vendor rule is a property of the section every inner was built from."""

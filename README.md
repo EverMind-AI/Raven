@@ -81,7 +81,7 @@ The bilingual onboarding wizard configures seven areas without requiring manual 
 2. Sandbox or execution location
 3. Chat channels
 4. EverOS long-term memory
-5. Web access (pick a search vendor and a page reader, give each its key; the search key is checked with one real query)
+5. Web access (pick a search vendor and a page reader, give each its key)
 6. Sub-agents shipped in this checkout
 7. Cold-start import from other AI tools
 

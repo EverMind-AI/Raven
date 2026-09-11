@@ -62,6 +62,16 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- The web file viewer opens a sub-agent's report again. `/file` anchored the
+  state-directory fence on the session's working directory whenever the page
+  named a session, so the fence exempted `~/.raven/tmp/<channel>` and refused
+  everything the DAG runner writes under `~/.raven/workspace/sessions/` as
+  raven state; the page drew the delivery and then said Raven was confined to
+  the working directory. The fence is anchored on agent home for the viewer
+  and the `fs.*` panel alike, with the session's directory added to what it
+  exempts rather than standing in for home. `serve.json` and `config.json`
+  stay refused.
+
 - **A cloned template page can have a space cleared in it.** `replace_text` swaps
   words where they stand, but drawing a chart, a panel or a figure into a cloned
   page needs the space emptied first and there was no supported way to say so. A

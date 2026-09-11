@@ -39,9 +39,6 @@ def normalize_usage(usage: dict[str, Any] | None) -> dict[str, Any]:
         "output_tokens": output,
         "cache_read_tokens": read,
         "cache_write_tokens": write,
-        # Part of the output count, never added to it -- an accounting field
-        # here, and the one number that says a silent turn still thought.
-        "reasoning_tokens": token_count(usage.get("reasoning_tokens")) or 0,
         "total_tokens": token_count(usage.get("total_tokens")) or prompt + output + (0 if includes_cache else cached),
         "cost_usd": reported_cost(usage.get("cost_usd")),
     }
@@ -52,14 +49,12 @@ def responses_usage(usage: dict[str, Any]) -> dict[str, Any]:
     if not usage:
         return {}
     details = usage.get("input_tokens_details") or {}
-    output_details = usage.get("output_tokens_details") or {}
     return {
         "prompt_tokens": token_count(usage.get("input_tokens")),
         "completion_tokens": token_count(usage.get("output_tokens")),
         "total_tokens": token_count(usage.get("total_tokens")),
         "cache_read_input_tokens": token_count(details.get("cached_tokens")),
         "cache_creation_input_tokens": token_count(details.get("cache_write_tokens")),
-        "reasoning_tokens": token_count(output_details.get("reasoning_tokens")),
         "prompt_tokens_include_cache": True,
         "cost_usd": reported_cost(usage.get("cost")),
     }

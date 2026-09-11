@@ -52,7 +52,6 @@ class ResolvingProvider(LLMProvider):
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
             stream_idle_timeout=defaults.stream_idle_timeout,
-            first_byte_timeout=defaults.llm_first_byte_timeout,
         )
 
     def _refresh_credentials(self) -> None:
@@ -164,19 +163,6 @@ class ResolvingProvider(LLMProvider):
     def supports_assistant_prefill(self, model: str | None = None) -> bool:
         """Asked of the vendor adapter that would serve this model."""
         return self._pick(model).supports_assistant_prefill(model)
-
-    def reasoning_wire_keys(self, model: str | None, reasoning_effort: str | None) -> Any:
-        """Forwarded for ``request_generation``'s reason: the streamed call's span
-        and the empty-response retry both see this router rather than the adapter,
-        and only the adapter knows which efforts its wire sends as one request."""
-        return self._pick(model).reasoning_wire_keys(model, reasoning_effort)
-
-    def request_generation(self, **asked: Any) -> dict[str, Any]:
-        """Forwarded for ``wire_model_id``'s reason: the record of what a request
-        asked for has to come from the adapter that will send it, or the reasoning
-        shape and the provider fence are recorded as absent on every streamed
-        call, whose span sees this router rather than the adapter."""
-        return self._pick(asked.get("model")).request_generation(**asked)
 
     def wire_model_id(self, model: str) -> str:
         """Forwarded: the inner adapter is the one that decides the wire id.

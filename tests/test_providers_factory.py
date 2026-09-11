@@ -653,19 +653,13 @@ def test_report_dropped_memory_writes_renders_on_the_given_console_only_when_som
 # --- generation settings reach the provider the ordinary assembly paths build ---
 
 
-def _config_with_idle(seconds: int, first_byte: int = 11):
+def _config_with_idle(seconds: int):
     from raven.config.schema import Config
 
     return Config.model_validate(
         {
             "providers": {"openai": {"apiKey": "K-OPENAI"}},
-            "agents": {
-                "defaults": {
-                    "model": "openai/gpt-4o-mini",
-                    "streamIdleTimeout": seconds,
-                    "llmFirstByteTimeout": first_byte,
-                }
-            },
+            "agents": {"defaults": {"model": "openai/gpt-4o-mini", "streamIdleTimeout": seconds}},
         }
     )
 
@@ -679,7 +673,6 @@ def test_make_provider_carries_the_configured_stream_idle_timeout() -> None:
 
     provider = make_provider(_config_with_idle(7))
     assert provider.generation.stream_idle_timeout == 7
-    assert provider.generation.first_byte_timeout == 11
     assert provider.generation.timeout == _config_with_idle(7).agents.defaults.llm_call_timeout
 
 
@@ -691,44 +684,4 @@ def test_make_lazy_provider_carries_it_on_both_the_wrapper_and_the_built_provide
     monkeypatch.setattr(LazyProvider, "prewarm", lambda self: None)
     lazy = factory_mod.make_lazy_provider(_config_with_idle(7))
     assert lazy.generation.stream_idle_timeout == 7
-    assert lazy.generation.first_byte_timeout == 11
     assert lazy._built().generation.stream_idle_timeout == 7
-    assert lazy._built().generation.first_byte_timeout == 11
-
-
-def test_the_first_byte_bound_is_clamped_to_the_call_budget() -> None:
-    """A hand-written value above the whole-call budget is a mistake worth
-    ignoring, not one worth refusing to boot over -- so it is clamped at read
-    rather than rejected at load."""
-    from raven.config.schema import Config
-    from raven.providers.factory import make_provider
-    from raven.providers.first_byte import first_byte_budget
-
-    config = Config.model_validate(
-        {
-            "providers": {"openai": {"apiKey": "K-OPENAI"}},
-            "agents": {
-                "defaults": {
-                    "model": "openai/gpt-4o-mini",
-                    "llmCallTimeout": 60,
-                    "llmFirstByteTimeout": 6000,
-                }
-            },
-        }
-    )
-    provider = make_provider(config)
-    assert provider.generation.first_byte_timeout == 6000
-    assert first_byte_budget(provider.generation) == 60
-
-
-def test_a_generation_object_predating_the_field_falls_back_to_the_call_budget() -> None:
-    """The same posture the adapters take with ``stream_idle_timeout``: a test
-    double or an older settings object must behave as it did before, not crash."""
-    from types import SimpleNamespace
-
-    from raven.providers.first_byte import first_byte_budget, httpx_timeout, stream_first_byte_budget
-
-    old = SimpleNamespace(timeout=600.0, stream_idle_timeout=180.0)
-    assert first_byte_budget(old) == 0.0, "no bound configured is not a bound at the total"
-    assert stream_first_byte_budget(old) == 180.0, "the idle cap is what bounded the first chunk before"
-    assert httpx_timeout(old) is None, "nothing to narrow, so the plain float goes as it always did"
