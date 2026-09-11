@@ -79,7 +79,7 @@ def test_the_reservation_reads_the_id_the_request_goes_out_under(workspace, monk
     monkeypatch.setattr(
         rates,
         "_OPENROUTER_CACHE",
-        {"vendor/thing": {"context_length": 400_000, "max_completion_tokens": 8_000}},
+        {"vendor/thing": {"context_length": 400_000, "max_completion_tokens": 100_000}},
         raising=False,
     )
     monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0, raising=False)
@@ -96,9 +96,9 @@ def test_the_reservation_reads_the_id_the_request_goes_out_under(workspace, monk
         tools=ToolWiring(restrict_to_workspace=True),
     )
 
-    assert agent._wire_output_ceiling() == 8_000, "the wire spelling reaches the catalogue, so it answers"
-    assert send_max_tokens(None, "vendor/thing", allow_fetch=False) == rates.MAX_OUTPUT_TOKENS_PER_ITERATION, (
-        "the configured spelling reaches nothing, so no declaration bounds it and the per-iteration bound answers"
+    assert agent._wire_output_ceiling() == 100_000, "the wire spelling reaches the catalogue, so it answers"
+    assert send_max_tokens(None, "vendor/thing", allow_fetch=False) == 49_152, (
+        "the configured spelling reaches nothing and falls back to the default window's reserve"
     )
 
 

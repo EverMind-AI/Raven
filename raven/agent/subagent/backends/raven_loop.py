@@ -15,10 +15,8 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent import charter as charter_mod
 from raven.agent.subagent.attachments import with_attachment_note
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
-from raven.agent.subagent.delegate import outbound_charter
 from raven.agent.subagent.mcp_grant import (
     McpGrant,
     McpSource,
@@ -208,29 +206,8 @@ class RavenLoopBackend:
     ) -> str:
         token = IN_SUBAGENT_RUN.set(True)
         grant = self.resolve_mcp_grant(mcps)
-        # The in-process half of what ``_meta`` carries over ACP. A forked
-        # worker reads its charter off the wire and opens the scope in its own
-        # turn; a sub-agent that runs here never crosses a process boundary, so
-        # the dispatch's charter would otherwise be set by ``spawn`` and read by
-        # nobody -- the brief would ride along in the task text while the tools,
-        # the checks and the deadline it named were silently dropped.
-        #
-        # Read here rather than deeper for the reason ``IN_SUBAGENT_RUN`` is set
-        # here: this call is the whole of the dispatched run, and a scope that
-        # did not span it would leave part of the run unbriefed.
-        charter = charter_mod.parse(outbound_charter())
-        if charter is not None:
-            # The same line the ACP lane logs on arrival. Without it a briefed
-            # in-process run and an unbriefed one read identically in the log,
-            # and the difference between them is the whole of this feature.
-            logger.info(
-                "agent playbook: charter applied to this run ({} tool(s), {} check(s){})",
-                "all" if charter.tools is None else len(charter.tools),
-                len(charter.checks),
-                ", judge" if charter.code else "",
-            )
         try:
-            with annotate_mcp_failure(grant), charter_mod.charter_scope(charter):
+            with annotate_mcp_failure(grant):
                 return await self._run(
                     task,
                     task_id=task_id,

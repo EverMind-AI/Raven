@@ -22,7 +22,6 @@ from raven.agent.subagent.backends import (
     SubagentBackend,
 )
 from raven.agent.subagent.backends.base import optional_keyword
-from raven.agent.subagent.backends.routing import TargetReady
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.dag_store import ensure_node_claimed, index_guard, record_node_outcome
 from raven.agent.subagent.direct_chat import (
@@ -234,7 +233,6 @@ class SubagentManager:
         agents: list | None = None,
         session_dir: "Callable[[str], Path] | None" = None,
         session_tier: "Callable[[str | None], str] | None" = None,
-        target_ready: "TargetReady | None" = None,
     ):
         from raven.config.schema import ExecToolConfig
 
@@ -329,11 +327,6 @@ class SubagentManager:
         self.registry = AgentRegistry()
         self.registry.set_builtin_builder(self.build_builtin_backend)
         self.registry.set_router(self._classify)
-        # Whether a routing entry's targets may run at all here. Injected, like
-        # the tier reader above: the manager holds no config, and a routing
-        # decision that reached for one would answer on whatever file the
-        # process last happened to load rather than on what built this loop.
-        self.registry.set_target_ready(target_ready)
         self._configs = list(agents or [])
         self.registry.apply(self._configs)
         # Bound at birth, not at first dispatch: a generation that only bound

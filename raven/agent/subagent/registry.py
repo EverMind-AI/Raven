@@ -36,13 +36,13 @@ from raven.agent.subagent.backends import (
     format_agent_listing,
     session_mcp_effective,
 )
-from raven.agent.subagent.backends.routing import RouteTarget, RoutingBackend
+from raven.agent.subagent.backends.routing import RoutingBackend
 from raven.agent.subagent.builtin_agents import LEGACY_AGENT_ALIASES, canonical_agent_name, merge_builtin_seeds
 from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
 
 if TYPE_CHECKING:
-    from raven.agent.subagent.backends.routing import Router, TargetReady
+    from raven.agent.subagent.backends.routing import Router
     from raven.agent.subagent.mcp_grant import McpSource
 
 
@@ -81,20 +81,9 @@ class Injectable:
 
 @dataclass(frozen=True)
 class Route:
-    """One candidate target offered to the host's route classifier.
-
-    ``owes`` and ``note`` are what the declaring row says about the case where
-    the gate keeps the work here; see :class:`SubagentRouteConfig` for why they
-    are the row's words rather than the gate's. ``needs`` and ``min_tier`` are
-    what subject the route to that gate in the first place, and a route naming
-    neither is dispatched exactly as routes were before the gate.
-    """
+    """One candidate target offered to the host's route classifier."""
 
     to: str
-    owes: str = ""
-    note: str = ""
-    needs: tuple[str, ...] = ()
-    min_tier: str = ""
 
 
 @dataclass(frozen=True)
@@ -179,14 +168,7 @@ def _row_for(cfg: Any) -> AgentRow:
 
 def _route_for(declared: Any) -> Route:
     read = declared.get if isinstance(declared, dict) else lambda key, default="": getattr(declared, key, default)
-    declared_needs = read("needs", ()) or ()
-    return Route(
-        to=str(read("to", "") or ""),
-        owes=str(read("owes", "") or ""),
-        note=str(read("note", "") or ""),
-        needs=tuple(str(need) for need in declared_needs),
-        min_tier=str(read("min_tier", "") or read("minTier", "") or ""),
-    )
+    return Route(to=str(read("to", "") or ""))
 
 
 class AgentRegistry:
@@ -210,7 +192,6 @@ class AgentRegistry:
         self._backends: dict[str, SubagentBackend] = {}
         self._mcp_source: "McpSource | None" = None
         self._router: "Router | None" = None
-        self._target_ready: "TargetReady | None" = None
 
     def set_builtin_builder(self, build_builtin: BuiltinBuilder | None) -> None:
         """Late-bind the in-process backend factory.
@@ -233,18 +214,6 @@ class AgentRegistry:
         for backend in self._backends.values():
             if isinstance(backend, RoutingBackend):
                 backend.set_router(router)
-
-    def set_target_ready(self, target_ready: "TargetReady | None") -> None:
-        """Hand every routing entry the probe for what its targets' pipelines spend.
-
-        Injected here for the reason the classifier is: the table knows which
-        rows route, and the host knows what this deployment is credentialed for.
-        A registry built without it routes exactly as it did before the gate.
-        """
-        self._target_ready = target_ready
-        for backend in self._backends.values():
-            if isinstance(backend, RoutingBackend):
-                backend.set_target_ready(target_ready)
 
     def set_mcp_source(self, source: "McpSource | None") -> None:
         """Late-bind the host MCP view into cached and future backends."""
@@ -331,22 +300,10 @@ class AgentRegistry:
                     row.name,
                 )
                 continue
-            targets.append(
-                RouteTarget(
-                    route.to,
-                    rows[route.to].description,
-                    backends[route.to],
-                    route.owes,
-                    route.note,
-                    route.needs,
-                    route.min_tier,
-                )
-            )
+            targets.append((route.to, rows[route.to].description, backends[route.to]))
         if not targets:
             return backends[row.name]
-        entry = RoutingBackend(
-            row.name, backends[row.name], targets, instances=get_registry(), target_ready=self._target_ready
-        )
+        entry = RoutingBackend(row.name, backends[row.name], targets, instances=get_registry())
         entry.set_router(self._router)
         return entry
 

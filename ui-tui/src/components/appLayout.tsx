@@ -12,6 +12,7 @@ import type { AppLayoutProps } from '../app/interfaces.js'
 import type { Theme } from '../theme.js'
 
 import { $directChat, sendingPausedReason } from '../app/directChatStore.js'
+import { $copyNotice } from '../app/copyNoticeStore.js'
 import { useGateway } from '../app/gatewayContext.js'
 import { $isBlocked, $overlayState, patchOverlayState } from '../app/overlayStore.js'
 import { $uiState } from '../app/uiStore.js'
@@ -234,6 +235,7 @@ const ComposerPane = memo(function ComposerPane({
   const isBlocked = useStore($isBlocked)
   const directChat = useStore($directChat)
   const sendingPaused = sendingPausedReason(directChat)
+  const copyNotice = useStore($copyNotice)
   const sh = (composer.inputBuf[0] ?? composer.input).startsWith('!')
   const promptText = sh ? '$' : ui.theme.brand.prompt
   const promptWidth = composerPromptWidth(promptText)
@@ -304,6 +306,8 @@ const ComposerPane = memo(function ComposerPane({
       <Box height={1} onMouseDown={captureInputDrag} onMouseDrag={dragFromSpacer} onMouseUp={endInputDrag} />
 
       <StatusRulePane at="top" composer={composer} status={status} />
+
+      {copyNotice && <Text color={ui.theme.color.muted}>{copyNotice}</Text>}
 
       <Box flexDirection="column" marginTop={ui.statusBar === 'top' ? 0 : 1}>
         {composer.input === '?' && !composer.inputBuf.length && <HelpHint t={ui.theme} />}

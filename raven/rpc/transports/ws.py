@@ -306,23 +306,12 @@ class WsGateway:
             raise web.HTTPInternalServerError(text=str(exc)) from None
 
     async def handle_ws(self, request: web.Request) -> web.WebSocketResponse:
-        # Imported here, like the viewer's own limits in `handle_file`: this
-        # module is the transport and `raven.rpc.files` reaches the config and
-        # the filesystem tools to answer what it answers.
-        from raven.rpc.files import frame_ceiling_for_upload
-
         if not self._origin_ok(request):
             raise web.HTTPForbidden(reason="bad origin")
         if not self._authorized(request):
             raise web.HTTPUnauthorized(reason="missing or invalid session")
 
-        # Sized from the upload limit, not left at aiohttp's 4 MiB default: an
-        # `fs.upload` rides as base64 inside one JSON-RPC frame, so the default
-        # capped attachments at about 3 MB while the method advertised 25 MB --
-        # and it capped them by killing the socket, which reached the page as a
-        # reconnect rather than as a reason. Derived so that raising one limit
-        # can never again leave the other behind.
-        ws = web.WebSocketResponse(heartbeat=30, max_msg_size=frame_ceiling_for_upload())
+        ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
         self._sockets.add(ws)
         logger.info("serve: ws client connected ({} active)", len(self._sockets))

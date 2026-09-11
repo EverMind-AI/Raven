@@ -20,33 +20,6 @@ from raven.config import load_config
 # does anything useful with the bytes, and the read would stall the event loop.
 MAX_VIEW_BYTES = 25 * 1024 * 1024
 
-# The largest file `fs.upload` accepts. It sits beside the viewer's ceiling
-# because the two are one story told in both directions, and here rather than
-# in the method that enforces it because the WebSocket transport has to size
-# its own frame ceiling from it: an upload rides as base64 inside one JSON-RPC
-# frame, so a transport ceiling below this one rejects the upload before the
-# method can explain why, and the page sees a dropped socket instead of a
-# reason. See `frame_ceiling_for_upload`.
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-
-# Room for the JSON-RPC envelope around a maximal upload: the method name, the
-# session key and the file name, plus escaping. Two orders of magnitude more
-# than those need, because the cost of it being too large is nothing and the
-# cost of it being too small is the silent disconnect this whole constant
-# exists to prevent.
-_FRAME_ENVELOPE_SLACK = 64 * 1024
-
-
-def frame_ceiling_for_upload(limit: int = MAX_UPLOAD_BYTES) -> int:
-    """The smallest WebSocket frame ceiling that can carry a maximal upload.
-
-    base64 costs four bytes for every three, so a transport sized at the upload
-    limit itself stops roughly a quarter short of it -- which is what made a
-    3 MB attachment kill the socket while the method advertised 25 MB.
-    """
-    return -(-limit // 3) * 4 + _FRAME_ENVELOPE_SLACK
-
-
 # Extensions the page renders as text even though the system would call them
 # something else (or nothing at all).
 _TEXT_SUFFIXES = {

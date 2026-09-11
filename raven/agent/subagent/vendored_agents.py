@@ -59,12 +59,9 @@ __all__ = [
     "agents_root",
     "api_key_var",
     "discover_product_rows",
-    "env_prefix",
     "host_can_lend_a_key",
     "merge_product_seeds",
     "product_folder",
-    "product_image_key",
-    "product_secret",
     "product_state",
     "Readiness",
 ]
@@ -174,113 +171,12 @@ def _install_packaged_tree(packaged: Path, installed: Path) -> None:
         logger.warning("Could not install the packaged agent products into {}: {}", installed, exc)
 
 
-_IMAGE_GATEWAY = "openrouter.ai"
-"""The one gateway a picture generator speaks. Spelled here as well as in each
-product launcher because the gate deciding whether a lane can draw and the
-launcher that gives it the key must not disagree about the address."""
-
-
-def env_prefix(folder_name: str) -> str:
-    """``DESIGN`` for ``raven-design``: the folder name without its ``raven-``
-    prefix, upper-cased. The stem every one of a product's own settings is
-    spelled with in its ``.env``."""
-    stem = folder_name[len("raven-") :] if folder_name.startswith("raven-") else folder_name
-    return stem.upper().replace("-", "_")
-
-
 def api_key_var(folder_name: str) -> str:
-    """``DESIGN_API_KEY`` for ``raven-design``. Mirrors the ``REQUIRED_SECRETS``
-    name each product's launcher reads from its ``.env``."""
-    return env_prefix(folder_name) + "_API_KEY"
-
-
-def product_secret(row_name: str, suffix: str, root: Path | None = None) -> str:
-    """One of a product's own settings, read the way its launcher reads it.
-
-    ``product_secret("Raven-PPT", "IMAGE_API_KEY")`` is the ``PPT_IMAGE_API_KEY``
-    that ``agents/raven-ppt/run.py`` resolves through ``env_value`` -- the
-    process environment first, then the folder's ``.env``.
-
-    Here so a caller asking *whether a routed lane is equipped* reads the same
-    file the lane will be configured from. The host's own credentials answer
-    for the host loop, and a product is free to be equipped by its folder alone
-    (or to be equipped differently: a key for a vendor the host never selected).
-
-    ``""`` for a name that is not a discovered product, and for a setting the
-    folder does not carry -- which is the caller's cue to fall back to whatever
-    the launcher would inherit from the host.
-    """
-    folder = product_folder(row_name, root)
-    return "" if folder is None else _folder_setting(folder, suffix)
-
-
-def _folder_setting(folder: Path, suffix: str) -> str:
-    """One setting off an already-located folder, for callers reading several."""
-    from raven.config.product_render import env_value
-
-    return (env_value(f"{env_prefix(folder.name)}_{suffix}", env_file=folder / ".env") or "").strip()
-
-
-def product_image_key(row_name: str, root: Path | None = None) -> str:
-    """The picture-generation key one product's folder supplies on its own.
-
-    The folder-side half of what ``configure_image_generation`` renders in a
-    product launcher, in that function's own precedence: an explicit
-    ``<PREFIX>_IMAGE_API_KEY``, else the key that pays for the words, which
-    pays for the pictures too -- but only towards OpenRouter, the one gateway
-    the generator speaks. Lending a chat credential to an address its owner
-    never nominated for pictures is the one thing that backfill must not do,
-    so the endpoint is read on both sides: the product's own image base pin,
-    and the gateway its provider blocks actually address.
-
-    ``""`` is "only the host can supply one", which is a different answer from
-    "cannot draw": the launcher inherits the host's image section where the
-    folder is silent, and putting the two together is the caller's job.
-    """
-    folder = product_folder(row_name, root)
-    if folder is None:
-        return ""
-    if explicit := _folder_setting(folder, "IMAGE_API_KEY"):
-        return explicit
-    # The inherit branch has no key of its own to lend: a folder naming none
-    # takes the host's, and the host's image section is the caller's other half.
-    key = _folder_setting(folder, "API_KEY")
-    if not key:
-        return ""
-    pinned = _folder_setting(folder, "IMAGE_API_BASE")
-    if pinned:
-        return key if _IMAGE_GATEWAY in pinned else ""
-    base = _folder_setting(folder, "API_BASE")
-    if base:
-        return key if _IMAGE_GATEWAY in base else ""
-    return key if _folder_addresses_openrouter(folder) else ""
-
-
-def _folder_addresses_openrouter(folder: Path) -> bool:
-    """Whether a folder's own provider blocks reach OpenRouter with no base set.
-
-    A block says which gateway it is two ways and both have to be read: an
-    explicit ``apiBase``, else the address the registry ships for the block's
-    own name. Reading only the first is what left a launcher's inherit branch
-    with no key to draw with, and this is the same walk ``openrouter_key_in_force``
-    does over the rendered config.
-    """
-    from raven.providers.registry import find_by_name
-
-    try:
-        declared = json.loads((folder / "config.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    for name, provider in (declared.get("providers") or {}).items():
-        if not isinstance(provider, dict):
-            continue
-        base = str(provider.get("apiBase") or "")
-        if not base:
-            spec = find_by_name(name)
-            base = spec.usable_default_api_base if spec else ""
-        if _IMAGE_GATEWAY in base:
-            return True
-    return False
+    """``DESIGN_API_KEY`` for ``raven-design``: the folder name without its
+    ``raven-`` prefix, upper-cased. Mirrors the ``REQUIRED_SECRETS`` name each
+    product's launcher reads from its ``.env``."""
+    stem = folder_name[len("raven-") :] if folder_name.startswith("raven-") else folder_name
+    return stem.upper().replace("-", "_") + "_API_KEY"
 
 
 def host_can_lend_a_key() -> bool:
@@ -463,44 +359,6 @@ def _routes_ready(entry: dict, by_name: dict[str, tuple[dict, Readiness]]) -> Re
     return _READY
 
 
-def _read_route_notes(folder: Path, entry: dict) -> None:
-    """Fill each route's ``note`` from the file it names, in place.
-
-    Read here rather than at the gate that appends it: by the time a route
-    reaches :class:`~raven.agent.subagent.backends.routing.RoutingBackend` the
-    folder is long out of scope, and a config-stored row copies the route list
-    as it stands. So the file is a manifest authoring form, and everything
-    downstream sees the same route it always saw.
-
-    A note file that is not there **warns and leaves the note empty** rather
-    than disabling the folder. The row without its note is the agent running
-    with one requirement unstated; the row disabled is the agent gone. Loud in
-    the log, and a shipped folder's own file is pinned by a test so a packaging
-    miss fails before an install can be missing it.
-    """
-    for route in entry.get("routes") or []:
-        if not isinstance(route, dict):
-            continue
-        named = str(route.get("noteFile") or route.get("note_file") or "").strip()
-        if not named or str(route.get("note") or "").strip():
-            # Both declared is a manifest saying one thing twice. Left exactly as
-            # written so the model refuses the row and says so once, rather than
-            # resolved here into a silent preference for one of them.
-            continue
-        route.pop("noteFile", None)
-        route.pop("note_file", None)
-        path = (folder / named).resolve()
-        if not path.is_relative_to(folder.resolve()):
-            logger.warning("{}: route noteFile {!r} points outside the agent folder; ignored", folder.name, named)
-            continue
-        try:
-            route["note"] = path.read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            logger.warning(
-                "{}: route noteFile {!r} could not be read ({}); the route says nothing", folder.name, named, exc
-            )
-
-
 def _scan_folders(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
     """One folder at a time, judged on its own: launcher present, engine importable."""
     root = agents_root() if root is None else root
@@ -524,7 +382,6 @@ def _scan_folders(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
             for field in _PLACEHOLDER_FIELDS:
                 if template := entry.get(field):
                     entry[field] = str(template).replace("{SUBAGENT_DIR}", str(folder)).replace("{PYTHON}", python)
-            _read_route_notes(folder, entry)
         except Exception as exc:  # noqa: BLE001 - one bad folder must not sink the rest
             logger.warning("Skipping the agent product in {}: {}", folder.name, exc)
             continue

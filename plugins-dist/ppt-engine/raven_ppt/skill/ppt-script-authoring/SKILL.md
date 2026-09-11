@@ -109,14 +109,6 @@ panels: the products it names have logos, the organisations have marks, the stan
 have badges, and the architectures have diagrams their own documentation draws. Search
 for those before deciding a page is text.
 
-**What a page is missing is searched for, not filled in.** The two paths above gather
-pictures; the same move answers a claim the sources leave without its evidence.
-`web_search` for it, `web_fetch` the page that carries it, and keep where it came from
-beside what you took. Nothing on a page is invented: not a number, not a source, not a
-person, not a place. A gap you went looking for and did not find is worth keeping -- say
-in `needs` what is missing and who has to supply it -- and a gap nobody looked for is a
-page handing its own work back to the reader.
-
 ## 3. One visual identity, defined once
 
 **What a finished page owes is written down, and it is what the review at the end judges
@@ -1054,10 +1046,8 @@ it. Never name a template or a house style you have not seen on the page. A temp
 cover *is* a photograph takes `backdrop`.
 
 **A backdrop is the one generated picture that never poses as evidence.** A cover, a
-contents page, a section page or a closing page wants atmosphere more than a figure, and a
-template's own photograph there is a placeholder. All four take one where an image key is
-configured -- the contents page included, which is the one that gets forgotten and comes
-out as a list on a white field. Generate one with `ppt_generate_image` at the page's
+section page or a closing page wants atmosphere more than a figure, and a template's own
+photograph there is a placeholder. Generate one with `ppt_generate_image` at the page's
 shape (`aspect_ratio="16:9"` for a full page) and lay it behind everything with
 `backdrop(slide, FIGURES / "cover.png")`: the photograph at full strength under a plane of the
 theme's ink, with the page's type set light -- the form a reference cover that works uses. A
@@ -1083,34 +1073,6 @@ page dense with cards does not want one. The same knob exists for a picture alre
 page: a photograph the template drew or `replace_picture` filled that a title has to read over wants
 a plane of ink over it and light type, the way `backdrop` lays one -- not `wash(shape_at(slide, n),
 0.3)`, which is fog; a picture at full strength again is `wash(shape, 1)`.
-
-### Look at the page before you ask for its picture
-
-A generation happens while the page is still a plan -- prepare, brief, template, pictures,
-*then* the program -- so a picture asked for at that moment is asked for against nothing.
-Draft the page first: write its block, `ppt_build(slides=[n])`, and read the render. What
-you ask for is then what the page **lacks**, not what it already carries.
-
-**Hand the model the material; do not describe it.** `references` takes up to six pictures
--- the logo file, the mark the brand actually uses, the template's own illustration, an
-earlier generation the new one is a series with -- as figure ids, source file names or
-absolute paths. A described logo comes back as a different logo.
-
-**Say where the type goes, and ask for no type.** Name the region the title needs by side
-and by share -- "the left 55% of the canvas stays almost pure dark, reserved for title text
-overlay" -- because a subject centred in the frame leaves the title nowhere to sit. And
-`no text, no letters, no numbers`: generated lettering is wrong in every language, and
-every word on a page is set by the typography.
-
-**Then look again.** The picture was for a page, so rebuild that page and read the render:
-only the composed page counts, and whether the type carries over what you laid down is
-read off those pixels and refuses (§12).
-
-**Where the deployment has no image key, `ppt_generate_image` says so** -- `no image API key
-is configured` -- and that is an answer to pass on, not a page to leave open. Carry it on
-type, grid, rule and colour, and say which pages would have had a picture. A blank slot, a
-flat colour block standing in for one, or a body page's photograph moved onto the cover are
-three ways of not saying it.
 
 **Tables are for figures, and a deck has few of them.** A table earns its grid when a reader
 compares numbers down a column -- a benchmark, a price list, a scoring matrix. Four labelled
@@ -1527,10 +1489,7 @@ and `find_icons("risk")` returns `warning`: every icon carries its upstream tags
 shelf and the search reads them, so the word you would use on the slide is a good enough
 query. It is a function in the build script, so it answers on the next build -- put
 every icon you are unsure of in one `print(find_icons(...))` and read them all from one
-round. Ask one concrete word at a time: `inventory` reaches `building_warehouse` through
-its tags, while an abstraction of several words -- `supply chain`, `throughput` -- matches
-on neither name nor tag and comes back with nothing usable or nothing at all. A few hundred
-names need no lookup at all, grouped by what they are for in
+round. A few hundred names need no lookup at all, grouped by what they are for in
 [deck/build/references/icons.md](deck/build/references/icons.md).
 
 Keep them small -- an icon is a mark beside type, so the square follows the line it labels

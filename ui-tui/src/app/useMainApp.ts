@@ -39,6 +39,7 @@ import { terminalParityHints } from '../lib/terminalParity.js'
 import { buildToolTrailLine, sameToolTrailGroup, toolTrailLabel } from '../lib/text.js'
 import { estimatedMsgHeight, messageHeightKey } from '../lib/virtualHeights.js'
 import { createChatStream, type ChatStreamHandle, type ChatStreamRpcClient } from './chatStream.js'
+import { showCopyNotice } from './copyNoticeStore.js'
 import { createGatewayEventHandler } from './createGatewayEventHandler.js'
 import { createSlashHandler } from './createSlashHandler.js'
 import {
@@ -440,6 +441,40 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   )
 
   const sys = useCallback((text: string) => appendMessage({ role: 'system', text }), [appendMessage])
+
+  // Terminals do not forward their own copy shortcut to a TUI that enables
+  // mouse tracking, so copy-on-select is what makes a transcript selection
+  // copyable at all. That holds on every platform, not just macOS.
+  //
+  // Nothing on screen changes when a drag ends, so the report is the only
+  // confirmation the clipboard was written. The first copy of a session
+  // carries the path caveat and stays in the transcript: it is the answer a
+  // user comes looking for after a paste comes up empty minutes later, and it
+  // cannot pile up because it is once per session by construction. The terse
+  // repeats, which are unbounded, show as a transient notice above the
+  // composer instead of stacking rows.
+  //
+  // The path caveat is per session while this hook outlives any one session:
+  // `newSession()` and `resumeById()` replace `ui.sid` without remounting it,
+  // so which sessions have been told belongs to the reporter rather than to a
+  // flag here, which would stay set and drop the caveat from the next
+  // session's first copy. The sid is read through `getUiState()` so a session
+  // change does not tear down and rebuild the bus subscription.
+  const reportCopyOnSelect = useRef(createCopyOnSelectReporter())
+
+  useEffect(
+    () =>
+      subscribeCopyOnSelect(selection, (text, path) => {
+        const report = reportCopyOnSelect.current(graphemeCount(text), path, getUiState().sid ?? 'draft')
+
+        if (report.firstOfSession) {
+          sys(report.text)
+        } else {
+          showCopyNotice(report.text, 3000)
+        }
+      }),
+    [selection, sys]
+  )
 
   const page = useCallback(
     (text: string, title?: string) => patchOverlayState({ pager: { lines: text.split('\n'), offset: 0, title } }),

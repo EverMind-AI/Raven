@@ -2,7 +2,6 @@
 
 import re
 import time
-from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
@@ -17,7 +16,6 @@ from raven.agent.subagent.dag_store import (
     read_session_nodes,
     release_node_claim,
 )
-from raven.agent.subagent.delegate import current_delegate, dispatch_charter
 from raven.agent.subagent.history import NODE_ID_PATTERN, nodes_root, session_history_root
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX
@@ -206,21 +204,7 @@ class SpawnTool(Tool):
         }
         agents = self._agents()
         names = sorted(a.name for a in agents)
-        labels, worker_lines = self._workers()
-        if labels:
-            # This turn's playbook named the workers, so they are what the model
-            # picks between: each carries a brief the task written here has to
-            # match, and a bare agent name would carry none.
-            props["subagent"] = {
-                "type": "string",
-                "enum": labels,
-                "description": (
-                    "Which worker runs this task. Required: pass one of the labels "
-                    "below -- the label itself, not the agent it runs on. "
-                    "This task's workers, each with what it is for:\n" + worker_lines
-                ),
-            }
-        elif names:
+        if names:
             props["subagent"] = {
                 "type": "string",
                 "enum": names,
@@ -247,83 +231,10 @@ class SpawnTool(Tool):
             "properties": props,
             "required": (
                 ["task_summary", "node_id", "prompt_template", "subagent"]
-                if (labels or names)
+                if names
                 else ["task_summary", "node_id", "prompt_template"]
             ),
         }
-
-    def to_schema(self) -> dict[str, Any]:
-        """Render this call's own shape, fresh, for every model call.
-
-        Authored rather than inherited on purpose: a tool that defines its own
-        ``to_schema`` has *declared* a dynamic shape, and ``ToolRegistry``
-        serves those live instead of from the admission snapshot. Without this,
-        the roster below would be frozen at admission and a turn's worker
-        table -- a per-turn thing by construction -- would never reach the model.
-
-        The table is fixed for the whole turn, so re-rendering yields the same
-        array on every iteration of it; what moves between turns is what the
-        model is meant to see move.
-        """
-        return super().to_schema()
-
-    def _workers(self) -> tuple[list[str], str]:
-        """This turn's labels and the lines describing them, or (``[]``, "").
-
-        Empty outside a playbook turn, which is what keeps the roster below on
-        the path it took before playbooks existed.
-        """
-        table = current_delegate()
-        if not table:
-            return [], ""
-        labels = table.labels()
-        lines = []
-        for label in labels:
-            worker = table.get(label)
-            if worker is None:
-                continue
-            brief = worker.brief.strip()
-            # The agent is named after the brief, not in parentheses after the
-            # label. Measured on real turns: with `- label (Agent): brief` the
-            # dispatching model read the parenthesised agent as the value to
-            # pass and sent the roster name, which the enum then refused. Once
-            # it had been refused twice one run abandoned delegation outright
-            # and did the work itself -- the opposite of what a table that
-            # names workers is for.
-            tail = f" [runs on {worker.agent}]"
-            lines.append(f"- {label}: {brief}{tail}" if brief else f"- {label}{tail}")
-        return labels, "\n".join(lines)
-
-    def _resolve_payload(self, subagent: str | None) -> "Mapping[str, Any] | None":
-        """The charter this dispatch should carry to a Raven worker, if any.
-
-        Separate from :meth:`_resolve_worker` because the two answer different
-        parties: that one answers this process (which agent, what preamble),
-        this one answers the worker's own process, and only a Raven worker has
-        anything to read it with.
-        """
-        table = current_delegate()
-        if not table or not subagent:
-            return None
-        worker = table.get(subagent)
-        return worker.payload if worker is not None else None
-
-    def _resolve_worker(self, subagent: str | None) -> tuple[str | None, str]:
-        """Map a label onto its roster agent, and hand back its charter.
-
-        A label resolves to no backend, so nothing downstream may ever see one:
-        the dispatch, the instance registry and the DAG tool are all given the
-        agent name. An unknown value passes through untouched -- the roster
-        check further down is the one place that refuses a name, and answering
-        the same mistake here would word it twice.
-        """
-        table = current_delegate()
-        if not table or not subagent:
-            return subagent, ""
-        worker = table.get(subagent)
-        if worker is None:
-            return subagent, ""
-        return worker.agent, worker.charter
 
     def _is_stateful(self, agent: str | None) -> bool:
         """Whether this target can continue a handle handed back to it.
@@ -459,11 +370,6 @@ class SpawnTool(Tool):
         # whether this call goes on to dispatch or is refused at any step below.
         self._pending.pop(org.session_key, None)
         subagent = subagent or kwargs.pop("agent", None)
-        # A label is this turn's name for a worker; everything below dispatches
-        # on the roster agent behind it. Resolved before the roster check so a
-        # label is never reported back as an unknown agent.
-        payload = self._resolve_payload(subagent)
-        subagent, charter = self._resolve_worker(subagent)
         template = prompt_template or kwargs.pop("task", None)
         if not template:
             return "Error: `prompt_template` is required -- it is the task the sub-agent runs."
@@ -491,10 +397,6 @@ class SpawnTool(Tool):
         # a run that started on a prompt with a hole in it.
         try:
             task = await self._render(template, inputs or {}, subagent, org.session_key, node_id)
-            # The charter rides on the task rather than replacing it: the worker
-            # gets its brief, then the thing this dispatch actually asked for.
-            if charter:
-                task = charter + task
         except DagValidationError as exc:
             detail = str(exc).rstrip()
             if detail and detail[-1] not in ".!?":
@@ -519,28 +421,23 @@ class SpawnTool(Tool):
                 taken, owner = claim
                 return "Error: " + duplicate_node_id(node_id, owner, readable=known.is_readable(taken), taken_as=taken)
             await claim_node(backend, history_root, node_id, kind="spawn", started_at_ms=int(time.time() * 1000))
-        # The charter rides the dispatch rather than the call signature:
-        # ``SubagentBackend.run`` is frozen contract and every backend would
-        # have to know a field only a Raven worker can use. The transport that
-        # can carry it asks for it instead.
-        with dispatch_charter(payload):
-            result = await self._manager.spawn(
-                node_id=node_id,
-                task=task,
-                task_summary=task_summary,
-                origin_channel=org.channel,
-                origin_chat_id=org.chat_id,
-                session_key=org.session_key,
-                agent=subagent,
-                instance=instance,
-                instance_auto=minted,
-                workspace=workdir.current(),
-                # The unrendered template, not `task`: the completion announcement
-                # shows this verbatim with no truncation, and `task` may have
-                # inlined a whole file through `{{ ref:<path> }}`.
-                authored_task=template,
-                tool_call_id=self._tool_call_id.get(),
-            )
+        result = await self._manager.spawn(
+            node_id=node_id,
+            task=task,
+            task_summary=task_summary,
+            origin_channel=org.channel,
+            origin_chat_id=org.chat_id,
+            session_key=org.session_key,
+            agent=subagent,
+            instance=instance,
+            instance_auto=minted,
+            workspace=workdir.current(),
+            # The unrendered template, not `task`: the completion announcement
+            # shows this verbatim with no truncation, and `task` may have
+            # inlined a whole file through `{{ ref:<path> }}`.
+            authored_task=template,
+            tool_call_id=self._tool_call_id.get(),
+        )
         # Same reason the handle below is withheld: a refusal comes back as the
         # result, not an exception, and it lands after the id was claimed. The
         # task never ran and left no record, so holding its id would burn that

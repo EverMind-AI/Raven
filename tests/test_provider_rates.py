@@ -998,10 +998,10 @@ def test_a_model_the_catalogue_does_not_know_gets_the_one_fallback(monkeypatch):
 
     assert rates.DEFAULT_MAX_OUTPUT_TOKENS == 64_000
     assert not hasattr(rates, "CLAUDE_MAX_OUTPUT_TOKENS"), "the claude half of the fallback is gone, not renamed"
-    assert rates.DEFAULT_CONTEXT_WINDOW_TOKENS - rates.MIN_PROMPT_TOKENS == 49_152, (
-        "the reserve alone would leave this much, and the per-iteration bound is what actually answers"
+    assert (
+        rates.resolve_max_output_tokens("probe/unknown")
+        == rates.DEFAULT_CONTEXT_WINDOW_TOKENS - rates.MIN_PROMPT_TOKENS
     )
-    assert rates.resolve_max_output_tokens("probe/unknown") == rates.MAX_OUTPUT_TOKENS_PER_ITERATION
 
 
 def test_a_row_filing_its_window_as_the_ceiling_is_not_trusted(monkeypatch):
@@ -1016,8 +1016,7 @@ def test_a_row_filing_its_window_as_the_ceiling_is_not_trusted(monkeypatch):
     """
     _patch_table(monkeypatch, {"probe/big": {"max_input_tokens": 1000000, "max_output_tokens": 1000000}})
 
-    assert rates.declared_max_output_tokens("probe/big") is None, "the row declares nothing the guard will take"
-    assert rates.resolve_max_output_tokens("probe/big") == rates.MAX_OUTPUT_TOKENS_PER_ITERATION
+    assert rates.resolve_max_output_tokens("probe/big") == rates.DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def test_the_same_row_shape_is_rejected_at_the_second_lookup_too(monkeypatch):
@@ -1026,8 +1025,7 @@ def test_the_same_row_shape_is_rejected_at_the_second_lookup_too(monkeypatch):
     one tier alone leaves the other to hand back what it just rejected."""
     _patch_table(monkeypatch, {}, info=lambda m: {"max_input_tokens": 1000000, "max_output_tokens": 1000000})
 
-    assert rates.declared_max_output_tokens("probe/big") is None, "the second tier rejects the shape too"
-    assert rates.resolve_max_output_tokens("probe/big") == rates.MAX_OUTPUT_TOKENS_PER_ITERATION
+    assert rates.resolve_max_output_tokens("probe/big") == rates.DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def test_a_small_suspicious_row_is_not_raised_past_its_own_number(monkeypatch):
@@ -1048,30 +1046,20 @@ def test_a_small_suspicious_row_is_not_raised_past_its_own_number(monkeypatch):
 
 
 def test_a_row_whose_ceiling_sits_below_its_window_is_left_alone(monkeypatch):
-    """The ordinary shape, and the majority of the table. Left alone means the
-    guard takes the row's own number rather than discarding it; what a request
-    finally carries is that number bounded, which is a separate step.
-    """
+    """The ordinary shape, and the majority of the table."""
     _patch_table(monkeypatch, {"probe/sane": {"max_input_tokens": 200000, "max_output_tokens": 64000}})
 
-    assert rates.declared_max_output_tokens("probe/sane") == 64000
-    assert rates.resolve_max_output_tokens("probe/sane") == rates.MAX_OUTPUT_TOKENS_PER_ITERATION
+    assert rates.resolve_max_output_tokens("probe/sane") == 64000
 
 
 def test_an_explicit_pin_is_still_the_caller_s_to_make(monkeypatch):
-    """A pin asks for a deliberately *short* answer, and every pin in the tree
-    is one: the curator asks for 2048, the judge for 64. Those are the ones that
-    must keep arriving unchanged.
-
-    A pin is bounded above by the same resolution everything else is, because
-    this number is the loop's reservation as well as the request body's -- a pin
-    the loop did not reserve for is the two sides disagreeing.
+    """The escape hatch for a caller that really does want a long single answer.
+    Bounded by what the model accepts, not by the pin.
     """
     _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 200_000, "max_output_tokens": 64_000}})
 
-    assert send_max_tokens(None, "probe/roomy", pinned=2048) == 2048, "the curator's pin is untouched"
-    assert send_max_tokens(None, "probe/roomy", pinned=64) == 64, "the judge's pin is untouched"
-    assert send_max_tokens(None, "probe/roomy", pinned=999_999) == rates.MAX_OUTPUT_TOKENS_PER_ITERATION
+    assert send_max_tokens(None, "probe/roomy", pinned=64_000) == 64_000
+    assert send_max_tokens(None, "probe/roomy", pinned=999_999) == 64_000
 
 
 def test_the_ceiling_leaves_the_prompt_room_inside_the_window(monkeypatch):
@@ -1085,19 +1073,17 @@ def test_the_ceiling_leaves_the_prompt_room_inside_the_window(monkeypatch):
     a vendor's own answer and not an implausible one, and half cut it to
     500000.
     """
-    _patch_table(monkeypatch, {"probe/snug": {"max_input_tokens": 40_000, "max_output_tokens": 38_000}})
-    assert send_max_tokens(None, "probe/snug") == 40_000 - rates.MIN_PROMPT_TOKENS, (
-        "declared 38000 would leave 2000 for the prompt, so the reserve bounds it"
+    _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 1_000_000, "max_output_tokens": 900_000}})
+    assert send_max_tokens(None, "probe/roomy") == 900_000, "the window has room for both, so the declaration stands"
+
+    _patch_table(monkeypatch, {"probe/snug": {"max_input_tokens": 65_536, "max_output_tokens": 64_000}})
+    assert send_max_tokens(None, "probe/snug") == 65_536 - rates.MIN_PROMPT_TOKENS, (
+        "declared 64000 would leave 1536 for the prompt, so the reserve bounds it"
     )
 
     _patch_table(monkeypatch, {"probe/tiny": {"max_input_tokens": 8_192, "max_output_tokens": 8_000}})
     assert send_max_tokens(None, "probe/tiny") == 4_096, (
         "below twice the reserve there is none to take, so the split is even"
-    )
-
-    _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 1_000_000, "max_output_tokens": 900_000}})
-    assert send_max_tokens(None, "probe/roomy") == rates.MAX_OUTPUT_TOKENS_PER_ITERATION, (
-        "the reserve leaves 983616 here, so it is the per-iteration bound that answers"
     )
 
 
@@ -1114,13 +1100,9 @@ def test_a_declaration_above_the_fallback_is_honoured(monkeypatch):
     """
     _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 2_000_000, "max_output_tokens": 131_072}})
 
-    assert rates.declared_max_output_tokens("probe/roomy") == 131_072, "the declaration is read, not replaced"
-
-    _patch_table(monkeypatch, {"probe/modest": {"max_input_tokens": 2_000_000, "max_output_tokens": 8_000}})
-    assert send_max_tokens(None, "probe/modest") == 8_000, (
-        "a declaration under the per-iteration bound is what the request carries, which is what "
-        "substituting the fallback used to lose"
-    )
+    assert rates.declared_max_output_tokens("probe/roomy") == 131_072
+    assert rates.resolve_max_output_tokens("probe/roomy") == 131_072
+    assert send_max_tokens(None, "probe/roomy") == 131_072, "the declaration is the ceiling, not our constant"
 
 
 def test_a_row_filing_its_window_as_a_ceiling_still_gets_the_fallback(monkeypatch):
@@ -1139,7 +1121,7 @@ def test_a_row_filing_its_window_as_a_ceiling_still_gets_the_fallback(monkeypatc
     )
 
     assert rates.declared_max_output_tokens("probe/window_as_ceiling") is None
-    assert rates.resolve_max_output_tokens("probe/window_as_ceiling") == rates.MAX_OUTPUT_TOKENS_PER_ITERATION
+    assert rates.resolve_max_output_tokens("probe/window_as_ceiling") == 64_000
     assert rates.DEFAULT_MAX_OUTPUT_TOKENS == 64_000, "raising this raises what those rows are sent"
 
 
@@ -1159,50 +1141,6 @@ def test_an_endpoint_declaring_less_than_the_bound_lowers_it(monkeypatch):
     assert rates.declared_max_output_tokens("hosted_vllm/vendor/tiny", allow_fetch=False) is None, (
         "an id that does not name OpenRouter must not read OpenRouter's row"
     )
-
-
-def test_a_declaration_far_inside_its_window_is_still_bounded_per_iteration(monkeypatch):
-    """The bound the reserve cannot supply. ``MIN_PROMPT_TOKENS`` only bites
-    where the window is tight, so a declaration well inside a large window
-    passed untouched and reserved the whole of it for a reply no one iteration writes.
-
-    The declaration is still read -- this is a bound on it, not a substitution
-    for it -- which is what keeps the tier below from being lost.
-    """
-    _patch_table(monkeypatch, {"probe/wide": {"max_input_tokens": 1_048_576, "max_output_tokens": 943_718}})
-
-    assert rates.declared_max_output_tokens("probe/wide") == 943_718
-    assert rates.resolve_max_output_tokens("probe/wide") == rates.MAX_OUTPUT_TOKENS_PER_ITERATION
-
-
-def test_a_declaration_under_the_per_iteration_bound_is_untouched(monkeypatch):
-    """The bound is a ``min``, so everything already below it is unaffected --
-    the half of the catalogue that declares small, and every pin in the tree."""
-    for declared in (64, 2048, 4096, 16_384, 32_768):
-        _patch_table(monkeypatch, {"probe/short": {"max_input_tokens": 1_000_000, "max_output_tokens": declared}})
-        assert rates.resolve_max_output_tokens("probe/short") == declared
-
-
-def test_the_two_endpoints_that_returned_400_now_leave_the_prompt_room(monkeypatch):
-    """The defect, in the two shapes it was caught in. Both walls are stated as
-    the sum of prompt and reply, so a reply reserving nearly the whole window
-    leaves a prompt that cannot fit, and the refusal is ``invalid_request`` --
-    not retryable, so the turn dies rather than degrades.
-
-    The prompts are the ones the failing requests actually carried.
-    """
-    for name, window, declared, prompt_sent in (
-        ("probe/glm46", 204_800, 131_000, 73_878),
-        ("probe/glm53", 1_048_576, 943_718, 127_373),
-    ):
-        _patch_table(monkeypatch, {name: {"max_input_tokens": window, "max_output_tokens": declared}})
-
-        before = min(declared, max(window - rates.MIN_PROMPT_TOKENS, window // 2))
-        assert window - before < prompt_sent, "the shape that returned 400: the prompt did not fit beside the reply"
-
-        reserved = send_max_tokens(None, name)
-        assert reserved == rates.MAX_OUTPUT_TOKENS_PER_ITERATION
-        assert window - reserved >= prompt_sent, "the prompt now fits beside the reply the request asks for"
 
 
 # --- Hyphen/dot version spellings (OpenRouter files what vendors hyphenate) ---
@@ -1318,3 +1256,53 @@ def test_the_cheap_tier_does_not_report_a_miss_the_next_call_may_fill(monkeypatc
         logger.remove(handle)
 
     assert not [line for line in lines if "nobody/unmapped-model" in line]
+
+# ── offline context (rates_offline) ────────────────────────────────────
+
+
+def test_offline_context_blocks_warm_and_lookups(monkeypatch):
+    """Inside rates_offline(): no warm thread, no fetch, no rate ladder."""
+    import threading
+
+    called = threading.Event()
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", lambda **_k: called.set() or {})
+    monkeypatch.setattr(rates, "_WARM_AT", 0.0)
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
+
+    with rates.rates_offline():
+        rates.warm_catalog_in_background()
+        assert rates.token_rates("openrouter/openai/gpt-4o-mini") is None
+
+    assert not called.wait(0.3)
+
+
+def test_offline_context_does_not_leak(monkeypatch):
+    """After the context exits, a normal turn's warm still fires its thread."""
+    import threading
+
+    called = threading.Event()
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", lambda **_k: called.set() or {})
+    monkeypatch.setattr(rates, "_WARM_AT", 0.0)
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
+
+    with rates.rates_offline():
+        rates.warm_catalog_in_background()
+
+    rates.warm_catalog_in_background()
+    assert called.wait(5), "the warm thread should run normally outside the offline context"
+
+
+def test_offline_fetch_entry_is_cache_only(monkeypatch):
+    """Even a direct fetch call inside the context answers from cache only."""
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
+    rates._OPENROUTER_CACHE.update({"m": {"pricing": {}}})
+
+    def _boom(*_a, **_k):
+        raise AssertionError("network fetch attempted inside rates_offline()")
+
+    monkeypatch.setattr(rates.model_catalog_cache, "load", lambda: None)
+    monkeypatch.setattr(rates.httpx, "get", _boom, raising=False)
+    with rates.rates_offline():
+        # The real implementation (conftest's autouse guard stubs the name).
+        table = _REAL_FETCH()
+    assert table == {"m": {"pricing": {}}}

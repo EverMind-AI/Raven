@@ -134,11 +134,7 @@ def test_the_registered_row_reaches_the_window_and_ceiling_resolvers() -> None:
     import_litellm()
 
     assert rates.resolve_context_window("deepseek/deepseek-flash") == 1_048_576
-    assert rates.declared_max_output_tokens("deepseek/deepseek-flash") == 384_000
-    # The row's ceiling is where the resolver starts, not what it returns: a
-    # declaration this far inside the window still outruns any one reply, so
-    # what a request carries is the per-iteration bound.
-    assert rates.resolve_max_output_tokens("deepseek/deepseek-flash") == rates.MAX_OUTPUT_TOKENS_PER_ITERATION
+    assert rates.resolve_max_output_tokens("deepseek/deepseek-flash") == 384_000
 
 
 def test_a_row_the_installed_catalogue_already_has_is_left_alone(monkeypatch) -> None:

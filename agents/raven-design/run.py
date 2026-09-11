@@ -72,18 +72,6 @@ def engine_skill_dir() -> Path | None:
     return Path(spec.origin).parent / "skills"
 
 
-def product_skill_dir() -> Path | None:
-    """This product's own Skill corpus, beside the manifest that declares it.
-
-    Separate from the engine wheel's: the engine's corpus is the shared visual
-    domain, and this one carries what is true of the deployment the product runs
-    on -- which tools answer here, and what the gates refuse. It travels with the
-    folder, so a checkout that has the manifest has it too.
-    """
-    folder = HERE / "skills"
-    return folder if folder.is_dir() else None
-
-
 def log(message: str) -> None:
     """Record a diagnostic without contaminating the protocol stream."""
     print(message, file=sys.stderr, flush=True)
@@ -133,14 +121,6 @@ def render_config(source: Path) -> Path:
     # the loop enforces them per session without reading the overlay -- which
     # the engine does not read either. The overlay stays on the entry as the
     # record of what the mode changed.
-    #
-    # A mode that names an effort of its own keeps it; the rest inherit the
-    # host's. Medium is the one that names one: below the top tier this agent
-    # designs the deck itself instead of handing it to the template lane, and
-    # the cheapest tier asking for the host's full thinking budget on top of
-    # that is the combination nobody chose. The other two say nothing, which
-    # is the same as inheriting -- an unset entry effort reads
-    # ``agents.defaults.reasoningEffort``, and that is the host's.
     catalogue = render.mode_catalogue(
         MODES_DIR,
         MODE_LABELS,
@@ -155,7 +135,7 @@ def render_config(source: Path) -> Path:
         for entry in catalogue.values():
             overlay_defaults = ((entry.get("overlay") or {}).get("agents") or {}).get("defaults") or {}
             overlay_defaults.pop("reasoningEffort", None)
-            entry.setdefault("reasoningEffort", defaults.get("reasoningEffort"))
+            entry["reasoningEffort"] = defaults.get("reasoningEffort")
         acp = config.get("acp")
         if not isinstance(acp, dict):
             acp = config["acp"] = {}
@@ -171,14 +151,12 @@ def render_config(source: Path) -> Path:
     # read_skill local/<name> instruction resolves on this host. Merged per
     # entry, keyed by path (the pw2b lesson): an operator who mounts
     # directories of their own keeps every row they wrote AND the engine row.
-    for skill_dir, source in ((engine_skill_dir(), ENGINE_PLUGIN_ID), (product_skill_dir(), "raven-design")):
-        if skill_dir is None:
-            continue
+    if skill_dir := engine_skill_dir():
         rows = config.setdefault("skillForge", {}).setdefault("localDirs", [])
         if isinstance(rows, list) and not any(
             isinstance(row, dict) and row.get("path") == str(skill_dir) for row in rows
         ):
-            rows.append({"path": str(skill_dir), "name": source, "alwaysEnabled": True})
+            rows.append({"path": str(skill_dir), "name": ENGINE_PLUGIN_ID, "alwaysEnabled": True})
 
     # The resident Task State writes its sidecars under the product state
     # root -- work, never the engine home (the sessions it is keyed by live
