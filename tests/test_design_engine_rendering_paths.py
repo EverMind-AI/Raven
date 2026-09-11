@@ -235,3 +235,25 @@ async def test_cancelling_boxlite_job_stops_vm_and_removes_staging(
         await task
     assert stopped.is_set()
     assert list(policy.runtime_root.iterdir()) == []
+
+
+def test_the_boxlite_backend_can_build_the_executor_it_asks_raven_for(tmp_path: Path) -> None:
+    """The constructor call crosses the raven/design-engine seam, so a new
+    required argument on raven's side fails here synchronously, before any VM.
+    The cancellation test above replaces ``_executor``, so it cannot see that."""
+    from raven.config.paths import get_sandbox_dir
+    from raven.sandbox.boxlite_executor import BoxliteExecutor
+
+    backend = BoxLiteRenderBackend(
+        RenderConfig(chrome_path=None, libreoffice_path=None),
+        _policy(tmp_path),
+        image="renderer:test",
+        cpus=1,
+        memory_mib=512,
+        create_timeout_seconds=1,
+    )
+
+    executor = backend._executor(tmp_path / "job")
+
+    assert isinstance(executor, BoxliteExecutor)
+    assert executor._sandbox_home == get_sandbox_dir("boxlite")

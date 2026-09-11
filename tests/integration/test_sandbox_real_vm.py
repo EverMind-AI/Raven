@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from raven.config.paths import get_sandbox_dir
+
 requires_kvm = pytest.mark.skipif(
     sys.platform == "linux" and not Path("/dev/kvm").exists(),
     reason="/dev/kvm not available",
@@ -70,6 +72,7 @@ async def executor(tmp_path):
         workspace=tmp_path,
         cpus=1,
         memory_mib=512,
+        sandbox_home=get_sandbox_dir("boxlite"),
     ) as e:
         yield e
 
@@ -105,6 +108,7 @@ class TestBoxliteExecutorIntegration:
             workspace=tmp_path,
             cpus=1,
             memory_mib=512,
+            sandbox_home=get_sandbox_dir("boxlite"),
         ) as e:
             result = await e.exec("echo lifecycle")
         assert result.stdout.strip() == "lifecycle"
@@ -121,6 +125,7 @@ async def node_executor(tmp_path):
         cpus=1,
         memory_mib=1024,  # npm needs more memory than basic ubuntu tests
         create_timeout=600,  # first-run image pull can be slow
+        sandbox_home=get_sandbox_dir("boxlite"),
     ) as e:
         yield e
 

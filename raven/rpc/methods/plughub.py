@@ -67,7 +67,7 @@ def _as_rpc(e: PlugConnectError) -> Exception:
 
 async def plughub_search(params: dict) -> dict:
     from raven.market import catalog_categories, catalog_search
-    from raven.security.urls import HubTrustError
+    from raven.market.vetting import HubTrustError
 
     q = str(params.get("q") or "").strip()
     category = str(params.get("category") or "").strip()
@@ -86,7 +86,7 @@ async def plughub_search(params: dict) -> dict:
 
 async def plughub_detail(params: dict) -> dict:
     from raven.market import catalog_detail
-    from raven.security.urls import HubTrustError
+    from raven.market.vetting import HubTrustError
 
     entry_id = str(params.get("id") or "")
     try:

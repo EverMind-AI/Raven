@@ -1446,12 +1446,8 @@ other way (enforced by the layer contracts in `pyproject.toml`).
 **Security** (`security/`):
 The address vocabulary (`hosts.py`: what a host string denotes, in every
 spelling) that the outbound policy (`network.py`: default-deny fetchability, the
-guarded per-hop fetch), the URL trust rules (`urls.py`: what a hub endpoint or a
-hub-supplied download may name -- judged on the string, answered by raising) and
-the browser's navigation policy all read; and prompt-injection fences
-(`trust.py`). Both hubs read `urls.py`: PlugHub through `market/vetting.py`,
-which keeps only the catalogue-entry half, and the Skill Hub client directly.
-A cross-cutting
+guarded per-hop fetch), the market's vetting (`market/vetting.py`) and the browser's navigation
+policy all read; and prompt-injection fences (`trust.py`). A cross-cutting
 mechanism and a member of the channels' shared-services shelf -- cargo may
 depend on it (dingtalk and qq do). Same leaf rule as `auth`.
 
