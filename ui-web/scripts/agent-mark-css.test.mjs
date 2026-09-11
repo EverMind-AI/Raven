@@ -80,9 +80,11 @@ describe('the agent mark filters', () => {
     }
   })
 
-  /* The tone filters handle a file that says nothing about the theme. One file
-     says plenty: miromind.svg is a favicon with its own prefers-color-scheme
-     rule, and an <img>'s SVG evaluates that against the embedding element's
+  /* The tone filters handle a file that says nothing about the theme. Two files
+     say plenty: miromind.svg, a favicon with its own prefers-color-scheme rule,
+     and raven.svg, which carries one because a black bird on the dark surface
+     is a silhouette and no tone filter can recolour a mark that is not one
+     colour. An <img>'s SVG evaluates that rule against the embedding element's
      used color-scheme rather than against this page's data-theme. Both
      directions are needed, because the mismatch runs both ways -- a dark OS
      under the app's explicitly light default, and a light OS under a chosen

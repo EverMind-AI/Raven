@@ -1350,8 +1350,8 @@ describe('xa island', () => {
      row's name. A configured row's name is the reader's to change, so keying on
      it would cost a renamed agent its identity, and would hand a brand to a
      hand-written row that merely spells itself like a preset. The generic glyph
-     is what a row with no preset gets: one of the shipped products, or an agent
-     the reader wrote. A glyph rather than an initial in a coloured square,
+     is what a row with neither a preset nor one of raven's own flags gets: an
+     agent the reader wrote. A glyph rather than an initial in a coloured square,
      which is what this page drew for every row before it had marks at all. */
   describe('the brand mark', () => {
     const markImg = (name: string): HTMLImageElement | null =>
@@ -1397,14 +1397,30 @@ describe('xa island', () => {
     })
 
     it('draws the generic glyph, never an initial, for a row with no preset', async () => {
-      install([row({ name: 'Raven-Code', preset: undefined, configured: false, vendored: true, kind: 'acp' })])
+      install([row({ name: 'my local helper', preset: undefined, kind: 'cli' })])
       await mount()
 
-      const slot = rowNamed('Raven-Code').querySelector('.agent-mark')
+      const slot = rowNamed('my local helper').querySelector('.agent-mark')
       expect(slot).not.toBeNull()
       expect(slot!.querySelector('svg')).not.toBeNull()
-      expect(markImg('Raven-Code')).toBeNull()
-      expect(rowNamed('Raven-Code').querySelector('.pmtile')).toBeNull()
+      expect(markImg('my local helper')).toBeNull()
+      expect(rowNamed('my local helper').querySelector('.pmtile')).toBeNull()
+    })
+
+    /* Raven's own agents have no preset to key off -- there is no third-party
+       package behind them to name -- so the flags the server sets stand in for
+       one. Both of them, because they are set on different rows and a reading
+       that covers only `builtin` leaves every Discovered agent wearing the
+       generic glyph, which is what they wore before. */
+    it('draws its own mark for raven itself and for a discovered agent', async () => {
+      install([
+        row({ name: 'raven', preset: undefined, kind: 'builtin', builtin: true, configured: false }),
+        row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false }),
+      ])
+      await mount()
+
+      expect(markImg('raven')!.getAttribute('src')).toBe('assets/agents/raven.svg')
+      expect(markImg('Raven-Code')!.getAttribute('src')).toBe('assets/agents/raven.svg')
     })
 
     /* One identity, drawn the same in both places. The card headed itself with

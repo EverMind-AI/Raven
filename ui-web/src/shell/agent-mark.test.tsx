@@ -22,7 +22,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { AgentMark, agentMarkPath } from './agent-mark'
+import { AgentMark, agentMarkPath, isOwnAgent } from './agent-mark'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -40,8 +40,8 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-const draw = (preset?: string): void => {
-  act(() => { root.render(<AgentMark preset={preset} />) })
+const draw = (preset?: string, own?: boolean): void => {
+  act(() => { root.render(<AgentMark preset={preset} own={own} />) })
 }
 
 const img = (): HTMLImageElement | null => host.querySelector('img')
@@ -98,6 +98,53 @@ describe('an agent row s brand mark', () => {
       expect(img()).toBe(null)
       expect(host.querySelector('svg')).toBeTruthy()
     }
+  })
+
+  /* Raven's own agents, which reach here with no preset because there is no
+     third-party package behind them to name. The flag is the server's
+     `builtin || vendored`, so this is the same kind of claim a preset is and
+     not a test on the row's name. */
+  describe('raven s own', () => {
+    it('draws the project s own mark off the flag, with no preset in hand', () => {
+      expect(agentMarkPath(undefined, true)).toBe('assets/agents/raven.svg')
+      draw(undefined, true)
+      expect(img()?.getAttribute('src')).toBe('assets/agents/raven.svg')
+    })
+
+    /* No `tone`, and that is load-bearing rather than an omission: raven.svg
+       carries a prefers-color-scheme rule of its own, so the stylesheet's
+       invert must not also reach it -- it would undo the file's answer and put
+       a black raven back on the dark surface. */
+    it('claims no tone, because the file answers the theme itself', () => {
+      draw(undefined, true)
+      expect(img()?.dataset.tone).toBe(undefined)
+    })
+
+    /* The flag is read before the table. A row carrying some preset string is
+       still a Discovered agent of this install's own, and the name it happens
+       to spell is not evidence about anything. */
+    it('prefers the flag to whatever preset the row spells', () => {
+      expect(agentMarkPath('claude_code', true)).toBe('assets/agents/raven.svg')
+    })
+
+    it('leaves an ordinary row alone when the flag is false', () => {
+      expect(agentMarkPath(undefined, false)).toBe(null)
+      draw(undefined, false)
+      expect(img()).toBe(null)
+      expect(host.querySelector('svg')).toBeTruthy()
+    })
+
+    /* Both flags, spelled once here so four call sites cannot drift: a reading
+       that covers only `builtin` leaves every Discovered agent wearing the
+       generic glyph. */
+    it('counts both flags the server sets, and nothing else', () => {
+      expect(isOwnAgent({ builtin: true })).toBe(true)
+      expect(isOwnAgent({ vendored: true })).toBe(true)
+      expect(isOwnAgent({ builtin: false, vendored: false })).toBe(false)
+      expect(isOwnAgent({})).toBe(false)
+      expect(isOwnAgent(undefined)).toBe(false)
+      expect(isOwnAgent(null)).toBe(false)
+    })
   })
 
   /* One column for both shapes. The glyph slot and the mark slot are the same
