@@ -235,6 +235,7 @@ def make_provider(config: Config, model: str | None = None):
         reasoning_effort=defaults.reasoning_effort,
         timeout=defaults.llm_call_timeout,
         stream_idle_timeout=defaults.stream_idle_timeout,
+        first_byte_timeout=defaults.llm_first_byte_timeout,
     )
     return provider
 
@@ -262,6 +263,7 @@ def make_lazy_provider(config: Config):
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
             stream_idle_timeout=defaults.stream_idle_timeout,
+            first_byte_timeout=defaults.llm_first_byte_timeout,
         ),
         initial_endpoint_label=initial_endpoint_label,
     )

@@ -150,6 +150,10 @@ TRUNK_HELD_OUT = {
 TRUNK_ONLY_DEFAULTS = {
     "llmRetryAfterOutput": True,
     "llmErrorRetryDelays": [30, 60, 120, 240, 300, 300, 300, 300],
+    # Stated rather than inherited: the host default is 0.1, which nobody chose for
+    # a deck -- the two coding agents raised theirs to 1.0 and the author writing
+    # the copy and picking the layouts was left at the host's number by omission.
+    "temperature": 0.95,
     # The fork ran with compaction off and a 20-page deck reached 450k tokens a call
     # (62M input tokens over 137 turns). The host's own compaction, at the host's
     # own thresholds but for the trigger ratio; the deck-specific part is the
@@ -176,6 +180,9 @@ GLM_ROUTING = {
 TRUNK_OVERRIDDEN_DEFAULTS = {
     "llmCallTimeout": (600, 1800),
     "modelOverrides": (GROK_ROUTING, {**GROK_ROUTING, **GLM_ROUTING}),
+    # The baseline tier is the source config, so this row is also what the max tier
+    # asks for -- it declares no effort of its own and inherits this one.
+    "reasoningEffort": ("medium", "high"),
 }
 
 
@@ -718,7 +725,11 @@ def test_the_three_tiers_are_declared_from_the_modes_directory(grounded):
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     modes = data["acp"]["modes"]
     assert sorted(modes) == ["high", "max", "medium"] and data["acp"]["defaultMode"] == "high"
-    assert modes["medium"]["reasoningEffort"] == "low" and "reasoningEffort" not in modes["high"]
+    assert modes["medium"]["reasoningEffort"] == "low" and modes["high"]["reasoningEffort"] == "high"
+    # max declares none, which is how it inherits the source config's -- the same
+    # absence that leaves its caps unset. A max.json would not be read at all: the
+    # catalogue skips the baseline's overlay file by construction.
+    assert "reasoningEffort" not in modes["max"]
     assert modes["medium"]["overlay"] == modes["high"]["overlay"] == {"buildCap": 10, "readingCap": 3}
     assert modes["max"]["overlay"] == {} and "reasoningEffort" not in modes["max"]
 
@@ -1061,7 +1072,7 @@ def test_copying_a_published_deck_is_not_denied():
     with the refusal as its answer. What defends delivery now is the publish record:
     the hook announces only decks whose sha256 the publish step wrote (see
     test_ppt_engine_plugin), so a copy is harmless and the exec policy is the trunk's own."""
-    from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
+    from raven.permissions.shell_policy import CommandDecision, ShellCommandPolicy
 
     config = json.loads((RUN_PY.parent / "config.json").read_text())
     assert "extraDenyPatterns" not in config["tools"]["exec"]

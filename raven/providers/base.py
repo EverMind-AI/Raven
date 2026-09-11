@@ -18,6 +18,7 @@ from typing import Any
 from loguru import logger
 
 from raven.contracts.llm_provider import (  # noqa: F401
+    CallRecord,
     ChatDelta,
     ErrorClassification,
     GenerationSettings,
@@ -29,6 +30,8 @@ from raven.contracts.llm_provider import (  # noqa: F401
 )
 from raven.contracts.llm_provider import LLMProvider as _LLMProviderPaper
 from raven.observability import semconv
+from raven.providers import call_record
+from raven.providers.first_byte import FirstByteTimeoutError
 from raven.tracing import trace
 
 # Wordings providers use to reject list-type content in a tool message. Each is
@@ -171,14 +174,35 @@ def send_max_tokens(generation: Any, model: str | None, *, pinned: int | None = 
     they get whatever is already loaded, then the fixed fallback. A caller
     about to build a request wants the default.
 
-    The model's own ceiling is the answer, unbounded by anything else. How much
+    Absent a pin the answer is ``resolve_max_output_tokens`` -- what the model
+    itself declares, bounded to leave room for the prompt beside it. How much
     of the window a turn holds back for its reply is the budget's business, and
-    it reserves exactly this number: requests no longer name a ceiling, so the
-    one that applies is the model's own, and the prompt has to fit beside it.
+    it reserves exactly this number, so the prompt has to fit beside the
+    ceiling the request carries.
+
+    The window handed to the resolver is the running turn's own, not a
+    catalogue lookup, so the bound works for a provider no catalogue lists: an
+    operator who pinned ``contextWindowTokens`` for a custom OpenAI-compatible
+    endpoint sized this ceiling too, rather than having it fall to the
+    unknown-model default. Outside a turn there is no binding and the resolver
+    falls back to the catalogue on its own.
+
+    ``model`` must be the id the request will go out under, not the spelling it
+    is configured with. The two differ (``z-ai/glm-5.3-flash`` against
+    ``openrouter/z-ai/glm-5.3-flash``) and only the second reaches the
+    OpenRouter tier, so passing the configured name is what had the loop
+    reserve 32768 against a request carrying 64000. Callers holding a provider
+    should pass ``provider.wire_model_id(model)``.
     """
+    from raven.providers.binding import active_binding
     from raven.providers.rates import resolve_max_output_tokens
 
-    ceiling = resolve_max_output_tokens(model, allow_fetch=allow_fetch)
+    binding = active_binding()
+    ceiling = resolve_max_output_tokens(
+        model,
+        window=binding.context_window if binding is not None else None,
+        allow_fetch=allow_fetch,
+    )
     pin = pinned if pinned is not None else getattr(generation, "max_tokens", None)
     if pin:
         return min(int(pin), ceiling)
@@ -325,6 +349,7 @@ class LLMProvider(_LLMProviderPaper):
             reasoning_content=response.reasoning_content,
             finish_reason=response.finish_reason,
             error_classification=response.error_classification,
+            call_record=response.call_record,
         )
 
     @staticmethod
@@ -392,6 +417,15 @@ class LLMProvider(_LLMProviderPaper):
 
         def has(*needles: str) -> bool:
             return any(n in msg for n in needles)
+
+        # Our own first-byte bound, first because it is the one failure here we
+        # raised ourselves and can name exactly. It is a TimeoutError subclass,
+        # so without this branch it would still land on the network bucket with
+        # the same retryable/fallback verdict -- what the branch adds is a
+        # category the record can say out loud, distinguishing "never started"
+        # from a mid-answer stall or a dropped connection.
+        if isinstance(exc, FirstByteTimeoutError):
+            return ErrorClassification("first_byte_timeout", retryable=True, should_fallback=True)
 
         # Context-window overflow → compress and retry, NOT fallback (a smaller
         # window won't help; the same model after compaction will). Detected by
@@ -635,7 +669,15 @@ class LLMProvider(_LLMProviderPaper):
                 raise
             except Exception as e:
                 exc = e
-                response = LLMResponse(content=None, finish_reason="error")
+                # The status and body, taken while the exception is alive: a
+                # provider whose ``chat`` raises rather than returning an error
+                # response has nowhere else to have kept them, and by the line
+                # below the failure is a rendered sentence.
+                response = LLMResponse(
+                    content=None,
+                    finish_reason="error",
+                    call_record=call_record.from_exception(e, status=self._extract_status_code(e)),
+                )
 
             if response.finish_reason != "error":
                 return response
@@ -677,6 +719,87 @@ class LLMProvider(_LLMProviderPaper):
             await asyncio.sleep(delay)
 
         return last_response  # type: ignore[return-value]  # loop always returns on the last attempt
+
+    def request_generation(
+        self,
+        *,
+        model: str | None = None,
+        max_tokens: object = _SENTINEL,
+        temperature: object = _SENTINEL,
+        reasoning_effort: object = _SENTINEL,
+    ) -> dict[str, Any]:
+        """What a call asks the model for, resolved the way the request resolves it.
+
+        The record's side of ``chat_with_retry``: sentinels fall back to
+        ``self.generation`` and the ceiling is resolved from the wire id, so the
+        answer is the number the request carries rather than the number a call
+        site happened to type. ``allow_fetch=False`` because a record must never
+        stall -- by the time this is asked the request has already resolved the
+        same ceiling, so the catalogue is in hand.
+
+        Parameters only, never credentials: the api key, the authorization header
+        and the base URL are not among the fields, and the provider fence is read
+        one key deep rather than copied whole, so nothing else an operator put in
+        ``extra_body`` can ride into a trace.
+        """
+        gen = getattr(self, "generation", None)
+        if max_tokens is self._SENTINEL:
+            max_tokens = getattr(gen, "max_tokens", None)
+        if temperature is self._SENTINEL:
+            temperature = getattr(gen, "temperature", None)
+        if reasoning_effort is self._SENTINEL:
+            reasoning_effort = getattr(gen, "reasoning_effort", None)
+        wire_id = self.wire_model_id(model or getattr(self, "default_model", "") or "")
+        ceiling = send_max_tokens(gen, wire_id, pinned=max_tokens, allow_fetch=False)
+        record: dict[str, Any] = {
+            # What the body carries. A request names a ceiling only where a caller or
+            # the settings pinned one; otherwise it names none and the model's own
+            # applies, so recording the resolved number here would claim a cap that
+            # never went out -- which is how 16384 came to look like a gateway limit.
+            "max_tokens": None if max_tokens is None else ceiling,
+            # The number the request was sized against either way, which is what a
+            # turn cut short has to be compared with.
+            "output_ceiling": ceiling,
+            "temperature": temperature if isinstance(temperature, (int, float)) else None,
+            "reasoning_effort": reasoning_effort if isinstance(reasoning_effort, str) and reasoning_effort else None,
+        }
+        if fence := self._provider_fence(model):
+            record["provider_fence"] = fence
+        return record
+
+    def reasoning_wire_keys(self, model: str | None, reasoning_effort: str | None) -> dict[str, Any]:
+        """The reasoning keys a request for this effort would carry.
+
+        Asked when a caller needs to know whether two efforts are the *same
+        request*, which is not answerable from the labels: the empty-response
+        retry only pays for itself if the request it re-sends differs, and on a
+        wire that collapses two rungs onto one value the second retry is the
+        first failure again at full price.
+
+        Here the effort travels as the label the caller named, so the label is
+        the shape and every rung is its own request. An adapter that translates
+        the label before sending it overrides this -- ``anthropic_messages``
+        does, and is the wire the collapse was measured on.
+        """
+        return {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
+
+    def _provider_fence(self, model: str | None) -> Any:
+        """The backend pin a request will carry, from the two places a config puts it.
+
+        ``extra_body["provider"]`` is where the gateway adapter keeps it and
+        ``model_overrides`` is where a per-model row does, at either depth; the
+        last matching pattern wins, as in the adapters that merge them. A pin a
+        provider *spec* contributes is not read here -- what a config declares is
+        what a reader is trying to check.
+        """
+        fence = (getattr(self, "extra_body", None) or {}).get("provider")
+        name = (model or getattr(self, "default_model", "") or "").lower()
+        for pattern, overrides in (getattr(self, "model_overrides", None) or {}).items():
+            if isinstance(overrides, dict) and str(pattern).lower() in name:
+                found = overrides.get("provider") or (overrides.get("extra_body") or {}).get("provider")
+                if found:
+                    fence = found
+        return fence
 
     @trace.instrument("llm.call", extract=semconv.llm_call)
     async def chat_with_retry(
@@ -738,10 +861,19 @@ class LLMProvider(_LLMProviderPaper):
             # a gateway spelling is its own catalogue row with its own ceiling.
             wire_id = self.wire_model_id(current_model or "")
             # Bounded here rather than inside each provider: a pin is per call
-            # but a ceiling is per model, so a fallback hop can change it. Left
-            # as ``None`` when nobody pinned, which is the provider's cue to
-            # resolve the model's own ceiling.
-            sent = None if max_tokens is None else send_max_tokens(self.generation, wire_id, pinned=max_tokens)
+            # but a ceiling is per model, so a fallback hop can change it.
+            # Named on every request, including the one nobody pinned. Left as
+            # ``None`` nothing reached the wire (captured) and the far side
+            # bounded the answer by a number of its own: a deck run's calls
+            # were cut at exactly 16384 while a request that named 40000 was
+            # served in full. Which component chose 16384 was never identified,
+            # and cannot be after the fact -- the gateway's own response id is
+            # not kept, so a call cannot be traced to the host that served it.
+            # It was not a small-ceiling host either: that run's requests did
+            # carry their provider fence (captured), so only three hosts could
+            # answer and all three declare 131072. A bound we do not send is
+            # one we can neither move nor report.
+            sent = send_max_tokens(self.generation, wire_id, pinned=max_tokens)
             response = await self._chat_attempt_with_retry(
                 messages=messages,
                 tools=tools,

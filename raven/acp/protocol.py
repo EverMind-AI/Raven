@@ -68,6 +68,14 @@ The reference SDK sends exactly this when a request's cancellation signal
 fires, which is what makes it the right thing for raven to send too.
 """
 
+STEER_METHOD = "_raven/session/steer"
+STEER_CAPABILITY = "raven.steer"
+"""raven's steer extension: text for a turn already in flight on a session.
+
+The same names raven's own ACP client uses (raven/acp_client/protocol.py); the
+capability is advertised by presence under ``agentCapabilities._meta``.
+"""
+
 STOP_REASONS = frozenset(
     {
         "end_turn",
@@ -79,11 +87,14 @@ STOP_REASONS = frozenset(
 )
 """Every value ``PromptResponse.stopReason`` may take.
 
-Two of the five have no source in raven and are therefore never sent:
-``max_tokens`` and ``max_turn_requests`` describe limits the agent loop does not
-report hitting. Kept in the set because it is the *schema's* enum, and a
-translator that latched one of them would be caught by the schema check rather
-than by this constant.
+``max_turn_requests`` has no source in raven and is therefore never sent: it
+describes a limit the agent loop does not report hitting. ``max_tokens`` is sent
+for a turn whose generation stopped at the model's output ceiling, which is what
+a delegating client needs in order to weigh the reply -- refined from
+``end_turn`` in `raven/acp/methods.py`, and never over a reason that already
+says why the turn ended. Both stay in the set because it is the *schema's* enum,
+and a translator that latched one of them would be caught by the schema check
+rather than by this constant.
 """
 
 

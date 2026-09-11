@@ -49,8 +49,8 @@ class _Source:
         return self._disabled_tools
 
 
-def _view(name: str, config: MCPServerConfig, *, state: str | None = None) -> McpServerView:
-    return McpServerView(name=name, config=config, state=state)
+def _view(name: str, config: MCPServerConfig, *, state: str | None = None, scope: str | None = None) -> McpServerView:
+    return McpServerView(name=name, config=config, state=state, scope=scope)
 
 
 def _wrapper(server: str, tool: str) -> MCPToolWrapper:
@@ -438,6 +438,58 @@ def test_a_bridged_receiver_gets_an_oauth_server_the_host_has_connected() -> Non
     assert grant.missing == ()
 
 
+def test_a_carried_oauth_server_with_stored_tokens_is_granted_without_host_state(tmp_path, monkeypatch) -> None:
+    # A run-scoped server has no host connection to read: the host's manager
+    # never dials it. Its playbook's credential file is the only fact, and tokens
+    # there mean the endpoint will dial with them.
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    from raven.mcp.oauth import credentials_path
+
+    path = credentials_path("sentry", scope="playbooks/scan")
+    path.write_text(json.dumps({"client_info": {"client_id": "c"}, "tokens": {"access_token": "t"}}))
+    config = MCPServerConfig(type="streamableHttp", url="https://mcp.example.test", auth="oauth")
+    source = _Source({"sentry": _view("sentry", config, state=None, scope="playbooks/scan")})
+
+    grant = resolve_grant(["sentry"], source, acp_target(allow_secrets=False, stdio_path=None))
+
+    assert [server.name for server in grant.granted] == ["sentry"]
+    assert grant.granted[0].scope == "playbooks/scan"
+    assert grant.missing == ()
+
+
+def test_a_carried_oauth_server_without_tokens_names_the_playbook_that_owns_it(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    config = MCPServerConfig(type="streamableHttp", url="https://mcp.example.test", auth="oauth")
+    source = _Source({"sentry": _view("sentry", config, state=None, scope="playbooks/scan")})
+
+    grant = resolve_grant(["sentry"], source, acp_target(allow_secrets=False, stdio_path=None))
+
+    assert grant.granted == ()
+    assert [(item.name, item.reason, item.scope) for item in grant.missing] == [
+        ("sentry", "auth_required", "playbooks/scan")
+    ]
+    note = grant.note_text()
+    assert "carried by playbook 'scan'" in note
+    assert "then continue this node" in note
+
+
+def test_a_carried_oauth_server_never_reads_the_hosts_token_file(tmp_path, monkeypatch) -> None:
+    # Same name as a host server that IS authorized: the carried one must not
+    # borrow that file, or a carried definition pointing elsewhere would send
+    # the host's bearer to another service.
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    from raven.mcp.oauth import credentials_path
+
+    credentials_path("sentry").write_text(json.dumps({"tokens": {"access_token": "host-token"}}))
+    config = MCPServerConfig(type="streamableHttp", url="https://elsewhere.example/mcp", auth="oauth")
+    source = _Source({"sentry": _view("sentry", config, state=None, scope="playbooks/scan")})
+
+    grant = resolve_grant(["sentry"], source, acp_target(allow_secrets=False, stdio_path=None))
+
+    assert grant.granted == ()
+    assert [item.reason for item in grant.missing] == ["auth_required"]
+
+
 def test_a_bridged_receiver_is_told_an_oauth_server_is_still_waiting() -> None:
     config = MCPServerConfig(type="streamableHttp", url="https://mcp.example.test", auth="oauth")
     source = _Source({"sentry": _view("sentry", config, state="auth_required")})
@@ -510,3 +562,31 @@ def test_an_in_process_grant_carries_no_off_switch_because_the_registry_holds_it
     grant = resolve_grant(["files"], source, raven_loop_target())
 
     assert grant.disabled_tools == ()
+
+
+def test_an_equal_carried_oauth_definition_keeps_its_playbook_scope() -> None:
+    # A portable playbook may ship the very definition the host has. For an
+    # OAuth server that equality says nothing about the account: the token
+    # lives under the playbook's scope, so the host's connection and wrappers
+    # cannot stand in for it. A non-OAuth equal definition carries its own
+    # credential in the definition and still folds onto the host.
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.dag_mcp_scope import run_mcp_scope, run_mcp_servers
+
+    manager = SimpleNamespace(
+        status=lambda: [{"name": "sentry", "state": "connected"}, {"name": "pg", "state": "connected"}]
+    )
+    oauth = MCPServerConfig(type="streamableHttp", url="https://mcp.sentry.dev/mcp", auth="oauth")
+    plain = MCPServerConfig(command="pg-mcp", env={"PGPASSWORD": "same"})
+    host = {"sentry": oauth, "pg": plain}
+    source = LiveMcpSource(lambda: dict(host), lambda: manager, ToolRegistry(), frozenset, run_servers=run_mcp_servers)
+
+    with run_mcp_scope({"sentry": oauth.model_copy(), "pg": plain.model_copy()}, scope="playbooks/portable"):
+        carried = source.server("sentry")
+        assert carried.scope == "playbooks/portable"
+        assert carried.state is None
+        assert source.tools("sentry") == ()
+        folded = source.server("pg")
+        assert folded.scope is None
+        assert folded.state == "connected"

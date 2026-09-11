@@ -1066,7 +1066,7 @@ class OpsTuneStatusTool(Tool):
             "required": [],
         }
 
-    async def execute(self, ledger: str = "", metric: str = "", **kwargs: Any) -> str:
+    async def execute(self, ledger: str = "", metric: str = "", **kwargs: Any) -> str:  # noqa: C901 (cc 54: pre-existing, above the ceiling)
         import json as _json
 
         from oncall_flow.backend import JobStatus
@@ -1774,7 +1774,7 @@ class OpsSubmitTool(_OpsScheduler):
             "required": ["configs", "eta_seconds"],
         }
 
-    async def execute(
+    async def execute(  # noqa: C901 (cc 69: pre-existing, above the ceiling)
         self,
         eta_seconds: int,
         objective: str = "",

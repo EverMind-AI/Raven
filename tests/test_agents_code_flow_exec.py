@@ -1,8 +1,10 @@
-"""The code flow's exec: trunk's shell tool with the fork's three fixes.
+"""The code flow's exec: trunk's shell tool with the fork's fixes.
 
 A long timeout is clamped instead of refused; a timed-out command keeps the
-output it produced; an oversized output is saved whole under Agent home with
-the path in the result. And the sandbox discipline: the factory serves this
+output it produced and says so in as many words; an oversized output is saved
+whole under Agent home with the path in the result. Keeping the output is no
+longer a difference -- trunk does that itself now -- so what this adds on that
+axis is the explicit marker. And the sandbox discipline: the factory serves this
 host-running replacement only where the host's own exec would run on the host
 too, and declines under any configured sandbox backend.
 """
@@ -110,14 +112,34 @@ def test_a_timed_out_command_keeps_the_output_it_produced(tmp_path):
     assert getattr(out, "ok", None) is False
 
 
-def test_trunks_executor_preserves_output_on_timeout():
-    """The shared executor preserves output produced before the timeout."""
+def test_trunks_executor_preserves_output_on_timeout(tmp_path):
+    """The shared executor preserves output produced before the timeout.
+
+    This is the retired half of the reason the fork replaced it: trunk used to
+    wait on ``communicate()`` and lose the buffered output when that raised,
+    which is why this file's own partial-output fix was written. Trunk drains
+    the pipes itself now, so that axis no longer tells the two apart.
+
+    What is still this fork's on the same axis is the explicit marker. Trunk
+    reports the kill through the stderr line and exit ``-1`` and nothing more,
+    while ``CodeExecResult`` also flags ``timed_out`` and renders
+    ``TIMED_OUT_NOTE``, which tells the model its output is a fragment. The
+    last assertion is what keeps the two from quietly converging.
+    """
     from raven.sandbox.direct_executor import DirectExecutor
 
-    result = _run(DirectExecutor().exec("echo started; sleep 30", timeout=1))
+    command = "echo started; sleep 30"
+    result = _run(DirectExecutor().exec(command, timeout=1))
     assert result.stdout == "started\n"
     assert "Timed out" in result.stderr
     assert result.exit_code == -1
+
+    # Both sides measured in one run, because the absence on its own is the
+    # vacuous kind of assertion: it also holds for a fork that stopped marking
+    # anything. The pair says the difference exists and which way round it is.
+    forked = str(_run(_tool(tmp_path).execute(command=command, timeout=1)))
+    assert TIMED_OUT_NOTE in forked, "the fork tells the model its output is a fragment"
+    assert TIMED_OUT_NOTE not in result.as_text(), "trunk does not, and that is what is left"
 
 
 def test_a_finished_command_reports_its_exit_code_and_both_streams(tmp_path):

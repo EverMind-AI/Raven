@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.config.schema import MCPServerConfig
-from raven.playbook.params import fill_param_refs, has_param_ref
+from raven.playbook.params import fill_param_refs, param_refs, secret_param_names
 
 if TYPE_CHECKING:
     from raven.agent.subagent.mcp_grant import McpSource
@@ -56,10 +56,11 @@ def playbook_mcp_servers(spec: "PlaybookSpec", values: Mapping[str, str]) -> dic
     """The spec's own server definitions with their parameter references filled in.
 
     Copies, never in place: the spec is the file, and the file keeps the
-    reference. An ``env`` / ``headers`` entry whose reference resolved to nothing
-    is dropped rather than passed on empty -- "the user did not supply a
-    password" and "the password is the empty string" are different states, and a
-    server told the second one fails in a way that reads like a broken server.
+    reference. An ``env`` / ``headers`` entry whose reference did not resolve
+    (no value, or the empty string) is dropped rather than passed on -- "the user
+    did not supply a password" and "the password is the empty string" are
+    different states, a server told the second one fails in a way that reads
+    like a broken server, and a literal ``{{ params.X }}`` must never be dialed.
     """
     out: dict[str, MCPServerConfig] = {}
     for name, cfg in (spec.mcp_servers or {}).items():
@@ -72,13 +73,51 @@ def playbook_mcp_servers(spec: "PlaybookSpec", values: Mapping[str, str]) -> dic
     return out
 
 
+def _references_a_value_we_do_not_have(
+    raw: str, values: Mapping[str, str], only: "frozenset[str] | None" = None
+) -> bool:
+    """Whether ``raw`` names a param this run has no value for.
+
+    Asked of the reference, not of the substitution: ``resolve_params`` gives an
+    optional param the empty string, so ``Bearer {{ params.TOK }}`` renders as
+    ``"Bearer "`` -- non-empty, no placeholder left, and carrying no credential
+    at all. Only the names tell the two apart.
+
+    ``only`` narrows the question to a set of names, which is how the credential
+    gap asks about secrets alone.
+    """
+    return any(not values.get(name) for name in param_refs(raw) if only is None or name in only)
+
+
+def servers_missing_a_credential(spec: "PlaybookSpec", values: Mapping[str, str]) -> frozenset[str]:
+    """Carried servers whose ``env`` / ``headers`` reference a *secret* with no value.
+
+    Such a server would be dialled without the credential its definition names
+    and answer 401 on its first call, which reads to a sub-agent as a broken
+    tool rather than a missing one -- the same reason an unauthorized OAuth
+    server is withheld instead of handed over.
+
+    Secrets only, because withholding is answered by a place to put the value:
+    the playbook's Credentials tab and ``raven playbook secret set``, neither of
+    which holds a param of any other type. An ordinary param left empty drops
+    its own entry and the server still runs, on whatever default it has for it.
+    """
+    secrets = secret_param_names(spec)
+    return frozenset(
+        name
+        for name, cfg in (spec.mcp_servers or {}).items()
+        for mapping in (cfg.env, cfg.headers)
+        for raw in (mapping or {}).values()
+        if _references_a_value_we_do_not_have(raw, values, secrets)
+    )
+
+
 def _filled(mapping: Mapping[str, str] | None, values: Mapping[str, str]) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, raw in (mapping or {}).items():
-        filled = fill_param_refs(raw, values)
-        if not filled and has_param_ref(raw):
+        if _references_a_value_we_do_not_have(raw, values):
             continue
-        out[key] = filled
+        out[key] = fill_param_refs(raw, values)
     return out
 
 
@@ -120,6 +159,7 @@ async def preflight_mcp_source(
     sandbox_config: Any = None,
     workspace: Path,
     secret_values: Iterable[str] = (),
+    credential_scope: str | None = None,
 ) -> AsyncIterator["McpSource"]:
     """Connect this run's MCP servers once, and yield the source grants read.
 
@@ -134,6 +174,10 @@ async def preflight_mcp_source(
 
     ``workspace`` is Agent home -- the directory the sandbox executor confines a
     bridged upstream to.
+
+    ``credential_scope`` is the playbook's (``raven.playbook.credentials``): the
+    carried servers' OAuth tokens are read and written under it, the host's
+    under the host's own store, from one manager.
     """
     from raven.agent.subagent.mcp_grant import LiveMcpSource
     from raven.agent.tools.registry import ToolRegistry
@@ -144,7 +188,12 @@ async def preflight_mcp_source(
     if declared is not None:
         servers = {name: cfg for name, cfg in servers.items() if name in declared}
     registry = ToolRegistry()
-    manager = MCPConnectionManager(registry, allow_auth_park=False)
+    carried = set(playbook_servers or {})
+
+    def scope_of(name: str) -> str | None:
+        return credential_scope if name in carried else None
+
+    manager = MCPConnectionManager(registry, allow_auth_park=False, credential_scope=scope_of)
     sandbox = build_executor(sandbox_config, workspace)
 
     async def executor_provider():
@@ -153,7 +202,11 @@ async def preflight_mcp_source(
     # The provider rides on the source because a bridged upstream is spawned by
     # the endpoint rather than by this manager, and it has to land in the same
     # confinement the pre-flight dialled its own connections inside.
-    source = LiveMcpSource(lambda: servers, lambda: manager, registry, disabled_tools, executor_provider)
+    # The same answer the manager dialled with, so a bridged node's endpoint
+    # dials the carried server under the playbook's scope too.
+    source = LiveMcpSource(
+        lambda: servers, lambda: manager, registry, disabled_tools, executor_provider, scope_of=scope_of
+    )
     async with sandbox:
         try:
             if servers:

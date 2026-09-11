@@ -149,6 +149,15 @@ class LazyProvider(LLMProvider):
         """
         return model if self._provider is None else self._provider.wire_model_id(model)
 
+    def request_generation(self, **asked: Any) -> dict[str, Any]:
+        """Forwarded post-materialization, like ``wire_model_id``: only the inner
+        provider knows the reasoning keys its wire takes, and the base answer
+        would record a shape nothing sent. Asked after a call, so the inner is
+        built by then; before that the base answer is all there is."""
+        if self._provider is None:
+            return super().request_generation(**asked)
+        return self._provider.request_generation(**asked)
+
     def supports_prompt_caching(self, model: str) -> bool:
         """Forwarded through a build, unlike the two probes above.
 
@@ -164,6 +173,15 @@ class LazyProvider(LLMProvider):
         gap between construction and the first turn, and no strategy runs there.
         """
         return self._built().supports_prompt_caching(model)
+
+    def reasoning_wire_keys(self, model: str | None, reasoning_effort: str | None) -> Any:
+        """Forwarded post-materialization, like ``request_generation``: only the
+        inner provider knows whether its wire can tell two efforts apart, and the
+        base answer says every label is its own request -- which is the answer
+        that let the retry re-send an unchanged one."""
+        if self._provider is None:
+            return super().reasoning_wire_keys(model, reasoning_effort)
+        return self._provider.reasoning_wire_keys(model, reasoning_effort)
 
     def supports_assistant_prefill(self, model: str | None = None) -> bool:
         """Forwarded through a build, like ``supports_prompt_caching``: the

@@ -613,3 +613,43 @@ async def test_create_refuses_a_traversal_name_before_generating(tmp_path):
 
     assert generator.calls == []
     assert list(tmp_path.rglob("playbook.md")) == []
+
+
+def test_a_stored_secret_is_advertised_as_stored_not_required(tmp_path, monkeypatch):
+    """A model told a secret is "required" asks the user to type it into the
+    conversation. One this machine already holds is filled in at load, so the
+    listing says so and the tool description tells the model not to ask."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    from raven.config.schema import MCPServerConfig
+    from raven.playbook.credentials import set_secret_param
+
+    spec = _spec(
+        name="carried-token",
+        params={"PROBE_TOKEN": ParamSpec(type="secret", required=True, description="the bearer")},
+        mcp_servers={
+            "tokened": MCPServerConfig(
+                url="http://127.0.0.1:8932/mcp", headers={"Authorization": "Bearer {{ params.PROBE_TOKEN }}"}
+            )
+        },
+        nodes=[
+            NodeSpec(
+                id="a", subagent="data-raven", node_summary="reach it", prompt_template="call whoami", mcps=["tokened"]
+            )
+        ],
+    )
+    before = LoadPlaybookTool(_runtime(tmp_path / "before", [spec])).description
+    assert (
+        "PROBE_TOKEN (secret, not set on this machine -- the user sets it on the playbook page, do not ask for it)"
+        in before
+    )
+    assert "required)" not in before.split("carried-token", 1)[1].split("\n", 1)[0]
+
+    set_secret_param("carried-token", "PROBE_TOKEN", "s3cr3t")
+    after = LoadPlaybookTool(_runtime(tmp_path / "again", [spec])).description
+    assert "PROBE_TOKEN (secret, stored on this machine -- do not ask for it)" in after
+    assert "required)" not in after.split("carried-token", 1)[1].split("\n", 1)[0]
+    assert "s3cr3t" not in after
+    assert "never ask the user to type a secret" in after
+    # An unset secret must not read as "collect it first": the run proceeds and
+    # the reply says where to set it, so the description says so outright.
+    assert "not set does not stop the run" in after

@@ -11,6 +11,7 @@ Spec source:
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import patch
 
@@ -696,3 +697,312 @@ async def test_a_turn_aimed_at_an_instance_never_claims_a_name_is_coming() -> No
     )
 
     assert result["naming"] is False
+
+
+async def test_busy_inject_hands_the_text_to_the_running_turn() -> None:
+    """``busy: inject`` on a lane mid-turn does not refuse: the request goes to
+    the scheduler as ``BusyPolicy.INJECT`` (the running turn's worker merges it
+    at its next tool-loop gap) and no slot is bound -- the running turn owns the
+    lane's. The id answered is one minted for the text, since that is the id
+    its events carry if the host ends first and it runs as a turn of its own.
+    Without ``busy`` the same send still refuses with -32003."""
+    from raven.rpc.methods import turn as turn_mod
+    from raven.spine.turn import BusyPolicy
+
+    scheduler = FakeScheduler()
+    turn_ids = {"tui:default": "running-1"}
+    turn_mod._active_turns["tui:default"] = FakeHandle()
+
+    with pytest.raises(TurnInProgressError):
+        await turn_send({"session_key": "tui:default", "content": "hi"}, scheduler=scheduler, turn_ids=turn_ids)
+
+    result = await turn_send(
+        {"session_key": "tui:default", "content": "how far along?", "busy": "inject"},
+        scheduler=scheduler,
+        turn_ids=turn_ids,
+    )
+
+    assert result["accepted"] is True and result["naming"] is False
+    assert result["turn_id"] and result["turn_id"] != "running-1", "the inject's own id, not the host's"
+    assert len(scheduler.submitted) == 1
+    req = scheduler.submitted[0]
+    assert req.busy is BusyPolicy.INJECT and req.text == "how far along?" and req.conversation == "tui:default"
+    assert req.turn_id == result["turn_id"]
+    assert turn_ids == {"tui:default": "running-1"}, "the running turn keeps the lane's slot"
+
+
+async def test_busy_inject_on_an_idle_lane_is_an_ordinary_send() -> None:
+    scheduler = FakeScheduler()
+    result = await turn_send({"session_key": "tui:idle", "content": "hi", "busy": "inject"}, scheduler=scheduler)
+    assert result["accepted"] is True and result["turn_id"]
+    from raven.spine.turn import BusyPolicy
+
+    assert scheduler.submitted[0].busy is BusyPolicy.APPEND
+
+
+async def test_busy_inject_merges_into_a_wake_the_real_scheduler_is_running() -> None:
+    """The reviewer's reproduction (2026-09-09), kept as the test the fakes above
+    cannot be: a turn the runtime submitted straight to the real ``Scheduler``
+    -- the way ``make_on_session_wake`` submits an armed wake -- with no
+    ``turn.send`` slot bound, and a steer arriving while it runs. Before the
+    fix the lane read ``pending=1, inject_mailbox=0``: a second turn queued
+    behind the wake, reported as ``injected``. Now the text sits in the inject
+    mailbox for the running turn's worker to drain, and nothing is queued."""
+    from raven.spine import ChatType, Origin, Source, TurnRequest
+    from raven.spine.events import Usage
+    from raven.spine.runner import TurnOutcome
+    from raven.spine.scheduler import OriginPools, Scheduler
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    drained: list = []
+
+    class _SleepingWake:
+        async def run(self, req, emit, drain):
+            started.set()
+            await release.wait()
+            drained.extend(drain())
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+    async def _sink(event) -> None:
+        return None
+
+    scheduler = Scheduler(_SleepingWake(), OriginPools(user=0, system=0), _sink)
+    wake = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="acp", chat_id="w1", sender_id="cron", chat_type=ChatType.DM),
+        text="wake: look at the job",
+        conversation="acp:w1",
+    )
+    handle = scheduler.submit(wake)
+    await asyncio.wait_for(started.wait(), 2)
+    from raven.rpc.methods import turn as turn_mod
+
+    assert not turn_mod.is_turn_active("acp:w1") and scheduler.has_inflight("acp:w1")
+
+    try:
+        result = await turn_send(
+            {"session_key": "acp:w1", "channel": "acp", "chat_id": "w1", "content": "how far along?", "busy": "inject"},
+            scheduler=scheduler,
+            turn_ids={},
+        )
+
+        lane = scheduler._lanes["acp:w1"]
+        assert result["accepted"] is True
+        assert (len(lane._inject_mailbox), len(lane._pending)) == (1, 0), "merged into the wake, not queued behind it"
+        release.set()
+        await asyncio.wait_for(handle.result(), 2)
+        assert [r.text for r in drained] == ["how far along?"], "the running turn drained the steer at its gap"
+    finally:
+        # A failed assertion must not leave the wake's worker parked on
+        # ``release`` forever -- that hangs the loop's teardown, not the test.
+        release.set()
+        await scheduler.shutdown(grace=1)
+
+
+class _DrainOnceLoop:
+    """The real loop's shape (turn_path.py): drain the injects once at the top
+    of the iteration, then work until released. A second drain never comes, so
+    an inject arriving after the first is the undrained case the reviewer
+    reproduced (2026-09-10)."""
+
+    def __init__(self) -> None:
+        self.saw: list[tuple[str, list[str]]] = []
+        self.started: dict[str, asyncio.Event] = {}
+        self.release: dict[str, asyncio.Event] = {}
+        self.tools: dict = {}
+
+    def gate(self, text: str) -> asyncio.Event:
+        self.started.setdefault(text, asyncio.Event())
+        return self.release.setdefault(text, asyncio.Event())
+
+    async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None, text_sink=None):
+        from raven.spine.events import Usage
+        from raven.spine.runner import TurnOutcome
+
+        self.saw.append((req.text, [r.text for r in drain()]))
+        self.gate(req.text)
+        self.started[req.text].set()
+        await self.release[req.text].wait()
+        return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+
+async def _spine_with_injects():
+    from raven.rpc.methods import turn as turn_mod
+    from raven.rpc.spine import build_rpc_spine
+    from tests.test_rpc_spine import FakeEmitter
+
+    loop = _DrainOnceLoop()
+    emitter = FakeEmitter()
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(
+        loop,
+        emitter,
+        on_turn_end=turn_mod.clear_active,
+        on_turn_start=turn_mod.promote_pending_inject,
+        user_pool=0,
+        system_pool=0,
+    )
+    return loop, emitter, scheduler, turn_ids, teardown
+
+
+async def test_an_undrained_inject_runs_as_a_turn_the_surface_can_see_and_cancel() -> None:
+    """Reviewer 2026-09-10, reproduced through ``build_rpc_spine`` with the sink
+    wired as bootstrap wires it. The host turn ends before its next drain; the
+    spine falls the inject back to a turn of its own. That turn used to own
+    nothing: ``turn_ids`` empty, ``is_turn_active`` false, ``turn.cancel`` a
+    no-op, no ``message.start`` -- the agent kept working after a person's
+    cancel did nothing. Now the sink promotes it: the lane is bound to the
+    inject's id, the turn opens on the wire with the person's text, and cancel
+    ends it."""
+    from raven.rpc.methods import turn as turn_mod
+    from raven.rpc.methods.turn import turn_cancel
+
+    loop, emitter, scheduler, turn_ids, teardown = await _spine_with_injects()
+    lane = "acp:w1"
+    try:
+        first = await turn_send(
+            {"session_key": lane, "content": "go"}, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids
+        )
+        await asyncio.wait_for(loop.started.setdefault("go", asyncio.Event()).wait(), 2)
+
+        steer = await turn_send(
+            {"session_key": lane, "content": "the docs first", "busy": "inject"},
+            emitter=emitter,
+            scheduler=scheduler,
+            turn_ids=turn_ids,
+        )
+        assert steer["turn_id"] not in ("", first["turn_id"])
+        assert turn_ids[lane] == first["turn_id"], "while the host runs, it keeps the lane"
+
+        loop.gate("go").set()  # the host ends past its only drain: the inject falls back
+        await asyncio.wait_for(loop.started.setdefault("the docs first", asyncio.Event()).wait(), 2)
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert loop.saw == [("go", []), ("the docs first", [])], "the text runs as a full turn either way"
+        assert turn_ids[lane] == steer["turn_id"], "the fallback turn now owns the lane"
+        assert turn_mod.is_turn_active(lane), "and the cancel paths can see it"
+        starts = [e for _k, e in emitter.emitted if e["type"] == "message.start"]
+        assert [e["payload"].get("turn_id") for e in starts] == [first["turn_id"], steer["turn_id"]]
+        assert starts[-1]["payload"]["content"] == "the docs first", "opened on the wire with the person's words"
+
+        cancelled = await turn_cancel({"session_key": lane}, emitter=emitter, turn_ids=turn_ids)
+        assert cancelled == {"cancelled": True}
+        assert not turn_mod.is_turn_active(lane) and lane not in turn_ids
+        errors = [e for _k, e in emitter.emitted if e["type"] == "error"]
+        assert errors and errors[-1]["payload"]["turn_id"] == steer["turn_id"]
+        assert lane not in turn_mod._pending_injects
+    finally:
+        for gate in loop.release.values():
+            gate.set()
+        await teardown()
+
+
+async def test_a_pending_inject_can_be_cancelled_before_it_merges_or_falls_back() -> None:
+    """While the host still runs, the inject sits in the lane's mailbox and owns
+    no slot; ``turn.cancel`` reaches it through the pending record all the same,
+    and the host turn is left alone."""
+    from raven.rpc.methods import turn as turn_mod
+    from raven.rpc.methods.turn import turn_cancel
+
+    loop, emitter, scheduler, turn_ids, teardown = await _spine_with_injects()
+    lane = "acp:w2"
+    try:
+        first = await turn_send(
+            {"session_key": lane, "content": "go"}, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids
+        )
+        await asyncio.wait_for(loop.started.setdefault("go", asyncio.Event()).wait(), 2)
+        # Cancelling now reaches the host turn: it is the active one.
+        assert turn_mod._cancellable(lane)[1] is None
+
+        # Take the host out of the active slot as the sink would at its end, but
+        # keep it running: the window between the host releasing the lane and the
+        # fallback starting is where a cancel used to find nothing at all.
+        steer = await turn_send(
+            {"session_key": lane, "content": "hold on", "busy": "inject"},
+            emitter=emitter,
+            scheduler=scheduler,
+            turn_ids=turn_ids,
+        )
+        assert scheduler._lanes[lane]._inject_mailbox and lane in turn_mod._pending_injects
+        turn_mod._active_turns.pop(lane)
+        assert turn_mod._cancellable(lane) is not None and turn_mod._cancellable(lane)[1] == steer["turn_id"]
+
+        cancelled = await turn_cancel({"session_key": lane}, emitter=emitter, turn_ids=turn_ids)
+
+        assert cancelled == {"cancelled": True}
+        assert not scheduler._lanes[lane]._inject_mailbox, "the inject is out of the mailbox"
+        assert lane not in turn_mod._pending_injects
+        assert scheduler.has_inflight(lane), "the host turn was not touched"
+        errors = [e for _k, e in emitter.emitted if e["type"] == "error"]
+        assert errors[-1]["payload"]["turn_id"] == steer["turn_id"]
+        loop.gate("go").set()
+        await asyncio.sleep(0.05)
+        assert loop.saw == [("go", [])], "nothing fell back: the cancelled inject never ran"
+    finally:
+        for gate in loop.release.values():
+            gate.set()
+        await teardown()
+
+
+async def test_two_undrained_injects_each_get_their_own_turn_promoted_and_cancelled() -> None:
+    """Reviewer 2026-09-10, second counterexample: two steers after the host's
+    only drain. One replaceable record per lane kept only the newer, so the
+    first fallback started unowned -- ``turn_ids`` empty, no ``message.start``
+    -- and a cancel took out the still-pending second while the first kept
+    running. Every inject is kept under its own id: the first fallback promotes
+    its own handle, its cancel ends it, then the second does the same."""
+    from raven.rpc.methods import turn as turn_mod
+    from raven.rpc.methods.turn import turn_cancel
+
+    loop, emitter, scheduler, turn_ids, teardown = await _spine_with_injects()
+    lane = "acp:w3"
+    try:
+        host = await turn_send(
+            {"session_key": lane, "content": "wake"}, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids
+        )
+        await asyncio.wait_for(loop.started.setdefault("wake", asyncio.Event()).wait(), 2)
+        one = await turn_send(
+            {"session_key": lane, "content": "first steer", "busy": "inject"},
+            emitter=emitter,
+            scheduler=scheduler,
+            turn_ids=turn_ids,
+        )
+        two = await turn_send(
+            {"session_key": lane, "content": "second steer", "busy": "inject"},
+            emitter=emitter,
+            scheduler=scheduler,
+            turn_ids=turn_ids,
+        )
+        assert set(turn_mod._pending_injects[lane]) == {one["turn_id"], two["turn_id"]}, (
+            "both kept, not the newest only"
+        )
+
+        loop.gate("wake").set()
+        await asyncio.wait_for(loop.started.setdefault("first steer", asyncio.Event()).wait(), 2)
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert turn_ids[lane] == one["turn_id"] and turn_mod.is_turn_active(lane), "the first fallback owns the lane"
+        starts = [e["payload"] for _k, e in emitter.emitted if e["type"] == "message.start"]
+        assert [p["turn_id"] for p in starts] == [host["turn_id"], one["turn_id"]]
+        assert starts[-1]["content"] == "first steer"
+        assert set(turn_mod._pending_injects[lane]) == {two["turn_id"]}, "the second is still pending, by its own id"
+
+        assert await turn_cancel({"session_key": lane}, emitter=emitter, turn_ids=turn_ids) == {"cancelled": True}
+        errors = [e["payload"]["turn_id"] for _k, e in emitter.emitted if e["type"] == "error"]
+        assert errors[-1] == one["turn_id"], "the cancel ended the running first fallback, not the pending second"
+
+        await asyncio.wait_for(loop.started.setdefault("second steer", asyncio.Event()).wait(), 2)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert turn_ids[lane] == two["turn_id"] and turn_mod.is_turn_active(lane), "then the second is promoted in turn"
+        starts = [e["payload"]["turn_id"] for _k, e in emitter.emitted if e["type"] == "message.start"]
+        assert starts[-1] == two["turn_id"]
+        assert await turn_cancel({"session_key": lane}, emitter=emitter, turn_ids=turn_ids) == {"cancelled": True}
+        assert lane not in turn_mod._pending_injects and not turn_mod.is_turn_active(lane)
+        assert loop.saw == [("wake", []), ("first steer", []), ("second steer", [])]
+    finally:
+        for gate in loop.release.values():
+            gate.set()
+        await teardown()

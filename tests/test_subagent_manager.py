@@ -3647,3 +3647,44 @@ async def test_a_backend_is_handed_the_authored_task_only_if_its_run_declares_it
     assert backend.calls[0]["task"] == "draw the poster from {{ ref:/x/brief.md }}"
     if backend_cls is _V15Backend:
         assert backend.calls[0]["authored_task"] == "draw the poster"
+
+
+class _CutOffProvider(LLMProvider):
+    """Answers once, on the output ceiling, with nothing to show for it."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import LLMResponse
+
+        return LLMResponse(content="", finish_reason="length")
+
+
+async def test_a_builtin_run_cut_at_the_ceiling_reports_it(tmp_path) -> None:
+    """The in-process lane has the fact first-hand -- it holds the response --
+    so it reports it directly rather than through any transport."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_CutOffProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("do it", task_id="n1", workspace=tmp_path, executor=None)
+
+    assert did.output_limited is True
+
+
+async def test_a_builtin_run_that_was_not_cut_reports_nothing(tmp_path) -> None:
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_ToolThenAnswerProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("do it", task_id="n1", workspace=tmp_path, executor=None)
+
+    assert did.output_limited is False

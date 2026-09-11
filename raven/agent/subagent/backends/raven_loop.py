@@ -358,6 +358,11 @@ class RavenLoopBackend:
 
         iteration = 0
         final_result: str | None = None
+        # Whether the LAST model response of this run was cut at the output
+        # ceiling, not whether any was: a round that was cut and then answered
+        # in full delivered its answer, and the verdict reading this is asking
+        # what the run has to show for itself.
+        cut_at_ceiling = False
         while iteration < self._MAX_ITERATIONS:
             iteration += 1
             if on_delta is None:
@@ -426,6 +431,7 @@ class RavenLoopBackend:
             # ACP agent's one cumulative report for the whole turn. Both arms
             # land here -- a streamed reply costs the same as a waited-for one.
             activity.note_usage(response.usage)
+            cut_at_ceiling = response.truncated
             if response.has_tool_calls:
                 tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
                 messages.append(
@@ -523,6 +529,11 @@ class RavenLoopBackend:
             )
             final_result = (wrap_up.content or "").strip() or None
             activity.note_usage(wrap_up.usage)
+            cut_at_ceiling = wrap_up.truncated
+        # Reported before the raise below, so a run that ends with no answer at
+        # all carries the reason as well -- that is the shape this exists for.
+        if cut_at_ceiling:
+            activity.note_output_limit()
         if final_result is None:
             # Nothing to hand back. Raised rather than returned, so the node
             # fails instead of completing with a sentence the next step would

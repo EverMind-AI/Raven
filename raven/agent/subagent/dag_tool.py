@@ -35,6 +35,7 @@ CustomEvent the web UI's DAG graph already renders.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -172,7 +173,15 @@ class _NodeBuild:
 
 @dataclass(frozen=True)
 class _DispatchBackend:
-    """One node backend with its cross-process MCP decision already frozen."""
+    """One node backend with its cross-process MCP decision settled at pre-flight.
+
+    The pre-flight grant is what the notices were written from. It is not what
+    every attempt dispatches with: a node continued after its credential landed
+    (a secret stored on the playbook page, a server authorized) has to dial with
+    the definition as it reads now, so the grant is resolved again per attempt.
+    A backend is wrapped with a grant only when it resolves one, so a resolver
+    is always there to ask.
+    """
 
     backend: Any
     mcp_grant: Any = None
@@ -184,8 +193,10 @@ class _DispatchBackend:
     async def run(self, *args: Any, **kwargs: Any) -> str:
         if self.drop_mcps:
             kwargs.pop("mcps", None)
-        if self.mcp_grant is not None:
-            kwargs["mcp_grant"] = self.mcp_grant
+        elif self.mcp_grant is not None:
+            resolver = getattr(self.backend, "resolve_mcp_grant_async", None) or self.backend.resolve_mcp_grant
+            grant = resolver(kwargs.get("mcps"))
+            kwargs["mcp_grant"] = await grant if inspect.isawaitable(grant) else grant
         return await self.backend.run(*args, **kwargs)
 
 
@@ -1027,7 +1038,9 @@ class SubAgentDagTool(Tool):
         task_summary: str = "",
         background: bool = True,
         confirm: bool = False,
-        mcp_servers: "Mapping[str, MCPServerConfig] | None" = None,
+        mcp_servers: "Mapping[str, MCPServerConfig] | Callable[[], Mapping[str, MCPServerConfig]] | None" = None,
+        mcp_scope: str | None = None,
+        mcp_credential_gaps: "Callable[[], frozenset[str]] | None" = None,
         **kwargs: Any,
     ) -> str:
         """Run one graph. ``mcp_servers`` is this run's own MCP definitions.
@@ -1052,7 +1065,7 @@ class SubAgentDagTool(Tool):
         # in-process node re-resolving its grant mid-run still finds the run's own
         # definitions. Reset on the way out, so the turn that dispatched a
         # background run does not carry them into whatever it does next.
-        with run_mcp_scope(mcp_servers):
+        with run_mcp_scope(mcp_servers, scope=mcp_scope, credential_gaps=mcp_credential_gaps):
             return await self._execute(nodes, background, confirm=confirm, task_summary=task_summary)
 
     async def _execute(
@@ -1631,7 +1644,9 @@ class SubAgentDagTool(Tool):
         if self._provider_for is None or not cfg.verdict_enabled:
             return None
 
-        async def _judge(*, node: Any, store: Any, output: str, error: str, crashed: bool) -> Verdict:
+        async def _judge(
+            *, node: Any, store: Any, output: str, error: str, crashed: bool, output_limited: bool = False
+        ) -> Verdict:
             # Resolved here, not when this tool was built: the loop's provider is
             # a property over the running turn's binding, so a session that
             # switched model must reach the judge.
@@ -1649,6 +1664,7 @@ class SubAgentDagTool(Tool):
                     evidence_complete=complete,
                     model=cfg.verdict_model,
                     timeout_s=cfg.verdict_timeout_seconds,
+                    output_limited=output_limited,
                 )
             return await judge(
                 provider,
@@ -1658,6 +1674,7 @@ class SubAgentDagTool(Tool):
                 evidence_complete=complete,
                 model=cfg.verdict_model,
                 timeout_s=cfg.verdict_timeout_seconds,
+                output_limited=output_limited,
             )
 
         return _judge

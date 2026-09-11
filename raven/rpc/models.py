@@ -1270,6 +1270,12 @@ class TurnSendParams(_Strict):
     # With it set the turn skips the model entirely and runs one direct-chat
     # turn against that instance (``TurnRequest.direct_target``).
     target: DirectTarget | None = None
+    # What to do when the lane already has a turn in flight. Absent refuses
+    # with -32003, as every existing caller expects. ``inject`` hands the text
+    # to the running turn instead (``BusyPolicy.INJECT``): the loop merges it
+    # at its next tool-loop gap, the way a channel's mid-turn message is
+    # merged. On an idle lane it is an ordinary send.
+    busy: Literal["inject"] | None = None
 
 
 class TurnSendResult(_Strict):
@@ -3800,6 +3806,68 @@ class PlaybooksGetParams(_Strict):
     name: str
 
 
+class PlaybookCredentialParam(_Strict):
+    """One ``secret`` param of a playbook and whether this machine holds a value for it. Never the value."""
+
+    name: str
+    set: bool
+    description: str
+
+
+class PlaybookCredentialServer(_Strict):
+    """One server the playbook carries, as the credentials tab needs it."""
+
+    name: str
+    auth: Literal["none", "apikey", "oauth"]
+    enabled: bool
+    authorized: bool
+    """For an ``oauth`` server: whether this machine holds tokens under the playbook's scope."""
+    shadows_host: bool
+    """The same name exists in the host's ``tools.mcpServers``; the carried
+    definition wins for this playbook's runs, and its credentials are its own."""
+
+
+class PlaybooksCredentialsGetParams(_Strict):
+    name: str
+
+
+class PlaybooksCredentialsGetResult(_Strict):
+    params: list[PlaybookCredentialParam]
+    servers: list[PlaybookCredentialServer]
+
+
+class PlaybooksCredentialsSetParams(_Strict):
+    name: str
+    param: str
+    value: str
+
+
+class PlaybooksCredentialsClearParams(_Strict):
+    name: str
+    param: str
+
+
+class PlaybooksOauthAuthorizeParams(_Strict):
+    name: str
+    server: str
+
+
+class PlaybooksOauthAuthorizeResult(_Strict):
+    server: str
+    state: str
+    auth_url: str | None = None
+    error: str | None = None
+
+
+class PlaybooksOauthClearParams(_Strict):
+    name: str
+    server: str
+
+
+class OkResult(_Strict):
+    ok: bool
+
+
 class PlaybooksGetResult(_Strict):
     playbook: PlaybookDetail
 
@@ -3949,6 +4017,11 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # playbooks.* -- the stored library, read-only
     "playbooks.list": (PlaybooksListParams, PlaybooksListResult),
     "playbooks.get": (PlaybooksGetParams, PlaybooksGetResult),
+    "playbooks.credentials.get": (PlaybooksCredentialsGetParams, PlaybooksCredentialsGetResult),
+    "playbooks.credentials.set": (PlaybooksCredentialsSetParams, OkResult),
+    "playbooks.credentials.clear": (PlaybooksCredentialsClearParams, OkResult),
+    "playbooks.oauth.authorize": (PlaybooksOauthAuthorizeParams, PlaybooksOauthAuthorizeResult),
+    "playbooks.oauth.clear": (PlaybooksOauthClearParams, OkResult),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
     "plughub.detail": (PlughubDetailParams, PlughubDetailResult),

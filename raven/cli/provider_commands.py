@@ -194,6 +194,10 @@ def _login_github_copilot() -> None:
         await litellm.acompletion(
             model="github_copilot/gpt-4o",
             messages=[{"role": "user", "content": "hi"}],
+            # One token, deliberately: this is a connectivity check, not a
+            # reply. A round trip that returns anything at all proves the
+            # credential and the route, and asking for more only pays for
+            # tokens nobody reads.
             max_tokens=1,
         )
 

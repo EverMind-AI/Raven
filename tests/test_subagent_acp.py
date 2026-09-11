@@ -4448,3 +4448,41 @@ async def test_a_clean_run_writes_no_failure_key(tmp_path: Path) -> None:
 
     assert did.tool_failures == []
     assert "tool_failures" not in did.as_meta()
+
+
+async def test_the_protocols_max_tokens_stop_reason_records_the_output_limit(tmp_path: Path) -> None:
+    """Read off the stop reason, which is the protocol's own way to say it: any
+    conforming agent reports the ceiling this way, and unlike a private `_meta`
+    key it is a field the documented design already acts on."""
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a", mode="output_limit"))
+    with activity.collecting() as did:
+        answer = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert answer.startswith("pong")
+    assert did.output_limited is True
+
+
+async def test_a_turn_that_ended_normally_records_no_output_limit(tmp_path: Path) -> None:
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a", mode="ok"))
+    with activity.collecting() as did:
+        assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "pong"
+
+    assert did.output_limited is False
+
+
+async def test_response_meta_alone_never_records_an_output_limit(tmp_path: Path) -> None:
+    """CONTEXT.md's Response Meta entry says the host reads none of it, and its
+    `_Avoid_` names deciding from it. An agent-authored table must not be able
+    to assert a fact the judge is shown outside the untrusted fence."""
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a", mode="meta"))
+    with activity.collecting() as did:
+        assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "pong"
+
+    assert did.response_meta, "the table still reaches the record verbatim"
+    assert did.output_limited is False

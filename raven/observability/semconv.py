@@ -9,12 +9,15 @@ See ``docs/TRACING_STANDARD_API.md``.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from typing import Any
 
 from raven.observability import usage as usage_mod
-from raven.tracing import config
+from raven.tracing import artifact_v2, config
+from raven.tracing import spans as _spans
 from raven.tracing.store import preview_text
+from raven.utils.images import inline_image_bytes, is_image_part
 
 _SKILL_TOOLS = {"use_skill", "read_skill"}
 
@@ -97,6 +100,7 @@ def _llm_attrs(resp: Any, provider: str, model: str | None, provider_class: str 
     u = usage_mod.normalize(getattr(resp, "usage", None), model)
     attrs["llm.usage.input_tokens"] = u["input_tokens"]
     attrs["llm.usage.output_tokens"] = u["output_tokens"]
+    attrs["llm.usage.reasoning_tokens"] = u["reasoning_tokens"]
     attrs["llm.usage.cache_read_tokens"] = u["cache_read_tokens"]
     attrs["llm.usage.cache_write_tokens"] = u["cache_write_tokens"]
     attrs["llm.usage.total_tokens"] = u["total_tokens"]
@@ -109,70 +113,214 @@ def _llm_attrs(resp: Any, provider: str, model: str | None, provider_class: str 
     if getattr(resp, "truncated", False):
         attrs["llm.truncated"] = True
         attrs["llm.max_tokens"] = getattr(resp, "max_tokens", None)
+    # On the span as well as in the artifact: finding the calls a gateway
+    # answered 200-and-nothing to, or the ones one backend of a fallback order
+    # served, is a question about many spans, and opening an artifact per call
+    # is not how it gets asked. Only stamped when present, for the reason above.
+    record = getattr(resp, "call_record", None)
+    if record is not None:
+        for key, value in (
+            ("llm.http_status", record.http_status),
+            ("llm.served_by", record.served_by),
+            ("llm.response_id", record.response_id),
+        ):
+            if value is not None:
+                attrs[key] = value
     return attrs
 
 
-def _coerce_text(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    try:
-        import json as _json
+#: A picture is a content part, never text: its base64 payload is not written
+#: into any record here, only counted. See the module note in
+#: ``raven.providers.call_record`` for the rest of that rule.
+def request_facts(messages: Any, tools: Any = None) -> dict[str, int]:
+    """How big the request was, and how much of it was pictures.
 
-        return _json.dumps(value, ensure_ascii=False)
-    except Exception:  # noqa: BLE001
-        return str(value)
+    The one number a post-mortem asks first and the record could not answer:
+    five calls of about 16.8 MB each came back empty, and the only way to learn
+    that was to stat the artifact files -- whose size is not the request's (the
+    payload below repeats the system prompt and the latest user message beside
+    the full ``messages`` list).
+
+    ``bytes`` is the size of the conversation payload -- ``messages`` plus
+    ``tools`` -- as the provider was handed it, serialized here with the wire's
+    own compact separators. It is not the request body, and must not be read as
+    one: this extractor runs around ``chat_with_retry``, above the provider, and
+    the provider then adds the model, the output ceiling, the temperature, its
+    reasoning keys, ``stream`` and any routing extras, sanitizes the messages,
+    moves prompt-cache breakpoints on its own copies, and on the Anthropic wire
+    hoists the system message out of ``messages`` into a ``system`` field
+    entirely. So the number can sit either side of the body an operator is
+    correlating with a transport failure (measured on one deck-shaped request:
+    2,344 bytes here against a 2,490-byte Anthropic body, and 33 of those 2,344
+    were separator whitespace the wire never carries -- hence the compact
+    separators). What it *is* exact about is its own subject: every byte of the
+    payload it names is counted rather than sampled, streamed through
+    ``iterencode`` so a 20 MB one is measured without a second copy of it in
+    memory (56 ms measured, against a call that takes seconds).
+
+    ``imageBytes`` is *decoded*, the unit the image window's budget is written
+    in; the encoded form is inside ``bytes``, 4/3 larger. Recording both is what
+    lets the gap between them be seen -- a measured request passed a 12 MB
+    decoded budget with 11.24 MB while putting 16.8 MB on the wire.
+    """
+    images = 0
+    image_bytes = 0
+    for message in messages if isinstance(messages, list) else []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if is_image_part(part):
+                images += 1
+                image_bytes += inline_image_bytes(part)
+    # The separators an HTTP client serializes a JSON body with, so the count is
+    # of the payload's own bytes rather than of Python's pretty-print spacing.
+    encoder = json.JSONEncoder(ensure_ascii=False, default=str, separators=(",", ":"))
+    payload = {"messages": messages, "tools": tools} if tools else {"messages": messages}
+    try:
+        total = sum(len(chunk.encode("utf-8")) for chunk in encoder.iterencode(payload))
+    except Exception:  # noqa: BLE001 - a record must never be the thing that fails
+        total = 0
+    return {"bytes": total, "images": images, "imageBytes": image_bytes}
+
+
+def _generation_facts(provider: Any, bound: dict[str, Any]) -> dict[str, Any]:
+    """What this call asked the model for, as the provider resolved it.
+
+    The record kept only the conversation, so a truncated turn could not be
+    attributed to anything: the ceiling a request carried, the effort it asked
+    for and the shape that effort went out in were all absent, and a rendered
+    config is not evidence of any of them. Asked of the provider rather than
+    reassembled here -- the provider owns the sentinel defaults, the wire id the
+    ceiling is resolved under, and which reasoning keys its wire takes.
+
+    Two call shapes reach the two ``llm.call`` spans: the non-streaming retry
+    ladder takes the parameters as named arguments (a sentinel where the caller
+    named nothing), the streaming path collects them into ``generation``.
+
+    No credentials: the fields come from ``request_generation``, which returns
+    parameters only.
+    """
+    ask = getattr(provider, "request_generation", None)
+    if not callable(ask):
+        return {}
+    sentinel = getattr(provider, "_SENTINEL", None)
+    asked: dict[str, Any] = {}
+    streamed = bound.get("generation")
+    for source in (bound, streamed if isinstance(streamed, dict) else {}):
+        for name in ("max_tokens", "temperature", "reasoning_effort"):
+            if name in source and source[name] is not sentinel:
+                asked[name] = source[name]
+    try:
+        facts = ask(model=bound.get("model"), **asked)
+    except Exception:  # noqa: BLE001 - a record must never be the thing that fails
+        return {}
+    return facts if isinstance(facts, dict) else {}
+
+
+def _generation_attrs(facts: dict[str, Any]) -> dict[str, Any]:
+    """The scalars on the span, so "what effort did this tier send" is a grep.
+
+    Only what is set: an attribute present on every call buries the one call
+    that differs, which is the call anyone is looking for.
+    """
+    attrs: dict[str, Any] = {}
+    if isinstance(facts.get("max_tokens"), int):
+        attrs["llm.request.max_tokens"] = facts["max_tokens"]
+    if isinstance(facts.get("output_ceiling"), int):
+        attrs["llm.request.output_ceiling"] = facts["output_ceiling"]
+    if facts.get("reasoning_effort"):
+        attrs["llm.request.reasoning_effort"] = facts["reasoning_effort"]
+    if isinstance(facts.get("temperature"), (int, float)):
+        attrs["llm.request.temperature"] = facts["temperature"]
+    thinking = facts.get("thinking")
+    if isinstance(thinking, dict):
+        attrs["llm.request.thinking"] = thinking.get("type")
+        if isinstance(thinking.get("budget_tokens"), int):
+            attrs["llm.request.thinking_budget"] = thinking["budget_tokens"]
+    for key, block in (("output_config", facts.get("output_config")), ("reasoning", facts.get("reasoning"))):
+        if isinstance(block, dict) and block.get("effort"):
+            attrs["llm.request.effort_sent"] = f"{key}.effort={block['effort']}"
+    fence = facts.get("provider_fence")
+    if fence:
+        # Compact JSON rather than the dict: the question asked of it is which
+        # backend served a run, and a string is what grep can answer that with.
+        attrs["llm.request.provider_fence"] = json.dumps(fence, sort_keys=True, separators=(",", ":"), default=str)
+    return attrs
 
 
 def _llm_input_payload(
-    provider: str, model: str | None, messages: Any, tools: Any, provider_class: str | None = None
+    provider: str,
+    model: str | None,
+    messages: Any,
+    tools: Any,
+    provider_class: str | None = None,
+    facts: dict[str, int] | None = None,
+    generation: dict[str, Any] | None = None,
 ) -> dict:
-    """Artifact payload for the model-input card.
+    """Artifact payload for the model-input card, in ``audit.artifact.v2``.
 
-    raven passes ONE flat ``messages`` list (system + prior turns + current).
-    We split it into three non-overlapping views for the viewer:
-      - ``systemPrompt``: the system message,
-      - ``prompt``: the latest user message (the current input to this call),
-      - ``historyMessages``: the prior turns only — everything EXCEPT the system
-        message and that latest user message (so it doesn't duplicate them).
-    ``messages`` keeps the full raw list as handed to the provider, which is not
-    what went on the wire: the provider adds or removes prompt-cache breakpoints
-    on copies (``providers.prompt_cache``) after this is recorded. Neither the
-    presence nor the absence of ``cache_control`` here says what was sent.
+    Each message is stored once under ``_messages/`` and referenced here, so a
+    turn that appends one message no longer rewrites the whole conversation.
+    ``systemPrompt`` and ``prompt`` alias their element of ``messages`` rather
+    than restating its text - the same reference object, so there is no second
+    address that could disagree.
+
+    Two rules differ from v1 on purpose. The system field takes the first
+    system message, where v1 took the first non-empty one: a reference has no
+    notion of emptiness, and synthesising one would mean a second address.
+    ``messages`` is always a list, where v1 passed a non-list argument
+    through: one constant type spares both resolvers a special case, and the
+    extractors always hand this a real call's message list.
+
+    ``request`` and ``generation`` ride along unaddressed. Neither holds
+    message content - three integers and the parameters the provider resolved -
+    so referencing them would cost an indirection and save nothing.
+    ``request.bytes`` is also what ``llm.request_bytes`` reports, which is the
+    request-size signal ``artifact_bytes`` stopped carrying once it began
+    measuring the shell.
+
+    The referenced list is not what went on the wire: the provider adds or
+    removes prompt-cache breakpoints on copies (``providers.prompt_cache``)
+    after this is recorded. Neither the presence nor the absence of
+    ``cache_control`` here says what was sent.
     """
     msgs = messages if isinstance(messages, list) else []
-    system_prompt = ""
-    user_prompt = ""
-    system_idxs: set[int] = set()
-    last_user_idx: int | None = None
-    for i, m in enumerate(msgs):
+    refs = _spans.address_items(msgs)
+    system_ref: Any = ""
+    prompt_ref: Any = ""
+    for index, m in enumerate(msgs):
         if isinstance(m, dict) and m.get("role") == "system":
-            system_idxs.add(i)
-            if not system_prompt:
-                system_prompt = _coerce_text(m.get("content"))
-    for i in range(len(msgs) - 1, -1, -1):
-        m = msgs[i]
-        if isinstance(m, dict) and m.get("role") == "user":
-            user_prompt = _coerce_text(m.get("content"))
-            last_user_idx = i
+            system_ref = refs[index]
             break
-    history = [m for i, m in enumerate(msgs) if i not in system_idxs and i != last_user_idx]
+    for index in range(len(msgs) - 1, -1, -1):
+        m = msgs[index]
+        if isinstance(m, dict) and m.get("role") == "user":
+            prompt_ref = refs[index]
+            break
     return {
+        "artifactFormat": artifact_v2.ARTIFACT_FORMAT,
         "provider": provider,
         "providerClass": provider_class,
         "model": model,
-        "systemPrompt": system_prompt,
-        "prompt": user_prompt,
-        "historyMessages": history,
-        "messages": messages,
+        "systemPrompt": system_ref,
+        "prompt": prompt_ref,
+        "messages": refs,
         "tools": tools,
+        # Taken from the caller when it has already measured them for the span's
+        # attributes, so one request is not walked twice.
+        "request": facts if facts is not None else request_facts(messages, tools),
+        # What was asked for, beside what was said. Taken from the caller, which
+        # has already asked the provider for the span's attributes.
+        "generation": generation or {},
     }
 
 
 def _llm_output_payload(resp: Any) -> Any:
     if resp is None:
         return None
+    from raven.providers.call_record import as_payload
+
     content = getattr(resp, "content", None)
     return {
         "content": content,
@@ -185,6 +333,11 @@ def _llm_output_payload(resp: Any) -> Any:
         "reasoning_content": getattr(resp, "reasoning_content", None),
         "thinking_blocks": getattr(resp, "thinking_blocks", None),
         "usage": getattr(resp, "usage", None),
+        # What the transport did: status, serving backend, kept headers, and the
+        # body when the response delivered nothing. Imported here rather than at
+        # module scope because ``raven.providers`` imports this module, and the
+        # payload builder is the only part of it that needs the other direction.
+        "call": as_payload(getattr(resp, "call_record", None)),
     }
 
 
@@ -265,14 +418,17 @@ def _skill_read_path(name: str, params: Any) -> str | None:
 provider_label = _provider_label
 llm_attrs = _llm_attrs
 llm_input_payload = _llm_input_payload
+generation_facts = _generation_facts
 llm_output_payload = _llm_output_payload
 
 
 __all__ = [
     "llm_attrs",
     "llm_input_payload",
+    "generation_facts",
     "llm_output_payload",
     "provider_label",
+    "request_facts",
     "llm_call",
     "llm_call_stream",
     "tool_call",
@@ -611,6 +767,15 @@ def turn(span, bound: dict[str, Any], result: Any, exc: BaseException | None) ->
     span.artifact("turn.output", {"content": out_content})
 
 
+def _request_attrs(facts: dict[str, int]) -> dict[str, Any]:
+    """The request's size as span attributes, so it is greppable without the artifact."""
+    return {
+        "llm.request_bytes": facts["bytes"],
+        "llm.request_images": facts["images"],
+        "llm.request_image_bytes": facts["imageBytes"],
+    }
+
+
 def _finish_error(span, result) -> None:
     """Mark the span ERROR when the model returned a soft error response."""
     if getattr(result, "finish_reason", None) == "error":
@@ -626,8 +791,15 @@ def llm_call(span, bound: dict[str, Any], result: Any, exc: BaseException | None
     provider_class = type(provider).__name__ if provider is not None else None
     eff_model = model or getattr(provider, "default_model", None)
     pname = provider_label(eff_model, provider_class)
-    span.artifact("llm.input", llm_input_payload(pname, eff_model, messages, tools, provider_class))
+    facts = request_facts(messages, tools)
+    generation = _generation_facts(provider, bound)
+    span.artifact(
+        "llm.input",
+        llm_input_payload(pname, eff_model, messages, tools, provider_class, facts, generation),
+    )
     attrs = llm_attrs(result, pname, eff_model, provider_class)
+    attrs.update(_request_attrs(facts))
+    attrs.update(_generation_attrs(generation))
     if span.invocation_source:
         attrs["llm.invocation_source"] = span.invocation_source
     span.set(attrs)
@@ -645,8 +817,15 @@ def llm_call_stream(span, bound: dict[str, Any], result: Any, exc: BaseException
     provider_class = type(provider).__name__ if provider is not None else "stream"
     eff_model = model or getattr(provider, "default_model", None)
     pname = provider_label(eff_model, provider_class)
-    span.artifact("llm.input", llm_input_payload(pname, eff_model, messages, tools, provider_class))
+    facts = request_facts(messages, tools)
+    generation = _generation_facts(provider, bound)
+    span.artifact(
+        "llm.input",
+        llm_input_payload(pname, eff_model, messages, tools, provider_class, facts, generation),
+    )
     attrs = llm_attrs(result, pname, eff_model, provider_class)
+    attrs.update(_request_attrs(facts))
+    attrs.update(_generation_attrs(generation))
     attrs["llm.stream"] = True
     if span.invocation_source:
         attrs["llm.invocation_source"] = span.invocation_source

@@ -14,6 +14,7 @@ from raven.providers.base import (
     LLMResponse,
     format_llm_error,
 )
+from raven.providers.first_byte import httpx_timeout, stream_first_byte_budget
 from raven.providers.openai_codex_provider import (
     _consume_sse,
     _convert_messages,
@@ -111,7 +112,7 @@ class OpenAIResponsesProvider(LLMProvider):
         headers = {"Accept": "text/event-stream", **self.extra_headers}
         raw_usage: dict[str, Any] = {}
         try:
-            async with httpx.AsyncClient(timeout=self.generation.timeout) as client:
+            async with httpx.AsyncClient(timeout=httpx_timeout(self.generation) or self.generation.timeout) as client:
                 async with client.stream(
                     "POST",
                     url,
@@ -128,8 +129,14 @@ class OpenAIResponsesProvider(LLMProvider):
                     # 2026-09-07). getattr: a GenerationSettings from before the
                     # field falls back to the call budget, as it always did.
                     idle_timeout = getattr(self.generation, "stream_idle_timeout", None) or self.generation.timeout
+                    # And the first event on the first-byte bound, which is the
+                    # one a stream that never starts needs: the idle cap is for a
+                    # stream that stopped mid-answer, minutes further out.
                     content, tool_calls, finish_reason = await _consume_sse(
-                        response, idle_timeout, usage_sink=raw_usage
+                        response,
+                        idle_timeout,
+                        usage_sink=raw_usage,
+                        first_byte=stream_first_byte_budget(self.generation),
                     )
             return LLMResponse(
                 content=content or None,

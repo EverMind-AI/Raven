@@ -119,7 +119,11 @@ class LoadPlaybookTool(Tool):
             "Loading runs it. Most playbooks ship their whole graph, so one call is the whole "
             "interaction; some instead come back with guidance for you to build the graph from, and "
             "some ask for values first. Pass every parameter you can read off the conversation -- "
-            "invent nothing -- and `fills` for any field listed below as left for you.\n"
+            "invent nothing -- and `fills` for any field listed below as left for you. A secret "
+            "param marked as stored on this machine is filled in at load: call without it, and never "
+            "ask the user to type a secret into the conversation. One marked as not set does not stop "
+            "the run either -- load it anyway; the servers that param fills run without it and the "
+            "reply says where the user sets it.\n"
             f"Installed playbooks:\n{lines}{more}"
         )
 

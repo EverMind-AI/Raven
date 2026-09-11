@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -249,6 +250,101 @@ def playbook_disable(name: str = typer.Argument(..., help="Playbook name, as lis
     console.print(f"{escape(name)}: {'disabled' if changed else 'already disabled'}")
 
 
+secret_app = typer.Typer(help="The secret params this machine holds for a playbook's carried MCP servers")
+playbook_app.add_typer(secret_app, name="secret")
+
+
+@secret_app.command("set")
+def playbook_secret_set(
+    name: str = typer.Argument(..., help="Playbook name, as listed"),
+    param: str = typer.Argument(..., help="A param the playbook declares with type: secret"),
+    value: Optional[str] = typer.Option(
+        None,
+        "--value",
+        help="The value. Omit to be prompted without echo -- a value on the command line is visible in `ps`.",
+    ),
+):
+    """Store one secret param for a playbook on this machine.
+
+    The value lands in the Raven credentials root (RAVEN_HOME) under
+    playbooks/<name>/, mode 0600, and is read at load, so a run no longer has to
+    be handed it -- and it never enters a conversation or the playbook file.
+    """
+    from raven.playbook.credentials import set_secret_param
+
+    config = _load_config()
+    store = _store(config)
+    _require_known(store, name)
+    spec = store.load(name)
+    declared = spec.params.get(param)
+    if declared is None or declared.type != "secret":
+        err_console.print(f"[red]{escape(name)} declares no secret param named {escape(param)}.[/red]")
+        raise typer.Exit(code=1)
+    if value is None:
+        value = typer.prompt(f"{param}", hide_input=True)
+    set_secret_param(name, param, value)
+    console.print(f"stored {escape(param)} for {escape(name)}")
+
+
+@secret_app.command("clear")
+def playbook_secret_clear(
+    name: str = typer.Argument(..., help="Playbook name, as listed"),
+    param: str = typer.Argument(..., help="The param to forget"),
+):
+    """Forget one stored secret param."""
+    from raven.playbook.credentials import clear_secret_param
+
+    config = _load_config()
+    _require_known(_store(config), name)
+    clear_secret_param(name, param)
+    console.print(f"cleared {escape(param)} for {escape(name)}")
+
+
+@playbook_app.command("auth")
+def playbook_auth(
+    name: str = typer.Argument(..., help="Playbook name, as listed"),
+    server: str = typer.Argument(..., help="A server the playbook carries with auth: oauth"),
+):
+    """Run the browser OAuth flow for a server this playbook carries.
+
+    Tokens land under the playbook's own credential scope, never under the
+    host's, so a carried server and a host server of one name stay apart.
+    """
+    from raven.playbook.credentials import credential_scope
+
+    config = _load_config()
+    store = _store(config)
+    _require_known(store, name)
+    spec = store.load(name)
+    cfg = (spec.mcp_servers or {}).get(server)
+    if cfg is None:
+        err_console.print(f"[red]{escape(name)} carries no MCP server named {escape(server)}.[/red]")
+        raise typer.Exit(code=1)
+    if cfg.auth != "oauth":
+        err_console.print(f"[red]{escape(server)} has auth={cfg.auth!r}; only an oauth server is authorized.[/red]")
+        raise typer.Exit(code=1)
+
+    async def _run() -> dict:
+        from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.manager import MCPConnectionManager
+
+        mgr = MCPConnectionManager(ToolRegistry(), credential_scope=credential_scope(name))
+        try:
+            return await mgr.connect(server, cfg, interactive=True)
+        finally:
+            await mgr.aclose()
+
+    console.print(f"authorizing {escape(server)} for {escape(name)} -- your browser will open...")
+    snap = asyncio.run(_run())
+    if snap.get("state") == "connected":
+        console.print(f"[green]authorized[/green] -- {snap.get('tool_count', 0)} tools, tokens saved")
+    else:
+        err_console.print(
+            f"[red]authorization failed[/red] ({snap.get('state')}): {escape(str(snap.get('error') or ''))}"
+        )
+        raise typer.Exit(code=1)
+
+
 @playbook_app.command("run")
 def playbook_run(
     name: str = typer.Argument(..., help="Playbook name, as listed"),
@@ -297,6 +393,7 @@ def playbook_run(
     from raven.agent.subagent.dag_tool import SubAgentDagTool
     from raven.agent.subagent.manager import SubagentManager
     from raven.playbook import PlaybookExecutor, PlaybookRuntime, agent_profiles_from_registry
+    from raven.playbook.credentials import credential_scope, stored_secret_params
     from raven.playbook.mcp import (
         declared_mcp_names,
         playbook_mcp_servers,
@@ -354,7 +451,9 @@ def playbook_run(
     async def run_with_mcp():
         if spec is None:
             return await runtime.load(name, values, fills, allow_disabled=True)
-        param_values, _ = resolve_params(spec, values)
+        # The same precedence the conversation path applies: a secret this
+        # machine stores stands in for one the command line did not supply.
+        param_values, _ = resolve_params(spec, {**stored_secret_params(spec), **values})
         secrets = secret_param_names(spec)
         declared = declared_mcp_names(spec, fills)
         async with preflight_mcp_source(
@@ -365,9 +464,17 @@ def playbook_run(
             sandbox_config=config.tools.sandbox,
             workspace=config.workspace_path,
             secret_values=[param_values.get(pname, "") for pname in secrets],
+            credential_scope=credential_scope(spec.name) if spec.mcp_servers else None,
         ) as source:
             for server, state in unusable_servers(source, declared or ()):
-                hint = f" -- run: raven plugin auth {server}" if state == "auth_required" else ""
+                hint = ""
+                if state == "auth_required":
+                    fix = (
+                        f"raven playbook auth {name} {server}"
+                        if server in spec.mcp_servers
+                        else f"raven plugin auth {server}"
+                    )
+                    hint = f" -- run: {fix}"
                 err_console.print(f"[yellow]MCP server {escape(server)}: {escape(state)}{escape(hint)}[/yellow]")
             manager.set_mcp_source(source)
             try:
