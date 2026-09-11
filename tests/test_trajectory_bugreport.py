@@ -116,8 +116,24 @@ def _decide_all(suspected_action=treview.ACTION_KEPT):
         "win C:\\Users\\alice\\f.txt path",
         "unc \\\\srv\\share\\x path",
         "file url file:///etc/passwd leaks",
+        '{"u":"https://api.x.com/v1","p":"/etc/raven/license.key"}',
+        "log https://x.com/v1,/var/db/raven/secrets.sqlite end",
     ],
-    ids=["tmp", "single", "private-var", "mnt", "opt", "unicode", "quoted-space", "users", "drive", "unc", "file-url"],
+    ids=[
+        "tmp",
+        "single",
+        "private-var",
+        "mnt",
+        "opt",
+        "unicode",
+        "quoted-space",
+        "users",
+        "drive",
+        "unc",
+        "file-url",
+        "json-after-url",
+        "comma-after-url",
+    ],
 )
 def test_parser_hits_absolute_paths(text):
     sanitized = tsan.sanitize_text(text)
@@ -132,11 +148,31 @@ def test_parser_hits_absolute_paths(text):
         "https://host/path/to/x stays",
         "see artifacts/001-trace-1-cli-a.json relative",
         "[REDACTED:path]/name.json placeholder tail",
+        "see https://host:8080/api/v1 now",
+        "see https://host/a?x=1&y=2 now",
     ],
-    ids=["natural", "url", "bundle-relative", "placeholder-tail"],
+    ids=["natural", "url", "bundle-relative", "placeholder-tail", "url-port", "url-query"],
 )
 def test_parser_leaves_non_paths_alone(text):
     assert tsan.sanitize_text(text) == text
+
+
+def test_a_path_glued_to_a_url_does_not_ride_out_in_an_export(tmp_path):
+    """The export's own no-local-paths assertion cannot catch this one.
+
+    ``scan_absolute_paths`` re-runs the parser ``sanitize_export_tree`` just
+    ran, so a path the parser cannot see is a path the assertion cannot see
+    either -- it reports CLEAN on a package that carries it. The assertion
+    below therefore reads the written file rather than the scanner's verdict.
+    """
+    payload = '{"u":"https://api.x.com/v1","p":"/etc/raven/license.key"}'
+    (tmp_path / "log.json").write_text(json.dumps({"line": payload}), encoding="utf-8")
+
+    tsan.sanitize_export_tree(tmp_path)
+
+    written = (tmp_path / "log.json").read_text(encoding="utf-8")
+    assert "/etc/raven/license.key" not in written
+    assert tsan.PATH_PLACEHOLDER in written
 
 
 def test_known_roots_replaced_wherever_they_appear(tmp_path):

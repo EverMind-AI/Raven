@@ -51,7 +51,13 @@ _BARE_END = set("\"'`)]},;:<>|")
 # the "//" after the scheme (":" is a boundary character, so the parser stops
 # there first). "file" is exempt from the exemption: a file:// path IS a local
 # path. Bounded lookbehind window — URLs in bundle text are line-local.
-_URL_BEFORE = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*)://[^\s]*$")
+# The run ends where a path token would end (_BARE_END), not only at whitespace:
+# compact JSON and logged request lines glue a path to a URL through a quote or
+# comma, and a run that swallows the quote reads that path as part of the URL --
+# exempting from redaction exactly what has to be redacted. ":" stays inside the
+# run so a port (https://host:8080/p) does not split it.
+_URL_RUN = "".join(re.escape(c) for c in _BARE_END if c != ":")
+_URL_BEFORE = re.compile(rf"([A-Za-z][A-Za-z0-9+.\-]*)://[^\s{_URL_RUN}]*$")
 _URL_SCHEME = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*):$")
 _URL_WINDOW = 512
 
