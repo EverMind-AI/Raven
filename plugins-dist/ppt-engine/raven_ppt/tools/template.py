@@ -41,7 +41,6 @@ from raven_ppt.services.template import (
     needed_imports,
     write_palette,
 )
-from raven_ppt.services.template.capacity import LEGEND
 from raven_ppt.services.template.house import house_style
 from raven_ppt.services.template.inventory import template_dir, write_ground
 from raven_ppt.services.template.menu import ICON_SLOT_NOTE, menu, roles
@@ -507,7 +506,7 @@ class PptTemplateTool(Tool):
                 "nothing else, while whatever this template draws that they cannot -- a timeline, a ring "
                 "of badges, a numbered pill, a figure card -- exists on these pages and nowhere else. "
                 "Use `adapt(items=...)` to fill the repeated units and remove the spares. Compose inside "
-                "the measured house style only for a page no example can carry. " + LEGEND
+                "the measured house style only for a page no example can carry."
             )
         asks = []
         if named:
@@ -645,10 +644,8 @@ class PptTemplateTool(Tool):
                 f"for a page without a suitable prototype, draw it yourself: "
                 f"`layout = prs.slide_layouts.get_by_name({house.layout!r})` then "
                 f"`prs.slides.add_slide(layout)`, so the page inherits the template's background, put the page title "
-                "in the title row exactly as given above, and lay the content out inside the box "
-                "`body_area_as_code` hands you -- paste that line, then divide the box with `ppt_layout`: "
-                "Box.columns, .rows, .grid, plane(), write(), table(). Every one of those takes a box of two "
-                "corners, which is what `body_area_corners_in` and that line both are. The arrangement is "
+                "in the title row exactly as given above, and lay the content out inside body_area_in with "
+                "`ppt_layout` -- Box.columns, .rows, .grid, plane(), write(), table(). The arrangement is "
                 "yours to decide from what the page has to say"
             )
         if house is not None and house.scale:
@@ -803,13 +800,7 @@ class PptTemplateTool(Tool):
                 + ", ".join(str(number) for number in sorted(unwritable))
                 + " hold shapes python-pptx cannot write, so code alone will not reproduce them -- clone "
                 "those pages with `from ppt_template import clone_page, replace_text, replace_picture, "
-                "clear_region, drop_shape` and edit the copy instead. Replacing its words is "
-                "`replace_text`; drawing anything of your own into it -- a chart, a panel, a figure -- means "
-                "emptying that space first -- `clear_region(slide, page_box(shape_at(slide, n)))` for where one "
-                "shape is, or `clear_region(slide, Box.corners(x0, y0, x1, y1))` for a space of your own, since "
-                "four bare numbers cannot say which reading they are and are refused -- which reports every shape it took "
-                "out and every one still lying over your box. A run that swept the page by hand instead "
-                "kept the arrows, the number labels and every connector, and drew two charts on top of them"
+                "drop_shape` and edit the copy instead"
             )
         payload["pages_read"] = [page.index + 1 for page in sources]
         if cut:

@@ -430,25 +430,8 @@ def test_every_check_produces_the_severity_it_declares(sample: Sample, tmp_path:
     # The eleventh is a page under a photograph washed to 30%, which is the state
     # `washed_backdrop` reads and one no other fixture's pictures, opaque or absent, are in.
     fogged = check_deck(DeckUnderReview(pptx_path=_a_page_under_a_washed_photograph(tmp_path)))
-    # The twelfth anchors an overset label to the middle of its box, which is the state
-    # `displaced_copy` reads: every other fixture's copy is anchored to the top, where
-    # copy that does not fit runs on downward and is `overset_copy`'s report instead.
-    displaced = check_deck(DeckUnderReview(pptx_path=_a_label_set_above_where_its_box_starts(tmp_path)))
 
-    every = (
-        *loaded,
-        *bare,
-        *alike,
-        *banded,
-        *fresh,
-        *footed,
-        *plain,
-        *inherited,
-        *cropped,
-        *marked,
-        *fogged,
-        *displaced,
-    )
+    every = (*loaded, *bare, *alike, *banded, *fresh, *footed, *plain, *inherited, *cropped, *marked, *fogged)
     assert {finding.kind for finding in every} == set(DISPATCH), "a row nothing produced"
     for finding in every:
         assert finding.severity == DISPATCH[finding.kind], finding.kind
@@ -493,41 +476,6 @@ def _a_deck_with_feet_and_no_numbers(tmp_path: Path) -> Path:
         for slot in range(3):
             builder.panel(page, left=0.72 + slot * 3.84, top=2.2, width=3.5, height=1.4)
     return builder.save("footed.pptx")
-
-
-def _a_label_set_above_where_its_box_starts(tmp_path: Path) -> Path:
-    """A card label anchored to the middle of a box that holds one line of its three.
-
-    The geometry of a delivered page: a 2.4x0.56in label at 20pt over a paragraph
-    0.09in below it. Anchored to the middle, the two lines the box cannot hold are set
-    above the first one, so the label's ink reaches both over the paragraph beneath it
-    and out of the top of its own box -- which is the reading, and which the same box
-    anchored to the top would not be in.
-    """
-    from pptx.enum.text import MSO_ANCHOR
-
-    builder = DeckBuilder(tmp_path)
-    page = builder.page()
-    label = builder.text(
-        page,
-        ("CATL-HyperStrong: 60 GWh", 20.0),
-        left=1.0,
-        top=2.0,
-        width=2.4,
-        height=0.56,
-        wrap=True,
-    )
-    label.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
-    builder.text(
-        page,
-        ("A three-year sodium-ion supply partnership, announced April 2026 and verified.", 14.0),
-        left=0.8,
-        top=2.65,
-        width=3.2,
-        height=1.2,
-        wrap=True,
-    )
-    return builder.save("displaced.pptx")
 
 
 def _a_body_nobody_divided(tmp_path: Path) -> tuple[Path, object]:

@@ -85,12 +85,6 @@ class PerModelProvider(LLMProvider):
         routed endpoint is not always the fallback's."""
         return self._pick(model).supports_prompt_caching(model)
 
-    def reasoning_wire_keys(self, model: str | None, reasoning_effort: str | None) -> Any:
-        """Asked of the endpoint that would serve this model, like
-        ``supports_assistant_prefill``: which efforts collapse into one request is
-        a property of that endpoint's wire."""
-        return self._pick(model).reasoning_wire_keys(model, reasoning_effort)
-
     def supports_assistant_prefill(self, model: str | None = None) -> bool:
         """Asked of the endpoint that would serve this model, like
         ``supports_prompt_caching``: the vendor rule rides on that endpoint."""

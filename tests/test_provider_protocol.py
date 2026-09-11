@@ -1,7 +1,6 @@
 """Tests for model wire protocol defaults and explicit overrides."""
 
 import json
-from dataclasses import replace
 
 import httpx
 import pytest
@@ -85,9 +84,9 @@ def test_response_series_defaults_preserve_manual_choices(model):
 
 def test_claude_default_and_explicit_protocol_priority():
     assert effective_protocol(None, "anthropic/claude-opus-5") == "anthropic"
-    assert effective_protocol({"protocol": "chat"}, "claude-opus-5") == "chat"
+    assert effective_protocol({"protocol": "chat"}, "glm-5.3-flash") == "chat"
     assert effective_protocol({"protocol": "responses"}, "claude-opus-5") == "responses"
-    assert isinstance(make_provider(_config("anthropic/claude-opus-5")), AnthropicMessagesProvider)
+    assert isinstance(make_provider(_config("glm-5.3-flash")), AnthropicMessagesProvider)
 
 
 def test_factory_selects_protocol_adapter() -> None:
@@ -241,41 +240,30 @@ def _anthropic_body(**overrides):
 
 
 def test_anthropic_default_output_ceiling_leaves_room_for_the_file() -> None:
-    """Every request went out with max_tokens 4096 unless the operator set one: a
-    poster's HTML was cut at the ceiling on every write."""
+    """Every request went out with max_tokens 4096 unless the operator set one, and
+    the thinking budget was carved out of that same number: a poster's HTML was cut
+    at the ceiling on every write, and a high-effort turn could come back as
+    nothing but thinking, which the loop reads as an empty turn."""
     body = _anthropic_body(model="claude-haiku-4-5")
     assert body["max_tokens"] == 64000
-    assert _anthropic_body(model="claude-haiku-4-5", max_tokens=4096)["max_tokens"] == 4096
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 8192}
+    assert _anthropic_body(model="claude-haiku-4-5", reasoning_effort="max")["thinking"]["budget_tokens"] == 64000 // 2
+    small = _anthropic_body(model="claude-haiku-4-5", max_tokens=4096)
+    assert small["max_tokens"] == 4096 and small["thinking"]["budget_tokens"] == 2048
+    assert "thinking" not in _anthropic_body(model="claude-haiku-4-5", reasoning_effort=None)
     assert _anthropic_body()["max_tokens"] == 64000
 
 
-def test_anthropic_sends_the_effort_as_a_label_not_a_token_count() -> None:
-    """Raven sizes no thinking budget. The effort goes out as the name the caller
-    gave it and whoever serves the model decides what it buys -- the table that used
-    to translate it here was half of a 16384 ceiling that no longer applies."""
-    labelled = _anthropic_body(model="claude-haiku-4-5", reasoning_effort="high")
-    assert labelled["reasoning"] == {"effort": "high"} and "thinking" not in labelled
-    assert _anthropic_body(model="z-ai/glm-5.3-flash", reasoning_effort="max")["reasoning"] == {"effort": "max"}
-    assert "reasoning" not in _anthropic_body(model="claude-haiku-4-5", reasoning_effort=None)
-
-
-def test_anthropic_keeps_the_temperature_beside_a_labelled_effort() -> None:
-    """Only Anthropic's own thinking request refuses a temperature. A pinned effort
-    used to send one of those on every model, so pinning a tier silently dropped the
-    repository's temperature and the tiers differed by more than the pin."""
-    labelled = _anthropic_body(model="z-ai/glm-5.3-flash", reasoning_effort="high", temperature=0.95)
-    assert labelled["reasoning"] == {"effort": "high"} and labelled["temperature"] == 0.95
-    adaptive = _anthropic_body(model="anthropic/claude-opus-5", reasoning_effort="high", temperature=0.95)
-    assert adaptive["thinking"] == {"type": "adaptive"} and "temperature" not in adaptive
-
-
 def test_anthropic_thinks_adaptively_on_the_models_that_require_it() -> None:
-    """Claude 4.7 and later take depth as ``output_config.effort`` beside
-    ``thinking.type: "adaptive"``. The model id decides, prefixed or not."""
+    """Claude 4.7 and later reject a budgeted ``thinking.type: "enabled"`` and
+    take depth as ``output_config.effort``; the 4.5 and 4.6 models are the other
+    way round. The model id decides, prefixed or not."""
     adaptive = _anthropic_body(model="anthropic/claude-opus-5", reasoning_effort="xhigh")
     assert adaptive["thinking"] == {"type": "adaptive"} and adaptive["output_config"] == {"effort": "xhigh"}
     assert "temperature" not in adaptive
     assert _anthropic_body(model="claude-fable-5-1", reasoning_effort="minimal")["output_config"] == {"effort": "low"}
+    budgeted = _anthropic_body(model="claude-haiku-4-5", reasoning_effort="high")
+    assert budgeted["thinking"] == {"type": "enabled", "budget_tokens": 8192} and "output_config" not in budgeted
     assert "thinking" not in _anthropic_body(model="claude-opus-5", reasoning_effort=None)
 
 
@@ -285,86 +273,18 @@ def test_anthropic_repairs_the_thinking_mode_a_400_complains_about() -> None:
     from raven.providers.anthropic_messages_provider import rewrite_on_400
 
     body = _anthropic_body(model="claude-3-7-sonnet-latest", reasoning_effort="high")
-    body["thinking"], body["output_config"] = {"type": "enabled", "budget_tokens": 4096}, {"effort": "high"}
+    assert body["thinking"]["type"] == "enabled"
     assert rewrite_on_400(body, 'thinking.type.enabled is not supported on this model; use thinking.type: "adaptive"')
     assert body["thinking"] == {"type": "adaptive"} and body["output_config"] == {"effort": "high"}
+
+    back = _anthropic_body(model="anthropic/claude-opus-5", reasoning_effort="max")
+    assert rewrite_on_400(back, "thinking.type: adaptive is not supported on this model")
+    assert back["thinking"] == {"type": "enabled", "budget_tokens": 64000 // 2} and "output_config" not in back
 
     level = _anthropic_body(model="claude-sonnet-5", reasoning_effort="xhigh")
     assert rewrite_on_400(level, "output_config.effort: xhigh is not a valid effort level for this model")
     assert "output_config" not in level and level["thinking"] == {"type": "adaptive"}
     assert not rewrite_on_400(level, "something else entirely")
-
-
-def test_anthropic_answers_a_refused_effort_label_with_litellms_number() -> None:
-    """A vendor that takes no label has to be answered in tokens, and the number is
-    litellm's -- the only place in this transport where a budget is a number at all.
-    Half the ceiling at most, and no temperature beside it."""
-    from raven.providers.anthropic_messages_provider import rewrite_on_400
-
-    body = _anthropic_body(model="claude-haiku-4-5", reasoning_effort="max", temperature=0.95)
-    assert body["reasoning"] == {"effort": "max"} and body["temperature"] == 0.95
-    assert rewrite_on_400(body, "reasoning: Extra inputs are not permitted") == "thinking"
-    budget = body["thinking"]["budget_tokens"]
-    assert "reasoning" not in body and "temperature" not in body
-    assert 1024 <= budget <= body["max_tokens"] // 2
-
-    adaptive = _anthropic_body(model="anthropic/claude-opus-5", reasoning_effort="max")
-    assert rewrite_on_400(adaptive, "thinking.type: adaptive is not supported on this model")
-    assert adaptive["thinking"]["budget_tokens"] <= adaptive["max_tokens"] // 2
-
-
-def test_anthropic_records_what_a_request_asks_for_without_the_key() -> None:
-    """The trace kept the conversation and nothing about the request, so a truncated
-    turn could not be attributed to a ceiling, an effort or a backend pin. The record
-    carries the parameters and never the credentials."""
-    provider = AnthropicMessagesProvider(
-        api_key="sk-or-v1-secret",
-        api_base="https://openrouter.ai/api/v1",
-        default_model="z-ai/glm-5.3-flash",
-        model_overrides={"glm-5.3-flash": {"extra_body": {"provider": {"order": ["Z.AI"]}}}},
-    )
-    provider.generation = replace(provider.generation, reasoning_effort="high", temperature=0.95)
-    record = provider.request_generation(model="z-ai/glm-5.3-flash")
-    assert record["reasoning_effort"] == "high" and record["reasoning"] == {"effort": "high"}
-    assert record["temperature"] == 0.95 and isinstance(record["max_tokens"], int)
-    assert record["provider_fence"] == {"order": ["Z.AI"]}
-    blob = json.dumps(record)
-    assert "secret" not in blob and "openrouter.ai" not in blob and "Authorization" not in blob
-
-    provider.generation = replace(provider.generation, reasoning_effort=None)
-    assert provider.request_generation(model="z-ai/glm-5.3-flash")["reasoning_effort"] is None
-
-
-def test_every_wrapper_forwards_the_question_of_what_a_rung_sends() -> None:
-    """The empty-response retry asks the provider the loop holds, which in
-    production is a wrapper.
-
-    The base answer -- every label is its own request -- is the wrong answer for
-    the Anthropic wire, and answering it here would leave the retry re-sending an
-    unchanged request exactly where the collapse was measured. Pinned the way
-    ``wire_model_id`` and ``supports_assistant_prefill`` are pinned: by naming
-    the wrappers, so a new one cannot inherit the default silently.
-    """
-    from raven.providers.base import LLMProvider
-    from raven.providers.endpoint_rotor import EndpointRotorProvider
-    from raven.providers.lazy import LazyProvider
-    from raven.providers.per_model_provider import PerModelProvider
-    from raven.providers.resolving_provider import ResolvingProvider
-
-    for wrapper in (LazyProvider, PerModelProvider, ResolvingProvider, EndpointRotorProvider):
-        assert "reasoning_wire_keys" in wrapper.__dict__, (
-            f"{wrapper.__name__} would answer LLMProvider's label-only default, "
-            "which says two collapsed rungs are two different requests"
-        )
-
-    inner = AnthropicMessagesProvider(api_key="k", default_model="claude-opus-5")
-    lazy = LazyProvider.__new__(LazyProvider)
-    lazy._provider = inner
-    assert lazy.reasoning_wire_keys("claude-opus-5", "low") == inner.reasoning_wire_keys("claude-opus-5", "low")
-    assert lazy.reasoning_wire_keys("claude-opus-5", "minimal") == lazy.reasoning_wire_keys("claude-opus-5", "low")
-    assert LLMProvider.reasoning_wire_keys(inner, "claude-opus-5", "minimal") != LLMProvider.reasoning_wire_keys(
-        inner, "claude-opus-5", "low"
-    ), "the base default really does read the two rungs as different requests"
 
 
 def test_anthropic_replays_only_signed_thinking_blocks() -> None:
@@ -441,7 +361,7 @@ async def test_anthropic_retries_once_at_the_ceiling_the_model_names(monkeypatch
 
     # The refusal is earned once: the ceiling it named is remembered for the model.
     assert [b["max_tokens"] for b in seen] == [64000, 8192, 8192]
-    assert seen[1]["reasoning"] == {"effort": "high"}
+    assert seen[1]["thinking"]["budget_tokens"] == 8192 - 4096
     assert "".join(d.content or "" for d in deltas) == "fits" and deltas[-1].finish_reason == "stop"
     assert again[-1].finish_reason == "stop"
 
@@ -491,12 +411,15 @@ async def test_a_400_that_named_no_ceiling_teaches_none(monkeypatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         seen.append(body)
-        if "reasoning" in body:
+        if body.get("thinking", {}).get("type") == "enabled":
             return httpx.Response(
                 400,
                 json={
                     "type": "error",
-                    "error": {"type": "invalid_request_error", "message": "reasoning: Extra inputs are not permitted"},
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "thinking.type: enabled is not supported for this model; it thinks adaptively",
+                    },
                 },
             )
         return httpx.Response(200, content=_stream_ok("ok"))
@@ -520,10 +443,10 @@ async def test_a_400_that_named_no_ceiling_teaches_none(monkeypatch) -> None:
     ]
 
     assert short[-1].finish_reason == "stop" and ordinary[-1].finish_reason == "stop"
-    # The ordinary turn earns the same effort 400 once, then goes through -- at
-    # the owner's number, not the earlier pin.
+    # The ordinary turn earns the same thinking 400 once (this model is budgeted
+    # by id), then goes through -- at the owner's number, not the earlier pin.
     assert [b["max_tokens"] for b in seen] == [2048, 2048, 64000, 64000]
-    assert seen[1]["thinking"]["type"] == "enabled" and "reasoning" not in seen[1]
+    assert seen[1]["thinking"] == {"type": "adaptive"}
     assert provider._ceilings == {}
 
 
@@ -739,24 +662,13 @@ async def test_responses_partial_usage_preserves_cost_and_cache():
     assert usage["cache_creation_input_tokens"] is None
 
 
-@pytest.mark.parametrize("model", ["claude-opus-5", "anthropic/claude-haiku-4-5"])
+@pytest.mark.parametrize("model", ["glm-5.3-flash", "z-ai/GLM-5", "openrouter/z-ai/glm-5.3-flash", "claude-opus-5"])
 def test_anthropic_model_defaults_preserve_manual_overrides(model):
     assert effective_protocol(None, model) == "anthropic"
     assert effective_protocol(_config(model).providers.custom, model) == "anthropic"
     for protocol in ("chat", "responses"):
         config = _config(model, override=protocol)
         assert effective_protocol(config.providers.custom, model) == protocol
-
-
-@pytest.mark.parametrize("model", ["glm-5.3-flash", "z-ai/GLM-5", "openrouter/z-ai/glm-5.3-flash"])
-def test_a_glm_model_is_not_inferred_onto_the_anthropic_wire(model):
-    """It was, for two days, and the Messages transport has to turn an effort into a
-    token budget -- which the gateway serving these models ignores. Over chat the
-    effort goes out as an effort. An explicit protocol still wins, as always."""
-    assert effective_protocol(None, model) == "chat"
-    assert isinstance(make_provider(_config(model)), LiteLLMProvider)
-    config = _config(model, override="anthropic")
-    assert effective_protocol(config.providers.custom, model) == "anthropic"
 
 
 def test_explicit_gemini_native_protocol_does_not_fall_back():
@@ -767,16 +679,13 @@ def test_explicit_gemini_native_protocol_does_not_fall_back():
         make_provider(config)
 
 
-def test_direct_glm_uses_vendor_anthropic_endpoint_when_asked_for_it():
-    """The vendor's Anthropic-compatible address is still declared and still used --
-    but only when the operator names the protocol. Inferring it from the model name
-    is what put every glm model on a wire that cannot carry an effort."""
-    config = _provider_config("zai", "zai/glm-4.6", override="anthropic")
+@pytest.mark.parametrize("override", [None, "anthropic"])
+def test_direct_glm_uses_vendor_anthropic_endpoint(override):
+    config = _provider_config("zai", "zai/glm-4.6", override=override)
     provider = make_provider(config)
     assert isinstance(provider, AnthropicMessagesProvider)
     assert provider.api_base == "https://api.z.ai/api/anthropic"
     assert provider.api_protocol == effective_protocol(config.providers.get("zai"), "zai/glm-4.6")
-    assert effective_protocol(_provider_config("zai", "zai/glm-4.6").providers.get("zai"), "zai/glm-4.6") == "chat"
 
 
 def test_explicit_native_protocol_requires_vendor_address():
@@ -788,7 +697,7 @@ def test_explicit_native_protocol_requires_vendor_address():
 
 
 def test_direct_glm_with_explicit_endpoint_uses_that_endpoint():
-    config = _provider_config("zai", "zai/glm-4.6", override="anthropic")
+    config = _provider_config("zai", "zai/glm-4.6")
     config.providers.get("zai").api_base = "https://vendor.example/anthropic"
     provider = make_provider(config)
     assert isinstance(provider, AnthropicMessagesProvider)
@@ -947,107 +856,3 @@ def test_gemini_defaults_to_litellm_chat_without_an_endpoint():
     provider = make_provider(_provider_config("gemini", "gemini/gemini-2.5-flash"))
     assert isinstance(provider, LiteLLMProvider)
     assert provider.api_protocol == "chat"
-
-
-@pytest.mark.parametrize("protocol", ["messages", "messages_stream", "responses", "chat"])
-async def test_a_reported_reasoning_count_reaches_the_usage_record(monkeypatch, protocol):
-    """Every protocol reports how much of the output was thinking, and every one
-    of them dropped it. Without the count a turn whose reasoning text never
-    arrived is indistinguishable from a turn that did not think, which is the
-    reading a 309-iteration deck run had to be diagnosed from.
-
-    The wire shapes here are captured responses: openrouter returns
-    ``completion_tokens_details.reasoning_tokens`` on chat completions and
-    ``output_tokens_details.thinking_tokens`` on the messages route.
-    """
-    from raven.agent.loop.turn_path import TurnPathMixin
-    from raven.observability import semconv
-    from raven.providers.streaming import stream_llm_call
-
-    def handler(request):
-        if protocol == "responses":
-            return httpx.Response(
-                200,
-                content=_anthropic_sse(
-                    {"type": "response.output_text.delta", "delta": "ok"},
-                    {
-                        "type": "response.completed",
-                        "response": {
-                            "status": "completed",
-                            "usage": {
-                                "input_tokens": 256,
-                                "output_tokens": 417,
-                                "output_tokens_details": {"reasoning_tokens": 235},
-                            },
-                        },
-                    },
-                ),
-            )
-        usage = {
-            "input_tokens": 256,
-            "output_tokens": 417,
-            "output_tokens_details": {"thinking_tokens": 235},
-        }
-        if protocol == "messages":
-            return httpx.Response(
-                200,
-                json={
-                    "content": [{"type": "thinking", "thinking": "inspect first"}, {"type": "text", "text": "ok"}],
-                    "stop_reason": "end_turn",
-                    "usage": usage,
-                },
-            )
-        return httpx.Response(
-            200,
-            content=_anthropic_sse(
-                {"type": "message_start", "message": {"usage": usage}},
-                {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {"type": "thinking_delta", "thinking": "inspect first"},
-                },
-                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": usage},
-                {"type": "message_stop"},
-            ),
-        )
-
-    if protocol == "chat":
-        from types import SimpleNamespace
-
-        provider = LiteLLMProvider(api_key="test", api_base="https://openrouter.ai/api/v1", provider_name="custom")
-        response = provider._parse_response(
-            SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(content="ok", tool_calls=None, reasoning_content="inspect first"),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=SimpleNamespace(
-                    prompt_tokens=256,
-                    completion_tokens=417,
-                    total_tokens=673,
-                    completion_tokens_details=SimpleNamespace(reasoning_tokens=235),
-                ),
-            )
-        )
-    else:
-        real_client = httpx.AsyncClient
-        monkeypatch.setattr(
-            httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)
-        )
-        provider_class = OpenAIResponsesProvider if protocol == "responses" else AnthropicMessagesProvider
-        provider = provider_class(
-            api_key="test", api_base="https://openrouter.ai/api/v1", provider_name="custom", default_model="test"
-        )
-        messages = [{"role": "user", "content": "hi"}]
-        if protocol == "messages_stream":
-            response = await stream_llm_call(provider, messages=messages, tools=None, model="test")
-        else:
-            response = await provider.chat(messages=messages, model="test")
-
-    assert response.usage["reasoning_tokens"] == 235
-    assert semconv.llm_output_payload(response)["usage"]["reasoning_tokens"] == 235
-    assert semconv.llm_attrs(response, "custom", "test")["llm.usage.reasoning_tokens"] == 235
-    assert TurnPathMixin._build_usage_snapshot(response, "test", "sess").reasoning_tokens == 235

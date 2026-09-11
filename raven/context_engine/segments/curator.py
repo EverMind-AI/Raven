@@ -275,13 +275,6 @@ class CuratorSegmentBuilder:
                 messages=messages,
                 tools=registry.get_definitions(),
                 model=binding.model,
-                # Deliberately not raised with the other pins. Measured over a
-                # 3h20m, 114-call deck run this ran once, and zero times in
-                # another; the one call was cut at this ceiling and the run was
-                # unaffected, because the segment still assembles the history
-                # and only the archiving decision is lost. Best-effort
-                # enrichment whose loss costs nothing observable is worth
-                # failing fast rather than paying more for.
                 max_tokens=2048,
                 temperature=0.1,
             )

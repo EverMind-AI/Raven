@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 168 methods, 96 component schemas.
+// 163 methods, 93 component schemas.
 
 /* eslint-disable */
 /**
@@ -1565,27 +1565,6 @@ export interface PlaybookMcpServer {
   auth?: 'none' | 'apikey' | 'oauth';
   has_oauth_config?: boolean;
 }
-/**
- * One `secret` param of a playbook and whether this machine holds a value for it. Never the value.
- */
-export interface PlaybookCredentialParam {
-  name: string;
-  set: boolean;
-  description: string;
-}
-/**
- * One server the playbook carries, as the credentials tab needs it: its auth kind, whether this machine holds OAuth tokens for it under the playbook's scope, and whether the same name exists among the host's own servers (the carried definition wins for this playbook's runs).
- */
-export interface PlaybookCredentialServer {
-  name: string;
-  auth: 'none' | 'apikey' | 'oauth';
-  enabled: boolean;
-  authorized: boolean;
-  shadows_host: boolean;
-}
-export interface OkResult {
-  ok: boolean;
-}
 export interface SessionListParams {
   /**
    * Max sessions to return.
@@ -1799,6 +1778,7 @@ export interface TurnSendParams {
    */
   media?: string[];
   target?: DirectTarget;
+  busy?: 'inject';
 }
 export interface TurnSendResult {
   turn_id: string;
@@ -3008,45 +2988,6 @@ export interface PlaybooksGetParams {
 export interface PlaybooksGetResult {
   playbook: PlaybookDetail;
 }
-export interface PlaybooksCredentialsGetParams {
-  name: string;
-}
-export interface PlaybooksCredentialsGetResult {
-  params: PlaybookCredentialParam[];
-  servers: PlaybookCredentialServer[];
-}
-export interface PlaybooksCredentialsSetParams {
-  name: string;
-  param: string;
-  value: string;
-}
-export interface PlaybooksCredentialsSetResult {
-  ok: boolean;
-}
-export interface PlaybooksCredentialsClearParams {
-  name: string;
-  param: string;
-}
-export interface PlaybooksCredentialsClearResult {
-  ok: boolean;
-}
-export interface PlaybooksOauthAuthorizeParams {
-  name: string;
-  server: string;
-}
-export interface PlaybooksOauthAuthorizeResult {
-  server: string;
-  state: string;
-  auth_url?: string | null;
-  error?: string | null;
-}
-export interface PlaybooksOauthClearParams {
-  name: string;
-  server: string;
-}
-export interface PlaybooksOauthClearResult {
-  ok: boolean;
-}
 export interface ApprovalRespondParams {
   approval_id: string;
   /**
@@ -3894,11 +3835,6 @@ export interface RpcMethods {
   'memory.delete': { params: MemoryDeleteParams; result: MemoryDeleteResult };
   'playbooks.list': { params: PlaybooksListParams; result: PlaybooksListResult };
   'playbooks.get': { params: PlaybooksGetParams; result: PlaybooksGetResult };
-  'playbooks.credentials.get': { params: PlaybooksCredentialsGetParams; result: PlaybooksCredentialsGetResult };
-  'playbooks.credentials.set': { params: PlaybooksCredentialsSetParams; result: PlaybooksCredentialsSetResult };
-  'playbooks.credentials.clear': { params: PlaybooksCredentialsClearParams; result: PlaybooksCredentialsClearResult };
-  'playbooks.oauth.authorize': { params: PlaybooksOauthAuthorizeParams; result: PlaybooksOauthAuthorizeResult };
-  'playbooks.oauth.clear': { params: PlaybooksOauthClearParams; result: PlaybooksOauthClearResult };
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult };
   'clarify.respond': { params: ClarifyRespondParams; result: ClarifyRespondResult };
   'confirm.respond': { params: ConfirmRespondParams; result: ConfirmRespondResult };
@@ -4028,13 +3964,8 @@ export const RPC_METHODS = [
   "model.remove_model",
   "model.save_key",
   "model.set_protocol",
-  "playbooks.credentials.clear",
-  "playbooks.credentials.get",
-  "playbooks.credentials.set",
   "playbooks.get",
   "playbooks.list",
-  "playbooks.oauth.authorize",
-  "playbooks.oauth.clear",
   "plug.auth",
   "plug.install",
   "plug.remove",

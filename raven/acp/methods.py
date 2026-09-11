@@ -23,10 +23,12 @@ Two rules run through the whole file:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import contextlib
 import mimetypes
+import time
 from collections.abc import Callable
 from itertools import count
 from typing import Any
@@ -112,6 +114,18 @@ def sanitise_error_data(data: Any) -> Any:
 #: answered back as the prompt response's ``_meta``, the field the ACP schema
 #: reserves for an agent's own metadata.
 ACP_META_OBSERVER = "acp_meta"
+
+#: The one ``acp_meta`` key this layer acts on instead of passing along
+#: (loop_hooks paper, ``metadata``): a turn that ended normally but says the
+#: agent's work goes on -- it armed a wake that will run a later turn on this
+#: session. The prompt that carried it is held open until a later turn ends
+#: without the key, so a client that reads ``end_turn`` as "finished" (a DAG
+#: judging its node) is not told so while the agent is still on the job.
+HOLD_TURN_META = "raven.holdTurn"
+#: How often a held prompt says it is alive, as a ``tool_call_update`` on the
+#: one call that stands for the wait. Well inside the ten minutes raven's own
+#: client gives a running node before it reports a stall.
+HOLD_HEARTBEAT_S = 60.0
 
 
 class AcpMethodError(Exception):
@@ -271,6 +285,8 @@ class AcpMethods:
             return await self._session_prompt(params)
         if method == "session/cancel":
             return await self._session_cancel(params)
+        if method == protocol.STEER_METHOD:
+            return await self._session_steer(params)
         if method in UNIMPLEMENTED_METHODS:
             raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"{method} is not implemented")
         raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"unknown method {method}")
@@ -741,12 +757,118 @@ class AcpMethods:
             stop = await future
         finally:
             self._translator.end_turn(session.session_id)
+        meta = self._turn_meta(sessions, session.session_key, filed_before)
+        # Before any hold: the first turn is the one that names the session, and
+        # a held prompt is exactly the long stretch a session list would
+        # otherwise show the placeholder for.
+        self._announce_title(session.session_id)
+        # A turn that ended with a wake armed has not finished the work it was
+        # asked for; the prompt stays open, held, until a later turn on this
+        # session -- the wake's, or a steer's -- ends with nothing pending.
+        while stop == "end_turn" and isinstance(meta, dict) and meta.get(HOLD_TURN_META):
+            hold = meta.pop(HOLD_TURN_META)
+            filed_before = len(sessions.get_or_create(session.session_key).messages) if sessions is not None else 0
+            stop = await self._hold_turn(session, hold if isinstance(hold, dict) else {})
+            meta = self._turn_meta(sessions, session.session_key, filed_before)
+        if isinstance(meta, dict):
+            # Read here, not passed on: the client is told the turn ended, and
+            # that is the whole of what the key decided.
+            meta.pop(HOLD_TURN_META, None)
         self._announce_title(session.session_id)
         result: dict[str, Any] = {"stopReason": stop}
-        meta = self._turn_meta(sessions, session.session_key, filed_before)
-        if meta is not None:
+        if meta:
             result["_meta"] = meta
         return result
+
+    async def _hold_turn(self, session: AcpSession, hold: dict[str, Any]) -> str:
+        """Keep the prompt open across the agent's sleep, until its next turn ends.
+
+        The agent is not running: it armed a wake and its turn is over, and the
+        wake will run a later turn on this session on its own clock. The client
+        sees one tool call standing for the wait, opened here and finished when
+        the wait ends, with a heartbeat on it every ``HOLD_HEARTBEAT_S`` -- the
+        frame a client clocks liveness by, since the model itself emits nothing
+        while it sleeps. The turn slot is reopened with no id to correlate on,
+        so whichever turn ends next on this session (the wake's, a steer's)
+        answers it; the caller then reads that turn's stash and decides again.
+        A cancel resolves the slot ``cancelled`` like any other prompt's.
+        """
+        future = self._translator.begin_turn(session.session_id)
+        self._translator.accept_turn(session.session_id, "")
+        call_id = f"hold-{next(self._ids)}"
+        why = str(hold.get("why") or "waiting for the agent's next scheduled turn")
+        until = hold.get("untilMs")
+        if isinstance(until, (int, float)) and until > 0:
+            why += time.strftime(" (next look ~%H:%M)", time.localtime(until / 1000))
+        self._update(
+            session,
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": call_id,
+                "title": why,
+                "kind": "other",
+                "status": "in_progress",
+                "_meta": {"raven.toolName": "wait_for_wake", "raven.blocking": True},
+            },
+        )
+        beat = asyncio.get_running_loop().create_task(self._heartbeat(session, call_id))
+        try:
+            return await future
+        finally:
+            beat.cancel()
+            self._translator.end_turn(session.session_id)
+            self._update(session, {"sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": "completed"})
+
+    async def _heartbeat(self, session: AcpSession, call_id: str) -> None:
+        started = time.monotonic()
+        while True:
+            await asyncio.sleep(HOLD_HEARTBEAT_S)
+            self._update(
+                session,
+                {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": call_id,
+                    "status": "in_progress",
+                    "_meta": {"raven.heldS": int(time.monotonic() - started)},
+                },
+            )
+
+    async def _session_steer(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Text for a turn already in flight on the session (``_raven/session/steer``).
+
+        Answers ``injected`` when the text was handed to the session's turn and
+        ``no_turn`` when no prompt is open on it -- the statuses raven's own
+        client reads. A held prompt counts as open: the agent is asleep between
+        its own scheduled turns, and the text runs a turn on the session now
+        (an idle lane is an ordinary send; a lane mid-turn merges it at the
+        next tool-loop gap, ``turn.send``'s ``busy: inject``). The turn's end
+        settles the held slot, and the prompt handler decides again whether the
+        wait goes on. The text is shown on the wire as the person's own line,
+        which the transcript would otherwise only learn at the turn's end.
+        """
+        session = self._session_for(params)
+        text = params.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise AcpMethodError(protocol.INVALID_PARAMS, "text must be a non-empty string", {"field": "text"})
+        turn = session.turn
+        if turn is None or turn.future.done():
+            return {"status": "no_turn"}
+        self._update(session, {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": text}})
+        await self._call(
+            "turn.send",
+            {
+                "session_key": session.session_key,
+                "channel": self._channel,
+                "chat_id": _chat_id_of(session.session_key),
+                "content": text,
+                "busy": "inject",
+            },
+        )
+        return {"status": "injected"}
+
+    def _update(self, session: AcpSession, update: dict[str, Any]) -> None:
+        """Put one ``session/update`` on the wire for this session."""
+        self._emit(protocol.notification("session/update", {"sessionId": session.session_id, "update": update}))
 
     @staticmethod
     def _turn_meta(sessions: Any, session_key: str, filed_before: int) -> dict[str, Any] | None:
@@ -1019,9 +1141,7 @@ class AcpMethods:
         from raven.mcp.manager import MCPConnectionManager
 
         held = ToolRegistry()
-        # 45s against the host's 60s session/new budget: a wedged upstream must
-        # cost this session one server, not the whole session on the host's clock.
-        manager = MCPConnectionManager(held, handshake_timeout=45.0)
+        manager = MCPConnectionManager(held)
         self._session_mcp[session_key] = manager
         try:
             # No executor provider: the endpoint is a unix socket on this host,

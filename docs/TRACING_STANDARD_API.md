@@ -127,7 +127,7 @@ adds richer rendering.
 | name | kind | required | optional attributes |
 |---|---|---|---|
 | `session.turn` | `session` | — | `turn.input_preview`, `turn.output_preview`, `turn.in_progress`, `turn.capabilities.{tools,plugins,skills}` |
-| `llm.call` | `model` | `llm.provider`, `llm.model` | `llm.provider_class`, `llm.finish_reason`, `llm.call_id`, `llm.invocation_source`, `llm.usage.{input,output,total,cache_read,cache_write}_tokens`, `llm.usage.cost_total`, `llm.request_{bytes,images,image_bytes}`, `llm.http_status`, `llm.served_by`, `llm.response_id`; artifacts `llm.input` (messages+tools, plus `request` = the messages+tools payload size and picture count, not the provider-final body), `llm.output` (plus `call` = the transport record) |
+| `llm.call` | `model` | `llm.provider`, `llm.model` | `llm.provider_class`, `llm.finish_reason`, `llm.call_id`, `llm.invocation_source`, `llm.usage.{input,output,total,cache_read,cache_write}_tokens`, `llm.usage.cost_total`; artifacts `llm.input` (messages+tools), `llm.output` |
 | `tool.call` | `tool` | `tool.name` | `tool.call_id`, `tool.duration_ms`, `tool.error`; artifacts `tool.input` (params), `tool.output` (result) |
 | `subagent.run` / `subagent.call` | `subagent` | — | `subagent.id`, `subagent.label`, `subagent.task`, `subagent.session_id`, `subagent.parent_trace_id`, `subagent.parent_span_id`, `subagent.trace_id`, `subagent.status` |
 | `skill.read` / `skill.inject` | `skill` | — | `skill.name`, `skill.id`, `skill.source`, `skill.path`, `skill.scripts_dir` (present => a runnable bundle was materialized, vs instructions-only), `skill.read.via_tool` (`use_skill`/`read_skill`/`read_file`), `skill.inject.{names,count,via}` |
@@ -136,20 +136,7 @@ adds richer rendering.
 
 **Provider labeling:** `llm.provider` is the *logical backend* the call routes to
 (e.g. `openrouter`), derived from the model's gateway prefix; `llm.provider_class`
-is the concrete class (e.g. `LiteLLMProvider`) when it differs. `llm.served_by` is a
-third thing: the backend the *response* names as having served the call, present only
-when the upstream says so, which behind a gateway that fans out is the only way to tell
-which one answered.
-
-**The transport record.** `llm.output`'s `call` object holds what the exchange did rather
-than what the model said: `http_status`, `served_by`, `served_model`, `response_id`,
-`headers`, and `body` -- the last filled only when the call delivered nothing, so a
-usable answer is never stored twice. It is built solely by
-`raven.providers.call_record`, which caps the body and the headers and replaces the value
-of any credential-named header; nothing else may construct one. A request's own bytes are
-never copied into a record: `llm.input`'s `request` object counts them
-(`bytes` on the wire, `images`, `imageBytes` decoded) and image payloads are counted, not
-logged.
+is the concrete class (e.g. `LiteLLMProvider`) when it differs.
 
 Naming rules:
 - `name` = `<domain>.<verb>`, lowercase dotted.

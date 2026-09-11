@@ -82,16 +82,12 @@ class UsageTracker(TokenStrategy):
         self._accumulate(usage)
 
         if self.persist:
-            # Why the call ended, beside what it spent: a row of counts cannot
-            # say whether the reply was finished or cut at the output ceiling.
-            finish_reason = response.get("finish_reason") if isinstance(response, dict) else None
             self._buffer.append(
                 {
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "schema_version": 2,
                     "_telemetry_dir": usage_context.telemetry_dir() or str(self.telemetry_dir),
                     **{k: v for k, v in asdict(usage).items() if k != "calls" and not k.endswith("_missing_calls")},
-                    "finish_reason": finish_reason,
                 }
             )
             if self._call_count % self.flush_every == 0:

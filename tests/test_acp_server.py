@@ -384,7 +384,7 @@ class TestApprovalWiring:
     def _restore_process_families(self):
         """The declaration is process-wide, so a test that sets it has to put it
         back or every later test inherits an ACP surface's policy."""
-        from raven.permissions import shell_policy
+        from raven.agent.tools import shell_policy
 
         before = shell_policy.surface_approval_families()
         yield

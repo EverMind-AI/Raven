@@ -95,7 +95,7 @@ _NUDGE_ACTIONS = frozenset({"nudge", "nudge_inject", "nudge_defer"})
 # Pin generation params so a globally-configured reasoning_effort or
 # high temperature cannot leak in via LLMProvider.generation defaults.
 # Module constants so tests and impl share one source of truth.
-_PLANNER_MAX_TOKENS = 2048
+_PLANNER_MAX_TOKENS = 1024
 _PLANNER_TEMPERATURE = 0.3
 _PLANNER_REASONING_EFFORT: str | None = None
 

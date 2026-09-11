@@ -195,45 +195,6 @@ async def test_user_turn_receives_tui_approval_capability(tmp_path):
     assert responder.requests[0]["turn_id"] == "turn-a"
 
 
-async def test_a_subagent_relay_in_a_watched_conversation_receives_the_approval_capability(tmp_path):
-    # A node's failure report opens a SUBAGENT turn in the user's own
-    # conversation. The person answers ask_user there, and the model acts on the
-    # answer with an ask-tier tool in the same turn; with a watcher present that
-    # tool must reach the responder, not be refused as unattended.
-    executor = _DirectRecordingExecutor()
-    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
-    loop = _ApprovalRunLoop(tool)
-    responder = _ApprovalResponder(True)
-    runner = RpcTurnRunner(loop, _WatchedEmitter({"tui:c1"}), {}, {}, approval_responder=responder)
-    req = TurnRequest(
-        origin=Origin.SUBAGENT, source=_src(), text="node failed", conversation="tui:c1", turn_id="turn-s"
-    )
-    _events, emit = _collect()
-
-    await runner.run(req, emit, lambda: [])
-
-    assert executor.commands == ["rm file.txt"]
-    assert responder.requests[0]["turn_id"] == "turn-s"
-
-
-async def test_a_subagent_relay_nobody_watches_does_not_receive_the_approval_capability(tmp_path):
-    executor = _DirectRecordingExecutor()
-    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
-    loop = _ApprovalRunLoop(tool)
-    responder = _ApprovalResponder(True)
-    runner = RpcTurnRunner(loop, _WatchedEmitter(set()), {}, {}, approval_responder=responder)
-    req = TurnRequest(
-        origin=Origin.SUBAGENT, source=_src(), text="node failed", conversation="tui:c1", turn_id="turn-s"
-    )
-    _events, emit = _collect()
-
-    await runner.run(req, emit, lambda: [])
-
-    assert "not interactive" in str(loop.result)
-    assert executor.commands == []
-    assert responder.requests == []
-
-
 async def test_cron_turn_does_not_receive_tui_approval_capability(tmp_path):
     executor = _DirectRecordingExecutor()
     tool = ExecTool(executor=executor, working_dir=str(tmp_path))

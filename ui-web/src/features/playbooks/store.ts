@@ -9,10 +9,10 @@
  * cached detail must not outlive the listing it was taken alongside.
  */
 
-import { ds, shell, t } from '../../shell/bridge'
+import { ds, shell } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 
-import type { PlaybookDetail, PlaybookRow, PlaybooksCredentialsGetResult, PlaybooksSource } from './types'
+import type { PlaybookDetail, PlaybookRow, PlaybooksSource } from './types'
 
 export interface PlaybooksState {
   /* null = the list has not been read yet, which is not the same as an empty
@@ -30,20 +30,9 @@ export interface PlaybooksState {
      component so opening another playbook cannot leave the reader on a tab they
      never chose for it. */
   tab: DetailTab
-  /* The credentials tab's own reading of the open playbook: null until fetched
-     or when the source has no such surface. Kept beside `detail` rather than in
-     it because it changes on its own clock -- a save or an authorization
-     re-reads it while the playbook itself did not change. */
-  creds: PlaybooksCredentialsGetResult | null
-  credsLoading: boolean
-  /* Per server: the authorization link the flow parked on, while it waits. */
-  authUrls: Record<string, string>
-  busy: Record<string, boolean>
 }
 
-export type DetailTab = 'graph' | 'contract' | 'credentials'
-
-const NO_CREDS = { creds: null, credsLoading: false, authUrls: {}, busy: {} }
+export type DetailTab = 'graph' | 'contract'
 
 const EMPTY: PlaybooksState = {
   rows: null,
@@ -53,8 +42,7 @@ const EMPTY: PlaybooksState = {
   detail: null,
   loading: false,
   pickedNode: null,
-  tab: 'graph',
-  ...NO_CREDS
+  tab: 'graph'
 }
 
 let state = EMPTY
@@ -120,8 +108,7 @@ export async function open(name: string): Promise<void> {
     detail: cached ?? null,
     loading: !cached,
     pickedNode: cached ? firstNode(cached) : null,
-    tab: 'graph',
-    ...NO_CREDS
+    tab: 'graph'
   })
   if (cached) return
   try {
@@ -143,130 +130,11 @@ export async function open(name: string): Promise<void> {
 }
 
 export function back(): void {
-  set({ openName: null, detail: null, pickedNode: null, loading: false, tab: 'graph', ...NO_CREDS })
+  set({ openName: null, detail: null, pickedNode: null, loading: false, tab: 'graph' })
 }
 
 export function showTab(tab: DetailTab): void {
   set({ tab })
-  if (tab === 'credentials') void loadCredentials()
-}
-
-/* Read what this machine holds for the open playbook. A source without the
-   surface leaves `creds` null and the tab says so; a failed read toasts and
-   leaves the previous reading in place. */
-export async function loadCredentials(): Promise<void> {
-  const name = state.openName
-  const src = source()
-  if (!name || !src.credentials) {
-    set({ creds: null, credsLoading: false })
-    return
-  }
-  set({ credsLoading: true })
-  try {
-    const creds = await src.credentials(name)
-    if (state.openName !== name) return
-    set({ creds, credsLoading: false })
-  } catch (e) {
-    if (state.openName !== name) return
-    set({ credsLoading: false })
-    toast((e as Error)?.message || String(e))
-  }
-}
-
-function mark(key: string, on: boolean): void {
-  set({ busy: { ...state.busy, [key]: on } })
-}
-
-export async function saveSecret(param: string, value: string): Promise<void> {
-  const name = state.openName
-  const src = source()
-  if (!name || !src.setSecret || !value) return
-  mark('p:' + param, true)
-  try {
-    await src.setSecret(name, param, value)
-    toast(t('gui.pb.cred_saved', { name: param }))
-    await loadCredentials()
-  } catch (e) {
-    toast((e as Error)?.message || String(e))
-  } finally {
-    mark('p:' + param, false)
-  }
-}
-
-export async function clearSecret(param: string): Promise<void> {
-  const name = state.openName
-  const src = source()
-  if (!name || !src.clearSecret) return
-  mark('p:' + param, true)
-  try {
-    await src.clearSecret(name, param)
-    toast(t('gui.pb.cred_cleared', { name: param }))
-    await loadCredentials()
-  } catch (e) {
-    toast((e as Error)?.message || String(e))
-  } finally {
-    mark('p:' + param, false)
-  }
-}
-
-/* Kick the browser flow and remember the link it parked on. The answer comes
-   back within seconds with whatever the connect reached; the flow itself runs
-   on behind it, so the tab re-reads the credentials on a short cadence until
-   the server reads as authorized or the reader leaves the tab. */
-export async function authorize(server: string): Promise<void> {
-  const name = state.openName
-  const src = source()
-  if (!name || !src.authorize) return
-  mark('s:' + server, true)
-  try {
-    const res = await src.authorize(name, server)
-    if (state.openName !== name) return
-    const authUrls = { ...state.authUrls }
-    if (res.auth_url) authUrls[server] = res.auth_url
-    else delete authUrls[server]
-    set({ authUrls })
-    if (res.error && res.state !== 'connected') toast(res.error)
-    await loadCredentials()
-    if (res.state !== 'connected') pollUntilAuthorized(name, server)
-  } catch (e) {
-    toast((e as Error)?.message || String(e))
-  } finally {
-    mark('s:' + server, false)
-  }
-}
-
-const POLL_MS = 3000
-const POLL_MAX = 200
-function pollUntilAuthorized(name: string, server: string, left: number = POLL_MAX): void {
-  if (left <= 0) return
-  setTimeout(async () => {
-    if (state.openName !== name || state.tab !== 'credentials') return
-    await loadCredentials()
-    const row = state.creds?.servers.find((s) => s.name === server)
-    if (row?.authorized) {
-      const authUrls = { ...state.authUrls }
-      delete authUrls[server]
-      set({ authUrls })
-      return
-    }
-    pollUntilAuthorized(name, server, left - 1)
-  }, POLL_MS)
-}
-
-export async function clearOauth(server: string): Promise<void> {
-  const name = state.openName
-  const src = source()
-  if (!name || !src.clearOauth) return
-  mark('s:' + server, true)
-  try {
-    await src.clearOauth(name, server)
-    toast(t('gui.pb.cred_cleared', { name: server }))
-    await loadCredentials()
-  } catch (e) {
-    toast((e as Error)?.message || String(e))
-  } finally {
-    mark('s:' + server, false)
-  }
 }
 
 export function pick(nodeId: string | null): void {

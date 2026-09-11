@@ -871,7 +871,7 @@ def _migrate_legacy_leaves(data: dict[str, Any], *, notify: bool = False) -> boo
     return changed
 
 
-def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version: int = CURRENT_CONFIG_VERSION) -> dict:  # noqa: C901 (cc 46: pre-existing, above the ceiling)
+def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version: int = CURRENT_CONFIG_VERSION) -> dict:
     """Migrate old config formats to current.
 
     ``pop_extension_keys``: when True (default, used by ``load_config``),

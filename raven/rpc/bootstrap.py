@@ -175,8 +175,7 @@ async def build_rpc_stack(
     both sides already used, so existing callers are unchanged.
 
     ``approval_responder`` replaces the shell-approval transport for this stack's
-    watched turns (a USER turn, or a SUBAGENT relay into a conversation a surface
-    is watching). The broker built here emits ``approval.request`` on the same
+    user turns. The broker built here emits ``approval.request`` on the same
     ``send_frame``, which is right for a client that implements that method and
     useless for one that does not -- an ACP client speaks
     ``session/request_permission`` instead. Only the transport is replaced:
@@ -307,6 +306,7 @@ async def build_rpc_stack(
             user_pool=user_pool,
             system_pool=system_pool,
             on_turn_end=turn_module.clear_active,
+            on_turn_start=turn_module.promote_pending_inject,
             direct_targets=direct_targets,
             readback_texts=cron_readback,
             # The caller's transport when it brought one. The locally built

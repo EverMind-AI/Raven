@@ -174,23 +174,27 @@ class RpcTurnRunner(AgentTurnRunner):
         cid = conversation_id(req)
         tools = getattr(self._loop, "tools", None)
 
-        # One gate for approval and ask, rebound per turn inside its task: a USER
-        # turn always, a SUBAGENT relay when a surface watches the conversation,
-        # any other origin never. Split, a person could pick "continue" and watch
-        # the tool that continues be refused as unattended.
-        watched = req.origin is Origin.USER or (req.origin is Origin.SUBAGENT and self._emitter.has_subscribers(cid))
-
+        # Approval capability is rebound for every turn, inside the task that
+        # runs it. Only USER origin receives the TUI responder; CRON and other
+        # background origins can share this process but must still fail closed
+        # as non-interactive. The IDs bind any response to this exact
+        # conversation and turn.
         async def _on_review(phase: str, tool_name: str) -> None:
             # The smart-mode reviewer runs inside the tool dispatch, so without
             # this the surface shows an unexplained pause on the running tool.
             await self._emitter.emit(cid, {"type": "permission.review", "payload": {"phase": phase, "tool": tool_name}})
 
         start_permission_turn(
-            self._approval_responder if watched else None,
+            self._approval_responder if req.origin is Origin.USER else None,
             conversation_id=cid,
             turn_id=req.turn_id or "",
-            on_review=_on_review if watched else None,
+            on_review=_on_review if req.origin is Origin.USER else None,
         )
+        # Same rebinding as the shell approval above but a wider gate: a USER
+        # turn binds always, and a SUBAGENT relay binds when its conversation
+        # has a live watcher. A CRON or otherwise background turn has no
+        # reader, and an ACP sub-agent's question there must decline rather
+        # than wait on nobody.
         # Function-level on purpose: the acp client family is future shelf
         # cargo and must not be named at this module's import time
         # (binding-time debt).
@@ -201,7 +205,9 @@ class RpcTurnRunner(AgentTurnRunner):
         # A SUBAGENT relay re-enters the user's own conversation, so whether a
         # human can answer its sub-agents' questions is not about the turn's
         # origin but about whether a surface is watching that conversation.
-        interactive = watched and isinstance(ask_tool, SupportsDirectAsk)
+        interactive = isinstance(ask_tool, SupportsDirectAsk) and (
+            req.origin is Origin.USER or (req.origin is Origin.SUBAGENT and self._emitter.has_subscribers(cid))
+        )
         start_ask_turn(
             AskViaTool(ask_tool) if interactive else None,
             Autofill(
@@ -300,6 +306,20 @@ class RpcOutlet:
                 payload["delegated"] = {**delegated, **({"content": content} if content else {})}
             payload = self._tagged(payload, cid)
             await self._emitter.emit(cid, {"type": "turn.started", "payload": payload})
+
+    async def emit_start(self, conversation_id: str, turn_id: str, content: str) -> None:
+        """Open a turn on the wire that ``turn.send`` could not: an inject the
+        host turn never drained, now running as a turn of its own.
+
+        The one exception to ``message.start`` belonging to ``turn.send``: that
+        call answered before it knew whether the text would merge or fall back,
+        so the boundary is drawn here, at the moment the fallback actually
+        starts, with the same shape and tag the ordinary send would have given
+        it (raven/rpc/methods/turn.py)."""
+        cid = self._subscription(conversation_id)
+        if cid:
+            payload = self._tagged({"turn_id": turn_id, "content": content}, conversation_id)
+            await self._emitter.emit(cid, {"type": "message.start", "payload": payload})
 
     @staticmethod
     def _subscription(conversation_id: str | None) -> str | None:
@@ -483,14 +503,19 @@ def _make_rpc_sink(
     usages: dict[str, dict[str, Any]],
     direct_targets: dict[str, dict[str, str]],
     on_turn_end: Callable[[str], None] | None,
+    on_turn_start: Callable[[str, str], str | None] | None = None,
 ) -> Callable[[TurnEvent], Awaitable[None]]:
     """Adapt the hub into the scheduler's EventSink for the TUI. Deliverables
     route through the hub; a turn's end fires message.complete / error after the
     render barrier (so they land after the last token.delta). ``on_turn_end`` is
     called at each turn exit (before message.complete) so turn.send's active-turn
     slot is cleared before the front-end is told it may submit the next turn.
-    This sink is build_rpc_spine's alone — the CLI keeps its own lifecycle-dropping
-    sink."""
+    ``on_turn_start`` is asked, for each USER turn that starts, whether it is a
+    pending ``busy: inject`` fallen back to a turn of its own -- answering the
+    injected text -- so this sink can bind the lane to it and open it on the
+    wire; ``turn.send`` could not, since it answered before the fallback was
+    decided. This sink is build_rpc_spine's alone — the CLI keeps its own
+    lifecycle-dropping sink."""
 
     async def _finish(conversation_id: str) -> None:
         # close_stream clears the hub's per-stream state (so the next turn on this
@@ -572,6 +597,16 @@ def _make_rpc_sink(
                 )
             return
         if isinstance(event, TurnStarted):
+            if on_turn_start is not None and event.origin is Origin.USER and event.turn_id:
+                injected = on_turn_start(event.conversation_id, event.turn_id)
+                if injected is not None:
+                    # The fallback turn takes the lane's slots the way a sent turn
+                    # would have at ``turn.send``: bound here so its end releases
+                    # them, and opened on the wire so a client can see and cancel
+                    # what is running (reviewed 2026-09-10).
+                    turn_ids[event.conversation_id] = event.turn_id
+                    await outlet.emit_start(event.conversation_id, event.turn_id, injected)
+                    return
             if event.origin is Origin.SUBAGENT and event.delegated:
                 # A turn the runtime opened (a delegated result re-entering the
                 # conversation) gets NO message.start -- that event belongs to
@@ -598,6 +633,7 @@ def build_rpc_spine(
     *,
     channel: str = "tui",
     on_turn_end: Callable[[str], None] | None = None,
+    on_turn_start: Callable[[str, str], str | None] | None = None,
     direct_targets: dict[str, dict[str, str]] | None = None,
     readback_texts: dict[str, str] | None = None,
     approval_responder: ApprovalResponder | None = None,
@@ -613,7 +649,9 @@ def build_rpc_spine(
     whether an ending turn is the one holding this lane's client-facing slots; the
     id on ``message.complete`` comes from the turn itself) and a ``teardown`` the
     caller awaits on exit (stop the scheduler, then close the hub's workers).
-    ``on_turn_end`` lets turn.send drop its active-turn slot at each turn exit.
+    ``on_turn_end`` lets turn.send drop its active-turn slot at each turn exit;
+    ``on_turn_start`` lets it bind that slot to an inject's fallback turn when
+    the spine starts one (see ``_make_rpc_sink``).
 
     ``direct_targets`` is the direct-chat map (conversation -> the sub-agent
     instance the in-flight turn was addressed to). Pass the same dict
@@ -627,10 +665,8 @@ def build_rpc_spine(
     private map when cron is not wired (e.g. tests).
 
     ``approval_responder`` is an interactive capability, not a process-wide
-    permission. The runner binds it per turn on the same gate the asker uses: a
-    USER turn always, a SUBAGENT relay when a surface is watching its
-    conversation, and no other origin -- a CRON or otherwise unattended turn is
-    refused at the ask tier."""
+    permission. The runner binds it only to USER-origin turns and explicitly
+    revokes it for background origins."""
     hub = DeliveryHub()
     if direct_targets is None:
         direct_targets = {}
@@ -649,7 +685,7 @@ def build_rpc_spine(
             approval_responder=approval_responder,
         ),
         OriginPools(user=user_pool, system=system_pool, direct=direct_pool),
-        _make_rpc_sink(hub, outlet, channel, turn_ids, usages, direct_targets, on_turn_end),
+        _make_rpc_sink(hub, outlet, channel, turn_ids, usages, direct_targets, on_turn_end, on_turn_start),
     )
 
     async def teardown() -> None:

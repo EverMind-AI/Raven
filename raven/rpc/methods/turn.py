@@ -17,6 +17,7 @@ single-argument dispatcher handlers.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -34,6 +35,7 @@ from raven.rpc.models import (
 from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import ChatType, Media, Origin, Source, TurnHandle, TurnRequest, direct_lane, session_of
 from raven.spine.scheduler import Scheduler, SchedulerDrainingError
+from raven.spine.turn import BusyPolicy
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -130,6 +132,67 @@ def clear_active(session_key: str) -> None:
     """Drop a session's active-turn slot. Wired into build_rpc_spine as ``on_turn_end``
     so the slot clears at the end of the turn that owns it (alongside turn_ids)."""
     _active_turns.pop(session_key, None)
+
+
+# The ``busy: inject`` sends the running turn has not yet merged, per lane and
+# then per the id minted for each: (its handle, its text), in arrival order.
+# The handle is the one record of that text the surface holds, and it stays
+# valid through every state the spine puts an inject in -- waiting in the lane's
+# mailbox, merged into the running turn, or fallen back to a turn of its own
+# when the host ended first. Kept so ``turn.cancel`` / ``session.interrupt``
+# can still reach it once the host turn has released the lane's active slot,
+# and so the sink can promote the fallback turn into that slot when it starts
+# (reviewed 2026-09-10: an undrained inject ran as a turn nothing could see or
+# cancel). Every inject, not the newest: the lane's mailbox keeps them all, and
+# two steers after the host's last drain fall back one after the other, each
+# needing its own handle when its turn starts (reviewed again the same day).
+_pending_injects: dict[str, dict[str, tuple[TurnHandle, str]]] = {}
+
+
+def promote_pending_inject(lane: str, turn_id: str) -> str | None:
+    """A pending inject's turn is starting on ``lane``: make it the lane's active turn.
+
+    Wired into build_rpc_spine as ``on_turn_start``. Answers the injected text
+    when ``turn_id`` names the lane's pending inject -- the host turn ended
+    before draining it and the spine fell it back to a turn of its own -- and
+    ``None`` for any other turn. The caller binds ``turn_ids`` and opens the
+    turn on the wire; this binds the active-turn slot the cancel paths read.
+    """
+    pending = _pending_injects.get(lane, {}).pop(turn_id, None)
+    if pending is None:
+        return None
+    if not _pending_injects.get(lane):
+        _pending_injects.pop(lane, None)
+    _active_turns[lane] = pending[0]
+    return pending[1]
+
+
+def _cancellable(lane: str) -> tuple[TurnHandle, str | None] | None:
+    """The handle a cancel on ``lane`` reaches, and the inject's id when that is what it is.
+
+    The active slot first -- the turn ``turn.send`` bound, or a fallback inject
+    the sink promoted. Failing that, the oldest inject still pending: in the
+    mailbox, or queued behind a host that ended before the sink saw it start.
+    Oldest, because that is the one the spine runs next.
+    """
+    handle = _active_turns.get(lane)
+    if handle is not None:
+        return handle, None
+    pending = _pending_injects.get(lane)
+    if not pending:
+        return None
+    inject_id, (inject_handle, _text) = next(iter(pending.items()))
+    return inject_handle, inject_id
+
+
+def _forget_inject(lane: str, turn_id: str) -> None:
+    """Drop one inject's pending record, and the lane's table when it empties."""
+    pending = _pending_injects.get(lane)
+    if pending is None:
+        return
+    pending.pop(turn_id, None)
+    if not pending:
+        _pending_injects.pop(lane, None)
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +379,13 @@ async def turn_send(
         else parsed.session_key
     )
 
+    if parsed.busy == "inject" and (is_turn_active(lane) or _lane_in_flight(scheduler, lane)):
+        # Two records of "a turn is running here", and both count: this map
+        # knows the turns ``turn.send`` started, the scheduler knows every turn
+        # on the lane -- an armed wake is submitted to it directly
+        # (``make_on_session_wake``) and never passes through here (reviewed
+        # 2026-09-09: a steer during a running wake queued a second turn).
+        return await _inject_into_running(parsed, lane, scheduler=scheduler, emitter=emitter)
     if is_turn_active(lane):
         raise TurnInProgressError(
             f"session {parsed.session_key!r} already has an active turn",
@@ -400,6 +470,67 @@ async def turn_send(
         naming = _name_session(parsed, agent_loop_factory=agent_loop_factory, emitter=emitter)
 
     return {"turn_id": turn_id, "accepted": True, "naming": naming}
+
+
+def _lane_in_flight(scheduler: Scheduler, lane: str) -> bool:
+    """Whether the scheduler has a turn running on ``lane``, whoever started it."""
+    probe = getattr(scheduler, "has_inflight", None)
+    return bool(probe(lane)) if callable(probe) else False
+
+
+async def _inject_into_running(
+    parsed: TurnSendParams,
+    lane: str,
+    *,
+    scheduler: Scheduler,
+    emitter: SubscriptionEmitter | None,
+) -> dict[str, Any]:
+    """Hand ``parsed.content`` to the turn already running on ``lane``.
+
+    ``BusyPolicy.INJECT``: the lane holds the text for the running turn's
+    worker to merge at its next tool-loop gap, and falls it back to a turn of
+    its own if that turn ends first (spine ``Lane.submit``). Nothing is bound
+    here -- the running turn owns the lane's slots -- but the handle is kept in
+    ``_pending_injects`` under an id minted for the text, so a cancel can still
+    reach it after the host has released those slots, and so the sink can
+    promote the fallback turn into them when it starts. The id answered is that
+    one: it is what the fallback turn's events will carry.
+    """
+    turn_id = uuid4().hex
+    target = _target_payload(parsed)
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=Source(
+            channel=parsed.channel or "tui",
+            chat_id=parsed.chat_id or "default",
+            sender_id=parsed.sender_id or "user",
+            chat_type=ChatType.DM,
+            surface=declared_surface(),
+        ),
+        text=parsed.content,
+        media=_resolve_media(parsed.media),
+        conversation=lane,
+        direct_target=(parsed.target.agent, parsed.target.handle) if parsed.target is not None else None,
+        busy=BusyPolicy.INJECT,
+        turn_id=turn_id,
+    )
+    try:
+        handle = scheduler.submit(req)
+    except SchedulerDrainingError:
+        # The same exit the ordinary send takes: the front end is told the turn
+        # failed so it can clear its slot, rather than an internal error.
+        if emitter is not None:
+            await _emit_start_then_error(emitter, parsed.session_key, turn_id, _TURN_FAILED_CODE, "turn_failed", target)
+        return {"turn_id": turn_id, "accepted": True, "naming": False}
+    _pending_injects.setdefault(lane, {})[turn_id] = (handle, parsed.content)
+
+    async def _forget_when_done() -> None:
+        # Merged, ran, or cancelled: the future resolves on every exit.
+        await handle.result()
+        _forget_inject(lane, turn_id)
+
+    asyncio.get_running_loop().create_task(_forget_when_done())
+    return {"turn_id": turn_id, "accepted": True, "naming": False}
 
 
 async def turn_subscribe(
@@ -491,9 +622,10 @@ async def turn_cancel(
         else parsed.session_key
     )
 
-    handle = _active_turns.get(lane)
-    if handle is None:
+    reach = _cancellable(lane)
+    if reach is None:
         return {"cancelled": False}
+    handle, inject_id = reach
 
     await handle.cancel()
 
@@ -501,13 +633,14 @@ async def turn_cancel(
         # Tagged from the live map rather than from ``parsed.target``: the map is
         # what turn.send bound for this lane, so the tag on this error is byte
         # for byte the one the cancelled turn's own events carried -- which is
-        # what lets the client clear the view it was streaming into.
+        # what lets the client clear the view it was streaming into. A pending
+        # inject was bound to nothing; its error names the id its send answered.
         await emitter.emit(
             parsed.session_key,
             {
                 "type": "error",
                 "payload": _tag(
-                    _cancel_payload((turn_ids or {}).get(lane, "")),
+                    _cancel_payload(inject_id or (turn_ids or {}).get(lane, "")),
                     (direct_targets or {}).get(lane),
                 ),
             },
@@ -516,6 +649,8 @@ async def turn_cancel(
     # Drain so the sink has dropped the active-turn slot before returning.
     # handle.result() returns None on cancellation (does not raise).
     await handle.result()
+    if inject_id is not None:
+        _forget_inject(lane, inject_id)
 
     return {"cancelled": True}
 
@@ -532,7 +667,8 @@ async def session_interrupt(params: dict[str, Any]) -> dict[str, Any]:
     happens routinely -- Ctrl+C on an idle prompt -- and is not an error.
     """
     session_key = str(params.get("session_id") or "").strip()
-    handle = _active_turns.get(session_key) if session_key else None
+    reach = _cancellable(session_key) if session_key else None
+    handle = reach[0] if reach is not None else None
     if handle is None:
         return {"ok": False}
     await handle.cancel()
