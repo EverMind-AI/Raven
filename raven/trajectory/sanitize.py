@@ -38,14 +38,15 @@ from typing import Iterable
 PATH_PLACEHOLDER = "[REDACTED:path]"
 
 # Characters that may legitimately precede an absolute path in text or JSON.
-# ")" and "}" are here as well as their opening halves: a closing bracket ends a
-# path token (_BARE_END), so a path written straight after one -- a markdown
-# link, a parenthesised note -- has to be able to start one too, or it is never
-# considered and the export assertion reports CLEAN on a tree that holds it.
-# "]" is deliberately NOT here: PATH_PLACEHOLDER ends with it, and the redacted
-# form keeps the basename ("[REDACTED:path]/report.png"), so admitting "]" would
-# re-redact every placeholder's own tail.
-_BOUNDARY = set("\"'`=:([{,<>)}")
+# Closing brackets belong here as well as their opening halves: a closing
+# bracket ends a path token (_BARE_END), so a path written straight after one --
+# a markdown link, a parenthesised note, a JSON object -- has to be able to
+# start one too, or it is never considered and the export assertion reports
+# CLEAN on a tree that holds it. "]" needs the exception in find_absolute_paths:
+# PATH_PLACEHOLDER ends with one, and the redacted form keeps the basename
+# ("[REDACTED:path]/report.png"), so the placeholder's own tail must not read as
+# a fresh path.
+_BOUNDARY = set("\"'`=:([{,<>)}]")
 _QUOTES = ('"', "'", "`")
 # Where a bare (unquoted) token ends. Quotes end a bare token too — a path
 # glued to a closing quote was not part of the quoted string.
@@ -112,6 +113,9 @@ def find_absolute_paths(text: str) -> list[tuple[int, int]]:
         ch = text[i]
         prev = text[i - 1] if i > 0 else ""
         at_boundary = i == 0 or prev.isspace() or prev in _BOUNDARY
+        if at_boundary and prev == "]" and text.endswith(PATH_PLACEHOLDER, 0, i):
+            # the "]" that closes a placeholder, not a bracket before a path
+            at_boundary = False
         if not at_boundary:
             i += 1
             continue

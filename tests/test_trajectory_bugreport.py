@@ -120,6 +120,8 @@ def _decide_all(suspected_action=treview.ACTION_KEPT):
         "log https://x.com/v1,/var/db/raven/secrets.sqlite end",
         "[docs](https://x.com/d)/opt/secret/key.pem",
         "note (see below)/srv/raven/keys.json end",
+        "[ref]/opt/secret/key.pem",
+        '{"a":1}/opt/secret/key.pem',
     ],
     ids=[
         "tmp",
@@ -137,6 +139,8 @@ def _decide_all(suspected_action=treview.ACTION_KEPT):
         "comma-after-url",
         "after-markdown-link",
         "after-parens",
+        "after-bracket",
+        "after-brace",
     ],
 )
 def test_parser_hits_absolute_paths(text):
