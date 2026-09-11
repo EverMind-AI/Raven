@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from raven.trajectory.bugreport import BugReportError, PreparationError
+from raven.trajectory.errors import BugReportError, PreparationError
 from raven.trajectory.redact import (
     REDACTION_METADATA_FILE,
     KnownSecret,

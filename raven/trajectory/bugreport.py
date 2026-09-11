@@ -52,6 +52,8 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping
 from raven import __version__
 from raven.tracing import config as tracing_config
 from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
+from raven.trajectory.errors import BugReportError as BugReportError
+from raven.trajectory.errors import PreparationError as PreparationError
 from raven.trajectory.redact import KnownSecret, RedactionReport, _variants, collect_known_secrets, redact_bundle
 from raven.trajectory.sanitize import sanitize_export_tree, sanitize_text, scan_absolute_paths, tree_digest
 from raven.trajectory.store import member_traces
@@ -88,21 +90,8 @@ REASON_INTERRUPTED_INCOMPLETE = "interrupted and the snapshot is incomplete; del
 REASON_SNAPSHOT_CORRUPTED = "snapshot corrupted; delete the report and file a new one"
 
 
-class BugReportError(Exception):
-    """Base for bug-report pipeline failures."""
-
-
 class StaleAttemptError(BugReportError):
     """The attempt's member set changed while the report was being prepared."""
-
-
-class PreparationError(BugReportError):
-    """Preparation failed before the record landed (nothing was created).
-
-    Expected filesystem/archive failures (disk full, permissions, tar errors)
-    are normalized into this so the UI can show the fixed pre-record failure
-    block instead of crashing the browser.
-    """
 
 
 class ExportLeakError(PreparationError):

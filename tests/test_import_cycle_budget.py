@@ -48,16 +48,17 @@ REPO = Path(__file__).resolve().parent.parent
 ROOT_PACKAGE = "raven"
 
 # Measured when the guard landed. Down only, with one exception on record: the
-# 2026-09-11 upstream sync landed four modules that import each other in pairs
-# (cli.trajectory_browse with cli.trajectory_commands, trajectory.bugreport with
-# trajectory.review). Neither pair can be unpicked by deferring an import --
-# this graph counts a function-local import the same as a top-level one -- so
-# both would mean moving code that had just arrived from upstream, inside a sync.
-# The module count was raised 42 -> 46 for that, deliberately; the package and
-# pair counts did not move.
+# 2026-09-11 upstream sync landed two pairs of modules that import each other,
+# and deferring an import does not help -- this graph counts a function-local
+# import exactly like a top-level one. The trajectory pair was unpicked here by
+# moving the two shared exception types into a leaf module
+# (raven/trajectory/errors.py), which is what took the count 46 -> 44. The CLI
+# pair (cli.trajectory_browse with cli.trajectory_commands) needs about 94
+# lines of code that arrived in the same sync moved to a third module, and is
+# left to a follow-up; those two modules are the whole of the raise from 42.
 PACKAGES_IN_CYCLES_CEILING = 18
 MUTUAL_PAIRS_CEILING = 13
-MODULES_IN_CYCLES_CEILING = 46
+MODULES_IN_CYCLES_CEILING = 44
 
 
 def _graph() -> grimp.ImportGraph:
