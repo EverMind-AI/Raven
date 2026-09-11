@@ -77,11 +77,7 @@ def agent_capabilities() -> dict[str, Any]:
         # sibling session on this connection. A raven build that answers the
         # field with ``-32602`` is otherwise indistinguishable from this one, and
         # a client reading no declaration has to assume the refusal.
-        # And raven's steer extension (``_raven/session/steer``): text for a
-        # turn already in flight -- a person speaking to an agent whose prompt
-        # is held open while it waits on its own scheduled work. Advertised by
-        # presence, which is how raven's own client reads it.
-        "_meta": {protocol.SESSION_MCP_CAPABILITY: {}, protocol.STEER_CAPABILITY: True},
+        "_meta": {protocol.SESSION_MCP_CAPABILITY: {}},
         # ``list``, ``resume``, ``close`` and ``delete``, and an empty object is
         # how the schema spells "supported". Each one is declared because the
         # method behind it exists and is honoured: ``_session_resume`` reopens a

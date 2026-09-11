@@ -88,7 +88,7 @@ class EvalJudge:
                         {"role": "user", "content": prompt},
                     ],
                     model=self._model,
-                    max_tokens=128,
+                    max_tokens=64,
                     temperature=0.0,
                 ),
                 timeout=self._timeout,

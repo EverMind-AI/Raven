@@ -40,9 +40,7 @@ FALLBACK_HEADING = "## Notes"
 _HEADING_RE = re.compile(r"^[A-Za-z][A-Za-z0-9 /&'-]{0,48}$")
 _MAX_ENTRY_CHARS_FOR_PROMPT = 1200
 # A heading is at most ~50 chars; classification-sized budget, not chat-sized.
-# Doubled off that estimate so a model that thinks before naming one still
-# has room to answer.
-_HEADING_MAX_TOKENS = 64
+_HEADING_MAX_TOKENS = 32
 
 _PROMPT = (
     "Pick the single best H2 section name for this user-profile fact in a "

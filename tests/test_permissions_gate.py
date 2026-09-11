@@ -73,7 +73,7 @@ async def test_user_deny_holds_in_full_mode():
 async def test_a_user_allow_rule_lifts_a_declared_family():
     # A declared family is not a mandate: the user's own allow rule is the
     # user's decision, and it wins.
-    from raven.permissions.shell_policy import DELETE_MATCHERS
+    from raven.agent.tools.shell_policy import DELETE_MATCHERS
 
     gate = gate_for(PermissionsConfig(tools={"exec": {"rm *": "allow"}}), families=DELETE_MATCHERS)
     decision = await gate.check("exec", {"command": "rm stale.txt"})
@@ -84,7 +84,7 @@ async def test_a_user_allow_rule_lifts_a_declared_family():
 @pytest.mark.asyncio
 async def test_full_mode_runs_a_declared_family():
     # full means full: the family names a prompt that full mode never shows.
-    from raven.permissions.shell_policy import DELETE_MATCHERS
+    from raven.agent.tools.shell_policy import DELETE_MATCHERS
 
     responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
     gate = gate_for(PermissionsConfig(mode="full"), families=DELETE_MATCHERS)
@@ -97,7 +97,7 @@ async def test_full_mode_runs_a_declared_family():
 async def test_a_declared_family_names_the_prompt():
     # What a family is for: when the ask tier does prompt, the human reads the
     # family's line instead of the generic one.
-    from raven.permissions.shell_policy import DELETE_MATCHERS
+    from raven.agent.tools.shell_policy import DELETE_MATCHERS
 
     gate = gate_for(PermissionsConfig(mode="ask"), families=DELETE_MATCHERS)
     decision = await gate.check("exec", {"command": "rm stale.txt"})
@@ -481,7 +481,7 @@ class TestDecisionsLandOnTheEmittedSpan:
     async def test_a_declared_family_is_recorded_whichever_way_the_tiers_decide(self, trace_dir):
         # The family does not decide, but the audit keeps the classification:
         # full mode runs the delete, and the span still says which family it was.
-        from raven.permissions.shell_policy import DELETE_MATCHERS
+        from raven.agent.tools.shell_policy import DELETE_MATCHERS
 
         gate = gate_for(PermissionsConfig(mode="full"), families=DELETE_MATCHERS)
         bind(None)
@@ -498,7 +498,7 @@ class TestDecisionsLandOnTheEmittedSpan:
 
     @pytest.mark.asyncio
     async def test_a_declared_family_is_recorded_on_a_user_deny_too(self, trace_dir):
-        from raven.permissions.shell_policy import DELETE_MATCHERS
+        from raven.agent.tools.shell_policy import DELETE_MATCHERS
 
         gate = gate_for(PermissionsConfig(mode="full", tools={"exec": {"rm *": "deny"}}), families=DELETE_MATCHERS)
         bind(None)

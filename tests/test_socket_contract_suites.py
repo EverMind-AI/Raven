@@ -89,7 +89,6 @@ class _Resp:
     truncated = False
     max_tokens = None
     reasoning_ms = None
-    call_record = None
 
     has_tool_calls = False
 

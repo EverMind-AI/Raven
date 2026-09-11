@@ -1,9 +1,4 @@
 {
-  "agents": {
-    "defaults": {
-      "reasoningEffort": "high"
-    }
-  },
   "plugins": {
     "config": {
       "ppt-engine": {

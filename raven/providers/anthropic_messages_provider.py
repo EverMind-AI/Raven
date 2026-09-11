@@ -9,7 +9,6 @@ Anthropic route intact.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import json
 import re
@@ -19,7 +18,6 @@ from typing import Any
 
 import httpx
 import json_repair
-from loguru import logger
 
 from raven.providers.base import (
     ChatDelta,
@@ -31,34 +29,23 @@ from raven.providers.base import (
     format_llm_error,
     send_max_tokens,
 )
-from raven.providers.first_byte import (
-    BOUND_NAME,
-    FirstByteTimeoutError,
-    httpx_timeout,
-    stream_first_byte_budget,
-)
 from raven.providers.prompt_cache import accepts_cache_control
-from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS
+from raven.providers.rates import CLAUDE_MAX_OUTPUT_TOKENS
 from raven.providers.tool_names import normalized_tool_name
-from raven.providers.usage import reported_cost, token_count
+from raven.providers.usage import reported_cost
 
 _DEFAULT_BASE = "https://api.anthropic.com"
 _ANTHROPIC_VERSION = "2023-06-01"
 # The Messages API requires ``max_tokens``. The number a request carries is
-# decided by the one owner every path shares, ``send_max_tokens``
-# (``rates.DEFAULT_MAX_OUTPUT_TOKENS``, lowered to what the model's catalogue
-# row declares when it declares less); the previous 4096 here cut a page's
-# HTML on every write. A
+# decided by the one owner every path shares, ``send_max_tokens`` (the model's
+# catalogue ceiling, ``rates.CLAUDE_MAX_OUTPUT_TOKENS`` when the catalogue has
+# no row for it); the previous 4096 here cut a page's HTML on every write. A
 # model whose real ceiling is below what the catalogue said names it in a 400;
 # `clamp_to_model_limit` retries at that number and the provider remembers it.
-# How much of that ceiling thinking may take is nobody's number here: the effort
-# goes out as the label the caller named and whoever serves the model sizes it
-# (OpenRouter's `reasoning.effort` is documented as a share of ``max_tokens``;
-# Anthropic's own adaptive models read `output_config.effort`). The table that
-# used to sit here was written against a 16384 ceiling -- ``high: 8192`` was half
-# of it -- and outlived that ceiling by an order of magnitude. A number is
-# reached for only when a vendor refuses the label (`rewrite_on_400`), and it
-# comes from litellm rather than from us.
+# The budget is part of ``max_tokens``, so a budget sized to the ceiling left a
+# high-effort turn returning nothing but thinking -- which the loop reads as an
+# empty turn. Thinking now gets at most half the ceiling; the rest is visible.
+_THINKING_BUDGETS = {"minimal": 1024, "low": 1024, "medium": 4096, "high": 8192, "xhigh": 16384, "max": 32768}
 _MODEL_LIMIT_RE = re.compile(r"max_tokens: (\d+) > (\d+)")
 # Claude 4.7 and later think adaptively: ``thinking.type: "enabled"`` with a
 # budget is a 400 there, and depth is ``output_config.effort``. Earlier models
@@ -421,38 +408,10 @@ def _visible_reserve(max_tokens: int) -> int:
     return max(1024, max_tokens // 2)
 
 
-def _litellm_budgets() -> dict[str, int]:
-    """litellm's own effort-to-budget table, or empty when it cannot be imported.
-
-    Read lazily: this is the refusal path only (a vendor that rejects an effort
-    label and demands a token count), and importing litellm costs seconds.
-    """
-    try:
-        from raven.providers.litellm_setup import import_litellm
-
-        constants = import_litellm().constants
-    except Exception:  # noqa: BLE001 - a repair must not become the failure
-        return {}
-    budgets = {}
-    for effort in ("minimal", "low", "medium", "high", "xhigh", "max"):
-        value = getattr(constants, f"DEFAULT_REASONING_EFFORT_{effort.upper()}_THINKING_BUDGET", None)
-        if isinstance(value, int) and value > 0:
-            budgets[effort] = value
-    return budgets
-
-
 def _thinking_budget(max_tokens: int, effort: str | None) -> int | None:
-    """A token budget for an effort, for the one vendor shape that takes no label."""
     if not effort or effort.lower() in {"none", "off", "disabled"}:
         return None
-    budgets = _litellm_budgets()
-    if not budgets:
-        return None
-    asked = budgets.get(effort.lower(), budgets.get("medium", 0))
-    # The budget is part of ``max_tokens``, so a budget sized to the ceiling
-    # leaves a turn returning nothing but thinking -- which the loop reads as an
-    # empty turn. Thinking gets at most half the ceiling; the rest is visible.
-    budget = min(asked, max_tokens - _visible_reserve(max_tokens))
+    budget = min(_THINKING_BUDGETS.get(effort.lower(), 4096), max_tokens - _visible_reserve(max_tokens))
     # Anthropic's floor for a budget; below it the ceiling is too small to think in.
     return budget if budget >= 1024 else None
 
@@ -493,21 +452,10 @@ def rewrite_on_400(body: dict[str, Any], error_text: str) -> str | None:
     and a temperature beside thinking (``"temperature"``). The name matters to
     the caller: only a ceiling complaint teaches the model's ceiling, the others
     leave ``max_tokens`` as the caller pinned it and must not be remembered as one.
-
-    This is the only place a reasoning budget becomes a number, and the number is
-    litellm's: a vendor that refuses an effort label has to be answered in tokens,
-    and answering it with a table of our own is what this repair replaced.
     """
     text = error_text or ""
     if clamp_to_model_limit(body, text):
         return "ceiling"
-    if isinstance(body.get("reasoning"), dict) and "reasoning" in text:
-        effort = str((body.pop("reasoning") or {}).get("effort") or "high")
-        budget = _thinking_budget(int(body.get("max_tokens") or DEFAULT_MAX_OUTPUT_TOKENS), effort)
-        if budget is not None:
-            body["thinking"] = {"type": "enabled", "budget_tokens": budget}
-            body.pop("temperature", None)
-        return "thinking"
     thinking = body.get("thinking")
     if isinstance(thinking, dict) and "not supported" in text:
         if thinking.get("type") == "enabled" and "enabled" in text:
@@ -517,7 +465,7 @@ def rewrite_on_400(body: dict[str, Any], error_text: str) -> str | None:
             return "thinking"
         if thinking.get("type") == "adaptive" and "adaptive" in text:
             effort = str((body.pop("output_config", None) or {}).get("effort") or "high")
-            budget = _thinking_budget(int(body.get("max_tokens") or DEFAULT_MAX_OUTPUT_TOKENS), effort)
+            budget = _thinking_budget(int(body.get("max_tokens") or CLAUDE_MAX_OUTPUT_TOKENS), effort)
             if budget is None:
                 body.pop("thinking", None)
             else:
@@ -528,46 +476,6 @@ def rewrite_on_400(body: dict[str, Any], error_text: str) -> str | None:
     if "temperature" in text and body.pop("temperature", None) is not None:
         return "temperature"
     return None
-
-
-def thinking_request(model: str, reasoning_effort: str | None) -> dict[str, Any]:
-    """The reasoning keys a request carries for this model and effort.
-
-    One owner for the shape, so the record of what was asked for cannot drift
-    from what was sent. Two shapes, both of them a label:
-
-    - a Claude that thinks adaptively reads ``output_config.effort``, beside
-      ``thinking.type: "adaptive"`` (Anthropic's own newer form);
-    - everything else on this wire gets OpenRouter's unified ``reasoning.effort``,
-      which the gateway translates into whatever the upstream wants.
-
-    A vendor that takes neither says so in a 400, and `rewrite_on_400` is where
-    a token count is reached for -- never here.
-    """
-    if not reasoning_effort or reasoning_effort.lower() in {"none", "off", "disabled"}:
-        return {}
-    effort = _ADAPTIVE_EFFORTS.get(reasoning_effort.lower(), "high")
-    if adaptive_thinking(model):
-        return {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}}
-    return {"reasoning": {"effort": effort}}
-
-
-def generation_keys(model: str, temperature: float | None, reasoning_effort: str | None) -> dict[str, Any]:
-    """Reasoning and temperature, as one request carries them.
-
-    Called by the body builder and by ``request_generation``, which is what
-    keeps the record of a call's parameters from drifting away from the request:
-    whether a temperature survives depends on which reasoning shape went out,
-    and that decision has to be made once.
-    """
-    keys = thinking_request(model, reasoning_effort)
-    if temperature is not None and "thinking" not in keys and not adaptive_thinking(model):
-        # Claude 4.7 and later think adaptively by default, and Anthropic's
-        # thinking request accepts no temperature but the default -- so the
-        # repository's own temperature would be refused beside one. An effort
-        # sent as a label carries no ``thinking`` key, and keeps its temperature.
-        keys["temperature"] = temperature
-    return keys
 
 
 def build_request_body(
@@ -582,7 +490,7 @@ def build_request_body(
     stream: bool,
 ) -> dict[str, Any]:
     system, converted_messages = convert_messages(messages)
-    output_limit = max(1, max_tokens or DEFAULT_MAX_OUTPUT_TOKENS)
+    output_limit = max(1, max_tokens or CLAUDE_MAX_OUTPUT_TOKENS)
     body: dict[str, Any] = {
         "model": model,
         "max_tokens": output_limit,
@@ -594,7 +502,17 @@ def build_request_body(
     if tools and tool_choice != "none":
         body["tools"] = _tool_definitions(tools)
         body["tool_choice"] = _tool_choice(tool_choice) or {"type": "auto"}
-    body.update(generation_keys(model, temperature, reasoning_effort))
+    thinking_on = bool(reasoning_effort) and reasoning_effort.lower() not in {"none", "off", "disabled"}
+    if thinking_on and adaptive_thinking(model):
+        body["thinking"] = {"type": "adaptive"}
+        body["output_config"] = {"effort": _ADAPTIVE_EFFORTS.get(reasoning_effort.lower(), "high")}
+    elif (budget := _thinking_budget(output_limit, reasoning_effort)) is not None:
+        body["thinking"] = {"type": "enabled", "budget_tokens": budget}
+    elif temperature is not None and not adaptive_thinking(model):
+        # Claude 4.7 and later think adaptively by default, and a thinking
+        # request accepts no temperature but the default -- so the repository's
+        # 0.1 would be refused on the ordinary request.
+        body["temperature"] = temperature
     return body
 
 
@@ -624,14 +542,6 @@ def _usage(raw: Any) -> dict[str, Any]:
         "total_tokens": total,
         "prompt_tokens_include_cache": False,
     }
-    # Absent is not zero: a turn whose reasoning text never arrived is only
-    # distinguishable from a turn that did not think by this count.
-    details = _get(raw, "output_tokens_details", {}) or {}
-    for key in ("thinking_tokens", "reasoning_tokens"):
-        thought = token_count(_get(details, key))
-        if thought is not None:
-            result["reasoning_tokens"] = thought
-            break
     if _get(raw, "cache_read_input_tokens") is not None:
         result["cache_read_input_tokens"] = cache_read
     if _get(raw, "cache_creation_input_tokens") is not None or creation:
@@ -698,32 +608,15 @@ def parse_message(payload: dict[str, Any]) -> LLMResponse:
     )
 
 
-async def _iter_sse(response: httpx.Response, timeout: float, first_byte: float = 0.0) -> AsyncIterator[dict[str, Any]]:
-    """Anthropic SSE events, with the wait for the *first* line bounded apart.
-
-    A stream that has not started is not a stream that stopped mid-answer, and
-    the two are minutes apart: ``first_byte`` bounds the former and ``timeout``
-    (the idle cap) every line after it. 0 means no separate bound and the idle
-    cap covers both, which is what this did before ``llmFirstByteTimeout``.
-    """
+async def _iter_sse(response: httpx.Response, timeout: float) -> AsyncIterator[dict[str, Any]]:
     event_name = ""
     data_lines: list[str] = []
     lines = response.aiter_lines()
-    started = asyncio.get_running_loop().time()
-    opening = first_byte > 0
     while True:
         try:
-            line = await asyncio.wait_for(lines.__anext__(), first_byte if opening else timeout)
+            line = await asyncio.wait_for(lines.__anext__(), timeout)
         except StopAsyncIteration:
             break
-        except TimeoutError as exc:
-            if not opening:
-                raise
-            waited = asyncio.get_running_loop().time() - started
-            raise FirstByteTimeoutError(
-                phase="waiting for the first stream event", budget=first_byte, waited=waited
-            ) from exc
-        opening = False
         if line.startswith("event:"):
             event_name = line[6:].strip()
         elif line.startswith("data:"):
@@ -750,9 +643,7 @@ async def _iter_sse(response: httpx.Response, timeout: float, first_byte: float 
             yield payload
 
 
-async def consume_message_stream(
-    response: httpx.Response, timeout: float, first_byte: float = 0.0
-) -> AsyncIterator[ChatDelta]:
+async def consume_message_stream(response: httpx.Response, timeout: float) -> AsyncIterator[ChatDelta]:
     """Normalize Anthropic SSE events into Raven stream deltas."""
     tool_indices: dict[int, int] = {}
     tool_ids: dict[int, str] = {}
@@ -762,7 +653,7 @@ async def consume_message_stream(
     usage: dict[str, Any] = {}
     terminal_sent = False
 
-    async for event in _iter_sse(response, timeout, first_byte):
+    async for event in _iter_sse(response, timeout):
         kind = event.get("type") or ""
         if kind == "message_start":
             message = event.get("message") or {}
@@ -909,28 +800,6 @@ class AnthropicMessagesProvider(LLMProvider):
         """Expose the normalized parser for provider-level tests and probes."""
         return parse_message(payload)
 
-    def request_generation(self, **asked: Any) -> dict[str, Any]:
-        """See ``LLMProvider.request_generation``; adds this wire's reasoning shape."""
-        record = super().request_generation(**asked)
-        # The Messages API requires the field, so this wire always names a ceiling
-        # even where nobody pinned one.
-        record["max_tokens"] = record["output_ceiling"]
-        wire_id = self.wire_model_id(asked.get("model") or self.default_model)
-        keys = generation_keys(wire_id, record.get("temperature"), record.get("reasoning_effort"))
-        record["temperature"] = keys.pop("temperature", None)
-        record.update(keys)
-        return record
-
-    def reasoning_wire_keys(self, model: str | None, reasoning_effort: str | None) -> dict[str, Any]:
-        """See ``LLMProvider.reasoning_wire_keys``; this wire translates the label.
-
-        Which is why it has to answer for itself: ``_ADAPTIVE_EFFORTS`` maps both
-        ``minimal`` and ``low`` onto ``low``, so those two rungs serialize to one
-        request here -- ``output_config.effort: low`` on a model that thinks
-        adaptively, ``reasoning.effort: low`` otherwise.
-        """
-        return thinking_request(self.wire_model_id(model or self.default_model), reasoning_effort)
-
     def _body(
         self,
         *,
@@ -998,13 +867,7 @@ class AnthropicMessagesProvider(LLMProvider):
             stream=False,
         )
         try:
-            # A non-streaming completion's first response byte and its last are
-            # the same byte, so the wait stays on the whole-call budget; what is
-            # separable is everything before the model starts generating, and
-            # ``httpx_timeout`` puts connect/write/pool on the first-byte bound
-            # while leaving the read wide. A plain float reached httpx as the
-            # same number on all four phases, so a dead route cost 1800s.
-            async with httpx.AsyncClient(timeout=httpx_timeout(self.generation) or self.generation.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.generation.timeout) as client:
                 for _attempt in range(3):
                     response = await asyncio.wait_for(
                         client.post(url, headers=build_headers(self.api_key or "", url, self.extra_headers), json=body),
@@ -1050,16 +913,15 @@ class AnthropicMessagesProvider(LLMProvider):
             tool_choice=tool_choice,
             stream=True,
         )
-        # The declared first-byte bound, on the two awaits that can hold a
-        # stream silent before it starts: opening it, and its first event. The
-        # client's own float bounded neither -- for a stream, waiting on the
-        # response headers is a read, and httpx leaves read on the call budget.
-        first_byte = stream_first_byte_budget(self.generation)
         try:
-            async with httpx.AsyncClient(timeout=httpx_timeout(self.generation) or self.generation.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.generation.timeout) as client:
                 for _attempt in range(3):
-                    async with contextlib.AsyncExitStack() as opened:
-                        response = await self._open_stream(opened, client, url, body, first_byte)
+                    async with client.stream(
+                        "POST",
+                        url,
+                        headers=build_headers(self.api_key or "", url, self.extra_headers, stream=True),
+                        json=body,
+                    ) as response:
                         if response.status_code != 200:
                             detail = await _error_text_async(response)
                             repair = rewrite_on_400(body, detail) if response.status_code == 400 else None
@@ -1075,7 +937,7 @@ class AnthropicMessagesProvider(LLMProvider):
                         # GenerationSettings from before the field falls back to
                         # the call budget.
                         idle_timeout = getattr(self.generation, "stream_idle_timeout", None) or self.generation.timeout
-                        async for delta in consume_message_stream(response, idle_timeout, first_byte=first_byte):
+                        async for delta in consume_message_stream(response, idle_timeout):
                             yield delta
                     break
         except asyncio.CancelledError:
@@ -1087,45 +949,6 @@ class AnthropicMessagesProvider(LLMProvider):
                 finish_reason="error",
                 error_classification=classification,
             )
-
-    async def _open_stream(
-        self,
-        opened: contextlib.AsyncExitStack,
-        client: httpx.AsyncClient,
-        url: str,
-        body: dict[str, Any],
-        first_byte: float,
-    ) -> httpx.Response:
-        """The streaming response, with the open bounded at the first-byte budget.
-
-        Entered through the caller's stack rather than an ``async with`` here so
-        the connection is closed by the caller's scope whichever way this
-        returns, and so a bounded open can be cancelled without leaving the
-        context half-entered.
-        """
-        request = client.stream(
-            "POST",
-            url,
-            headers=build_headers(self.api_key or "", url, self.extra_headers, stream=True),
-            json=body,
-        )
-        if first_byte <= 0:
-            return await opened.enter_async_context(request)
-        loop = asyncio.get_running_loop()
-        started = loop.time()
-        try:
-            return await asyncio.wait_for(opened.enter_async_context(request), first_byte)
-        except TimeoutError as exc:
-            waited = loop.time() - started
-            logger.warning(
-                "LLM first byte: nothing from {} after {:.1f}s while opening the stream "
-                "(bound {}={:g}s); giving the call up as stalled so the retry ladder can ask again",
-                self._provider_name or "anthropic",
-                waited,
-                BOUND_NAME,
-                first_byte,
-            )
-            raise FirstByteTimeoutError(phase="opening the stream", budget=first_byte, waited=waited) from exc
 
     def _remember_ceiling(self, body: dict[str, Any]) -> None:
         """Called only for a 400 that named the model's ceiling: the other repairs

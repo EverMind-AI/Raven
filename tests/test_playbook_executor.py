@@ -53,21 +53,14 @@ class FakeDagTool:
     def set_context(self, channel, chat_id, session_key=None):
         self.context = (channel, chat_id, session_key)
 
-    async def execute(
-        self, nodes, task_summary="", background=True, confirm=False, mcp_servers=None, mcp_scope=None, **_
-    ):
-        # The hand-off is a callable the graph tool re-reads per dispatch; the
-        # fake keeps it so a test can read it again after a credential lands.
-        render = mcp_servers if callable(mcp_servers) else (lambda: mcp_servers or {})
+    async def execute(self, nodes, task_summary="", background=True, confirm=False, mcp_servers=None, **_):
         self.calls.append(
             {
                 "nodes": nodes,
                 "task_summary": task_summary,
                 "background": background,
                 "confirm": confirm,
-                "mcp_servers": dict(render()),
-                "render": render,
-                "mcp_scope": mcp_scope,
+                "mcp_servers": dict(mcp_servers or {}),
             }
         )
         return "DAG run wf-1 started in the background (%d nodes)." % len(nodes)
@@ -1122,92 +1115,3 @@ async def test_both_param_spellings_fill_from_the_one_mechanism():
 
     assert plan.kind == "dag"
     assert tool.calls[0]["nodes"][0]["prompt_template"] == "pull 2026-08-11 for PM"
-
-
-# ── Stored credentials (raven/playbook/credentials.py) ─────────────────────────
-
-
-def _secret_pg_spec():
-    return _dag_spec(
-        params={"PG_PASSWORD": ParamSpec(type="secret", required=True, description="the db password")},
-        mcp_servers={"local-pg": MCPServerConfig(command="pg-mcp", env={"PGPASSWORD": "{{ params.PG_PASSWORD }}"})},
-    )
-
-
-async def test_a_stored_secret_stands_in_for_one_the_caller_did_not_supply(tmp_path, monkeypatch):
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
-    from raven.playbook.credentials import set_secret_param
-
-    spec = _secret_pg_spec()
-    set_secret_param(spec.name, "PG_PASSWORD", "from-the-tab")
-    tool = FakeDagTool()
-    plan = await PlaybookExecutor(dag_tool=tool).execute(spec, {})
-
-    assert plan.kind == "dag"
-    handed = tool.calls[0]["mcp_servers"]
-    assert handed["local-pg"].env == {"PGPASSWORD": "from-the-tab"}
-    assert tool.calls[0]["mcp_scope"] == "playbooks/" + spec.name
-
-
-async def test_an_unset_secret_is_a_reminder_not_a_gap(tmp_path, monkeypatch):
-    # A gap is closed by the caller collecting the value in the conversation,
-    # which is the one path a secret may not take. The run goes ahead, the server
-    # the secret fills is handed over without it, and the reply says where to set it.
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
-    spec = _secret_pg_spec()
-    tool = FakeDagTool()
-    plan = await PlaybookExecutor(dag_tool=tool).execute(spec, {})
-
-    assert plan.kind == "dag"
-    assert "was not run" not in plan.reply
-    assert "secret param 'PG_PASSWORD' is not set on this machine" in plan.reply
-    assert f"raven playbook secret set {spec.name} PG_PASSWORD" in plan.reply
-    assert tool.calls[0]["mcp_servers"]["local-pg"].env == {}
-
-
-async def test_a_supplied_secret_outranks_the_stored_one(tmp_path, monkeypatch):
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
-    from raven.playbook.credentials import set_secret_param
-
-    spec = _secret_pg_spec()
-    set_secret_param(spec.name, "PG_PASSWORD", "stored")
-    tool = FakeDagTool()
-    await PlaybookExecutor(dag_tool=tool).execute(spec, {"PG_PASSWORD": "explicit"})
-
-    assert tool.calls[0]["mcp_servers"]["local-pg"].env == {"PGPASSWORD": "explicit"}
-
-
-async def test_a_secret_stored_after_the_dispatch_reaches_the_next_read(tmp_path, monkeypatch):
-    # The hand-off is re-rendered on every read, which is what lets a node
-    # that is continued after the credential landed dial with it.
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
-    from raven.playbook.credentials import set_secret_param
-
-    spec = _secret_pg_spec()
-    set_secret_param(spec.name, "PG_PASSWORD", "v1")
-    tool = FakeDagTool()
-    await PlaybookExecutor(dag_tool=tool).execute(spec, {})
-    assert tool.calls[0]["mcp_servers"]["local-pg"].env == {"PGPASSWORD": "v1"}
-
-    set_secret_param(spec.name, "PG_PASSWORD", "v2")
-    assert tool.calls[0]["render"]()["local-pg"].env == {"PGPASSWORD": "v2"}
-
-
-async def test_a_stored_value_for_a_non_secret_param_is_not_read_back(tmp_path, monkeypatch):
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
-    from raven.playbook.credentials import set_secret_param
-
-    spec = _dag_spec(params={"topic": ParamSpec(type="string", required=True, description="what to scan")})
-    set_secret_param(spec.name, "topic", "smuggled")
-    tool = FakeDagTool()
-    plan = await PlaybookExecutor(dag_tool=tool).execute(spec, {})
-
-    assert plan.kind == "gaps"
-    assert "params.topic" in plan.reply
-    assert tool.calls == []
-
-
-async def test_a_playbook_without_carried_servers_hands_over_no_scope():
-    tool = FakeDagTool()
-    await PlaybookExecutor(dag_tool=tool).execute(_dag_spec(), params={"week_of": "w"})
-    assert tool.calls[0]["mcp_scope"] is None

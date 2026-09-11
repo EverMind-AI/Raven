@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 # for the validator without blowing per-call cost.
 _HISTORY_MAX_CHARS = 8000
 
-_VALIDATOR_MAX_TOKENS = 512
+_VALIDATOR_MAX_TOKENS = 256
 _VALIDATOR_TEMPERATURE = 0.1
 
 

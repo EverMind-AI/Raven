@@ -146,28 +146,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     # is the stuck case. Same per-turn cap, for the same reason.
     _NO_PROGRESS_THRESHOLD = 8
 
-    # Kept, and now only what it always was: a bound on injected advice. It is
-    # not what failed -- the per-answer "fire once" rule is, and one measured
-    # turn spent 1 of these 2 and then watched 280 more identical calls go by.
-    # The steps below deliberately do not read it: enforcement must not be
-    # rationed by how much text a turn has already been given.
     _NO_PROGRESS_MAX = 2
-
-    # Escalation, for when the nudge was read and did not land. Four more
-    # identical answers past the nudge is what settles that: on the measured
-    # turn every call from the 8th to the 288th was byte-identical, answered by
-    # an identical 287-token reply over a prompt-cached ~265k prefix, so a model
-    # that was going to change course had already had four chances not to look
-    # like this. Four costs ~34s when the guard is wrong.
-    _NO_PROGRESS_REFUSE = 12
-
-    # Refusals of one established call before the turn ends. The refusal names
-    # what happened and what to do instead, and a model needs a call or two to
-    # act on that, so it is not one. It is not more because a further refusal
-    # buys nothing: each iteration of the measured loop cost 9.7s and about a
-    # cent, of which the tool itself was 0.25s, so bounding the loop is the
-    # whole saving and exactly where it is bounded is worth pennies.
-    _NO_PROGRESS_REFUSALS_MAX = 3
 
     # Hook rollbacks per turn: a gate that keeps bouncing a draft must not be
     # able to spin the loop forever. Past the cap the decision degrades to
