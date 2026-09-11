@@ -65,3 +65,25 @@ def test_register_approval_methods_adds_real_handler() -> None:
     register_approval_methods(dispatcher, approval_broker=ApprovalBroker(send))
 
     assert "approval.respond" in dispatcher.methods()
+
+
+async def test_approval_respond_forwards_the_pattern() -> None:
+    class Broker:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def resolve(self, approval_id, choice, *, conversation_id, feedback="", pattern=""):
+            self.calls.append(
+                {"id": approval_id, "choice": choice, "conv": conversation_id, "feedback": feedback, "pattern": pattern}
+            )
+            return True
+
+    broker = Broker()
+    out = await approval_respond(
+        {"approval_id": "a1", "session_id": "s1", "choice": "allow_always", "pattern": "git push *"},
+        approval_broker=broker,
+    )
+    assert out == {"ok": True}
+    assert broker.calls == [
+        {"id": "a1", "choice": "allow_always", "conv": "s1", "feedback": "", "pattern": "git push *"}
+    ]

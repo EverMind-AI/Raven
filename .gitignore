@@ -137,3 +137,8 @@ demos/oncall_heat2d/.raven-demo-home/
 
 # Generated benchmark reports (written by the real_llm integration tests).
 /reports/
+
+# Raven-PPT deck intermediates, left in the checkout when a session's workspace
+# is the agent's own folder; a dispatched run writes under the state root.
+agents/raven-ppt/deck/
+agents/raven-ppt/materials/

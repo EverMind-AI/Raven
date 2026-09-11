@@ -423,7 +423,7 @@ export interface AppOverlaysProps {
   cols: number
   compIdx: number
   completions: CompletionItem[]
-  onApprovalChoice: (choice: string, feedback?: string, approvalId?: string) => void
+  onApprovalChoice: (choice: string, feedback?: string, approvalId?: string, pattern?: string) => void
   onClarifyAnswer: (value: string) => void
   onConfirmAnswer: (answer: boolean) => void
   onModelSelect: (model: string, providerSlug: string) => void

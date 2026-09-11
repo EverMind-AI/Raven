@@ -140,15 +140,22 @@ export interface ApprovalReq {
   approvalId: string
   command: string
   description: string
+  /* The prefix rule the runtime found safe to offer for persisting; absent
+     when there is none, and then the sheet offers no such choice. */
+  suggestedPattern?: string
 }
 
-/* The permission gate's ask: allow once, deny (the agent reads the refusal and
-   goes on), or deny and stop the turn. A note typed before a refusal rides to
-   the model as the reason. Same sheet clothes as open() above -- this variant
+/* The permission gate's ask: allow once, allow for this session, allow and
+   save a prefix rule (only when the runtime suggested one; the prefix is
+   editable before it is sent), deny (the agent reads the refusal and goes
+   on), or deny and stop the turn. A note typed before a refusal rides to the
+   model as the reason. Same sheet clothes as open() above -- this variant
    differs in what an answer is, so it reports a choice string instead of
    calling one of two thunks. */
 export function openApproval(
-  req: ApprovalReq, onChoice: (choice: string, feedback: string) => void, owner?: string,
+  req: ApprovalReq,
+  onChoice: (choice: string, feedback: string, pattern?: string) => void,
+  owner?: string,
 ): Approval {
   const key = owner || session()
   dropClass('csheet', key)
@@ -159,13 +166,13 @@ export function openApproval(
   sheet.setAttribute('aria-label', t('gui.confirm.title'))
 
   let answered = false
-  const close = (choice?: string): void => {
+  const close = (choice?: string, pattern?: string): void => {
     if (answered) return
     answered = true
     openApprovals.delete(req.approvalId)
     document.removeEventListener('keydown', onKey, true)
     sheetRemove(sheet)
-    if (choice) onChoice(choice, note.value.trim())
+    if (choice) onChoice(choice, note.value.trim(), pattern)
   }
   const withdraw = (): void => close()
   openApprovals.set(req.approvalId, withdraw)
@@ -186,15 +193,38 @@ export function openApproval(
   note.placeholder = t('gui.confirm.note_ph')
   note.setAttribute('aria-label', t('gui.confirm.note_ph'))
   body.appendChild(note)
-  const opts: Array<[string, string, boolean]> = [
-    [t('gui.confirm.allow'), 'allow', true],
-    [t('gui.confirm.deny'), 'deny', false],
-    [t('gui.confirm.deny_stop'), 'deny_stop', false],
+  /* The persisted grant sits after the session one and before the refusals,
+     so the two refusals keep the last two numbers whatever was suggested. Its
+     prefix is an input the reader may edit; an emptied input saves nothing. */
+  const pattern = document.createElement('input')
+  pattern.className = 'note-in pattern-in'
+  pattern.value = req.suggestedPattern || ''
+  pattern.setAttribute('aria-label', t('gui.confirm.pattern_for'))
+  pattern.title = t('gui.confirm.pattern_for')
+  const saveRule = (): void => {
+    const rule = pattern.value.trim()
+    if (rule) close('allow_always', rule)
+  }
+  const opts: Array<[string, () => void, boolean]> = [
+    [t('gui.confirm.allow'), () => close('allow'), true],
+    [t('gui.confirm.allow_session'), () => close('allow_session'), false],
+    ...(req.suggestedPattern
+      ? [[t('gui.confirm.allow_always', { pattern: '' }), saveRule, false] as [string, () => void, boolean]]
+      : []),
+    [t('gui.confirm.deny'), () => close('deny'), false],
+    [t('gui.confirm.deny_stop'), () => close('deny_stop'), false],
   ]
-  opts.forEach(([label, choice, go], i) => {
+  opts.forEach(([label, fn, go], i) => {
     const b = el('button', 'opt' + (go ? ' go' : ''))
     b.append(el('span', 'n', String(i + 1)), el('span', undefined, label))
-    b.onclick = () => close(choice)
+    if (fn === saveRule) {
+      b.classList.add('rule')
+      b.appendChild(pattern)
+      /* Typing in the prefix must not pick the row, and Enter there saves. */
+      pattern.onclick = (e) => e.stopPropagation()
+      pattern.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); saveRule() } }
+    }
+    b.onclick = fn
     body.appendChild(b)
   })
   sheet.appendChild(body)
@@ -204,10 +234,11 @@ export function openApproval(
     if (e.key === 'Escape') { e.preventDefault(); close('deny'); return }
     /* Digits keep working while the note field is focused only when it is
        empty: a typed note starts with whatever the reader types, digits
-       included. */
+       included. The prefix field is text from the first key. */
+    if (document.activeElement === pattern) return
     if (document.activeElement === note && note.value) return
     const n = Number(e.key)
-    if (n >= 1 && n <= opts.length) { e.preventDefault(); close(opts[n - 1]![1]) }
+    if (n >= 1 && n <= opts.length) { e.preventDefault(); opts[n - 1]![1]() }
   }
   document.addEventListener('keydown', onKey, true)
 

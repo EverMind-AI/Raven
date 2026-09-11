@@ -4194,13 +4194,17 @@ export interface PlaybooksOauthClearParams {
 export interface ApprovalRespondParams {
   approval_id: string;
   /**
-   * allow | deny | deny_stop.
+   * allow | allow_session | allow_always | deny | deny_stop.
    */
   choice: string;
   /**
    * Optional sentence attached to a refusal, relayed to the model.
    */
   feedback?: string;
+  /**
+   * With allow_always: the exec prefix rule to persist, as the human confirmed or edited it.
+   */
+  pattern?: string;
   session_id?: string;
   /**
    * Compatibility spelling of session_id.

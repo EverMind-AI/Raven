@@ -3211,9 +3211,13 @@ class ApprovalRespondParams(_Strict):
     that happens to show the same command."""
 
     approval_id: str
-    choice: str = Field(..., description="allow | deny | deny_stop.")
+    choice: str = Field(..., description="allow | allow_session | allow_always | deny | deny_stop.")
     feedback: str | None = Field(
         default=None, description="Optional sentence attached to a refusal, relayed to the model."
+    )
+    pattern: str | None = Field(
+        default=None,
+        description="With allow_always: the exec prefix rule to persist, as the human confirmed or edited it.",
     )
     session_id: str | None = None
     conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")

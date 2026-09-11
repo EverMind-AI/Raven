@@ -68,11 +68,17 @@ rpc.notify['approval.request'] = (p) => {
   const owner = p.conversation_id || sessionCurrent();
   notifyTurn(owner, { type: 'wait' });
   approvalSheet(
-    { approvalId: p.approval_id, command: p.command || '', description: p.description || '' },
-    (choice, feedback) => {
+    {
+      approvalId: p.approval_id,
+      command: p.command || '',
+      description: p.description || '',
+      suggestedPattern: p.suggested_pattern || '',
+    },
+    (choice, feedback, pattern) => {
       notifyTurn(owner, { type: 'resume' });
       const params = { approval_id: p.approval_id, choice, session_id: owner };
       if (feedback) params.feedback = feedback;
+      if (pattern) params.pattern = pattern;
       rpc.call('approval.respond', params).catch(() => {});
     },
     owner,

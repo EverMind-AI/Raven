@@ -1059,7 +1059,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   )
 
   const answerApproval = useCallback(
-    (choice: string, feedback = '', approvalId?: string) => {
+    (choice: string, feedback = '', approvalId?: string, pattern = '') => {
       // Read live rather than from this render's closure. One turn can hold two
       // approvals back to back -- a sub-agent's first command lands a second
       // after the spawn that created it was allowed -- and a closure a render
@@ -1091,7 +1091,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
       rpc<ApprovalRespondResponse>(
         'approval.respond',
-        buildApprovalRespond(approval.approvalId, approval.conversationId, choice, feedback)
+        buildApprovalRespond(approval.approvalId, approval.conversationId, choice, feedback, pattern)
       ).then(response => {
         if (refusal) {
           return
