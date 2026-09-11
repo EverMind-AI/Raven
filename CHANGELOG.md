@@ -6,6 +6,12 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- Serply joins the `web_search` vendors: `tools.web.search.provider: serply`
+  with the key under `tools.web.providers.serply.apiKey` (or `SERPLY_API_KEY`).
+  Google SERP rows normalised into the shared render path; the research
+  sub-agent's search tool routes through it too and pages with a result
+  offset like SerpApi.
+
 - Two dark templates join the bundled catalogue, cut from user uploads: a
   near-black circuit-board deck for product launches and a green aurora deck
   for trend reports. Hidden vendor pages are gone, vendor marks are stripped,

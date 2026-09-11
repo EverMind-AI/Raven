@@ -905,7 +905,7 @@ class GatewayConfig(Base):
     page: GatewayPageConfig = Field(default_factory=GatewayPageConfig)
 
 
-WebSearchProvider = Literal["serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl"]
+WebSearchProvider = Literal["serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply"]
 WebFetchProvider = Literal["jina", "anysearch", "tavily", "exa", "firecrawl"]
 
 #: The bare environment variable each web vendor's tool falls back to when the
@@ -919,6 +919,7 @@ WEB_VENDOR_ENV_VARS: dict[str, str] = {
     "exa": "EXA_API_KEY",
     "brave": "BRAVE_API_KEY",
     "firecrawl": "FIRECRAWL_API_KEY",
+    "serply": "SERPLY_API_KEY",
 }
 
 
@@ -950,6 +951,7 @@ class WebProvidersConfig(Base):
     exa: WebProviderKey = Field(default_factory=WebProviderKey)
     brave: WebProviderKey = Field(default_factory=WebProviderKey)
     firecrawl: WebProviderKey = Field(default_factory=WebProviderKey)
+    serply: WebProviderKey = Field(default_factory=WebProviderKey)
 
     def key_for(self, vendor: str) -> str:
         """One vendor's configured key, or an empty string for an unknown vendor."""

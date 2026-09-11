@@ -528,6 +528,10 @@ _SEARCH_PAYLOADS: dict[str, tuple[dict, dict]] = {
         {"data": {"results": [{"title": "T", "url": "https://e.com/a", "snippet": "S"}]}},
         {"title": "T", "link": "https://e.com/a", "snippet": "S"},
     ),
+    "serply": (
+        {"results": [{"title": "T", "link": "https://e.com/a", "description": "S"}]},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
 }
 
 
@@ -647,7 +651,7 @@ async def test_a_paginating_vendor_sends_its_own_offset_parameter(monkeypatch):
     in results, Brave a page index under a third name. One page number, three
     encodings, and sending the wrong one reads as a duplicate first page."""
     seen: dict[str, httpx.Request] = {}
-    for vendor in ("serper", "serpapi", "brave"):
+    for vendor in ("serper", "serpapi", "brave", "serply"):
         transport = _CaptureTransport(_SEARCH_PAYLOADS[vendor][0])
         # One patch per vendor, undone before the next: patching the already
         # patched factory would pass ``transport`` twice and the request would
@@ -665,6 +669,8 @@ async def test_a_paginating_vendor_sends_its_own_offset_parameter(monkeypatch):
     assert seen["serpapi"].url.params["start"] == "3"
     # A page index, unlike SerpApi's result count.
     assert seen["brave"].url.params["offset"] == "1"
+    # A result offset again, under Google's own parameter name.
+    assert seen["serply"].url.params["start"] == "3"
 
 
 @pytest.mark.parametrize("status", [401, 429])
