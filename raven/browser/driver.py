@@ -30,14 +30,25 @@ from loguru import logger
 
 from raven.browser.policy import NavigationRefusedError, check_navigation, navigation_refusal
 
+
 # sys.executable is the venv that has playwright in both install shapes -- a uv
 # tool install (the engines carry it) and a source checkout -- whereas `uv sync`
 # exists only in the checkout, so the hint names the interpreter itself.
-CHROMIUM_INSTALL_HINT = f"{shlex.quote(sys.executable)} -m playwright install chromium"
-# When the package itself is missing (install.sh's bare-raven fallback rung),
-# `python -m playwright` cannot work either; point at the installers instead.
+# shlex.quote emits POSIX quoting that cmd/PowerShell take literally, so on
+# Windows the path gets double quotes, and only when a space demands them.
+def _quote_interpreter(path: str) -> str:
+    if sys.platform == "win32":
+        return f'"{path}"' if " " in path else path
+    return shlex.quote(path)
+
+
+CHROMIUM_INSTALL_HINT = f"{_quote_interpreter(sys.executable)} -m playwright install chromium"
+# When the package itself is missing (the installers' bare-raven fallback
+# rung), `python -m playwright` cannot work either; point at the installer
+# this platform runs instead.
 PACKAGE_INSTALL_HINT = (
-    "reinstall raven via install.sh (engines carry the browser library); from a source checkout: uv sync --all-extras"
+    f"reinstall raven via {'install.ps1' if sys.platform == 'win32' else 'install.sh'} "
+    "(engines carry the browser library); from a source checkout: uv sync --all-extras"
 )
 
 # One profile on disk: logins survive restarts, and -- because pop-out is a

@@ -7,6 +7,7 @@ import gzip
 import http.server
 import re
 import shutil
+import sys
 import threading
 import urllib.parse
 from dataclasses import dataclass
@@ -108,7 +109,7 @@ class BrowserAdapter:
         if not self.config.chrome_path:
             raise RenderError(
                 "renderer_unavailable",
-                "No Chromium executable is available; run `playwright install chromium` "
+                f"No Chromium executable is available; run `{sys.executable} -m playwright install chromium` "
                 "or point the render config's `chromePath` at a Chromium binary.",
             )
         browser_root = bundle_root / ".worker" / "browser-root"

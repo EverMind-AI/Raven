@@ -450,7 +450,10 @@ def _gather_tools(config: "Config") -> ToolsInfo:
     )
 
 
-_BROWSER_PACKAGE_FIX = "reinstall raven via install.sh (engines carry the browser library)"
+_BROWSER_PACKAGE_FIX = (
+    f"reinstall raven via {'install.ps1' if sys.platform == 'win32' else 'install.sh'} "
+    "(engines carry the browser library)"
+)
 
 
 def _browser_binary_fix() -> str:
@@ -469,11 +472,19 @@ def _playwright_package_dir() -> Optional[Path]:
     return Path(spec.origin).parent
 
 
-def _resolve_browsers_root(package_dir: Path, env_value: Optional[str]) -> Path:
+def _resolve_browsers_root(
+    package_dir: Path,
+    env_value: Optional[str],
+    xdg_cache_home: Optional[str] = None,
+    local_app_data: Optional[str] = None,
+) -> Path:
     """The directory playwright downloads browsers into, resolved its way.
 
     ``"0"`` is playwright's own spelling for "keep them inside the package",
     not a path -- reading it as one would glob an empty directory named 0.
+    The per-user caches follow playwright's own lookups too: Linux resolves
+    ``XDG_CACHE_HOME`` before ``~/.cache``, and Windows reads ``LOCALAPPDATA``
+    before deriving the same directory from the profile.
     """
     if env_value == "0":
         return package_dir / ".local-browsers"
@@ -482,8 +493,10 @@ def _resolve_browsers_root(package_dir: Path, env_value: Optional[str]) -> Path:
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Caches" / "ms-playwright"
     if sys.platform == "win32":
-        return Path.home() / "AppData" / "Local" / "ms-playwright"
-    return Path.home() / ".cache" / "ms-playwright"
+        base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+        return base / "ms-playwright"
+    base = Path(xdg_cache_home) if xdg_cache_home else Path.home() / ".cache"
+    return base / "ms-playwright"
 
 
 def _chromium_markers(registry_path: Path, browsers_root: Path) -> tuple[bool, bool]:
@@ -497,9 +510,12 @@ def _chromium_markers(registry_path: Path, browsers_root: Path) -> tuple[bool, b
     ``chromium-<rev>`` still cannot serve the browser tool.
     """
     try:
-        browsers = json.loads(registry_path.read_text(encoding="utf-8")).get("browsers", [])
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False, False
+    if not isinstance(registry, dict):
+        return False, False
+    browsers = registry.get("browsers", [])
     revisions = {b.get("name"): b.get("revision") for b in browsers if isinstance(b, dict)}
 
     def downloaded(directory: str, revision: Optional[str]) -> bool:
@@ -518,7 +534,12 @@ def _gather_external_tools() -> ExternalToolsInfo:
     package_dir = _playwright_package_dir()
     if package_dir is not None:
         info.browser_package = True
-        root = _resolve_browsers_root(package_dir, os.environ.get("PLAYWRIGHT_BROWSERS_PATH"))
+        root = _resolve_browsers_root(
+            package_dir,
+            os.environ.get("PLAYWRIGHT_BROWSERS_PATH"),
+            os.environ.get("XDG_CACHE_HOME"),
+            os.environ.get("LOCALAPPDATA"),
+        )
         info.browsers_root = str(root)
         info.chromium, info.headless_shell = _chromium_markers(package_dir / "driver/package/browsers.json", root)
     info.design_engine = find_spec("raven_design") is not None

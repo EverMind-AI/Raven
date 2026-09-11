@@ -61,6 +61,26 @@ def test_the_office_prompt_and_sudo_both_read_the_tty() -> None:
     assert "sudo apt-get install -y libreoffice < /dev/tty" in text
 
 
+def test_the_tty_gate_probes_openability_not_existence() -> None:
+    """/dev/tty can exist with no controlling terminal (CI, cron, `docker run
+    -t` without -i), where a read on it errors or hangs -- the gate must open
+    the node, not stat it."""
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    assert ": < /dev/tty" in text
+    assert "[ ! -e /dev/tty ]" not in text
+
+
+def test_the_office_offer_defaults_to_yes_in_both_installers() -> None:
+    """Enter means install, and only an explicit no declines -- including the
+    spelled-out word, which the bare `n|N)` arm used to fall through to yes."""
+    sh = INSTALL_SH.read_text(encoding="utf-8")
+    assert "[Y/n]" in sh
+    assert "n|N|[nN][oO])" in sh
+    ps1 = INSTALL_PS1.read_text(encoding="utf-8")
+    assert "[Y/n]" in ps1
+    assert '-match "^[nN]"' in ps1
+
+
 def test_the_capability_steps_stay_above_the_closing_hint() -> None:
     closing = INSTALL_SH.read_text(encoding="utf-8")
     closing = closing[closing.index("All set") :].lower()

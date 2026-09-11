@@ -462,9 +462,11 @@ install_office() {
         return 0
       fi
       # Installing needs sudo, so ask first -- and under `curl | sh` stdin is
-      # the script itself, so the answer must come from the terminal. No
-      # terminal (CI, piped, cron) means skip cleanly, never hang on a prompt.
-      if [ ! -e /dev/tty ] || ! have sudo; then
+      # the script itself, so the answer must come from the terminal. The
+      # /dev/tty node can exist yet be unopenable (CI, cron, docker -t
+      # without -i), so probe by opening it rather than stat-ing it; no
+      # openable terminal means skip cleanly, never hang on the read.
+      if ! { : < /dev/tty; } 2>/dev/null || ! have sudo; then
         warn "LibreOffice not found; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
         return 0
       fi
@@ -476,7 +478,7 @@ install_office() {
       answer=""
       read -r answer < /dev/tty || answer=""
       case "$answer" in
-        n|N)
+        n|N|[nN][oO])
           warn "Skipping LibreOffice; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
           ;;
         *)

@@ -1360,6 +1360,27 @@ def test_no_env_falls_back_to_the_user_cache(tmp_path: Path) -> None:
     assert Path.home() in root.parents
 
 
+@pytest.mark.parametrize(("platform", "env_kwarg"), [("linux", "xdg_cache_home"), ("win32", "local_app_data")])
+def test_the_platform_cache_env_overrides_the_home_derivation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, env_kwarg: str
+) -> None:
+    """playwright itself resolves XDG_CACHE_HOME on Linux and LOCALAPPDATA on
+    Windows before deriving anything from the profile; doctor must look where
+    playwright downloads, or it reports a green install as missing."""
+    monkeypatch.setattr(doctor_commands.sys, "platform", platform)
+    root = doctor_commands._resolve_browsers_root(tmp_path / "pkg", None, **{env_kwarg: str(tmp_path / "cache-base")})
+    assert root == tmp_path / "cache-base" / "ms-playwright"
+
+
+def test_a_registry_that_is_not_an_object_reports_nothing_downloaded(tmp_path: Path) -> None:
+    """Valid JSON that is not an object (null, a list, a string) used to raise
+    out of the reports-only path instead of reading as no browsers."""
+    registry = tmp_path / "browsers.json"
+    for text in ("null", "[]", '"chromium"'):
+        registry.write_text(text, encoding="utf-8")
+        assert doctor_commands._chromium_markers(registry, tmp_path / "cache") == (False, False)
+
+
 def _wide_console(monkeypatch: pytest.MonkeyPatch) -> None:
     """Assertions on literal path fragments must not depend on where Rich
     wraps: xdist's longer tmp paths cross the 80-column default and split a

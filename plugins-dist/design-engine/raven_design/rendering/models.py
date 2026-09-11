@@ -29,12 +29,15 @@ _VM_PATTERN_GROUPS = (
 )
 # playwright >= 1.58 installs macOS Chromium as a Chrome for Testing app
 # bundle; older caches still carry the pre-CfT Chromium.app layout, so
-# every pattern must end at the executable the config will exec.
+# every pattern must end at the executable the config will exec. On Windows
+# playwright 1.62's driver registry maps win-x64 to chrome-win64/chrome.exe;
+# older layouts used chrome-win.
 _CACHE_PATTERN_GROUPS = (
     ("chromium-*/chrome-linux/chrome", "chromium-*/chrome-linux64/chrome"),
     ("chromium-*/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",),
     ("chromium-*/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",),
     ("chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium",),
+    ("chromium-*/chrome-win64/chrome.exe", "chromium-*/chrome-win/chrome.exe"),
 )
 
 DiscoveryRoots = Sequence[tuple[Path, tuple[tuple[str, ...], ...]]]
@@ -64,7 +67,15 @@ def _playwright_roots() -> DiscoveryRoots:
         roots.append((Path(env_root), _CACHE_PATTERN_GROUPS))
     home = Path.home()
     roots.append((home / "Library" / "Caches" / "ms-playwright", _CACHE_PATTERN_GROUPS))
-    roots.append((home / ".cache" / "ms-playwright", _CACHE_PATTERN_GROUPS))
+    # The user caches follow playwright's own lookups: Linux resolves
+    # XDG_CACHE_HOME before ~/.cache, and Windows reads LOCALAPPDATA before
+    # deriving the same directory from the profile.
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME", "")
+    linux_cache = Path(xdg_cache_home) if xdg_cache_home else home / ".cache"
+    roots.append((linux_cache / "ms-playwright", _CACHE_PATTERN_GROUPS))
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    windows_cache = Path(local_app_data) if local_app_data else home / "AppData" / "Local"
+    roots.append((windows_cache / "ms-playwright", _CACHE_PATTERN_GROUPS))
     return roots
 
 

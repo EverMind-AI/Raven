@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -263,11 +264,21 @@ def test_a_cropped_image_becomes_a_content_warning() -> None:
 def _browsers_from_the_real_home(monkeypatch: pytest.MonkeyPatch) -> None:
     """The suite redirects HOME to a temp dir; playwright keeps its browsers
     under the real one. Point discovery there unless the caller already did."""
-    if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-        import pwd
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+    if sys.platform == "win32":
+        # Discovery reads LOCALAPPDATA, which the HOME redirect never touches,
+        # so the real cache is already reachable (and pwd does not exist here).
+        return
+    import pwd
 
-        real_home = pwd.getpwuid(os.getuid()).pw_dir
-        monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", os.path.join(real_home, "Library", "Caches", "ms-playwright"))
+    real_home = pwd.getpwuid(os.getuid()).pw_dir
+    if sys.platform == "darwin":
+        cache = os.path.join(real_home, "Library", "Caches", "ms-playwright")
+    else:
+        xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+        cache = os.path.join(xdg_cache_home or os.path.join(real_home, ".cache"), "ms-playwright")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", cache)
 
 
 @pytest.mark.usefixtures("_browsers_from_the_real_home")
@@ -355,7 +366,10 @@ def test_the_browser_measures_where_the_headline_sits_on_the_opening_visual() ->
     ).format(p=fill)
     ready = "() => [...document.images].every(i => i.complete && i.naturalWidth > 0)"
     with playwright.sync_playwright() as pw:
-        browser = pw.chromium.launch(executable_path=chrome, args=["--no-sandbox"])
+        try:
+            browser = pw.chromium.launch(executable_path=chrome, args=["--no-sandbox"])
+        except Exception as exc:  # pragma: no cover - environment without a browser
+            pytest.skip(f"chromium unavailable: {exc}")
         page = browser.new_page(viewport={"width": 1000, "height": 700})
         page.set_content(over)
         page.wait_for_function(ready)
@@ -431,6 +445,7 @@ def test_unset_or_zero_env_root_falls_through_to_the_home_cache(
     monkeypatch.setattr("shutil.which", lambda name: None)
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     executable = _stage_chromium(home / cache, _CFT_MAC_ARM64)
 
     monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
@@ -506,6 +521,36 @@ def test_the_legacy_chromium_app_layout_is_still_discovered(tmp_path: Path, monk
     assert _discover_chromium() == str(executable)
 
 
+def test_the_windows_cache_layout_is_discovered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """playwright 1.62's driver registry maps win-x64 to chrome-win64/chrome.exe;
+    a cache holding it must not read as browserless just because discovery only
+    knew the posix and mac shapes."""
+    from raven_design.rendering.models import _discover_chromium
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    env_root = tmp_path / "browsers"
+    executable = _stage_chromium(env_root, "chromium-1234/chrome-win64/chrome.exe")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(env_root))
+
+    assert _discover_chromium() == str(executable)
+
+
+def test_xdg_cache_home_replaces_the_home_cache_fallthrough(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """playwright resolves the Linux cache as XDG_CACHE_HOME || ~/.cache, so a
+    machine that relocates its cache still gets its browsers discovered."""
+    from raven_design.rendering.models import _discover_chromium
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+    xdg_cache_home = tmp_path / "xdg-cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(xdg_cache_home))
+    executable = _stage_chromium(xdg_cache_home / "ms-playwright", "chromium-1234/chrome-linux64/chrome")
+
+    assert _discover_chromium() == str(executable)
+
+
 def test_the_missing_browser_refusal_says_how_to_fix_it(tmp_path: Path) -> None:
     from raven_design.rendering.browser import BrowserAdapter
     from raven_design.rendering.models import RenderConfig, RenderError, RenderRequest
@@ -525,5 +570,5 @@ def test_the_missing_browser_refusal_says_how_to_fix_it(tmp_path: Path) -> None:
         BrowserAdapter(config).render(tmp_path / "page.html", tmp_path, detection, request)
 
     assert raised.value.code == "renderer_unavailable"
-    assert "playwright install chromium" in raised.value.message
+    assert f"{sys.executable} -m playwright install chromium" in raised.value.message
     assert "chromePath" in raised.value.message

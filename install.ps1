@@ -379,6 +379,13 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
         # Pin to the locked dependency set so an install matches what we test.
         $constraints = Join-Path ([IO.Path]::GetTempPath()) ("raven-constraints-" + [guid]::NewGuid().ToString("N") + ".txt")
         & $UvPath export --directory "$scriptDir" --frozen --all-extras --no-hashes --no-emit-workspace -o "$constraints"
+        # The default config names the everos memory backend, which ships as
+        # its own distribution beside the wheel -- carry it, and degrade
+        # loudly (the host boots memoryless and `raven doctor` says why) if
+        # it cannot build.
+        $memoryPlugin = @(
+            "--with-editable", (Join-Path $scriptDir "plugins-dist\everos-memory")
+        )
         # Raven-Design and Raven-PPT keep their harness in their own
         # distributions, and the roster gates on them: discovery reads the
         # `engine` block in each agents/<product>/subagent.json and disables the
@@ -390,19 +397,24 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
         )
         # Install all channel adapters by default; fall back to base raven if
         # the umbrella extra fails to build on this platform, so one broken
-        # channel SDK cannot block the whole install. The engines fall before
-        # raven itself for the same reason: they carry native builds a platform
-        # can refuse on its own.
+        # channel SDK cannot block the whole install. Four rungs, dropping one
+        # capability each: the engines carry native builds (PDF, raster,
+        # plotting) a platform can refuse on its own, so they fall before the
+        # memory plugin rather than taking it down with them.
         try {
-            & $UvPath tool install --force -c "$constraints" @enginePlugins -e "$scriptDir[channels]"
+            & $UvPath tool install --force -c "$constraints" @memoryPlugin @enginePlugins -e "$scriptDir[channels]"
             if ($LASTEXITCODE -ne 0) { throw "channel extras install failed" }
         } catch {
             Write-Warn "Channel dependencies failed to install; retrying with base raven. Some channels stay unavailable (see: raven channels list)."
-            & $UvPath tool install --force -c "$constraints" @enginePlugins -e "$scriptDir"
+            & $UvPath tool install --force -c "$constraints" @memoryPlugin @enginePlugins -e "$scriptDir"
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn "A product engine failed to build; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
-                & $UvPath tool install --force -c "$constraints" -e "$scriptDir"
-                if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
+                & $UvPath tool install --force -c "$constraints" @memoryPlugin -e "$scriptDir"
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warn "EverOS memory plugin failed to install; long-term memory stays off (raven doctor explains)."
+                    & $UvPath tool install --force -c "$constraints" -e "$scriptDir"
+                    if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
+                }
             }
         }
     } else {
@@ -415,33 +427,51 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
             $cArgs = @()
         }
         Write-Info "  installing $wheelUrl"
+        # The everos memory plugin ships as a sibling wheel from the same
+        # release; older releases carry none, and its absence only means the
+        # default memory backend degrades loudly at boot. Kept apart from the
+        # engines' arguments: the ladder below drops the engines one rung
+        # before the memory plugin, and a shared array would take
+        # everos-memory down with the first engine that cannot build.
+        $mArgs = @()
+        $everosUrl = Resolve-RavenPluginWheel "everos_memory"
+        if ($everosUrl) {
+            $mArgs = @("--with", "everos-memory@$everosUrl")
+            Write-Info "  with memory plugin $everosUrl"
+        } else {
+            Write-Warn "This release carries no EverOS memory plugin wheel; long-term memory stays off (raven doctor explains)."
+        }
         # The product engines ship as their own wheels from the same release.
         # Absent ones are a warning, not a failure: the release still installs
         # and Raven-Design / Raven-PPT stay disabled the way discovery already
         # reports them.
-        $pArgs = @()
+        $eArgs = @()
         foreach ($engine in @(
             @{ Prefix = "design_engine"; Package = "design-engine"; Label = "design engine"; Product = "Raven-Design" },
             @{ Prefix = "ppt_engine";    Package = "ppt-engine";    Label = "deck engine";   Product = "Raven-PPT" }
         )) {
             $url = Resolve-RavenPluginWheel $engine.Prefix
             if ($url) {
-                $pArgs += @("--with", "$($engine.Package)@$url")
+                $eArgs += @("--with", "$($engine.Package)@$url")
                 Write-Info "  with $($engine.Label) $url"
             } else {
                 Write-Warn "This release carries no $($engine.Package) wheel; $($engine.Product) stays disabled (raven doctor explains)."
             }
         }
         try {
-            & $UvPath tool install --force @cArgs @pArgs "raven[channels] @ $wheelUrl"
+            & $UvPath tool install --force @cArgs @mArgs @eArgs "raven[channels] @ $wheelUrl"
             if ($LASTEXITCODE -ne 0) { throw "channel extras install failed" }
         } catch {
             Write-Warn "Channel dependencies failed to install; retrying with base raven. Some channels stay unavailable (see: raven channels list)."
-            & $UvPath tool install --force @cArgs @pArgs $wheelUrl
+            & $UvPath tool install --force @cArgs @mArgs @eArgs $wheelUrl
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
-                & $UvPath tool install --force @cArgs $wheelUrl
-                if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
+                & $UvPath tool install --force @cArgs @mArgs $wheelUrl
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warn "EverOS memory plugin failed to install; long-term memory stays off (raven doctor explains)."
+                    & $UvPath tool install --force @cArgs $wheelUrl
+                    if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
+                }
             }
         }
     }
