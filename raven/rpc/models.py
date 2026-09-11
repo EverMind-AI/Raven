@@ -1123,6 +1123,14 @@ class SessionDeleteResult(_Strict):
             "The session_id that was deleted (matches the request param); null when no such session file existed."
         ),
     )
+    still_on_disk: bool = Field(
+        default=False,
+        description=(
+            "True when a removal was attempted and the session file survived it. A null `deleted` is two "
+            "answers -- nothing was there, or the removal failed -- and only the second leaves a session a "
+            "client must keep listing, so the two are told apart here rather than guessed at by the caller."
+        ),
+    )
 
 
 class SessionMostRecentParams(_Strict):

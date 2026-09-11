@@ -433,20 +433,14 @@ class CuratorAssembler:
             build_messages=lambda h: self._full_messages(h, working_state),
         )
 
-        # Checked here, on the one funnel, so the fallback path answers for its
-        # pairing the same as a candidate does: a plan that fits the budget but
-        # ships an orphan tool result is not ``ok`` (2026-09-11, every turn of a
-        # session refused by the backend while the trace read ``ok: True``).
-        errors = self.trimmer.structural_errors(messages)
         validation = {
-            "ok": bool(outcome.ok and not errors),
+            "ok": outcome.ok,
             "total_tokens": outcome.estimated_tokens,
             "max_prompt_tokens": outcome.max_prompt_tokens,
             "over_by": outcome.over_by,
             "source": outcome.source,
             "included_message_ids": outcome.included_ids,
             "assembler_warnings": outcome.warnings,
-            "errors": errors,
         }
         return AssembledContext(
             messages=messages,
@@ -459,7 +453,10 @@ class CuratorAssembler:
         ), validation
 
     def validate_candidate(self, state: CuratorState, plan: ContextPlan) -> dict[str, Any]:
-        _assembled, validation = self.build(state, plan)
+        assembled, validation = self.build(state, plan)
+        errors = self.trimmer.structural_errors(assembled.messages)
+        validation["ok"] = bool(validation["ok"] and not errors)
+        validation["errors"] = errors
         validation["retry_allowed"] = not validation["ok"]
         return validation
 

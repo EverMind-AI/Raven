@@ -522,10 +522,21 @@ DS.sessions.remove = function (s) {
   confirmAsk(T('gui.sess.delete_title'), T('gui.sess.delete_body', { title: s.title }), T('gui.sess.delete'), async () => {
     try {
       const r = await rpc.call('session.delete', { session_id: s.id });
-      if (r.deleted !== s.id) throw new Error(`session ${s.id} no longer exists`);
+      /* A null `deleted` is two answers and only one of them may drop the row.
+         Nothing left to remove -- an unknown key, or a conversation whose first
+         turn never saved a file -- is the reader's own goal, so the row goes; a
+         file that survived its removal is still there to list, and claiming it
+         is gone is the one thing this rail must never do.
+
+         `!== false`, not falsy: a server too old to carry the field says nothing
+         at all, and "nothing at all" is not "nothing was there" -- reading it as
+         the second would drop a row whose file may have survived. */
+      if (r.deleted !== s.id && r.still_on_disk !== false) throw new Error(T('gui.sess.delete_kept'));
       await leaveDeletedSession(s.id);
-      toast(T('gui.sess.deleted_x', { title: s.title }));
-    } catch (e) { toast(`删除失败：${e.message || e}`); }
+      toast(r.deleted === s.id
+        ? T('gui.sess.deleted_x', { title: s.title })
+        : T('gui.sess.delete_absent', { title: s.title }));
+    } catch (e) { toast(T('gui.sess.delete_failed', { title: s.title, err: e.message || e })); }
   });
 };
 

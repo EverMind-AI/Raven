@@ -2107,6 +2107,10 @@ export interface SessionDeleteResult {
    * The session_id that was deleted (matches the request param); null when no such session file existed.
    */
   deleted?: string;
+  /**
+   * True when a removal was attempted and the session file survived it. A null `deleted` is two answers -- nothing was there, or the removal failed -- and only the second leaves a session a client must keep listing, so the two are told apart here rather than guessed at by the caller.
+   */
+  still_on_disk?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

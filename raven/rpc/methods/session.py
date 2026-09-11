@@ -632,10 +632,13 @@ async def session_delete(
 
     Returns {deleted: session_id} only when a file was actually removed;
     {deleted: null} otherwise (unknown id, missing param, or removal failure)
-    so the UI can tell a typo from a real removal.
+    so the UI can tell a typo from a real removal. ``still_on_disk`` splits that
+    null: true only for a removal the filesystem refused, which is the one case
+    a client must keep listing.
     """
     session_key = params.get("session_id", "")
     removed = False
+    still_on_disk = False
     if session_key:
         if turn_module.is_session_busy(session_key):
             raise TurnInProgressError(
@@ -646,6 +649,12 @@ async def session_delete(
         config = load_config()
         mgr = manager_for(agent_loop, config)
         removed = mgr.delete(session_key)
+        # ``delete`` answers False both for a session that had no file -- an
+        # unknown key, or one created and never saved -- and for a removal the
+        # filesystem refused, and a client must treat those oppositely: the
+        # first is the caller's own goal, the second leaves a session that is
+        # still there to list. Asking the store again is what separates them.
+        still_on_disk = not removed and mgr.exists(session_key)
         if agent_loop is not None:
             # Not gated on ``removed``: a session that switched model before its
             # first save has a binding in memory and no file on disk, and
@@ -655,7 +664,7 @@ async def session_delete(
             clear = getattr(agent_loop, "clear_session_binding", None)
             if callable(clear):
                 clear(session_key)
-    return {"deleted": session_key if removed else None}
+    return {"deleted": session_key if removed else None, "still_on_disk": still_on_disk}
 
 
 async def session_most_recent(

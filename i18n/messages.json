@@ -3731,9 +3731,21 @@
       "en": "Delete",
       "zh": "删除"
     },
+    "gui.sess.delete_absent": {
+      "en": "\"{title}\" was already gone; removed from the list",
+      "zh": "「{title}」本来就不在了，已从列表移除"
+    },
     "gui.sess.delete_body": {
       "en": "\"{title}\" will be deleted from disk. There is no undo.",
       "zh": "「{title}」将从磁盘删除，不可恢复。"
+    },
+    "gui.sess.delete_failed": {
+      "en": "Could not delete \"{title}\": {err}",
+      "zh": "删除「{title}」没有成功：{err}"
+    },
+    "gui.sess.delete_kept": {
+      "en": "the session file is still on disk",
+      "zh": "会话文件还在磁盘上"
     },
     "gui.sess.delete_title": {
       "en": "Delete session",

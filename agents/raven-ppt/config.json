@@ -92,7 +92,6 @@
       "plugin",
       "read_skill",
       "run_subagent_dag",
-      "spawn",
       "text_to_speech",
       "tool_call",
       "tool_search",

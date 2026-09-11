@@ -740,7 +740,7 @@ async def test_session_delete_removes_session(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_delete({"session_id": "tui:20260610_100000_rm01"})
-    assert result == {"deleted": "tui:20260610_100000_rm01"}
+    assert result == {"deleted": "tui:20260610_100000_rm01", "still_on_disk": False}
     path = tmp_path / "sessions" / "tui" / "20260610_100000_rm01.jsonl"
     assert not path.exists()
 
@@ -771,7 +771,7 @@ async def test_session_delete_reaches_the_shared_stores_observers(
     monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_delete({"session_id": "tui:20260610_100000_ob01"})
-    assert result == {"deleted": "tui:20260610_100000_ob01"}
+    assert result == {"deleted": "tui:20260610_100000_ob01", "still_on_disk": False}
     assert heard == [("tui:20260610_100000_ob01", True)]
 
 
@@ -788,7 +788,7 @@ async def test_session_delete_unknown_key_returns_null(tmp_path: Path, monkeypat
     monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_delete({"session_id": "tui:ghost_session"})
-    assert result == {"deleted": None}
+    assert result == {"deleted": None, "still_on_disk": False}
 
 
 async def test_session_delete_missing_param_returns_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -803,7 +803,61 @@ async def test_session_delete_missing_param_returns_null(tmp_path: Path, monkeyp
     monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_delete({})
-    assert result == {"deleted": None}
+    assert result == {"deleted": None, "still_on_disk": False}
+
+
+async def test_session_delete_says_a_refused_removal_left_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A removal the filesystem refuses answers a null `deleted` like an absent
+    session does, and is told apart by `still_on_disk`: the file is still there,
+    so a client must keep listing the session rather than claim it is gone."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    from raven.session.manager import SessionManager
+
+    mgr = SessionManager(tmp_path)
+    s = mgr.get_or_create("tui:20260610_100000_ro01")
+    s.add_message("user", "stay")
+    mgr.save(s)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    path = mgr.session_path("tui:20260610_100000_ro01")
+    real_unlink = Path.unlink
+
+    def _refuse(self: Path, *args: object, **kwargs: object) -> None:
+        if self == path:
+            raise OSError(13, "Permission denied")
+        real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", _refuse)
+
+    result = await session_delete({"session_id": "tui:20260610_100000_ro01"})
+    assert result == {"deleted": None, "still_on_disk": True}
+    assert path.exists()
+
+
+async def test_session_delete_says_an_absent_session_left_no_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session with no file answers `still_on_disk: False`, which is what lets
+    a client drop a row for a conversation whose first turn never saved one --
+    the case that otherwise cannot be cleared from the list at all."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    from raven.session.manager import SessionManager
+
+    mgr = SessionManager(tmp_path)
+    mgr.get_or_create("tui:20260610_100000_lz01")
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    assert not mgr.exists("tui:20260610_100000_lz01")
+    result = await session_delete({"session_id": "tui:20260610_100000_lz01"})
+    assert result == {"deleted": None, "still_on_disk": False}
 
 
 async def test_session_most_recent_returns_session_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
