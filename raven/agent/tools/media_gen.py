@@ -44,6 +44,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import shutil
 import uuid
 import wave
@@ -181,7 +182,7 @@ class _OpenRouterMediaTool(Tool):
         cfg_model = getattr(self._config, "model", "") if self._config else ""
         return override or cfg_model or self.default_model
 
-    def _output_path(self, ext: str, output_dir: str | None = None) -> Path:
+    def _output_path(self, ext: str, output_dir: str | None = None, stem: str | None = None) -> Path:
         base = workdir.current() or self._workspace
         out_dir = (base / Path(output_dir).expanduser()).resolve() if output_dir else base / self._output_subdir
         if output_dir and self._restrict_to_workspace:
@@ -192,7 +193,9 @@ class _OpenRouterMediaTool(Tool):
             if not any(out_dir == root or root in out_dir.parents for root in roots):
                 raise PermissionError(f"output_dir {output_dir} is outside the workspace")
         out_dir.mkdir(parents=True, exist_ok=True)
-        return out_dir / f"{self.name}-{uuid.uuid4().hex[:12]}.{ext}"
+        if not stem:
+            return out_dir / f"{self.name}-{uuid.uuid4().hex[:12]}.{ext}"
+        return _claim(out_dir, stem, ext)
 
     def _no_key_error(self) -> str:
         return json.dumps(
@@ -307,15 +310,103 @@ def _split_data_uri(url: str) -> tuple[str, bytes]:
     return mime, base64.b64decode(encoded)
 
 
+# How many of a batch are in flight at once. The deck engine settled on four for the
+# same call (plugins-dist/ppt-engine/raven_ppt/tools/generate_image.py): a batch is
+# waited on as a whole, so the ceiling only has to keep the slowest picture from
+# arriving last, and a wider fan-out at one key buys 429s instead of images.
+_BATCH_CONCURRENCY = 4
+
+# Fields a single picture may carry. `model` and `output_dir` are not among them:
+# one call speaks to one deployment and writes into one directory.
+_PICTURE_FIELDS = ("prompt", "filename", "images", "aspect_ratio", "quality")
+
+_SAFE_NAME = re.compile(r"[^a-zA-Z0-9._-]+")
+
+# How far the numbering walks before a name falls back to a uuid. A batch is eight
+# pictures, not thousands; past this the caller is reusing one name for everything
+# and a unique suffix serves better than a longer walk.
+_NAME_ATTEMPTS = 512
+
+
+def _safe_stem(value: Any) -> str:
+    """A caller-supplied file name reduced to a bare stem, or "" to keep the generated one.
+
+    The name arrives from the model, so a directory in it is dropped rather than
+    honoured: `output_dir` is the only thing that decides where a picture lands.
+    """
+    name = Path(str(value or "")).name
+    return _SAFE_NAME.sub("-", Path(name).stem).strip("-._")
+
+
+def _claim(out_dir: Path, stem: str, ext: str) -> Path:
+    """The first free path for `stem`, taken by creating it.
+
+    A generated name carries a uuid and cannot clash, but a caller-supplied one is
+    a plain word, and three things want the same word at once: the pictures of a
+    batch that share the call's top-level `filename`, the several images one prompt
+    can answer with, and whatever the workspace already holds under that name. The
+    name is taken with O_EXCL rather than by testing for the file first -- the
+    pictures of a batch are written while the rest are still in flight, so a name
+    that was free when it was tested is not one that is still free when it is
+    written, and nothing the caller did not generate is ever written over.
+    """
+    for suffix in range(1, _NAME_ATTEMPTS + 1):
+        candidate = out_dir / (f"{stem}.{ext}" if suffix == 1 else f"{stem}-{suffix}.{ext}")
+        try:
+            os.close(os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+        except FileExistsError:
+            continue
+        return candidate
+    return out_dir / f"{stem}-{uuid.uuid4().hex[:8]}.{ext}"
+
+
+def _distinct_stems(wanted: list[dict[str, Any]]) -> list[str]:
+    """A name per picture that no other picture of the same batch is aiming at.
+
+    `_claim` alone would keep the files apart, but which picture ends up at the
+    bare name would then follow the order the answers happen to come back in. A
+    batch that asks twice for the same name says so before anything is in flight,
+    so the tie is broken here, by position, and the answer a caller reads is the
+    same one every run. A name only one picture asked for is left exactly as it
+    was asked for.
+    """
+    claimed: set[str] = set()
+    stems: list[str] = []
+    for index, spec in enumerate(wanted):
+        asked = _safe_stem(spec.get("filename"))
+        stem, bump = asked, index
+        while stem and stem in claimed:
+            stem = f"{asked}-{bump + 1}"
+            bump += 1
+        if stem:
+            claimed.add(stem)
+        stems.append(stem)
+    return stems
+
+
+def _picture_spec(item: Any) -> dict[str, Any]:
+    """One item of `prompts` as a spec, with its unset fields left out.
+
+    Left out rather than carried as None, so the call's top-level value stands for
+    whatever the item does not name.
+    """
+    if not isinstance(item, dict):
+        return {}
+    return {key: value for key, value in item.items() if key in _PICTURE_FIELDS and value is not None}
+
+
 class ImageGenerateTool(_OpenRouterMediaTool):
     """Generate (or edit) an image from a text prompt via OpenRouter or an OpenAI-compatible Images API."""
 
     name = "image_generate"
     default_model = "openai/gpt-image-2.5-sunburst"
     description = (
-        "Generate an image from a text prompt (optionally editing/varying input "
-        "images). Saves the image under the workspace and returns its file path; "
-        "forward it to the user with the `message` tool's `media` field."
+        "Generate images from text prompts (optionally editing/varying input images). "
+        "Several pictures in one call, generated at the same time: plan every picture "
+        "the task needs, then ask for them together in `prompts` instead of one call "
+        "each -- a call is a minute of waiting whether it carries one prompt or eight. "
+        "Saves each image under the workspace and returns its file path; forward them "
+        "to the user with the `message` tool's `media` field."
     )
     parameters = {
         "type": "object",
@@ -352,8 +443,51 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                     "(created if missing); defaults to generated/ under the working directory"
                 ),
             },
+            "filename": {
+                "type": "string",
+                "description": (
+                    "Optional file name for the image, without a directory; a generated "
+                    "unique name is used when it is left out. A name already taken -- by "
+                    "another picture of the same call, or by a file already there -- is "
+                    "numbered rather than written over, so give each picture its own name "
+                    "if you want to know which is which"
+                ),
+            },
+            "prompts": {
+                "type": "array",
+                "description": (
+                    "Several images in one call, generated at the same time: plan every picture "
+                    "you need, then ask for them together instead of one call each. Each item "
+                    "takes its own `prompt` and may override `filename`, `images`, `aspect_ratio` "
+                    "and `quality`; whatever an item leaves out falls back to this call's "
+                    "top-level value. A top-level `prompt` given alongside is generated as the "
+                    "first picture of the batch. `model` and `output_dir` stay shared by the "
+                    "whole call. One picture failing does not fail the rest: the answer says per "
+                    "picture what was made and why the others were not"
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {"type": "string", "description": "Text description of this image"},
+                        "filename": {
+                            "type": "string",
+                            "description": (
+                                "File name for this image, without a directory; a name another "
+                                "picture already took is numbered rather than written over"
+                            ),
+                        },
+                        "images": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Input images to edit/vary for this picture only",
+                        },
+                        "aspect_ratio": {"type": "string", "enum": list(_SIZES)},
+                        "quality": {"type": "string", "enum": ["low", "medium", "high"]},
+                    },
+                    "required": ["prompt"],
+                },
+            },
         },
-        "required": ["prompt"],
     }
 
     def _image_part(self, ref: str) -> dict[str, Any]:
@@ -392,26 +526,113 @@ class ImageGenerateTool(_OpenRouterMediaTool):
 
     async def execute(
         self,
-        prompt: str,
+        prompt: str = "",
         model: str | None = None,
         images: list[str] | None = None,
         aspect_ratio: str | None = None,
         quality: str | None = None,
         output_dir: str | None = None,
+        filename: str | None = None,
+        prompts: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> str:
         if not self.api_key:
             return self._no_key_error()
+        shared = {
+            key: value
+            for key, value in (
+                ("images", images),
+                ("aspect_ratio", aspect_ratio),
+                ("quality", quality),
+                ("filename", filename),
+            )
+            if value is not None
+        }
+        wanted = [{**shared, **_picture_spec(item)} for item in (prompts or [])]
+        if str(prompt or "").strip():
+            wanted.insert(0, {**shared, "prompt": prompt})
+        if not wanted:
+            return json.dumps(
+                {"error": 'nothing to generate: give prompt, or prompts=[{"prompt": ...}, ...]'},
+                ensure_ascii=False,
+            )
+        blank = next((i for i, spec in enumerate(wanted) if not str(spec.get("prompt") or "").strip()), None)
+        if blank is not None:
+            return json.dumps({"error": f"the picture at index {blank} has no prompt"}, ensure_ascii=False)
+        if len(wanted) == 1:
+            return await self._generate_one(wanted[0], _safe_stem(wanted[0].get("filename")), model, output_dir)
+        stems = _distinct_stems(wanted)
+        gate = asyncio.Semaphore(_BATCH_CONCURRENCY)
 
+        async def one(spec: dict[str, Any], stem: str) -> str:
+            async with gate:
+                return await self._generate_one(spec, stem, model, output_dir)
+
+        # Gathered with the exceptions, not through them: a directory refused for one
+        # picture, or a reference it cannot read, is that picture's answer -- the seven
+        # the caller waited for alongside it still come back.
+        answers = await asyncio.gather(*(one(spec, stem) for spec, stem in zip(wanted, stems)), return_exceptions=True)
+        return self._batch_answer(wanted, answers)
+
+    def _batch_answer(self, wanted: list[dict[str, Any]], answers: list[str | BaseException]) -> str:
+        """Fold the per-picture answers into one, keeping every path under `paths`.
+
+        A picture that failed takes its reason with it instead of the batch: the
+        caller asks again for those and forwards the rest, which is the whole point
+        of asking for eight at once.
+        """
+        results: list[dict[str, Any]] = []
+        paths: list[str] = []
+        for index, (spec, answer) in enumerate(zip(wanted, answers)):
+            if isinstance(answer, BaseException):
+                logger.error("image_generate: picture {} failed: {}", index, answer)
+                reply: dict[str, Any] = {"error": f"{type(answer).__name__}: {answer}"}
+            else:
+                try:
+                    reply = json.loads(answer)
+                except (TypeError, ValueError):
+                    reply = {"error": f"no usable answer: {answer!r}"}
+            item: dict[str, Any] = {"index": index, "prompt": str(spec.get("prompt") or "")[:120]}
+            if reply.get("paths"):
+                item["paths"] = reply["paths"]
+                paths.extend(reply["paths"])
+            else:
+                item["error"] = reply.get("error") or "no image returned"
+                for key in ("note", "finish_reason", "retryable"):
+                    if reply.get(key) is not None:
+                        item[key] = reply[key]
+            if reply.get("model"):
+                item["model"] = reply["model"]
+            results.append(item)
+        failed = [item for item in results if item.get("error")]
+        answer_body: dict[str, Any] = {
+            "success": bool(paths),
+            "model": next((item["model"] for item in results if item.get("model")), self._model(None)),
+            "paths": paths,
+            "results": results,
+        }
+        if failed:
+            answer_body["failed"] = len(failed)
+            answer_body["note"] = (
+                f"{len(failed)} of {len(results)} images failed; the reason is on each result. "
+                "Ask again only for those, in one call."
+            )
+        logger.info("image_generate: {} of {} image(s) made in one call", len(paths), len(results))
+        return json.dumps(answer_body, ensure_ascii=False)
+
+    async def _generate_one(self, spec: dict[str, Any], stem: str, model: str | None, output_dir: str | None) -> str:
+        prompt = str(spec.get("prompt") or "")
+        images = list(spec.get("images") or []) or None
+        aspect_ratio = spec.get("aspect_ratio") or None
         config = self._config
         model_id = getattr(config, "model", "") or model or self.default_model
-        quality = self.effective_quality(quality, model_id)
+        quality = self.effective_quality(spec.get("quality"), model_id)
         # The Images API takes the frame only from the families known to honour
         # it; the chat route takes it from any model, as image_config below.
         frames = any(name in model_id.lower() for name in ("gpt-image", "seedream", "qwen-image", "grok-imagine"))
         if any(name in model_id.lower() for name in _IMAGE_API_MODELS):
             return await self._via_images_api(
-                model_id, prompt, images, aspect_ratio if frames else None, quality, output_dir
+                model_id, prompt, images, aspect_ratio if frames else None, quality, output_dir, stem
             )
         if images:
             content: Any = [{"type": "text", "text": prompt}]
@@ -438,7 +659,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         except httpx.HTTPStatusError as e:
             if _image_only_refusal(e):
                 return await self._via_images_api(
-                    model_id, prompt, images, aspect_ratio if frames else None, quality, output_dir
+                    model_id, prompt, images, aspect_ratio if frames else None, quality, output_dir, stem
                 )
             return self._format_http_error(e)
         except Exception as e:
@@ -468,7 +689,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             if not url.startswith("data:"):
                 continue
             mime, data = _split_data_uri(url)
-            path = self._output_path(_MIME_EXT.get(mime, "png"), output_dir)
+            path = self._output_path(_MIME_EXT.get(mime, "png"), output_dir, stem)
             path.write_bytes(data)
             paths.append(str(path))
 
@@ -488,6 +709,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         aspect_ratio: str | None,
         quality: str | None,
         output_dir: str | None = None,
+        stem: str = "",
     ) -> str:
         """The Images API: OpenRouter's unified ``/images``, or ``/images/generations``
         and ``/images/edits`` on an OpenAI-compatible base."""
@@ -556,7 +778,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             encoded = item.get("b64_json") if isinstance(item, dict) else None
             if not encoded:
                 continue
-            path = self._output_path(_MIME_EXT.get(item.get("media_type"), "png"), output_dir)
+            path = self._output_path(_MIME_EXT.get(item.get("media_type"), "png"), output_dir, stem)
             path.write_bytes(base64.b64decode(encoded))
             paths.append(str(path))
         if not paths:
