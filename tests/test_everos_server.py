@@ -479,6 +479,26 @@ class TestThePrimitivesAgainstTheRealOS:
 
         libc = ctypes.CDLL(None, use_errno=True)
         libc.inotify_init.restype = ctypes.c_int
+
+        def mine() -> int:
+            """This process's own instances, by the predicate _inotify_usage
+            applies across every same-UID process.
+
+            Counting ours rather than the system total is what makes the delta
+            reliable: the suite runs under xdist, and a neighbouring worker
+            closing an unrelated instance between the two snapshots would
+            cancel out one of the descriptors opened here.
+            """
+            found = 0
+            for entry in (_server._PROC_ROOT / "self" / "fd").iterdir():
+                try:
+                    if os.readlink(entry) == "anon_inode:inotify":
+                        found += 1
+                except OSError:
+                    continue
+            return found
+
+        before_mine = mine()
         before = _server._inotify_usage()
         assert before is not None
         fds = []
@@ -488,12 +508,13 @@ class TestThePrimitivesAgainstTheRealOS:
                 if fd < 0:
                     pytest.skip("per-user inotify cap is exhausted on this host")
                 fds.append(fd)
+            after_mine = mine()
             after = _server._inotify_usage()
         finally:
             for fd in fds:
                 libc.close(fd)
+        assert after_mine == before_mine + 2
         assert after is not None
-        assert after[0] >= before[0] + 2
         assert after[1] == before[1]
 
     def test_a_held_ome_lock_is_detected(self, tmp_path) -> None:
