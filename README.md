@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/d56804e5-5d4b-4493-bc70-71bd38833806)
+![Raven: The Harness of Harnesses, One Surface, All Agents](https://github.com/user-attachments/assets/d56804e5-5d4b-4493-bc70-71bd38833806)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -17,7 +17,7 @@
 
 # Raven
 
-Raven is **The Harness of Harnesses**, a continuously evolving multi-agent ecosystem built for autonomous collaboration and open co-creation. Built on EverMind's self-evolving harness engine, it is designed to build and improve Agent Harnesses for specific models and domains, then compose their heterogeneous execution capabilities into an **All-Domain Collaboration Network** for complex, long-horizon tasks.
+Raven is **The Harness of Harnesses**, a continuously evolving multi-agent ecosystem built for autonomous collaboration and open co-creation. Built on EverMind's self-evolving harness engine, it is designed to build and improve Agent Harnesses for specific models and domains, then bring their heterogeneous execution capabilities together under **One Surface, All Agents** for complex, long-horizon tasks.
 
 Powered by the [EverOS](https://github.com/EverMind-AI/EverOS) memory system, Raven preserves user context, agent experience, and world knowledge across sessions. Its self-evolving harness builds on this memory to refine tools, skills, and workflows over time, helping agents learn from past work and collaborate more effectively on future tasks.
 
@@ -475,10 +475,6 @@ integrations into one open-source ecosystem.
 <tr>
 <td><strong><a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a></strong></td>
 <td><a href="https://github.com/EverMind-AI/plugins/tree/main/hermes">Hermes plugin</a> for persistent memory across Hermes sessions.</td>
-</tr>
-<tr>
-<td><strong><a href="https://github.com/deepseek-ai/DeepSeek-Harness">DeepSeek Harness</a></strong></td>
-<td><a href="https://github.com/EverMind-AI/plugins/tree/main/dsh">DSH plugin</a> for memory-aware DeepSeek Harness agents.</td>
 </tr>
 <tr>
 <td><strong><a href="https://dify.ai">Dify</a></strong></td>

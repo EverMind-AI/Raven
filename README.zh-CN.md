@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/d56804e5-5d4b-4493-bc70-71bd38833806)
+![Raven: The Harness of Harnesses, One Surface, All Agents](https://github.com/user-attachments/assets/d56804e5-5d4b-4493-bc70-71bd38833806)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -17,7 +17,7 @@
 
 # Raven
 
-Raven 是 **The Harness of Harnesses**，一个为自主协作与开放共创而构建、持续演进的多 Agent 生态系统。依托 EverMind 的自进化 harness 引擎，Raven 致力于为特定模型和领域构建、改进 Agent Harness，并将其异构执行能力组合成面向复杂长程任务的 **全领域协作网络（All-Domain Collaboration Network）**。
+Raven 是 **The Harness of Harnesses**，一个为自主协作与开放共创而构建、持续演进的多 Agent 生态系统。依托 EverMind 的自进化 harness 引擎，Raven 致力于为特定模型和领域构建、改进 Agent Harness，并将其异构执行能力汇聚到 **One Surface, All Agents** 这一协作界面，处理复杂长程任务。
 
 借助 [EverOS](https://github.com/EverMind-AI/EverOS) 记忆系统，Raven 能跨会话保留用户上下文、Agent 经验和世界知识。自进化 harness 以这些记忆为基础，持续改进工具、技能和工作流，让 Agent 从过往工作中学习，并在后续任务中更有效地协作。
 
