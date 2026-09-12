@@ -238,7 +238,7 @@ the image, so no separate host-side build is required:
 
 ```bash
 cd docker
-docker compose up 
+docker compose up
 ```
 
 Open <http://127.0.0.1:18793>. The Compose container runs the full `gateway`

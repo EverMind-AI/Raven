@@ -25,6 +25,8 @@ from importlib import metadata
 from pathlib import Path
 from typing import Optional
 
+from raven.home import raven_home
+
 MARKER_NAME = "upgrade.json"
 
 _UNPARENTED_GRACE_S = 120.0
@@ -52,8 +54,6 @@ class InstallFault:
 
 
 def marker_path() -> Path:
-    from raven.config.loader import raven_home
-
     return raven_home() / MARKER_NAME
 
 
