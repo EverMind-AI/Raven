@@ -189,7 +189,7 @@ export function NewInstancePicker({ gw, onCancel, onCreated, sessionKey, t }: Ne
       })}
 
       {offset + VISIBLE < rows.length && <Text color={t.color.muted}> ↓ {rows.length - offset - VISIBLE} more</Text>}
-      {err && <Text color={t.color.label}>error: {err}</Text>}
+      {err && <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text>}
       {creating ? (
         <OverlayHint t={t}>creating…</OverlayHint>
       ) : (

@@ -936,7 +936,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
 
         {formError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            error: {formError}
+            {uiText('gui.panel.error_prefix')} {formError}
           </Text>
         ) : saving ? (
           <Text color={t.color.muted} wrap="truncate-end">

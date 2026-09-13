@@ -979,7 +979,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
         {keyError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            error: {keyError}
+            {uiText('gui.panel.error_prefix')} {keyError}
           </Text>
         ) : keySaving ? (
           <Text color={t.color.muted} wrap="truncate-end">
@@ -1026,7 +1026,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
         {keyError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            error: {keyError}
+            {uiText('gui.panel.error_prefix')} {keyError}
           </Text>
         ) : keySaving ? (
           <Text color={t.color.muted} wrap="truncate-end">
@@ -1061,7 +1061,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
         </Text>
 
         <Text color={t.color.label} wrap="truncate-end">
-          {keyError ? `error: ${keyError}` : ' '}
+          {keyError ? `${uiText('gui.panel.error_prefix')} ${keyError}` : ' '}
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end">
@@ -1161,7 +1161,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
         {keyError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            error: {keyError}
+            {uiText('gui.panel.error_prefix')} {keyError}
           </Text>
         ) : keySaving ? (
           <Text color={t.color.muted} wrap="truncate-end">
@@ -1210,7 +1210,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
         {loginError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            error: {loginError}
+            {uiText('gui.panel.error_prefix')} {loginError}
           </Text>
         ) : loginPhase === 'running' ? (
           <Text color={t.color.muted} wrap="truncate-end">
