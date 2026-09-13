@@ -151,7 +151,7 @@ async function loadProviders(sid, gen) {
     acceptsKey: p.accepts_api_key !== false,
     apiBase: p.api_base || '', defaultApiBase: p.default_api_base || '',
     env: p.key_env || '', warn: p.warning || '',
-    key: p.authenticated ? '已配置' : '',
+    key: p.authenticated ? T('gui.set.tls.key_set') : '',
   }));
   if (mo.model) { modelSet(mo.model); setModelLabel(); }
 }
@@ -172,7 +172,7 @@ DS.settings = {
     /* The tool inventory is part of settings. Loading it here keeps every
        opener on the island's one refresh path rather than replacing the
        demo-layer openSettings binding in live mode. */
-    try { await loadExt(); } catch (e) { toast(`加载失败：${e.message || e}`); }
+    try { await loadExt(); } catch (e) { toast(T('gui.op.load_failed', { detail: e.message || e })); }
     await loadSettings();
     pushPermMode();
     await loadEveros();
@@ -281,7 +281,7 @@ async function langPickLive(next, { persist } = {}) {
        not agree with -- the same key drives the TUI and the agent's replies. */
     langSet(prev);
     redrawAll();
-    toast(`切换语言失败：${(e.data && e.data.detail) || e.message || e}`);
+    toast(T('gui.op.lang_failed', { detail: (e.data && e.data.detail) || e.message || e }));
   }
 }
 

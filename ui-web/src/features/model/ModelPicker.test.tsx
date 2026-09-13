@@ -63,7 +63,7 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
     ...over,
   }
   const shell: Shell = {
-    T: (key) => key,
+    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
     confirmAsk: () => {},
     showPage: () => {},
   }
@@ -245,7 +245,7 @@ describe('the model picker, choosing', () => {
     expect(h.persisted).toEqual(['minimax-m2'])
     expect(h.persistedProviders).toEqual(['minimax'])
     expect(h.persistedScopes).toEqual(['session'])
-    expect(h.toasts).toEqual(['已切换到 minimax-m2'])
+    expect(h.toasts).toEqual(['gui.model.pick_switched {"name":"minimax-m2"}'])
   })
 
   it('a switch from the settings default control is scoped to the default, not the session', async () => {
@@ -274,7 +274,7 @@ describe('the model picker, choosing', () => {
        config did not take. */
     expect(h.local).toEqual(['minimax-m2', 'minimax-m3'])
     expect(h.model()).toBe('minimax-m3')
-    expect(h.toasts).toEqual(['切换失败：no such model'])
+    expect(h.toasts).toEqual(['gui.op.switch_failed {"detail":"no such model"}'])
   })
 
   it('tells the caller after every local change, forward and back', async () => {
@@ -289,7 +289,7 @@ describe('the model picker, choosing', () => {
       rows('models')[1]!.click()
     })
     expect(h.after).toBe(2)
-    expect(h.toasts).toEqual(['切换失败：boom'])
+    expect(h.toasts).toEqual(['gui.op.switch_failed {"detail":"boom"}'])
   })
 
   it('says a staged pick is staged, not switched', async () => {
@@ -302,7 +302,7 @@ describe('the model picker, choosing', () => {
       rows('models')[1]!.click()
     })
     expect(store.current()).toBe('minimax-m2')
-    expect(h.toasts).toEqual(['已选择 minimax-m2，发送首条消息后生效'])
+    expect(h.toasts).toEqual(['gui.model.pick_staged {"name":"minimax-m2"}'])
   })
 
   it('a refused default switch commits nothing locally and does not roll back', async () => {
@@ -318,7 +318,7 @@ describe('the model picker, choosing', () => {
       rows('models')[1]!.click()
     })
     expect(h.after).toBe(0)
-    expect(h.toasts).toEqual(['切换失败：boom'])
+    expect(h.toasts).toEqual(['gui.op.switch_failed {"detail":"boom"}'])
   })
 
   it('takes the first hit on enter', async () => {
@@ -501,7 +501,7 @@ describe('the picker with nothing to offer', () => {
     openIt()
     expect(pick()).toBeNull()
     expect(h.providerSettings).toEqual(['anthropic'])
-    expect(h.toasts).toEqual(['gui.picker.no_models_for'])
+    expect(h.toasts).toEqual(['gui.picker.no_models_for {"name":"Anthropic"}'])
   })
 
   it('still says "no account" when nothing is connected at all', () => {

@@ -6250,6 +6250,94 @@
     "gui.pb.cred_disabled": {
       "en": "disabled",
       "zh": "已停用"
+    },
+    "gui.op.subscribe_failed": {
+      "en": "Could not subscribe - {detail}",
+      "zh": "订阅失败：{detail}"
+    },
+    "gui.op.switch_failed": {
+      "en": "Could not switch - {detail}",
+      "zh": "切换失败：{detail}"
+    },
+    "gui.op.open_failed": {
+      "en": "Could not open the session - {detail}",
+      "zh": "打开会话失败：{detail}"
+    },
+    "gui.op.load_failed": {
+      "en": "Could not load - {detail}",
+      "zh": "加载失败：{detail}"
+    },
+    "gui.op.save_failed": {
+      "en": "Could not save - {detail}",
+      "zh": "保存失败：{detail}"
+    },
+    "gui.op.action_failed": {
+      "en": "That did not work - {detail}",
+      "zh": "操作失败：{detail}"
+    },
+    "gui.op.delete_failed": {
+      "en": "Could not delete it - {detail}",
+      "zh": "删除失败：{detail}"
+    },
+    "gui.op.trigger_failed": {
+      "en": "Could not trigger it - {detail}",
+      "zh": "触发失败：{detail}"
+    },
+    "gui.op.lang_failed": {
+      "en": "Could not switch the language - {detail}",
+      "zh": "切换语言失败：{detail}"
+    },
+    "gui.op.branch_failed": {
+      "en": "Could not branch - {detail}",
+      "zh": "分叉失败：{detail}"
+    },
+    "gui.op.saved_next_turn": {
+      "en": "Saved. It applies from the next turn.",
+      "zh": "已保存 · 下一轮对话生效"
+    },
+    "gui.op.saved_restart": {
+      "en": "Saved. It applies once the engine restarts.",
+      "zh": "已保存 · 重启引擎后生效"
+    },
+    "gui.conn.not_receiving": {
+      "en": "The enabled entry is not receiving yet - open the Raven app and it starts.",
+      "zh": "已启用的入口还没在收消息 — 打开 Raven App 就会启动"
+    },
+    "gui.sess.branch_empty": {
+      "en": "This session has no content yet, so it cannot be branched",
+      "zh": "这个会话还没有内容，无法分叉"
+    },
+    "gui.sess.branched_n": {
+      "en": "Branched, carrying {n} messages",
+      "zh": "已分叉，带上了 {n} 条消息"
+    },
+    "gui.model.protocol_unsupported": {
+      "en": "This WebUI backend cannot set the API type",
+      "zh": "当前 WebUI 后端不支持 API 类型设置"
+    },
+    "gui.model.pick_staged": {
+      "en": "Picked {name}; it applies after you send the first message",
+      "zh": "已选择 {name}，发送首条消息后生效"
+    },
+    "gui.model.pick_switched": {
+      "en": "Switched to {name}",
+      "zh": "已切换到 {name}"
+    },
+    "gui.ws.notice_title": {
+      "en": "Web search is not set up yet",
+      "zh": "网页搜索还没配置"
+    },
+    "gui.ws.notice_body": {
+      "en": "Right now Raven can only fetch URLs you give it; it cannot look things up on its own.",
+      "zh": "现在 Raven 只能抓你给出的网址，不能自己找资料。"
+    },
+    "gui.ws.notice_go": {
+      "en": "Set it up",
+      "zh": "去配置"
+    },
+    "gui.ws.notice_dismiss": {
+      "en": "Dismiss",
+      "zh": "忽略"
     }
   }
 }
