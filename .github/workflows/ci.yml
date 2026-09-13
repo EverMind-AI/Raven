@@ -293,7 +293,7 @@ jobs:
       # The npm build makes the island bundle build.py inlines; the gate
       # scripts themselves still run on bare node, straight off the checkout.
       # build.py validates the part seams (IIFE opener first, closer last);
-      # check-page.mjs validates the assembled artifact (one style, two
+      # check-page.mjs validates the assembled artifact (one style, three
       # inline scripts, no leftover markers, scripts parse).
       - name: Build and check the served page
         run: |

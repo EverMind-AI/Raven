@@ -300,12 +300,14 @@ def test_doctor_answers_where_the_memories_are(healthy_config: Path, no_memory_s
     converging and no command showed it again, so a user asking "where are my
     memories" had to read config.json by hand. Doctor is where that question
     gets asked."""
-    from raven.config import update_everos as ue
-
     _configured(no_memory_server, "llm")
     _capabilities(no_memory_server, llm=True)
-    no_memory_server.setattr(ue, "everos_root", lambda: tmp_path / "mem-root")
-    no_memory_server.setattr(ue, "everos_owned", lambda: True)
+    raw = json.loads(healthy_config.read_text(encoding="utf-8"))
+    raw.setdefault("plugins", {}).setdefault("config", {})["everos-memory"] = {
+        "root": str(tmp_path / "mem-root"),
+        "owned": True,
+    }
+    healthy_config.write_text(json.dumps(raw), encoding="utf-8")
 
     r = runner.invoke(app, ["doctor"])
 
