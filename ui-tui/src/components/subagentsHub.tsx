@@ -986,8 +986,8 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
   if (err && !rows.length) {
     return (
       <Box flexDirection="column" width={width}>
-        <Text color={t.color.label}>error: {err}</Text>
-        <OverlayHint t={t}>Esc/q cancel</OverlayHint>
+        <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text>
+        <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
   }
@@ -1000,10 +1000,10 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
         Subagents{view === 'uninstalled' ? ` · ${SECTION_TITLES.uninstalled}` : ''}
       </Text>
 
-      {err ? <Text color={t.color.label}>error: {err}</Text> : null}
-      {!rows.length ? <Text color={t.color.muted}>no subagents or presets available</Text> : null}
+      {err ? <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text> : null}
+      {!rows.length ? <Text color={t.color.muted}>{uiText('gui.panel.no_subagents')}</Text> : null}
 
-      {offset > 0 && <Text color={t.color.muted}> ↑ {offset} more</Text>}
+      {offset > 0 && <Text color={t.color.muted}> {uiText('gui.panel.more_up', '', { n: offset })}</Text>}
 
       {visibleLines.map(line =>
         line.kind === 'header' ? (
@@ -1023,7 +1023,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
         )
       )}
 
-      {offset + VISIBLE < lines.length && <Text color={t.color.muted}> ↓ {lines.length - offset - VISIBLE} more</Text>}
+      {offset + VISIBLE < lines.length && <Text color={t.color.muted}> {uiText('gui.panel.more_down', '', { n: lines.length - offset - VISIBLE })}</Text>}
 
       {failureDetail ? (
         <Text color={t.color.label} wrap="truncate-end">
@@ -1031,7 +1031,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
         </Text>
       ) : null}
 
-      {runningNames.length > 0 ? <OverlayHint t={t}>Esc cancels the running test</OverlayHint> : null}
+      {runningNames.length > 0 ? <OverlayHint t={t}>{uiText('gui.panel.esc_stops_test')}</OverlayHint> : null}
       <OverlayHint t={t}>
         {view === 'main'
           ? // The built-in row answers to none of the configuring keys, and a hint

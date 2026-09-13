@@ -6414,6 +6414,78 @@
     "gui.panel.description": {
       "en": "Description",
       "zh": "描述"
+    },
+    "gui.panel.esc_cancel": {
+      "en": "Esc/q cancel",
+      "zh": "Esc/q 取消"
+    },
+    "gui.panel.error_prefix": {
+      "en": "error:",
+      "zh": "错误："
+    },
+    "gui.panel.more_up": {
+      "en": "↑ {n} more",
+      "zh": "↑ 还有 {n} 条"
+    },
+    "gui.panel.more_down": {
+      "en": "↓ {n} more",
+      "zh": "↓ 还有 {n} 条"
+    },
+    "gui.panel.no_providers": {
+      "en": "no providers available",
+      "zh": "没有可用的服务商"
+    },
+    "gui.panel.no_skills": {
+      "en": "no skills available",
+      "zh": "没有可用技能"
+    },
+    "gui.panel.pick_category": {
+      "en": "select a category",
+      "zh": "选择一个分类"
+    },
+    "gui.panel.no_skills_here": {
+      "en": "no skills in this category",
+      "zh": "这个分类下没有技能"
+    },
+    "gui.panel.no_sessions": {
+      "en": "no previous sessions",
+      "zh": "没有历史会话"
+    },
+    "gui.panel.no_subagents": {
+      "en": "no subagents or presets available",
+      "zh": "没有可用的子代理或预设"
+    },
+    "gui.panel.esc_stops_test": {
+      "en": "Esc cancels the running test",
+      "zh": "Esc 取消正在运行的测试"
+    },
+    "gui.panel.no_direct_chat": {
+      "en": "no sub-agent can hold a direct chat (needs an enabled, stateful agent)",
+      "zh": "没有子代理能直接对话（需要一个已启用且有状态的智能体）"
+    },
+    "gui.panel.no_system_prompt": {
+      "en": "No system prompt loaded.",
+      "zh": "没有加载系统提示词。"
+    },
+    "gui.panel.failed": {
+      "en": "failed",
+      "zh": "失败"
+    },
+    "gui.panel.tool_one": {
+      "en": "1 tool",
+      "zh": "1 个工具"
+    },
+    "gui.panel.tool_n": {
+      "en": "{n} tools",
+      "zh": "{n} 个工具"
+    },
+    "gui.panel.skill_one": {
+      "en": "1 skill",
+      "zh": "1 个技能"
+    },
+    "gui.panel.skill_n": {
+      "en": "{n} skills",
+      "zh": "{n} 个技能"
     }
   }
 }

@@ -11,6 +11,7 @@ import type { Theme } from '../theme.js'
 
 import { rpcErrorMessage } from '../lib/rpc.js'
 import { OverlayHint, useOverlayKeys, windowItems, windowOffset } from './overlayControls.js'
+import { t as uiText } from '../i18n/index.js'
 
 const VISIBLE = 12
 const MIN_WIDTH = 40
@@ -190,8 +191,8 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
   if (err && stage === 'category') {
     return (
       <Box flexDirection="column" width={width}>
-        <Text color={t.color.label}>error: {err}</Text>
-        <OverlayHint t={t}>Esc/q cancel</OverlayHint>
+        <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text>
+        <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
   }
@@ -199,8 +200,8 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
   if (!cats.length) {
     return (
       <Box flexDirection="column" width={width}>
-        <Text color={t.color.muted}>no skills available</Text>
-        <OverlayHint t={t}>Esc/q cancel</OverlayHint>
+        <Text color={t.color.muted}>{uiText('gui.panel.no_skills')}</Text>
+        <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
   }
@@ -215,8 +216,8 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
           Skills Hub
         </Text>
 
-        <Text color={t.color.muted}>select a category</Text>
-        {offset > 0 && <Text color={t.color.muted}> ↑ {offset} more</Text>}
+        <Text color={t.color.muted}>{uiText('gui.panel.pick_category')}</Text>
+        {offset > 0 && <Text color={t.color.muted}> {uiText('gui.panel.more_up', '', { n: offset })}</Text>}
 
         {items.map((row, i) => {
           const idx = offset + i
@@ -250,9 +251,11 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
           {selectedCat}
         </Text>
 
-        <Text color={t.color.muted}>{skills.length} skill(s)</Text>
-        {!skills.length ? <Text color={t.color.muted}>no skills in this category</Text> : null}
-        {offset > 0 && <Text color={t.color.muted}> ↑ {offset} more</Text>}
+        <Text color={t.color.muted}>{skills.length === 1
+          ? uiText('gui.panel.skill_one')
+          : uiText('gui.panel.skill_n', '', { n: skills.length })}</Text>
+        {!skills.length ? <Text color={t.color.muted}>{uiText('gui.panel.no_skills_here')}</Text> : null}
+        {offset > 0 && <Text color={t.color.muted}> {uiText('gui.panel.more_up', '', { n: offset })}</Text>}
 
         {items.map((row, i) => {
           const idx = offset + i
@@ -291,7 +294,7 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
       {info?.description ? <Text color={t.color.text}>{info.description}</Text> : null}
       {info?.path ? <Text color={t.color.muted}>path: {info.path}</Text> : null}
       {!info && !err ? <Text color={t.color.muted}>loading…</Text> : null}
-      {err ? <Text color={t.color.label}>error: {err}</Text> : null}
+      {err ? <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text> : null}
       {installing ? <Text color={t.color.accent}>installing…</Text> : null}
 
       <OverlayHint t={t}>i reinspect · x reinstall · Enter/Esc back · q close</OverlayHint>

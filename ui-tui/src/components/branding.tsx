@@ -320,10 +320,10 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
           <Text color={t.color.muted}>: </Text>
           {s.connected ? (
             <Text color={t.color.text}>
-              {s.tools} tool{s.tools === 1 ? '' : 's'}
+              {s.tools === 1 ? uiText('gui.panel.tool_one') : uiText('gui.panel.tool_n', '', { n: s.tools })}
             </Text>
           ) : (
-            <Text color={t.color.error}>failed</Text>
+            <Text color={t.color.error}>{uiText('gui.panel.failed')}</Text>
           )}
         </Text>
       ))}
@@ -335,7 +335,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
 
   const systemBody = () => {
     if (sysPromptLen === 0) {
-      return <Text color={t.color.muted}>No system prompt loaded.</Text>
+      return <Text color={t.color.muted}>{uiText('gui.panel.no_system_prompt')}</Text>
     }
 
     return <Text color={t.color.muted}>{info.system_prompt}</Text>

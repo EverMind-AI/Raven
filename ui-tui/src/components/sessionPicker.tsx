@@ -12,6 +12,7 @@ import type { Theme } from '../theme.js'
 
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { OverlayHint, useOverlayKeys, windowOffset } from './overlayControls.js'
+import { t as uiText } from '../i18n/index.js'
 
 const VISIBLE = 15
 const MIN_WIDTH = 60
@@ -179,8 +180,8 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
   if (err && !items.length) {
     return (
       <Box flexDirection="column">
-        <Text color={t.color.label}>error: {err}</Text>
-        <OverlayHint t={t}>Esc/q cancel</OverlayHint>
+        <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text>
+        <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
   }
@@ -188,8 +189,8 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
   if (!items.length) {
     return (
       <Box flexDirection="column">
-        <Text color={t.color.muted}>no previous sessions</Text>
-        <OverlayHint t={t}>Esc/q cancel</OverlayHint>
+        <Text color={t.color.muted}>{uiText('gui.panel.no_sessions')}</Text>
+        <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
   }
@@ -202,7 +203,7 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
         Resume Session
       </Text>
 
-      {offset > 0 && <Text color={t.color.muted}> ↑ {offset} more</Text>}
+      {offset > 0 && <Text color={t.color.muted}> {uiText('gui.panel.more_up', '', { n: offset })}</Text>}
 
       {items.slice(offset, offset + VISIBLE).map((s, vi) => {
         const i = offset + vi
@@ -240,7 +241,7 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
       })}
 
       {offset + VISIBLE < items.length && <Text color={t.color.muted}> ↓ {items.length - offset - VISIBLE} more</Text>}
-      {err && <Text color={t.color.label}>error: {err}</Text>}
+      {err && <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text>}
       {deleting ? (
         <OverlayHint t={t}>deleting…</OverlayHint>
       ) : (

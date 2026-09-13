@@ -22,6 +22,7 @@ import { providerDisplayNames } from '../domain/providers.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { tagBadge, tagLegend } from './modelTags.js'
 import { OverlayHint, useOverlayKeys, windowItems } from './overlayControls.js'
+import { t as uiText } from '../i18n/index.js'
 
 const VISIBLE = 12
 const MIN_WIDTH = 40
@@ -898,8 +899,8 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
   if (err) {
     return (
       <Box flexDirection="column">
-        <Text color={t.color.label}>error: {err}</Text>
-        <OverlayHint t={t}>Esc/q cancel</OverlayHint>
+        <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text>
+        <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
   }
@@ -907,8 +908,8 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
   if (!providers.length) {
     return (
       <Box flexDirection="column">
-        <Text color={t.color.muted}>no providers available</Text>
-        <OverlayHint t={t}>Esc/q cancel</OverlayHint>
+        <Text color={t.color.muted}>{uiText('gui.panel.no_providers')}</Text>
+        <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
   }

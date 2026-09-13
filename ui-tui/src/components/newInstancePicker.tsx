@@ -20,6 +20,7 @@ import type { Theme } from '../theme.js'
 import { $directChat } from '../app/directChatStore.js'
 import { rpcErrorMessage } from '../lib/rpc.js'
 import { OverlayHint, useOverlayKeys, windowOffset } from './overlayControls.js'
+import { t as uiText } from '../i18n/index.js'
 
 const VISIBLE = 12
 const MIN_WIDTH = 60
@@ -132,9 +133,9 @@ export function NewInstancePicker({ gw, onCancel, onCreated, sessionKey, t }: Ne
     return (
       <Box flexDirection="column">
         <Text color={t.color.muted}>
-          {err ? `error: ${err}` : 'no sub-agent can hold a direct chat (needs an enabled, stateful agent)'}
+          {err ? `${uiText('gui.panel.error_prefix')} ${err}` : uiText('gui.panel.no_direct_chat')}
         </Text>
-        <OverlayHint t={t}>Esc/q cancel</OverlayHint>
+        <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
   }
@@ -147,7 +148,7 @@ export function NewInstancePicker({ gw, onCancel, onCreated, sessionKey, t }: Ne
         New Instance
       </Text>
 
-      {offset > 0 && <Text color={t.color.muted}> ↑ {offset} more</Text>}
+      {offset > 0 && <Text color={t.color.muted}> {uiText('gui.panel.more_up', '', { n: offset })}</Text>}
 
       {rows.slice(offset, offset + VISIBLE).map((row, vi) => {
         const i = offset + vi
