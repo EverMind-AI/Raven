@@ -1600,7 +1600,7 @@
       "zh": "上下文使用 {used}/{max} {pct}%"
     },
     "gui.dag.aria": {
-      "en": "Sub-agent orchestration",
+      "en": "Subagent orchestration",
       "zh": "子智能体编排"
     },
     "gui.dag.close": {
@@ -2868,7 +2868,7 @@
       "zh": "{n} 失败"
     },
     "gui.nav.agents": {
-      "en": "Sub-agents",
+      "en": "Subagents",
       "zh": "子智能体"
     },
     "gui.nav.conn": {
@@ -3100,7 +3100,7 @@
       "zh": "欢迎使用 Raven"
     },
     "gui.page.agents": {
-      "en": "Sub-agents",
+      "en": "Subagents",
       "zh": "子智能体"
     },
     "gui.page.conn": {
@@ -5180,7 +5180,7 @@
       "zh": "消耗 {n} tokens"
     },
     "gui.ws.agents": {
-      "en": "Sub-agents",
+      "en": "Subagents",
       "zh": "子智能体"
     },
     "gui.ws.agents_absent": {
@@ -5192,7 +5192,7 @@
       "zh": "还没有后台任务"
     },
     "gui.ws.agents_none_sub": {
-      "en": "Sub-agents this session starts show up here",
+      "en": "Subagents this session starts show up here",
       "zh": "这个会话启动的子智能体会出现在这里"
     },
     "gui.ws.desk_limit": {
@@ -5200,7 +5200,7 @@
       "zh": "最多同时打开 4 个窗口"
     },
     "gui.ws.instance_empty": {
-      "en": "No conversation on record for this sub-agent.",
+      "en": "No conversation on record for this subagent.",
       "zh": "这个子智能体还没有留下对话记录。"
     },
     "gui.ws.spawn_empty": {
@@ -6040,11 +6040,11 @@
       "zh": "—"
     },
     "gui.tier.title": {
-      "en": "Sub-agent effort",
+      "en": "Subagent effort",
       "zh": "子智能体力度"
     },
     "gui.tier.scope": {
-      "en": "The tier in force is offered to the sub-agents this conversation dispatches, clamped to what each one supports.",
+      "en": "The tier in force is offered to the subagents this conversation dispatches, clamped to what each one supports.",
       "zh": "当前这一档会下发给本会话派出的子智能体，并按每个子智能体支持的档位钳定。"
     },
     "gui.tier.failed": {
@@ -6056,7 +6056,7 @@
       "zh": "会话模式"
     },
     "gui.tier.mode_scope": {
-      "en": "The tier in force is not a built-in one, so it is not offered to sub-agents.",
+      "en": "The tier in force is not a built-in one, so it is not offered to subagents.",
       "zh": "当前这一档不是内置的三档之一，不会下发给子智能体。"
     },
     "gui.imode.title": {
@@ -6460,7 +6460,7 @@
       "zh": "Esc 取消正在运行的测试"
     },
     "gui.panel.no_direct_chat": {
-      "en": "no sub-agent can hold a direct chat (needs an enabled, stateful agent)",
+      "en": "no subagent can hold a direct chat (needs an enabled, stateful agent)",
       "zh": "没有子智能体能直接对话（需要一个已启用且有状态的智能体）"
     },
     "gui.panel.no_system_prompt": {
