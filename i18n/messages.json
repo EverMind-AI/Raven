@@ -4317,7 +4317,7 @@
     },
     "gui.set.mem.borrow_note": {
       "en": "The key and address are copied from that account when you save. Change them there later and this stays on the copy.",
-      "zh": "保存时会把那个账号的密钥和地址复制过来。之后在那边改动,这里不会跟着变。"
+      "zh": "保存时会把那个账号的密钥和地址复制过来。之后在那边改动，这里不会跟着变。"
     },
     "gui.set.mem.models": {
       "en": "EverOS models",
@@ -5221,7 +5221,7 @@
     },
     "gui.ws.instance_new_fail": {
       "en": "Could not start: {why}",
-      "zh": "无法新建:{why}"
+      "zh": "无法新建：{why}"
     },
     "gui.ws.instance_say": {
       "en": "Send",
@@ -5257,7 +5257,7 @@
     },
     "gui.ws.instance_forget_note": {
       "en": "Drops the row. For an ACP instance the agent-side session is dropped too, stopping a running turn. Your records stay on disk.",
-      "zh": "移除这一行。ACP 实例的子端侧会话也会一并移除,进行中的任务将被停止。本机记录仍保留在磁盘上。"
+      "zh": "移除这一行。ACP 实例的子端侧会话也会一并移除，进行中的任务将被停止。本机记录仍保留在磁盘上。"
     },
     "gui.ws.browser": {
       "en": "Browser",
@@ -5681,11 +5681,11 @@
     },
     "gui.agent.installing": {
       "en": "Installing...",
-      "zh": "正在安装..."
+      "zh": "正在安装…"
     },
     "gui.agent.install_note": {
       "en": "Downloads this build's dependencies (a few hundred MB) and takes a few minutes. It keeps running if you leave this page.",
-      "zh": "会下载这个构建的依赖(几百 MB),要几分钟。离开这个页面也会继续跑。"
+      "zh": "会下载这个构建的依赖（几百 MB），要几分钟。离开这个页面也会继续跑。"
     },
     "gui.agent.kind_builtin": {
       "en": "built in",
@@ -5809,7 +5809,7 @@
     },
     "gui.agent.test_running": {
       "en": "Testing...",
-      "zh": "正在测试..."
+      "zh": "正在测试…"
     },
     "gui.agent.test_stop": {
       "en": "Stop",
@@ -5817,15 +5817,15 @@
     },
     "gui.agent.test_note": {
       "en": "Dispatches the agent once for real, which spends its own quota.",
-      "zh": "会真的派它跑一次,消耗它自己的额度。"
+      "zh": "会真的派它跑一次，消耗它自己的额度。"
     },
     "gui.agent.test_ok": {
       "en": "Worked, {ago}",
-      "zh": "可用,{ago}"
+      "zh": "可用，{ago}"
     },
     "gui.agent.test_bad": {
       "en": "Failed, {ago}",
-      "zh": "失败,{ago}"
+      "zh": "失败，{ago}"
     },
     "gui.agent.test_never": {
       "en": "Never tested",
@@ -5917,7 +5917,7 @@
     },
     "gui.pb.canvas": {
       "en": "Playbook graph - drag to pan, ctrl and scroll to zoom",
-      "zh": "剧本流程图 - 拖动平移，按住 ctrl 滚动缩放"
+      "zh": "剧本流程图 · 拖动平移，按住 ctrl 滚动缩放"
     },
     "gui.pb.zoom_in": {
       "en": "Zoom in",
@@ -6029,7 +6029,7 @@
     },
     "gui.pb.carried": {
       "en": "carried by this playbook, not this machine's configuration",
-      "zh": "本剧本自带,不是本机配置里的同名服务器"
+      "zh": "本剧本自带，不是本机配置里的同名服务器"
     },
     "gui.pb.required": {
       "en": "required",
@@ -6045,7 +6045,7 @@
     },
     "gui.tier.scope": {
       "en": "The tier in force is offered to the sub-agents this conversation dispatches, clamped to what each one supports.",
-      "zh": "当前这一档会下发给本会话派出的子智能体,并按每个子智能体支持的档位钳定。"
+      "zh": "当前这一档会下发给本会话派出的子智能体，并按每个子智能体支持的档位钳定。"
     },
     "gui.tier.failed": {
       "en": "Could not switch to {name}",
@@ -6057,7 +6057,7 @@
     },
     "gui.tier.mode_scope": {
       "en": "The tier in force is not a built-in one, so it is not offered to sub-agents.",
-      "zh": "当前这一档不是内置的三档之一,不会下发给子智能体。"
+      "zh": "当前这一档不是内置的三档之一，不会下发给子智能体。"
     },
     "gui.imode.title": {
       "en": "Effort",
@@ -6077,7 +6077,7 @@
     },
     "gui.imode.set_tip": {
       "en": "This instance's own effort, set apart from the conversation.",
-      "zh": "这个实例自己的力度,与会话分开设定。"
+      "zh": "这个实例自己的力度，与会话分开设定。"
     },
     "gui.imode.failed": {
       "en": "Could not change this instance's effort",
@@ -6177,11 +6177,11 @@
     },
     "gui.pb.cred_intro": {
       "en": "What this machine holds for the servers this playbook carries. Values never enter the playbook file or a conversation.",
-      "zh": "本机为此剧本自带的 MCP 服务器保存的凭据。值不会进入剧本文件,也不会进入对话。"
+      "zh": "本机为此剧本自带的 MCP 服务器保存的凭据。值不会进入剧本文件，也不会进入对话。"
     },
     "gui.pb.cred_none": {
       "en": "This playbook declares no secret params and carries no OAuth server.",
-      "zh": "此剧本没有声明 secret 参数,也没有自带 OAuth 服务器。"
+      "zh": "此剧本没有声明 secret 参数，也没有自带 OAuth 服务器。"
     },
     "gui.pb.cred_sec_params": {
       "en": "Secret params",
