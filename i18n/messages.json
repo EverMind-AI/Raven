@@ -6453,7 +6453,7 @@
     },
     "gui.panel.no_subagents": {
       "en": "no subagents or presets available",
-      "zh": "没有可用的子代理或预设"
+      "zh": "没有可用的子智能体或预设"
     },
     "gui.panel.esc_stops_test": {
       "en": "Esc cancels the running test",
@@ -6461,7 +6461,7 @@
     },
     "gui.panel.no_direct_chat": {
       "en": "no sub-agent can hold a direct chat (needs an enabled, stateful agent)",
-      "zh": "没有子代理能直接对话（需要一个已启用且有状态的智能体）"
+      "zh": "没有子智能体能直接对话（需要一个已启用且有状态的智能体）"
     },
     "gui.panel.no_system_prompt": {
       "en": "No system prompt loaded.",
