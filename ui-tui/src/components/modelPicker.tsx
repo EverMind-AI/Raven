@@ -899,7 +899,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
   if (err) {
     return (
       <Box flexDirection="column">
-        <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text>
+        <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text>
         <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
@@ -979,7 +979,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
         {keyError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            {uiText('gui.panel.error_prefix')} {keyError}
+            {uiText('gui.panel.error_x', '', { detail: keyError })}
           </Text>
         ) : keySaving ? (
           <Text color={t.color.muted} wrap="truncate-end">
@@ -1026,7 +1026,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
         {keyError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            {uiText('gui.panel.error_prefix')} {keyError}
+            {uiText('gui.panel.error_x', '', { detail: keyError })}
           </Text>
         ) : keySaving ? (
           <Text color={t.color.muted} wrap="truncate-end">
@@ -1061,7 +1061,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
         </Text>
 
         <Text color={t.color.label} wrap="truncate-end">
-          {keyError ? `${uiText('gui.panel.error_prefix')} ${keyError}` : ' '}
+          {keyError ? uiText('gui.panel.error_x', '', { detail: keyError }) : ' '}
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end">
@@ -1161,7 +1161,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
         {keyError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            {uiText('gui.panel.error_prefix')} {keyError}
+            {uiText('gui.panel.error_x', '', { detail: keyError })}
           </Text>
         ) : keySaving ? (
           <Text color={t.color.muted} wrap="truncate-end">
@@ -1210,7 +1210,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
         {loginError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            {uiText('gui.panel.error_prefix')} {loginError}
+            {uiText('gui.panel.error_x', '', { detail: loginError })}
           </Text>
         ) : loginPhase === 'running' ? (
           <Text color={t.color.muted} wrap="truncate-end">

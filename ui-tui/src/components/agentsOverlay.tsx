@@ -1270,7 +1270,7 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
     const deliver = (text: string) => {
       appendDirectMessage(key, { role: 'user', text })
       sendDirect(target, text).catch((e: Error) => {
-        appendDirectMessage(key, { role: 'system', text: `${uiText('gui.panel.error_prefix')} ${e.message}` })
+        appendDirectMessage(key, { role: 'system', text: uiText('gui.panel.error_x', '', { detail: e.message }) })
       })
       detailScrollRef.current?.scrollToBottom?.()
     }

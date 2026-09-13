@@ -191,7 +191,7 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
   if (err && stage === 'category') {
     return (
       <Box flexDirection="column" width={width}>
-        <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text>
+        <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text>
         <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
@@ -294,7 +294,7 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
       {info?.description ? <Text color={t.color.text}>{info.description}</Text> : null}
       {info?.path ? <Text color={t.color.muted}>path: {info.path}</Text> : null}
       {!info && !err ? <Text color={t.color.muted}>loading…</Text> : null}
-      {err ? <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text> : null}
+      {err ? <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text> : null}
       {installing ? <Text color={t.color.accent}>installing…</Text> : null}
 
       <OverlayHint t={t}>i reinspect · x reinstall · Enter/Esc back · q close</OverlayHint>

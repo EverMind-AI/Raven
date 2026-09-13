@@ -936,7 +936,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
 
         {formError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            {uiText('gui.panel.error_prefix')} {formError}
+            {uiText('gui.panel.error_x', '', { detail: formError })}
           </Text>
         ) : saving ? (
           <Text color={t.color.muted} wrap="truncate-end">
@@ -986,7 +986,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
   if (err && !rows.length) {
     return (
       <Box flexDirection="column" width={width}>
-        <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text>
+        <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text>
         <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
@@ -1000,7 +1000,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
         Subagents{view === 'uninstalled' ? ` · ${SECTION_TITLES.uninstalled}` : ''}
       </Text>
 
-      {err ? <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text> : null}
+      {err ? <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text> : null}
       {!rows.length ? <Text color={t.color.muted}>{uiText('gui.panel.no_subagents')}</Text> : null}
 
       {offset > 0 && <Text color={t.color.muted}> {uiText('gui.panel.more_up', '', { n: offset })}</Text>}

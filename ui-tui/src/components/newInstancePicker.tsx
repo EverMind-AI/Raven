@@ -133,7 +133,7 @@ export function NewInstancePicker({ gw, onCancel, onCreated, sessionKey, t }: Ne
     return (
       <Box flexDirection="column">
         <Text color={t.color.muted}>
-          {err ? `${uiText('gui.panel.error_prefix')} ${err}` : uiText('gui.panel.no_direct_chat')}
+          {err ? uiText('gui.panel.error_x', '', { detail: err }) : uiText('gui.panel.no_direct_chat')}
         </Text>
         <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
@@ -189,7 +189,7 @@ export function NewInstancePicker({ gw, onCancel, onCreated, sessionKey, t }: Ne
       })}
 
       {offset + VISIBLE < rows.length && <Text color={t.color.muted}> ↓ {rows.length - offset - VISIBLE} more</Text>}
-      {err && <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text>}
+      {err && <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text>}
       {creating ? (
         <OverlayHint t={t}>creating…</OverlayHint>
       ) : (

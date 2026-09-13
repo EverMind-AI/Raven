@@ -180,7 +180,7 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
   if (err && !items.length) {
     return (
       <Box flexDirection="column">
-        <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text>
+        <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text>
         <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
@@ -241,7 +241,7 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
       })}
 
       {offset + VISIBLE < items.length && <Text color={t.color.muted}> ↓ {items.length - offset - VISIBLE} more</Text>}
-      {err && <Text color={t.color.label}>{uiText('gui.panel.error_prefix')} {err}</Text>}
+      {err && <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text>}
       {deleting ? (
         <OverlayHint t={t}>deleting…</OverlayHint>
       ) : (
