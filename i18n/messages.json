@@ -303,20 +303,20 @@
     },
     "agents": {
       "zh": {
-        "name": "子代理",
-        "help": "打开子代理面板（实时查看，可暂停/终止）"
+        "name": "子智能体",
+        "help": "打开子智能体面板（实时查看，可暂停/终止）"
       }
     },
     "replay": {
       "zh": {
         "name": "回放",
-        "help": "回放一棵已完成的子代理树"
+        "help": "回放一棵已完成的子智能体树"
       }
     },
     "replay-diff": {
       "zh": {
         "name": "回放对比",
-        "help": "对比两棵已完成的子代理树"
+        "help": "对比两棵已完成的子智能体树"
       }
     },
     "reload-skills": {
@@ -808,7 +808,7 @@
       "zh": "保存"
     },
     "gui.ai_note": {
-      "en": "AI-generated content -- double-check what matters.",
+      "en": "AI-generated content - double-check what matters.",
       "zh": "内容由 AI 生成，请注意甄别"
     },
     "gui.answer.branch": {
@@ -881,23 +881,23 @@
     },
     "gui.auth.checking": {
       "en": "Sign-in was refused - checking whether the service is still up",
-      "zh": "登录被拒 — 正在确认服务是否还在"
+      "zh": "登录被拒——正在确认服务是否还在"
     },
     "gui.auth.dead": {
       "en": "The service is not running - start it with: raven web",
-      "zh": "服务没有在运行 — 在终端运行：raven web"
+      "zh": "服务没有在运行——在终端运行：raven web"
     },
     "gui.auth.stale": {
       "en": "The service is running but this tab's sign-in expired - get a fresh link with: raven web",
-      "zh": "服务在运行，但这个标签页的登录已失效 — 在终端运行 raven web 拿一个新链接"
+      "zh": "服务在运行，但这个标签页的登录已失效——在终端运行 raven web 拿一个新链接"
     },
     "gui.auth.dead_app": {
       "en": "Sign-in expired - quit Raven and open it again",
-      "zh": "登录已失效 — 关掉 Raven 再打开一次"
+      "zh": "登录已失效——关掉 Raven 再打开一次"
     },
     "gui.auth.retry": {
       "en": "Session expired - reconnecting",
-      "zh": "认证已失效 — 正在重新连接"
+      "zh": "认证已失效——正在重新连接"
     },
     "gui.boot_fail": {
       "en": "Startup step \"{where}\" failed: {err}",
@@ -932,7 +932,7 @@
       "zh": "还没打开页面"
     },
     "gui.br.idle_w": {
-      "en": "Type a URL above, or ask Raven to open one. You and Raven share this browser -- either of you can click, and the other sees it.",
+      "en": "Type a URL above, or ask Raven to open one. You and Raven share this browser - either of you can click, and the other sees it.",
       "zh": "在上面输入网址，或者让 Raven 打开一个。这个浏览器你和 Raven 共用：谁点的另一方都看得到。"
     },
     "gui.br.popin": {
@@ -948,7 +948,7 @@
       "zh": "已在独立窗口中打开"
     },
     "gui.br.popped_w": {
-      "en": "The page is running in a real Chromium window -- native scrolling and typing, and Raven keeps driving the same session. Logins carry over.",
+      "en": "The page is running in a real Chromium window - native scrolling and typing, and Raven keeps driving the same session. Logins carry over.",
       "zh": "页面正运行在一个真实的 Chromium 窗口里——原生滚动和输入，Raven 仍然操作的是同一个会话，登录状态也会带过去。"
     },
     "gui.br.reload": {
@@ -1133,7 +1133,7 @@
     },
     "gui.clarify.other_ph": {
       "en": "Other - write your own answer...",
-      "zh": "其他 — 输入你自己的回答…"
+      "zh": "其他——输入你自己的回答…"
     },
     "gui.clarify.ph": {
       "en": "Write your answer...",
@@ -1184,7 +1184,7 @@
       "zh": "关闭"
     },
     "gui.code.copied": {
-      "en": "copied",
+      "en": "Copied",
       "zh": "已复制"
     },
     "gui.code.copy": {
@@ -1276,7 +1276,7 @@
       "zh": "已开启，但没有在运行"
     },
     "gui.conn.st_unknown": {
-      "en": "Cannot tell -- the gateway is not answering",
+      "en": "Cannot tell - the gateway is not answering",
       "zh": "状态未知 —— gateway 没有应答"
     },
     "gui.conn.st_unpaired": {
@@ -1372,7 +1372,7 @@
       "zh": "每 {every}"
     },
     "gui.cron.failed": {
-      "en": "failed",
+      "en": "Failed",
       "zh": "失败"
     },
     "gui.cron.h.allday": {
@@ -1548,7 +1548,7 @@
       "zh": "打开它的会话"
     },
     "gui.cron.paused": {
-      "en": "paused",
+      "en": "Paused",
       "zh": "已暂停"
     },
     "gui.cron.paused_meta": {
@@ -1628,8 +1628,8 @@
       "zh": "运行 id"
     },
     "gui.dag.deps_none": {
-      "en": "nothing -- starts with the graph",
-      "zh": "无 — 第一层，随图一起起跑"
+      "en": "nothing - starts with the graph",
+      "zh": "无——第一层，随图一起起跑"
     },
     "gui.dag.done": {
       "en": "{n}/{t} done",
@@ -2124,7 +2124,7 @@
       "zh": "下一页"
     },
     "gui.hub.page": {
-      "en": "page {p} / {n}",
+      "en": "Page {p} of {n}",
       "zh": "第 {p} / {n} 页"
     },
     "gui.hub.prev": {
@@ -2349,7 +2349,7 @@
     },
     "gui.mem.empty": {
       "zh": "这里还没有记忆，先和 Raven 干点活吧",
-      "en": "Nothing here yet — go do some work with Raven"
+      "en": "Nothing here yet - go do some work with Raven"
     },
     "gui.mem.hero": {
       "zh": "数据与记忆",
@@ -2421,7 +2421,7 @@
     },
     "gui.mem.search_ph": {
       "zh": "语义搜索这类记忆…",
-      "en": "Search this memory semantically…"
+      "en": "Search this memory semantically..."
     },
     "gui.mem.sec_approach": {
       "zh": "做法",
@@ -2789,11 +2789,11 @@
     },
     "gui.model.key_ph": {
       "en": "{name} API key",
-      "zh": "{name} API Key"
+      "zh": "{name} API key"
     },
     "gui.model.key_ph_update": {
       "en": "Only a new key overwrites the stored one",
-      "zh": "填入新的 Key 才会覆盖"
+      "zh": "填入新的密钥才会覆盖"
     },
     "gui.model.kind.endpoint": {
       "en": "Key + address",
@@ -2801,7 +2801,7 @@
     },
     "gui.model.kind.key": {
       "en": "API key",
-      "zh": "API Key"
+      "zh": "API key"
     },
     "gui.model.kind.local": {
       "en": "Local deployment",
@@ -2821,7 +2821,7 @@
     },
     "gui.model.need_key": {
       "en": "Paste the key before connecting.",
-      "zh": "把 Key 填进来再连接。"
+      "zh": "把密钥填进来再连接。"
     },
     "gui.model.needs_login": {
       "en": "sign in from the terminal",
@@ -2829,7 +2829,7 @@
     },
     "gui.model.none_connected": {
       "en": "Nothing connected yet. Pick one below and paste its key.",
-      "zh": "一个都没连。下面挑一家填上 Key 就能开始。"
+      "zh": "一个都没连。下面挑一家填上密钥就能开始。"
     },
     "gui.model.not_connected": {
       "en": "not connected",
@@ -3036,8 +3036,8 @@
       "zh": "完成"
     },
     "gui.onb.key_ph": {
-      "en": "API Key",
-      "zh": "API Key"
+      "en": "API key",
+      "zh": "API key"
     },
     "gui.onb.key_s": {
       "en": "The key is stored locally in ~/.raven/config.json and never leaves this machine.",
@@ -3128,7 +3128,7 @@
       "zh": "完全访问"
     },
     "gui.perm.full_h": {
-      "en": "No prompts -- but operations that the platform deems dangerous are still refused.",
+      "en": "No prompts - but operations that the platform deems dangerous are still refused.",
       "zh": "不弹审批；平台级高危操作仍会被拒绝"
     },
     "gui.perm.smart": {
@@ -3585,7 +3585,7 @@
     },
     "gui.q.remove": {
       "en": "Remove",
-      "zh": "删除"
+      "zh": "移除"
     },
     "gui.qa.a": {
       "en": "ANSWER",
@@ -5092,7 +5092,7 @@
       "zh": "界面有更新"
     },
     "gui.update.reload": {
-      "en": "reload",
+      "en": "Reload",
       "zh": "刷新"
     },
     "gui.upg.body": {
@@ -5104,7 +5104,7 @@
       "zh": "当前还有回合在跑，跑完再升级。"
     },
     "gui.upg.close": {
-      "en": "close",
+      "en": "Close",
       "zh": "关闭"
     },
     "gui.upg.failed": {
@@ -5180,7 +5180,7 @@
       "zh": "消耗 {n} tokens"
     },
     "gui.ws.agents": {
-      "en": "Subagents",
+      "en": "Sub-agents",
       "zh": "子智能体"
     },
     "gui.ws.agents_absent": {
@@ -5508,7 +5508,7 @@
       "zh": "{n} 项"
     },
     "gui.ws.json_capped": {
-      "en": "… the rest is only in the source view",
+      "en": "... the rest is only in the source view",
       "zh": "… 其余内容请切换到源码视图"
     },
     "gui.ws.sub.browser": {
@@ -5688,7 +5688,7 @@
       "zh": "会下载这个构建的依赖（几百 MB），要几分钟。离开这个页面也会继续跑。"
     },
     "gui.agent.kind_builtin": {
-      "en": "built in",
+      "en": "built-in",
       "zh": "内置"
     },
     "gui.conn.cost_scan_line": {
@@ -5973,7 +5973,7 @@
     },
     "gui.pb.col_default": {
       "en": "default",
-      "zh": "缺省"
+      "zh": "默认"
     },
     "gui.pb.col_desc": {
       "en": "description",
@@ -6228,7 +6228,7 @@
       "zh": "未授权"
     },
     "gui.pb.cred_authorizing": {
-      "en": "waiting for the browser…",
+      "en": "waiting for the browser...",
       "zh": "等待浏览器授权…"
     },
     "gui.pb.cred_open_link": {
@@ -6301,7 +6301,7 @@
     },
     "gui.conn.not_receiving": {
       "en": "The enabled entry is not receiving yet - open the Raven app and it starts.",
-      "zh": "已启用的入口还没在收消息 — 打开 Raven App 就会启动"
+      "zh": "已启用的入口还没在收消息——打开 Raven App 就会启动"
     },
     "gui.sess.branch_empty": {
       "en": "This session has no content yet, so it cannot be branched",
