@@ -23,6 +23,7 @@ import { ApprovalPrompt, ClarifyPrompt, ConfirmPrompt } from './prompts.js'
 import { SessionPicker } from './sessionPicker.js'
 import { SkillsHub } from './skillsHub.js'
 import { SubagentsHub } from './subagentsHub.js'
+import { t as uiText } from '../i18n/index.js'
 
 const COMPLETION_WINDOW = 16
 
@@ -105,7 +106,7 @@ export function PromptZone({
   if (overlay.sudo) {
     return (
       <Box flexDirection="column" flexShrink={0} paddingX={1} paddingY={1}>
-        <MaskedPrompt cols={cols} icon="🔐" label="sudo password required" onSubmit={onSudoSubmit} t={theme} />
+        <MaskedPrompt cols={cols} icon="🔐" label={uiText('gui.panel.sudo_password')} onSubmit={onSudoSubmit} t={theme} />
       </Box>
     )
   }

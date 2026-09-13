@@ -63,6 +63,7 @@ import {
 import { compactPreview } from '../lib/text.js'
 import { MessageLine } from './messageLine.js'
 import { TextInput } from './textInput.js'
+import { t as uiText } from '../i18n/index.js'
 
 // ── Types + lookup tables ────────────────────────────────────────────
 
@@ -633,7 +634,7 @@ function LiveTranscript({
 
   if (refInfo.kind === 'spawn' && !callId) {
     return (
-      <OverlaySection defaultOpen id="transcript" scope={scope} t={t} title="Transcript">
+      <OverlaySection defaultOpen id="transcript" scope={scope} t={t} title={uiText('gui.panel.transcript')}>
         <Text color={t.color.muted}>queued — nothing has run yet</Text>
       </OverlaySection>
     )
@@ -641,7 +642,7 @@ function LiveTranscript({
 
   if (!msgs || msgs.length === 0) {
     return (
-      <OverlaySection defaultOpen id="transcript" scope={scope} t={t} title="Transcript">
+      <OverlaySection defaultOpen id="transcript" scope={scope} t={t} title={uiText('gui.panel.transcript')}>
         <Text color={t.color.muted}>{live ? 'waiting for the first step…' : 'no per-step record for this run'}</Text>
       </OverlaySection>
     )
@@ -784,7 +785,7 @@ function Detail({
       ) : null}
 
       {localTokens > 0 || localCost > 0 ? (
-        <OverlaySection defaultOpen id="budget" scope={item.id} t={t} title="Budget">
+        <OverlaySection defaultOpen id="budget" scope={item.id} t={t} title={uiText('gui.panel.budget')}>
           {localTokens > 0 ? (
             <Field
               name="tokens"
@@ -816,7 +817,7 @@ function Detail({
       ) : null}
 
       {filesRead.length > 0 || filesWritten.length > 0 ? (
-        <OverlaySection count={filesRead.length + filesWritten.length} id="files" scope={item.id} t={t} title="Files">
+        <OverlaySection count={filesRead.length + filesWritten.length} id="files" scope={item.id} t={t} title={uiText('gui.panel.files')}>
           {filesWritten.slice(0, 8).map((p, i) => (
             <Text color={t.color.statusGood} key={`w-${i}`} wrap="truncate-end">
               +{p}
@@ -834,7 +835,7 @@ function Detail({
       ) : null}
 
       {toolLines.length > 0 ? (
-        <OverlaySection count={toolLines.length} defaultOpen id="tools" scope={item.id} t={t} title="Tool calls">
+        <OverlaySection count={toolLines.length} defaultOpen id="tools" scope={item.id} t={t} title={uiText('gui.panel.tool_calls')}>
           {toolLines.map((line, i) => (
             <Text color={t.color.text} key={i} wrap="wrap">
               <Text color={t.color.muted}>·</Text> {line}
@@ -844,7 +845,7 @@ function Detail({
       ) : null}
 
       {outputTail.length > 0 ? (
-        <OverlaySection count={outputTail.length} defaultOpen id="output" scope={item.id} t={t} title="Output">
+        <OverlaySection count={outputTail.length} defaultOpen id="output" scope={item.id} t={t} title={uiText('gui.panel.output')}>
           {outputTail.map((entry, i) => (
             <Text color={entry.isError ? t.color.error : t.color.text} key={i} wrap="wrap">
               <Text bold color={entry.isError ? t.color.error : t.color.accent}>
@@ -857,7 +858,7 @@ function Detail({
       ) : null}
 
       {item.notes.length ? (
-        <OverlaySection count={item.notes.length} id="progress" scope={item.id} t={t} title="Progress">
+        <OverlaySection count={item.notes.length} id="progress" scope={item.id} t={t} title={uiText('gui.panel.progress')}>
           {item.notes.slice(-6).map((line, i) => (
             <Text color={t.color.text} key={i} wrap="wrap">
               <Text color={t.color.label}>·</Text> {line}
@@ -867,7 +868,7 @@ function Detail({
       ) : null}
 
       {item.summary ? (
-        <OverlaySection defaultOpen id="summary" scope={item.id} t={t} title="Summary">
+        <OverlaySection defaultOpen id="summary" scope={item.id} t={t} title={uiText('gui.panel.summary')}>
           <Text color={t.color.text} wrap="wrap">
             {item.summary}
           </Text>

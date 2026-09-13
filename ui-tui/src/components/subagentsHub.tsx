@@ -14,6 +14,7 @@ import { fmtDuration } from '../domain/messages.js'
 import { rpcErrorMessage } from '../lib/rpc.js'
 import { OverlayHint, windowItems } from './overlayControls.js'
 import { Spinner } from './thinking.js'
+import { t as uiText } from '../i18n/index.js'
 
 const MIN_WIDTH = 40
 const MAX_WIDTH = 90
@@ -916,8 +917,8 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
           {' '}
         </Text>
 
-        <FormFieldLine focused={field === 'name'} label="Name" saving={saving} t={t} value={nameInput} />
-        <FormFieldLine focused={field === 'description'} label="Description" saving={saving} t={t} value={descInput} />
+        <FormFieldLine focused={field === 'name'} label={uiText('gui.panel.name')} saving={saving} t={t} value={nameInput} />
+        <FormFieldLine focused={field === 'description'} label={uiText('gui.panel.description')} saving={saving} t={t} value={descInput} />
         {isOpenAI ? (
           <FormFieldLine
             display={masked}

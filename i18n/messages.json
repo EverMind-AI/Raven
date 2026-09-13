@@ -6338,6 +6338,82 @@
     "gui.ws.notice_dismiss": {
       "en": "Dismiss",
       "zh": "忽略"
+    },
+    "gui.panel.thinking": {
+      "en": "Thinking",
+      "zh": "思考"
+    },
+    "gui.panel.tool_calls": {
+      "en": "Tool calls",
+      "zh": "工具调用"
+    },
+    "gui.panel.progress": {
+      "en": "Progress",
+      "zh": "进度"
+    },
+    "gui.panel.spawned": {
+      "en": "Spawned",
+      "zh": "派生"
+    },
+    "gui.panel.spawn_tree": {
+      "en": "Spawn tree",
+      "zh": "派生树"
+    },
+    "gui.panel.activity": {
+      "en": "Activity",
+      "zh": "活动"
+    },
+    "gui.panel.transcript": {
+      "en": "Transcript",
+      "zh": "转录"
+    },
+    "gui.panel.budget": {
+      "en": "Budget",
+      "zh": "预算"
+    },
+    "gui.panel.files": {
+      "en": "Files",
+      "zh": "文件"
+    },
+    "gui.panel.output": {
+      "en": "Output",
+      "zh": "输出"
+    },
+    "gui.panel.summary": {
+      "en": "Summary",
+      "zh": "摘要"
+    },
+    "gui.panel.tools": {
+      "en": "Available Tools",
+      "zh": "可用工具"
+    },
+    "gui.panel.skills": {
+      "en": "Available Skills",
+      "zh": "可用技能"
+    },
+    "gui.panel.system_prompt": {
+      "en": "System Prompt",
+      "zh": "系统提示词"
+    },
+    "gui.panel.mcp_servers": {
+      "en": "MCP Servers",
+      "zh": "MCP 服务"
+    },
+    "gui.panel.scanning_skills": {
+      "en": "scanning skills",
+      "zh": "正在扫描技能"
+    },
+    "gui.panel.sudo_password": {
+      "en": "sudo password required",
+      "zh": "需要 sudo 密码"
+    },
+    "gui.panel.name": {
+      "en": "Name",
+      "zh": "名称"
+    },
+    "gui.panel.description": {
+      "en": "Description",
+      "zh": "描述"
     }
   }
 }

@@ -20,6 +20,7 @@ import {
 } from '../banner.js'
 import { flat } from '../lib/text.js'
 import { DEFAULT_THEME, type Theme } from '../theme.js'
+import { t as uiText } from '../i18n/index.js'
 
 const LOADER_TICK_MS = 120
 
@@ -269,7 +270,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
 
   const skillsBody = () => {
     if (info.lazy && skillEntries.length === 0) {
-      return <InlineLoader label="scanning skills" t={t} />
+      return <InlineLoader label={uiText('gui.panel.scanning_skills')} t={t} />
     }
 
     const shown = skillEntries.slice(0, SKILLS_MAX)
@@ -383,7 +384,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
               onToggle={() => setToolsOpen(v => !v)}
               open={toolsOpen}
               t={t}
-              title="Available Tools"
+              title={uiText('gui.panel.tools')}
             />
             {toolsOpen && toolsBody()}
           </Box>
@@ -398,7 +399,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
                 skillsCatCount > 0 ? `in ${skillsCatCount} categor${skillsCatCount === 1 ? 'y' : 'ies'}` : undefined
               }
               t={t}
-              title="Available Skills"
+              title={uiText('gui.panel.skills')}
             />
             {skillsOpen && skillsBody()}
           </Box>
@@ -411,7 +412,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
                 open={systemOpen}
                 suffix={`— ${sysPromptLen.toLocaleString()} chars`}
                 t={t}
-                title="System Prompt"
+                title={uiText('gui.panel.system_prompt')}
               />
               {systemOpen && systemBody()}
             </Box>
@@ -426,7 +427,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
                 open={mcpOpen}
                 suffix="connected"
                 t={t}
-                title="MCP Servers"
+                title={uiText('gui.panel.mcp_servers')}
               />
               {mcpOpen && mcpBody()}
             </Box>
