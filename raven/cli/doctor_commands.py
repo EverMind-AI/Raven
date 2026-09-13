@@ -657,8 +657,14 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     )
 
     # Which memories, and whose: this is where "where are my memories" is
-    # answered, without reading config.json by hand.
-    info.owned = everos_owned()
+    # answered, without reading config.json by hand. Reuse the loaded config
+    # when it records the decision so a concurrent test or second instance
+    # cannot change the answer between the static and memory checks.
+    plugin_config = getattr(getattr(config, "plugins", None), "config", {})
+    memory_config = plugin_config.get("everos-memory", {}) if isinstance(plugin_config, dict) else {}
+    recorded_root = memory_config.get("root") if isinstance(memory_config, dict) else None
+    recorded_owned = memory_config.get("owned") if isinstance(memory_config, dict) else None
+    info.owned = bool(recorded_owned) if recorded_owned is not None else everos_owned()
     info.address = configured_base_url(config)
     report = probe_capabilities(configured_base_url(config))
     info.server_running = report.reachable
@@ -666,7 +672,7 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     info.capabilities = dict(report.capabilities)
 
     if info.owned:
-        info.root = str(everos_root())
+        info.root = str(recorded_root) if recorded_root else str(everos_root())
         info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
         # Recall quality is decided by the embedding role in the user-level
         # everos.toml: with it recall matches meaning, without it only keywords.
