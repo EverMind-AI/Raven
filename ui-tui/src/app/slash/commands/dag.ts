@@ -113,7 +113,7 @@ const withRefreshedDagRun = (history: Msg[], snapshot: DagRunSnapshot): Msg[] =>
 
 export const dagCommands: SlashCommand[] = [
   {
-    help: "refresh this session's sub-agent DAG graphs, or show one node's prompt/output",
+    help: "refresh this session's subagent DAG graphs, or show one node's prompt/output",
     name: 'dag',
     run: (arg, ctx) => {
       const { gateway, local, transcript, ui } = ctx
