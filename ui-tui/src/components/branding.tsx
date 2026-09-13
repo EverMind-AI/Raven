@@ -42,7 +42,9 @@ function InlineLoader({ label, t }: { label: string; t: Theme }) {
   )
 }
 
-const STARTUP_MESSAGES = ['summoning raven…', 'building agent loop…', 'loading tools & skills…']
+// Keys, not text: this array is built at import, which is before `setLocale`
+// runs, so holding the strings here would freeze the boot line in English.
+const STARTUP_KEYS = ['gui.panel.boot_summon', 'gui.panel.boot_loop', 'gui.panel.boot_tools']
 const STARTUP_LABEL_MS = 900
 
 // Placeholder shown in the intro row while the backend builds the agent loop,
@@ -58,7 +60,8 @@ export function StartupLoader({ t }: { t: Theme }) {
     return () => clearInterval(id)
   }, [])
 
-  const label = STARTUP_MESSAGES[Math.min(step, STARTUP_MESSAGES.length - 1)] ?? STARTUP_MESSAGES[0]
+  const key = STARTUP_KEYS[Math.min(step, STARTUP_KEYS.length - 1)] ?? STARTUP_KEYS[0]!
+  const label = uiText(key)
 
   return (
     <Box borderColor={t.color.border} borderStyle="round" marginBottom={1} paddingX={2} paddingY={1}>

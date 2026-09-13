@@ -281,7 +281,18 @@ function SubagentRowLine({
   )
 }
 
-const SECTION_TITLES = { installed: 'INSTALLED', presets: 'AVAILABLE PRESETS', uninstalled: 'NOT INSTALLED' } as const
+/** The three roster sections. The view names them; `buildSubagentView`
+ *  only tags a header with which one it is, so the shaping stays pure and a
+ *  locale flip cannot need it re-run. */
+export type SectionKind = 'installed' | 'presets' | 'uninstalled'
+
+const SECTION_TITLE_KEYS = {
+  installed: 'gui.panel.sec_installed',
+  presets: 'gui.panel.sec_presets',
+  uninstalled: 'gui.panel.sec_uninstalled'
+} as const
+
+export const sectionTitle = (section: SectionKind): string => uiText(SECTION_TITLE_KEYS[section])
 
 /** Which list the overlay is showing: the roster, or the drill-in that holds
  *  the not-installed rows the roster folds away. */
@@ -297,7 +308,7 @@ export type SubagentItem = { kind: 'group'; rows: SubagentRow[] } | { kind: 'row
  *  index. Headers and items share one array so `windowItems` can window across
  *  the whole list in render order -- a section boundary is not a reason for the
  *  selected row to be able to scroll out of view. */
-export type DisplayLine = { item: SubagentItem; itemIndex: number; kind: 'item' } | { kind: 'header'; title: string }
+export type DisplayLine = { item: SubagentItem; itemIndex: number; kind: 'item' } | { kind: 'header'; section: SectionKind }
 
 export interface SubagentDisplay {
   items: SubagentItem[]
@@ -328,7 +339,7 @@ export function buildSubagentView(rows: SubagentRow[], view: SubagentView): Suba
 
   if (view === 'uninstalled') {
     if (uninstalled.length) {
-      lines.push({ kind: 'header', title: SECTION_TITLES.uninstalled })
+      lines.push({ kind: 'header', section: 'uninstalled' })
 
       for (const row of uninstalled) {
         push({ kind: 'row', row })
@@ -339,7 +350,7 @@ export function buildSubagentView(rows: SubagentRow[], view: SubagentView): Suba
   }
 
   if (installed.length) {
-    lines.push({ kind: 'header', title: SECTION_TITLES.installed })
+    lines.push({ kind: 'header', section: 'installed' })
 
     for (const row of installed) {
       push({ kind: 'row', row })
@@ -347,7 +358,7 @@ export function buildSubagentView(rows: SubagentRow[], view: SubagentView): Suba
   }
 
   if (presets.length) {
-    lines.push({ kind: 'header', title: SECTION_TITLES.presets })
+    lines.push({ kind: 'header', section: 'presets' })
 
     for (const row of presets) {
       push({ kind: 'row', row })
@@ -370,7 +381,7 @@ function GroupLine({ count, selected, t }: { count: number; selected: boolean; t
   return (
     <Text bold color={selected ? t.color.accent : t.color.label} inverse={selected} wrap="truncate-end">
       {selected ? '▸ ' : '  '}
-      {SECTION_TITLES.uninstalled} ({count}) - Enter to open
+      {uiText('gui.panel.group_open', '', { n: count, title: sectionTitle('uninstalled') })}
     </Text>
   )
 }
@@ -621,7 +632,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
     // no reason to pay a round trip for input the client can already tell
     // will fail -- show the same error inline instead.
     if (!trimmedName) {
-      setFormError('name cannot be blank')
+      setFormError(uiText('gui.panel.name_blank'))
 
       return
     }
@@ -893,7 +904,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
   })
 
   if (loading) {
-    return <Text color={t.color.muted}>loading subagents…</Text>
+    return <Text color={t.color.muted}>{uiText('gui.panel.loading_subagents')}</Text>
   }
 
   if (stage === 'form' && selected) {
@@ -901,12 +912,14 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
     // Copied verbatim from modelPicker.tsx's key stage (line 547): the only
     // masking logic this file is allowed to have.
     const masked = keyInput ? '•'.repeat(Math.min(keyInput.length, 40)) : ''
-    const keyLabel = selected.has_api_key ? 'API key (stored - blank keeps it)' : 'API key'
+    const keyLabel = selected.has_api_key ? uiText('gui.panel.key_stored') : 'API key'
 
     return (
       <Box flexDirection="column" width={width}>
         <Text bold color={t.color.accent} wrap="truncate-end">
-          {formMode === 'add' ? 'Add subagent' : `Edit subagent: ${selected.name}`}
+          {formMode === 'add'
+            ? uiText('gui.panel.add_subagent')
+            : uiText('gui.panel.edit_subagent', '', { name: selected.name })}
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end">
@@ -948,7 +961,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
           </Text>
         )}
 
-        <OverlayHint t={t}>Tab field · Enter/Ctrl+S save · Esc back</OverlayHint>
+        <OverlayHint t={t}>{uiText('gui.panel.k_form')}</OverlayHint>
       </Box>
     )
   }
@@ -977,7 +990,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
             removing…
           </Text>
         ) : (
-          <OverlayHint t={t}>y confirm · n/Esc cancel</OverlayHint>
+          <OverlayHint t={t}>{uiText('gui.panel.k_yn')}</OverlayHint>
         )}
       </Box>
     )
@@ -997,7 +1010,8 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
   return (
     <Box flexDirection="column" width={width}>
       <Text bold color={t.color.accent}>
-        Subagents{view === 'uninstalled' ? ` · ${SECTION_TITLES.uninstalled}` : ''}
+        {uiText('gui.panel.subagents')}
+        {view === 'uninstalled' ? ` · ${sectionTitle('uninstalled')}` : ''}
       </Text>
 
       {err ? <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text> : null}
@@ -1007,8 +1021,8 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
 
       {visibleLines.map(line =>
         line.kind === 'header' ? (
-          <Text bold color={t.color.label} key={`header:${line.title}`} wrap="truncate-end">
-            {line.title}
+          <Text bold color={t.color.label} key={`header:${line.section}`} wrap="truncate-end">
+            {sectionTitle(line.section)}
           </Text>
         ) : line.item.kind === 'group' ? (
           <GroupLine count={line.item.rows.length} key="group:uninstalled" selected={line.itemIndex === idx} t={t} />
@@ -1038,13 +1052,13 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
             // that offers a switch it does not have is the same broken control as
             // drawing one.
             selected?.kind === 'builtin'
-            ? '↑/↓ select · r refresh · Esc/q close'
-            : '↑/↓ select · Enter add/edit/open · space toggle · t test · d delete · r refresh · Esc/q close'
+            ? uiText('gui.panel.k_hub_builtin')
+            : uiText('gui.panel.k_hub_main')
           : selected?.configured
-            ? '↑/↓ select · Enter edit · space toggle · t test · d delete · r refresh · ←/Esc back · q close'
-            : '↑/↓ select · r refresh · ←/Esc back · q close'}
+            ? uiText('gui.panel.k_hub_sub_cfg')
+            : uiText('gui.panel.k_hub_sub')}
       </OverlayHint>
-      <OverlayHint t={t}>custom agents: web UI /subagents or ~/.raven/config.json</OverlayHint>
+      <OverlayHint t={t}>{uiText('gui.panel.custom_agents')}</OverlayHint>
     </Box>
   )
 }

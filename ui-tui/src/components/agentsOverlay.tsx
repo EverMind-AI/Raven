@@ -635,7 +635,7 @@ function LiveTranscript({
   if (refInfo.kind === 'spawn' && !callId) {
     return (
       <OverlaySection defaultOpen id="transcript" scope={scope} t={t} title={uiText('gui.panel.transcript')}>
-        <Text color={t.color.muted}>queued — nothing has run yet</Text>
+        <Text color={t.color.muted}>{uiText('gui.panel.queued_none')}</Text>
       </OverlaySection>
     )
   }
@@ -643,7 +643,7 @@ function LiveTranscript({
   if (!msgs || msgs.length === 0) {
     return (
       <OverlaySection defaultOpen id="transcript" scope={scope} t={t} title={uiText('gui.panel.transcript')}>
-        <Text color={t.color.muted}>{live ? 'waiting for the first step…' : 'no per-step record for this run'}</Text>
+        <Text color={t.color.muted}>{live ? uiText('gui.panel.waiting_first') : uiText('gui.panel.no_step_record')}</Text>
       </OverlaySection>
     )
   }
@@ -690,12 +690,12 @@ function LiveTranscript({
       ))}
 
       {tail.length === 0 && !consoleTail ? (
-        <Text color={t.color.muted}>{live ? 'waiting for the first step…' : 'no per-step record for this run'}</Text>
+        <Text color={t.color.muted}>{live ? uiText('gui.panel.waiting_first') : uiText('gui.panel.no_step_record')}</Text>
       ) : null}
 
       {consoleTail ? (
         <Box flexDirection="column" marginTop={tail.length > 0 ? 1 : 0}>
-          <Text color={t.color.label}>console</Text>
+          <Text color={t.color.label}>{uiText('gui.panel.console')}</Text>
           <Text color={t.color.muted} wrap="wrap">
             {consoleTail}
           </Text>
@@ -1000,7 +1000,7 @@ function DiffView({
         <Text bold color={t.color.primary}>
           Replay diff
         </Text>
-        <Text color={t.color.muted}>baseline vs candidate · esc/q close</Text>
+        <Text color={t.color.muted}>{uiText('gui.panel.k_diff')}</Text>
       </Box>
 
       <Box flexDirection="row" marginBottom={1}>
@@ -1478,7 +1478,8 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
 
   const title =
     replayMode && effectiveSnapshot
-      ? `${historyIndex > 0 ? `Replay ${historyIndex}/${history.length}` : 'Last turn'} · finished ${new Date(
+      ? `${historyIndex > 0 ? uiText('gui.panel.replay_x', '', { i: historyIndex, n: history.length })
+          : uiText('gui.panel.last_turn')} · finished ${new Date(
           effectiveSnapshot.finishedAt
         ).toLocaleTimeString()}`
       : `Spawn tree${delegation.paused ? ' · ⏸ paused' : ''}`

@@ -6451,6 +6451,178 @@
       "en": "no previous sessions",
       "zh": "没有历史会话"
     },
+    "gui.panel.subagents": {
+      "en": "Subagents",
+      "zh": "子智能体"
+    },
+    "gui.panel.sec_installed": {
+      "en": "INSTALLED",
+      "zh": "已安装"
+    },
+    "gui.panel.sec_presets": {
+      "en": "AVAILABLE PRESETS",
+      "zh": "可用预设"
+    },
+    "gui.panel.sec_uninstalled": {
+      "en": "NOT INSTALLED",
+      "zh": "未安装"
+    },
+    "gui.panel.group_open": {
+      "en": "{title} ({n}) - Enter to open",
+      "zh": "{title}（{n}）· Enter 打开"
+    },
+    "gui.panel.loading_subagents": {
+      "en": "loading subagents...",
+      "zh": "正在加载子智能体…"
+    },
+    "gui.panel.loading_skills": {
+      "en": "loading skills...",
+      "zh": "正在加载技能…"
+    },
+    "gui.panel.loading_sessions": {
+      "en": "loading sessions...",
+      "zh": "正在加载会话…"
+    },
+    "gui.panel.loading_models": {
+      "en": "loading models...",
+      "zh": "正在加载模型…"
+    },
+    "gui.panel.loading": {
+      "en": "loading...",
+      "zh": "正在加载…"
+    },
+    "gui.panel.installing": {
+      "en": "installing...",
+      "zh": "正在安装…"
+    },
+    "gui.panel.deleting": {
+      "en": "deleting...",
+      "zh": "正在删除…"
+    },
+    "gui.panel.creating": {
+      "en": "creating...",
+      "zh": "正在创建…"
+    },
+    "gui.panel.add_subagent": {
+      "en": "Add subagent",
+      "zh": "添加子智能体"
+    },
+    "gui.panel.edit_subagent": {
+      "en": "Edit subagent: {name}",
+      "zh": "编辑子智能体：{name}"
+    },
+    "gui.panel.key_stored": {
+      "en": "API key (stored - blank keeps it)",
+      "zh": "API key（已保存 · 留空则不变）"
+    },
+    "gui.panel.name_blank": {
+      "en": "name cannot be blank",
+      "zh": "名称不能为空"
+    },
+    "gui.panel.press_d_again": {
+      "en": "press d again to delete",
+      "zh": "再按一次 d 删除"
+    },
+    "gui.panel.custom_agents": {
+      "en": "custom agents: web UI /subagents or ~/.raven/config.json",
+      "zh": "自定义子智能体：网页端 /subagents 或 ~/.raven/config.json"
+    },
+    "gui.panel.server_addr": {
+      "en": "Server address",
+      "zh": "服务器地址"
+    },
+    "gui.panel.console": {
+      "en": "console",
+      "zh": "控制台"
+    },
+    "gui.panel.last_turn": {
+      "en": "Last turn",
+      "zh": "上一轮"
+    },
+    "gui.panel.replay_x": {
+      "en": "Replay {i}/{n}",
+      "zh": "回放 {i}/{n}"
+    },
+    "gui.panel.queued_none": {
+      "en": "queued - nothing has run yet",
+      "zh": "排队中 · 还没有开始"
+    },
+    "gui.panel.waiting_first": {
+      "en": "waiting for the first step...",
+      "zh": "正在等待第一步…"
+    },
+    "gui.panel.no_step_record": {
+      "en": "no per-step record for this run",
+      "zh": "这次运行没有分步记录"
+    },
+    "gui.panel.k_form": {
+      "en": "Tab field · Enter/Ctrl+S save · Esc back",
+      "zh": "Tab 切换字段 · Enter/Ctrl+S 保存 · Esc 返回"
+    },
+    "gui.panel.k_yn": {
+      "en": "y confirm · n/Esc cancel",
+      "zh": "y 确认 · n/Esc 取消"
+    },
+    "gui.panel.k_yn_enter": {
+      "en": "y/Enter confirm · n/Esc cancel",
+      "zh": "y/Enter 确认 · n/Esc 取消"
+    },
+    "gui.panel.k_hub_main": {
+      "en": "↑/↓ select · Enter add/edit/open · space toggle · t test · d delete · r refresh · Esc/q close",
+      "zh": "↑/↓ 选择 · Enter 添加/编辑/打开 · space 启停 · t 测试 · d 删除 · r 刷新 · Esc/q 关闭"
+    },
+    "gui.panel.k_hub_builtin": {
+      "en": "↑/↓ select · r refresh · Esc/q close",
+      "zh": "↑/↓ 选择 · r 刷新 · Esc/q 关闭"
+    },
+    "gui.panel.k_hub_sub_cfg": {
+      "en": "↑/↓ select · Enter edit · space toggle · t test · d delete · r refresh · ←/Esc back · q close",
+      "zh": "↑/↓ 选择 · Enter 编辑 · space 启停 · t 测试 · d 删除 · r 刷新 · ←/Esc 返回 · q 关闭"
+    },
+    "gui.panel.k_hub_sub": {
+      "en": "↑/↓ select · r refresh · ←/Esc back · q close",
+      "zh": "↑/↓ 选择 · r 刷新 · ←/Esc 返回 · q 关闭"
+    },
+    "gui.panel.k_cats": {
+      "en": "↑/↓ select · Enter open · 1-9,0 quick · Esc/q cancel",
+      "zh": "↑/↓ 选择 · Enter 打开 · 1-9,0 快选 · Esc/q 取消"
+    },
+    "gui.panel.k_esc_back_close": {
+      "en": "Esc back · q close",
+      "zh": "Esc 返回 · q 关闭"
+    },
+    "gui.panel.k_skill": {
+      "en": "i reinspect · x reinstall · Enter/Esc back · q close",
+      "zh": "i 重新查看 · x 重新安装 · Enter/Esc 返回 · q 关闭"
+    },
+    "gui.panel.k_sessions": {
+      "en": "↑/↓ select · Enter resume · 1-9 quick · d delete · Esc/q cancel",
+      "zh": "↑/↓ 选择 · Enter 恢复 · 1-9 快选 · d 删除 · Esc/q 取消"
+    },
+    "gui.panel.k_instances": {
+      "en": "↑/↓ select · Enter create · 1-9 quick · Esc/q cancel",
+      "zh": "↑/↓ 选择 · Enter 创建 · 1-9 快选 · Esc/q 取消"
+    },
+    "gui.panel.k_diff": {
+      "en": "baseline vs candidate · esc/q close",
+      "zh": "基线 对比 候选 · esc/q 关闭"
+    },
+    "gui.panel.boot_summon": {
+      "en": "summoning raven...",
+      "zh": "正在唤醒 raven…"
+    },
+    "gui.panel.boot_loop": {
+      "en": "building agent loop...",
+      "zh": "正在搭建智能体循环…"
+    },
+    "gui.panel.boot_tools": {
+      "en": "loading tools & skills...",
+      "zh": "正在加载工具与技能…"
+    },
+    "gui.panel.no_active_session": {
+      "en": "no active session",
+      "zh": "当前没有会话"
+    },
     "gui.panel.no_subagents": {
       "en": "no subagents or presets available",
       "zh": "没有可用的子智能体或预设"

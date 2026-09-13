@@ -174,7 +174,7 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
   })
 
   if (loading) {
-    return <Text color={t.color.muted}>loading sessions…</Text>
+    return <Text color={t.color.muted}>{uiText('gui.panel.loading_sessions')}</Text>
   }
 
   if (err && !items.length) {
@@ -234,7 +234,7 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
               inverse={selected}
               wrap="truncate-end"
             >
-              {pendingDelete ? 'press d again to delete' : s.title || s.preview || '(untitled)'}
+              {pendingDelete ? uiText('gui.panel.press_d_again') : s.title || s.preview || '(untitled)'}
             </Text>
           </Box>
         )
@@ -243,9 +243,9 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
       {offset + VISIBLE < items.length && <Text color={t.color.muted}> ↓ {items.length - offset - VISIBLE} more</Text>}
       {err && <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text>}
       {deleting ? (
-        <OverlayHint t={t}>deleting…</OverlayHint>
+        <OverlayHint t={t}>{uiText('gui.panel.deleting')}</OverlayHint>
       ) : (
-        <OverlayHint t={t}>↑/↓ select · Enter resume · 1-9 quick · d delete · Esc/q cancel</OverlayHint>
+        <OverlayHint t={t}>{uiText('gui.panel.k_sessions')}</OverlayHint>
       )}
     </Box>
   )

@@ -185,7 +185,7 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
   })
 
   if (loading) {
-    return <Text color={t.color.muted}>loading skills…</Text>
+    return <Text color={t.color.muted}>{uiText('gui.panel.loading_skills')}</Text>
   }
 
   if (err && stage === 'category') {
@@ -237,7 +237,7 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
         })}
 
         {offset + VISIBLE < rows.length && <Text color={t.color.muted}> ↓ {rows.length - offset - VISIBLE} more</Text>}
-        <OverlayHint t={t}>↑/↓ select · Enter open · 1-9,0 quick · Esc/q cancel</OverlayHint>
+        <OverlayHint t={t}>{uiText('gui.panel.k_cats')}</OverlayHint>
       </Box>
     )
   }
@@ -278,7 +278,7 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
           <Text color={t.color.muted}> ↓ {skills.length - offset - VISIBLE} more</Text>
         )}
         <OverlayHint t={t}>
-          {skills.length ? '↑/↓ select · Enter open · 1-9,0 quick · Esc back · q close' : 'Esc back · q close'}
+          {skills.length ? '↑/↓ select · Enter open · 1-9,0 quick · Esc back · q close' : uiText('gui.panel.k_esc_back_close')}
         </OverlayHint>
       </Box>
     )
@@ -293,11 +293,11 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
       <Text color={t.color.muted}>{info?.category ?? selectedCat}</Text>
       {info?.description ? <Text color={t.color.text}>{info.description}</Text> : null}
       {info?.path ? <Text color={t.color.muted}>path: {info.path}</Text> : null}
-      {!info && !err ? <Text color={t.color.muted}>loading…</Text> : null}
+      {!info && !err ? <Text color={t.color.muted}>{uiText('gui.panel.loading')}</Text> : null}
       {err ? <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text> : null}
-      {installing ? <Text color={t.color.accent}>installing…</Text> : null}
+      {installing ? <Text color={t.color.accent}>{uiText('gui.panel.installing')}</Text> : null}
 
-      <OverlayHint t={t}>i reinspect · x reinstall · Enter/Esc back · q close</OverlayHint>
+      <OverlayHint t={t}>{uiText('gui.panel.k_skill')}</OverlayHint>
     </Box>
   )
 }

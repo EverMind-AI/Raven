@@ -73,7 +73,7 @@ export function NewInstancePicker({ gw, onCancel, onCreated, sessionKey, t }: Ne
     }
 
     if (!sessionKey) {
-      setErr('no active session')
+      setErr(uiText('gui.panel.no_active_session'))
 
       return
     }
@@ -126,7 +126,7 @@ export function NewInstancePicker({ gw, onCancel, onCreated, sessionKey, t }: Ne
   })
 
   if (loading) {
-    return <Text color={t.color.muted}>loading sub-agents…</Text>
+    return <Text color={t.color.muted}>{uiText('gui.panel.loading_subagents')}</Text>
   }
 
   if (!rows.length) {
@@ -191,9 +191,9 @@ export function NewInstancePicker({ gw, onCancel, onCreated, sessionKey, t }: Ne
       {offset + VISIBLE < rows.length && <Text color={t.color.muted}> ↓ {rows.length - offset - VISIBLE} more</Text>}
       {err && <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text>}
       {creating ? (
-        <OverlayHint t={t}>creating…</OverlayHint>
+        <OverlayHint t={t}>{uiText('gui.panel.creating')}</OverlayHint>
       ) : (
-        <OverlayHint t={t}>↑/↓ select · Enter create · 1-9 quick · Esc/q cancel</OverlayHint>
+        <OverlayHint t={t}>{uiText('gui.panel.k_instances')}</OverlayHint>
       )}
     </Box>
   )

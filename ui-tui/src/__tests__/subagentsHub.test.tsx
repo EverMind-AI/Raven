@@ -470,9 +470,9 @@ describe('buildSubagentView', () => {
   it('renders the roster with the installed and preset headers only', () => {
     const { lines } = buildSubagentView(ROWS, 'main')
 
-    expect(lines.filter(l => l.kind === 'header').map(l => (l.kind === 'header' ? l.title : ''))).toEqual([
-      'INSTALLED',
-      'AVAILABLE PRESETS'
+    expect(lines.filter(l => l.kind === 'header').map(l => (l.kind === 'header' ? l.section : ''))).toEqual([
+      'installed',
+      'presets'
     ])
   })
 
@@ -480,7 +480,7 @@ describe('buildSubagentView', () => {
     const { items, lines } = buildSubagentView(ROWS, 'uninstalled')
 
     expect(items).toEqual([{ kind: 'row', row: GUARD_ROW }])
-    expect(lines[0]).toEqual({ kind: 'header', title: 'NOT INSTALLED' })
+    expect(lines[0]).toEqual({ kind: 'header', section: 'uninstalled' })
   })
 
   // The reported case: openclaw ships as a preset, is not on the login shell

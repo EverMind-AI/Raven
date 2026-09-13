@@ -893,7 +893,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
   })
 
   if (loading) {
-    return <Text color={t.color.muted}>loading models…</Text>
+    return <Text color={t.color.muted}>{uiText('gui.panel.loading_models')}</Text>
   }
 
   if (err) {
@@ -925,7 +925,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
     const keyLabel = provider.key_env ?? 'API key'
     const baseLabel =
       provider.auth_type === 'local'
-        ? 'Server address'
+        ? uiText('gui.panel.server_addr')
         : `API base${provider.needs_api_base ? ' (required)' : ' (optional)'}`
     const caret = keySaving ? '' : '▎'
 
@@ -1280,7 +1280,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
             disconnecting…
           </Text>
         ) : (
-          <OverlayHint t={t}>y/Enter confirm · n/Esc cancel</OverlayHint>
+          <OverlayHint t={t}>{uiText('gui.panel.k_yn_enter')}</OverlayHint>
         )}
       </Box>
     )
