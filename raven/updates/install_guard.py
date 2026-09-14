@@ -52,7 +52,10 @@ class InstallFault:
 
 
 def marker_path() -> Path:
-    from raven.config.loader import raven_home
+    # Read from the kernel module rather than the config shelf: the upgrade
+    # handoff writes this marker from the old tool environment, which carries
+    # no dependency of the config layer's own.
+    from raven.home import raven_home
 
     return raven_home() / MARKER_NAME
 
