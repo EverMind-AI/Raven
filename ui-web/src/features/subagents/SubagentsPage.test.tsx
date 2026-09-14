@@ -329,11 +329,11 @@ describe('subagents island, the list', () => {
   })
 
   it('lets the keyboard reach the retire control instead of opening the row', async () => {
-    /* Reported by gloryfromca on #401. The row is a focusable button holding a
-       real button, and a keydown on the inner one bubbles: the row's handler
-       called `preventDefault()`, which cancels the inner button's own native
-       activation, and then opened the pane. So a keyboard user could not
-       retire at all -- they got the thing they were trying not to do. */
+    /* The row is a focusable button holding a real button, and a keydown on the
+       inner one bubbles: the row's handler calls `preventDefault()`, which
+       cancels the inner button's own native activation, and then opens the
+       pane. Without the boundary a keyboard user cannot retire at all -- they
+       get the one thing they were trying not to do, while the mouse works. */
     startable({ instances: async () => [inst({ handle: 'one' })] })
     await mountGrouped()
     await screen.findByText('hermes')
