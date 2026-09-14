@@ -177,8 +177,7 @@ describe('getting a conversation to work in', () => {
   })
 
   it('holds a settled send behind a promotion the roster started', async () => {
-    /* Reported by gloryfromca on #399, and reproduced here before the fix.
-       `promote` moves the pointer and lowers `draft` BEFORE awaiting the staged
+    /* `promote` moves the pointer and lowers `draft` BEFORE awaiting the staged
        model, tier and permission writes and the subscription. A send landing in
        that window reads the page as a settled conversation and dispatches at
        once -- so the first turn starts on a conversation whose draft-selected
