@@ -91,4 +91,3 @@ DS.conn = {
     ? Promise.resolve(null)
     : rpc.call('channels.qr', { name: c.id })),
 };
-
