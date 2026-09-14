@@ -47,6 +47,11 @@ SUBAGENT_ENV_VAR = "RAVEN_SUBAGENT"
 #: registered" when asked without one -- they are dropped so the model is not
 #: offered three tools that can only answer that.
 #:
+#: ``a2a_send`` is here because it reaches another agent without passing through
+#: ``spawn`` -- the same shape as ``load_playbook``. A sub-agent that hands its
+#: task to an external A2A peer returns a receipt, and the caller cannot tell
+#: that from an answer.
+#:
 #: ``message`` is deliberately absent. The in-process backend withholds it, but an
 #: acp child reaches its caller over the protocol rather than through that tool.
 #:
@@ -67,6 +72,7 @@ WITHHELD_FROM_SUBAGENT = frozenset(
         "cancel_dag",
         "dag_status",
         "resolve_dag_node",
+        "a2a_send",
     }
 )
 

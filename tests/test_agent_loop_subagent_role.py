@@ -297,3 +297,11 @@ def test_both_sub_agent_paths_withhold_the_same_tools(workspace, monkeypatch: py
     assert "read_file" in builtin and delegated.tools.has("read_file"), "baseline: neither side may be empty"
     over_acp = {name for name in WITHHELD_FROM_SUBAGENT if delegated.tools.has(name)}
     assert WITHHELD_FROM_SUBAGENT & builtin == over_acp == set()
+
+
+def test_a2a_send_is_withheld_from_a_subagent(monkeypatch):
+    from raven.agent.subagent.role import WITHHELD_FROM_SUBAGENT, is_subagent_process
+
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+    assert is_subagent_process() is True
+    assert "a2a_send" in WITHHELD_FROM_SUBAGENT
