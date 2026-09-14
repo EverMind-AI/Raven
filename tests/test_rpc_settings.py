@@ -365,3 +365,86 @@ class TestAPinIsWrittenAsOneThing:
 
         block = _read(cfg)["translate"]
         assert block["model"] is None and block["provider"] is None
+
+
+class TestAWriteFollowsTheSpellingTheConfigAlreadyUses:
+    """Every block and field is accepted under two spellings.
+
+    The models set ``alias_generator=to_camel`` with ``populate_by_name=True``,
+    so a hand-written config may hold ``session_title`` or ``sessionTitle`` and
+    both are valid. A write that always used its own spelling did not update
+    such a config, it added a second key beside the first -- and because the
+    models forbid extras, the block that was already there became an extra
+    input and the whole config stopped loading. Every case here is a config
+    that loaded before the write and has to load after it.
+    """
+
+    @staticmethod
+    def _loads(cfg) -> bool:
+        from raven.config.raven import load_raven_config
+
+        try:
+            load_raven_config()
+        except Exception:
+            return False
+        return True
+
+    async def test_a_snake_case_block_is_updated_not_duplicated(self, cfg):
+        cfg.write_text(json.dumps({"session_title": {"enabled": True, "model": "old/m"}}), encoding="utf-8")
+
+        await rpc_console.settings_set(
+            {"key": "sessionTitle", "value": {"model": "openai/gpt-5.4-mini", "provider": "openai"}}
+        )
+
+        raw = _read(cfg)
+        assert "sessionTitle" not in raw, "a second spelling of the block is what breaks the load"
+        assert raw["session_title"]["model"] == "openai/gpt-5.4-mini"
+        assert raw["session_title"]["provider"] == "openai"
+        assert raw["session_title"]["enabled"] is True
+        assert self._loads(cfg)
+
+    async def test_snake_case_leaves_are_updated_not_duplicated(self, cfg):
+        cfg.write_text(
+            json.dumps({"knowledge": {"embedding_model": "openai/old", "embedding_provider": "openai"}}),
+            encoding="utf-8",
+        )
+
+        await rpc_console.settings_set(
+            {"key": "knowledge", "value": {"embeddingModel": "openai/new", "embeddingProvider": "openai"}}
+        )
+
+        block = _read(cfg)["knowledge"]
+        assert set(block) == {"embedding_model", "embedding_provider"}
+        assert block["embedding_model"] == "openai/new"
+        assert self._loads(cfg)
+
+    async def test_a_single_leaf_write_follows_the_block_too(self, cfg):
+        """Not only the pair: the leaf keys address the same block and grew the
+        same duplicate."""
+        cfg.write_text(json.dumps({"session_title": {"enabled": True}}), encoding="utf-8")
+
+        await rpc_console.settings_set({"key": "sessionTitle.model", "value": "openai/x"})
+
+        raw = _read(cfg)
+        assert "sessionTitle" not in raw
+        assert raw["session_title"]["model"] == "openai/x"
+        assert self._loads(cfg)
+
+    async def test_a_camel_case_config_is_left_in_its_own_spelling(self, cfg):
+        cfg.write_text(json.dumps({"sessionTitle": {"enabled": True, "model": "old"}}), encoding="utf-8")
+
+        await rpc_console.settings_set({"key": "sessionTitle", "value": {"model": "openai/new", "provider": "openai"}})
+
+        raw = _read(cfg)
+        assert "session_title" not in raw
+        assert raw["sessionTitle"]["model"] == "openai/new"
+        assert self._loads(cfg)
+
+    async def test_a_block_that_is_not_there_yet_is_written_camel(self, cfg):
+        """No existing spelling to follow, so the alias the models generate."""
+        await rpc_console.settings_set(
+            {"key": "knowledge", "value": {"embeddingModel": "openai/new", "embeddingProvider": "openai"}}
+        )
+
+        assert set(_read(cfg)["knowledge"]) == {"embeddingModel", "embeddingProvider"}
+        assert self._loads(cfg)

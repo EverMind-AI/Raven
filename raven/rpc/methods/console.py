@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args
 
 from loguru import logger
+from pydantic.alias_generators import to_camel, to_snake
 
 from raven.config.env_file import MIRRORED_KEYS, refresh_env_file
 from raven.config.schema import WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
@@ -593,6 +594,25 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
 _MERGED_KEYS = frozenset({"tools.media.image", "sessionTitle", "translate", "knowledge"})
 
 
+def _as_written(node: dict, name: str) -> str:
+    """The spelling this object already uses for ``name``, or ``name`` itself.
+
+    The config models set ``alias_generator=to_camel`` with
+    ``populate_by_name=True``, so every block and field is accepted under two
+    spellings and a hand-written config may hold either. A write that always
+    used the camelCase one did not update the file, it grew a second key beside
+    the first -- and since the models forbid extras, the block that was there
+    before became an extra input and the whole config stopped loading. The
+    write has to follow the file rather than the writer's spelling.
+    """
+    if name in node:
+        return name
+    for alias in (to_camel(name), to_snake(name)):
+        if alias != name and alias in node:
+            return alias
+    return name
+
+
 def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
     """Dotted-path read-modify-write into config.json, under the config lock.
 
@@ -612,17 +632,21 @@ def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
         node = raw
         parts = key.split(".")
         for p in parts[:-1]:
-            node = node.setdefault(p, {})
+            node = node.setdefault(_as_written(node, p), {})
             if not isinstance(node, dict):
                 raise ConfigValidationError(f"config path {key} blocked by non-object")
-        prev = node.get(parts[-1])
+        leaf = _as_written(node, parts[-1])
+        prev = node.get(leaf)
         if merge:
             if prev is not None and not isinstance(prev, dict):
                 raise ConfigValidationError(f"config path {key} blocked by non-object")
-            node[parts[-1]] = {**(prev or {}), **value}
-            prev = {k: (prev or {}).get(k) for k in value}
+            existing = prev or {}
+            # Each field of the pair, under the spelling the block already uses.
+            fields = {_as_written(existing, k): v for k, v in value.items()}
+            node[leaf] = {**existing, **fields}
+            prev = {k: existing.get(k) for k in fields}
         else:
-            node[parts[-1]] = value
+            node[leaf] = value
         return json.dumps(raw, indent=2, ensure_ascii=False), prev
 
     prev = atomic_update(path, _apply)
