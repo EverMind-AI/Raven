@@ -49,7 +49,8 @@ and re-measure if the pinned version moves.
 | `DefaultRequestHandler(agent_executor, task_store, agent_card, ...)` | `agent_card` is **required and positional-capable**; a two-argument call raises `TypeError` |
 | `EventQueue.enqueue_event(event) -> None` is a **coroutine** despite the annotation | `await` it; the `-> None` is misleading, confirmed with `inspect.iscoroutinefunction` |
 | There is **no** `enqueue_event_nowait` | scheduling from a sync callback needs `asyncio.create_task` |
-| `enqueue_event` accepts only `Message \| Task \| TaskStatusUpdateEvent \| TaskArtifactUpdateEvent` | a plain dict is not enqueueable; build the protobuf event |
+| `enqueue_event` is TYPED as `Message \| Task \| TaskStatusUpdateEvent \| TaskArtifactUpdateEvent` but does **no runtime check** | measured: a plain dict is accepted silently and never raises at the queue. So a dict passes the unit test AND the real queue, and fails later and invisibly -- build the real protobuf event, and do not rely on the queue to catch you |
+| `EventQueue` is now an abstract interface | instantiating it directly is deprecated and redirects to `EventQueueLegacy`; construct it the way the SDK's own server path does |
 | `RequestContext` exposes `get_user_input(delimiter='\n') -> str`, and properties `message`, `task_id`, `context_id`, `current_task` | there is **no** `message_text` attribute |
 | `AgentCard` / `AgentInterface` / `AgentCapabilities` / `AgentSkill` field names | as used in Task 5; verified against the protobuf descriptors |
 | A fetched card's `supported_interfaces[].url` may name a **different origin** than the card | the credential was resolved for the card's origin; sending it to a card-declared origin is a leak. Require same-origin before attaching -- see Task 3 |
