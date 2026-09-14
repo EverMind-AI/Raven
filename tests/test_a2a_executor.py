@@ -26,7 +26,7 @@ class FakeContext:
 
 
 async def test_a_completed_turn_enqueues_its_answer():
-    from a2a.types import TaskState
+    from a2a.types import Task, TaskState
 
     async def run_turn(prompt):
         assert prompt == "do the thing"
@@ -34,8 +34,15 @@ async def test_a_completed_turn_enqueues_its_answer():
 
     queue = FakeQueue()
     await RavenAgentExecutor(run_turn).execute(FakeContext(), queue)
+    # The SDK's task consumer rejects a status update for a task it has never seen a
+    # Task object for, so the first event must be a bare submitted-state Task.
+    assert isinstance(queue.events[0], Task)
     states = [e.status.state for e in queue.events]
-    assert states == [TaskState.TASK_STATE_WORKING, TaskState.TASK_STATE_COMPLETED]
+    assert states == [
+        TaskState.TASK_STATE_SUBMITTED,
+        TaskState.TASK_STATE_WORKING,
+        TaskState.TASK_STATE_COMPLETED,
+    ]
     assert queue.events[-1].status.message.parts[0].text == "the answer"
 
 
