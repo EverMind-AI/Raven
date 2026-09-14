@@ -60,6 +60,21 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "memory.memoryTopK",
         "agents.defaults.enablePersonalization",
         "agents.defaults.reasoningEffort",
+        # The default-model pins, the same shape as tools.media.image.model
+        # above: which model a subsystem uses and which configured provider
+        # serves it. Neither half is a containment control, and the provider
+        # half is checked against the registry -- but note what it does reach,
+        # since that is the argument this list asks for: it can move a
+        # subsystem's traffic to another provider the deployment has already
+        # credentialed. It cannot introduce one, name an address, or carry a
+        # key, so the set of endpoints reachable through it is the set the
+        # operator already chose.
+        "sessionTitle.model",
+        "sessionTitle.provider",
+        "translate.model",
+        "translate.provider",
+        "knowledge.embeddingModel",
+        "knowledge.embeddingProvider",
         # No new reach: the same key has been writable through config.set (the
         # chip and /perm) since the gate landed; this lets the settings panel
         # write the default a new conversation starts on.
