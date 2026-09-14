@@ -23,6 +23,45 @@
 - **Never leak internals across the trust boundary:** a raven turn that raises returns `InternalError` with no traceback text in the payload. The cause goes to this host's logs.
 - **Gates before pushing:** `make lint check-commits check-large-files check-source-language`, plus the `pr-review-patterns` pre-submit sweep.
 
+## Measured API facts
+
+Verified 2026-09-14 against `a2a-sdk` 1.1.2 and this repo. Several of these contradict what
+the SDK's own docs and naming suggest, so take them from here rather than from intuition,
+and re-measure if the pinned version moves.
+
+**`a2a-sdk`, outbound:**
+
+| Fact | Consequence |
+|---|---|
+| `ClientFactory.__init__(config: ClientConfig \| None = None)` | there is no `httpx_client=` argument; it is a **field of `ClientConfig`** |
+| `ClientFactory.create(card: AgentCard, ...)` | takes a card **object**, not a URL |
+| `ClientFactory.create_from_url(url, ...)` | this is the one that takes a URL |
+| `Client.send_message(request: SendMessageRequest, *, context=None) -> AsyncIterator[StreamResponse]` | takes a **request**, not a `Message`, and is **iterated**, not awaited for one value |
+| `Message` fields: `message_id, context_id, task_id, role, parts, metadata, extensions, reference_task_ids` | the field is `parts`, **not** `content` |
+| `Part` fields: `text, raw, url, data, metadata, filename, media_type` | `Part(text=...)` is right; there is **no** `TextPart` export |
+| `Role` values: `ROLE_UNSPECIFIED, ROLE_USER, ROLE_AGENT` | `Role.ROLE_USER` is right |
+
+**`a2a-sdk`, inbound:**
+
+| Fact | Consequence |
+|---|---|
+| `DefaultRequestHandler(agent_executor, task_store, agent_card, ...)` | `agent_card` is **required and positional-capable**; a two-argument call raises `TypeError` |
+| `EventQueue.enqueue_event(event) -> None` is a **coroutine** despite the annotation | `await` it; the `-> None` is misleading, confirmed with `inspect.iscoroutinefunction` |
+| There is **no** `enqueue_event_nowait` | scheduling from a sync callback needs `asyncio.create_task` |
+| `enqueue_event` accepts only `Message \| Task \| TaskStatusUpdateEvent \| TaskArtifactUpdateEvent` | a plain dict is not enqueueable; build the protobuf event |
+| `RequestContext` exposes `get_user_input(delimiter='\n') -> str`, and properties `message`, `task_id`, `context_id`, `current_task` | there is **no** `message_text` attribute |
+| `AgentCard` / `AgentInterface` / `AgentCapabilities` / `AgentSkill` field names | as used in Task 5; verified against the protobuf descriptors |
+
+**This repo:**
+
+| Fact | Consequence |
+|---|---|
+| `pytest-aiohttp` is **not installed** | the `aiohttp_client` / `aiohttp_server` fixtures do not exist. Use `from aiohttp.test_utils import TestClient, TestServer`, the pattern `tests/test_rpc_files.py` already uses |
+| `asyncio_mode = "auto"` (pyproject.toml:426) | `@pytest.mark.asyncio` is unnecessary; an `async def test_` is collected as-is |
+| `AgentLoop` / `WiringMixin` hold **no** whole `Config` | there is no `self.config`. Per-feature config arrives as its own constructor argument and attribute, the way `self.ask_user_config` does (`raven/agent/loop/main.py:320`) |
+| `WsGateway.__init__(self)` takes no arguments and holds no `Config` | it exposes `self.agent_loop_factory`; anything A2A needs must be set on it the same way |
+| `load_config` imports from `raven.config` **and** `raven.config.loader` | either is fine; tests use `from raven.config import load_config` |
+
 ---
 
 ### Task 1: Dependency and the `a2a` config section
@@ -346,7 +385,6 @@ def test_no_credential_field_is_exposed_to_the_model():
     assert "sekrit" not in blob
 
 
-@pytest.mark.asyncio
 async def test_execute_returns_the_peer_reply(monkeypatch):
     seen = {}
 
@@ -363,7 +401,6 @@ async def test_execute_returns_the_peer_reply(monkeypatch):
     assert seen["message"] == "hello"
 
 
-@pytest.mark.asyncio
 async def test_a_transport_failure_becomes_a_model_readable_error(monkeypatch):
     async def boom(config, card_url, message, *, timeout_s):
         raise ConnectionError("refused")
@@ -396,8 +433,8 @@ how a reply becomes a string the model can read.
 from __future__ import annotations
 
 import httpx
-from a2a.client import ClientFactory
-from a2a.types import Message, Part, Role
+from a2a.client import ClientConfig, ClientFactory
+from a2a.types import Message, Part, Role, SendMessageRequest
 
 from raven.a2a_client.peers import auth_headers, resolve_peer
 from raven.config.schema import A2aConfig
@@ -405,9 +442,22 @@ from raven.config.schema import A2aConfig
 A2A_VERSION_HEADER = {"A2A-Version": "1.0"}
 
 
-def _text_of(reply: object) -> str:
-    parts = getattr(getattr(reply, "message", None), "content", None) or []
-    chunks = [p.text for p in parts if getattr(p, "text", "")]
+def _text_of(event: object) -> str:
+    """Any text carried by one StreamResponse event.
+
+    The oneof is task-or-message, so both arms are read: a peer may answer with a
+    message directly, or with a task whose artifacts hold the answer.
+    """
+    chunks: list[str] = []
+    message = getattr(event, "message", None)
+    for part in getattr(message, "parts", None) or []:
+        if getattr(part, "text", ""):
+            chunks.append(part.text)
+    task = getattr(event, "task", None)
+    for artifact in getattr(task, "artifacts", None) or []:
+        for part in getattr(artifact, "parts", None) or []:
+            if getattr(part, "text", ""):
+                chunks.append(part.text)
     return "\n".join(chunks)
 
 
@@ -415,14 +465,16 @@ async def send_message(config: A2aConfig, card_url: str, message: str, *, timeou
     """Send `message` to the A2A agent whose card is at `card_url`."""
     headers = {**A2A_VERSION_HEADER, **auth_headers(resolve_peer(config, card_url))}
     async with httpx.AsyncClient(headers=headers, timeout=timeout_s) as http:
-        client = ClientFactory(httpx_client=http).create(card_url)
-        reply = await client.send_message(
-            Message(role=Role.ROLE_USER, content=[Part(text=message)])
+        factory = ClientFactory(ClientConfig(httpx_client=http))
+        client = factory.create_from_url(card_url)
+        request = SendMessageRequest(
+            message=Message(role=Role.ROLE_USER, parts=[Part(text=message)])
         )
-    return _text_of(reply) or "(the peer returned no text)"
+        chunks = [text async for event in client.send_message(request) if (text := _text_of(event))]
+    return "\n".join(chunks) or "(the peer returned no text)"
 ```
 
-Note for the implementer: `ClientFactory`'s exact constructor and `send_message` shape come from `a2a-sdk` 1.1.2. Before writing this, run `uv run --frozen --all-extras python -c "from a2a.client import ClientFactory; help(ClientFactory)"` and match the real signature. Adjust `_text_of` to the real reply type -- `SendMessageResponse` is a protobuf with a `task`/`message` oneof, so a task-shaped reply needs its artifacts read instead.
+Four things here are not what the names suggest, all measured -- see **Measured API facts**: the factory takes a `ClientConfig` (not an `httpx_client`), `create` takes a card object so a URL needs `create_from_url`, `Message` carries `parts` (not `content`), and `send_message` takes a `SendMessageRequest` and returns an **async iterator**, so it is iterated rather than awaited for a single value.
 
 - [ ] **Step 4: Implement the tool**
 
@@ -552,10 +604,22 @@ Expected: FAIL. The test asserting every withheld name is registered on an ordin
 
 - [ ] **Step 3: Register the tool on the host path**
 
-In `raven/agent/loop/wiring.py`, inside `_register_orchestration_tools` (the method called at line 867 under `if not is_subagent_process():`), add:
+There is **no** `self.config` on this class -- `WiringMixin` and `AgentLoop` hold no whole
+`Config`. Per-feature config arrives as its own constructor argument and attribute, the way
+`ask_user_config` does. Follow that pattern exactly.
+
+In `raven/agent/loop/main.py`, beside the existing `self.ask_user_config = ask_user_config or AskUserToolConfig()` (line 320), add:
 
 ```python
-        self.tools.register(A2aTool(self.config.a2a))
+        self.a2a_config = a2a_config or A2aConfig()
+```
+
+with `a2a_config: "A2aConfig | None" = None` added to `AgentLoop.__init__`'s keyword arguments, and `from raven.config.schema import A2aConfig` imported. Then find where `ask_user_config` is read off the incoming config near line 223 and pass `a2a_config` down the same way from whichever caller assembles the loop.
+
+In `raven/agent/loop/wiring.py`, inside `_register_orchestration_tools` (line 983, the method called at line 867 under `if not is_subagent_process():`), add:
+
+```python
+        self.tools.register(A2aTool(self.a2a_config))
 ```
 
 and the import at the top of the file:
@@ -563,8 +627,6 @@ and the import at the top of the file:
 ```python
 from raven.a2a_client.tool import A2aTool
 ```
-
-If `self.config` is not the attribute name on this class, read the surrounding constructor and use whatever holds the loaded `Config`; the tool needs the `a2a` section, nothing else.
 
 - [ ] **Step 4: Run the role test again**
 
@@ -897,6 +959,8 @@ from raven.a2a.executor import RavenAgentExecutor
 
 
 class FakeQueue:
+    """Stands in for EventQueue. `enqueue_event` is a coroutine on the real one."""
+
     def __init__(self):
         self.events = []
 
@@ -905,12 +969,17 @@ class FakeQueue:
 
 
 class FakeContext:
+    """Stands in for RequestContext, which exposes get_user_input(), not an attribute."""
+
     def __init__(self, text="do the thing"):
-        self.message_text = text
+        self._text = text
         self.task_id = "task-1"
+        self.context_id = "ctx-1"
+
+    def get_user_input(self, delimiter="\n"):
+        return self._text
 
 
-@pytest.mark.asyncio
 async def test_a_completed_turn_enqueues_its_answer():
     from a2a.types import TaskState
 
@@ -920,12 +989,11 @@ async def test_a_completed_turn_enqueues_its_answer():
 
     queue = FakeQueue()
     await RavenAgentExecutor(run_turn).execute(FakeContext(), queue)
-    states = [e["state"] for e in queue.events]
+    states = [e.status.state for e in queue.events]
     assert states == [TaskState.TASK_STATE_WORKING, TaskState.TASK_STATE_COMPLETED]
-    assert queue.events[-1]["text"] == "the answer"
+    assert queue.events[-1].status.message.parts[0].text == "the answer"
 
 
-@pytest.mark.asyncio
 async def test_a_failed_turn_reports_the_failed_state():
     from a2a.types import TaskState
 
@@ -934,10 +1002,9 @@ async def test_a_failed_turn_reports_the_failed_state():
 
     queue = FakeQueue()
     await RavenAgentExecutor(run_turn).execute(FakeContext(), queue)
-    assert queue.events[-1]["state"] == TaskState.TASK_STATE_FAILED
+    assert queue.events[-1].status.state == TaskState.TASK_STATE_FAILED
 
 
-@pytest.mark.asyncio
 async def test_a_raising_turn_does_not_put_the_traceback_on_the_wire():
     async def run_turn(prompt):
         raise RuntimeError("/srv/secret/path.py exploded with API_KEY=abc123")
@@ -991,7 +1058,7 @@ class RavenAgentExecutor(AgentExecutor):
         self._run_turn = run_turn
 
     async def execute(self, context, event_queue) -> None:
-        prompt = getattr(context, "message_text", "") or ""
+        prompt = context.get_user_input()
         await event_queue.enqueue_event(self._status(context, "running"))
         try:
             answer = await self._run_turn(prompt)
@@ -1005,18 +1072,30 @@ class RavenAgentExecutor(AgentExecutor):
         logger.info("a2a task {} cancelled by the caller", getattr(context, "task_id", "?"))
         await event_queue.enqueue_event(self._status(context, "cancelled"))
 
-    def _status(self, context, outcome: str, text: str = "") -> object:
+    def _status(self, context, outcome: str, text: str = "") -> TaskStatusUpdateEvent:
         """One task-status event carrying `outcome`'s A2A state and optional text."""
-        return {
-            "task_id": getattr(context, "task_id", ""),
-            "state": task_state_for(outcome),
-            "text": text,
-        }
+        status = TaskStatus(state=task_state_for(outcome))
+        if text:
+            status.message.CopyFrom(Message(role=Role.ROLE_AGENT, parts=[Part(text=text)]))
+        return TaskStatusUpdateEvent(
+            task_id=context.task_id,
+            context_id=context.context_id,
+            status=status,
+        )
 ```
 
-`_status` returns a plain dict so the test can read it without an SDK event type. Replacing it with the real `TaskStatusUpdateEvent` is part of Task 11, where the SDK actually consumes these -- keep `task_state_for` as the single source of the state value when you do.
+with these imports:
 
-Note for the implementer: `enqueue_event` takes an SDK event object, not a bare string. Read `a2a.server.events.EventQueue` and `a2a.server.tasks.TaskUpdater` and build the real `Message` / `TaskStatusUpdateEvent`; keep the test's assertions (answer present, traceback absent) and adjust `FakeQueue` to record the real objects. `RequestContext` likewise exposes the inbound message through its own accessor -- confirm the attribute rather than assuming `message_text`.
+```python
+from a2a.types import Message, Part, Role, TaskStatus, TaskStatusUpdateEvent
+```
+
+A real `TaskStatusUpdateEvent`, not a dict: `EventQueue.enqueue_event` accepts only
+`Message | Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent`, so a dict would pass a
+unit test and fail the moment a real queue saw it. Field names are measured --
+`TaskStatus` is `state, message, timestamp` and `TaskStatusUpdateEvent` is
+`task_id, context_id, status, metadata`.
+
 
 - [ ] **Step 4: Run the tests**
 
@@ -1163,8 +1242,11 @@ Create `tests/test_a2a_routes.py`:
 ```python
 """The JSON-RPC binding: version gating, auth ordering, and error shape."""
 
+from collections.abc import AsyncIterator
+
 import pytest
 from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
 from raven.a2a.card import CARD_PATH
 from raven.a2a.routes_aiohttp import add_a2a_routes
@@ -1184,27 +1266,29 @@ class RecordingHandler:
 
 
 @pytest.fixture
-def client_and_handler(aiohttp_client):
-    async def build():
-        handler = RecordingHandler()
-        app = web.Application()
-        add_a2a_routes(app, CONFIG, handler)
-        return await aiohttp_client(app), handler
+async def client_and_handler() -> AsyncIterator[tuple[TestClient, RecordingHandler]]:
+    """`pytest-aiohttp` is not installed here; aiohttp ships these test utils itself.
+    Same shape as the fixture in tests/test_rpc_files.py."""
+    handler = RecordingHandler()
+    app = web.Application()
+    add_a2a_routes(app, CONFIG, handler)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        yield client, handler
+    finally:
+        await client.close()
 
-    return build
 
-
-@pytest.mark.asyncio
 async def test_the_card_is_served_unauthenticated(client_and_handler):
-    client, _ = await client_and_handler()
+    client, _ = client_and_handler
     resp = await client.get(CARD_PATH)
     assert resp.status == 200
     assert "supportedInterfaces" in await resp.text()
 
 
-@pytest.mark.asyncio
 async def test_a_missing_version_header_is_refused(client_and_handler):
-    client, handler = await client_and_handler()
+    client, handler = client_and_handler
     resp = await client.post(
         "/a2a",
         json={"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": {}},
@@ -1215,9 +1299,8 @@ async def test_a_missing_version_header_is_refused(client_and_handler):
     assert handler.calls == []
 
 
-@pytest.mark.asyncio
 async def test_an_unauthenticated_call_never_reaches_the_handler(client_and_handler):
-    client, handler = await client_and_handler()
+    client, handler = client_and_handler
     resp = await client.post(
         "/a2a",
         json={"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": {}},
@@ -1227,9 +1310,8 @@ async def test_an_unauthenticated_call_never_reaches_the_handler(client_and_hand
     assert handler.calls == []
 
 
-@pytest.mark.asyncio
 async def test_an_authenticated_1_0_call_reaches_the_handler(client_and_handler):
-    client, handler = await client_and_handler()
+    client, handler = client_and_handler
     resp = await client.post(
         "/a2a",
         json={"jsonrpc": "2.0", "id": 7, "method": "SendMessage", "params": {"x": 1}},
@@ -1240,9 +1322,8 @@ async def test_an_authenticated_1_0_call_reaches_the_handler(client_and_handler)
     assert handler.calls == [{"x": 1}]
 
 
-@pytest.mark.asyncio
 async def test_an_unknown_method_is_a_json_rpc_error(client_and_handler):
-    client, _ = await client_and_handler()
+    client, _ = client_and_handler
     resp = await client.post(
         "/a2a",
         json={"jsonrpc": "2.0", "id": 2, "method": "Nope", "params": {}},
@@ -1559,11 +1640,12 @@ In `raven/rpc/transports/ws.py`, inside `build_app` after the existing `app.rout
 
 ```python
     from raven.a2a.gate import mount_if_allowed
+    from raven.config import load_config
 
-    mount_if_allowed(app, gateway.config.a2a, handler=gateway.a2a_handler)
+    mount_if_allowed(app, load_config().a2a, handler=gateway.a2a_handler)
 ```
 
-Read `WsGateway` first: use whatever attribute actually holds the loaded `Config`, and add an `a2a_handler` attribute defaulting to `None` alongside the existing `agent_loop_factory`, set the same way. A `None` handler with `server.enabled` false never mounts, which is the default.
+`WsGateway.__init__(self)` takes no arguments and holds no `Config`, which is why the config is loaded here rather than read off the gateway. Add an `a2a_handler` attribute defaulting to `None` beside the existing `self.agent_loop_factory: Any = None` (line 112), set the same way. A `None` handler with `server.enabled` false never mounts, which is the default.
 
 - [ ] **Step 6: Run the tests**
 
@@ -1600,7 +1682,7 @@ git commit -m "feat(a2a): refuse to serve in a sub-agent and mount both hostings
 
 **Interfaces:**
 - Consumes: `RavenAgentExecutor` (Task 7), `add_a2a_routes` (Task 9), `mount_if_allowed` (Task 10), `build_agent_card` (Task 5).
-- Produces: `build_request_handler(run_turn) -> DefaultRequestHandler` and `serve_standalone(config, *, host, port, run_turn) -> None`.
+- Produces: `build_request_handler(config, run_turn, *, base_url='') -> DefaultRequestHandler` and `serve_standalone(config, *, host, port, run_turn) -> None`.
 
 Tasks 5 through 10 each deliver a piece; until this one runs, nothing constructs a `DefaultRequestHandler` and no external client can complete a call. This is the task that makes the inbound face real, and it carries the spec's conformance test.
 
@@ -1617,8 +1699,11 @@ The SDK's own client is the closest thing to a second implementation available,
 so conformance is asserted against it rather than against our own encoder.
 """
 
+from collections.abc import AsyncIterator
+
 import pytest
 from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 from raven.a2a.card import CARD_PATH
 from raven.a2a.routes_aiohttp import add_a2a_routes
@@ -1629,16 +1714,22 @@ CONFIG = A2aConfig.model_validate({"server": {"enabled": True, "token": "t0ken",
 
 
 @pytest.fixture
-async def server(aiohttp_server):
+async def server() -> AsyncIterator[TestServer]:
+    """`pytest-aiohttp` is absent; aiohttp's own TestServer is what this repo uses."""
+
     async def run_turn(prompt):
         return f"echo: {prompt}"
 
     app = web.Application()
-    add_a2a_routes(app, CONFIG, build_request_handler(run_turn))
-    return await aiohttp_server(app)
+    add_a2a_routes(app, CONFIG, build_request_handler(CONFIG, run_turn))
+    srv = TestServer(app)
+    await srv.start_server()
+    try:
+        yield srv
+    finally:
+        await srv.close()
 
 
-@pytest.mark.asyncio
 async def test_the_card_round_trips_through_a_plain_fetch(server):
     import httpx
 
@@ -1650,7 +1741,6 @@ async def test_the_card_round_trips_through_a_plain_fetch(server):
     assert card["capabilities"]["streaming"] is True
 
 
-@pytest.mark.asyncio
 async def test_send_message_returns_the_turn_answer(server):
     import httpx
 
@@ -1670,7 +1760,6 @@ async def test_send_message_returns_the_turn_answer(server):
     assert "echo: hello" in str(body["result"])
 
 
-@pytest.mark.asyncio
 async def test_a_header_less_request_is_refused_over_the_wire(server):
     import httpx
 
@@ -1713,16 +1802,27 @@ from a2a.server.tasks import InMemoryTaskStore
 from aiohttp import web
 from loguru import logger
 
+from raven.a2a.card import build_agent_card
 from raven.a2a.executor import RavenAgentExecutor
 from raven.a2a.routes_aiohttp import add_a2a_routes
 from raven.config.schema import A2aConfig
 
 
-def build_request_handler(run_turn: Callable[[str], Awaitable[str]]) -> DefaultRequestHandler:
-    """A request handler serving `run_turn` as this agent's behaviour."""
+def build_request_handler(
+    config: A2aConfig,
+    run_turn: Callable[[str], Awaitable[str]],
+    *,
+    base_url: str = "",
+) -> DefaultRequestHandler:
+    """A request handler serving `run_turn` as this agent's behaviour.
+
+    `agent_card` is required by the SDK, not optional -- a two-argument call
+    raises TypeError -- so the config has to reach here to build one.
+    """
     return DefaultRequestHandler(
         agent_executor=RavenAgentExecutor(run_turn),
         task_store=InMemoryTaskStore(),
+        agent_card=build_agent_card(config, base_url=base_url or config.server.path),
     )
 
 
@@ -1735,7 +1835,7 @@ async def serve_standalone(
 ) -> None:
     """Run the A2A face on its own aiohttp site until cancelled."""
     app = web.Application()
-    add_a2a_routes(app, config, build_request_handler(run_turn))
+    add_a2a_routes(app, config, build_request_handler(config, run_turn))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host, port)
@@ -1775,7 +1875,9 @@ Replace `run_turn` with the host's real turn entry point: find how `raven agent 
 In `raven/rpc/transports/ws.py`, the `mount_if_allowed` call from Task 10 currently passes `gateway.a2a_handler`. Set that attribute in `build_app` from the same turn entry point the gateway already uses for `/rpc`:
 
 ```python
-    gateway.a2a_handler = build_request_handler(gateway.run_turn)
+    from raven.config import load_config
+
+    gateway.a2a_handler = build_request_handler(load_config().a2a, gateway.run_turn)
 ```
 
 Use whatever coroutine the gateway already exposes for running one turn; if there is none with that exact name, read `WsGateway.handle_ws` to find how it drives a turn and reuse that path rather than building a second one.
@@ -1793,7 +1895,6 @@ Expected: 3 passed.
 Append to the same file:
 
 ```python
-@pytest.mark.asyncio
 async def test_streaming_delivers_more_than_one_event(server):
     import httpx
 
@@ -1871,7 +1972,6 @@ from a2a.types import TaskState
 from raven.a2a.asking import A2aQuestionBroker
 
 
-@pytest.mark.asyncio
 async def test_await_question_parks_and_then_returns_the_answer():
     parked = []
     broker = A2aQuestionBroker(on_park=parked.append)
@@ -1887,12 +1987,10 @@ async def test_await_question_parks_and_then_returns_the_answer():
     assert await waiting == "the second one"
 
 
-@pytest.mark.asyncio
 async def test_answering_an_unknown_task_reports_that_it_did_nothing():
     assert A2aQuestionBroker(on_park=lambda _: None).answer("nope", "hi") is False
 
 
-@pytest.mark.asyncio
 async def test_a_timed_out_question_returns_the_default_and_unparks():
     broker = A2aQuestionBroker(on_park=lambda _: None)
     out = await broker.await_question("task-2", prompt="?", default="fallback", timeout_s=0.01)
@@ -1989,7 +2087,7 @@ In `raven/a2a/executor.py`, run the turn as a background task so the request can
         await event_queue.enqueue_event(self._status(context, "running"))
 
         def on_park(_task_id: str) -> None:
-            event_queue.enqueue_event_nowait(self._status(context, "question"))
+            asyncio.create_task(event_queue.enqueue_event(self._status(context, "question")))
 
         self._broker = A2aQuestionBroker(on_park=on_park)
         ...
