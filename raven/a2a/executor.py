@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
-from a2a.types import Message, Part, Role, TaskStatus, TaskStatusUpdateEvent
+from a2a.types import Message, Part, Role, Task, TaskState, TaskStatus, TaskStatusUpdateEvent
 from loguru import logger
 
 from raven.a2a.lifecycle import task_state_for
@@ -38,6 +38,9 @@ class RavenAgentExecutor(AgentExecutor):
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Run one turn for `context`'s task, reporting working then a terminal state."""
         prompt = context.get_user_input()
+        # The SDK's consumer rejects a TaskStatusUpdateEvent for a task it has never
+        # seen a Task object for, so a brand-new task needs this bare Task first.
+        await event_queue.enqueue_event(self._initial_task(context))
         await event_queue.enqueue_event(self._status(context, "running"))
         try:
             answer = await self._run_turn(prompt)
@@ -51,6 +54,14 @@ class RavenAgentExecutor(AgentExecutor):
         """Report `context`'s task as cancelled; there is no in-flight turn to stop here."""
         logger.info("a2a task {} cancelled by the caller", context.task_id)
         await event_queue.enqueue_event(self._status(context, "cancelled"))
+
+    def _initial_task(self, context: RequestContext) -> Task:
+        """The bare submitted-state Task a new task must exist as before any status update."""
+        return Task(
+            id=context.task_id,
+            context_id=context.context_id,
+            status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+        )
 
     def _status(self, context: RequestContext, outcome: str, text: str = "") -> TaskStatusUpdateEvent:
         """One task-status event carrying `outcome`'s A2A state and optional message text."""

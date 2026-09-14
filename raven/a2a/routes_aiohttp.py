@@ -56,6 +56,22 @@ def error_response(name: str, request_id: Any) -> dict[str, Any]:
     }
 
 
+def _error_name_for(exc: Exception) -> str:
+    """The A2A error name a raised exception should be reported under.
+
+    A real `DefaultRequestHandler`-backed handler raises `InvalidParamsError`
+    from two places: malformed params fail conversion before the handler is
+    even called, and well-formed but incomplete params pass conversion but
+    then fail the SDK's own required-field validation inside the handler
+    call. Both must reach the caller as `InvalidParamsError`, not a flattened
+    `InternalError` -- so any exception whose class name is one of the SDK's
+    own error types is reported as itself; anything else still falls back to
+    `InternalError`, unchanged from before.
+    """
+    name = type(exc).__name__
+    return name if name in ERROR_CODES else "InternalError"
+
+
 def _to_jsonable(value: Any) -> Any:
     """A real `RequestHandler` answers with protobuf (`Task`, `Message`, ...); the
     opaque test double in tests/test_a2a_routes.py answers with a plain dict. Both
@@ -78,8 +94,9 @@ async def _serve_stream(
         async for event in getattr(handler, method_name)(params, None):
             payload = {"jsonrpc": "2.0", "id": request_id, "result": _to_jsonable(event)}
             await response.write(f"data: {json.dumps(payload)}\n\n".encode())
-    except Exception:
-        await response.write(f"data: {json.dumps(error_response('InternalError', request_id))}\n\n".encode())
+    except Exception as exc:
+        error = error_response(_error_name_for(exc), request_id)
+        await response.write(f"data: {json.dumps(error)}\n\n".encode())
     return response
 
 
@@ -126,8 +143,8 @@ def add_a2a_routes(app: web.Application, config: A2aConfig, handler: Any) -> Non
             # json.dumps: a result that fails to convert or encode is a caller-facing
             # InternalError, not an unhandled exception that falls through to a bare 500.
             return web.json_response({"jsonrpc": "2.0", "id": request_id, "result": _to_jsonable(result)})
-        except Exception:
-            return web.json_response(error_response("InternalError", request_id), status=200)
+        except Exception as exc:
+            return web.json_response(error_response(_error_name_for(exc), request_id), status=200)
 
     app.router.add_get(CARD_PATH, serve_card)
     app.router.add_post(config.server.path, serve_rpc)
