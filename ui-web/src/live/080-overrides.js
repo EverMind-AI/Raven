@@ -363,6 +363,52 @@ const mediaOf = (text) => {
    The attachment tray is not here any more. It is the composer island's, and so
    is the note a staged file becomes; the island builds the message and hands it
    over already folded. */
+/* A conversation to work in, made if there is not one yet.
+ *
+ * The draft on screen becomes a real session here, and two callers want that
+ * while only one of them has a message: `liveSend` below promotes on the
+ * reader's first send, and the sub-agent roster's new-instance button promotes
+ * because an instance has to live inside a conversation and pressing it is the
+ * reader asking for both at once. What is here is what both need -- the row,
+ * the pointer, the composer's draft, the staged settings and the subscription.
+ * What only a send needs -- the turn's owner, the naming request, the row's
+ * preview line -- stays with the send.
+ *
+ * Answers the open conversation when there already is one rather than refusing:
+ * "give me a conversation" is what both callers actually want, and a seam that
+ * has to be asked separately whether it applies is one a caller can get wrong.
+ * `draft` and a null session pointer are the same state -- startDraft sets
+ * both, openLiveSession clears both -- so this reads the flag and the callers
+ * read the pointer without the two being able to disagree.
+ */
+async function openConversation(preview, atPointer) {
+  if (!draft) return sessionCurrent();
+  /* Taken before the first await, so a caller reporting on THIS conversation
+     reads the view as it stood when the promotion began rather than whatever
+     the reader has opened since. */
+  const gen = viewGen;
+  const r = await rpc.call('session.create', {});
+  wsSetRoot(r.info && r.info.cwd);
+  const s = { id: r.session_id, title: T('gui.new_task'), last: preview || T('gui.sess.not_started'),
+    when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false };
+  sessionRows().unshift(s); sessionSet(s.id); draft = false;
+  /* The pointer has moved, and a caller with something to file under the new
+     conversation files it HERE rather than after the round trips below: the
+     send records the turn's owner at exactly this point, and a reader switching
+     conversations inside the staged-settings calls would otherwise leave the
+     in-flight turn parked under the wrong one. */
+  if (atPointer) atPointer(s.id);
+  // The composer was owned by 'new' until this point; keep later keystrokes
+  // filed under the session that just came into being.
+  claimDraft(sessionCurrent());
+  await applyStagedModel(s.id, gen);
+  await applyStagedTier(s.id);
+  await applyStagedPerm(s.id);
+  sessionDraw();
+  await subscribe(s.id);
+  return s.id;
+}
+
 function liveSend(text) {
   if (turn.busy()) { queuePush(text); return; }
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
@@ -395,28 +441,14 @@ function liveSend(text) {
   }
   // The draft becomes a real session here, on its first message.
   (async () => {
-    // Taken before the first await: the recovery refresh below reports on THIS
-    // send's session, so it needs the view as it stood when the send began --
-    // a ticket taken later would read as current and repaint whatever the
-    // reader has since opened.
-    const sendGen = viewGen;
-    const r = await rpc.call('session.create', {});
-    wsSetRoot(r.info && r.info.cwd);
-    const s = { id: r.session_id, title: T('gui.new_task'), last: rowPreview(text) || T('gui.sess.not_started'),
-      when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false };
-    sessionRows().unshift(s); sessionSet(s.id); draft = false;
-    turnOwner = sessionCurrent();
-    // The composer was owned by 'new' until this point; keep later keystrokes
-    // filed under the session that just came into being.
-    claimDraft(sessionCurrent());
-    await applyStagedModel(s.id, sendGen);
-    await applyStagedTier(s.id);
-    await applyStagedPerm(s.id);
+    const id = await openConversation(rowPreview(text), () => { turnOwner = sessionCurrent(); });
     beginNaming(text);
-    sessionDraw();
-    await subscribe(s.id);
+    /* `sessionCurrent()` rather than `id`, which is what this has always sent:
+       the two differ only when the reader opened another conversation inside
+       the promotion above, and making them agree is a fix about where a raced
+       first message lands, not about this one. Left alone deliberately. */
     const sent = await rpc.call('turn.send', { session_key: sessionCurrent(), content: text, ...mediaOf(text) });
-    if (sent && sent.naming === false) namingDeclined(s.id);
+    if (sent && sent.naming === false) namingDeclined(id);
   })().catch(failed);
 };
 
@@ -455,6 +487,11 @@ function drainQueue() {
    is the go button's other half and the Escape key's; `send` is what the island
    hands a folded message to. */
 DS.composer.send = liveSend;
+/* The one way anything outside the dock can get a conversation to work in. The
+   composer has always made one on its first send; this is the same promotion
+   offered by name, for a caller that needs the conversation and has no message
+   to start it with. */
+DS.composer.startConversation = () => openConversation();
 DS.composer.stop = function () {
   /* A runtime turn (a delegated result re-entering) is NOT cancellable:
      turn.cancel resolves only handles turn.send registered, and the stop
