@@ -662,6 +662,53 @@ def _chk_str(key: str, max_len: int = 500):
     return chk
 
 
+def _chk_pin_model(key: str):
+    """A subsystem pin's model half: a Model Ref, or empty to unset it.
+
+    Empty clears the pin rather than being rejected, because "follow the
+    conversation" is the documented unset state and a picker needs a way back
+    to it. Not checked against a catalogue: a provider's live list is the
+    authority on what it serves, and a config written before a model was
+    published must not be refused by a snapshot that predates it.
+    """
+    inner = _chk_str(key, 200)
+
+    def chk(v: Any) -> str | None:
+        if v is None:
+            return None
+        text = inner(v).strip()
+        return text or None
+
+    return chk
+
+
+def _chk_pin_provider(key: str):
+    """A pin's provider half: a configured provider's slug, or empty to unset.
+
+    Checked against the registry rather than against the config: naming a
+    provider that has no credentials yet is an ordinary order of operations
+    (pick the model, then go and add the key), while naming one that does not
+    exist is a typo that would otherwise surface as a silent fallback to the
+    conversation's model.
+    """
+    inner = _chk_str(key, 100)
+
+    def chk(v: Any) -> str | None:
+        if v is None:
+            return None
+        text = inner(v).strip()
+        if not text:
+            return None
+        from raven.providers.registry import canonical_provider_name, find_by_name
+
+        slug = canonical_provider_name(text)
+        if find_by_name(slug) is None:
+            raise ConfigValidationError(f"{key}: no provider named {text!r}")
+        return slug
+
+    return chk
+
+
 def _chk_image_selection(value: Any) -> dict:
     if not isinstance(value, dict) or set(value) != {"model", "quality"}:
         raise ConfigValidationError("image selection must contain exactly model and quality")
@@ -701,6 +748,17 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "channels.sendProgress": _chk_bool("channels.sendProgress"),
     "channels.sendToolHints": _chk_bool("channels.sendToolHints"),
     "memory.memoryTopK": _chk_int("memory.memoryTopK", 1, 50),
+    # The default-model pins the settings page offers, each a model and the
+    # provider serving it. Written as a pair by the page; validated
+    # independently here because `settings.set` carries one key at a time, and
+    # a pin with one half missing is a state the readers already handle (they
+    # follow the conversation's model rather than guess a credential).
+    "sessionTitle.model": _chk_pin_model("sessionTitle.model"),
+    "sessionTitle.provider": _chk_pin_provider("sessionTitle.provider"),
+    "translate.model": _chk_pin_model("translate.model"),
+    "translate.provider": _chk_pin_provider("translate.provider"),
+    "knowledge.embeddingModel": _chk_pin_model("knowledge.embeddingModel"),
+    "knowledge.embeddingProvider": _chk_pin_provider("knowledge.embeddingProvider"),
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
     "agents.defaults.reasoningEffort": _chk_enum("agents.defaults.reasoningEffort", "minimal", "low", "medium", "high"),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),

@@ -1100,6 +1100,44 @@ _HTTP_STATUS_MAP: dict[int, str] = {
 }
 
 
+def resolve_provider_credentials(name: str, *, config_path: Path | None = None) -> tuple[str, str] | None:
+    """The address and key a request to ``name`` would actually go out on.
+
+    Unredacted, unlike ``list_provider_endpoints``: this answers for a caller
+    that is about to make the call, not for a screen. The selection is the one
+    ``test_provider`` makes -- the first endpoint holding a key, falling back to
+    the first endpoint's address and then to the spec's default -- so a caller
+    reaching a provider through here reaches the address the runtime would.
+
+    ``None`` for a provider whose credential is not a key in the config: an
+    OAuth seat's token is fetched and refreshed by the flow that owns it, and
+    handing out a stale one would be worse than saying nothing. ``None`` too
+    when no key is configured, which reads as "not set up" rather than as an
+    anonymous request to somebody's paid endpoint.
+    """
+    name = canonical_provider_name(name)
+    spec = _provider_spec(name)
+    if spec is not None and spec.is_oauth:
+        return None
+    path = config_path or get_config_path()
+    try:
+        data = read_raw_or_raise(path)
+    except Exception:
+        return None
+    cls, _ = _load_provider_endpoints(name, data)
+    try:
+        instance = cls.model_validate(_raw_section(data, name))
+    except ValidationError:
+        instance = cls()
+    endpoints = provider_endpoints(instance)
+    endpoint = next((ep for ep in endpoints if ep.api_key), endpoints[0] if endpoints else None)
+    api_key = endpoint.api_key if endpoint else ""
+    api_base = (endpoint.api_base if endpoint else None) or (spec.default_api_base if spec else "") or ""
+    if not api_key or not api_base:
+        return None
+    return str(api_base).rstrip("/"), str(api_key)
+
+
 def test_provider(
     name: str,
     *,
@@ -1723,6 +1761,7 @@ def _probe_codex_catalog(*, timeout_s: float) -> dict[str, Any]:
 
 __all__ = [
     "provider_field_specs",
+    "resolve_provider_credentials",
     "list_providers",
     "get_provider_config",
     "set_provider_fields",
