@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest'
 
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync } from 'node:fs'
+
 import { clearance } from './popover'
 
 /* happy-dom measures every box as zero, so each element that matters here is
@@ -43,6 +46,23 @@ describe('what an anchored panel has to clear', () => {
     rect(anchor, 200, 224)
     expect(clearance(anchor).top).toBe(200)
     expect(clearance(anchor).bottom).toBe(224)
+  })
+
+  it('names a class the composer actually wears', () => {
+    /* The selector is a string here and the card is markup over there, so
+       nothing but this ties them together: rename the wrapper in page.html and
+       every panel silently goes back to clearing its chip -- which is a layout
+       regression no type-checker and no other test can see. Asserted on the
+       element that holds the composer's own field, not on a bare grep, so a
+       `.dock-in` appearing anywhere else would not satisfy it. */
+    const page = readFileSync('src/page.html', 'utf8') as string
+    document.body.innerHTML = page.slice(page.indexOf('<div class="dock-in">'))
+    const card = document.querySelector('.dock-in')
+    expect(card).not.toBeNull()
+    expect(card!.querySelector('#ta')).not.toBeNull()
+    expect(card!.querySelector('#permChip')).not.toBeNull()
+    expect(card!.querySelector('#modelChip')).not.toBeNull()
+    expect(card!.querySelector('#tierChip')).not.toBeNull()
   })
 
   it('answers with the card when the anchor IS the card', () => {
