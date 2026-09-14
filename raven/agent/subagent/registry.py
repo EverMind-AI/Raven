@@ -58,6 +58,12 @@ class AgentCaps:
     stateful: bool
     reads_local_files: bool
     live_progress: bool
+    model_choices: tuple[Any, ...] = ()
+    """The models the agent offers, when its transport has a menu (acp only).
+
+    AcpModelChoice records, measured the same way modes is and for the
+    same reason: a row naming its own would drift the first time the agent's
+    list changed."""
     modes: tuple[Any, ...] = ()
     """The agent's operating profiles, when its transport has them (acp only).
 
@@ -121,7 +127,16 @@ class AgentRow:
     """Rows a task dispatched here may be redirected to; the row's backend is then a ``RoutingBackend``."""
 
     def meta(self) -> AgentMeta:
-        """This row as the roster renders it."""
+        """This row as the roster renders it.
+
+        ``model_choices`` travels even though ``format_agent_listing`` does not
+        render it, so a meta built from a row and one built from a config carry
+        the same facts -- a field that is always empty on one of the two paths is
+        one that rots. The listing leaving it out is deliberate and stays that
+        way: which model an instance answers with is a person's choice about a
+        conversation, not something the dispatching model picks, exactly as it
+        has no say over ``modes``.
+        """
         return AgentMeta(
             self.name,
             self.description,
@@ -131,6 +146,7 @@ class AgentRow:
             self.owns,
             self.caps.modes,
             self.owns_watched_work,
+            self.caps.model_choices,
         )
 
 
@@ -167,6 +183,7 @@ def _row_for(cfg: Any) -> AgentRow:
             reads_local_files=meta.reads_local_files,
             live_progress=meta.live_progress,
             modes=meta.modes,
+            model_choices=meta.model_choices,
         ),
         injectable=Injectable(skills=builtin, mcps=injectable_mcps),
         owns=meta.owns,

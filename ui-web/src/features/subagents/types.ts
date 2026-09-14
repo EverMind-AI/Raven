@@ -87,6 +87,25 @@ export interface InstanceModeReply {
   availableModes?: SubagentMode[]
 }
 
+/* One model the agent offers. Hand-written beside `SubagentMode` rather than
+   imported from the generated contract, because the contract spells this item
+   inline inside the result and the generator therefore mints no name for it --
+   the same reason `SubagentMode` is written here. */
+export interface SubagentModelChoice {
+  value: string
+  name?: string
+  group?: string
+}
+
+/* The model half. No `inherited` twin, and that absence is the contract: a mode
+   falls through to the session's tier, while a cleared model falls through to
+   whatever the agent picked for itself -- which this host cannot name, so
+   `model: null` means exactly "the agent's own" and nothing stands beside it. */
+export interface InstanceModelReply {
+  model?: string | null
+  availableModels?: SubagentModelChoice[]
+}
+
 export interface AgentsSource {
   roster?(): Promise<SubagentRow[]>
   list(sessionId: string): Promise<AgentRow[]>
@@ -121,6 +140,12 @@ export interface AgentsSource {
      session's tier": it is the absence of an override, which is what lets the
      tier keep moving underneath. */
   instanceSetMode?(agent: string, handle: string, mode: string | null): Promise<InstanceModeReply>
+  /* This instance's own model and the menu this agent offers. Optional for the
+     same reason, and empty for a transport with no such menu: a cli agent has
+     none, and an acp agent that advertises no model option has none either --
+     one answer, because for a caller they are the same fact. */
+  instanceModel?(agent: string, handle: string): Promise<InstanceModelReply>
+  instanceSetModel?(agent: string, handle: string, model: string | null): Promise<InstanceModelReply>
   /* The live heartbeat: the source calls back every couple of seconds and
      the island decides whether anything on screen needs asking about. */
   watch?(fn: () => void): void

@@ -23,6 +23,7 @@ from raven.rpc.methods.instances import (
     instances_history,
     instances_list,
     instances_set_mode,
+    instances_set_model,
     instances_steer,
 )
 
@@ -1818,6 +1819,123 @@ class _ModedManager(_FakeManager):
         else:
             self.held[key] = mode
         return mode
+
+
+class _ModelledManager(_FakeManager):
+    """A manager whose agent offers a grouped model menu, recording what was set."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        from raven.acp_client.capabilities import AcpModelChoice
+
+        self._choices = (
+            AcpModelChoice("hosted/qwen", "qwen3.6-35B-A3B", "Current"),
+            AcpModelChoice("openrouter/opus-5", "claude-opus-5", "OpenRouter"),
+        )
+        self.applied: list[tuple[str, str, str, str | None]] = []
+        self.held: dict[tuple[str, str, str], str] = {}
+
+    def agent_model_choices(self, agent: str):
+        return self._choices if agent == "Researcher" else ()
+
+    def instance_model(self, session_key, agent, handle):
+        return self.held.get((session_key or "", agent, handle))
+
+    def set_instance_model(self, session_key, agent, handle, model):
+        if model is not None and model not in [c.value for c in self.agent_model_choices(agent)]:
+            raise ValueError(f"{agent!r} has no model {model!r}; it offers 2")
+        self.applied.append((session_key, agent, handle, model))
+        key = (session_key or "", agent, handle)
+        if model is None:
+            self.held.pop(key, None)
+        else:
+            self.held[key] = model
+        return model
+
+
+async def test_setting_a_model_answers_with_the_whole_menu(_isolated_registry: Any) -> None:
+    """One reply is enough to draw the control, for the reason its mode sibling
+    gives: a caller that asked for the catalogue separately would render the new
+    model against a stale list."""
+    await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
+    manager = _ModelledManager()
+    params = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1", "model": "openrouter/opus-5"}
+
+    out = await instances_set_model(params, agent_loop_factory=lambda: _FakeLoop(manager))
+
+    assert out["model"] == "openrouter/opus-5"
+    assert [c["value"] for c in out["availableModels"]] == ["hosted/qwen", "openrouter/opus-5"]
+    # The short name and the agent's bucketing travel with it: the chip shows the
+    # name, sends the value, and rules the list where the group changes.
+    assert out["availableModels"][1]["name"] == "claude-opus-5"
+    assert out["availableModels"][1]["group"] == "OpenRouter"
+    assert manager.applied == [("tui:s1", "Researcher", "h1", "openrouter/opus-5")]
+
+
+async def test_a_model_report_carries_no_inherited_twin(_isolated_registry: Any) -> None:
+    """The shape that separates this from set_mode. A cleared mode falls through
+    to the session's tier, which this host can name; a cleared model falls through
+    to the agent's own, which it cannot -- so null stands alone and nothing beside
+    it may claim to know better."""
+    await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
+    manager = _ModelledManager()
+    key = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1"}
+
+    reported = await instances_set_model(dict(key), agent_loop_factory=lambda: _FakeLoop(manager))
+
+    assert reported["model"] is None
+    assert "inherited" not in reported
+    assert manager.applied == [], "a report must not write"
+
+
+async def test_clearing_a_model_is_its_own_field_not_a_reserved_value(_isolated_registry: Any) -> None:
+    """An agent may offer a model whose id is any string at all, so a sentinel
+    would take that id away from it."""
+    await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
+    manager = _ModelledManager()
+    key = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1"}
+
+    await instances_set_model({**key, "model": "openrouter/opus-5"}, agent_loop_factory=lambda: _FakeLoop(manager))
+    cleared = await instances_set_model({**key, "clear": True}, agent_loop_factory=lambda: _FakeLoop(manager))
+
+    assert cleared["model"] is None
+    assert manager.applied[-1] == ("tui:s1", "Researcher", "h1", None)
+
+
+async def test_a_model_the_agent_never_offered_is_refused_not_stored(_isolated_registry: Any) -> None:
+    """Silently storing it would leave the next turn on the old model with the
+    control showing the new one."""
+    await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
+    manager = _ModelledManager()
+    params = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1", "model": "gpt-9"}
+
+    with pytest.raises(ConfigValidationError):
+        await instances_set_model(params, agent_loop_factory=lambda: _FakeLoop(manager))
+    assert manager.applied == []
+
+
+async def test_a_model_set_against_a_handle_this_session_lacks_is_refused(_isolated_registry: Any) -> None:
+    """Held per instance, so one set against a handle that does not exist is
+    stored where nothing will read it and echoed back as if it had landed."""
+    manager = _ModelledManager()
+    params = {"session_key": "tui:s1", "agent": "Researcher", "handle": "ghost", "model": "openrouter/opus-5"}
+
+    with pytest.raises(ConfigValidationError):
+        await instances_set_model(params, agent_loop_factory=lambda: _FakeLoop(manager))
+    assert manager.applied == []
+
+
+async def test_a_model_read_degrades_to_empty_but_a_write_refuses() -> None:
+    """A read answers empty like every read in this module; a write must not,
+    because answering a set with "no models" is the silent no-op above."""
+    assert await instances_set_model(
+        {"session_key": "s1", "agent": "Researcher", "handle": "h1"}, agent_loop_factory=None
+    ) == {"model": None, "availableModels": []}
+    with pytest.raises(ConfigValidationError):
+        await instances_set_model(
+            {"session_key": "s1", "agent": "Researcher", "handle": "h1", "model": "x"},
+            agent_loop_factory=None,
+        )
 
 
 async def test_setting_a_mode_answers_with_the_whole_menu(_isolated_registry: Any) -> None:

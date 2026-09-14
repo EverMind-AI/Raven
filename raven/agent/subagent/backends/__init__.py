@@ -85,6 +85,15 @@ class AgentMeta(NamedTuple):
     request is steered toward, which is a routing question, not a capability the
     model chooses between."""
 
+    model_choices: tuple[Any, ...] = ()
+    """The models this agent offers, or ``()`` when it offers no menu.
+
+    ``raven.acp_client.capabilities.AcpModelChoice`` records, measured at
+    registration from the agent's own session response, exactly as ``modes`` is.
+    LAST, after ``owns_watched_work``, for the reason ``modes`` records two
+    fields up: this is a NamedTuple several callers build positionally, so a
+    field inserted anywhere but the end moves one of theirs."""
+
 
 def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
     """The advertised capabilities of one agent config, any kind.
@@ -144,6 +153,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
             bool(getattr(cfg, "owns_watched_work", False)),
         )
     modes: tuple[Any, ...] = ()
+    model_choices: tuple[Any, ...] = ()
     if kind == "acp":
         if snapshot is None:
             snapshot = acp_snapshot_for(cfg)
@@ -154,6 +164,9 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         # Measured, never declared: the menu offered has to be the one the agent
         # serves, or the model is handed a mode the agent then refuses.
         modes = tuple(getattr(snapshot, "available_modes", ()) or ())
+        # Same rule, same reason: the menu offered has to be the one the agent
+        # serves, or a reader is handed a model the agent then refuses.
+        model_choices = tuple(getattr(snapshot, "model_choices", ()) or ())
     elif kind == "openai":
         stateful = bool(getattr(cfg, "stateful", True))
     else:
@@ -170,6 +183,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         getattr(cfg, "owns", None) or "",
         modes,
         bool(getattr(cfg, "owns_watched_work", False)),
+        model_choices,
     )
 
 

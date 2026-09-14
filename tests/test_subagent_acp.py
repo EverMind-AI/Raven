@@ -166,6 +166,14 @@ async def test_verify_reads_capabilities_from_the_handshake() -> None:
     # must not become one the model would be offered and the agent then refuse.
     assert [m.id for m in snapshot.available_modes] == ["fast", "deep"]
     assert snapshot.available_modes[1].description == "searches longer"
+    # The stable model surface, which is where the agents this host drives put
+    # their menu: one configOptions entry with category "model". The entry beside
+    # it carries a different category and must not be mistaken for it, and the
+    # third choice has no value and must not become an invented id.
+    assert [(c.value, c.name, c.group) for c in snapshot.model_choices] == [
+        ("stub:model-a", "model-a", "Stub"),
+        ("stub:model-b", "model-b", "Stub"),
+    ]
     assert snapshot.auth_methods == ("stub-auth",)
 
 
@@ -3928,6 +3936,68 @@ async def test_close_all_abandons_a_connection_whose_close_hangs() -> None:
     assert closed == ["clean"]
     assert pool._connections == {}
     released.set()
+
+
+# ---- session models --------------------------------------------------------
+
+
+async def test_a_model_reaches_the_session_before_it_is_prompted(tmp_path: Path) -> None:
+    """The channel is ``session/set_config_option`` with ``configId: "model"``.
+    ``session/set_model`` is not in the stable schema, and an agent waiting for
+    it would never be asked to switch."""
+    cfg = stub_config("modeller")
+    backend = build_third_party_backend(cfg)
+
+    reply = await backend.run(
+        "ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-b"
+    )
+
+    connection = await get_pool().acquire(
+        name="modeller", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    assert reply == "pong"
+    assert "session/set_config_option model=stub:model-b" in connection.client.stderr_tail()
+
+
+async def test_no_model_asked_for_sends_no_frame(tmp_path: Path) -> None:
+    """The agent's own choice is the right answer when nothing was requested, and
+    an unrequested frame is a round trip on every single dispatch."""
+    cfg = stub_config("quietmodel")
+    backend = build_third_party_backend(cfg)
+
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    connection = await get_pool().acquire(
+        name="quietmodel", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    assert "session/set_config_option" not in connection.client.stderr_tail()
+
+
+async def test_an_agent_that_serves_no_model_option_still_runs_the_task(tmp_path: Path) -> None:
+    """Refusing the option is not a reason to fail a task: running it on the
+    agent's own model is a better outcome than not running it at all."""
+    cfg = stub_config("nomodels", mode="no_models")
+    backend = build_third_party_backend(cfg)
+
+    reply = await backend.run(
+        "ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-b"
+    )
+
+    assert reply == "pong"
+
+
+async def test_a_model_the_agent_will_not_write_still_runs_the_task(tmp_path: Path) -> None:
+    """The runtime's own refusal travels with its own code (-32011) rather than
+    as an internal error, and it is still not fatal here: the task runs on what
+    the agent already had."""
+    cfg = stub_config("refusemodel")
+    backend = build_third_party_backend(cfg)
+
+    reply = await backend.run(
+        "ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-never"
+    )
+
+    assert reply == "pong"
 
 
 # ---- session modes ---------------------------------------------------------

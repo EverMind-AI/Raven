@@ -768,6 +768,73 @@ async def instances_set_mode(
     }
 
 
+async def instances_set_model(
+    params: dict[str, Any],
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict[str, Any]:
+    """Put one instance on a model (``subagents.instance.set_model``).
+
+    The sibling of ``instances_set_mode`` above and shaped the same way, because
+    a reader meets the two as one row of per-instance settings. A direct chat is
+    a continuation, so which model answers it has to be changeable without
+    abandoning the conversation to start another one elsewhere.
+
+    What differs is what it inherits: nothing. A mode falls through to the
+    session's tier, so a cleared instance still runs at something this host
+    chose. A model does not -- cleared, the instance runs on whatever the agent
+    picked for itself, and this host cannot say what that is. The agent reports
+    a ``currentValue`` for the session it opened during a capability probe, and
+    that is the state of a throwaway session rather than a fact about this
+    instance, so reporting it here would name a model this conversation may
+    never have been on. ``null`` therefore means "the agent's own", and is drawn
+    as such.
+
+    Three calls, told apart by which fields are present rather than by a
+    sentinel value, for the reason the mode method records -- an agent is free
+    to offer a model whose id is any string at all:
+
+    - neither field: **report** the override and the menu on offer;
+    - ``clear: true``: drop the override, returning the instance to the agent's own;
+    - ``model: "<value>"``: switch, from the instance's next turn on.
+    """
+    manager = _manager(agent_loop_factory)
+    agent = str(params.get("agent") or "")
+    handle = str(params.get("handle") or "")
+    session_key = str(params.get("session_key") or "")
+    raw = params.get("model")
+    model = str(raw) if isinstance(raw, str) and raw else None
+    reading = model is None and not params.get("clear")
+
+    def menu() -> list[dict[str, Any]]:
+        return [
+            {"value": c.value, "name": c.name, "group": c.group}
+            for c in (manager.agent_model_choices(agent) if manager is not None else ())
+        ]
+
+    if manager is None:
+        # A read degrades to empty and a write does not, for the reason the mode
+        # method states: answering a set with "no models" is a silent no-op, and
+        # the caller would draw the model it asked for over an override that was
+        # never recorded.
+        if reading:
+            return {"model": None, "availableModels": []}
+        raise ConfigValidationError("sub-agents are not configured, so an instance has no model to set")
+    if reading:
+        return {"model": manager.instance_model(session_key, agent, handle), "availableModels": menu()}
+    rows = get_registry().list_instances(session_key)
+    if not any(r.get("agent") == agent and r.get("handle") == handle for r in rows):
+        # Checked only on the write path, as the mode method is: an override held
+        # against a handle that does not exist is stored where nothing will read
+        # it and echoed back as if it had landed.
+        raise ConfigValidationError(f"no instance {agent}/{handle} in this session")
+    try:
+        applied = manager.set_instance_model(session_key, agent, handle, model)
+    except ValueError as exc:
+        raise ConfigValidationError(str(exc)) from exc
+    return {"model": applied, "availableModels": menu()}
+
+
 def register_instance_methods(
     dispatcher: "Dispatcher",
     *,
@@ -793,12 +860,16 @@ def register_instance_methods(
     async def _set_mode(params: dict[str, Any]) -> dict[str, Any]:
         return await instances_set_mode(params, agent_loop_factory=agent_loop_factory)
 
+    async def _set_model(params: dict[str, Any]) -> dict[str, Any]:
+        return await instances_set_model(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("subagents.instances", _list)
     dispatcher.register("subagents.instance.create", _create)
     dispatcher.register("subagents.instance.history", _history)
     dispatcher.register("subagents.instance.forget", _forget)
     dispatcher.register("subagents.instance.steer", _steer)
     dispatcher.register("subagents.instance.set_mode", _set_mode)
+    dispatcher.register("subagents.instance.set_model", _set_model)
 
 
 __all__ = [

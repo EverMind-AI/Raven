@@ -79,6 +79,18 @@ DS.agents = {
       ? { session_key: sessionCurrent(), agent, handle, clear: true }
       : { session_key: sessionCurrent(), agent, handle, mode })
       .then((r) => r || {}),
+  /* The model beside the mode, on the same three-call shape: neither field
+     reports, `clear` drops the override, a value switches. Nothing is inherited
+     here -- cleared means the agent's own choice, which this host cannot name --
+     so there is no second field to read back. */
+  instanceModel: (agent, handle) =>
+    rpc.call('subagents.instance.set_model', { session_key: sessionCurrent(), agent, handle })
+      .then((r) => r || {}),
+  instanceSetModel: (agent, handle, model) =>
+    rpc.call('subagents.instance.set_model', model === null
+      ? { session_key: sessionCurrent(), agent, handle, clear: true }
+      : { session_key: sessionCurrent(), agent, handle, model })
+      .then((r) => r || {}),
   /* The heartbeat, forwarded rather than acted on: a run in flight has to
      move on screen without being reopened, and every judgement about what
      that takes belongs to the island that is drawing it. */
