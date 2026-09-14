@@ -955,7 +955,6 @@ ADDED_VENDORS = {
     "perplexity": "perplexity/sonar-pro",
     "cerebras": "cerebras/gpt-oss-120b",
     "huggingface": "huggingface/deepseek-ai/DeepSeek-V4-Pro",
-    "poe": "poe/anthropic/claude-opus-4.8",
     "bigmodel": "bigmodel/glm-4.6",
     "xiaomi_mimo": "xiaomi-mimo/mimo-v2.5",
     "baidu_cloud": "baidu-cloud/ernie-5.1",
@@ -970,8 +969,12 @@ ADDED_VENDORS = {
 #: rest resell other people's under their own spelling -- so a shortlist here
 #: would be ids nobody can check. Each reaches the page as a key field and an
 #: empty list, and its own /v1/models fills that in once a key is entered.
+#: Poe is here for the sharpest form of it: it serves the same models under bot
+#: names of its own, and only the outer "poe/" comes off on the way out, so a
+#: maker-spelled id reaches Poe as a model it does not have.
 NO_SHORTLIST_VENDORS = [
     "baichuan",
+    "poe",
     "ai302",
     "dmxapi",
     "burncloud",

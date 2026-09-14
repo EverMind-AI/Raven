@@ -355,6 +355,12 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # id here names the model's maker and never Poe. Gateway for that reason:
     # the rule is what puts Poe's own prefix in front of "anthropic/..." rather
     # than letting Anthropic's key answer for a Poe subscription.
+    #
+    # No `default_model` and no shortlist, for the reason the resale gateways
+    # below state. Poe names what it serves by bot rather than by the
+    # maker's id, and only the outer "poe/" comes off before the request is
+    # sent -- so a vendor-spelled id arrives as a model Poe does not have, and
+    # shipping one as the default makes the first chat a wrong-model error.
     ProviderSpec(
         name="poe",
         keywords=("poe",),
@@ -366,7 +372,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="api.poe.com",
         default_api_base="https://api.poe.com/v1",
         strip_model_prefix=False,
-        default_model="poe/anthropic/claude-opus-4.8",
     ),
     # === Resale gateways reached through OpenAI's driver ===================
     # Thirteen shelves that resell other vendors' models over an
