@@ -58,6 +58,34 @@ def _round_dir_inside_case(remote_dir: str, staged_case: str) -> tuple[str, str]
     return None
 
 
+def _remote_dir_taken(remote_dir: str, cdir: Path, ops_home: Path) -> str | None:
+    """The live sibling campaign already keeping its rounds in ``remote_dir``, or None.
+
+    Two campaigns writing rounds into one directory bill each other: the spend
+    measure walks ``{remote_dir}/jobs/*``, and a directory name carries no campaign
+    identity. The backend now reads only the campaign's own ledger, but a shared
+    directory still mixes the two campaigns' job trees, so it is refused at the
+    declaration, where the fix is one word. A concluded sibling is done writing
+    there and does not count; re-declaring this same campaign is not a collision.
+    """
+    if not remote_dir:
+        return None
+    from oncall_flow.tools.ops import _campaign_meta
+
+    mine = Path(remote_dir).expanduser()
+    try:
+        siblings = sorted(d for d in ops_home.iterdir() if d.is_dir())
+    except OSError:
+        return None
+    for sib in siblings:
+        if sib == cdir or (sib / "concluded.json").exists():
+            continue
+        theirs = str(_campaign_meta(sib).get("remote_dir") or "")
+        if theirs and Path(theirs).expanduser() == mine:
+            return sib.name
+    return None
+
+
 # Commands whose whole job is to put a copy of something somewhere else. Only the
 # first word of a step is checked against this, so a "cp" inside a filename or a
 # message is not one of them.
@@ -853,6 +881,16 @@ class OpsDeclareTool(Tool):
                 f"directory inside it would be linked into the next round, and the case "
                 f"would stop being something you only read. Put rounds beside the case or "
                 f"anywhere else writable. Nothing was written."
+            )
+        taken = _remote_dir_taken(remote_dir, cdir, _ops_home())
+        if taken:
+            return (
+                f"REFUSED: remote_dir {remote_dir!r} is where campaign {taken!r} keeps its rounds, "
+                f"and that campaign has not concluded.\n"
+                f"Two campaigns in one rounds directory cannot tell their jobs apart, so each "
+                f"would bill the other's runs against its own budget. Give this campaign a "
+                f"rounds directory of its own (for example a sibling named after it). "
+                f"Nothing was written."
             )
         # Only what this shape has. An absent metric is what tells every later
         # reader there is no ranking to do -- writing an empty one would leave
