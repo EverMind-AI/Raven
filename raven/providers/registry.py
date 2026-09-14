@@ -104,6 +104,12 @@ class ProviderSpec:
     # gateway behavior
     strip_model_prefix: bool = False  # strip "provider/" before re-prefixing
 
+    #: This gateway serves other vendors' models under names of its own, so the
+    #: bundled registry's ids for it are not ids it accepts. A catalogue list
+    #: must then come from the gateway alone: the registry rows would be
+    #: selectable, and every one of them a wrong-model error on first use.
+    renames_models: bool = False
+
     # per-model param overrides, e.g. (("kimi-k2.5", {"temperature": 1.0}),)
     model_overrides: tuple[tuple[str, dict[str, Any]], ...] = ()
 
@@ -372,6 +378,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="api.poe.com",
         default_api_base="https://api.poe.com/v1",
         strip_model_prefix=False,
+        renames_models=True,
     ),
     # === Resale gateways reached through OpenAI's driver ===================
     # Thirteen shelves that resell other vendors' models over an

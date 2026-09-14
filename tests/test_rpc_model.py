@@ -1436,6 +1436,40 @@ async def test_direct_provider_without_native_base_is_flagged_without_protocol_f
         make_provider(load_config())
 
 
+async def test_a_gateway_that_renames_models_offers_only_what_it_answered(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Poe serves other vendors' models under bot names of its own.
+
+    The bundled registry files 137 models under Poe in the maker's spelling,
+    and unioning those into the answer put ids Poe does not accept in front of
+    the reader as things to add -- selectable, and a wrong-model error on the
+    first message. Removing the default and the shortlist closed two doors to
+    the same room; this is the third, and the one an ordinary Get model list
+    walks through.
+    """
+    from raven.providers.registry_data import catalogue_for
+
+    # The premise: the bundled rows exist and are the maker's spelling, so the
+    # assertion below is about suppressing them rather than about an empty file.
+    bundled = catalogue_for("poe")
+    assert len(bundled) > 100, "expected the bundled Poe catalogue this test exists to withhold"
+    assert any(row.startswith("anthropic/") for row in bundled)
+
+    _write_config(fake_home, {"providers": {"poe": {"apiKey": "k"}}})
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *a, **k: {"ok": True, "status": "valid", "model_ids": ["Claude-Sonnet-4.6", "GPT-5.4"]},
+    )
+
+    out = await model_fetch_models({"slug": "poe"})
+
+    assert out["status"] == "ok"
+    assert [row["source"] for row in out["models"]] == ["live", "live"]
+    assert {row["id"] for row in out["models"]} == {"poe/Claude-Sonnet-4.6", "poe/GPT-5.4"}
+
+
 async def test_fetching_a_catalogue_dresses_what_the_vendor_answered(
     fake_home: Path,
     monkeypatch: pytest.MonkeyPatch,
