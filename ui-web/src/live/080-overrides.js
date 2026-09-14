@@ -90,7 +90,12 @@ rpc.onReconnect = async () => {
 };
 
 /* A pending new task is a draft, not a session: nothing is written to disk
-   until the first message, so the rail does not fill with empty sessions. */
+   until the reader does something that needs a conversation, so the rail does
+   not fill with empty sessions. That was the first message and only the first
+   message; it is now also the sub-agent roster starting an instance, which has
+   to have a conversation to put one in. Both are deliberate, which is the
+   property that actually keeps the rail clean -- merely opening the new-task
+   screen still writes nothing. */
 let draft = false;
 
 /* A model chosen while still a draft is held here, not written: a draft has no
