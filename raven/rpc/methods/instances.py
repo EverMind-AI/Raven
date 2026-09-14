@@ -308,12 +308,37 @@ async def instances_list(
     hidden = {row.name for row in table.rows() if getattr(row, "hidden", False)} if table is not None else set()
     reconciled = [row for row in reconciled if row.get("agent") not in hidden]
     return {
-        "instances": _mark_titles(
-            _mark_resumable(_collapse_dag_rows(_drop_nodes_that_never_ran(reconciled)), manager),
-            _session_dir(agent_loop_factory, session_key),
+        "instances": _mark_turn_start(
+            _mark_titles(
+                _mark_resumable(_collapse_dag_rows(_drop_nodes_that_never_ran(reconciled)), manager),
+                _session_dir(agent_loop_factory, session_key),
+            ),
+            session_key,
         ),
         "pending_handoff_count": handoff.pending_count(session_key) if handoff is not None else 0,
     }
+
+
+def _mark_turn_start(rows: list[dict[str, Any]], session_key: str) -> list[dict[str, Any]]:
+    """Stamp each row that is answering a turn with when that turn began.
+
+    The registry cannot answer this. Its ``updatedAtMs`` is stamped by every
+    write -- a status change, a binding commit, a graph-origin write -- so it
+    dates the row and not the turn, and a clock counting from it would jump
+    whenever anything else touched the record. The running turn's own start is
+    on the activity the backend is collecting, which is the only place it exists.
+
+    Absent rather than zero when nothing is running, and absent is the whole
+    signal: a reader shows a clock when the field is there and nothing when it
+    is not, so an instance that finished between two polls stops counting
+    instead of freezing on its last number.
+    """
+    for row in rows:
+        live = run_activity.live_instance(session_key, str(row.get("agent") or ""), str(row.get("handle") or ""))
+        began = getattr(live, "started_at_ms", None) if live is not None else None
+        if isinstance(began, int) and began > 0:
+            row["turnStartedAtMs"] = began
+    return rows
 
 
 async def instances_create(
