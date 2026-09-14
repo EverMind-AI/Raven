@@ -390,13 +390,17 @@ const mediaOf = (text) => {
  */
 let promoting = null;
 async function openConversation(preview, atPointer) {
-  if (!draft) return sessionCurrent();
-  /* One promotion, however many callers ask inside it. `draft` stays raised
-     across the `session.create` round trip, so a second caller landing in that
-     window -- the roster's button pressed just after send -- would read the page
-     as still a draft and mint a SECOND conversation for the same press of the
-     new-task screen. Shared rather than refused: both callers want the same
-     answer, and both are owed it.
+  /* One promotion, however many callers ask inside it, and it is asked about
+     FIRST -- before the flag. `promote` lowers `draft` partway through, while
+     the staged writes and the subscription are still running, so a caller
+     arriving in that window reads the page as already settled. Checking the
+     flag first answered it "there is one, carry on" and sent it straight past
+     the setup that had not finished: the send then started the first turn under
+     settings the reader chose and did not get.
+
+     Shared rather than refused, because both callers want the same answer and
+     both are owed it -- ahead of the flag, a second press of the new-task
+     screen's button also stops minting a SECOND conversation for one visit.
      The joiner's hook runs on the way out instead of from inside, which is the
      same guarantee later: what it is for is a pointer that has already moved. */
   if (promoting) {
@@ -404,6 +408,7 @@ async function openConversation(preview, atPointer) {
     if (atPointer) atPointer(joined);
     return joined;
   }
+  if (!draft) return sessionCurrent();
   promoting = promote(preview, atPointer);
   try {
     return await promoting;
@@ -439,6 +444,46 @@ async function promote(preview, atPointer) {
   return s.id;
 }
 
+/* A send onto a conversation that already exists, held until that conversation
+ * is finished being made.
+ *
+ * A promotion the ROSTER started may still be running. It moves the pointer and
+ * lowers `draft` before awaiting the staged model, tier and permission writes
+ * and the subscription, so the page reads as a settled conversation while the
+ * draft's own settings are not on it yet and its events have nowhere to arrive.
+ * Sending into that window starts the first turn on a conversation that is half
+ * made, under settings the reader chose and did not get.
+ *
+ * Reachable only since the roster gained the ability to promote: every other way
+ * in went through `liveSend`, which marks the turn busy before the promotion
+ * starts, so a second send was queued rather than sent.
+ *
+ * Joined rather than queued, because `openConversation` answers exactly when
+ * that setup is complete, which is exactly when this send is safe. The guard is
+ * on this function rather than on its caller so that the wait cannot be
+ * bypassed by a second way in -- the caller is one line either way. */
+function sendOnSession(text, failed) {
+  if (promoting) {
+    openConversation().then(() => dispatchSend(text, failed), failed);
+    return;
+  }
+  dispatchSend(text, failed);
+}
+
+/* What `liveSend` has always run here, unchanged. */
+function dispatchSend(text, failed) {
+  const current = sessionCurrent();
+  turnOwner = current;
+  touchSession(current, text);
+  beginNaming(text);
+  /* `=== false`, not falsy: a server too old to carry the field says nothing
+     at all, and reading that as "declined" would tear down a placeholder
+     while a title really is on its way. */
+  rpc.call('turn.send', { session_key: current, content: text, ...mediaOf(text) })
+    .then(r => { if (r && r.naming === false) namingDeclined(current); })
+    .catch(failed);
+}
+
 function liveSend(text) {
   if (turn.busy()) { queuePush(text); return; }
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
@@ -457,16 +502,7 @@ function liveSend(text) {
     goState(); drawMeter();
   };
   if (!draft) {
-    const current = sessionCurrent();
-    turnOwner = current;
-    touchSession(current, text);
-    beginNaming(text);
-    /* `=== false`, not falsy: a server too old to carry the field says nothing
-       at all, and reading that as "declined" would tear down a placeholder
-       while a title really is on its way. */
-    rpc.call('turn.send', { session_key: current, content: text, ...mediaOf(text) })
-      .then(r => { if (r && r.naming === false) namingDeclined(current); })
-      .catch(failed);
+    sendOnSession(text, failed);
     return;
   }
   // The draft becomes a real session here, on its first message.

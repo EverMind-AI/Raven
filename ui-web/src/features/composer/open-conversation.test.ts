@@ -33,7 +33,9 @@ const slice = (start: string): string => {
 }
 const fnSource = `let promoting = null;\n`
   + `${slice('async function openConversation(preview, atPointer) {')}\n`
-  + slice('async function promote(preview, atPointer) {')
+  + `${slice('async function promote(preview, atPointer) {')}\n`
+  + `${slice('function sendOnSession(text, failed) {')}\n`
+  + slice('function dispatchSend(text, failed) {')
 
 interface Row { id: string; title: string; last: string; persisted: boolean }
 
@@ -55,13 +57,16 @@ function harness(startAsDraft: boolean) {
   const build = new Function(
     'rpc', 'T', 'sessionCurrent', 'sessionSet', 'sessionRows', 'claimDraft',
     'applyStagedModel', 'applyStagedTier', 'applyStagedPerm', 'sessionDraw',
-    'subscribe', 'wsSetRoot', 'startAsDraft',
-    `let draft = startAsDraft; let viewGen = 7;\n${fnSource}\n`
-    + 'return { openConversation, isDraft: () => draft, '
-    + 'setDraft: (on) => { draft = on; } };',
+    'subscribe', 'wsSetRoot', 'startAsDraft', 'touchSession', 'beginNaming',
+    'mediaOf', 'namingDeclined',
+    `let draft = startAsDraft; let viewGen = 7; let turnOwner = null;\n${fnSource}\n`
+    + 'return { openConversation, sendOnSession, isDraft: () => draft, '
+    + 'turnOwner: () => turnOwner, setDraft: (on) => { draft = on; } };',
   ) as (...args: unknown[]) => {
     openConversation: (preview?: string, atPointer?: (id: string) => void) => Promise<string | null>
+    sendOnSession: (text: string, failed: (e: unknown) => void) => void
     isDraft: () => boolean
+    turnOwner: () => string | null
     setDraft: (on: boolean) => void
   }
   const built = build(
@@ -78,6 +83,10 @@ function harness(startAsDraft: boolean) {
     async (id: string) => { log.push(`subscribe:${id}`) },
     say('wsRoot'),
     startAsDraft,
+    (id: string) => { log.push(`touch:${id}`) },
+    () => { log.push('naming') },
+    () => ({}),
+    say('namingDeclined'),
   )
   return { ...built, log, rows, rpc, pointer: () => pointer }
 }
@@ -165,6 +174,37 @@ describe('getting a conversation to work in', () => {
     await expect(h.openConversation()).resolves.toBe('made-2')
     expect(h.rpc.call).toHaveBeenCalledTimes(2)
     expect(h.rows.map((r) => r.id)).toEqual(['made-2', 'made-1'])
+  })
+
+  it('holds a settled send behind a promotion the roster started', async () => {
+    /* Reported by gloryfromca on #399, and reproduced here before the fix.
+       `promote` moves the pointer and lowers `draft` BEFORE awaiting the staged
+       model, tier and permission writes and the subscription. A send landing in
+       that window reads the page as a settled conversation and dispatches at
+       once -- so the first turn starts on a conversation whose draft-selected
+       settings are not on it yet and whose events have nowhere to arrive.
+
+       Reachable only since the roster gained the ability to promote. Every
+       other way in went through `liveSend`, which marks the turn busy before
+       the promotion starts, so a second send was queued rather than sent. */
+    const h = harness(true)
+    const rosterDone = h.openConversation()
+    /* Let the create resolve, which is what moves the pointer and lowers the
+       flag -- the window the earlier concurrency test never entered, because it
+       joined while `session.create` was still pending. */
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(h.isDraft()).toBe(false)
+    h.sendOnSession('hello', () => {})
+    await rosterDone
+    await Promise.resolve()
+    const sent = h.log.indexOf('rpc:turn.send')
+    expect(sent).toBeGreaterThan(-1)
+    /* After all four, not before any of them. */
+    for (const step of ['staged:model:7', 'staged:tier:made-1', 'staged:perm:made-1', 'subscribe:made-1']) {
+      expect(h.log.indexOf(step)).toBeGreaterThan(-1)
+      expect(sent).toBeGreaterThan(h.log.indexOf(step))
+    }
   })
 
   it('carries the view generation the promotion began on into the staged model', async () => {
