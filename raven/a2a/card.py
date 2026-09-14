@@ -7,7 +7,14 @@ capability fails at the call instead of choosing another path.
 
 from __future__ import annotations
 
-from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentSkill
+from a2a.types import (
+    AgentCapabilities,
+    AgentCard,
+    AgentInterface,
+    AgentSkill,
+    HTTPAuthSecurityScheme,
+    SecurityScheme,
+)
 
 from raven.config.schema import A2aConfig
 
@@ -37,6 +44,11 @@ def build_agent_card(config: A2aConfig, *, base_url: str) -> AgentCard:
             push_notifications=False,
             extended_agent_card=False,
         ),
+        security_schemes={
+            "http_auth": SecurityScheme(
+                http_auth_security_scheme=HTTPAuthSecurityScheme(scheme="bearer"),
+            )
+        },
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain"],
         skills=[
