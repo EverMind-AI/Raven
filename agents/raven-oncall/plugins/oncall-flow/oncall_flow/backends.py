@@ -84,6 +84,22 @@ def backend_from_meta(meta: dict[str, Any]) -> JobBackend:
     return factory(meta)
 
 
+def billing_only(backend: JobBackend, ledger: Any) -> JobBackend:
+    """``backend``, told to bill only the jobs in this campaign's ``ledger``.
+
+    Campaigns share a ``remote_dir`` more often than not, and a backend that
+    measures spend by walking that directory then sees every sibling's jobs as
+    its own. The ledger is the one record of which jobs are this campaign's, so
+    it is handed over here, at the seam every tool builds its backend through. A
+    backend that does not measure spend by directory has nothing to restrict and
+    comes back as it was; so does one built by a test double.
+    """
+    restrict = getattr(backend, "restrict_spend_to", None)
+    if ledger is not None and callable(restrict):
+        restrict(ledger)
+    return backend
+
+
 def prepare_from_meta(meta: dict[str, Any], *, app_dir: str) -> None:
     """Round-zero setup for backends that need it; a no-op for those that don't."""
     if backend_name(meta) != DEFAULT_BACKEND:
