@@ -135,6 +135,15 @@ export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = 
       tabIndex={0}
       onClick={open}
       onKeyDown={(e) => {
+        /* The row's own keys only. A row is a focusable button holding a real
+           button, and a keydown on that one bubbles to here: the preventDefault
+           below then cancels its native activation, so the control is reachable
+           with the mouse and not with the keyboard -- and the reader gets the
+           row opening, which is the thing they were trying not to do. The same
+           boundary `shell/setuprow.tsx` already draws, for the same reason.
+           `stopPropagation` on the click cannot cover this: a click does not
+           reach here, a keydown does. */
+        if (e.target !== e.currentTarget) return
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
           open()
@@ -173,6 +182,12 @@ export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = 
   return (
     <div className="sarow inst" role="button" tabIndex={0} onClick={open}
       onKeyDown={(e) => {
+        /* The row's own keys only, for the reason the compact branch above
+           records. This row has carried a Remove button since before that one
+           existed, so the same defect was already here and reachable from the
+           standalone panel -- fixed in the same breath rather than left as the
+           one row where the keyboard still loses. */
+        if (e.target !== e.currentTarget) return
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open() }
       }}>
       {/* Identity first, then state -- the order the roster head and every

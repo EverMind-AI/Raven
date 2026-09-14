@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -326,6 +326,44 @@ describe('subagents island, the list', () => {
        also be a click on it. */
     expect(store.getState().instances.map((r) => r.handle)).toEqual(['two'])
     expect(store.getState().open).toBeNull()
+  })
+
+  it('lets the keyboard reach the retire control instead of opening the row', async () => {
+    /* Reported by gloryfromca on #401. The row is a focusable button holding a
+       real button, and a keydown on the inner one bubbles: the row's handler
+       called `preventDefault()`, which cancels the inner button's own native
+       activation, and then opened the pane. So a keyboard user could not
+       retire at all -- they got the thing they were trying not to do. */
+    startable({ instances: async () => [inst({ handle: 'one' })] })
+    await mountGrouped()
+    await screen.findByText('hermes')
+    const button = retireIn('hermes')!
+    /* `fireEvent` answers false when the event was cancelled, and cancelled is
+       exactly what takes the button's activation away. */
+    const survived = fireEvent.keyDown(button, { key: 'Enter' })
+    expect(survived).toBe(true)
+    expect(store.getState().open).toBeNull()
+    /* The positive half, or the case above is satisfied by a row that responds
+       to no keys at all: the ROW's own Enter still opens it. */
+    const row = button.closest('.sarow') as HTMLElement
+    expect(fireEvent.keyDown(row, { key: 'Enter' })).toBe(false)
+    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'one' })
+  })
+
+  it('lets the keyboard reach the standalone row Remove button too', async () => {
+    /* The flat list has carried a Remove button since before the compact one
+       existed, and its row draws the same handler -- so the defect was already
+       there, reachable from the standalone panel. Covered here so the fix
+       cannot be undone on one row and kept on the other. */
+    instances([inst({ handle: 'one' })])
+    await mount()
+    await screen.findByText('one')
+    const button = document.querySelector<HTMLButtonElement>('.sarow .mini.ghost')!
+    expect(fireEvent.keyDown(button, { key: 'Enter' })).toBe(true)
+    expect(store.getState().open).toBeNull()
+    const row = button.closest('.sarow') as HTMLElement
+    expect(fireEvent.keyDown(row, { key: 'Enter' })).toBe(false)
+    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'one' })
   })
 
   it('offers a new instance only for an agent that can hold a direct chat', async () => {
