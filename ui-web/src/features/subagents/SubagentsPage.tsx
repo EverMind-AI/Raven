@@ -23,6 +23,18 @@ function IcoUp(): JSX.Element {
   )
 }
 
+/* The removal glyph on a roster row. A cross, not a bin: `forgetInstance`
+   retires the instance -- the row goes and an ACP agent's own session is
+   dropped with it -- while the records it wrote stay on disk, so a bin would
+   promise a deletion that does not happen. */
+function IcoRetire(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M7 7l10 10M17 7 7 17" />
+    </svg>
+  )
+}
+
 function IcoPlus(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -138,6 +150,23 @@ export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = 
           and the run id it used to show here is a timestamp -- which is why the
           absence is drawn as nothing rather than as an id. */}
       {it.runTitle ? <span className="source" title={it.runTitle}>{it.runTitle}</span> : null}
+      {/* Retiring was reachable only from the standalone panel, and the desk is
+          where this list actually lives -- one run leaves six rows here and
+          there was no way to clear any of them. The same verb, the same
+          warning: one behaviour drawn in two places, not two.
+
+          Standing rather than revealed on hover, for the reason the CSS above
+          `.agent-new` records: a reader who does not know a control is there
+          will not hover looking for it. `stopPropagation`, or dismissing a row
+          would also open it. */}
+      <button
+        className="inst-retire"
+        title={t('gui.ws.instance_forget_note')}
+        aria-label={t('gui.ws.instance_forget')}
+        onClick={(e) => { e.stopPropagation(); store.forgetInstance(it) }}
+      >
+        <IcoRetire />
+      </button>
     </div>
   )
   const state = instanceState(it.status ?? undefined)
