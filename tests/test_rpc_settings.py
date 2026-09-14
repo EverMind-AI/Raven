@@ -448,3 +448,33 @@ class TestAWriteFollowsTheSpellingTheConfigAlreadyUses:
 
         assert set(_read(cfg)["knowledge"]) == {"embeddingModel", "embeddingProvider"}
         assert self._loads(cfg)
+
+
+class TestClearingAPinThroughItsLeafKeys:
+    """``None`` clears a half, the same as the empty string.
+
+    A surface that has no value to send sends ``null`` rather than inventing
+    one, and "follow the conversation" is the documented unset state -- so this
+    is a way back to it, not a malformed write to refuse.
+    """
+
+    async def test_null_clears_the_model_half(self, cfg):
+        cfg.write_text(json.dumps({"translate": {"model": "openai/gpt-5.5"}}), encoding="utf-8")
+
+        await rpc_console.settings_set({"key": "translate.model", "value": None})
+
+        assert _read(cfg)["translate"]["model"] is None
+
+    async def test_null_clears_the_provider_half(self, cfg):
+        cfg.write_text(json.dumps({"translate": {"provider": "openai"}}), encoding="utf-8")
+
+        await rpc_console.settings_set({"key": "translate.provider", "value": None})
+
+        assert _read(cfg)["translate"]["provider"] is None
+
+    async def test_whitespace_is_not_a_provider(self, cfg):
+        """Trimmed to nothing reads as unset rather than as a provider named
+        with spaces, which no registry lookup would match."""
+        await rpc_console.settings_set({"key": "translate.provider", "value": "   "})
+
+        assert _read(cfg)["translate"]["provider"] is None

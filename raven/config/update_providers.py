@@ -1124,10 +1124,15 @@ def resolve_provider_credentials(name: str, *, config_path: Path | None = None) 
         data = read_raw_or_raise(path)
     except Exception:
         return None
-    cls, _ = _load_provider_endpoints(name, data)
     try:
+        cls, _ = _load_provider_endpoints(name, data)
         instance = cls.model_validate(_raw_section(data, name))
     except ValidationError:
+        # A hand-edited section with a wrong type is not a reason to raise at a
+        # caller that only asked for an address. Both calls are inside the
+        # guard: the loader validates the section too, so catching only the
+        # second let the same bad config raise from one line higher.
+        cls = _provider_schema_cls(name)
         instance = cls()
     endpoints = provider_endpoints(instance)
     endpoint = next((ep for ep in endpoints if ep.api_key), endpoints[0] if endpoints else None)

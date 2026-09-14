@@ -100,6 +100,41 @@ class TestTheRavenPinDecidesWhenItIsSet:
 
         assert load_embedding_config().api_key == "sk-test"
 
+    def test_an_unreadable_config_leaves_the_everos_endpoint_answering(self, everos_root, monkeypatch) -> None:
+        """A config raven cannot parse is reported at debug and stepped over.
+        Raising here would take the knowledge base down with the config."""
+        _write(everos_root, _FULL)
+
+        def _boom():
+            raise RuntimeError("config is not readable")
+
+        monkeypatch.setattr("raven.config.raven.load_raven_config", _boom)
+
+        assert load_embedding_config().api_key == "sk-test"
+
+    def test_a_real_resolver_answer_is_what_gets_used(self, everos_root, monkeypatch) -> None:
+        """Through the resolver itself rather than a stand-in, so the pair this
+        actually sends is the one a request would go out on."""
+        from raven.config.raven import KnowledgeConfig, RavenConfig
+        from raven.config.update_providers import set_provider_fields
+
+        cfg = everos_root.parent / "config.json"
+        set_provider_fields("siliconflow", {"api_key": "sk-sf"}, config_path=cfg)
+        # Patched where the resolver reads it: update_providers imported the
+        # name, so rebinding it on the loader would not reach this call.
+        monkeypatch.setattr("raven.config.update_providers.get_config_path", lambda: cfg)
+        config = RavenConfig()
+        config.knowledge = KnowledgeConfig(embedding_model="siliconflow/BAAI/bge-m3", embedding_provider="siliconflow")
+        monkeypatch.setattr("raven.config.raven.load_raven_config", lambda: config)
+
+        resolved = load_embedding_config()
+
+        assert resolved.base_url == "https://api.siliconflow.cn/v1"
+        assert resolved.api_key == "sk-sf"
+        # Only the leading provider segment comes off: the vendor's own id may
+        # itself contain a slash.
+        assert resolved.model == "BAAI/bge-m3"
+
     def test_no_pin_at_all_is_the_behaviour_every_install_had(self, everos_root, monkeypatch) -> None:
         _write(everos_root, _FULL)
         self._pin(monkeypatch, model=None, provider=None, credentials=None)
