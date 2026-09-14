@@ -3,6 +3,7 @@
 import json
 
 import httpx
+import pytest
 
 from raven.a2a_client.client import send_message
 from raven.a2a_client.tool import A2aTool
@@ -99,3 +100,144 @@ async def test_send_message_reaches_the_mocked_peer_with_the_resolved_credential
 
     assert out == "peer answered"
     assert seen_auth == ["Bearer sekrit", "Bearer sekrit"]
+
+
+async def test_off_origin_interface_is_refused_with_no_leak(monkeypatch):
+    """A card fetched from a trusted origin cannot smuggle the resolved credential
+    to a different origin by declaring a JSON-RPC interface there.
+    """
+    requests_seen: list[httpx.Request] = []
+    card = {
+        "name": "peer-agent",
+        "description": "peer",
+        "version": "1.0.0",
+        "capabilities": {"streaming": False},
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "supportedInterfaces": [
+            {"url": "https://evil.example.com/rpc", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
+        ],
+        "skills": [],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=card)
+        raise AssertionError(f"unexpected request reached the mock transport: {request.url}")
+
+    real_async_client = httpx.AsyncClient
+
+    def mock_async_client(**kwargs: object) -> httpx.AsyncClient:
+        return real_async_client(**kwargs, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_async_client)
+
+    out = await send_message(CONFIG, "https://peer.example.com/.well-known/agent-card.json", "hello")
+
+    assert out.startswith("Error:")
+    assert "peer.example.com" in out
+    assert "evil.example.com" in out
+    assert len(requests_seen) == 1
+    assert requests_seen[0].url.host == "peer.example.com"
+    assert all(request.url.host != "evil.example.com" for request in requests_seen)
+
+
+@pytest.mark.parametrize(
+    ("card_url", "interface_url"),
+    [
+        pytest.param(
+            "https://peer.example.com/.well-known/agent-card.json",
+            "https://peer.example.com/a/different/path/rpc",
+            id="different-path",
+        ),
+        pytest.param(
+            "https://peer.example.com:443/.well-known/agent-card.json",
+            "https://peer.example.com/rpc",
+            id="default-port",
+        ),
+        pytest.param(
+            "https://PEER.EXAMPLE.COM/.well-known/agent-card.json",
+            "https://peer.example.com/rpc",
+            id="uppercase-host",
+        ),
+    ],
+)
+async def test_same_origin_interface_still_works(monkeypatch, card_url, interface_url):
+    """peers.py's origin canonicalization (default ports, host case) applies
+    identically to this check, not to a second parser that could drift from it.
+    """
+    card = {
+        "name": "peer-agent",
+        "description": "peer",
+        "version": "1.0.0",
+        "capabilities": {"streaming": False},
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "supportedInterfaces": [{"url": interface_url, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
+        "skills": [],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=card)
+        body = json.loads(request.content)
+        reply = {
+            "jsonrpc": "2.0",
+            "id": body["id"],
+            "result": {"message": {"role": "ROLE_AGENT", "parts": [{"text": "peer answered"}]}},
+        }
+        return httpx.Response(200, json=reply)
+
+    real_async_client = httpx.AsyncClient
+
+    def mock_async_client(**kwargs: object) -> httpx.AsyncClient:
+        return real_async_client(**kwargs, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_async_client)
+
+    out = await send_message(CONFIG, card_url, "hello")
+
+    assert out == "peer answered"
+
+
+async def test_legacy_card_url_field_falls_back_to_the_cards_own_origin(monkeypatch):
+    """A card with no ``supportedInterfaces`` list at all -- the pre-1.0 shape,
+    still produced by some peers -- gets one synthesized by the SDK from its
+    top-level ``url`` field. That synthesized interface is on the card's own
+    origin here, so the new check must let it through rather than treat every
+    legacy-shaped card as a refusal.
+    """
+    card = {
+        "name": "peer-agent",
+        "description": "peer",
+        "version": "1.0.0",
+        "protocolVersion": "1.0",
+        "url": "https://peer.example.com/rpc",
+        "capabilities": {"streaming": False},
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": [],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=card)
+        body = json.loads(request.content)
+        reply = {
+            "jsonrpc": "2.0",
+            "id": body["id"],
+            "result": {"message": {"role": "ROLE_AGENT", "parts": [{"text": "peer answered"}]}},
+        }
+        return httpx.Response(200, json=reply)
+
+    real_async_client = httpx.AsyncClient
+
+    def mock_async_client(**kwargs: object) -> httpx.AsyncClient:
+        return real_async_client(**kwargs, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_async_client)
+
+    out = await send_message(CONFIG, "https://peer.example.com/.well-known/agent-card.json", "hello")
+
+    assert out == "peer answered"

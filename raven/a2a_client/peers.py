@@ -85,6 +85,17 @@ def resolve_peer(config: A2aConfig, card_url: str) -> A2aPeerConfig | None:
     return None
 
 
+def same_origin(url_a: str, url_b: str) -> bool:
+    """Whether `url_a` and `url_b` canonicalize to the same origin.
+
+    Built on `_origin_of` so every origin comparison in this package -- peer
+    lookup and this one -- shares one canonicalization and can't drift apart.
+    Either URL failing to parse as http(s) counts as "not the same origin".
+    """
+    origin_a = _origin_of(url_a)
+    return origin_a is not None and origin_a == _origin_of(url_b)
+
+
 def auth_headers(peer: A2aPeerConfig | None) -> dict[str, str]:
     """Request headers carrying `peer`'s credential; empty for an unlisted peer."""
     if peer is None or not peer.credential:
