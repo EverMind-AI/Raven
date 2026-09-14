@@ -676,7 +676,7 @@ git commit -m "feat(agent): register a2a_send on the host and withhold it from s
 
 **Interfaces:**
 - Consumes: `A2aConfig` (Task 1).
-- Produces: `build_agent_card(config: A2aConfig, *, base_url: str) -> AgentCard` returning the SDK's protobuf `AgentCard`.
+- Produces: `build_agent_card(config: A2aConfig, *, base_url: str) -> AgentCard` returning the SDK's protobuf `AgentCard`; the module constants `CARD_PATH`, `JSONRPC_BINDING` and `PROTOCOL_VERSION`, which Task 9 imports.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1230,7 +1230,7 @@ git commit -m "feat(a2a): authenticate inbound callers with a configured bearer 
 - Test: `tests/test_a2a_routes.py`
 
 **Interfaces:**
-- Consumes: `build_agent_card`, `CARD_PATH` (Task 5); `is_authorized` (Task 8); `RavenAgentExecutor` (Task 7); `A2aConfig` (Task 1).
+- Consumes: `build_agent_card`, `CARD_PATH`, `PROTOCOL_VERSION` (Task 5); `is_authorized` (Task 8); `A2aConfig` (Task 1). Not the executor: these routes take an opaque `handler` and never construct one -- Task 11 supplies the real `DefaultRequestHandler`.
 - Produces: `add_a2a_routes(app: web.Application, config: A2aConfig, handler) -> None`, plus `error_response(code: str, request_id) -> dict`.
 
 This is the file the spec says is written to be deleted: if the gateway ever moves to ASGI, it is replaced by the SDK's `add_a2a_routes_to_fastapi()`.
@@ -1468,7 +1468,7 @@ git commit -m "feat(a2a): serve the json-rpc binding and the card over aiohttp"
 
 **Interfaces:**
 - Consumes: `add_a2a_routes` (Task 9); `is_subagent_process` from `raven/agent/subagent/role.py`.
-- Produces: `refuse_if_subagent() -> str | None` returning a refusal reason or None; `a2a_app` typer application.
+- Produces: `refuse_if_subagent() -> str | None` returning a refusal reason or None; `mount_if_allowed(app, config, *, handler) -> bool`, which Task 11 calls; `a2a_app` typer application.
 
 Naming follows AGENTS.md 5.1: a CLI module's tests live in `tests/test_cli_<module>_commands.py`.
 
