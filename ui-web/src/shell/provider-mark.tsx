@@ -9,6 +9,7 @@ import type { JSX } from 'react'
 const ICONS: Record<string, string> = {
   ai302: 'ai302',
   aihubmix: 'aihubmix',
+  radeon_cloud: 'amd',
   aionly: 'aionly',
   alayanew: 'alayanew',
   anthropic: 'anthropic',
@@ -183,7 +184,8 @@ const DARK_PAIRED = new Set([
   'zhipu',
 ])
 
-const TONES: Record<string, 'mono' | 'hybrid'> = {
+const TONES: Record<string, 'mono' | 'hybrid' | 'mono-white'> = {
+  amd: 'mono-white',
   anthropic: 'hybrid',
   vllm: 'mono',
 }

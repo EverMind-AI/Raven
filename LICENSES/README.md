@@ -12,6 +12,14 @@ history.
 
 - `MIT-hermes-agent.txt` - Hermes Agent license notice.
 - `MIT-ink.txt` - Ink license notice.
+- AMD's wordmark, `ui-web/src/assets/providers/amd.svg`, is AMD's own file from
+  www.amd.com, copied byte for byte and shown to identify the AMD GPU Cloud row.
+  It carries no licence text of its own -- it is a trademark rather than a
+  licensed work, and the basis for showing it is the same nominative use every
+  other mark here rests on. The published rendering is white, for AMD's own dark
+  header; the stylesheet lifts it in the light theme rather than editing the
+  file. Neither icon set below carries an AMD mark, which is why this one comes
+  straight from the vendor.
 - `MIT-cherry-studio.txt` - the provider and model brand marks under
   `ui-web/src/assets/providers/`, taken from `@cherrystudio/ui`
   (CherryHQ/cherry-studio, commit 6beb5e1b7e, 2026-09-07) at

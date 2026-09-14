@@ -721,6 +721,13 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    which is what `data-tone` says; `hybrid` rotates the hue back for the part of
    the mark that is a real colour. Only two marks still take this path. */
 .mark-dark { display: none; }
+/* The white rendering of a wordmark: legible on the dark ground as published,
+   so it is the light theme that lifts this one. The mirror of `mono`, and the
+   reason the rule is keyed to a tone rather than to the theme alone. */
+:root[data-theme="light"] img.provider-icon[data-tone="mono-white"] { filter: invert(1); }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) img.provider-icon[data-tone="mono-white"] { filter: invert(1); }
+}
 :root[data-theme="dark"] img.provider-icon[data-tone="mono"] { filter: invert(1); }
 :root[data-theme="dark"] img.provider-icon[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
 :root[data-theme="dark"] .mark-light { display: none; }

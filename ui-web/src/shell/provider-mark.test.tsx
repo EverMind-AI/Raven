@@ -22,14 +22,14 @@ const BRANDED = [
   'xai', 'mistral', 'together_ai', 'fireworks_ai', 'perplexity', 'cerebras',
   'huggingface', 'poe', 'xiaomi_mimo', 'baichuan', 'baidu_cloud', 'stepfun',
   'longcat', 'modelscope', 'qiniu', 'bigmodel',
-  'ai302', 'burncloud', 'ppio', 'sophnet', 'tokenhub',
+  'ai302', 'burncloud', 'ppio', 'sophnet', 'tokenhub', 'radeon_cloud',
 ]
 
-/* The one provider still without a mark: AMD GPU Cloud appears in neither icon
-   set. It renders the fallback initial, which the mark component supports
-   deliberately -- pinned here so the state reads as a decision rather than a
-   line somebody forgot. */
-const UNBRANDED = ['radeon_cloud']
+/* Every provider carries a mark now, so no provider is left to pin here. The
+   fallback is still the component's answer for a slug no table names and for a
+   file that fails to load -- the two tests below cover both -- and the empty
+   list is the claim that the first case no longer happens to a real row. */
+const UNBRANDED: string[] = []
 
 afterEach(cleanup)
 
