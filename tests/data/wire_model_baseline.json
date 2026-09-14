@@ -373,7 +373,6 @@
     },
     "poe": {
       "poe-probe": "poe/poe-probe",
-      "poe/anthropic/claude-opus-4.8": "poe/anthropic/claude-opus-4.8",
       "poe/vendorx/zz-probe-1": "poe/vendorx/zz-probe-1",
       "poe/zz-probe-1": "poe/zz-probe-1",
       "vendorx/zz-probe-1": "poe/vendorx/zz-probe-1",
