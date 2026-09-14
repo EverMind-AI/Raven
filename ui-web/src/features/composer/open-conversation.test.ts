@@ -23,10 +23,17 @@ const source = readFileSync('src/live/080-overrides.js', 'utf8') as string
 
 /* Just the one function, not the file: the rest of this layer reaches for
    dozens of globals that have nothing to do with the promotion. */
-const START = 'async function openConversation(preview, atPointer) {'
-const begin = source.indexOf(START)
-const end = source.indexOf('\n}\n', begin)
-const fnSource = source.slice(begin, end + 2)
+/* Both halves: the entry point that decides whether to promote at all, and the
+   promotion itself. They are one unit of behaviour and the first calls the
+   second. */
+const slice = (start: string): string => {
+  const begin = source.indexOf(start)
+  if (begin < 0) throw new Error(`open-conversation.test: ${start} is gone from 080-overrides.js`)
+  return source.slice(begin, source.indexOf('\n}\n', begin) + 2)
+}
+const fnSource = `let promoting = null;\n`
+  + `${slice('async function openConversation(preview, atPointer) {')}\n`
+  + slice('async function promote(preview, atPointer) {')
 
 interface Row { id: string; title: string; last: string; persisted: boolean }
 
@@ -34,10 +41,12 @@ function harness(startAsDraft: boolean) {
   const log: string[] = []
   const rows: Row[] = []
   let pointer: string | null = startAsDraft ? null : 'already-open'
+  let minted = 0
   const rpc = {
     call: vi.fn(async (method: string) => {
       log.push(`rpc:${method}`)
-      return { session_id: 'made-1', info: { cwd: '/w' } }
+      minted += 1
+      return { session_id: `made-${minted}`, info: { cwd: '/w' } }
     }),
   }
   const say = (name: string) => (...args: unknown[]): void => {
@@ -48,10 +57,12 @@ function harness(startAsDraft: boolean) {
     'applyStagedModel', 'applyStagedTier', 'applyStagedPerm', 'sessionDraw',
     'subscribe', 'wsSetRoot', 'startAsDraft',
     `let draft = startAsDraft; let viewGen = 7;\n${fnSource}\n`
-    + 'return { openConversation, isDraft: () => draft };',
+    + 'return { openConversation, isDraft: () => draft, '
+    + 'setDraft: (on) => { draft = on; } };',
   ) as (...args: unknown[]) => {
     openConversation: (preview?: string, atPointer?: (id: string) => void) => Promise<string | null>
     isDraft: () => boolean
+    setDraft: (on: boolean) => void
   }
   const built = build(
     rpc,
@@ -124,6 +135,36 @@ describe('getting a conversation to work in', () => {
       'draw',
       'subscribe:made-1',
     ])
+  })
+
+  it('mints one conversation for two callers that land inside the same promotion', async () => {
+    /* `draft` stays raised across `session.create`, so a second press arriving in
+       that window used to read the page as still a draft. Both callers want the
+       same conversation; both get it, and each one's hook still runs. */
+    const h = harness(true)
+    const hooks: string[] = []
+    const [a, b] = await Promise.all([
+      h.openConversation('first', (id) => hooks.push(`a:${id}`)),
+      h.openConversation('second', (id) => hooks.push(`b:${id}`)),
+    ])
+    expect([a, b]).toEqual(['made-1', 'made-1'])
+    expect(h.rpc.call).toHaveBeenCalledTimes(1)
+    expect(h.rows).toHaveLength(1)
+    expect(hooks.sort()).toEqual(['a:made-1', 'b:made-1'])
+  })
+
+  it('promotes the NEXT draft too, rather than answering with the last one', async () => {
+    /* The hold is released when the promotion ends, not kept for the life of the
+       page: the reader goes back to the new-task screen -- `startDraft` raises
+       the flag again -- and that draft has to become its own conversation. A
+       hold left standing would hand it the previous one, and the instance would
+       be filed under a conversation the reader had left. */
+    const h = harness(true)
+    await expect(h.openConversation()).resolves.toBe('made-1')
+    h.setDraft(true)
+    await expect(h.openConversation()).resolves.toBe('made-2')
+    expect(h.rpc.call).toHaveBeenCalledTimes(2)
+    expect(h.rows.map((r) => r.id)).toEqual(['made-2', 'made-1'])
   })
 
   it('carries the view generation the promotion began on into the staged model', async () => {
