@@ -232,7 +232,6 @@ describe('/mode', () => {
     expect(out).toContain('The least effort a sub-agent is asked for.')
   })
 
-
   it('says so for an agent that offers none, instead of printing an empty menu', async () => {
     enterDirect('Coder', 'h1')
     const h = run(
@@ -300,7 +299,10 @@ describe('/mode in the main conversation', () => {
   })
 
   it('no longer refuses outside a sub-agent chat', async () => {
-    const h = run('', vi.fn(() => Promise.resolve({ availableModes: TIERS, mode: 'high' })))
+    const h = run(
+      '',
+      vi.fn(() => Promise.resolve({ availableModes: TIERS, mode: 'high' }))
+    )
     await settle()
     expect(h.main.join('\n')).not.toContain('applies to a sub-agent chat')
   })

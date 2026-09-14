@@ -29,13 +29,15 @@ export const deliveryFiles = (metadata: unknown): TurnArtifactFile[] => {
     if (!name) {
       return []
     }
-    return [{
-      ext: extOf(name),
-      missing: row.missing === true,
-      name,
-      size: Number(row.size) || 0,
-      title: String(row.title || name)
-    }]
+    return [
+      {
+        ext: extOf(name),
+        missing: row.missing === true,
+        name,
+        size: Number(row.size) || 0,
+        title: String(row.title || name)
+      }
+    ]
   })
 }
 
@@ -57,8 +59,11 @@ export const changedFile = (name: string, args: unknown): TurnArtifactFile | nul
 
 export const addUnique = (rows: TurnArtifactFile[], row: TurnArtifactFile): void => {
   const at = rows.findIndex(item => item.name === row.name)
-  if (at >= 0) {rows[at] = row}
-  else {rows.push(row)}
+  if (at >= 0) {
+    rows[at] = row
+  } else {
+    rows.push(row)
+  }
 }
 
 export const artifactMessage = (artifacts: TurnArtifacts): Msg | null =>

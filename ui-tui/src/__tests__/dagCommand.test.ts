@@ -225,14 +225,22 @@ describe('/dag after a resume', () => {
             index: 0,
             tools: [
               {
-                dag: { done: false, nodes: [{ dependsOn: [], id: 'a', status: 'pending', subagent: 'echo' }], runId: 'dag-1' },
+                dag: {
+                  done: false,
+                  nodes: [{ dependsOn: [], id: 'a', status: 'pending', subagent: 'echo' }],
+                  runId: 'dag-1'
+                },
                 id: 't0',
                 name: 'run_subagent_dag',
                 ok: true,
                 summary: 'dag'
               },
               {
-                dag: { done: false, nodes: [{ dependsOn: [], id: 'x', status: 'pending', subagent: 'echo' }], runId: 'dag-2' },
+                dag: {
+                  done: false,
+                  nodes: [{ dependsOn: [], id: 'x', status: 'pending', subagent: 'echo' }],
+                  runId: 'dag-2'
+                },
                 id: 't1',
                 name: 'run_subagent_dag',
                 ok: true,

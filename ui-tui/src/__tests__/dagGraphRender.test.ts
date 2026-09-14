@@ -87,9 +87,7 @@ describe('renderDagGraph', () => {
 
   it('draws a chain with no vertical at all', () => {
     expect(draw([node('a'), node('b', ['a'])])).toBe(
-      ['╭──────────╮      ╭──────────╮', '│ 1 ✓ code │─────▸│ 2 ✓ code │', '╰──────────╯      ╰──────────╯'].join(
-        '\n'
-      )
+      ['╭──────────╮      ╭──────────╮', '│ 1 ✓ code │─────▸│ 2 ✓ code │', '╰──────────╯      ╰──────────╯'].join('\n')
     )
   })
 

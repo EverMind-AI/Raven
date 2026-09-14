@@ -441,7 +441,6 @@ describe('call intent', () => {
   })
 })
 
-
 describe('card default and shape', () => {
   const call = (extra: Partial<EpisodeTool> = {}): EpisodeTool => ({
     done: true,
