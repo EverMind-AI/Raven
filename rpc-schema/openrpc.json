@@ -2671,7 +2671,12 @@
             }
           }
         }
-      }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
     },
     {
       "name": "session.set_mode",
