@@ -5017,6 +5017,16 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   background: transparent; color: var(--faint); }
 .agent-new svg { width: 14px; height: 14px; stroke-linecap: round; }
 .agent-newfail { margin: 0 7px 4px 28px; color: var(--clay); font: 9.5px/1.5 var(--mono); }
+/* Standing, like `.agent-new` on the head above it and for the same reason.
+   Faint until the row is under the pointer, then readable -- a dense 29px row
+   cannot carry a second control at full contrast without reading as two. */
+.inst-retire { width: 18px; height: 18px; flex: none; display: grid; place-items: center;
+  border: 0; border-radius: 4px; background: transparent; color: var(--faint); cursor: pointer;
+  opacity: .45; transition: opacity .12s ease, background .12s ease, color .12s ease; }
+.sarow:hover .inst-retire { opacity: 1; color: var(--muted); }
+.inst-retire:hover { background: var(--surface); color: var(--text); }
+.inst-retire:focus-visible { opacity: 1; }
+.inst-retire svg { width: 12px; height: 12px; stroke-linecap: round; }
 .agent-instances { margin-left: 18px; padding-left: 0; border-left: 1px solid var(--line-soft); }
 .agent-instances .sarow { height: 29px; padding: 0 7px; gap: 8px; border-radius: 0; }
 .agent-instances .desk-status { width: 8px; display: grid; place-items: center; flex: none; }

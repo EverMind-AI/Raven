@@ -292,6 +292,42 @@ describe('subagents island, the list', () => {
       (g) => g.querySelector('.agent-head b')?.textContent === agent,
     )?.querySelector('.agent-new') ?? null
 
+  const retireIn = (agent: string): HTMLButtonElement | null =>
+    Array.from(document.querySelectorAll<HTMLElement>('.agent-group')).find(
+      (g) => g.querySelector('.agent-head b')?.textContent === agent,
+    )?.querySelector('.agent-instances .inst-retire') ?? null
+
+  it('retires an instance from the roster, which is where the list actually lives', async () => {
+    /* Removal was reachable only from the standalone panel. One run leaves six
+       rows in the desk's roster and there was no way to clear any of them. */
+    const forgotten: Array<[string, string]> = []
+    let listed: InstanceRow[] = [inst({ handle: 'one' }), inst({ handle: 'two' })]
+    startable({
+      instances: async () => listed,
+      instanceForget: async (agent, handle) => {
+        forgotten.push([agent, handle])
+        listed = listed.filter((r) => r.handle !== handle)
+      },
+    })
+    await mountGrouped()
+    await screen.findByText('hermes')
+    expect(store.getState().instances.map((r) => r.handle)).toEqual(['one', 'two'])
+    const button = retireIn('hermes')!
+    /* The warning the standalone row already carries, not a second wording:
+       this drops an ACP agent's own session too, and the reader is owed that
+       before clicking rather than after. */
+    expect(button.title).toBe('gui.ws.instance_forget_note')
+    expect(button.getAttribute('aria-label')).toBe('gui.ws.instance_forget')
+    await act(async () => {
+      button.click()
+    })
+    expect(forgotten).toEqual([['hermes', 'one']])
+    /* Gone from the list, and the row did NOT open -- dismissing a row must not
+       also be a click on it. */
+    expect(store.getState().instances.map((r) => r.handle)).toEqual(['two'])
+    expect(store.getState().open).toBeNull()
+  })
+
   it('offers a new instance only for an agent that can hold a direct chat', async () => {
     startable()
     await mountGrouped()
