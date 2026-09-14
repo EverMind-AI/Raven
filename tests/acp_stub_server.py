@@ -682,8 +682,60 @@ def main() -> None:
                                 {"name": "no-id-so-skipped"},
                             ],
                         },
+                        # The stable model surface, as raven's own ACP server
+                        # serves it and as every agent this host drives answers:
+                        # one configOptions entry with category "model", grouped
+                        # choices under it. `models.availableModels` above is the
+                        # older key, kept because the reader for it is still
+                        # there and a stub that dropped it would stop covering
+                        # the agents that do send it.
+                        "configOptions": [
+                            {
+                                "id": "mode",
+                                "category": "mode",
+                                "type": "select",
+                                "options": [{"value": "ignored", "name": "not a model"}],
+                            },
+                            {
+                                "id": "model",
+                                "name": "Model",
+                                "category": "model",
+                                "type": "select",
+                                "currentValue": "stub:model-a",
+                                "options": [
+                                    {
+                                        "group": "stub",
+                                        "name": "Stub",
+                                        "options": [
+                                            {"value": "stub:model-a", "name": "model-a"},
+                                            {"value": "stub:model-b", "name": "model-b"},
+                                            {"name": "no-value-so-skipped"},
+                                        ],
+                                    }
+                                ],
+                            },
+                        ],
                     },
                 )
+        elif method == "session/set_config_option":
+            # Logged on entry, not on success: a test asserting that NO frame was
+            # sent has to see every frame, and a print behind the refusals below
+            # leaves an unrequested call looking identical to no call at all.
+            print(
+                f"stub: session/set_config_option {params.get('configId')}={params.get('value')}",
+                file=sys.stderr,
+                flush=True,
+            )
+            if MODE == "no_models":
+                err(request_id, -32602, "unknown configuration option 'model'")
+            elif params.get("configId") != "model":
+                err(request_id, -32602, f"unknown configuration option {params.get('configId')!r}")
+            elif params.get("value") not in ("stub:model-a", "stub:model-b"):
+                # The runtime's own refusal, with its own code: a value it will
+                # not write is not an internal error.
+                err(request_id, -32011, f"will not switch to {params.get('value')!r}")
+            else:
+                ok(request_id, {"configOptions": []})
         elif method == "session/set_mode":
             if MODE == "no_modes":
                 err(request_id, -32601, "session/set_mode is not implemented")

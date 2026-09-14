@@ -3688,3 +3688,69 @@ async def test_a_builtin_run_that_was_not_cut_reports_nothing(tmp_path) -> None:
         await backend.run("do it", task_id="n1", workspace=tmp_path, executor=None)
 
     assert did.output_limited is False
+
+
+# ---- per-instance model ----------------------------------------------------
+
+
+def test_an_instance_model_is_refused_unless_the_agent_offered_it(monkeypatch) -> None:
+    """The values are opaque provider-qualified ids, so a caller guessing at one
+    is how a reader asks for a model the agent will refuse. Named back rather
+    than stored, or the next turn runs on the old one while the control shows
+    the new."""
+    from raven.acp_client.capabilities import AcpModelChoice
+
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(
+        mgr, "agent_model_choices", lambda agent: (AcpModelChoice("real/id", "Real", "g"),)
+    )
+
+    assert mgr.set_instance_model("s1", "Researcher", "h1", "real/id") == "real/id"
+    assert mgr.instance_model("s1", "Researcher", "h1") == "real/id"
+
+    with pytest.raises(ValueError):
+        mgr.set_instance_model("s1", "Researcher", "h1", "invented/id")
+    assert mgr.instance_model("s1", "Researcher", "h1") == "real/id", "the refusal changed nothing"
+
+
+def test_clearing_an_instance_model_returns_it_to_the_agent(monkeypatch) -> None:
+    """``None`` is the absence of an override, not a model id -- an agent is free
+    to offer one whose id is any string at all, so a sentinel would take that
+    string away from it."""
+    from raven.acp_client.capabilities import AcpModelChoice
+
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(
+        mgr, "agent_model_choices", lambda agent: (AcpModelChoice("real/id", "Real", "g"),)
+    )
+    mgr.set_instance_model("s1", "Researcher", "h1", "real/id")
+
+    assert mgr.set_instance_model("s1", "Researcher", "h1", None) is None
+    assert mgr.instance_model("s1", "Researcher", "h1") is None
+
+
+def test_an_instance_model_is_held_per_instance_not_per_agent(monkeypatch) -> None:
+    """Two handles on one agent are two conversations, and a model chosen while
+    having one of them must not follow the other."""
+    from raven.acp_client.capabilities import AcpModelChoice
+
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(
+        mgr,
+        "agent_model_choices",
+        lambda agent: (AcpModelChoice("a/1", "A", "g"), AcpModelChoice("b/2", "B", "g")),
+    )
+
+    mgr.set_instance_model("s1", "Researcher", "h1", "a/1")
+
+    assert mgr.instance_model("s1", "Researcher", "h2") is None
+    assert mgr.instance_model("s2", "Researcher", "h1") is None, "nor across conversations"
+
+
+def test_an_agent_with_no_menu_offers_no_model(monkeypatch) -> None:
+    """A cli agent has none and an acp agent advertising none has none: the same
+    answer, because for a caller they are the same fact."""
+    mgr = _make_manager(max_concurrent=1)
+    assert mgr.agent_model_choices("Researcher") == ()
+    with pytest.raises(ValueError):
+        mgr.set_instance_model("s1", "Researcher", "h1", "anything")

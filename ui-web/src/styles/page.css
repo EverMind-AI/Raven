@@ -4999,6 +4999,11 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 :root[data-theme="light"] .agent-mark img { color-scheme: light; }
 .agent-kind { flex: none; padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: 999px;
   background: var(--surface); color: var(--muted); font: 8.5px/1.45 var(--mono); text-transform: lowercase; }
+/* The model chip wears the effort chip's clothes -- they are one row of
+   per-instance settings -- but caps its width: a provider-qualified id is the
+   honest fallback when an agent names no short form, and one of those would push
+   the header's own buttons off the end. */
+.pane-imodel { max-width: 168px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-headrow { display: flex; align-items: center; min-width: 0; }
 .agent-headrow .agent-head { flex: 1; min-width: 0; }
 /* Standing, not revealed on hover: this is the only way to start a conversation

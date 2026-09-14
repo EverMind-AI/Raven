@@ -1091,6 +1091,9 @@ class AcpAgentBackend:
         mcps: list[str] | None = None,
         mcp_grant: McpGrant | None = None,
         mode: str | None = None,
+        # Not `model` above, which is the PARENT's and rides out as
+        # RAVEN_PARENT_MODEL: this is what this agent should answer with.
+        session_model: str | None = None,
         authored_task: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
@@ -1165,6 +1168,7 @@ class AcpAgentBackend:
                     mcp_servers=mcp_servers,
                     router=connection.router,
                     mode=mode,
+                    session_model=session_model,
                 )
                 if journal is not None:
                     # Inside the marked range on purpose, so the per-call copy of the
@@ -1434,6 +1438,7 @@ class AcpAgentBackend:
         mcp_servers: list[dict[str, Any]],
         router: Any = None,
         mode: str | None = None,
+        session_model: str | None = None,
     ) -> tuple[str, bool]:
         """The session to prompt, and whether it continues an earlier one."""
 
@@ -1491,6 +1496,7 @@ class AcpAgentBackend:
                         )
                     self._relearn_modes(loaded)
                     await self._set_mode(client, known, mode, budget=budget)
+                    await self._set_model(client, known, session_model, budget=budget)
                     return known, True
                 except AcpRemoteError as exc:
                     # The agent's own store may have pruned this id, and the
@@ -1517,7 +1523,53 @@ class AcpAgentBackend:
         if not isinstance(session_id, str) or not session_id:
             raise AcpEmptyTurnError(f"acp agent {self.name!r}: session/new returned no sessionId")
         await self._set_mode(client, session_id, mode, budget=budget)
+        await self._set_model(client, session_id, session_model, budget=budget)
         return session_id, False
+
+    async def _set_model(self, client: Any, session_id: str, model: str | None, *, budget: float) -> None:
+        """Put this session on ``model`` before the prompt, if one was asked for.
+
+        On every route into a session, for the reason ``_set_mode`` gives below
+        and for the same mechanism: the agent binds the choice to the session id
+        it holds in memory, so it survives an engine eviction but not a restart
+        of the agent process, and the pool relaunches that process whenever the
+        launch key changes. Re-asserting each time is what repairs that without
+        anyone noticing.
+
+        The channel is ``session/set_config_option`` with ``configId: "model"``.
+        ``session/set_model`` is not in the stable schema, and an agent waiting
+        for it would never be asked to switch.
+
+        Never fatal, like the mode beside it. An agent that offers no such option
+        answers invalid-params and one that will not take the value answers with
+        its own code; either way the task still runs on the agent's own model,
+        and failing the run would be a worse outcome than running it on a model
+        the caller did not pick.
+        """
+        if not model:
+            return
+        try:
+            await client.request(
+                "session/set_config_option",
+                {"sessionId": session_id, "configId": "model", "value": model},
+                timeout=budget,
+            )
+        except AcpRemoteError as exc:
+            logger.warning(
+                "acp agent {!r}: session {} would not take model {!r} ({}); running on its default",
+                self.name,
+                session_id,
+                model,
+                exc.message,
+            )
+        except AcpError as exc:
+            logger.warning(
+                "acp agent {!r}: could not set model {!r} on session {} ({}); running on its default",
+                self.name,
+                model,
+                session_id,
+                exc,
+            )
 
     async def _set_mode(self, client: Any, session_id: str, mode: str | None, *, budget: float) -> None:
         """Put this session in ``mode`` before the prompt, if one was asked for.
