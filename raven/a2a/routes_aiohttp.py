@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP
 from aiohttp import web
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message as ProtoMessage
@@ -25,19 +26,11 @@ from raven.config.schema import A2aConfig
 
 VERSION_HEADER = "A2A-Version"
 
-#: The JSON-RPC codes this binding emits, by A2A error name. Fixed here so two
-#: call sites cannot disagree about what a caller sees.
-ERROR_CODES: dict[str, int] = {
-    "VersionNotSupportedError": -32001,
-    "MethodNotFoundError": -32601,
-    "InvalidRequestError": -32600,
-    "InvalidParamsError": -32602,
-    "TaskNotFoundError": -32002,
-    "TaskNotCancelableError": -32005,
-    "PushNotificationNotSupportedError": -32003,
-    "ContentTypeNotSupportedError": -32004,
-    "InternalError": -32603,
-}
+#: The JSON-RPC codes this binding emits, derived from the SDK's own canonical map so a
+#: conformant client reconstructs the error class we actually meant. Do NOT hand-write these
+#: numbers: an earlier draft invented them and disagreed with the SDK on four of nine, which
+#: made a real client decode VersionNotSupportedError as TaskNotFoundError.
+ERROR_CODES: dict[str, int] = {cls.__name__: code for cls, code in JSON_RPC_ERROR_CODE_MAP.items()}
 
 #: JSON-RPC method -> the ``RequestHandler`` coroutine that serves it.
 METHODS: dict[str, str] = {
@@ -103,6 +96,11 @@ def add_a2a_routes(app: web.Application, config: A2aConfig, handler: Any) -> Non
         try:
             body = await request.json()
         except Exception:
+            body = None
+        # A body that parses to something other than a JSON object (null, a number, an
+        # array, ...) has no "id" or "method" to read; treat it the same as a parse failure
+        # rather than let `.get()` raise past this point.
+        if not isinstance(body, dict):
             return web.json_response(error_response("InvalidRequestError", None), status=400)
         request_id = body.get("id")
 
@@ -124,9 +122,12 @@ def add_a2a_routes(app: web.Application, config: A2aConfig, handler: Any) -> Non
 
         try:
             result = await getattr(handler, method_name)(params, None)
+            # Serialization stays inside the guarded region, same as the streaming branch's
+            # json.dumps: a result that fails to convert or encode is a caller-facing
+            # InternalError, not an unhandled exception that falls through to a bare 500.
+            return web.json_response({"jsonrpc": "2.0", "id": request_id, "result": _to_jsonable(result)})
         except Exception:
             return web.json_response(error_response("InternalError", request_id), status=200)
-        return web.json_response({"jsonrpc": "2.0", "id": request_id, "result": _to_jsonable(result)})
 
     app.router.add_get(CARD_PATH, serve_card)
     app.router.add_post(config.server.path, serve_rpc)
