@@ -289,6 +289,37 @@ def test_a_mounted_page_takes_the_relays_that_belong_to_its_sessions() -> None:
     assert "agent.subagents.set_submit(pro_submit)" in before_mount
 
 
+def test_a_channel_started_while_the_gateway_runs_gets_the_inbound_dispatch() -> None:
+    """Both halves of a channel's wiring must survive the launch loop.
+
+    The page enables an entrance by writing config, and the manager builds and
+    starts the adapter on the spot -- after the loop that hands every channel
+    its dispatch has already run. The outlet half was taught this (`on_started`
+    registers an outlet, so a hot-started channel could be replied to); the
+    intake half was not, so such a channel logged "no spine dispatch wired" once
+    per message and dropped every one, while the page drew it connected and the
+    adapter's own login had succeeded (2026-09-14, weixin).
+
+    Pinned on the source for the reason the mounted-relay test above records:
+    the wiring lives in the command with no import seam.
+    """
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+
+    # The channels present at launch still get it directly.
+    assert "for _ch in channels.channels.values():" in src
+    assert "_wire_intake(_ch)" in src
+
+    # And a channel born later gets it through the same hook the outlet uses.
+    assert "channels.on_started = _on_channel_started" in src
+    wired = src.split("def _on_channel_started", 1)[1].split("channels.on_started =", 1)[0]
+    assert "_wire_intake(ch)" in wired, "a hot-started channel must be given the dispatch"
+    assert "_outlet(ch)" in wired, "and must keep the outlet the hook already carried"
+
+
 def _gateway_partition_with_the_page_enabled() -> set[str]:
     """The cron partition a page-wanting gateway is built with."""
     from types import SimpleNamespace

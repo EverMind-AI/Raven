@@ -760,8 +760,33 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     else:
                         gw_scheduler.submit(req)  # fire-and-forget (no readback)
 
+                # Both halves of a channel's wiring outlive this loop, because a
+                # channel can be born after it: the page enables an entrance by
+                # writing config, and the manager builds and starts the adapter
+                # on the spot. The outlet half already knew that (see
+                # `channels.on_started` above, whose comment records the replies
+                # a hot-started channel used to lose); the intake half did not,
+                # so such a channel logged "no spine dispatch wired" once per
+                # message and dropped every one of them -- while the page drew
+                # it connected and the adapter's own login had succeeded.
+                #
+                # Composed here rather than set beside the outlet, because
+                # `_inbound_dispatch` is born in this generation and the outlet
+                # hook is not.
+                def _wire_intake(ch) -> None:
+                    ch.intake.set_submit(_inbound_dispatch)
+
                 for _ch in channels.channels.values():
-                    _ch.intake.set_submit(_inbound_dispatch)
+                    _wire_intake(_ch)
+
+                _outlet_hook = channels.on_started
+
+                def _on_channel_started(ch, _outlet=_outlet_hook) -> None:
+                    if _outlet is not None:
+                        _outlet(ch)
+                    _wire_intake(ch)
+
+                channels.on_started = _on_channel_started
 
             from raven.core.runtime import SwapCandidate, SwapCoordinator
 
