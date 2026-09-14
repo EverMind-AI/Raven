@@ -110,6 +110,7 @@ class WsGateway:
         self._sockets: set[web.WebSocketResponse] = set()
         self.dispatcher: Any = None
         self.agent_loop_factory: Any = None
+        self.a2a_handler: Any = None
         self.port: int = DEFAULT_PORT
 
     def mint_nonce(self) -> str:
@@ -519,6 +520,11 @@ def build_app(
     app.router.add_get("/knowledge/file", gateway.handle_knowledge_file)
     app.router.add_get("/rpc", gateway.handle_ws)
     app.router.add_get("/oauth/callback", handle_oauth_callback)
+
+    from raven.a2a.gate import mount_if_allowed
+    from raven.config import load_config
+
+    mount_if_allowed(app, load_config().a2a, handler=gateway.a2a_handler)
 
     def guard_delivery(request: web.Request) -> None:
         if not gateway._origin_ok(request):
