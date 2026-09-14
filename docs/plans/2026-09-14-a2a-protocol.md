@@ -35,7 +35,8 @@ and re-measure if the pinned version moves.
 |---|---|
 | `ClientFactory.__init__(config: ClientConfig \| None = None)` | there is no `httpx_client=` argument; it is a **field of `ClientConfig`** |
 | `ClientFactory.create(card: AgentCard, ...)` | takes a card **object**, not a URL |
-| `ClientFactory.create_from_url(url, ...)` | this is the one that takes a URL |
+| `ClientFactory.create_from_url(url, ...)` is **async** | this is the one that takes a URL, and it must be `await`ed; `create` is sync, `create_from_url` is not |
+| `create_from_url` appends the well-known suffix itself | pass `relative_card_path="/"` when the URL is already a complete card URL, or the fetch 404s on a doubled suffix |
 | `Client.send_message(request: SendMessageRequest, *, context=None) -> AsyncIterator[StreamResponse]` | takes a **request**, not a `Message`, and is **iterated**, not awaited for one value |
 | `Message` fields: `message_id, context_id, task_id, role, parts, metadata, extensions, reference_task_ids` | the field is `parts`, **not** `content` |
 | `Part` fields: `text, raw, url, data, metadata, filename, media_type` | `Part(text=...)` is right; there is **no** `TextPart` export |
@@ -51,6 +52,7 @@ and re-measure if the pinned version moves.
 | `enqueue_event` accepts only `Message \| Task \| TaskStatusUpdateEvent \| TaskArtifactUpdateEvent` | a plain dict is not enqueueable; build the protobuf event |
 | `RequestContext` exposes `get_user_input(delimiter='\n') -> str`, and properties `message`, `task_id`, `context_id`, `current_task` | there is **no** `message_text` attribute |
 | `AgentCard` / `AgentInterface` / `AgentCapabilities` / `AgentSkill` field names | as used in Task 5; verified against the protobuf descriptors |
+| A fetched card's `supported_interfaces[].url` may name a **different origin** than the card | the credential was resolved for the card's origin; sending it to a card-declared origin is a leak. Require same-origin before attaching -- see Task 3 |
 
 **This repo:**
 
@@ -61,6 +63,7 @@ and re-measure if the pinned version moves.
 | `AgentLoop` / `WiringMixin` hold **no** whole `Config` | there is no `self.config`. Per-feature config arrives as its own constructor argument and attribute, the way `self.ask_user_config` does (`raven/agent/loop/main.py:320`) |
 | `WsGateway.__init__(self)` takes no arguments and holds no `Config` | it exposes `self.agent_loop_factory`; anything A2A needs must be set on it the same way |
 | `load_config` imports from `raven.config` **and** `raven.config.loader` | either is fine; tests use `from raven.config import load_config` |
+| `Tool.parameters` is `@property @abstractmethod` (`raven/contracts/tool.py:274`), **not** a plain method | declare it `@property` and read it as `tool.parameters`, never `tool.parameters()`. `name` and `description` are properties too; only `execute` is a method |
 
 ---
 
