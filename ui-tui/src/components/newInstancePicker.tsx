@@ -18,9 +18,9 @@ import type { InstanceRow, SubagentRow, SubagentsInstanceCreateResult, Subagents
 import type { Theme } from '../theme.js'
 
 import { $directChat } from '../app/directChatStore.js'
+import { t as uiText } from '../i18n/index.js'
 import { rpcErrorMessage } from '../lib/rpc.js'
 import { OverlayHint, useOverlayKeys, windowOffset } from './overlayControls.js'
-import { t as uiText } from '../i18n/index.js'
 
 const VISIBLE = 12
 const MIN_WIDTH = 60

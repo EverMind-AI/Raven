@@ -18,9 +18,9 @@ import {
   RAVEN_WORD_WIDTH,
   rowsWidth
 } from '../banner.js'
+import { t as uiText } from '../i18n/index.js'
 import { flat } from '../lib/text.js'
 import { DEFAULT_THEME, type Theme } from '../theme.js'
-import { t as uiText } from '../i18n/index.js'
 
 const LOADER_TICK_MS = 120
 

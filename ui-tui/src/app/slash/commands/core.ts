@@ -186,7 +186,9 @@ export const coreCommands: SlashCommand[] = [
             // The gate reads the mode live, so the switch holds from the
             // next tool call -- nothing else to poke.
             ctx.transcript.sys(
-              isDefault ? `default permission mode set to ${want}` : `permission mode set to ${want} for this conversation`
+              isDefault
+                ? `default permission mode set to ${want}`
+                : `permission mode set to ${want} for this conversation`
             )
           })
         )

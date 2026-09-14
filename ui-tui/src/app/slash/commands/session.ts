@@ -346,9 +346,7 @@ export const sessionCommands: SlashCommand[] = [
             return ctx.transcript.sys('nothing to compress')
           }
 
-          ctx.transcript.sys(
-            `compressed ${r.removed} messages${r.usage?.total ? ` · ${fmtK(r.usage.total)} tok` : ''}`
-          )
+          ctx.transcript.sys(`compressed ${r.removed} messages${r.usage?.total ? ` · ${fmtK(r.usage.total)} tok` : ''}`)
         })
         .catch(ctx.guardedErr)
     }

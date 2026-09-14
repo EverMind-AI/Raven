@@ -9,9 +9,9 @@ import { useEffect, useState } from 'react'
 import type { GatewayClient } from '../gatewayClientStub.js'
 import type { Theme } from '../theme.js'
 
+import { t as uiText } from '../i18n/index.js'
 import { rpcErrorMessage } from '../lib/rpc.js'
 import { OverlayHint, useOverlayKeys, windowItems, windowOffset } from './overlayControls.js'
-import { t as uiText } from '../i18n/index.js'
 
 const VISIBLE = 12
 const MIN_WIDTH = 40
@@ -251,9 +251,9 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
           {selectedCat}
         </Text>
 
-        <Text color={t.color.muted}>{skills.length === 1
-          ? uiText('gui.panel.skill_one')
-          : uiText('gui.panel.skill_n', '', { n: skills.length })}</Text>
+        <Text color={t.color.muted}>
+          {skills.length === 1 ? uiText('gui.panel.skill_one') : uiText('gui.panel.skill_n', '', { n: skills.length })}
+        </Text>
         {!skills.length ? <Text color={t.color.muted}>{uiText('gui.panel.no_skills_here')}</Text> : null}
         {offset > 0 && <Text color={t.color.muted}> {uiText('gui.panel.more_up', '', { n: offset })}</Text>}
 
@@ -278,7 +278,9 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
           <Text color={t.color.muted}> ↓ {skills.length - offset - VISIBLE} more</Text>
         )}
         <OverlayHint t={t}>
-          {skills.length ? '↑/↓ select · Enter open · 1-9,0 quick · Esc back · q close' : uiText('gui.panel.k_esc_back_close')}
+          {skills.length
+            ? '↑/↓ select · Enter open · 1-9,0 quick · Esc back · q close'
+            : uiText('gui.panel.k_esc_back_close')}
         </OverlayHint>
       </Box>
     )

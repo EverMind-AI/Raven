@@ -11,10 +11,10 @@ import type { SubagentRow, SubagentsListResult, SubagentsProbeResult, SubagentsT
 import type { Theme } from '../theme.js'
 
 import { fmtDuration } from '../domain/messages.js'
+import { t as uiText } from '../i18n/index.js'
 import { rpcErrorMessage } from '../lib/rpc.js'
 import { OverlayHint, windowItems } from './overlayControls.js'
 import { Spinner } from './thinking.js'
-import { t as uiText } from '../i18n/index.js'
 
 const MIN_WIDTH = 40
 const MAX_WIDTH = 90
@@ -308,7 +308,9 @@ export type SubagentItem = { kind: 'group'; rows: SubagentRow[] } | { kind: 'row
  *  index. Headers and items share one array so `windowItems` can window across
  *  the whole list in render order -- a section boundary is not a reason for the
  *  selected row to be able to scroll out of view. */
-export type DisplayLine = { item: SubagentItem; itemIndex: number; kind: 'item' } | { kind: 'header'; section: SectionKind }
+export type DisplayLine =
+  | { item: SubagentItem; itemIndex: number; kind: 'item' }
+  | { kind: 'header'; section: SectionKind }
 
 export interface SubagentDisplay {
   items: SubagentItem[]
@@ -930,8 +932,20 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
           {' '}
         </Text>
 
-        <FormFieldLine focused={field === 'name'} label={uiText('gui.panel.name')} saving={saving} t={t} value={nameInput} />
-        <FormFieldLine focused={field === 'description'} label={uiText('gui.panel.description')} saving={saving} t={t} value={descInput} />
+        <FormFieldLine
+          focused={field === 'name'}
+          label={uiText('gui.panel.name')}
+          saving={saving}
+          t={t}
+          value={nameInput}
+        />
+        <FormFieldLine
+          focused={field === 'description'}
+          label={uiText('gui.panel.description')}
+          saving={saving}
+          t={t}
+          value={descInput}
+        />
         {isOpenAI ? (
           <FormFieldLine
             display={masked}
@@ -1037,7 +1051,9 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
         )
       )}
 
-      {offset + VISIBLE < lines.length && <Text color={t.color.muted}> {uiText('gui.panel.more_down', '', { n: lines.length - offset - VISIBLE })}</Text>}
+      {offset + VISIBLE < lines.length && (
+        <Text color={t.color.muted}> {uiText('gui.panel.more_down', '', { n: lines.length - offset - VISIBLE })}</Text>
+      )}
 
       {failureDetail ? (
         <Text color={t.color.label} wrap="truncate-end">

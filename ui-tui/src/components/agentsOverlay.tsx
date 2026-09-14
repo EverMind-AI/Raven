@@ -44,6 +44,7 @@ import { useTurnSelector } from '../app/turnStore.js'
 import { getUiState } from '../app/uiStore.js'
 import { useDirectStepPoll } from '../app/useDirectStepPoll.js'
 import { toTranscriptMessages } from '../domain/messages.js'
+import { t as uiText } from '../i18n/index.js'
 import { asRpcResult } from '../lib/rpc.js'
 import {
   buildSubagentTree,
@@ -63,7 +64,6 @@ import {
 import { compactPreview } from '../lib/text.js'
 import { MessageLine } from './messageLine.js'
 import { TextInput } from './textInput.js'
-import { t as uiText } from '../i18n/index.js'
 
 // ── Types + lookup tables ────────────────────────────────────────────
 
@@ -643,7 +643,9 @@ function LiveTranscript({
   if (!msgs || msgs.length === 0) {
     return (
       <OverlaySection defaultOpen id="transcript" scope={scope} t={t} title={uiText('gui.panel.transcript')}>
-        <Text color={t.color.muted}>{live ? uiText('gui.panel.waiting_first') : uiText('gui.panel.no_step_record')}</Text>
+        <Text color={t.color.muted}>
+          {live ? uiText('gui.panel.waiting_first') : uiText('gui.panel.no_step_record')}
+        </Text>
       </OverlaySection>
     )
   }
@@ -690,7 +692,9 @@ function LiveTranscript({
       ))}
 
       {tail.length === 0 && !consoleTail ? (
-        <Text color={t.color.muted}>{live ? uiText('gui.panel.waiting_first') : uiText('gui.panel.no_step_record')}</Text>
+        <Text color={t.color.muted}>
+          {live ? uiText('gui.panel.waiting_first') : uiText('gui.panel.no_step_record')}
+        </Text>
       ) : null}
 
       {consoleTail ? (
@@ -817,7 +821,13 @@ function Detail({
       ) : null}
 
       {filesRead.length > 0 || filesWritten.length > 0 ? (
-        <OverlaySection count={filesRead.length + filesWritten.length} id="files" scope={item.id} t={t} title={uiText('gui.panel.files')}>
+        <OverlaySection
+          count={filesRead.length + filesWritten.length}
+          id="files"
+          scope={item.id}
+          t={t}
+          title={uiText('gui.panel.files')}
+        >
           {filesWritten.slice(0, 8).map((p, i) => (
             <Text color={t.color.statusGood} key={`w-${i}`} wrap="truncate-end">
               +{p}
@@ -835,7 +845,14 @@ function Detail({
       ) : null}
 
       {toolLines.length > 0 ? (
-        <OverlaySection count={toolLines.length} defaultOpen id="tools" scope={item.id} t={t} title={uiText('gui.panel.tool_calls')}>
+        <OverlaySection
+          count={toolLines.length}
+          defaultOpen
+          id="tools"
+          scope={item.id}
+          t={t}
+          title={uiText('gui.panel.tool_calls')}
+        >
           {toolLines.map((line, i) => (
             <Text color={t.color.text} key={i} wrap="wrap">
               <Text color={t.color.muted}>·</Text> {line}
@@ -845,7 +862,14 @@ function Detail({
       ) : null}
 
       {outputTail.length > 0 ? (
-        <OverlaySection count={outputTail.length} defaultOpen id="output" scope={item.id} t={t} title={uiText('gui.panel.output')}>
+        <OverlaySection
+          count={outputTail.length}
+          defaultOpen
+          id="output"
+          scope={item.id}
+          t={t}
+          title={uiText('gui.panel.output')}
+        >
           {outputTail.map((entry, i) => (
             <Text color={entry.isError ? t.color.error : t.color.text} key={i} wrap="wrap">
               <Text bold color={entry.isError ? t.color.error : t.color.accent}>
@@ -858,7 +882,13 @@ function Detail({
       ) : null}
 
       {item.notes.length ? (
-        <OverlaySection count={item.notes.length} id="progress" scope={item.id} t={t} title={uiText('gui.panel.progress')}>
+        <OverlaySection
+          count={item.notes.length}
+          id="progress"
+          scope={item.id}
+          t={t}
+          title={uiText('gui.panel.progress')}
+        >
           {item.notes.slice(-6).map((line, i) => (
             <Text color={t.color.text} key={i} wrap="wrap">
               <Text color={t.color.label}>·</Text> {line}
@@ -1161,7 +1191,6 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
     setComposing(true)
   }, [cursor, historyIndex, mode])
 
-
   useEffect(() => {
     // Warm caps + paused flag on open, and settle the live rows against disk.
     gw.request<DelegationStatusResponse>('delegation.status', {})
@@ -1282,8 +1311,7 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
     // with no bound. The run announces the merged words itself (a user row on
     // its live transcript), so nothing is echoed here; a refusal hands the
     // text back to the draft rather than losing it.
-    const working =
-      isTargetWorking(getDirectChat(), target) || item.status === 'running' || item.status === 'queued'
+    const working = isTargetWorking(getDirectChat(), target) || item.status === 'running' || item.status === 'queued'
 
     if (!working) {
       return deliver(content)
@@ -1478,10 +1506,11 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
 
   const title =
     replayMode && effectiveSnapshot
-      ? `${historyIndex > 0 ? uiText('gui.panel.replay_x', '', { i: historyIndex, n: history.length })
-          : uiText('gui.panel.last_turn')} · finished ${new Date(
-          effectiveSnapshot.finishedAt
-        ).toLocaleTimeString()}`
+      ? `${
+          historyIndex > 0
+            ? uiText('gui.panel.replay_x', '', { i: historyIndex, n: history.length })
+            : uiText('gui.panel.last_turn')
+        } · finished ${new Date(effectiveSnapshot.finishedAt).toLocaleTimeString()}`
       : `Spawn tree${delegation.paused ? ' · ⏸ paused' : ''}`
 
   const metaLine = [formatSummary(totals), spark, capsLabel, mix ? `· ${mix}` : ''].filter(Boolean).join('  ')
@@ -1609,8 +1638,8 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
           </Text>
         ) : composerOn && composing ? (
           <Text color={t.color.muted} wrap="truncate-end">
-            Enter {conversationWorking ? 'steer' : 'send'} · Tab pane keys · PgUp/PgDn page · Esc clear draft / back
-            to list
+            Enter {conversationWorking ? 'steer' : 'send'} · Tab pane keys · PgUp/PgDn page · Esc clear draft / back to
+            list
           </Text>
         ) : (
           <Text color={t.color.muted} wrap="truncate-end">

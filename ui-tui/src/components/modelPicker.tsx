@@ -19,10 +19,10 @@ import type { LaunchResult } from '../lib/externalCli.js'
 import type { Theme } from '../theme.js'
 
 import { providerDisplayNames } from '../domain/providers.js'
+import { t as uiText } from '../i18n/index.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { tagBadge, tagLegend } from './modelTags.js'
 import { OverlayHint, useOverlayKeys, windowItems } from './overlayControls.js'
-import { t as uiText } from '../i18n/index.js'
 
 const VISIBLE = 12
 const MIN_WIDTH = 40
@@ -1431,7 +1431,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
           a tooltip, and only the tags actually on screen are worth a line. Kept
           in the layout when empty so the rows below hold still. */}
       <Text color={t.color.muted} wrap="truncate-end">
-        {tagLegend(models.map((model) => provider?.model_labels?.[model])) || ' '}
+        {tagLegend(models.map(model => provider?.model_labels?.[model])) || ' '}
       </Text>
 
       <Text color={t.color.muted} wrap="truncate-end">

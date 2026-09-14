@@ -10,9 +10,9 @@ import type { GatewayClient } from '../gatewayClientStub.js'
 import type { SessionDeleteResponse, SessionListItem, SessionListResponse } from '../gatewayTypes.js'
 import type { Theme } from '../theme.js'
 
+import { t as uiText } from '../i18n/index.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { OverlayHint, useOverlayKeys, windowOffset } from './overlayControls.js'
-import { t as uiText } from '../i18n/index.js'
 
 const VISIBLE = 15
 const MIN_WIDTH = 60

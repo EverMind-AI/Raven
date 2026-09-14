@@ -20,6 +20,7 @@ import type {
 
 import { THINKING_COT_MAX } from '../config/limits.js'
 import { sectionMode } from '../domain/details.js'
+import { t as uiText } from '../i18n/index.js'
 import {
   buildSubagentTree,
   fmtCost,
@@ -43,7 +44,6 @@ import {
   thinkingPreview,
   toolTrailLabel
 } from '../lib/text.js'
-import { t as uiText } from '../i18n/index.js'
 
 const THINK: BrailleSpinnerName[] = ['helix', 'breathe', 'orbit', 'dna', 'waverows', 'snake', 'pulse']
 const TOOL: BrailleSpinnerName[] = ['cascade', 'scan', 'diagswipe', 'fillsweep', 'rain', 'columns', 'sparkle']
