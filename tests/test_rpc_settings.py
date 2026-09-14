@@ -293,3 +293,75 @@ async def test_extension_pin_writes_roundtrip_through_raven_loader(cfg):
     assert loaded.translate.provider == "openai"
     assert loaded.knowledge.embedding_model == "openai/text-embedding-3-small"
     assert loaded.knowledge.embedding_provider == "openai"
+
+
+class TestAPinIsWrittenAsOneThing:
+    """Both halves of a model pin land in one write, or neither does.
+
+    A pair written a key at a time has two ways to end up mismatched, and the
+    surface cannot close either from its side: a connection dropping between
+    the writes leaves a new model beside the old provider, with the repair
+    write having to travel the connection that just failed; and two surfaces
+    saving at once interleave into a pair neither of them chose, with every
+    individual write succeeding. One key is one ``atomic_update``.
+    """
+
+    async def test_the_pair_lands_together(self, cfg):
+        r = await rpc_console.settings_set(
+            {
+                "key": "knowledge",
+                "value": {"embeddingModel": "openai/text-embedding-3-large", "embeddingProvider": "openai"},
+            }
+        )
+
+        assert r["applied"] is True
+        block = _read(cfg)["knowledge"]
+        assert block["embeddingModel"] == "openai/text-embedding-3-large"
+        assert block["embeddingProvider"] == "openai"
+
+    async def test_a_refused_half_writes_neither(self, cfg):
+        """The whole point. Validation runs over the pair before the file is
+        touched, so the half that would have passed is not left behind."""
+        with pytest.raises(ConfigValidationError):
+            await rpc_console.settings_set(
+                {
+                    "key": "knowledge",
+                    "value": {"embeddingModel": "openai/text-embedding-3-large", "embeddingProvider": "nosuchvendor"},
+                }
+            )
+
+        assert "knowledge" not in _read(cfg)
+
+    async def test_half_a_pair_is_not_a_pin(self, cfg):
+        with pytest.raises(ConfigValidationError):
+            await rpc_console.settings_set({"key": "knowledge", "value": {"embeddingModel": "openai/x"}})
+
+        assert "knowledge" not in _read(cfg)
+
+    async def test_the_rest_of_the_block_survives_the_write(self, cfg):
+        """``sessionTitle`` carries enabled, the timeout and the width gate
+        beside its pin. A replacing write would drop all three."""
+        cfg.write_text(
+            json.dumps({"sessionTitle": {"enabled": True, "timeoutSeconds": 8.0, "budget": 24}}),
+            encoding="utf-8",
+        )
+
+        await rpc_console.settings_set(
+            {"key": "sessionTitle", "value": {"model": "openai/gpt-5.4-mini", "provider": "openai"}}
+        )
+
+        block = _read(cfg)["sessionTitle"]
+        assert block["model"] == "openai/gpt-5.4-mini"
+        assert block["provider"] == "openai"
+        assert (block["enabled"], block["timeoutSeconds"], block["budget"]) == (True, 8.0, 24)
+
+    async def test_clearing_a_pin_clears_both_halves(self, cfg):
+        cfg.write_text(
+            json.dumps({"translate": {"model": "openai/gpt-5.5", "provider": "openai"}}),
+            encoding="utf-8",
+        )
+
+        await rpc_console.settings_set({"key": "translate", "value": {"model": "", "provider": ""}})
+
+        block = _read(cfg)["translate"]
+        assert block["model"] is None and block["provider"] is None

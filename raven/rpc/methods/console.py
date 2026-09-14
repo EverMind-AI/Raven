@@ -574,7 +574,7 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
 
     checker = _SETTINGS_SIMPLE_KEYS.get(key)
     if checker is not None:
-        written = _write_raw_key(key, checker(value), merge=key == "tools.media.image")
+        written = _write_raw_key(key, checker(value), merge=key in _MERGED_KEYS)
         if key in MIRRORED_KEYS:
             # cli/acp sub-agents read every web credential from the
             # environment, not from the config, so the ~/.raven/env mirror has
@@ -584,6 +584,13 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         return written
 
     raise ConfigValidationError(f"key not writable via settings.set: {key}")
+
+
+#: Keys whose value is an object covering only part of the block it names, so
+#: the write merges instead of replacing. ``sessionTitle`` carries enabled, the
+#: timeout and the width gate beside its pin, and a replacing write would drop
+#: every one of them.
+_MERGED_KEYS = frozenset({"tools.media.image", "sessionTitle", "translate", "knowledge"})
 
 
 def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
@@ -709,6 +716,30 @@ def _chk_pin_provider(key: str):
     return chk
 
 
+def _chk_pin_pair(parent: str, model_field: str, provider_field: str):
+    """A model/provider pin as one value, so it is written as one operation.
+
+    Both halves in a single ``settings.set`` because a pin is only meaningful
+    as a pair. Written a key at a time, a dropped connection between the two
+    leaves a model pointing at the wrong provider, and the rollback cannot
+    recover through the connection that just failed; two pickers saving at once
+    can interleave their writes into a pair neither of them chose. One key is
+    one ``atomic_update`` under the config lock, which has neither failure.
+
+    The leaves stay individually writable for callers that set one on purpose,
+    exactly as ``tools.media.image.model`` does beside ``tools.media.image``;
+    their validators are what this delegates to.
+    """
+    fields = {model_field, provider_field}
+
+    def chk(value: Any) -> dict:
+        if not isinstance(value, dict) or set(value) != fields:
+            raise ConfigValidationError(f"{parent} must contain exactly {model_field} and {provider_field}")
+        return {k: _SETTINGS_SIMPLE_KEYS[f"{parent}.{k}"](v) for k, v in value.items()}
+
+    return chk
+
+
 def _chk_image_selection(value: Any) -> dict:
     if not isinstance(value, dict) or set(value) != {"model", "quality"}:
         raise ConfigValidationError("image selection must contain exactly model and quality")
@@ -759,6 +790,11 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "translate.provider": _chk_pin_provider("translate.provider"),
     "knowledge.embeddingModel": _chk_pin_model("knowledge.embeddingModel"),
     "knowledge.embeddingProvider": _chk_pin_provider("knowledge.embeddingProvider"),
+    # The pair keys. A surface offering a pin writes one of these, not the two
+    # leaves in sequence.
+    "sessionTitle": _chk_pin_pair("sessionTitle", "model", "provider"),
+    "translate": _chk_pin_pair("translate", "model", "provider"),
+    "knowledge": _chk_pin_pair("knowledge", "embeddingModel", "embeddingProvider"),
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
     "agents.defaults.reasoningEffort": _chk_enum("agents.defaults.reasoningEffort", "minimal", "low", "medium", "high"),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),

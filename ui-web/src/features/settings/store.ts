@@ -431,29 +431,16 @@ export function reset(): void {
   delete window.sTab
 }
 
-/* Both halves in one action. A pin is a model and the provider serving it.
-   If the provider half is refused after the model half succeeds, restore the
-   previous model so the config cannot keep a new model paired with an old key. */
-export async function writePin(
-  modelKey: string,
-  providerKey: string,
-  model: string,
-  provider: string,
-): Promise<WriteOutcome> {
-  let previous: unknown = state.snap.raw
-  for (const part of modelKey.split('.')) {
-    if (previous == null || typeof previous !== 'object') {
-      previous = undefined
-      break
-    }
-    previous = (previous as Record<string, unknown>)[part]
-  }
+/* One key, one write. A pin is only meaningful as a pair, so the backend takes
+   both halves under the block's own key and stores them in a single
+   atomic_update under the config lock.
 
-  const first = await write(modelKey, model)
-  if (first !== 'ok') return first
-  const second = await write(providerKey, provider)
-  if (second === 'ok') return second
-
-  await write(modelKey, previous ?? null)
-  return second
+   Two writes and a rollback is what this replaced, and neither half of that
+   worked: a connection dropping between the writes left a new model paired
+   with the old provider, and the rollback had to travel the same dead
+   connection to undo it; two pickers saving at once could interleave their
+   per-key writes into a pair neither of them chose, with every write
+   succeeding. Refusals now happen before anything is written. */
+export async function writePin(pinKey: string, fields: Record<string, string>): Promise<WriteOutcome> {
+  return write(pinKey, fields)
 }

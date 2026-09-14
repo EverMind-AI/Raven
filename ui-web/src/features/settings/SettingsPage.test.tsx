@@ -1344,20 +1344,33 @@ describe('default model pins', () => {
     })
     /* Both, in that order. A model with no provider is a pin the backend reads
        as unset, so a half-written pair is a control that silently did nothing. */
+    /* One call carrying both halves, not two carrying one each. The pair is
+       what the backend stores in a single transaction; a surface that sent two
+       writes could have the second refused and leave the first standing. */
     expect(calls).toEqual([
-      ['set', { key: 'knowledge.embeddingModel', value: 'text-embedding-3-large' }],
-      ['set', { key: 'knowledge.embeddingProvider', value: 'openai' }],
+      [
+        'set',
+        {
+          key: 'knowledge',
+          value: { embeddingModel: 'text-embedding-3-large', embeddingProvider: 'openai' },
+        },
+      ],
     ])
   })
 
-  it('restores the previous model when the provider half fails', async () => {
+  /* This replaces a rollback. The pair used to be two writes with the first
+     undone when the second failed, which could not hold: the undo travelled
+     the same connection that had just dropped, and two pickers saving at once
+     could interleave their writes into a pair neither chose with nothing
+     failing at all. A refused write now leaves the config untouched because
+     there was only ever one. */
+  it('leaves the stored pin untouched when the write is refused', async () => {
     const data = pinsnap({ raw: { knowledge: { embeddingModel: 'openai/old', embeddingProvider: 'openai' } } })
     const calls: Array<[string, unknown]> = []
     install(data, {
       set: async (key, value) => {
         calls.push(['set', { key, value }])
-        if (key === 'knowledge.embeddingProvider') throw { handled: true }
-        return data
+        throw { handled: true }
       },
     })
     await mount()
@@ -1370,11 +1383,20 @@ describe('default model pins', () => {
       })
     })
 
+    // One attempt, and no repair write behind it: nothing to repair.
     expect(calls).toEqual([
-      ['set', { key: 'knowledge.embeddingModel', value: 'text-embedding-3-large' }],
-      ['set', { key: 'knowledge.embeddingProvider', value: 'openai' }],
-      ['set', { key: 'knowledge.embeddingModel', value: 'openai/old' }],
+      [
+        'set',
+        {
+          key: 'knowledge',
+          value: { embeddingModel: 'text-embedding-3-large', embeddingProvider: 'openai' },
+        },
+      ],
     ])
+    // And the row does not claim the pick that was refused.
+    expect((screen.getByLabelText('gui.set.dm.embed') as HTMLSelectElement).value).not.toBe(
+      'openai::text-embedding-3-large',
+    )
   })
 
   it('offers nothing from a provider that is not connected', async () => {

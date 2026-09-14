@@ -1879,22 +1879,26 @@ function PinRow({
   title,
   note,
   kind,
-  modelKey,
-  providerKey,
+  pinKey,
+  modelField,
+  providerField,
   foot,
   s,
 }: {
   title: string
   note: string
   kind: ModelKind
-  modelKey: string
-  providerKey: string
+  /* The block the pair lives under, which is also the key it is written by:
+     one write, so the two halves cannot be persisted apart. */
+  pinKey: string
+  modelField: string
+  providerField: string
   foot?: string
   s: SettingsState
 }): JSX.Element {
   const [nl, say] = useNl()
-  const model = String(V(s.snap.raw, modelKey, '') || '')
-  const provider = String(V(s.snap.raw, providerKey, '') || '')
+  const model = String(V(s.snap.raw, `${pinKey}.${modelField}`, '') || '')
+  const provider = String(V(s.snap.raw, `${pinKey}.${providerField}`, '') || '')
   const groups = s.snap.providers
     .filter((p) => p.on)
     .map((p) => ({
@@ -1912,9 +1916,11 @@ function PinRow({
           value={current}
           onChange={(e) => {
             const [nextProvider = '', nextModel = ''] = e.currentTarget.value.split('::')
-            void store.writePin(modelKey, providerKey, nextModel, nextProvider).then((r) => {
-              if (r !== 'ok') say()
-            })
+            void store
+              .writePin(pinKey, { [modelField]: nextModel, [providerField]: nextProvider })
+              .then((r) => {
+                if (r !== 'ok') say()
+              })
           }}
         >
           <option value="">{t('gui.set.dm.inherit')}</option>
@@ -1975,16 +1981,18 @@ function DefaultsPage({ s }: { s: SettingsState }): JSX.Element {
         title={t('gui.set.dm.quick')}
         note={t('gui.set.dm.quick_note')}
         kind="text"
-        modelKey="sessionTitle.model"
-        providerKey="sessionTitle.provider"
+        pinKey="sessionTitle"
+        modelField="model"
+        providerField="provider"
         s={s}
       />
       <PinRow
         title={t('gui.set.dm.translate')}
         note={t('gui.set.dm.translate_note')}
         kind="text"
-        modelKey="translate.model"
-        providerKey="translate.provider"
+        pinKey="translate"
+        modelField="model"
+        providerField="provider"
         s={s}
       />
       {/* Not a pin: the image tool carries its own key and address rather than
@@ -1996,8 +2004,9 @@ function DefaultsPage({ s }: { s: SettingsState }): JSX.Element {
         title={t('gui.set.dm.embed')}
         note={t('gui.set.dm.embed_note')}
         kind="embedding"
-        modelKey="knowledge.embeddingModel"
-        providerKey="knowledge.embeddingProvider"
+        pinKey="knowledge"
+        modelField="embeddingModel"
+        providerField="embeddingProvider"
         foot={t('gui.set.dm.embed_warn')}
         s={s}
       />
