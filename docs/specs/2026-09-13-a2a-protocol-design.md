@@ -1,6 +1,6 @@
 # A2A protocol support: the host speaks it, sub-agents do not
 
-Status: design, approved 2026-09-13.
+Status: design, approved 2026-09-13; outbound shape revised 2026-09-14.
 
 ## The gap
 
@@ -16,14 +16,16 @@ What is missing is interoperability with an agent that raven did not build and d
 launch -- one that speaks a public protocol, lives at a URL, holds its own task state,
 and belongs to someone else's trust domain. A2A is that protocol.
 
-The registry design of 2026-08-14 already named it. Its deferred-work table lists
+The registry design of 2026-08-14 named it in advance. Its deferred-work table lists
 `openai` -> `http` + `protocol` with the trigger written as "when a second HTTP protocol
-lands (A2A, ACP over HTTP)". This is that landing.
+lands (A2A, ACP over HTTP)". **That trigger does not fire here**, because A2A does not
+enter the sub-agent roster at all -- see the ruling below. The rename stays deferred and
+the discriminated union is untouched.
 
-## Owner ruling (2026-09-13)
+## Owner rulings
 
-**A2A is a host-only protocol face. Sub-agents are reached over ACP and speak no A2A in
-either direction.**
+**First (2026-09-13): A2A is a host-only protocol face. Sub-agents are reached over ACP
+and speak no A2A in either direction.**
 
 That is a boundary, not a permission setting. It forecloses a design that otherwise
 looks attractive -- exposing each product in `agents/` as its own A2A endpoint -- and it
@@ -50,6 +52,23 @@ external A2A client --A2A--> host raven <--A2A--> external A2A agent
 ```
 
 The five products keep `kind: "acp"`. No A2A route to them is added.
+
+**Second (2026-09-14): A2A is a capability of the host agent, not an entry in the
+sub-agent roster.** An earlier draft of this design gave a remote A2A agent a roster row
+of a new `kind: "a2a"`. That was wrong, and the repo already carries the evidence.
+
+The roster answers "who may I delegate to", and its rows are shaped by raven owning the
+worker: the `acp` row declares `command`, `cwd`, `env`, `ready_timeout_ms`, `mcps`,
+`allow_mcp_secrets`, `session_mcp` and `preset`. An external A2A peer satisfies none of
+those -- raven does not start it, does not hold its lifetime, and cannot grant it an MCP.
+The strain is already visible on the one existing kind that is also external: `kind:
+"openai"` carries two runtime warnings whose whole content is that roster fields do not
+apply to it (`mcps`/`allowMcpSecrets`, and `readsLocalFiles`). A `kind: "a2a"` row would
+have been a third instance of the same mismatch.
+
+The confusion underneath was between **subordination** (the roster) and **reachability**
+(a protocol). A2A peers are reachable, not subordinate. So the outbound half is a tool on
+the host agent, and the sub-agent union is not touched.
 
 ## Protocol version: 1.0 only
 
@@ -168,6 +187,9 @@ raven/a2a/               inbound -- the server face
   routes_aiohttp.py      JSON-RPC dispatch + A2A-Version; deleted on migration
   gate.py                sub-agent refusal
 raven/a2a_client/        outbound -- the client face
+  client.py              JSON-RPC over the SDK client
+  peers.py               origin -> credential lookup; the model never holds one
+  tool.py                the single host-agent tool; withheld from sub-agents
 ```
 
 Import-linter gains one contract line: `raven.a2a` must not import `raven.cli`, matching
@@ -195,32 +217,46 @@ other people's agents. Running `raven web` must not silently open the second one
 
 ## Outbound
 
-A remote A2A agent is a roster row of a new `kind: "a2a"`, added to the discriminated
-union in `raven/config/schema.py` beside `cli`, `openai`, `acp` and `builtin`. The row
-holds the Agent Card URL and its auth material.
+One tool on the host agent, taking an Agent Card URL and a message. No new agent entity,
+no roster row, and no change to `raven/config/schema.py`'s discriminated union.
 
-Capabilities are read from the fetched Card rather than declared in config, for the
-reason the registry design already gives: under one protocol, different agents disagree
-(`can_fork` is false on codex and true on hermes), so a hand-filled field is guaranteed
-wrong somewhere, and three consumers read it.
+Configuration is a section of its own, `a2a`, holding the inbound switch and a list of
+trusted peers keyed by origin. A peer entry carries credentials and nothing else the
+roster would have demanded.
+
+**The model never sees a credential.** It passes a URL; the client layer matches the
+origin against the trusted list and attaches whatever that peer's Agent Card declares
+under `securitySchemes` (API key, HTTP auth, OAuth2, OIDC, mTLS). An origin absent from
+the list is called unauthenticated or refused, per that section's policy -- it is never
+an invitation for the model to supply a secret itself.
+
+This is the one place the roster shape would genuinely have helped, and it is worth being
+explicit about what is given up. A roster row carries `description` and `owns`, which are
+the text the classifier routes on; a tool taking a URL carries no such advertisement, so
+the model learns a peer exists only from the trusted-peer list or from the user naming it
+in the turn. That is the accepted cost of not modelling reachability as subordination.
+Capabilities are still read from the fetched Card rather than declared, for the reason the
+registry design gives: under one protocol different agents disagree, so a hand-filled
+capability field is guaranteed wrong somewhere.
 
 ## The gate
 
 The ruling has two halves and they need different enforcement, because only one of them
 passes through the tool registry.
 
-**Outbound is already closed, and the design keeps it that way.** The only model-facing
-routes to any sub-agent are `spawn`, `run_subagent_dag`, and the three graph controls
-(`cancel_dag`, `resolve_dag_node`, `dag_status`); direct chat is a host UI path, not a
-model tool. All five are in `WITHHELD_FROM_SUBAGENT` and are not registered at all in a
-sub-agent process -- not hidden from the schema, because hiding leaves a tool reachable
-through `tool_call`. A `kind: "a2a"` row is therefore unreachable from a sub-agent
-without any new code, and the correct way to keep it that way is a test, not a gate.
+**Outbound: the tool joins `WITHHELD_FROM_SUBAGENT`.** It is a route to another agent
+that does not pass through `spawn`, which is exactly the shape `load_playbook` already
+has -- a third route to a graph, withheld by name for that reason. So the A2A tool is
+withheld by name too, and is not registered at all in a sub-agent process rather than
+hidden from the schema, because hiding leaves a tool reachable through `tool_call`.
 
-This is also why no ad-hoc "call this A2A URL" tool is added. Such a tool would be a
-fourth route to another agent, bypassing `spawn`, and would have to be withheld
-explicitly -- the same trap `load_playbook` already fell into by dispatching from inside
-the call. Roster rows only.
+This is a real gate rather than a free one, and that is the price of the second ruling.
+The earlier roster-row draft inherited the gate without writing it, since the only
+model-facing routes to a roster entry -- `spawn`, `run_subagent_dag`, and the three graph
+controls -- are already withheld. Paying one frozenset entry is the cheaper half of the
+trade: `tests/test_agent_loop_subagent_role.py` already holds that set in both
+directions, failing on a withheld name nothing registers and on a withheld name the gates
+let through, so the new entry is guarded the moment it is added.
 
 **Inbound needs a new gate**, because serving a port does not go through the registry.
 Both hostings refuse to start when `is_subagent_process()` is true, and say why. The
@@ -236,8 +272,14 @@ product for free.
 directions: it fails on a withheld name that nothing registers, and on a withheld name
 the gates let through. Two assertions join it:
 
-- a `kind: "a2a"` row is unreachable in a sub-agent process;
+- the A2A tool is in the withheld set, so both existing directions of that file's check
+  now cover it: it must be registered on the host and absent in a sub-agent process;
 - both A2A server hostings refuse to start under `RAVEN_SUBAGENT=1`.
+
+One more, because the second ruling is the kind a later change undoes by accident: the
+sub-agent discriminated union admits exactly `cli`, `openai`, `acp` and `builtin`. A test
+pinning that set turns "someone added `kind: a2a` back" into a red test rather than a
+design regression nobody notices.
 
 Protocol conformance is tested against the SDK's own client, which is the closest thing
 to a second implementation available: card fetch, `SendMessage`, `GetTask`, `CancelTask`,
@@ -249,8 +291,12 @@ and a header-less request answering `VersionNotSupportedError`.
 - push notification configuration (four of the eleven `RequestHandler` methods);
 - a 0.3 compatibility layer;
 - migrating `raven serve` to starlette/fastapi;
-- the deferred `openai` -> `http` + `protocol` rename. It is now triggered, but it is a
-  migration of an existing kind and does not belong in the change that adds a new one.
+- the deferred `openai` -> `http` + `protocol` rename. Its stated trigger is a second
+  HTTP protocol *in the roster*, and A2A does not enter the roster, so it stays deferred
+  on its original terms rather than being deferred again by this change;
+- routing text for peers. A roster row would have carried `description` and `owns`; the
+  tool carries neither, so the model is not advertised a peer it could choose on its own.
+  If that turns out to matter, it is a separate change with its own evidence.
 
 ## Evidence
 
@@ -267,3 +313,5 @@ Measured 2026-09-13 unless stated.
 | ASGI stack already locked | `fastapi` 0.137.1, `starlette` 1.3.1, `sse-starlette` 3.4.1, `uvicorn` 0.46.0 present; zero importers under `raven/` and `bridge/` |
 | aiohttp server surface | six files, ~84 `web.` sites, 46 in `ws.py` |
 | all five products inherit the gate | every `agents/*/subagent.json` is `kind: acp`; no override of `RAVEN_SUBAGENT` in any product's config, roster row or env file |
+| the roster assumes raven owns the worker | the `acp` row declares `command`, `cwd`, `env`, `ready_timeout_ms`, `mcps`, `allow_mcp_secrets`, `session_mcp`, `preset` |
+| an external kind already strains it | `kind: "openai"` carries two "not supported for kind 'openai'" warnings, for `mcps`/`allowMcpSecrets` and for `readsLocalFiles` |
