@@ -924,6 +924,36 @@ class AcpConfig(Base):
         return None if "modes" in self.model_fields_set else DEFAULT_TIER
 
 
+class A2aPeerConfig(Base):
+    """One remote A2A agent this host is allowed to call, and how to authenticate to it.
+
+    Keyed by origin rather than by full card URL: the credential belongs to the
+    host, not to one card path, and a peer that moves its card must not silently
+    become an unauthenticated call.
+    """
+
+    origin: str
+    auth_scheme: str = "bearer"
+    credential: str = ""
+
+
+class A2aServerConfig(Base):
+    """The inbound A2A face. Off by default: it is a network surface for other
+    people's agents, so running the gateway must not open it as a side effect."""
+
+    enabled: bool = False
+    token: str = ""
+    path: str = "/a2a"
+
+
+class A2aConfig(Base):
+    """Both A2A faces. Neither touches the sub-agent roster -- a peer is reachable,
+    not subordinate, so nothing here describes a process raven starts."""
+
+    server: A2aServerConfig = Field(default_factory=A2aServerConfig)
+    peers: list[A2aPeerConfig] = Field(default_factory=list)
+
+
 class TuiConfig(Base):
     """Terminal UI launcher behavior.
 
@@ -2229,6 +2259,7 @@ class Config(BaseSettings):
     playbooks: PlaybookConfig = Field(default_factory=PlaybookConfig)
     tui: TuiConfig = Field(default_factory=TuiConfig)
     acp: AcpConfig = Field(default_factory=AcpConfig)
+    a2a: A2aConfig = Field(default_factory=A2aConfig)
     # UI language chosen during onboarding. Drives the wizard/CLI copy and the
     # agent's reply language (injected into the system prompt). "en" | "zh".
     language: Literal["en", "zh"] = "en"
