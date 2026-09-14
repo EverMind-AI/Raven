@@ -377,12 +377,37 @@ const mediaOf = (text) => {
  * Answers the open conversation when there already is one rather than refusing:
  * "give me a conversation" is what both callers actually want, and a seam that
  * has to be asked separately whether it applies is one a caller can get wrong.
- * `draft` and a null session pointer are the same state -- startDraft sets
- * both, openLiveSession clears both -- so this reads the flag and the callers
- * read the pointer without the two being able to disagree.
+ * `draft` is read rather than the pointer because it is the flag this layer
+ * keeps: startDraft raises it and nulls the pointer in one statement, and
+ * openLiveSession lowers it on the way into a conversation it is about to
+ * switch to -- so a caller arriving mid-switch is answered with the session
+ * being left, which is where `liveSend` has always sent that turn too.
  */
+let promoting = null;
 async function openConversation(preview, atPointer) {
   if (!draft) return sessionCurrent();
+  /* One promotion, however many callers ask inside it. `draft` stays raised
+     across the `session.create` round trip, so a second caller landing in that
+     window -- the roster's button pressed just after send -- would read the page
+     as still a draft and mint a SECOND conversation for the same press of the
+     new-task screen. Shared rather than refused: both callers want the same
+     answer, and both are owed it.
+     The joiner's hook runs on the way out instead of from inside, which is the
+     same guarantee later: what it is for is a pointer that has already moved. */
+  if (promoting) {
+    const joined = await promoting;
+    if (atPointer) atPointer(joined);
+    return joined;
+  }
+  promoting = promote(preview, atPointer);
+  try {
+    return await promoting;
+  } finally {
+    promoting = null;
+  }
+}
+
+async function promote(preview, atPointer) {
   /* Taken before the first await, so a caller reporting on THIS conversation
      reads the view as it stood when the promotion began rather than whatever
      the reader has opened since. */
