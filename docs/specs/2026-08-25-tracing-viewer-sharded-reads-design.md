@@ -83,6 +83,19 @@ Against the median session, that turns a 171 MB response into 50 KB.
 
 ## The constraint that decides the design
 
+**Narrowed by a later change.** The constraint below holds for a span that
+carries a `session.key`: which `session.id` that key belongs to is a fact about
+the corpus rather than about the span, and the election is what settles it. A
+span carrying *neither* an id nor a key is a different population -- a cron
+heartbeat, a plugin load, a title generated after a turn ended -- and for those
+there is no corpus fact to recover. They are now attributed from the span's own
+`startTime`, to a per-day `background:<day>` session (`backgroundSessionId` in
+`shard-index.js`), which is why they reach the panel at all rather than being
+dropped by every reader keyed on a session id. That derivation had to be
+span-local for the reason this section gives: anything consulting global state
+would let the whole-corpus reader and the per-file index elect different ids for
+the same span.
+
 A span cannot be attributed to a session by looking at the span. Verified on the
 measured store:
 

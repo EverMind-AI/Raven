@@ -400,8 +400,9 @@ def test_trace_owner_resolves_a_trace_to_its_session(tmp_path):
 def test_llm_calls_match_the_whole_corpus_reader(tmp_path):
     logs = tmp_path / "logs"
     call = _span("live-session", "span-call", name="llm.call")
-    # A call the election cannot place in a session. The whole-corpus reader drops
-    # it, so this one has to as well.
+    # A call the election cannot place in a session. It is no longer dropped --
+    # it lands in the derived per-day background session -- and what this test
+    # pins either way is that both readers make the same call about it.
     orphan = {**_span("x", "span-orphan", name="llm.call"), "attributes": {"span.type": "model"}}
     _write_spans(logs / "audit-spans.log", [call, orphan, _span("live-session", "span-tool")])
 
@@ -417,7 +418,7 @@ def test_llm_calls_match_the_whole_corpus_reader(tmp_path):
         if span["name"] == "llm.call"
     )
     assert sorted(entry["span"]["spanId"] for entry in calls) == want
-    assert "span-orphan" not in {entry["span"]["spanId"] for entry in calls}
+    assert "span-orphan" in {entry["span"]["spanId"] for entry in calls}
 
 
 def test_a_stale_sidecar_is_rebuilt_rather_than_trusted(tmp_path):
@@ -613,3 +614,71 @@ def test_python_and_the_viewer_resolve_a_shell_identically(tmp_path):
     assert json.dumps(from_python, ensure_ascii=False, sort_keys=True) == json.dumps(
         from_viewer, ensure_ascii=False, sort_keys=True
     )
+
+
+def _sessionless_span(span_id: str, *, name: str = "llm.call", start: str = "2026-08-01T00:00:00+00:00") -> dict:
+    """What a cron heartbeat or a plugin load writes: real work, no session.
+
+    The writer leaves ``session.id`` and ``session.key`` off entirely, because
+    there is no session -- a timer fired, or the process started up.
+    """
+    span = _span("", span_id, name=name, start=start)
+    span["attributes"] = {"span.type": "model"}
+    return span
+
+
+def _reachable_span_ids(payload: dict) -> set[str]:
+    return {span["spanId"] for session in payload["sessions"] for trace in session["traces"] for span in trace["spans"]}
+
+
+def test_a_span_with_no_session_is_still_reachable(tmp_path):
+    """Work that belongs to no session is still work, and it still has to show.
+
+    A cron heartbeat and a plugin load carry no ``session.id``. Keying the whole
+    payload on a session id drops them, and the drop is silent: a day whose only
+    activity was scheduled reads as a day with no activity at all.
+    """
+    _write_spans(
+        tmp_path / "logs" / "audit-spans.log",
+        [_span("real-session", "span-in-session"), _sessionless_span("span-background")],
+    )
+
+    with _viewer(tmp_path) as port:
+        payload = _get(port, "/api/data")
+
+    reachable = _reachable_span_ids(payload)
+    assert "span-in-session" in reachable
+    assert "span-background" in reachable
+
+
+def test_a_sidecar_from_the_previous_schema_does_not_hide_background_spans(tmp_path):
+    """A sidecar written before background spans were indexed must be rebuilt.
+
+    The index is content the reader trusts instead of re-reading the log, so a
+    change to *what goes into* it is a schema change. Leave ``SCHEMA`` alone and
+    every archive already on disk keeps answering with the old contents -- the
+    fix ships and changes nothing for the history it was written for, which is
+    the silent-history failure ``readSidecar`` is paranoid about.
+    """
+    logs = tmp_path / "logs"
+    archive = logs / "archive" / "2026-08-01" / "audit-spans-2026-08-01-1.log"
+    _write_spans(archive, [_span("real-session", "span-in-session"), _sessionless_span("span-background")])
+    _write_spans(logs / "audit-spans.log", [_span("live-session", "span-live")])
+
+    # /api/sessions is the sharded reader -- the one backed by the sidecar.
+    # /api/data rebuilds from the logs every time and would never notice.
+    with _viewer(tmp_path) as port:
+        assert "background:2026-08-01" in _session_ids(_get(port, "/api/sessions"))
+
+    sidecar = logs / "index" / "archive" / "2026-08-01" / "audit-spans-2026-08-01-1.log.json"
+    assert sidecar.exists(), "a rotated file should have been indexed"
+
+    # Exactly what the previous version left on disk: same log, same size and
+    # mtime, but indexed by a build that had no notion of a background session.
+    index = json.loads(sidecar.read_text(encoding="utf-8"))
+    index["schema"] = 2
+    index["pairs"] = [pair for pair in index["pairs"] if not str(pair.get("id") or "").startswith("background:")]
+    sidecar.write_text(json.dumps(index), encoding="utf-8")
+
+    with _viewer(tmp_path) as port:
+        assert "background:2026-08-01" in _session_ids(_get(port, "/api/sessions"))

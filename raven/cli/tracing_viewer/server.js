@@ -209,7 +209,11 @@ function normalizeSpan(span) {
     failureLabel: failure.failureLabel,
     attributes: attrs,
     events: span.events || [],
-    sessionId: attrs['session.id'] || null,
+    // A span with neither id nor key belongs to no session -- a timer tick, a
+    // plugin load. It gets the same derived per-day session the shard index
+    // gives it, so both readers agree. A span that has a key but no id is left
+    // alone: the identity election resolves that one.
+    sessionId: attrs['session.id'] || (attrs['session.key'] ? null : shardIndex.backgroundSessionId(span.startTime)),
     sessionKey: attrs['session.key'] || null,
     agentId: attrs['agent.id'] || null,
     workspaceDir: attrs['workspace.dir'] || null,
@@ -1018,9 +1022,10 @@ function buildLlmCalls(windowKey) {
       .filter(Boolean);
     for (const span of spans) {
       if (cutoff !== null && (parseTime(span.startTime) || 0) < cutoff) continue;
-      // A call the election could not attribute to a session is dropped, as the
-      // whole-corpus reader drops it: there is nowhere in a session-oriented view
-      // to show it, and on the measured store there are 34,644 of them.
+      // Narrower than it reads: a call with no session at all now carries a
+      // derived background session, so what is still dropped here is only a
+      // call whose session.key the election could not resolve to an id. The
+      // whole-corpus reader drops exactly the same one.
       if (!span.sessionId) continue;
       const row = sessionByPair.get(span.sessionId);
       calls.push({
