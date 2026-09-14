@@ -92,6 +92,15 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- An on-call campaign bills only its own runs. Campaigns of one task usually
+  keep their rounds in one `remote_dir`, and the spend measure walked that
+  directory's `jobs/`, so a later campaign was charged for every earlier one's
+  runs the moment it started: a second-round campaign with a 130-minute budget
+  read 125.6 spent on its first look, 34.6 of it its own, and stopped with 142
+  real minutes unspent. The backend now counts the jobs in the campaign's own
+  ledger (plus what it submitted itself), and `ops_declare` refuses a
+  `remote_dir` a live sibling campaign is still writing rounds into.
+
 - The web file viewer opens a sub-agent's report again. `/file` anchored the
   state-directory fence on the session's working directory whenever the page
   named a session, so the fence exempted `~/.raven/tmp/<channel>` and refused
