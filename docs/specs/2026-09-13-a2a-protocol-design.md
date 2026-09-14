@@ -1,47 +1,54 @@
 # A2A protocol support: the host speaks it, sub-agents do not
 
-Status: design, approved 2026-09-13; outbound shape revised 2026-09-14.
+Status: design, approved 2026-09-14.
 
 ## The gap
 
-Raven has two protocol faces today and both point inward.
+Raven reaches other agents today, but never on a protocol it does not control both ends
+of.
 
-`raven/acp/` serves ACP over stdio, so an editor or a parent raven can drive this
-process. `raven/acp_client/` and `raven/agent/subagent/backends/` reach outward, but
-only to things raven itself launches: a `kind: cli` subprocess, a `kind: acp` child, a
-`kind: openai` Chat Completions endpoint. Every one of those is a process or an endpoint
-raven owns the shape of.
+`raven/acp/` serves ACP over stdio, so an editor or a parent raven can drive this process.
+`raven/acp_client/` and `raven/agent/subagent/backends/` reach the other way, to a `kind:
+cli` subprocess, a `kind: acp` child, or a `kind: openai` endpoint. The first two are
+processes raven starts and holds. The third is genuinely remote, but `openai` is an LLM
+API shape, not an agent-interoperability protocol: there is no agent identity to fetch, no
+declared skills, no task that outlives a request, and no vocabulary for "I need more input
+before I can continue".
 
-What is missing is interoperability with an agent that raven did not build and does not
-launch -- one that speaks a public protocol, lives at a URL, holds its own task state,
-and belongs to someone else's trust domain. A2A is that protocol.
+A2A supplies exactly those. It is how raven talks to an agent that someone else built,
+runs, and secures -- one that publishes what it can do, holds its own task state, and sits
+in a different trust domain. This design adds both faces of it.
 
-One cross-reference, for a reader coming from the registry design of 2026-08-14: its
-deferred `openai` -> `http` + `protocol` rename names A2A as a trigger, but that trigger
-is a second HTTP protocol among the agents raven launches. A2A adds none, so the rename
-stays deferred on its original terms and nothing in `raven/config/schema.py` changes.
+For a reader coming from the registry design of 2026-08-14: its deferred `openai` ->
+`http` + `protocol` rename names A2A as a trigger, but that trigger is a second HTTP
+protocol *among the agents raven launches*. A2A adds none, so the rename stays deferred on
+its original terms and `raven/config/schema.py` is untouched.
 
-## Owner rulings
+## The boundary
 
-**First (2026-09-13): A2A is a host-only protocol face. Sub-agents are reached over ACP
-and speak no A2A in either direction.**
+**A2A is a face of the host agent. Sub-agents are reached over ACP and speak no A2A in
+either direction.**
 
-That is a boundary, not a permission setting. It forecloses a design that otherwise
-looks attractive -- exposing each product in `agents/` as its own A2A endpoint -- and it
-is what keeps A2A and ACP orthogonal rather than competing:
+Serving A2A is the host answering as the agent its Card describes. Calling A2A is one tool
+the host agent holds. Neither is a configured agent entity, and no sub-agent machinery is
+involved on either side.
+
+This is a boundary, not a permission setting. It forecloses a design that otherwise looks
+attractive -- publishing each product in `agents/` as its own A2A endpoint -- and it is
+what keeps the two protocols orthogonal instead of competing:
 
 | | ACP | A2A |
 |---|---|---|
 | Direction | raven orchestrates downward | raven interoperates outward |
 | Transport | stdio, process-level | HTTP, cross-host |
-| Trust | host owns the child's lifecycle | separate trust domain, authenticated |
+| Trust | host owns the child's lifetime | separate trust domain, authenticated |
 | Who holds the face | host **and** sub-agent | host only |
 
-Without the ruling, "how do I call raven-code" would have two answers, and every later
-feature would have to pick one. With it, that question has one answer forever.
+Without it, "how do I call raven-code" would have two answers and every later feature would
+have to pick one. With it, that question has one answer.
 
 ```
-external A2A client --A2A--> host raven <--A2A--> external A2A agent
+external A2A client --A2A--> host raven --A2A--> external A2A agent
                                  |   (the only process holding either A2A face)
                                  +--ACP--> agents/raven-code
                                  +--ACP--> agents/raven-ppt
@@ -52,64 +59,58 @@ external A2A client --A2A--> host raven <--A2A--> external A2A agent
 
 The five products keep `kind: "acp"`. No A2A route to them is added.
 
-**Second (2026-09-14): both A2A faces belong to the host agent itself.** Serving A2A is
-the host answering as the agent its Card describes; calling A2A is one tool the host
-agent holds. Neither is a configured agent entity, and no sub-agent machinery is
-involved in either direction.
-
 ## Protocol version: 1.0 only
 
-A2A 1.0.0 is a restructure of 0.3, not a point release, and the differences are on the
-wire:
+A2A 1.0.0 restructures 0.3 rather than extending it, and the differences are on the wire:
 
 | | 0.3 | 1.0.0 |
 |---|---|---|
-| Agent Card path | `/.well-known/agent.json` | `/.well-known/agent-card.json` |
 | Send | `message/send` | `SendMessage` |
 | Get | `tasks/get` | `GetTask` |
 | Task state | `working` | `TASK_STATE_WORKING` |
 | Task envelope | on `result` | on `result.task` |
 | Version header | absent | `A2A-Version` required |
 
-1.0 layers the spec as a canonical data model (normatively a `.proto`), abstract
-operations, and three bindings -- JSON-RPC, gRPC, HTTP/REST -- which must be
-functionally identical. We implement **the JSON-RPC binding only**.
+The Agent Card path is **not** one of the differences: 0.3 and 1.0 both publish at
+`/.well-known/agent-card.json`. The older `/.well-known/agent.json` belongs to the 2025
+drafts before 0.3, and appears here only because the rejected `pya2a` still serves it.
 
-The spec defines an absent `A2A-Version` header to mean 0.3. A 1.0-only server therefore
-has to answer header-less requests deliberately: we return `VersionNotSupportedError`
-rather than guessing a dialect. No 0.3 compatibility layer is built.
+1.0 layers the spec as a canonical data model (normatively a `.proto`), abstract
+operations, and three bindings -- JSON-RPC, gRPC, HTTP/REST -- which must be functionally
+identical. We implement **the JSON-RPC binding only**.
+
+The spec defines an absent `A2A-Version` header to mean 0.3, so a 1.0-only server has to
+answer header-less requests deliberately rather than by accident: we return
+`VersionNotSupportedError`. No 0.3 compatibility layer is built.
 
 ## Dependency: `a2a-sdk`
 
-Decided after measuring three candidates against this repo.
+**`pya2a` is rejected.** It is a 2025-04-15 package at 0.1.1, two releases total, and it
+fails on four independent counts:
 
-**`pya2a` is rejected.** It is a 2025-04-15 package at 0.1.1 with two releases total, and
-it fails on four independent counts:
-
-- it implements the original April-2025 draft (`tasks/send`, `tasks/sendSubscribe`,
-  `/.well-known/agent.json`), predating even 0.2's `message/send` -- two major versions
-  behind the target;
+- it serves the pre-0.3 draft -- `tasks/send`, `tasks/sendSubscribe`,
+  `tasks/pushNotification/set`, and the old `/.well-known/agent.json` -- with no
+  `message/send` anywhere, so it is two protocol generations behind the target;
 - it carries no `A2A-Version`, no `TASK_STATE_*`, and no `supportedInterfaces`;
-- it pins `starlette>=0.27,<1.0` against this repo's `starlette>=1.3.1`, which resolves
-  as unsatisfiable, and `cryptography<42.0.0` against a lock holding 48.0.1;
-- it installs into the top-level package name `a2a` -- the same name the official SDK
-  uses -- overlapping on five core paths including `a2a/__init__.py` and
-  `a2a/client/client.py`, so installing both silently clobbers one with no installer
-  error. Its own default install cannot be imported at all: `a2a/__init__.py`
-  unconditionally imports `a2a.server`, which imports `starlette`, which the package
-  declares only under an optional extra.
+- it pins `starlette>=0.27,<1.0` and `cryptography<42.0.0`. This repo floors starlette at
+  1.3.1 (a `[tool.uv]` constraint, since nothing here imports starlette directly) and
+  resolves cryptography at 48.0.1, so `pya2a[server]` is unsatisfiable here, by resolver
+  output rather than by inspection;
+- it installs into the top-level package name `a2a`, the same name the official SDK uses,
+  overlapping on five paths including `a2a/__init__.py` and `a2a/client/client.py`.
+  Installing both silently clobbers one with no installer error. Its own default install
+  cannot be imported at all: `a2a/__init__.py` unconditionally imports `a2a.server`, which
+  imports `starlette`, which the package declares only under an optional extra.
 
 **`a2a-sdk` 1.1.2 is adopted**, with its cost stated rather than hidden. Its object model
-is protobuf (`AgentCard`, `Task` and `Message` are `a2a_pb2` messages, not Pydantic
-models), which is foreign to a repo whose config and contracts are Pydantic throughout;
-conversion therefore happens at our boundary, not inside it. The base install adds five
-packages to the lock: `protobuf`, `google-api-core`, `googleapis-common-protos`,
-`json-rpc`, `culsans`.
+is protobuf -- `AgentCard`, `Task` and `Message` are `a2a_pb2` messages, not Pydantic
+models -- which is foreign to a repo whose config and contracts are Pydantic throughout, so
+conversion happens at our boundary. The base install adds five packages to the lock:
+`protobuf`, `google-api-core`, `googleapis-common-protos`, `json-rpc`, `culsans`.
 
-What it buys is the part worth buying. `RequestHandler` is eleven protocol methods,
-already implemented by `DefaultRequestHandler` over a task store, an event queue and a
-streaming aggregator. What we implement against it is `AgentExecutor`, which is two
-methods:
+What it buys is the part worth buying. `RequestHandler` is eleven protocol methods, already
+implemented by `DefaultRequestHandler` over a task store, an event queue and a streaming
+aggregator. What we implement against it is `AgentExecutor`, which is two:
 
 ```
 execute(context: RequestContext, event_queue: EventQueue) -> None
@@ -121,11 +122,14 @@ raven turn".
 
 ## Transport binding: our own aiohttp routes, deliberately temporary
 
-The SDK's server half is written for ASGI, and this gateway is aiohttp. The coupling is
-separable: `starlette` and `fastapi` appear only under `a2a/server/routes/` and
-`a2a/compat/v0_3/`, while the four core packages -- `request_handlers`,
-`agent_execution`, `tasks`, `events` -- import cleanly in an environment with no
-starlette, no fastapi and no grpc installed.
+The SDK's server half is written for ASGI and this gateway is aiohttp, but the coupling is
+optional rather than structural. `a2a/server/routes/` and `a2a/compat/v0_3/` import
+starlette and fastapi directly; `a2a/utils/error_handlers.py` and `a2a/utils/proto_utils.py`
+reference starlette types under `TYPE_CHECKING` with a runtime `try/except ImportError`
+that falls back to `Any`. Nothing else mentions either. The four core packages --
+`request_handlers`, `agent_execution`, `tasks`, `events` -- import cleanly in a venv with
+no starlette, no fastapi and no grpc, which is how this was established rather than by
+reading the imports.
 
 So the binding layer is ours and the logic is not:
 
@@ -139,29 +143,28 @@ aiohttp routes (ours)        ->  RequestHandler, 11 methods (SDK)
                                  one raven turn
 ```
 
-This file is written to be deleted. The SDK already ships
-`add_a2a_routes_to_fastapi()`, `create_jsonrpc_routes()` and
-`create_agent_card_routes()`; if the gateway is ever moved to starlette/fastapi, the
-migration for A2A is dropping `routes_aiohttp.py` and calling those instead. No A2A
-logic moves.
+`routes_aiohttp.py` is written to be deleted. The SDK ships
+`add_a2a_routes_to_fastapi()`, `create_jsonrpc_routes()` and `create_agent_card_routes()`;
+if the gateway ever moves to starlette/fastapi, the A2A migration is dropping that file and
+calling those. No A2A logic moves.
 
-That migration is not in this change, and the reason is sequencing: a protocol feature
-should not sit behind a whole-repo web-stack rewrite. It is nonetheless cheaper than it
-looks, which is why the binding is isolated rather than spread. The server-side aiohttp
-surface is six files and roughly eighty call sites, concentrated in
-`raven/rpc/transports/ws.py` (539 lines, 46 of them), and that file uses only
-conventional API -- `web.Request`, `web.Response`, `web.WebSocketResponse`,
-`web.json_response`, `web.FileResponse` and a set of HTTP exception classes -- each with
-a direct starlette equivalent. The whole ASGI stack is already resolved in the lock
-(`fastapi` 0.137.1 by way of `everos`, `starlette` 1.3.1, `sse-starlette` 3.4.1,
-`uvicorn` 0.46.0) and no file under `raven/` or `bridge/` imports any of it.
+That migration is not in this change: a protocol feature should not sit behind a whole-repo
+web-stack rewrite. It is nonetheless cheaper than it looks, which is the reason to isolate
+the binding rather than spread it. The server-side aiohttp surface is six files and roughly
+eighty call sites, concentrated in `raven/rpc/transports/ws.py` (539 lines, 46 of them),
+and that file uses only conventional API -- `web.Request`, `web.Response`,
+`web.WebSocketResponse`, `web.json_response`, `web.FileResponse`, and a set of HTTP
+exception classes -- each with a direct starlette equivalent. The whole ASGI stack is
+already resolved in the lock (`fastapi` 0.137.1 by way of `everos`, `starlette` 1.3.1,
+`sse-starlette` 3.4.1, `uvicorn` 0.46.0) while no file under `raven/` or `bridge/` imports
+any of it.
 
-Three things make that migration non-trivial when it comes, and they are recorded here so
-whoever does it does not rediscover them: `ws.py` carries the browser auth bootstrap
-(one-time nonce, HttpOnly SameSite=Strict cookie, Origin check, `X-Raven-Token`) and is
-security code, not mechanical translation; `raven web` depends on an `AppRunner`/`TCPSite`
-process shape that becomes a `uvicorn.Server`; and the remaining five aiohttp files use
-it as an HTTP *client*, so the dependency stays either way.
+Three things make that migration non-trivial when it comes, recorded so whoever does it
+does not rediscover them: `ws.py` carries the browser auth bootstrap (one-time nonce,
+HttpOnly SameSite=Strict cookie, Origin check, `X-Raven-Token`) and is security code, not
+mechanical translation; `raven web` depends on an `AppRunner`/`TCPSite` process shape that
+becomes a `uvicorn.Server`; and five other files use aiohttp as an HTTP *client*, so the
+dependency stays either way.
 
 ## Module layout
 
@@ -171,6 +174,8 @@ Named for symmetry with the ACP pair that already exists.
 raven/a2a/               inbound -- the server face
   card.py                Agent Card construction
   executor.py            AgentExecutor: an A2A task becomes one raven turn
+  lifecycle.py           raven turn states -> TaskState; questions -> INPUT_REQUIRED
+  auth.py                authenticating the caller
   routes_aiohttp.py      JSON-RPC dispatch + A2A-Version; deleted on migration
   gate.py                sub-agent refusal
 raven/a2a_client/        outbound -- the client face
@@ -187,101 +192,183 @@ the existing "the served surfaces do not import the launcher" rule that already 
 
 `DefaultRequestHandler` from the SDK, driven by our `AgentExecutor`.
 
-The Agent Card is served at `/.well-known/agent-card.json` and declares a single entry in
-`supportedInterfaces` -- the JSON-RPC binding, `protocolVersion: "1.0"`. Skills are
-derived from what the host can actually do, never hand-written, following the rule the
-registry design already set for capabilities: derived in one place, because hand-filled
-capability fields are wrong on some agent by construction.
+### The Agent Card
 
-Mounting is opt-in and off by default, in two hostings:
+Served at `/.well-known/agent-card.json`, declaring one entry in `supportedInterfaces` --
+the JSON-RPC binding at `protocolVersion: "1.0"` -- plus `capabilities`, `skills` and the
+`securitySchemes` the next section enforces.
+
+`capabilities` is four fields (`streaming`, `push_notifications`, `extensions`,
+`extended_agent_card`) and each is answered by what this build actually does, never
+optimistically: `push_notifications` is false because it is out of scope below, and
+`streaming` is true per the Streaming section.
+
+Skills are derived from what the host can do rather than hand-written, following the rule
+the registry design set for capability fields: derived in one place, because a hand-filled
+field is wrong on some agent by construction.
+
+### Authenticating the caller
+
+An A2A endpoint is a network face for other people's agents, so it authenticates them.
+The Card advertises the scheme under `securitySchemes`; the protobuf admits five
+(`api_key`, `http_auth`, `oauth2`, `open_id_connect`, `mtls`), and this build implements
+one -- a bearer token in the `Authorization` header, declared as `http_auth`.
+
+The token is configured, never minted per caller: there is no enrolment flow here, and
+inventing one would be a larger design than the protocol face itself. An unauthenticated
+request is refused before it reaches `AgentExecutor`, so a turn is never started by an
+unknown caller.
+
+This deliberately does not reuse the `/rpc` cookie. That cookie authenticates *this user's
+browser* to their own gateway, and its bootstrap mints a nonce for a human to click; an
+A2A caller is a program in another trust domain with no browser and no user. Sharing one
+credential between them would make either face's compromise the other's.
+
+### Task lifecycle, and a turn that needs the user
+
+One A2A task maps to one raven turn. `TaskState` moves `TASK_STATE_SUBMITTED` ->
+`TASK_STATE_WORKING` -> `TASK_STATE_COMPLETED`, with `TASK_STATE_FAILED` on a raised turn
+and `TASK_STATE_CANCELED` from `cancel()`.
+
+The interesting state is `TASK_STATE_INPUT_REQUIRED`, and it is why this section exists.
+A raven turn can stop and ask -- that is `AskUserTool`, and over ACP it goes out as
+`session/request_permission` on the caller's own wire. A2A models the same thing natively:
+the task parks in `INPUT_REQUIRED` and the caller resumes it by sending another message
+against the same task id. So an inbound A2A question parks the task rather than blocking a
+request thread, and rather than timing out against a caller that was never going to answer
+a protocol it was not asked.
+
+A task in a terminal state is not restartable; a message sent against one is an error, per
+the spec.
+
+### Streaming
+
+`SendStreamingMessage` and `SubscribeToTask` are implemented, and `capabilities.streaming`
+is therefore true. The cost is small -- `DefaultRequestHandler` already aggregates the
+event queue, and the aiohttp side is an SSE response -- and the alternative is that every
+caller polls `GetTask` through turns that routinely run for minutes.
+
+### Mounting
+
+Opt-in and off by default, in two hostings:
 
 - a config flag mounts it on the running gateway, sharing that port and lifecycle;
 - `raven a2a serve` runs it standalone for a headless deployment.
 
-Default-off is a security position, not caution. The `/rpc` WebSocket is a local,
-token-guarded surface for this user's own page; an A2A endpoint is a network face for
-other people's agents. Running `raven web` must not silently open the second one.
+Default-off is a security position, not caution. Running `raven web` must not silently open
+a second, differently-authenticated network face.
 
 ## Outbound
 
 One tool on the host agent, taking an Agent Card URL and a message.
 
-Configuration is a section of its own, `a2a`, holding the inbound switch and a list of
-trusted peers keyed by origin. A peer entry carries an origin and its credentials -- raven
-neither starts an A2A peer nor holds its lifetime, so there is nothing else to declare.
+Configuration is a section of its own, `a2a`, holding the inbound switch and its token, and
+a list of trusted peers keyed by origin. A peer entry carries an origin and its credentials
+-- raven neither starts an A2A peer nor holds its lifetime, so there is nothing else to
+declare.
 
-**The model never sees a credential.** It passes a URL; the client layer matches the
-origin against the trusted list and attaches whatever that peer's Agent Card declares
-under `securitySchemes` (API key, HTTP auth, OAuth2, OIDC, mTLS). An origin absent from
-the list is called unauthenticated or refused, per that section's policy -- it is never
-an invitation for the model to supply a secret itself.
+**The model never sees a credential.** It passes a URL; the client layer matches the origin
+against the trusted list and attaches what that peer's Card declares. An origin absent from
+the list is called unauthenticated or refused, per that section's policy -- never an
+invitation for the model to supply a secret itself.
 
 A peer's capabilities are read from its fetched Card rather than declared in config, for
-the reason the registry design gives about capability fields generally: under one protocol
-different agents disagree, so a hand-filled field is guaranteed wrong on some agent.
+the same derive-once reason.
 
-One limit worth stating plainly: the model learns that a peer exists from the trusted-peer
-list or from the user naming it in the turn. Nothing advertises a peer's skills into the
-turn unprompted. Whether that should change is a question for after there are real peers
-to route between.
+One limit worth stating plainly: the model learns a peer exists from the trusted-peer list
+or from the user naming it in the turn. Nothing advertises a peer's skills into the turn
+unprompted. Whether that should change is a question for after there are real peers to
+route between.
+
+## Errors
+
+The SDK's error types are the vocabulary, and the mapping is fixed here so two
+implementers do not each invent one:
+
+| Condition | A2A error |
+|---|---|
+| Missing or unsupported `A2A-Version` | `VersionNotSupportedError` |
+| Unknown task id on `GetTask` / `CancelTask` | `TaskNotFoundError` |
+| Message against a terminal task | `TaskNotCancelableError` / `InvalidRequestError` per operation |
+| A part type this build cannot read | `ContentTypeNotSupportedError` |
+| Push-notification methods (out of scope) | `PushNotificationNotSupportedError` |
+| A raven turn that raised | `InternalError`, with the cause logged and **not** returned |
+
+The last row is the one with a rule behind it: a turn's traceback can carry file paths,
+prompt fragments and tool output, and the caller is in another trust domain. The task's
+status message says the turn failed; the detail stays in this host's logs.
 
 ## The gate
 
-The ruling has two halves and they need different enforcement, because only one of them
-passes through the tool registry.
+The boundary has two halves and they need different enforcement, because only one passes
+through the tool registry.
 
-**Outbound: the tool joins `WITHHELD_FROM_SUBAGENT`.** It is a route to another agent
-that does not pass through `spawn`, which is exactly the shape `load_playbook` already
-has -- a third route to a graph, withheld by name for that reason. So the A2A tool is
-withheld by name too, and is not registered at all in a sub-agent process rather than
-hidden from the schema, because hiding leaves a tool reachable through `tool_call`.
+**Outbound: the tool joins `WITHHELD_FROM_SUBAGENT`.** It is a route to another agent that
+does not pass through `spawn` -- exactly the shape `load_playbook` has, which `role.py`
+records as a third route to a graph beside `spawn` and `run_subagent_dag`, withheld by name
+for that reason. So the A2A tool is withheld by name too,
+and is not registered at all in a sub-agent process rather than hidden from the schema,
+because hiding leaves a tool reachable through `tool_call`.
 
-The cost is one frozenset entry, and it is guarded the moment it is added:
+The cost is one frozenset entry, guarded the moment it is added:
 `tests/test_agent_loop_subagent_role.py` holds that set in both directions, failing on a
 withheld name nothing registers as loudly as on a withheld name the gates let through.
 
-**Inbound needs a new gate**, because serving a port does not go through the registry.
-Both hostings refuse to start when `is_subagent_process()` is true, and say why. The
-signal is the existing `RAVEN_SUBAGENT` environment variable: the host merges
-`subagent_role_env()` into every `kind: acp` child it launches, all five products in
-`agents/` are `kind: acp`, and none of them overrides the variable in `config.json`,
-`subagent.json` or `.env` -- so the seam already covers them, and covers any future
-product for free.
+**Inbound: both hostings refuse to start** when `is_subagent_process()` is true, and say
+why. Serving a port does not pass through the registry, so this gate is new code. The
+signal is the existing `RAVEN_SUBAGENT` variable: the host merges `subagent_role_env()`
+into every `kind: acp` child it launches, all five products in `agents/` are `kind: acp`,
+and none overrides the variable in `config.json`, `subagent.json` or `.env` -- so the seam
+already covers them, and covers a future product for free.
 
 ## Tests
 
-`tests/test_agent_loop_subagent_role.py` already holds the sub-agent rule in both
-directions: it fails on a withheld name that nothing registers, and on a withheld name
-the gates let through. Two assertions join it:
+Sub-agent rule, joining the two directions `tests/test_agent_loop_subagent_role.py`
+already enforces:
 
-- the A2A tool is in the withheld set, so both existing directions of that file's check
-  now cover it: it must be registered on the host and absent in a sub-agent process;
-- both A2A server hostings refuse to start under `RAVEN_SUBAGENT=1`.
+- the A2A tool is registered on the host and absent in a sub-agent process;
+- both server hostings refuse to start under `RAVEN_SUBAGENT=1`.
 
-Protocol conformance is tested against the SDK's own client, which is the closest thing
-to a second implementation available: card fetch, `SendMessage`, `GetTask`, `CancelTask`,
-and a header-less request answering `VersionNotSupportedError`.
+Protocol conformance, driven by the SDK's own client -- the closest thing to a second
+implementation available: card fetch, `SendMessage`, `GetTask`, `CancelTask`, a streaming
+subscription, and a header-less request answering `VersionNotSupportedError`.
+
+Two that guard the decisions most likely to erode:
+
+- an unauthenticated request is refused **before** `AgentExecutor` runs, asserted by the
+  executor not having been entered rather than by the status code alone;
+- a turn that raises returns `InternalError` whose payload carries no traceback text.
+
+Lifecycle: a turn that asks a question parks the task in `TASK_STATE_INPUT_REQUIRED` and a
+second message against that task id resumes the same turn.
 
 ## Deliberately out of scope
 
 - the gRPC and HTTP/REST bindings -- JSON-RPC only;
 - push notification configuration (four of the eleven `RequestHandler` methods);
 - a 0.3 compatibility layer;
+- per-caller credentials or any enrolment flow: one configured bearer token;
 - migrating `raven serve` to starlette/fastapi;
 - advertising peer skills into the turn, so the model can pick a peer unprompted.
 
 ## Evidence
 
-Measured 2026-09-13 unless stated.
+Measured 2026-09-13 and 2026-09-14 against `a2a-sdk` 1.1.2 and `pya2a` 0.1.1 installed in
+isolated environments, and against this repo at `origin/main`.
 
 | Claim | How it was checked |
 |---|---|
-| A2A 1.0.0 wire shape | the published specification and its method-mapping table |
-| `TASK_STATE_*` has nine values | enumerated from the installed SDK's protobuf enum |
+| 1.0 method names, bindings, version header | the published specification and its method-mapping table |
+| `TASK_STATE_*` has nine values | enumerated from the SDK's protobuf enum |
+| task rides `result.task` in 1.0 | `SendMessageResponse` descriptor fields are `task`, `message` |
+| card path is `agent-card.json` for both 0.3 and 1.0 | the SDK serves both dialects and contains no other well-known path |
+| `capabilities` / `securityScheme` field sets | protobuf descriptors for `AgentCapabilities` and `SecurityScheme` |
 | SDK core needs no ASGI | `request_handlers`, `agent_execution`, `tasks`, `events` imported in a venv with no starlette/fastapi/grpc |
+| the two `utils` files degrade rather than require | `TYPE_CHECKING` plus `try/except ImportError` falling back to `Any` |
 | SDK types are protobuf | `type(AgentCard)` is `google._upb._message.MessageMeta` |
 | `pya2a` name collision | five overlapping paths between the two `RECORD` manifests |
-| `pya2a` unsatisfiable here | resolver output against `starlette>=1.3.1` |
+| `pya2a` unsatisfiable here | uv resolver output against `starlette>=1.3.1` |
 | ASGI stack already locked | `fastapi` 0.137.1, `starlette` 1.3.1, `sse-starlette` 3.4.1, `uvicorn` 0.46.0 present; zero importers under `raven/` and `bridge/` |
 | aiohttp server surface | six files, ~84 `web.` sites, 46 in `ws.py` |
-| all five products inherit the gate | every `agents/*/subagent.json` is `kind: acp`; no override of `RAVEN_SUBAGENT` in any product's config, roster row or env file |
+| a served raven already has a question path | ACP sends `session/request_permission` on the caller's wire |
+| all five products inherit the gate | every `agents/*/subagent.json` is `kind: acp`; no `RAVEN_SUBAGENT` override in any product's config, roster row or env file |
