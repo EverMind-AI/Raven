@@ -81,7 +81,7 @@ and re-measure if the pinned version moves.
 uv add a2a-sdk
 ```
 
-Expected: `pyproject.toml` gains `a2a-sdk>=1.1.2` and `uv.lock` gains five packages -- `protobuf`, `google-api-core`, `googleapis-common-protos`, `json-rpc`, `culsans`.
+Expected (measured): `pyproject.toml` gains `a2a-sdk>=1.1.2` and `uv.lock` gains **thirteen** entries -- `a2a-sdk`, the direct `protobuf`, `google-api-core`, `googleapis-common-protos`, `json-rpc`, `culsans`, and the transitive `google-auth`, `opentelemetry-api`, `proto-plus`, `pyasn1`, `pyasn1-modules`, `wrapt`, `aiologic`. Nothing is removed or downgraded; if anything is, stop and report it.
 
 - [ ] **Step 2: Verify the SDK core imports without an ASGI stack**
 

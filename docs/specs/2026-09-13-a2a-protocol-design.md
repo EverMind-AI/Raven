@@ -105,8 +105,13 @@ fails on four independent counts:
 **`a2a-sdk` 1.1.2 is adopted**, with its cost stated rather than hidden. Its object model
 is protobuf -- `AgentCard`, `Task` and `Message` are `a2a_pb2` messages, not Pydantic
 models -- which is foreign to a repo whose config and contracts are Pydantic throughout, so
-conversion happens at our boundary. The base install adds five packages to the lock:
-`protobuf`, `google-api-core`, `googleapis-common-protos`, `json-rpc`, `culsans`.
+conversion happens at our boundary. Installing it adds **thirteen** entries to the lock,
+not the five its own metadata lists: the direct five (`protobuf`, `google-api-core`,
+`googleapis-common-protos`, `json-rpc`, `culsans`) plus `a2a-sdk` itself and the transitive
+`google-auth`, `opentelemetry-api`, `proto-plus`, `pyasn1`, `pyasn1-modules`, `wrapt`,
+`aiologic`. Nothing is removed or downgraded. The five-package figure in an earlier draft of
+this document counted only declared dependencies and understated the real footprint --
+`opentelemetry-api` and `google-auth` in particular are not obvious from the metadata.
 
 What it buys is the part worth buying. `RequestHandler` is eleven protocol methods, already
 implemented by `DefaultRequestHandler` over a task store, an event queue and a streaming
