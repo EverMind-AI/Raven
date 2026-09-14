@@ -231,12 +231,22 @@ One A2A task maps to one raven turn. `TaskState` moves `TASK_STATE_SUBMITTED` ->
 and `TASK_STATE_CANCELED` from `cancel()`.
 
 The interesting state is `TASK_STATE_INPUT_REQUIRED`, and it is why this section exists.
-A raven turn can stop and ask -- that is `AskUserTool`, and over ACP it goes out as
+A raven turn can ask -- that is `AskUserTool`, and over ACP it goes out as
 `session/request_permission` on the caller's own wire. A2A models the same thing natively:
-the task parks in `INPUT_REQUIRED` and the caller resumes it by sending another message
-against the same task id. So an inbound A2A question parks the task rather than blocking a
-request thread, and rather than timing out against a caller that was never going to answer
-a protocol it was not asked.
+the task reports `INPUT_REQUIRED` and the caller sends another message against the same
+task id.
+
+The mechanism underneath is worth stating exactly, because the protocol's wording invites
+the wrong one. **The turn never stops.** `AskUserTool` sets `blocking_interaction = True`
+and awaits `QuestionResponder.await_question`, so the turn's coroutine stays alive holding
+a future. Nothing is suspended, serialised or replayed. What the second message does is
+resolve that future -- so "resuming a task", on this side, is answering a turn that was
+running the whole time, and the A2A face keeps the coroutine in the background while the
+HTTP request returns.
+
+That costs nothing structural, because `QuestionResponder` is a **structural Protocol** and
+every transport already brings its own broker: the TUI has one, the gateway has one, and
+A2A adds a third. `AskUserTool` is untouched.
 
 A task in a terminal state is not restartable; a message sent against one is an error, per
 the spec.
@@ -371,4 +381,6 @@ isolated environments, and against this repo at `origin/main`.
 | ASGI stack already locked | `fastapi` 0.137.1, `starlette` 1.3.1, `sse-starlette` 3.4.1, `uvicorn` 0.46.0 present; zero importers under `raven/` and `bridge/` |
 | aiohttp server surface | six files, ~84 `web.` sites, 46 in `ws.py` |
 | a served raven already has a question path | ACP sends `session/request_permission` on the caller's wire |
+| a turn does not suspend to ask | `AskUserTool` sets `blocking_interaction = True` and awaits `broker.await_question`, holding a future |
+| every transport brings its own broker | `QuestionResponder` at `raven/contracts/asking.py:58` is a structural `Protocol` |
 | all five products inherit the gate | every `agents/*/subagent.json` is `kind: acp`; no `RAVEN_SUBAGENT` override in any product's config, roster row or env file |
