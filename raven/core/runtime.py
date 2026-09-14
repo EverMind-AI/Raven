@@ -218,6 +218,7 @@ def build_runtime(
             plugin_tools=plugin_tools,
             plugin_tool_gates=plugin_tool_gates,
             deliverables=deliverables,
+            a2a_config=config.a2a,
         ),
         subagents=SubagentWiring(
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,

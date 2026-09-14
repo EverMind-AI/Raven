@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from raven.a2a_client.tool import A2aTool
 from raven.acp_client.asker import held_question
 from raven.agent.loop._shared import (
     SEARCH_PROVIDERS,
@@ -1006,10 +1007,14 @@ class WiringMixin:
         """Every tool that hands work to another agent, or steers a hand-off already running.
 
         Grouped into one method so the sub-agent gate has a single place to
-        refuse, rather than a condition repeated over five registrations that a
-        sixth would quietly not get.
+        refuse, rather than a condition repeated over six registrations that a
+        seventh would quietly not get.
         """
         self.tools.register(SpawnTool(manager=self.subagents))
+        # Outbound A2A: hands work to an external agent rather than one this
+        # process manages, but it is still a hand-off this method's gate must
+        # cover -- see raven.agent.subagent.role.WITHHELD_FROM_SUBAGENT.
+        self.tools.register(A2aTool(self.a2a_config))
         # Sub-agent DAG orchestration. Registered unconditionally now that
         # the agent table always holds the package's built-in rows: the tool used
         # to be gated on an enabled third-party entry existing, because without one
