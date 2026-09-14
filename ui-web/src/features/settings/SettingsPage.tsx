@@ -30,20 +30,10 @@ import type { JSX, ReactNode, RefObject } from 'react'
    changing" -- myself, the agent, or the machine it runs on. */
 const SET_GROUPS: Array<{ key: string; pages: Array<[string, string]> }> = [
   {
-    key: 'gui.set.grp.me',
-    pages: [
-      ['usage', 'gui.set.pg.usage'],
-      ['look', 'gui.set.pg.look'],
-      ['notify', 'gui.set.pg.notify'],
-      ['keys', 'gui.set.pg.keys'],
-      ['about', 'gui.set.pg.about'],
-    ],
-  },
-  {
     key: 'gui.set.grp.agent',
     pages: [
-      ['defaults', 'gui.set.pg.defaults'],
       ['model', 'gui.set.pg.model'],
+      ['defaults', 'gui.set.pg.defaults'],
       ['perm', 'gui.set.pg.perm'],
       ['toolset', 'gui.set.pg.toolset'],
       ['memory', 'gui.set.pg.memory'],
@@ -56,6 +46,16 @@ const SET_GROUPS: Array<{ key: string; pages: Array<[string, string]> }> = [
       ['exec', 'gui.set.pg.exec'],
       ['channel', 'gui.set.pg.channel'],
       ['data', 'gui.set.pg.data'],
+    ],
+  },
+  {
+    key: 'gui.set.grp.me',
+    pages: [
+      ['usage', 'gui.set.pg.usage'],
+      ['look', 'gui.set.pg.look'],
+      ['notify', 'gui.set.pg.notify'],
+      ['keys', 'gui.set.pg.keys'],
+      ['about', 'gui.set.pg.about'],
     ],
   },
 ]
@@ -325,9 +325,9 @@ function HostInput({
   )
 }
 
-function Scard({ title, desc, children }: { title?: string; desc?: string; children?: ReactNode }): JSX.Element {
+function Scard({ title, desc, children, className }: { title?: string; desc?: string; children?: ReactNode; className?: string }): JSX.Element {
   return (
-    <div className="scard">
+    <div className={className ? "scard " + className : "scard"}>
       {(title || desc) && (
         <div className="ch">
           {title && <div className="t">{title}</div>}
@@ -1897,11 +1897,14 @@ function PinRow({
   const provider = String(V(s.snap.raw, providerKey, '') || '')
   const groups = s.snap.providers
     .filter((p) => p.on)
-    .map((p) => ({ p, models: (p.configured ?? p.models).filter((m) => kindOf(p.labels?.[m]) === kind) }))
+    .map((p) => ({
+      p,
+      models: (p.configured?.length ? p.configured : p.models).filter((m) => kindOf(p.labels?.[m]) === kind),
+    }))
     .filter((g) => g.models.length)
   const current = model && provider ? `${provider}::${model}` : ''
   return (
-    <Scard title={title} desc={note}>
+    <Scard className="inline" title={title} desc={note}>
       {groups.length ? (
         <select
           className="mini"
@@ -1940,7 +1943,7 @@ function PinRow({
 function PaintRow({ s }: { s: SettingsState }): JSX.Element {
   const [nl, say] = useNl()
   return (
-    <Scard title={t('gui.set.dm.paint')} desc={t('gui.set.dm.paint_note')}>
+    <Scard className="inline" title={t('gui.set.dm.paint')} desc={t('gui.set.dm.paint_note')}>
       <ImageModelPicker
         model={String(V(s.snap.raw, 'tools.media.image.model', ''))}
         quality={Vnull(s.snap.raw, 'tools.media.image.quality', undefined) as string | undefined}
@@ -1955,7 +1958,7 @@ function DefaultsPage({ s }: { s: SettingsState }): JSX.Element {
   const [nl, say] = useNl()
   return (
     <>
-      <Scard title={t('gui.set.dm.agent')} desc={t('gui.set.dm.agent_note')}>
+      <Scard className="inline" title={t('gui.set.dm.agent')} desc={t('gui.set.dm.agent_note')}>
         <button
           className="mini ghost pickm"
           onClick={(e) => {

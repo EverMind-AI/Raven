@@ -159,6 +159,12 @@ describe('settings island', () => {
     expect(screen.getByText('gui.set.grp.me')).toBeTruthy()
     expect(screen.getByText('gui.set.grp.agent')).toBeTruthy()
     expect(screen.getByText('gui.set.grp.env')).toBeTruthy()
+    expect([...document.querySelectorAll('#snavList .grp')].map((group) => group.textContent)).toEqual([
+      'gui.set.grp.agent',
+      'gui.set.grp.env',
+      'gui.set.grp.me',
+    ])
+    expect(document.querySelector<HTMLButtonElement>('#snavList .sitem')?.textContent).toContain('gui.set.pg.model')
     const cur = document.querySelector('#snavList [aria-current="true"]')!
     expect(cur.textContent).toContain('gui.set.pg.usage')
     expect(document.getElementById('setTitle')!.textContent).toBe('gui.set.pg.usage')
@@ -1280,13 +1286,14 @@ async function openImageSettings() {
 describe('default model pins', () => {
   /* One provider offering all three kinds, so a slot showing the wrong one is
      a visible failure rather than an empty list that could mean anything. */
-  const pinsnap = () =>
+  const pinsnap = (over: Partial<SettingsSnapshot> = {}) =>
     snap({
       providers: [
         {
           id: 'openai',
           name: 'OpenAI',
           models: ['gpt-5.5', 'text-embedding-3-large', 'gpt-image-2'],
+          configured: [],
           on: true,
           kind: 'api_key',
           labels: {
@@ -1297,6 +1304,7 @@ describe('default model pins', () => {
         },
         { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-4-5'], on: false, kind: 'api_key' },
       ],
+      ...over,
     })
 
   const openDefaults = async (over = pinsnap()) => {
@@ -1320,6 +1328,13 @@ describe('default model pins', () => {
     expect(optionsOf('gui.set.dm.translate')).toEqual(['gui.set.dm.inherit', 'gpt-5.5'])
   })
 
+  it('lays out default model copy on the left and controls on the right', async () => {
+    await openDefaults()
+    expect(document.querySelector('.pickm')?.closest('.scard')?.classList.contains('inline')).toBe(true)
+    for (const label of ['gui.set.dm.quick', 'gui.set.dm.translate', 'gui.caps.image_model', 'gui.set.dm.embed']) {
+      expect(screen.getByLabelText(label).closest('.scard')?.classList.contains('inline')).toBe(true)
+    }
+  })
   it('writes both halves of a pin, model and provider', async () => {
     const { calls } = await openDefaults()
     await act(async () => {
@@ -1332,6 +1347,33 @@ describe('default model pins', () => {
     expect(calls).toEqual([
       ['set', { key: 'knowledge.embeddingModel', value: 'text-embedding-3-large' }],
       ['set', { key: 'knowledge.embeddingProvider', value: 'openai' }],
+    ])
+  })
+
+  it('restores the previous model when the provider half fails', async () => {
+    const data = pinsnap({ raw: { knowledge: { embeddingModel: 'openai/old', embeddingProvider: 'openai' } } })
+    const calls: Array<[string, unknown]> = []
+    install(data, {
+      set: async (key, value) => {
+        calls.push(['set', { key, value }])
+        if (key === 'knowledge.embeddingProvider') throw { handled: true }
+        return data
+      },
+    })
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.defaults').click()
+    })
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('gui.set.dm.embed'), {
+        target: { value: 'openai::text-embedding-3-large' },
+      })
+    })
+
+    expect(calls).toEqual([
+      ['set', { key: 'knowledge.embeddingModel', value: 'text-embedding-3-large' }],
+      ['set', { key: 'knowledge.embeddingProvider', value: 'openai' }],
+      ['set', { key: 'knowledge.embeddingModel', value: 'openai/old' }],
     ])
   })
 

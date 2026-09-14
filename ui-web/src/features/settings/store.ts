@@ -431,17 +431,29 @@ export function reset(): void {
   delete window.sTab
 }
 
-/* Both halves in one action. A pin is a model *and* the provider serving it,
-   and writing only one leaves a state the backend reads as "no pin" -- so a
-   failed second write rolls nothing back but is reported, rather than leaving
-   the page claiming a pin the config does not hold. */
+/* Both halves in one action. A pin is a model and the provider serving it.
+   If the provider half is refused after the model half succeeds, restore the
+   previous model so the config cannot keep a new model paired with an old key. */
 export async function writePin(
   modelKey: string,
   providerKey: string,
   model: string,
   provider: string,
 ): Promise<WriteOutcome> {
+  let previous: unknown = state.snap.raw
+  for (const part of modelKey.split('.')) {
+    if (previous == null || typeof previous !== 'object') {
+      previous = undefined
+      break
+    }
+    previous = (previous as Record<string, unknown>)[part]
+  }
+
   const first = await write(modelKey, model)
   if (first !== 'ok') return first
-  return write(providerKey, provider)
+  const second = await write(providerKey, provider)
+  if (second === 'ok') return second
+
+  await write(modelKey, previous ?? null)
+  return second
 }

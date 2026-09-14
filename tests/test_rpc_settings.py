@@ -277,3 +277,19 @@ async def test_default_permission_mode_is_a_settings_key(cfg):
     assert _read(cfg)["permissions"]["mode"] == "smart"
     with pytest.raises(ConfigValidationError):
         await rpc_console.settings_set({"key": "permissions.mode", "value": "yolo"})
+
+
+async def test_extension_pin_writes_roundtrip_through_raven_loader(cfg):
+    from raven.config.raven import load_raven_config
+
+    await rpc_console.settings_set({"key": "translate.model", "value": "openai/gpt-5-mini"})
+    await rpc_console.settings_set({"key": "translate.provider", "value": "openai"})
+    await rpc_console.settings_set({"key": "knowledge.embeddingModel", "value": "openai/text-embedding-3-small"})
+    await rpc_console.settings_set({"key": "knowledge.embeddingProvider", "value": "openai"})
+
+    loaded = load_raven_config(cfg)
+
+    assert loaded.translate.model == "openai/gpt-5-mini"
+    assert loaded.translate.provider == "openai"
+    assert loaded.knowledge.embedding_model == "openai/text-embedding-3-small"
+    assert loaded.knowledge.embedding_provider == "openai"
