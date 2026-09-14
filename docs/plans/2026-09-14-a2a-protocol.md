@@ -330,7 +330,7 @@ def auth_headers(peer: A2aPeerConfig | None) -> dict[str, str]:
 uv run --frozen --all-extras pytest tests/test_a2a_peers.py -v
 ```
 
-Expected: 8 passed.
+Expected: 7 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1215,7 +1215,7 @@ def is_authorized(config: A2aServerConfig, header_value: str | None) -> bool:
 uv run --frozen --all-extras pytest tests/test_a2a_auth.py -v
 ```
 
-Expected: 8 passed.
+Expected: 7 passed.
 
 - [ ] **Step 5: Commit**
 
