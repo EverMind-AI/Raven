@@ -430,3 +430,18 @@ export function reset(): void {
   usageAt = 0
   delete window.sTab
 }
+
+/* Both halves in one action. A pin is a model *and* the provider serving it,
+   and writing only one leaves a state the backend reads as "no pin" -- so a
+   failed second write rolls nothing back but is reported, rather than leaving
+   the page claiming a pin the config does not hold. */
+export async function writePin(
+  modelKey: string,
+  providerKey: string,
+  model: string,
+  provider: string,
+): Promise<WriteOutcome> {
+  const first = await write(modelKey, model)
+  if (first !== 'ok') return first
+  return write(providerKey, provider)
+}

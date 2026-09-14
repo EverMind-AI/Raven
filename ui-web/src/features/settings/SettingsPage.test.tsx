@@ -283,7 +283,7 @@ describe('settings island', () => {
     })
     await mount()
     await act(async () => {
-      screen.getByText('gui.set.pg.model').click()
+      screen.getByText('gui.set.pg.defaults').click()
     })
     /* Queried through the default-model button rather than by text: the pane
        on the right lists the selected provider's models, so the same id is on
@@ -311,19 +311,26 @@ describe('settings island', () => {
       },
     })
     await mount()
-    await act(async () => {
-      screen.getByText('gui.set.pg.model').click()
-    })
     /* On the rail, so which provider holds the default is answerable without
-       selecting each one in turn. */
+       selecting each one in turn. The rail is the providers page and the pick
+       is the defaults page, so this crosses between them -- but never remounts,
+       which is the "without reopening" the name is about. */
     const badged = () =>
       [...document.querySelectorAll('.mrail .mrow')].find((row) => row.querySelector('.tagm'))
         ?.querySelector('.nm')
         ?.textContent
+    const go = async (page: string) => {
+      await act(async () => {
+        screen.getByText(page).click()
+      })
+    }
+    await go('gui.set.pg.model')
     expect(badged()).toBe('Anthropic')
+    await go('gui.set.pg.defaults')
     await act(async () => {
       document.querySelector<HTMLButtonElement>('.pickm')!.click()
     })
+    await go('gui.set.pg.model')
     expect(badged()).toBe('OpenAI')
   })
 
@@ -1025,7 +1032,7 @@ describe('settings island', () => {
     const { calls } = install()
     await mount()
     await act(async () => {
-      screen.getByText('gui.set.pg.model').click()
+      screen.getByText('gui.set.pg.defaults').click()
     })
     await act(async () => {
       screen.getByText('gui.set.mdl.eff_high').click()
@@ -1264,11 +1271,77 @@ describe('settings island', () => {
   })
 })
 
+/* The painting model sits with the other defaults now, not folded inside the
+   image tool's row, so reaching it is the page click and nothing else. */
 async function openImageSettings() {
-  await act(async () => { screen.getByText('gui.set.pg.toolset').click() })
-  const row = screen.getByText('draw').closest('.trow')!
-  await act(async () => { row.querySelector<HTMLButtonElement>('.ctl .mini.ghost')!.click() })
+  await act(async () => { screen.getByText('gui.set.pg.defaults').click() })
 }
+
+describe('default model pins', () => {
+  /* One provider offering all three kinds, so a slot showing the wrong one is
+     a visible failure rather than an empty list that could mean anything. */
+  const pinsnap = () =>
+    snap({
+      providers: [
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          models: ['gpt-5.5', 'text-embedding-3-large', 'gpt-image-2'],
+          on: true,
+          kind: 'api_key',
+          labels: {
+            'gpt-5.5': { capabilities: ['function-call'], output_modalities: ['text'] },
+            'text-embedding-3-large': { capabilities: ['embedding'] },
+            'gpt-image-2': { capabilities: ['image-generation'], output_modalities: ['image'] },
+          },
+        },
+        { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-4-5'], on: false, kind: 'api_key' },
+      ],
+    })
+
+  const openDefaults = async (over = pinsnap()) => {
+    const h = install(over)
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.defaults').click()
+    })
+    return h
+  }
+
+  const optionsOf = (label: string): string[] =>
+    [...screen.getByLabelText(label).querySelectorAll('option')].map((o) => o.textContent ?? '')
+
+  it('offers each slot only the models it can actually use', async () => {
+    await openDefaults()
+    /* The embedding slot is the sharp one: a text id chosen here is not a
+       degraded answer, it is a vector store that cannot be searched. */
+    expect(optionsOf('gui.set.dm.embed')).toEqual(['gui.set.dm.inherit', 'text-embedding-3-large'])
+    expect(optionsOf('gui.set.dm.quick')).toEqual(['gui.set.dm.inherit', 'gpt-5.5'])
+    expect(optionsOf('gui.set.dm.translate')).toEqual(['gui.set.dm.inherit', 'gpt-5.5'])
+  })
+
+  it('writes both halves of a pin, model and provider', async () => {
+    const { calls } = await openDefaults()
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('gui.set.dm.embed'), {
+        target: { value: 'openai::text-embedding-3-large' },
+      })
+    })
+    /* Both, in that order. A model with no provider is a pin the backend reads
+       as unset, so a half-written pair is a control that silently did nothing. */
+    expect(calls).toEqual([
+      ['set', { key: 'knowledge.embeddingModel', value: 'text-embedding-3-large' }],
+      ['set', { key: 'knowledge.embeddingProvider', value: 'openai' }],
+    ])
+  })
+
+  it('offers nothing from a provider that is not connected', async () => {
+    await openDefaults()
+    /* Anthropic is off, so its model must not appear even though the slot's
+       kind would take it: picking it would fail on the next call, not here. */
+    expect(optionsOf('gui.set.dm.quick')).not.toContain('claude-opus-4-5')
+  })
+})
 
 describe('image model selection', () => {
   it('defaults to sunburst and saves one model/quality pair', async () => {
@@ -2115,11 +2188,25 @@ describe('the models pane', () => {
     expect(document.querySelector('[data-sec="models"] .mdocs')).toBeNull()
   })
 
-  it('keeps the default-model card above the split', async () => {
-    await openModels()
-    const card = document.querySelector('#spanels .scard')!
-    const split = document.querySelector('#spanels .msplit')!
-    expect(card.querySelector('.pickm')).toBeTruthy()
-    expect(card.compareDocumentPosition(split) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  /* The card and the split are two pages now. What used to be "above the
+     split" is "on the page before it": the agent model leads the defaults, and
+     the providers page is the split alone -- a stray `.pickm` left behind there
+     would mean the move half happened. */
+  it('leads the defaults page with the agent model, and leaves the split alone', async () => {
+    const h = install(snap())
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.defaults').click()
+    })
+    const first = document.querySelector('#spanels .scard')!
+    expect(first.querySelector('.pickm')).toBeTruthy()
+    expect(document.querySelector('#spanels .msplit')).toBeNull()
+
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    expect(document.querySelector('#spanels .msplit')).toBeTruthy()
+    expect(document.querySelector('#spanels .pickm')).toBeNull()
+    return h
   })
 })

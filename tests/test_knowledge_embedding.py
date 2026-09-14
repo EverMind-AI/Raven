@@ -46,6 +46,67 @@ api_key = "sk-test"
 """
 
 
+class TestTheRavenPinDecidesWhenItIsSet:
+    """``knowledge.embeddingModel`` + ``embeddingProvider``, resolved.
+
+    The pin is somebody's deliberate pick against a provider they can see; the
+    EverOS endpoint is what the memory backend happened to leave behind. Both
+    exist, so which one wins is the whole of this.
+    """
+
+    @staticmethod
+    def _pin(monkeypatch, *, model, provider, credentials):
+        from raven.config.raven import KnowledgeConfig, RavenConfig
+
+        config = RavenConfig()
+        config.knowledge = KnowledgeConfig(embedding_model=model, embedding_provider=provider)
+        monkeypatch.setattr("raven.config.raven.load_raven_config", lambda: config)
+        monkeypatch.setattr(
+            "raven.config.update_providers.resolve_provider_credentials",
+            lambda name, **_: credentials,
+        )
+
+    def test_a_complete_pin_is_used_over_the_everos_endpoint(self, everos_root, monkeypatch) -> None:
+        _write(everos_root, _FULL)
+        self._pin(
+            monkeypatch,
+            model="openai/text-embedding-3-large",
+            provider="openai",
+            credentials=("https://api.openai.com/v1", "sk-pinned"),
+        )
+
+        config = load_embedding_config()
+
+        # The wire id, not the stored spelling: the provider half already said
+        # whose credential this is, so the prefix has done its job.
+        assert config.model == "text-embedding-3-large"
+        assert config.base_url == "https://api.openai.com/v1"
+        assert config.api_key == "sk-pinned"
+
+    def test_half_a_pin_leaves_the_everos_endpoint_answering(self, everos_root, monkeypatch) -> None:
+        """A model with no provider is not a pin. Reading it as one would send
+        the id to whatever address happened to be configured."""
+        _write(everos_root, _FULL)
+        self._pin(monkeypatch, model="openai/text-embedding-3-large", provider=None, credentials=None)
+
+        assert load_embedding_config().api_key == "sk-test"
+
+    def test_a_pin_whose_provider_has_no_key_falls_back(self, everos_root, monkeypatch) -> None:
+        """Reported, then the endpoint that does work. A knowledge base that
+        stops answering because a picker was pointed at an empty account is a
+        worse outcome than one still on its old endpoint."""
+        _write(everos_root, _FULL)
+        self._pin(monkeypatch, model="openai/text-embedding-3-large", provider="openai", credentials=None)
+
+        assert load_embedding_config().api_key == "sk-test"
+
+    def test_no_pin_at_all_is_the_behaviour_every_install_had(self, everos_root, monkeypatch) -> None:
+        _write(everos_root, _FULL)
+        self._pin(monkeypatch, model=None, provider=None, credentials=None)
+
+        assert load_embedding_config().model == "text-embedding-3-small"
+
+
 def test_the_configured_endpoint_is_read(everos_root) -> None:
     _write(everos_root, _FULL)
     config = load_embedding_config()
