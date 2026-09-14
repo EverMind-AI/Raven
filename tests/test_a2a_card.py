@@ -24,3 +24,11 @@ def test_capabilities_match_what_is_implemented():
 
 def test_card_advertises_at_least_one_skill():
     assert len(build_agent_card(A2aConfig(), base_url="https://h/a2a").skills) >= 1
+
+
+def test_card_declares_the_enforced_bearer_scheme():
+    card = build_agent_card(A2aConfig(), base_url="https://h/a2a")
+    assert "http_auth" in card.security_schemes
+    scheme = card.security_schemes["http_auth"]
+    assert scheme.WhichOneof("scheme") == "http_auth_security_scheme"
+    assert scheme.http_auth_security_scheme.scheme == "bearer"
