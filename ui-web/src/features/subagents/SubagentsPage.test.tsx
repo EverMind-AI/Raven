@@ -321,9 +321,9 @@ describe('subagents island, the list', () => {
   })
 
   it('starts the conversation the instance needs, from the new-task screen', async () => {
-    /* The reported bug: a draft has no id, so the create was refused before its
-       first await and the press did nothing at all. Pressing the button is the
-       reader asking for both -- the conversation, then the instance in it. */
+    /* A draft has no id, so the create is refused before its first await and
+       the press does nothing at all. Pressing the button is the reader asking
+       for both -- the conversation, then the instance in it. */
     const asked: Array<[string, string]> = []
     const fresh = inst({ handle: 'fresh', status: 'idle' })
     let listed: InstanceRow[] = []
