@@ -328,6 +328,12 @@ def _mark_turn_start(rows: list[dict[str, Any]], session_key: str) -> list[dict[
     whenever anything else touched the record. The running turn's own start is
     on the activity the backend is collecting, which is the only place it exists.
 
+    ``turn_started_at_ms`` and not ``started_at_ms``: the latter is when
+    collection opened, and a spawn builds its activity before waiting on
+    ``hold_handle``. The two differ by the length of that wait, so publishing it
+    let a spawn queued behind a five-minute turn open its pane claiming five
+    minutes of work it had not done. The slot-taking stamp is the turn.
+
     Absent rather than zero when nothing is running, and absent is the whole
     signal: a reader shows a clock when the field is there and nothing when it
     is not, so an instance that finished between two polls stops counting
@@ -335,7 +341,7 @@ def _mark_turn_start(rows: list[dict[str, Any]], session_key: str) -> list[dict[
     """
     for row in rows:
         live = run_activity.live_instance(session_key, str(row.get("agent") or ""), str(row.get("handle") or ""))
-        began = getattr(live, "started_at_ms", None) if live is not None else None
+        began = getattr(live, "turn_started_at_ms", None) if live is not None else None
         if isinstance(began, int) and began > 0:
             row["turnStartedAtMs"] = began
     return rows

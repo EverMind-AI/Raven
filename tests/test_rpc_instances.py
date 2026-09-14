@@ -112,11 +112,16 @@ async def test_instances_stamps_the_start_of_the_turn_being_answered(
     _isolated_registry: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A reader drawing a clock needs the turn's own start, and only the
-    activity has it."""
+    activity has it -- the turn's, not the moment collection opened."""
     await _isolated_registry.upsert_spawn("s1", "Raven-Code", "a", "running")
 
     class _Live:
-        started_at_ms = 1700000000000
+        # Both, deliberately, and only one may be published. `started_at_ms` is
+        # when collection opened; a spawn builds its activity before waiting on
+        # `hold_handle`, so for a queued one the two differ by the whole wait and
+        # publishing the earlier let a pane open claiming work it had not done.
+        started_at_ms = 1699999700000
+        turn_started_at_ms = 1700000000000
 
     monkeypatch.setattr(
         run_activity,
