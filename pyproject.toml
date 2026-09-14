@@ -68,6 +68,7 @@ dependencies = [
     "aiohttp>=3.13.4",
     "click>=8.1",
     "pyarrow>=17",
+    "a2a-sdk>=1.1.2",
 ]
 
 [project.optional-dependencies]
