@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -72,6 +74,28 @@ class TestTheMarker:
         monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "not-created"))
         guard.write_marker()
         assert guard.read_marker() is not None
+
+    def test_resolving_its_path_stays_inside_the_kernel(self) -> None:
+        """write_marker runs while uv is about to delete the environment the
+        process is executing from, and the real-uv fixture that models that
+        moment installs httpx, rich and typer only. Resolving the marker's home
+        must therefore stop at raven.home: raven.config brings the settings
+        stack, and pydantic with it. A subprocess, because other tests in the
+        session import both long before this one runs.
+
+        This pins the one call site. The closure of the whole handoff is still
+        proven only by tests/integration/test_cli_upgrade_real_uv.py, which the
+        default run deselects.
+        """
+        script = (
+            "import sys\n"
+            "from raven.updates import install_guard\n"
+            "install_guard.marker_path()\n"
+            "print(sorted(name for name in ('pydantic', 'raven.config') if name in sys.modules))\n"
+        )
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "[]", result.stdout
 
 
 class TestWhetherTheUpgradeIsStillRunning:
