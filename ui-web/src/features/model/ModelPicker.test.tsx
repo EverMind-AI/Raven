@@ -231,6 +231,62 @@ describe('the model picker', () => {
   })
 })
 
+describe('the model picker, where it lands', () => {
+  /* happy-dom measures every box as zero, so the three that decide the
+     placement are given the rects they have on the running page. Stubbed on the
+     prototype because the popover is created during the render that then
+     measures it -- there is no moment in between to reach the node. */
+  function measure(sizes: Map<string, [number, number]>): void {
+    const real = Element.prototype.getBoundingClientRect
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      for (const [selector, [top, height]] of sizes) {
+        if (this.matches(selector)) {
+          return { top, bottom: top + height, left: 40, right: 40, width: 0, height, x: 40, y: top } as DOMRect
+        }
+      }
+      return real.call(this)
+    })
+  }
+
+  /* The composer, as page.html nests it: the chip is on the card's bottom bar,
+     which is the whole reason the card and not the chip is what has to be
+     cleared. */
+  function onTheCard(): HTMLElement {
+    document.body.innerHTML = `
+      <div class="dock-in">
+        <div class="field"><textarea></textarea></div>
+        <div class="under"><button id="modelChip">chip</button></div>
+      </div>`
+    return document.getElementById('modelChip')!
+  }
+
+  it('opens above the composer card, not above the chip on it', () => {
+    install()
+    const chip = onTheCard()
+    measure(new Map([['.mpick', [0, 300]], ['.dock-in', [436, 126]], ['#modelChip', [518, 21]]]))
+    mount()
+    openIt(chip)
+    /* 436 - 300 - 8. Off the chip it was 210, which put three quarters of the
+       popover over the field the reader types in. */
+    expect(pick()!.style.top).toBe('128px')
+  })
+
+  it('drops below the whole card when there is no room above it', () => {
+    install()
+    const chip = onTheCard()
+    /* A card near the top of a tall window: nothing fits above it, so the
+       popover goes under -- under the CARD, or it would cover the bar the chip
+       itself sits on. */
+    Object.defineProperty(document.documentElement, 'clientHeight', { value: 900, configurable: true })
+    measure(new Map([['.mpick', [0, 300]], ['.dock-in', [60, 126]], ['#modelChip', [142, 21]]]))
+    mount()
+    openIt(chip)
+    /* 60 + 126 + 8, clear of the card's lower edge. Off the chip it was 171 --
+       eight pixels under the chip and straight over the bar beside it. */
+    expect(pick()!.style.top).toBe('194px')
+  })
+})
+
 describe('the model picker, choosing', () => {
   it('closes, sets locally, persists, and says what happened', async () => {
     const h = install()
