@@ -1374,18 +1374,14 @@ from raven.config.schema import A2aConfig
 
 VERSION_HEADER = "A2A-Version"
 
-#: The JSON-RPC codes this binding emits, by A2A error name. Fixed here so two
-#: call sites cannot disagree about what a caller sees.
+#: The JSON-RPC codes this binding emits, derived from the SDK's own canonical map so a
+#: conformant client reconstructs the error class we actually meant. Do NOT hand-write these
+#: numbers: an earlier draft of this plan invented them and disagreed with the SDK on four of
+#: nine, which made a real client decode VersionNotSupportedError as TaskNotFoundError.
+from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP
+
 ERROR_CODES: dict[str, int] = {
-    "VersionNotSupportedError": -32001,
-    "MethodNotFoundError": -32601,
-    "InvalidRequestError": -32600,
-    "InvalidParamsError": -32602,
-    "TaskNotFoundError": -32002,
-    "TaskNotCancelableError": -32005,
-    "PushNotificationNotSupportedError": -32003,
-    "ContentTypeNotSupportedError": -32004,
-    "InternalError": -32603,
+    cls.__name__: code for cls, code in JSON_RPC_ERROR_CODE_MAP.items()
 }
 
 #: JSON-RPC method -> the ``RequestHandler`` coroutine that serves it.
