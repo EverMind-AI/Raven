@@ -294,6 +294,7 @@ def configure_embedding_env(embedding: Any) -> bool:
         }
     )
     os.environ.update(env)
+    _BOUND_HERE.update(env)
     return bool(env)
 
 
@@ -356,15 +357,40 @@ def everos_has_own_embedding() -> bool:
     return role_configured_in(load_everos_config(), "embedding") or embedding_is_env_managed()
 
 
+_EMBEDDING_ENV_KEYS = (
+    "EVEROS_EMBEDDING__MODEL",
+    "EVEROS_EMBEDDING__BASE_URL",
+    "EVEROS_EMBEDDING__API_KEY",
+)
+
+_BOUND_HERE: set[str] = set()
+"""Which of those variables this process set itself.
+
+Provenance, not a cache. ``configure_embedding_env`` puts the host's endpoint
+into ``os.environ`` so the in-process EverOS imports and every child see it --
+after which the variables are present and complete, and a reader that asks only
+"are all three set" cannot tell the host's own binding from an operator's
+export. It answered "an operator exported these" about values raven had written
+a moment earlier, and the settings card then refused an edit by telling the
+person to change variables they had never set.
+"""
+
+
 def embedding_is_env_managed() -> bool:
-    """Whether the endpoint EverOS uses comes from the exported variables.
+    """Whether the endpoint EverOS uses came from outside this process.
 
     Named apart from :func:`everos_has_own_embedding` because one surface needs
-    to tell the two homes apart rather than only know that one of them is in
-    force: a settings page can offer to edit a file, and cannot offer to edit
-    somebody's shell.
+    to tell the homes apart rather than only know that one is in force: a
+    settings page can offer to edit a file, and cannot offer to edit somebody's
+    shell.
+
+    All three present and not all three ours. Partly ours cannot arise -- a
+    fragment is not an endpoint, so the binding replaces it whole -- and is
+    read the conservative way if it ever does.
     """
-    return all(os.environ.get(f"EVEROS_EMBEDDING__{k}") for k in ("MODEL", "BASE_URL", "API_KEY"))
+    if not all(os.environ.get(k) for k in _EMBEDDING_ENV_KEYS):
+        return False
+    return not all(k in _BOUND_HERE for k in _EMBEDDING_ENV_KEYS)
 
 
 def host_embedding_env() -> dict[str, str]:
