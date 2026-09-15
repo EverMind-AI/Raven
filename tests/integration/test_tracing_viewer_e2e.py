@@ -723,6 +723,31 @@ def test_a_sessionless_trace_across_midnight_has_one_owner(tmp_path):
     assert owner["sessionId"] == "background:2026-08-01"
 
 
+def test_a_sessionless_span_with_no_start_time_is_still_reachable(tmp_path):
+    """The fallback the day derivation takes when there is no day to take.
+
+    ``backgroundSessionId`` answers ``background:undated`` for a start time it
+    cannot slice, and nothing upstream rejects such a span -- ``normalizeSpan``
+    passes ``startTime`` through as it finds it. No writer emits one today, so
+    the value here is that the pool exists and is reachable rather than that a
+    store has ever held one: without it every undated span would share whatever
+    id the empty slice produced, unnoticed.
+    """
+    undated = _sessionless_span("span-undated")
+    del undated["startTime"]
+    _write_spans(
+        tmp_path / "logs" / "audit-spans.log",
+        [_span("real-session", "span-in-session"), undated],
+    )
+
+    with _viewer(tmp_path) as port:
+        payload = _get(port, "/api/data")
+        listed = _get(port, "/api/sessions")
+
+    assert "span-undated" in _reachable_span_ids(payload)
+    assert "background:undated" in {row["sessionId"] for row in listed["sessions"]}
+
+
 def test_a_sidecar_from_the_previous_schema_does_not_hide_background_spans(tmp_path):
     """A sidecar written before background spans were indexed must be rebuilt.
 
