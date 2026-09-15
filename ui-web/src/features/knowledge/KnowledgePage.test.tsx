@@ -105,6 +105,17 @@ afterEach(() => {
   delete (window as { DS?: unknown }).DS
 })
 
+/* Open one row's action menu. The four operations live behind it now: four
+   buttons on every row is a wall across a table, and the design puts them
+   where a reader goes looking for "what can I do with this file". */
+async function openRowMenu(name: string): Promise<void> {
+  const row = [...document.querySelectorAll('.kbtable .td.nm')].find((c) => c.textContent === name)
+  const dots = row!.parentElement!.querySelector('.kbops .dots') as HTMLButtonElement
+  await act(async () => {
+    dots.click()
+  })
+}
+
 describe('the knowledge page', () => {
   it('sends an unconfigured reader to the section that configures it', async () => {
     /* The status alone named a state and stopped. The endpoint is set in a
@@ -128,27 +139,12 @@ describe('the knowledge page', () => {
     expect(opened.length).toBe(1)
   })
 
-  it('says which document a hit came from', async () => {
-    source({
-      bases: async () => [base({ id: 'b1' })],
-      documents: async () => [
-        doc({ id: 'd1', source: 'handbook.md', status: 'ready' }),
-        doc({ id: 'd2', source: 'policy.md', status: 'ready' }),
-      ],
-      search: async () => [{ score: 0.7, document_id: 'd2', text: 'the answer' }],
-    })
-    await mount()
-    await act(async () => {
-      await store.open_('b1')
-    })
-    await act(async () => {
-      await store.searchNow('what')
-    })
-    /* The score alone cannot answer "found where?" once a base holds more than
-       one document, and the id rides on every hit already. */
-    expect(screen.getByText('gui.kb.from_doc {"name":"policy.md"}')).toBeTruthy()
-  })
-
+  /* The hits UI left with the search box: the panel is a file table now, and
+     Recall Test is where searching comes back. What survived the move is the
+     store logic underneath -- the request token and the debounce -- so these
+     assert what the store holds rather than what is painted, which is also
+     where the races they pin actually live. A test that drove the removed
+     input would have to be deleted; one that drives the store does not. */
   it('keeps the newest answer when an older one lands after it', async () => {
     /* Both requests are for the same base, so the openId guard passes for each:
        without a request token the slower prefix repainted the panel under the
@@ -172,8 +168,8 @@ describe('the knowledge page', () => {
       gates[0]!([{ score: 0.4, document_id: 'd1', text: 'the stale answer' }])
       await first
     })
-    expect(screen.getByText('the newest answer')).toBeTruthy()
-    expect(screen.queryByText('the stale answer')).toBeNull()
+    const texts = (store.getState().hits ?? []).map((h) => h.text)
+    expect(texts).toEqual(['the newest answer'])
   })
 
   it('clears the hits through the debounced path when the box is emptied', async () => {
@@ -192,11 +188,13 @@ describe('the knowledge page', () => {
     await act(async () => {
       await store.searchNow('what')
     })
-    expect(screen.getByText('the answer')).toBeTruthy()
+    expect((store.getState().hits ?? []).map((h) => h.text)).toEqual(['the answer'])
     await act(async () => {
       store.search('')
     })
-    expect(screen.queryByText('the answer')).toBeNull()
+    /* Null, not empty: "asked and found nothing" and "not asked" are different
+       states, and the panel shows the documents again only for the second. */
+    expect(store.getState().hits).toBeNull()
     expect(screen.getByText('handbook.md')).toBeTruthy()
   })
 
@@ -214,18 +212,17 @@ describe('the knowledge page', () => {
     await act(async () => {
       await store.open_('b1')
     })
-    /* Driven through the DOM, not the store: what is being pinned is the box
-       being wired to `searchNow`, and a test that calls the store directly
-       passes with the handler deleted. */
-    const box = document.querySelector('input.kbask') as HTMLInputElement
+    /* The box this used to type into is gone. What it pinned is still real:
+       a debounced keystroke followed by an immediate ask must spend one
+       request, not two, and must not leave the timer behind to fire a second. */
     await act(async () => {
-      fireEvent.change(box, { target: { value: 'quarterly' } })
+      store.search('quarterly')
     })
     expect(calls).toBe(0)
     await act(async () => {
-      fireEvent.keyDown(box, { key: 'Enter' })
+      await store.searchNow('quarterly')
     })
-    expect(screen.getByText('straight away')).toBeTruthy()
+    expect((store.getState().hits ?? []).map((h) => h.text)).toEqual(['straight away'])
     /* One request, not two: Enter cancels the keystroke's pending timer rather
        than racing it. */
     expect(calls).toBe(1)
@@ -273,6 +270,11 @@ describe('the knowledge page', () => {
       bases: async () => [base({ id: 'b1', embedding_model: 'bge-m3' })],
     })
     await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    /* On the open base's panel rather than the rail: it is a fact about the
+       base being looked at, and down a list of twenty it is noise. */
     expect(screen.getByText('bge-m3')).toBeTruthy()
   })
 
@@ -478,7 +480,10 @@ describe('the write surface', () => {
     })
     expect(screen.getByText('onboarding.md')).toBeTruthy()
     expect(screen.getByText('gui.kb.doc_ready')).toBeTruthy()
-    expect(screen.getByText('gui.kb.chunks {"n":3}')).toBeTruthy()
+    /* Four columns and no chunk count: the table answers "what is in this base
+       and is it searchable", and how a document was cut up is what View Chunks
+       is for. */
+    expect(screen.getByText('gui.kb.col_updated')).toBeTruthy()
   })
 
   it('carries a failed document reason on its own row', async () => {
@@ -525,7 +530,10 @@ describe('the write surface', () => {
       release([])
       await slow
     })
-    expect(screen.getByText('two')).toBeTruthy()
+    /* Both panels are on screen now, so the name is in the rail and in the
+       heading: scoped to the heading, which is the one that says which base
+       the documents below belong to. */
+    expect(document.querySelector('.kbhd b')!.textContent).toBe('two')
     expect(screen.getByText('gui.kb.no_docs')).toBeTruthy()
   })
 })
@@ -555,8 +563,9 @@ describe('documents and search', () => {
       await store.upload(new File(['hi'], 'onboarding.md', { type: 'text/markdown' }))
     })
     expect(seen).toEqual(['upload', 'index'])
+    /* Queued, then searchable: the two calls are one action to the reader, and
+       the row is what tells them it finished. */
     expect(screen.getByText('gui.kb.doc_ready')).toBeTruthy()
-    expect(screen.getByText('gui.kb.chunks {"n":2}')).toBeTruthy()
   })
 
   it('says why an upload failed instead of leaving a row that is not there', async () => {
@@ -590,24 +599,25 @@ describe('documents and search', () => {
     await act(async () => {
       await store.searchNow('what')
     })
-    expect(screen.getByText('the answer')).toBeTruthy()
-    /* Two decimals: a similarity is for ranking by eye. */
-    expect(screen.getByText('0.81')).toBeTruthy()
+    expect((store.getState().hits ?? []).map((h) => h.text)).toEqual(['the answer'])
     await act(async () => {
       await store.searchNow('  ')
     })
-    expect(screen.queryByText('the answer')).toBeNull()
+    /* Whitespace is not a query: it clears rather than asking, and the panel
+       is back to the documents. */
+    expect(store.getState().hits).toBeNull()
     expect(screen.getByText('onboarding.md')).toBeTruthy()
   })
 
-  it('offers a way out only on a row that is stuck', async () => {
-    /* Two buttons on every row would bury the one row that needs them, and a
-       `ready` document has nowhere to go. */
+  it('gives every row the same actions, and the failed one its reason', async () => {
+    /* Deliberately not "only where they are the way out", which is what the
+       stacked rows before this did: a table row carries one menu whatever its
+       status, so reindexing a `ready` document is reachable without first
+       breaking it. The reason still rides with the row that failed. */
     source({
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [
         doc({ id: 'd1', source: 'done.md', status: 'ready', chunk_count: 2 }),
-        doc({ id: 'd2', source: 'stuck.md', status: 'pending' }),
         doc({ id: 'd3', source: 'broke.md', status: 'failed', error: 'endpoint said 400' }),
       ],
     })
@@ -615,9 +625,11 @@ describe('documents and search', () => {
     await act(async () => {
       await store.open_('b1')
     })
-    expect(screen.getAllByText('gui.kb.doc_retry').length).toBe(2)
-    expect(screen.getAllByText('gui.kb.doc_delete').length).toBe(2)
-    expect(screen.getByText('done.md').closest('.kbdoc')!.querySelector('button')).toBeNull()
+    expect(document.querySelectorAll('.kbops .dots').length).toBe(2)
+    await openRowMenu('done.md')
+    expect(screen.getByText('gui.kb.doc_reindex')).toBeTruthy()
+    expect(screen.getByText('gui.kb.delete')).toBeTruthy()
+    expect(screen.getByText('endpoint said 400')).toBeTruthy()
   })
 
   it('indexes a stuck row again, and shows the answer', async () => {
@@ -634,14 +646,14 @@ describe('documents and search', () => {
     await act(async () => {
       await store.open_('b1')
     })
+    await openRowMenu('stuck.md')
     await act(async () => {
-      screen.getByText('gui.kb.doc_retry').click()
+      screen.getByText('gui.kb.doc_reindex').click()
     })
     /* The same call upload makes: `index_document` re-embeds from the stored
        blob, so an endpoint failure clears with nothing else to do. */
     expect(asked).toEqual(['d2'])
     expect(screen.getByText('gui.kb.doc_ready')).toBeTruthy()
-    expect(screen.queryByText('gui.kb.doc_retry')).toBeNull()
   })
 
   it('puts a retried row back when the retry fails too', async () => {
@@ -656,8 +668,9 @@ describe('documents and search', () => {
     await act(async () => {
       await store.open_('b1')
     })
+    await openRowMenu('stuck.md')
     await act(async () => {
-      screen.getByText('gui.kb.doc_retry').click()
+      screen.getByText('gui.kb.doc_reindex').click()
     })
     /* The optimistic `indexing` was a promise the call did not keep; leaving it
        there is a row saying it is working when nothing is. */
@@ -685,10 +698,12 @@ describe('documents and search', () => {
     await act(async () => {
       await store.open_('b1')
     })
+    await openRowMenu('stuck.md')
     await act(async () => {
-      screen.getByText('gui.kb.doc_retry').click()
+      screen.getByText('gui.kb.doc_reindex').click()
     })
-    const remove = screen.getByText('gui.kb.doc_delete').closest('button') as HTMLButtonElement
+    await openRowMenu('stuck.md')
+    const remove = screen.getByText('gui.kb.delete').closest('button') as HTMLButtonElement
     expect(remove.disabled).toBe(true)
     await act(async () => {
       remove.click()
@@ -719,8 +734,9 @@ describe('documents and search', () => {
     await act(async () => {
       await store.open_('b1')
     })
+    await openRowMenu('stuck.md')
     await act(async () => {
-      screen.getByText('gui.kb.doc_delete').click()
+      screen.getByText('gui.kb.delete').click()
     })
     await act(async () => {
       await Promise.resolve()
@@ -741,7 +757,10 @@ describe('documents and search', () => {
     await act(async () => {
       await store.searchNow('nothing here')
     })
-    expect(screen.getByText('gui.kb.no_hits')).toBeTruthy()
+    /* An empty array, not null. The distinction is the whole test: asked and
+       found nothing is a result, and not having asked is not one -- and only
+       the second means the panel should be showing documents. */
+    expect(store.getState().hits).toEqual([])
   })
 
   it('drops a search that answers after the reader left the base', async () => {
@@ -763,5 +782,134 @@ describe('documents and search', () => {
       await slow
     })
     expect(screen.getByText('one')).toBeTruthy()
+  })
+})
+
+describe('the two-panel layout', () => {
+  it('keeps the bases in view while one of them is open', async () => {
+    /* The whole point of the split. The drill-down this replaced put a Back
+       button between a reader and the base they were comparing against, so
+       both panels staying on screen is the behaviour, not decoration. */
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' }), base({ id: 'b2', name: 'policies' })],
+      documents: async () => [doc({ id: 'd1', source: 'onboarding.md', status: 'ready' })],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    const rail = [...document.querySelectorAll('.kbrail .kbrow .nm')].map((n) => n.textContent)
+    expect(rail).toEqual(['handbook', 'policies'])
+    expect(document.querySelector('.kbhd b')!.textContent).toBe('handbook')
+    /* And the open one is marked, since the rail is what says which base the
+       panel belongs to. */
+    const on = [...document.querySelectorAll('.kbrail .kbrow')].filter((r) => r.hasAttribute('aria-current'))
+    expect(on.length).toBe(1)
+    expect(on[0]!.textContent).toContain('handbook')
+  })
+
+  it('asks for nothing until a base is picked', async () => {
+    source({ bases: async () => [base({ id: 'b1', name: 'handbook' })] })
+    await mount()
+
+    expect(screen.getByText('gui.kb.pick_base')).toBeTruthy()
+    expect(document.querySelector('.kbhd')).toBeNull()
+  })
+
+  it('names the controls it has not built yet instead of pretending', async () => {
+    /* Recall Test, Settings, View Chunks and Disable have nothing behind them.
+       They are on screen because the design puts them there, and disabled
+       because a control that looks live and does nothing when pressed is
+       worse than one that says it is not ready. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', source: 'onboarding.md', status: 'ready' })],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    for (const label of ['gui.kb.recall_test', 'gui.kb.settings']) {
+      const btn = screen.getByText(label).closest('button') as HTMLButtonElement
+      expect(btn.disabled).toBe(true)
+      expect(btn.title).toBe('gui.kb.soon')
+    }
+    await openRowMenu('onboarding.md')
+    for (const label of ['gui.kb.doc_view_chunks', 'gui.kb.doc_disable']) {
+      expect((screen.getByText(label).closest('button') as HTMLButtonElement).disabled).toBe(true)
+    }
+    /* Adding a file is the one data source the engine already takes, so that
+       button is wired rather than stubbed beside a working upload. */
+    const add = screen.getByText('+ gui.kb.add_source').closest('label')!
+    expect(add.querySelector('input[type="file"]')).toBeTruthy()
+  })
+})
+
+describe('the create dialog', () => {
+  const openDialog = async () => {
+    await act(async () => {
+      screen.getByText('+ gui.kb.new').click()
+    })
+  }
+
+  it('takes a name and an embedding model, and creates with them', async () => {
+    const made: string[] = []
+    source({
+      status: async () => ({ configured: true, model: 'bge-m3' }),
+      create: async (name: string) => {
+        made.push(name)
+        return base({ id: 'b1', name })
+      },
+    })
+    await mount()
+    await openDialog()
+
+    /* Disabled is a real choice, not the absence of one: a base nobody means
+       to search by vector should not be made to carry an index. */
+    const opts = [...document.querySelectorAll('#kbembed option')].map((o) => o.textContent)
+    expect(opts).toEqual(['gui.kb.embed_off', 'bge-m3'])
+
+    const field = document.getElementById('kbname') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(field, { target: { value: 'handbook' } })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.create').click()
+    })
+
+    expect(made).toEqual(['handbook'])
+    expect(document.querySelector('.kbdlg')).toBeNull()
+  })
+
+  it('will not create a base with no name', async () => {
+    source({ bases: async () => [] })
+    await mount()
+    await openDialog()
+
+    expect((screen.getByText('gui.kb.create').closest('button') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('closes on cancel without creating', async () => {
+    const made: string[] = []
+    source({
+      create: async (name: string) => {
+        made.push(name)
+        return base({ id: 'b1', name })
+      },
+    })
+    await mount()
+    await openDialog()
+    const field = document.getElementById('kbname') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(field, { target: { value: 'handbook' } })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.cancel').click()
+    })
+
+    expect(made).toEqual([])
+    expect(document.querySelector('.kbdlg')).toBeNull()
   })
 })

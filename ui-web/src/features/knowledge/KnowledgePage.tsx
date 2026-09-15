@@ -1,135 +1,225 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
 import { t } from '../../shell/bridge'
 import { open as openSettings, setTab as setSettingsTab } from '../settings/store'
 import * as store from './store'
 
-import type { KbBase, KbDoc, KbHit } from './types'
+import type { KbBase, KbDoc } from './types'
 import type { JSX } from 'react'
 
-function Creator({ busy }: { busy: boolean }): JSX.Element {
+/* Controls the panel shows because they belong to it, and which nothing is
+   behind yet. Disabled rather than inert: a button that looks live and does
+   nothing when pressed is worse than one that says it is not ready, and the
+   reader can see where the feature will be. */
+function Soon({ label, className = 'mini ghost' }: { label: string; className?: string }): JSX.Element {
+  return (
+    <button className={className} disabled title={t('gui.kb.soon')}>
+      {label}
+    </button>
+  )
+}
+
+/* Name and embedding model, the two facts a base is created with. The model
+   cannot be changed afterwards -- vector width is fixed when the collection is
+   made -- so it is asked for here rather than offered as a setting later. */
+function CreateDialog({ model, onClose }: { model: string; onClose: () => void }): JSX.Element {
   const [name, setName] = useState('')
+  const [embed, setEmbed] = useState(model)
+  const field = useRef<HTMLInputElement>(null)
+  useEffect(() => field.current?.focus(), [])
+
   const submit = (): void => {
+    if (!name.trim()) return
     void store.create(name)
-    setName('')
+    onClose()
   }
   return (
-    <div className="kbnew">
-      <input
-        className="kbname"
-        value={name}
-        placeholder={t('gui.kb.new_hint')}
-        onChange={(e) => setName(e.currentTarget.value)}
-        /* Enter submits, because a one-field form where it does not is a form
-           people retype into. */
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') submit()
-        }}
-      />
-      <button className="mini" disabled={busy || !name.trim()} onClick={submit}>
-        {t('gui.kb.new')}
-      </button>
+    <div className="kbmodal" role="dialog" aria-modal="true" aria-label={t('gui.kb.new_title')}>
+      <div className="kbdlg">
+        <button className="x" aria-label={t('gui.kb.cancel')} onClick={onClose}>
+          &times;
+        </button>
+        <div className="ttl">{t('gui.kb.new_title')}</div>
+
+        <label className="fl" htmlFor="kbname">
+          {t('gui.kb.name')}
+        </label>
+        <input
+          id="kbname"
+          ref={field}
+          className="kbname"
+          value={name}
+          placeholder={t('gui.kb.name')}
+          onChange={(e) => setName(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit()
+            if (e.key === 'Escape') onClose()
+          }}
+        />
+
+        <label className="fl" htmlFor="kbembed">
+          {t('gui.kb.embed_model')}
+        </label>
+        <select
+          id="kbembed"
+          className="mini"
+          value={embed}
+          onChange={(e) => setEmbed(e.currentTarget.value)}
+        >
+          {/* Disabled is a real choice, not the absence of one: a base nobody
+              means to search by vector should not be made to carry an index. */}
+          <option value="">{t('gui.kb.embed_off')}</option>
+          {model && <option value={model}>{model}</option>}
+        </select>
+        {!embed && <div className="hint">{t('gui.kb.embed_off_note')}</div>}
+
+        <div className="acts">
+          <button className="mini ghost" onClick={onClose}>
+            {t('gui.kb.cancel')}
+          </button>
+          <button className="mini" disabled={!name.trim()} onClick={submit}>
+            {t('gui.kb.create')}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
 
-function Row({ base }: { base: KbBase }): JSX.Element {
+function BaseRow({ base, on }: { base: KbBase; on: boolean }): JSX.Element {
   return (
-    <div className="kbrow" onClick={() => void store.open_(base.id)}>
-      <div className="nm">{base.name}</div>
-      <div className="st">
-        <span className="who">{t('gui.kb.docs', { n: base.documents })}</span>
-        {/* The model the base was built with, not the one configured now. A
-            base outlives a config change and the mismatch has to be visible. */}
-        <span className="mdl">{base.embedding_model}</span>
-      </div>
-      {base.description ? <div className="ds">{base.description}</div> : null}
+    <button className="kbrow" aria-current={on || undefined} onClick={() => void store.open_(base.id)}>
+      <span className="nm">{base.name}</span>
+      <span className="who">{t('gui.kb.docs', { n: base.documents })}</span>
+    </button>
+  )
+}
+
+/* The menu a row's actions live behind. Four of them on every row would be a
+   wall of buttons across a table; the two that are wired sit beside the two
+   that are not, so the set reads as one feature rather than as a gap. */
+function DocMenu({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const shut = (): void => setOpen(false)
+    /* Any click outside closes it, and the listener is added on the next tick
+       so the click that opened the menu does not immediately close it. */
+    const id = setTimeout(() => document.addEventListener('click', shut), 0)
+    return () => {
+      clearTimeout(id)
+      document.removeEventListener('click', shut)
+    }
+  }, [open])
+  return (
+    <div className="kbops">
       <button
-        className="mini ghost"
-        title={t('gui.kb.delete')}
+        className="mini ghost dots"
+        aria-label={t('gui.kb.doc_ops', { name: doc.source })}
+        aria-expanded={open}
         onClick={(e) => {
-          /* The row opens the base; deleting is not opening. */
           e.stopPropagation()
-          store.remove(base)
+          setOpen((v) => !v)
         }}
       >
-        {t('gui.kb.delete')}
+        &#8943;
       </button>
+      {open && (
+        <div className="kbmenu" role="menu">
+          <Soon label={t('gui.kb.doc_view_chunks')} className="mi" />
+          {/* Closed on the way out. A menu still standing over the row it just
+              acted on hides the status it changed, which is the one thing the
+              reader pressed it to see. */}
+          <button
+            className="mi"
+            role="menuitem"
+            disabled={busy}
+            onClick={() => {
+              setOpen(false)
+              void store.retry(doc)
+            }}
+          >
+            {t('gui.kb.doc_reindex')}
+          </button>
+          <Soon label={t('gui.kb.doc_disable')} className="mi" />
+          <button
+            className="mi danger"
+            role="menuitem"
+            disabled={busy}
+            onClick={() => {
+              setOpen(false)
+              store.removeDoc(doc)
+            }}
+          >
+            {t('gui.kb.delete')}
+          </button>
+        </div>
+      )}
     </div>
   )
+}
+
+/* Relative, because "7 minutes ago" is what a reader checks for after an
+   upload; an absolute date is for a column nobody is watching.
+
+   The same thresholds and the same keys as the agents roster
+   (features/xa/XaPage.tsx `agoText`), spelled again rather than imported --
+   the two islands share no module, and the ratchet in
+   scripts/count-shared-globals.mjs is there to keep it that way. An
+   unparseable stamp is shown as it came: a row dated "Invalid Date" says less
+   than one dated with the string the engine actually sent. */
+function ago(iso: string): string {
+  const then = Date.parse(iso)
+  if (Number.isNaN(then)) return iso
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000))
+  if (mins < 1) return t('gui.time.ago_now')
+  if (mins < 60) return t('gui.time.ago_m', { n: mins })
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return t('gui.time.ago_h', { n: hours })
+  return t('gui.time.ago_d', { n: Math.round(hours / 24) })
 }
 
 function DocRow({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
-  /* Only where they are the way out. A `ready` document needs neither, and two
-     buttons on every row would bury the one row that is stuck. */
-  const stuck = doc.status !== 'ready'
   return (
-    <div className="kbdoc">
-      <div className="nm">{doc.source}</div>
-      <div className="st">
-        <span className="who">{t('gui.kb.doc_' + doc.status)}</span>
-        {doc.chunk_count ? <span className="mdl">{t('gui.kb.chunks', { n: doc.chunk_count })}</span> : null}
-        {stuck && (
-          <>
-            <button className="mini ghost" disabled={busy} onClick={() => void store.retry(doc)}>
-              {t('gui.kb.doc_retry')}
-            </button>
-            {/* Gated like Retry, and for a worse reason than tidiness: deleting
-                mid-index takes the record and the blob while the embed is still
-                running, and `index_document` ends by re-inserting its vectors --
-                into a collection where no record owns them. `delete_document`
-                returns early once the record is gone, so nothing can reclaim
-                them, and `search` never joins a hit back to a record, so they
-                keep coming back as results. */}
-            <button className="mini ghost" disabled={busy} onClick={() => store.removeDoc(doc)}>
-              {t('gui.kb.doc_delete')}
-            </button>
-          </>
-        )}
+    <>
+      <div className="td nm" title={doc.source}>
+        {doc.source}
       </div>
-      {/* The reason travels with the row: a failed document that does not say
-          why sends the reader to a log they may not have. */}
-      {doc.error ? <div className="ds">{doc.error}</div> : null}
-    </div>
+      <div className="td">{t('gui.kb.doc_type_file')}</div>
+      <div className={`td st s-${doc.status}`}>{t('gui.kb.doc_' + doc.status)}</div>
+      <div className="td">{ago(doc.updated_at)}</div>
+      <div className="td">
+        <DocMenu doc={doc} busy={busy} />
+      </div>
+      {/* Why it failed, under the row it belongs to: a reason a reader has to
+          go to a log for is a reason they will not read. */}
+      {doc.error ? <div className="td err">{doc.error}</div> : null}
+    </>
   )
 }
 
-/* The document a hit came from, when the panel still holds the rows. A base
-   with one document does not need it; a base with twenty answers "found
-   where?" with a score and nothing else without it. */
-function sourceOf(docs: KbDoc[], id: string): string | undefined {
-  return docs.find((d) => d.id === id)?.source
-}
-
-function Hit({ hit, from }: { hit: KbHit; from?: string }): JSX.Element {
-  return (
-    <div className="kbhit">
-      {/* Two decimals: a similarity is for ranking by eye, and more digits
-          invite reading precision that is not there. */}
-      <div className="st">
-        <span className="mdl">{hit.score.toFixed(2)}</span>
-        {from ? <span className="who">{t('gui.kb.from_doc', { name: from })}</span> : null}
-      </div>
-      <div className="ds">{hit.text}</div>
-    </div>
-  )
-}
-
-function Panel({ base }: { base: KbBase }): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getState> }): JSX.Element {
   return (
     <>
       <div className="kbhd">
-        <button className="mini ghost back" onClick={() => store.back()}>
-          {t('gui.kb.back')}
-        </button>
         <b>{base.name}</b>
-        <span className="mdl">{base.embedding_model}</span>
+        {/* The model this base was built with, not the one configured now. A
+            base outlives a config change, its vector width is fixed at
+            creation, and a mismatch is why a search stops answering -- so it
+            stays on screen rather than being something to go and look up. */}
+        <span className="mdl">{base.embedding_model || t('gui.kb.embed_off')}</span>
+        <Soon label={t('gui.kb.recall_test')} />
+        <Soon label={t('gui.kb.settings')} />
       </div>
-      <div className="kbtools">
-        <label className="mini">
-          {t('gui.kb.upload')}
+      <div className="kbsub">
+        <span className="who">{t('gui.kb.updated_when', { when: ago(base.updated_at) })}</span>
+        {/* A file is a data source, so this is the button the design asks for
+            doing the one thing the engine already supports, rather than a
+            placeholder beside a working upload that had nowhere else to go.
+            The other source kinds join it here when they exist. */}
+        <label className="mini kbsrc">
+          + {t('gui.kb.add_source')}
           <input
             type="file"
             hidden
@@ -143,33 +233,14 @@ function Panel({ base }: { base: KbBase }): JSX.Element {
             }}
           />
         </label>
-        <input
-          className="kbask"
-          value={s.query}
-          placeholder={t('gui.kb.ask')}
-          onChange={(e) => store.search(e.currentTarget.value)}
-          /* Enter means "done typing": it skips the wait rather than adding a
-             request, since it cancels the pending one first. The skill hub
-             search box does the same. */
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void store.searchNow(e.currentTarget.value)
-          }}
-        />
       </div>
-      {s.hits !== null ? (
-        s.hits.length ? (
-          <div className="kbhits">
-            {s.hits.map((h, i) => (
-              <Hit key={`${h.document_id}:${i}`} hit={h} from={sourceOf(s.docs, h.document_id)} />
-            ))}
-          </div>
-        ) : (
-          <div className="empty-note">
-            <div className="ttl">{t('gui.kb.no_hits')}</div>
-          </div>
-        )
-      ) : s.docs.length ? (
-        <div className="kbdocs">
+      {s.docs.length ? (
+        <div className="kbtable">
+          <div className="th">{t('gui.kb.col_name')}</div>
+          <div className="th">{t('gui.kb.col_type')}</div>
+          <div className="th">{t('gui.kb.col_status')}</div>
+          <div className="th">{t('gui.kb.col_updated')}</div>
+          <div className="th" />
           {s.docs.map((d) => (
             <DocRow key={d.id} doc={d} busy={s.busy} />
           ))}
@@ -185,6 +256,7 @@ function Panel({ base }: { base: KbBase }): JSX.Element {
 
 export function KnowledgeApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.getState)
+  const [creating, setCreating] = useState(false)
 
   if (s.failed) {
     /* The reason, not an empty list: an unreachable engine and a deployment
@@ -221,22 +293,30 @@ export function KnowledgeApp(): JSX.Element {
   }
 
   const open = s.openId ? s.bases.find((b) => b.id === s.openId) : undefined
-  if (open) return <Panel base={open} />
-
   return (
     <>
-      <Creator busy={s.busy} />
-      {s.bases.length ? (
-        <div className="kblist">
-          {s.bases.map((base) => (
-            <Row key={base.id} base={base} />
-          ))}
+      <div className="kbsplit">
+        <div className="kbrail">
+          <button className="mini kbadd" disabled={s.busy} onClick={() => setCreating(true)}>
+            + {t('gui.kb.new')}
+          </button>
+          {s.bases.length ? (
+            s.bases.map((base) => <BaseRow key={base.id} base={base} on={base.id === s.openId} />)
+          ) : (
+            <div className="hint">{t('gui.kb.none')}</div>
+          )}
         </div>
-      ) : (
-        <div className="empty-note">
-          <div className="ttl">{t('gui.kb.none')}</div>
+        <div className="kbpane">
+          {open ? (
+            <BasePanel base={open} s={s} />
+          ) : (
+            <div className="empty-note">
+              <div className="ttl">{t('gui.kb.pick_base')}</div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
+      {creating && <CreateDialog model={s.status?.model ?? ''} onClose={() => setCreating(false)} />}
     </>
   )
 }

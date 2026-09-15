@@ -5301,66 +5301,109 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    Same card language as the memory page: a base row is a thing you open,
    and giving it its own idiom would only make the rail's two neighbours
    look like two products. */
-.kbnew { display: flex; gap: 10px; align-items: center; margin: 0 0 14px; }
-.kbnew .kbname {
-  flex: 1; max-width: 420px; background: var(--surface); border: 1px solid var(--line);
-  border-radius: 9px; padding: 8px 12px; color: var(--text); font: 12.5px var(--sans);
-  outline: none;
+/* Two panels that both stay: the bases on the left, what is in one of them on
+   the right. The drill-down this replaced put a Back button between a reader
+   and the base they were comparing against. Same split proportions as the
+   settings model rail, because it is the same shape of question. */
+.kbsplit {
+  display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 14px;
+  height: min(64vh, 620px); margin-top: 14px;
+  border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px;
 }
-.kbnew .kbname:focus { border-color: var(--amber); }
-.kblist { display: grid; gap: 10px; }
+.kbrail { overflow-y: auto; display: grid; gap: 2px; align-content: start;
+  border-right: 1px solid var(--line-soft); padding-right: 10px; }
+.kbrail .kbadd { justify-self: stretch; margin-bottom: 8px; }
+.kbrail .hint { font-size: 12px; color: var(--muted); padding: 6px 8px; line-height: 1.6; }
 .kbrow {
-  position: relative; text-align: left; border: 1px solid var(--line); border-radius: 12px;
-  background: var(--ink); box-shadow: var(--elev); padding: 12px 15px 11px;
-  display: grid; gap: 4px; cursor: pointer;
-  transition: border-color .15s ease, box-shadow .15s ease;
+  display: grid; gap: 2px; text-align: left; cursor: pointer; width: 100%;
+  border: 1px solid transparent; border-radius: 9px; background: none;
+  padding: 8px 10px; color: var(--text); font: inherit;
 }
-.kbrow:hover { border-color: var(--faint); box-shadow: var(--elev-up); }
-.kbrow .nm { font-size: 13.5px; font-weight: 600; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; padding-right: 64px; }
-.kbrow .st, .kbhd .st, .kbhit .st { display: flex; gap: 8px; align-items: center; }
-.kbrow .ds { font-size: 12.5px; color: var(--muted); line-height: 1.65;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-/* Parked in the corner rather than in the flow: deleting is the one thing on
-   the card that is not opening it, and a button beside the name reads as the
-   card's purpose. */
-.kbrow > .mini { position: absolute; top: 10px; right: 12px; }
-/* The document count and the model: mono, because both are read as values.
-   The chip is the count -- the model recedes, since it matters only when it
-   disagrees with the one configured now. */
-.kbrow .who, .kbdoc .who, .kbhit .who {
-  font-family: var(--mono); font-size: 10.5px; color: var(--muted);
-  background: var(--raised); border-radius: 5px; padding: 1px 6px; flex: none;
-}
-.kbrow .mdl, .kbhd .mdl, .kbdoc .mdl {
-  font-family: var(--mono); font-size: 10.5px; color: var(--faint); flex: none;
-}
+.kbrow:hover { background: var(--surface); }
+/* The selected base is the subject of the whole right-hand panel, so it is
+   marked by fill rather than by a border a reader has to look for. */
+.kbrow[aria-current] { background: var(--surface); border-color: var(--line); }
+.kbrow .nm { font-size: 13px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.kbpane { overflow-y: auto; min-width: 0; padding: 0 2px 8px 4px; }
 .kbhd { display: flex; align-items: center; gap: 10px; padding-bottom: 12px;
   border-bottom: 1px solid var(--line-soft); }
 .kbhd b { font-size: 14px; font-weight: 600; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
-.kbhd .back { flex: none; }
-.kbhd .mdl { margin-left: auto; }
-.kbtools { display: flex; gap: 10px; align-items: center; margin: 14px 0; }
+/* The controls sit together at the far end, away from the name and the model. */
+.kbhd > button:first-of-type { margin-left: auto; }
+.kbhd .mdl { font-family: var(--mono); font-size: 11px; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kbsub { display: flex; align-items: center; gap: 10px; margin: 12px 0 14px; }
+.kbsub .who { margin-right: auto; }
 /* The file input is hidden behind its own label, so the label has to look and
    behave like the button it stands in for. */
-.kbtools label.mini { cursor: pointer; flex: none; }
-.kbtools .kbask {
-  flex: 1; max-width: 420px; background: var(--surface); border: 1px solid var(--line);
-  border-radius: 9px; padding: 8px 12px; color: var(--text); font: 12.5px var(--sans);
-  outline: none;
+.kbsub label.kbsrc { cursor: pointer; flex: none; }
+
+/* A grid rather than a table element: the failure reason is a full-width row
+   under the one it explains, which a table would need a colspan for. */
+.kbtable {
+  display: grid; grid-template-columns: minmax(0, 1fr) 84px 110px 120px 44px;
+  align-items: center; row-gap: 1px;
 }
-.kbtools .kbask:focus { border-color: var(--amber); }
-.kbdocs { display: grid; gap: 8px; }
-.kbdoc {
-  border: 1px solid var(--line); border-radius: 10px; background: var(--ink);
-  padding: 10px 13px; display: grid; gap: 3px;
+.kbtable .th {
+  font-size: 11.5px; color: var(--muted); font-weight: 600;
+  padding: 0 8px 8px; border-bottom: 1px solid var(--line-soft);
 }
-.kbdoc .nm { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kbdoc .st { display: flex; gap: 8px; align-items: center; }
-/* Why it failed, in the colour of a failure: a reason set in body text reads
-   as part of the document. */
-.kbdoc .ds { font-size: 11.5px; color: var(--clay); line-height: 1.6; }
+.kbtable .td { font-size: 12.5px; padding: 11px 8px; border-bottom: 1px solid var(--line-soft);
+  min-width: 0; }
+.kbtable .td.nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kbtable .td.st { font-size: 12px; }
+/* Status carries the only colour in the row, because it is the only cell a
+   reader scans a list of files for. */
+.kbtable .td.s-ready { color: var(--moss); }
+.kbtable .td.s-failed { color: var(--clay); }
+.kbtable .td.s-indexing, .kbtable .td.s-pending { color: var(--amber); }
+.kbtable .td.err {
+  grid-column: 1 / -1; font-size: 11.5px; color: var(--clay); line-height: 1.6;
+  padding: 0 8px 10px; border-bottom: 1px solid var(--line-soft);
+}
+.kbops { position: relative; display: flex; justify-content: flex-end; }
+.kbops .dots { padding: 2px 8px; font-size: 15px; line-height: 1; }
+.kbmenu {
+  position: absolute; top: 100%; right: 0; z-index: var(--z-menu); min-width: 176px;
+  display: grid; gap: 1px; padding: 6px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--ink); box-shadow: var(--elev-up);
+}
+.kbmenu .mi {
+  text-align: left; background: none; border: 0; border-radius: 7px;
+  padding: 8px 10px; font: 12.5px var(--sans); color: var(--text); cursor: pointer;
+}
+.kbmenu .mi:hover:not(:disabled) { background: var(--surface); }
+.kbmenu .mi:disabled { color: var(--faint); cursor: default; }
+.kbmenu .mi.danger { color: var(--clay); }
+
+/* The create dialog. Its own overlay rather than the settings modal: this
+   island is mounted on its own and has no access to that one. */
+.kbmodal {
+  position: fixed; inset: 0; z-index: var(--z-veil); display: grid; place-items: center;
+  background: var(--scrim-mid); padding: 20px;
+}
+.kbdlg {
+  position: relative; width: min(440px, 100%); display: grid; gap: 6px;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--ink);
+  box-shadow: var(--elev-up); padding: 22px 24px 20px;
+}
+.kbdlg .ttl { font-size: 17px; font-weight: 700; margin-bottom: 10px; }
+.kbdlg .fl { font-size: 12.5px; font-weight: 600; margin-top: 8px; }
+.kbdlg .x {
+  position: absolute; top: 12px; right: 14px; background: none; border: 0;
+  color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 4px;
+}
+.kbdlg .kbname {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
+  padding: 10px 12px; color: var(--text); font: 13px var(--sans); outline: none;
+}
+.kbdlg .kbname:focus { border-color: var(--amber); }
+.kbdlg select.mini { width: 100%; text-align: left; }
+.kbdlg .hint { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+.kbdlg .acts { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .kbhits { display: grid; gap: 10px; }
 .kbhit {
   border: 1px solid var(--line); border-radius: 12px; background: var(--ink);

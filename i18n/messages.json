@@ -2967,6 +2967,102 @@
       "en": "Add a document",
       "zh": "添加文档"
     },
+    "gui.kb.add_source": {
+      "en": "Add Data Source",
+      "zh": "添加数据源"
+    },
+    "gui.kb.cancel": {
+      "en": "Cancel",
+      "zh": "取消"
+    },
+    "gui.kb.col_name": {
+      "en": "Name",
+      "zh": "名称"
+    },
+    "gui.kb.col_ops": {
+      "en": "Actions",
+      "zh": "操作"
+    },
+    "gui.kb.col_status": {
+      "en": "Status",
+      "zh": "状态"
+    },
+    "gui.kb.col_type": {
+      "en": "Type",
+      "zh": "类型"
+    },
+    "gui.kb.col_updated": {
+      "en": "Updated",
+      "zh": "更新时间"
+    },
+    "gui.kb.create": {
+      "en": "Create",
+      "zh": "创建"
+    },
+    "gui.kb.doc_disable": {
+      "en": "Disable",
+      "zh": "停用"
+    },
+    "gui.kb.doc_enable": {
+      "en": "Enable",
+      "zh": "启用"
+    },
+    "gui.kb.doc_ops": {
+      "en": "Actions for {name}",
+      "zh": "{name} 的操作"
+    },
+    "gui.kb.doc_reindex": {
+      "en": "Reindex",
+      "zh": "重新索引"
+    },
+    "gui.kb.doc_type_file": {
+      "en": "Files",
+      "zh": "文件"
+    },
+    "gui.kb.doc_view_chunks": {
+      "en": "View Chunks",
+      "zh": "查看分块"
+    },
+    "gui.kb.embed_model": {
+      "en": "Embedding Model",
+      "zh": "嵌入模型"
+    },
+    "gui.kb.embed_off": {
+      "en": "Disabled",
+      "zh": "不启用"
+    },
+    "gui.kb.embed_off_note": {
+      "en": "No embedding model. The base stores its documents and is not searched by vector.",
+      "zh": "不使用嵌入模型。该知识库仅保存文档，不进行向量检索。"
+    },
+    "gui.kb.name": {
+      "en": "Name",
+      "zh": "名称"
+    },
+    "gui.kb.new_title": {
+      "en": "New Knowledge Base",
+      "zh": "新建知识库"
+    },
+    "gui.kb.pick_base": {
+      "en": "Select a knowledge base to see what is in it.",
+      "zh": "请选择一个知识库以查看其内容。"
+    },
+    "gui.kb.recall_test": {
+      "en": "Recall Test",
+      "zh": "召回测试"
+    },
+    "gui.kb.settings": {
+      "en": "Settings",
+      "zh": "设置"
+    },
+    "gui.kb.soon": {
+      "en": "Not built yet",
+      "zh": "尚未实现"
+    },
+    "gui.kb.updated_when": {
+      "en": "Updated {when}",
+      "zh": "更新于 {when}"
+    },
     "gui.kb.ask": {
       "en": "Search this base",
       "zh": "在这个库里检索"
