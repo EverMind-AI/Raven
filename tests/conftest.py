@@ -83,6 +83,25 @@ def pytest_configure(config: pytest.Config) -> None:
         if not 1 <= k <= n:
             raise pytest.UsageError(f"--shard {spec}: K must be between 1 and N")
         _SHARD = (k, n)
+    if config.getoption("--idle-ceiling-strict"):
+        _warm_the_heaviest_import()
+
+
+def _warm_the_heaviest_import() -> None:
+    """Pay litellm's import here rather than inside whichever test is first.
+
+    Opening its few thousand files costs about 1.7 s that no CPU accounts for,
+    so it lands as idle on one test, and which test that is depends on the
+    order the shard collected. A gate cannot be held to a moving target. Most
+    runs import it during collection anyway, from the twenty test modules that
+    name a provider at module level, and this is then a no-op.
+    """
+    try:
+        from raven.providers.litellm_setup import import_litellm
+
+        import_litellm()
+    except Exception as exc:  # noqa: BLE001 -- a missing extra is not this hook's business
+        print(f"idle ceiling: litellm did not warm up ({exc}); a first import may be charged to a test")
 
 
 def _no_recurse(pattern: str, directory: Path) -> bool:
@@ -142,9 +161,21 @@ def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool 
     return True if index % n != k - 1 else None
 
 
+def _clocks() -> tuple[float, float]:
+    """The wall clock, and every CPU second spent on this process's behalf.
+
+    ``os.times`` counts the CPU of children this process has reaped as well as
+    its own, and POSIX makes that recursive, so a subprocess doing real work --
+    a LibreOffice conversion, a browser, eight spawned workers -- lands on the
+    account of the test that waited for it.
+    """
+    spent = os.times()
+    return time.perf_counter(), spent.user + spent.system + spent.children_user + spent.children_system
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
-    item.stash[_CLOCKS] = (time.perf_counter(), time.process_time())
+    item.stash[_CLOCKS] = _clocks()
     yield
 
 
@@ -152,13 +183,14 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
     """Write the test's idle time onto its teardown report.
 
-    Idle is wall clock minus this process's CPU time over setup, call and
-    teardown. It is what the ceiling judges, rather than wall clock, because
-    the class it guards against is a test waiting out a production sleep or a
-    subprocess it did not need: that shows the same seconds on every machine,
-    where a test that computes for two seconds on a laptop computes for seven
-    on the CI runner and is not the problem. The report carries the number so
-    the xdist controller, which sees only reports, can judge it.
+    Idle is the wall clock of setup, call and teardown minus the CPU anyone
+    spent on the test in that window. It is what the ceiling judges, rather
+    than wall clock, because the class it guards against is a test waiting:
+    on a production backoff, on a timeout it arranged, on a process that
+    answers nothing. A wait costs the same seconds on every machine, where
+    work costs two seconds on a laptop and seven on a CI runner and is not the
+    problem. The report carries the number so the xdist controller, which sees
+    only reports, can judge it.
     """
     outcome = yield
     if call.when != "teardown":
@@ -166,8 +198,9 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
     started = item.stash.get(_CLOCKS, None)
     if started is None:
         return
-    wall = time.perf_counter() - started[0]
-    idle = wall - (time.process_time() - started[1])
+    now = _clocks()
+    wall = now[0] - started[0]
+    idle = wall - (now[1] - started[1])
     report = outcome.get_result()
     report.user_properties.append((_IDLE_PROPERTY, idle))
     report.user_properties.append((_WALL_PROPERTY, wall))
