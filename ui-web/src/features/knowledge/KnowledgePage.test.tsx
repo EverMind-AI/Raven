@@ -913,3 +913,97 @@ describe('the create dialog', () => {
     expect(document.querySelector('.kbdlg')).toBeNull()
   })
 })
+
+describe('viewing the original file', () => {
+  const openBase = async (docs: KbDoc[]) => {
+    source({ bases: async () => [base({ id: 'b1', name: 'handbook' })], documents: async () => docs })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+  }
+
+  const clickName = async (name: string) => {
+    await act(async () => {
+      ;(screen.getByText(name).closest('button') as HTMLButtonElement).click()
+    })
+  }
+
+  it('frames the file when its name is clicked, and goes back', async () => {
+    await openBase([doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })])
+
+    await clickName('contract.pdf')
+
+    const frame = document.querySelector('.kbframe') as HTMLIFrameElement
+    expect(frame).not.toBeNull()
+    expect(frame.getAttribute('src')).toBe('/knowledge/file?document=d1')
+    /* No sandbox attribute: the response already carries a CSP sandbox, and the
+       attribute as well stops the browser's own PDF viewer drawing anything. */
+    expect(frame.hasAttribute('sandbox')).toBe(false)
+    expect(document.querySelector('.kbtable')).toBeNull()
+
+    await act(async () => {
+      ;(document.querySelector('.kbback') as HTMLButtonElement).click()
+    })
+    expect(document.querySelector('.kbframe')).toBeNull()
+    expect(document.querySelector('.kbtable')).not.toBeNull()
+  })
+
+  it('asks the gateway to convert the formats no browser draws', async () => {
+    await openBase([doc({ id: 'd2', source: 'notice.doc', status: 'ready' })])
+
+    await clickName('notice.doc')
+
+    /* A legacy .doc has no reader in the browser and no pure-Python one worth
+       trusting, so the gateway renders it with LibreOffice first. */
+    expect((document.querySelector('.kbframe') as HTMLIFrameElement).getAttribute('src')).toBe(
+      '/knowledge/file?document=d2&render=pdf',
+    )
+  })
+
+  it('offers a download rather than framing what cannot be drawn', async () => {
+    await openBase([doc({ id: 'd3', source: 'archive.zip', status: 'ready' })])
+
+    await clickName('archive.zip')
+
+    expect(document.querySelector('.kbframe')).toBeNull()
+    expect(screen.getByText('gui.kb.no_preview')).toBeTruthy()
+    const link = screen.getByText('gui.kb.download') as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe('/knowledge/file?document=d3')
+    expect(link.getAttribute('download')).toBe('archive.zip')
+  })
+
+  it('leaves the viewer when the base does', async () => {
+    /* A frame still showing the last base's document while the rail has moved
+       on is the panel lying about what it belongs to. */
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' }), base({ id: 'b2', name: 'policies' })],
+      documents: async (id: string) =>
+        id === 'b1' ? [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })] : [],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await clickName('contract.pdf')
+    expect(document.querySelector('.kbframe')).not.toBeNull()
+
+    await act(async () => {
+      await store.open_('b2')
+    })
+
+    expect(document.querySelector('.kbframe')).toBeNull()
+  })
+
+  it('sorts every offered format into framed, converted or neither', () => {
+    const kind = (name: string) => store.previewKind(doc({ id: 'x', source: name }))
+    expect(kind('a.pdf')).toBe('native')
+    expect(kind('a.png')).toBe('native')
+    expect(kind('a.md')).toBe('native')
+    expect(kind('a.docx')).toBe('converted')
+    expect(kind('a.XLS')).toBe('converted')
+    expect(kind('a.zip')).toBe('none')
+    /* No suffix at all is not a format anyone can guess at. */
+    expect(kind('README')).toBe('none')
+  })
+})

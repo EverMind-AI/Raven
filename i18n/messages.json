@@ -3023,6 +3023,14 @@
       "en": "View Chunks",
       "zh": "查看分块"
     },
+    "gui.kb.download": {
+      "en": "Download",
+      "zh": "下载"
+    },
+    "gui.kb.no_preview": {
+      "en": "This file cannot be shown here.",
+      "zh": "该文件无法在此预览。"
+    },
     "gui.kb.embed_model": {
       "en": "Embedding Model",
       "zh": "嵌入模型"

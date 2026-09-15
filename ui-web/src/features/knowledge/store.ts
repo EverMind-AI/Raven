@@ -40,6 +40,11 @@ interface State {
      so going back and returning does not silently drop what was asked. */
   query: string
   hits: KbHit[] | null
+  /* The document whose original file is on screen, or null for the table.
+     Held as the record rather than an id: the viewer needs the name and the
+     media type to decide what it is showing, and a row that is deleted while
+     open should not leave the panel looking up an id that is gone. */
+  viewing: KbDoc | null
 }
 
 const EMPTY: State = {
@@ -52,6 +57,7 @@ const EMPTY: State = {
   busy: false,
   query: '',
   hits: null,
+  viewing: null,
 }
 
 let state: State = EMPTY
@@ -137,7 +143,7 @@ export async function open_(id: string): Promise<void> {
   /* A query typed in the base being left must not spend a request, nor land
      its hits in the base being opened. */
   cancelSearch()
-  set({ openId: id, docs: [], query: '', hits: null })
+  set({ openId: id, docs: [], query: '', hits: null, viewing: null })
   try {
     const docs = await source().documents(id)
     /* The reader may have gone back or opened another base while this was in
@@ -150,7 +156,7 @@ export async function open_(id: string): Promise<void> {
 
 export function back(): void {
   cancelSearch()
-  set({ openId: null, docs: [], query: '', hits: null })
+  set({ openId: null, docs: [], query: '', hits: null, viewing: null })
 }
 
 export async function upload(file: File): Promise<void> {
@@ -323,4 +329,45 @@ export function _resetForTests(): void {
   /* The timer and the token too: a test that types without waiting out the
      debounce would otherwise fire into the next test's source. */
   cancelSearch()
+}
+
+/* ── the original file behind a row ───────────────────────────────────
+   The gateway serves it by document id, never by path: the blobs live under
+   raven's state directory, which the viewer's own path policy refuses, and an
+   id means nothing the page sends names a location. */
+
+/* Formats no browser draws, which the gateway converts to PDF with
+   LibreOffice. Keyed on the upload's own name because that is what the record
+   kept -- the stored copy has no suffix at all. */
+const CONVERTED = new Set(['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'odt', 'odp', 'ods', 'rtf'])
+/* What a frame can draw as it stands. Everything else is offered as a
+   download rather than shown as a wall of bytes. */
+const NATIVE = new Set([
+  'pdf', 'txt', 'md', 'markdown', 'mdx', 'csv', 'tsv', 'json', 'xml', 'yaml', 'yml',
+  'html', 'htm', 'log', 'rst', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif',
+])
+
+function suffixOf(doc: KbDoc): string {
+  const name = doc.source || ''
+  const dot = name.lastIndexOf('.')
+  return dot < 0 ? '' : name.slice(dot + 1).toLowerCase()
+}
+
+export function previewKind(doc: KbDoc): 'native' | 'converted' | 'none' {
+  const ext = suffixOf(doc)
+  if (CONVERTED.has(ext)) return 'converted'
+  return NATIVE.has(ext) ? 'native' : 'none'
+}
+
+export function previewUrl(doc: KbDoc): string {
+  const base = `/knowledge/file?document=${encodeURIComponent(doc.id)}`
+  return previewKind(doc) === 'converted' ? `${base}&render=pdf` : base
+}
+
+export function openDoc(doc: KbDoc): void {
+  set({ viewing: doc })
+}
+
+export function closeDoc(): void {
+  set({ viewing: null })
 }

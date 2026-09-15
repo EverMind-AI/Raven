@@ -5403,7 +5403,35 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .kbdlg .kbname:focus { border-color: var(--amber); }
 .kbdlg select.mini { width: 100%; text-align: left; }
 .kbdlg .hint { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
-.kbdlg .acts { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+/* kbacts, not acts: `.acts` is the transcript's message-action row, and its
+   `.acts button` makes every button a 27px borderless icon square -- which
+   outranks `.mini` and left Cancel and Create as two grey words touching each
+   other. A shared stylesheet has one namespace, so the island takes a name of
+   its own rather than fighting the specificity. */
+.kbdlg .kbacts { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+/* the file viewer ---------------------------------------------------- */
+/* The name is the way into the file, so it reads as the row's own text and
+   behaves as the control it is. */
+.kbopen {
+  background: none; border: 0; padding: 0; text-align: left; cursor: pointer;
+  color: var(--text); font: inherit; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kbopen:hover { color: var(--amber); }
+.kbvhd { display: flex; align-items: center; gap: 10px; padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft); }
+.kbvhd b { font-size: 13.5px; font-weight: 600; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kbback {
+  flex: none; background: none; border: 0; cursor: pointer; padding: 2px 6px;
+  color: var(--muted); font-size: 16px; line-height: 1; border-radius: 7px;
+}
+.kbback:hover { color: var(--text); background: var(--surface); }
+/* Tall enough to read a page of a document in, and the panel scrolls rather
+   than the frame's own content being squeezed. */
+.kbframe { width: 100%; height: calc(100% - 44px); min-height: 420px; border: 0;
+  border-radius: 0 0 10px 10px; background: var(--surface); }
+
 .kbhits { display: grid; gap: 10px; }
 .kbhit {
   border: 1px solid var(--line); border-radius: 12px; background: var(--ink);
