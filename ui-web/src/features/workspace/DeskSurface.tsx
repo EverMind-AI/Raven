@@ -5,6 +5,7 @@ import { createPortal, flushSync } from 'react-dom'
 
 import { AgentRecordConversation, InstanceConversation } from '../subagents/SubagentsPage'
 import { InstanceMode } from '../subagents/InstanceMode'
+import { InstanceModel } from '../subagents/InstanceModel'
 import * as agents from '../subagents/store'
 import { t } from '../../shell/bridge'
 import { ChgDiff, FileView } from './WorkspacePage'
@@ -88,6 +89,7 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
         <span className="pane-spacer" />
         {/* Live instances only. A record is a run that already happened, and the
             mode it ran under is not a thing a reader can still change. */}
+        {pane.kind === 'agent' ? <InstanceModel row={row!} /> : null}
         {pane.kind === 'agent' ? <InstanceMode row={row!} /> : null}
         <button
           className="pane-fullscreen"

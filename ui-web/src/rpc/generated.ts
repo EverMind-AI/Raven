@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 168 methods, 96 component schemas.
+// 169 methods, 96 component schemas.
 
 /* eslint-disable */
 /**
@@ -2182,6 +2182,42 @@ export interface SubagentsInstanceSetModeResult {
     description?: string;
   }[];
 }
+export interface SubagentsInstanceSetModelParams {
+  session_key: string;
+  agent: string;
+  handle: string;
+  /**
+   * The opaque provider-qualified id the agent offered. Never a display name: the two differ and the agent takes only the id back.
+   */
+  model?: string;
+  /**
+   * Drop this instance's override, returning it to the agent's own model. model wins when both are given, matching set_mode: naming one is a statement, clearing is the absence of one.
+   */
+  clear?: boolean;
+}
+export interface SubagentsInstanceSetModelResult {
+  /**
+   * This instance's override, or null when it follows the agent's own model.
+   */
+  model?: string | null;
+  /**
+   * The menu the agent advertised, measured from its own handshake rather than declared here.
+   */
+  availableModels?: {
+    /**
+     * The id the agent takes back.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually far shorter than the value.
+     */
+    name?: string;
+    /**
+     * The agent's own bucketing, a provider typically. Empty when it offered none.
+     */
+    group?: string;
+  }[];
+}
 export interface SessionSetModeParams {
   session_key: string;
   mode?: string;
@@ -3842,6 +3878,7 @@ export interface RpcMethods {
   'subagents.instance.forget': { params: SubagentsInstanceForgetParams; result: SubagentsInstanceForgetResult };
   'subagents.instance.steer': { params: SubagentsInstanceSteerParams; result: SubagentsInstanceSteerResult };
   'subagents.instance.set_mode': { params: SubagentsInstanceSetModeParams; result: SubagentsInstanceSetModeResult };
+  'subagents.instance.set_model': { params: SubagentsInstanceSetModelParams; result: SubagentsInstanceSetModelResult };
   'session.set_mode': { params: SessionSetModeParams; result: SessionSetModeResult };
   'system.hello': { params: SystemHelloParams; result: SystemHelloResult };
   'system.ping': { params: SystemPingParams; result: SystemPingResult };
@@ -4113,6 +4150,7 @@ export const RPC_METHODS = [
   "subagents.instance.forget",
   "subagents.instance.history",
   "subagents.instance.set_mode",
+  "subagents.instance.set_model",
   "subagents.instance.steer",
   "subagents.instances",
   "subagents.list",
