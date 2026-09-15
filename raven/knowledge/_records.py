@@ -19,6 +19,7 @@ import json
 import os
 import uuid
 from dataclasses import asdict, dataclass, replace
+from dataclasses import fields as dataclass_fields
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -39,6 +40,82 @@ DEFAULT_TOP_K = 6
 DEFAULT_CHUNK_SIZE = 2048
 DEFAULT_CHUNK_OVERLAP = 215
 DEFAULT_SEPARATOR = "\n\n"
+
+
+#: Where a field this version added is written, rather than beside the record
+#: it belongs to.
+#:
+#: A previous version's loader builds each record by handing every stored key
+#: to a dataclass constructor, and drops the row when one of them is a keyword
+#: that constructor does not take. So writing a new field into the record
+#: itself makes every base and document vanish from a build that is rolled
+#: back -- the records are still on disk, and nothing lists them.
+#:
+#: These two keys are siblings of ``bases`` and ``documents``, and a loader
+#: that does not know them does not read them. What a rollback loses is the
+#: settings, which that build has no use for; what it keeps is every base and
+#: every document, which is the part that cannot be recovered by re-entering
+#: it.
+BASE_EXTRAS = "base_settings"
+DOCUMENT_EXTRAS = "document_origins"
+
+#: The fields a record carried before those keys existed. Stated rather than
+#: derived, because what belongs beside the record is "what the previous
+#: loader accepts", and that is a fact about a build that has shipped -- it
+#: does not change when a field is added here.
+LEGACY_BASE_FIELDS = (
+    "name",
+    "embedding_model",
+    "dimensions",
+    "created_at",
+    "updated_at",
+    "description",
+)
+LEGACY_DOCUMENT_FIELDS = (
+    "base_id",
+    "source",
+    "media_type",
+    "size",
+    "status",
+    "created_at",
+    "updated_at",
+    "chunk_count",
+    "error",
+)
+
+
+def _split(record: Any, legacy: "tuple[str, ...]") -> "tuple[dict[str, Any], dict[str, Any]]":
+    """One record as (what the old schema holds, what this version added).
+
+    A newer field still sitting at its default is left out of the second half:
+    it round-trips to the same value either way, and omitting it means an
+    installation that has changed no setting writes the file the previous
+    build wrote, down to its keys.
+    """
+    fields = {k: v for k, v in asdict(record).items() if k != "id"}
+    known = {k: v for k, v in fields.items() if k in legacy}
+    defaults = {f.name: f.default for f in dataclass_fields(record)}
+    extra = {k: v for k, v in fields.items() if k not in legacy and v != defaults.get(k)}
+    return known, extra
+
+
+def _build(cls: Any, record_id: str, fields: dict, extra: dict | None) -> Any:
+    """One record from its stored halves, or ``None`` when it will not build.
+
+    Keys the dataclass does not take are dropped rather than failing the row.
+    A registry written by a *later* version is the mirror of the case the two
+    keys above exist for, and losing a base because a build after this one
+    added a field would be the same bug in the other direction.
+    """
+    taken = {f.name for f in dataclass_fields(cls)}
+    merged = {**fields, **(extra or {})}
+    unknown = sorted(k for k in merged if k not in taken)
+    if unknown:
+        logger.debug("knowledge: ignoring unknown field(s) {} on {}", ", ".join(unknown), record_id)
+    try:
+        return cls(id=record_id, **{k: v for k, v in merged.items() if k in taken})
+    except TypeError:
+        return None
 
 
 def _now() -> str:
@@ -134,16 +211,20 @@ class RecordStore:
             return
         if not isinstance(raw, dict):
             return
+        base_extra = raw.get(BASE_EXTRAS) or {}
+        doc_extra = raw.get(DOCUMENT_EXTRAS) or {}
         for base_id, fields in (raw.get("bases") or {}).items():
-            try:
-                self._bases[base_id] = KnowledgeBaseRecord(id=base_id, **fields)
-            except TypeError:
+            record = _build(KnowledgeBaseRecord, base_id, fields, base_extra.get(base_id))
+            if record is None:
                 logger.warning("knowledge: dropping malformed base {}", base_id)
+            else:
+                self._bases[base_id] = record
         for doc_id, fields in (raw.get("documents") or {}).items():
-            try:
-                self._documents[doc_id] = KnowledgeDocumentRecord(id=doc_id, **fields)
-            except TypeError:
+            record = _build(KnowledgeDocumentRecord, doc_id, fields, doc_extra.get(doc_id))
+            if record is None:
                 logger.warning("knowledge: dropping malformed document {}", doc_id)
+            else:
+                self._documents[doc_id] = record
         self._requeue_interrupted()
 
     def _requeue_interrupted(self) -> None:
@@ -163,10 +244,20 @@ class RecordStore:
             self._save()
 
     def _save(self) -> None:
+        bases = {b.id: _split(b, LEGACY_BASE_FIELDS) for b in self._bases.values()}
+        documents = {d.id: _split(d, LEGACY_DOCUMENT_FIELDS) for d in self._documents.values()}
         payload = {
-            "bases": {b.id: {k: v for k, v in asdict(b).items() if k != "id"} for b in self._bases.values()},
-            "documents": {d.id: {k: v for k, v in asdict(d).items() if k != "id"} for d in self._documents.values()},
+            "bases": {i: known for i, (known, _) in bases.items()},
+            "documents": {i: known for i, (known, _) in documents.items()},
         }
+        # Only when there is something to put there, so a registry that uses
+        # none of them is byte-for-byte what the older writer produced.
+        base_extra = {i: extra for i, (_, extra) in bases.items() if extra}
+        doc_extra = {i: extra for i, (_, extra) in documents.items() if extra}
+        if base_extra:
+            payload[BASE_EXTRAS] = base_extra
+        if doc_extra:
+            payload[DOCUMENT_EXTRAS] = doc_extra
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
