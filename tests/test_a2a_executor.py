@@ -30,7 +30,7 @@ class FakeContext:
 async def test_a_completed_turn_enqueues_its_answer():
     from a2a.types import Task, TaskState
 
-    async def run_turn(prompt):
+    async def run_turn(prompt, *, conversation_id, broker):
         assert prompt == "do the thing"
         return "the answer"
 
@@ -51,7 +51,7 @@ async def test_a_completed_turn_enqueues_its_answer():
 async def test_a_failed_turn_reports_the_failed_state():
     from a2a.types import TaskState
 
-    async def run_turn(prompt):
+    async def run_turn(prompt, *, conversation_id, broker):
         raise RuntimeError("boom")
 
     queue = FakeQueue()
@@ -60,7 +60,7 @@ async def test_a_failed_turn_reports_the_failed_state():
 
 
 async def test_a_raising_turn_does_not_put_the_traceback_on_the_wire():
-    async def run_turn(prompt):
+    async def run_turn(prompt, *, conversation_id, broker):
         raise RuntimeError("/srv/secret/path.py exploded with API_KEY=abc123")
 
     queue = FakeQueue()
@@ -85,15 +85,31 @@ async def _drain_until(condition, attempts=50):
     raise AssertionError("condition never became true")
 
 
+async def test_the_conversation_id_reaches_run_turn_and_differs_from_the_task_id():
+    """`execute` mints a raven conversation id per task and passes it to `run_turn`
+    as a keyword -- that id, not the A2A task id, is what `AskUserTool` actually
+    parks futures under (see `ask_user.py`'s `set_context`).
+    """
+    seen: dict[str, str] = {}
+
+    async def run_turn(prompt, *, conversation_id, broker):
+        seen["conversation_id"] = conversation_id
+        return "ok"
+
+    await RavenAgentExecutor(run_turn).execute(FakeContext(), FakeQueue())
+
+    assert seen["conversation_id"], "run_turn must receive a non-empty conversation id"
+    assert seen["conversation_id"] != "task-1"
+
+
 async def test_a_turn_that_asks_parks_then_completes_once_answered():
     from a2a.types import TaskState
 
-    async def run_turn(prompt):
-        # No real ask_user wiring exists yet for A2A (see executor.py's module
-        # docstring); this stand-in reaches the broker the way a future tool
-        # integration would, keyed by the same task id FakeContext always uses.
-        broker = executor._brokers["task-1"]
-        choice = await broker.await_question("task-1", prompt="which one?")
+    async def run_turn(prompt, *, conversation_id, broker):
+        # The broker and conversation id arrive as the same kwargs `execute`
+        # injects into the real turn path -- nothing here reaches into the
+        # executor's private bookkeeping to find them.
+        choice = await broker.await_question(conversation_id, prompt="which one?")
         return f"chose: {choice}"
 
     executor = RavenAgentExecutor(run_turn)
@@ -109,6 +125,9 @@ async def test_a_turn_that_asks_parks_then_completes_once_answered():
     ]
     assert not turn.done()
 
+    # `answer()` is keyed by the task id -- the id a caller resuming a task
+    # actually has -- and translates it to the conversation id the broker
+    # parked the future under.
     assert executor.answer("task-1", "the second one") is True
     await turn
     assert queue.events[-1].status.state == TaskState.TASK_STATE_COMPLETED
@@ -116,7 +135,7 @@ async def test_a_turn_that_asks_parks_then_completes_once_answered():
 
 
 async def test_answer_on_an_unknown_task_id_reports_that_it_did_nothing():
-    async def run_turn(prompt):
+    async def run_turn(prompt, *, conversation_id, broker):
         return "unused"
 
     assert RavenAgentExecutor(run_turn).answer("no-such-task", "hi") is False
@@ -128,10 +147,8 @@ async def test_two_parked_tasks_are_tracked_and_answered_independently():
     """
     from a2a.types import TaskState
 
-    async def run_turn(prompt):
-        task_id = "task-1" if prompt == "first" else "task-2"
-        broker = executor._brokers[task_id]
-        choice = await broker.await_question(task_id, prompt="which one?")
+    async def run_turn(prompt, *, conversation_id, broker):
+        choice = await broker.await_question(conversation_id, prompt="which one?")
         return f"chose: {choice}"
 
     executor = RavenAgentExecutor(run_turn)

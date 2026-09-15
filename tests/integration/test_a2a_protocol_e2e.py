@@ -16,8 +16,10 @@ from aiohttp.test_utils import TestServer
 
 from raven.a2a.card import CARD_PATH
 from raven.a2a.routes_aiohttp import add_a2a_routes
-from raven.a2a.runtime import build_request_handler
+from raven.a2a.runtime import build_request_handler, make_run_turn
+from raven.agent.tools.ask_user import AskUserTool
 from raven.config.schema import A2aConfig
+from raven.contracts.tool import ToolResult
 
 CONFIG = A2aConfig.model_validate({"server": {"enabled": True, "token": "t0ken", "path": "/a2a"}})
 
@@ -26,7 +28,7 @@ CONFIG = A2aConfig.model_validate({"server": {"enabled": True, "token": "t0ken",
 async def server() -> AsyncIterator[TestServer]:
     """`pytest-aiohttp` is absent; aiohttp's own TestServer is what this repo uses."""
 
-    async def run_turn(prompt):
+    async def run_turn(prompt, *, conversation_id, broker):
         return f"echo: {prompt}"
 
     app = web.Application()
@@ -113,6 +115,30 @@ async def test_streaming_delivers_more_than_one_event(server):
     assert len(lines) >= 2
 
 
+class _StandInLoop:
+    """Minimal stand-in for `AgentLoop`: exposes `.tools` and `.run_turn` the way
+    `runtime._run_one_shot_turn` expects, without building a real agent loop.
+
+    The tool under `self.tools["ask_user"]` is a real `AskUserTool`, reached the
+    same way the production turn path reaches it: `_run_one_shot_turn` calls
+    `set_broker` on it before `run_turn` runs, and `run_turn` itself here calls
+    `set_context`, mirroring the one call `turn_path.py` would make in the real
+    loop. Nothing in this test reaches into the executor's or the broker's
+    private state to shortcut the ask.
+    """
+
+    def __init__(self) -> None:
+        self.tools = {"ask_user": AskUserTool()}
+        self.prompts: list[str] = []
+
+    async def run_turn(self, req, emit, drain, *, stream, text_sink):
+        self.prompts.append(req.text)
+        ask_tool = self.tools["ask_user"]
+        ask_tool.set_context(req.conversation)
+        result = await ask_tool.execute(questions=[{"question": "which one?", "options": ["first", "second"]}])
+        text_sink["text"] = result.display_text if isinstance(result, ToolResult) else str(result)
+
+
 async def test_a_resume_answers_the_parked_turn_instead_of_starting_a_second_one():
     """Pins the session-key gap: a resume must reach the turn that is already parked.
 
@@ -121,24 +147,19 @@ async def test_a_resume_answers_the_parked_turn_instead_of_starting_a_second_one
     closes that gap by answering a waiting `RavenAgentExecutor` broker (see
     `raven/a2a/asking.py`) before a resume ever reaches that one-shot path. This
     uses its own server, not the `server` fixture above, because it needs a
-    `run_turn` that parks on a question instead of echoing.
+    `run_turn` that asks a real question instead of echoing.
+
+    The ask itself goes through a real `AskUserTool`, driven by the real
+    `make_run_turn` / `_run_one_shot_turn` production chain via `_StandInLoop`
+    above -- not a fake that reaches into the executor's broker dict directly.
     """
     import httpx
 
-    calls: list[str] = []
-
-    async def run_turn(prompt: str) -> str:
-        calls.append(prompt)
-        # No real ask_user wiring exists yet for A2A (see executor.py's module
-        # docstring); this reaches the one broker `execute` just registered for
-        # this task the same way a future tool integration would.
-        task_id, broker = next(iter(executor._brokers.items()))
-        choice = await broker.await_question(task_id, prompt="which one?")
-        return f"final: {choice}"
+    loop = _StandInLoop()
+    run_turn = make_run_turn(loop)
 
     app = web.Application()
     handler = build_request_handler(CONFIG, run_turn)
-    executor = handler._handler.agent_executor
     add_a2a_routes(app, CONFIG, handler)
     srv = TestServer(app)
     await srv.start_server()
@@ -190,7 +211,23 @@ async def test_a_resume_answers_the_parked_turn_instead_of_starting_a_second_one
         await srv.close()
 
     assert final is not None, "the parked turn never completed after being answered"
-    assert final["result"]["status"]["message"]["parts"][0]["text"] == "final: the second one"
+    # "answered: the second one" is AskUserTool's own real display text for a
+    # single question (raven/agent/tools/ask_user.py) -- not a fake's stand-in
+    # string -- so this pins that the real tool answered the real ask.
+    assert final["result"]["status"]["message"]["parts"][0]["text"] == "answered: the second one"
     # Exactly one invocation: the resume answered the live turn instead of
     # starting a second one through runtime.py's one-shot path.
-    assert calls == ["start"]
+    assert loop.prompts == ["start"]
+
+
+async def test_ask_user_tool_without_a_broker_reports_its_own_error():
+    """Regression: a real `AskUserTool` with no broker wired fails with its own
+    literal error text instead of hanging or raising -- the same tool the resume
+    test above drives, exercised without any A2A machinery around it at all.
+    """
+    tool = AskUserTool()
+    tool.set_context("some-conversation")
+
+    result = await tool.execute(questions=[{"question": "which one?", "options": ["first", "second"]}])
+
+    assert result == "Error: ask_user not configured (no question broker)"
