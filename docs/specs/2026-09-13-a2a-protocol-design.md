@@ -109,9 +109,18 @@ conversion happens at our boundary. Installing it adds **thirteen** entries to t
 not the five its own metadata lists: the direct five (`protobuf`, `google-api-core`,
 `googleapis-common-protos`, `json-rpc`, `culsans`) plus `a2a-sdk` itself and the transitive
 `google-auth`, `opentelemetry-api`, `proto-plus`, `pyasn1`, `pyasn1-modules`, `wrapt`,
-`aiologic`. Nothing is removed or downgraded. The five-package figure in an earlier draft of
-this document counted only declared dependencies and understated the real footprint --
-`opentelemetry-api` and `google-auth` in particular are not obvious from the metadata.
+`aiologic`. Nothing is removed or downgraded. Counting the declared dependencies alone
+understates that footprint, and `opentelemetry-api` and `google-auth` in particular are not
+visible in the SDK's own metadata at all.
+
+`opentelemetry-api` is the one with a cost beyond its size: `tests/test_no_otel_tracing.py`
+pins that Raven has no OpenTelemetry, and that pin fires here. It arrives through
+`google-api-core`, which has required it at base since 2.36, so it is unavoidable while
+depending on `a2a-sdk`. What it does not bring is the sdk or an exporter, and without an sdk
+the api is inert -- `get_tracer` returns a `ProxyTracer` whose spans report
+`is_recording() == False`. So the decision recorded is that the pin guards the sdk, the
+exporter, and any import under `raven/`, and stops asserting which transitive packages a
+vendor declares. Reversing it means dropping `a2a-sdk`.
 
 What it buys is the part worth buying. `RequestHandler` is eleven protocol methods, already
 implemented by `DefaultRequestHandler` over a task store, an event queue and a streaming
