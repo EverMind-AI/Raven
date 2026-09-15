@@ -2584,6 +2584,10 @@ class TurnPathMixin:
         pending: dict[str, Any] = {"rerun": False, "reasons": []}
 
         def _dead_reasons(final_content: str | None, msgs: list[dict], status: str) -> list[str]:
+            # The scaffolding goes before the reading. This question used to be asked
+            # after the attempt returned, on the list it had already been dropped from,
+            # and it is asked inside the attempt now; a recovery nudge left sitting at
+            # the end would otherwise become what the turn is judged to have ended on.
             turn = [m for m in msgs[turn_start_idx:] if not any(m.get(k) for k in _TURN_TRANSIENT_KEYS)]
             reasons = dead_reasons(messages=turn, final_content=final_content, status=status)
             if budgets.dead_end_reasons:
@@ -2625,10 +2629,14 @@ class TurnPathMixin:
                 # Unreachable for an agent whose hooks leave no budget, which is every
                 # agent but the one that asked for it.
                 #
-                # The condition is the answer the attempt that just ended gave, and
-                # the next attempt's answer is what ends the loop: a budget of one
-                # leaves ``retries_left`` at zero by then, which its seam reads as no.
-                while pending["rerun"]:
+                # The second half of the condition is the answer the attempt that just
+                # ended gave; the first is the bound, kept here rather than left to a
+                # callback, because a loop whose only exit is a value someone else
+                # writes has no exit a reader of this loop can check. The two read one
+                # counter for two questions: this one asks how many reruns are left to
+                # run, the seam asks whether the attempt it is ending has one after it,
+                # which is what decides that attempt's salvage.
+                while retries_left > 0 and pending["rerun"]:
                     retries_left -= 1
                     attempt_no += 1
                     logger.info("Dead end ({}); re-running the turn", ", ".join(pending["reasons"]))
