@@ -390,9 +390,10 @@ async def playbooks_oauth_clear(params: dict) -> dict:
 #
 # Everything below is reachable from `raven playbook`, and the rule these
 # handlers keep is that they reach it through the same door rather than around
-# it: enabling writes the deny list the CLI writes, and running goes through the
-# runtime the model's own tool goes through. A second path to the same library
-# would be a second place for its rules to live.
+# it: enabling writes the deny list the CLI writes, running goes through the
+# runtime the model's own tool goes through, and creation binds the composer
+# both creation entries bind. A second path to the same library would be a
+# second place for its rules to live.
 
 
 async def playbooks_set_enabled(params: dict) -> dict:
