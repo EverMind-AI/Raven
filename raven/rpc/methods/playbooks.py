@@ -1,6 +1,6 @@
-"""``playbooks.*`` RPC handlers -- the page's view of the playbook library.
+"""``playbooks.*`` RPC handlers -- the playbook library as a client sees it.
 
-Read-only, and deliberately two calls rather than one:
+The reads are deliberately two calls rather than one:
 
 * ``playbooks.list`` answers a row per playbook *including the graph's shape*
   (each node's id and what it depends on, nothing else). The library page draws
@@ -121,14 +121,8 @@ async def playbooks_list(params: dict) -> dict:
 
 async def playbooks_get(params: dict) -> dict:
     """One playbook, whole: params, nodes, and where the file lives."""
-    from raven.rpc.errors import ConfigValidationError
-
-    name = str(params.get("name") or "").strip()
-    if not name:
-        raise ConfigValidationError("name is required")
+    name = _known_name(params.get("name"))
     store = _store()
-    if store.origin_of(name) is None:
-        raise ConfigValidationError(f"no playbook named {name}")
     spec = store.load(name)
     # Imported here rather than at module scope: this module is loaded to
     # register RPC methods, and the MCP client package pulls the SDK in with it.
@@ -209,16 +203,40 @@ async def playbooks_get(params: dict) -> dict:
 # needs to draw the tab.
 
 
-def _spec_or_raise(name: str):
+def _known_name(raw: Any) -> str:
+    """One playbook's name, checked for shape before it reaches the store.
+
+    The shape check is not cosmetic and is not the store's job. A name is joined
+    to the library root to resolve a directory, so ``../sibling`` resolves
+    *outside* the library and is classified as a user playbook -- which made
+    every name-taking handler here read, and one of them delete, a path the
+    caller chose. ``NAME_RE`` is the boundary the library already defines and
+    ``raven playbook create`` already enforces; this is the same rule on the way
+    in rather than only on the way out.
+
+    Checked BEFORE the first lookup, because the lookup is itself the escape:
+    ``origin_of`` answers ``user`` for a traversal, so a guard placed after it
+    has already been told the wrong answer.
+
+    Answers the clean name so a caller cannot go on using the raw one.
+    """
+    import re
+
+    from raven.playbook.types import NAME_RE
     from raven.rpc.errors import ConfigValidationError
 
-    name = str(name or "").strip()
+    name = str(raw or "").strip()
     if not name:
         raise ConfigValidationError("name is required")
-    store = _store()
-    if store.origin_of(name) is None:
+    if not re.fullmatch(NAME_RE, name):
+        raise ConfigValidationError(f"playbook names are kebab-case ({NAME_RE}); got {name!r}")
+    if _store().origin_of(name) is None:
         raise ConfigValidationError(f"no playbook named {name}")
-    return store.load(name)
+    return name
+
+
+def _spec_or_raise(name: str):
+    return _store().load(_known_name(name))
 
 
 async def playbooks_credentials_get(params: dict) -> dict:
@@ -352,6 +370,116 @@ async def playbooks_oauth_clear(params: dict) -> dict:
     return {"ok": True}
 
 
+# ---------------------------------------------------------------------------
+# The library as a thing a person changes, not only reads.
+#
+# Everything below has been reachable from `raven playbook` since the library
+# shipped; what it has not been is reachable from anything else. A surface that
+# can draw a playbook as disabled and offer no way to enable it is showing a
+# state it cannot act on, which is the gap these close.
+#
+# Deliberately not here: `run` and `create`. Both take model time -- a graph to
+# completion, a generation -- and a JSON-RPC call that occupies the socket for
+# minutes blocks every other call on it. They need a dispatch that answers with
+# a handle and reports progress, which is a different change.
+
+
+async def playbooks_set_enabled(params: dict) -> dict:
+    """Take a playbook off the deny list, or put it on it.
+
+    ``enabled`` is the state a caller wants, not a toggle: a toggle makes two
+    clients racing on one name land wherever the ordering falls, and the page
+    already knows which state it is asking for.
+
+    Disabling takes a playbook out of what the model is offered and nothing
+    else. It stays runnable by name from the CLI, which is the user's own hand
+    rather than the model's -- the same rule ``raven playbook disable`` states.
+
+    Answers with the state now in force and whether this call is what changed
+    it, so a caller can tell "you did that" from "it was already so" without a
+    second read.
+    """
+    from raven.config.update import set_playbook_disabled
+    from raven.rpc.errors import ConfigValidationError
+
+    name = _known_name(params.get("name"))
+    enabled = params.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ConfigValidationError("enabled must be true or false")
+    changed = set_playbook_disabled(name, not enabled)
+    return {"name": name, "enabled": enabled, "changed": bool(changed)}
+
+
+async def playbooks_validate(params: dict) -> dict:
+    """Check one playbook without running it: the spec's shape, then its rules.
+
+    Answers rather than raises. A playbook that does not validate is the normal
+    reason to call this, so the findings are the result -- an error code would
+    make the ordinary answer look like a broken call, and carries one string
+    where this carries the list.
+
+    Validated against this machine's agent table, because a playbook is a
+    distribution unit: a step naming an agent this host does not have is a real
+    finding here, and the CLI reports it the same way.
+    """
+    from pydantic import ValidationError
+
+    from raven.agent.subagent.registry import AgentRegistry
+    from raven.config.loader import load_config
+    from raven.playbook.validate import validate_structure
+
+    name = _known_name(params.get("name"))
+    store = _store()
+
+    errors: list[str] = []
+    spec = None
+    try:
+        spec = store.load(name)
+    except (ValidationError, ValueError) as exc:
+        errors.append(str(exc))
+    if spec is not None:
+        registry = AgentRegistry()
+        registry.apply(load_config().subagents.agents)
+        errors.extend(validate_structure(spec, known_agents=registry.all_names()))
+    return {"name": name, "ok": not errors, "errors": errors, "path": str(store.path_for(name))}
+
+
+async def playbooks_delete(params: dict) -> dict:
+    """Remove a user playbook's directory.
+
+    Refused for a builtin, which ships with the package: there is no file of the
+    host's to remove, and the next install would put it back. Disabling is the
+    operation that exists for those, and the refusal says so.
+
+    The name comes off the deny list as it goes, for the reason the CLI records:
+    a gone name has no business there, and a later playbook reusing it should
+    start enabled like any other new one.
+
+    A user playbook shadowing a builtin of the same name is the case worth
+    knowing about: deleting it does not remove the name, it uncovers the
+    builtin. The answer says which happened rather than leaving a caller to
+    re-read the list to find out.
+    """
+    import shutil
+
+    from raven.config.update import set_playbook_disabled
+    from raven.rpc.errors import ConfigValidationError
+
+    name = _known_name(params.get("name"))
+    store = _store()
+    origin = store.origin_of(name)
+    if origin == "builtin":
+        raise ConfigValidationError(f"{name} is a builtin and cannot be deleted; disable it instead")
+
+    directory = store.path_for(name).parent
+    shutil.rmtree(directory)
+    set_playbook_disabled(name, False)
+    # Read back through a fresh store: `_store()` holds paths rather than an
+    # index, so this is what the library actually offers now.
+    uncovered = _store().origin_of(name) == "builtin"
+    return {"name": name, "deleted": True, "uncovered_builtin": uncovered}
+
+
 def register_playbooks_methods(dispatcher: Dispatcher) -> None:
     dispatcher.register("playbooks.list", playbooks_list)
     dispatcher.register("playbooks.get", playbooks_get)
@@ -360,6 +488,9 @@ def register_playbooks_methods(dispatcher: Dispatcher) -> None:
     dispatcher.register("playbooks.credentials.clear", playbooks_credentials_clear)
     dispatcher.register("playbooks.oauth.authorize", playbooks_oauth_authorize)
     dispatcher.register("playbooks.oauth.clear", playbooks_oauth_clear)
+    dispatcher.register("playbooks.set_enabled", playbooks_set_enabled)
+    dispatcher.register("playbooks.validate", playbooks_validate)
+    dispatcher.register("playbooks.delete", playbooks_delete)
 
 
 __all__ = [
