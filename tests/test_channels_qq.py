@@ -456,6 +456,27 @@ def test_send_swallows_api_error():
 # ── contract conformance ───────────────────────────────────────────────
 
 
+async def test_start_hands_the_bot_it_built_to_the_connect_loop(monkeypatch) -> None:
+    """``start()`` is where the factory's return becomes ``self._client`` and then
+    the thing the connect loop awaits. The factory has its own test; this covers
+    the seam between them, which is the line a wrong return type lands on."""
+    from raven.channels.adapters.qq import channel as channel_mod
+
+    ch = _channel()
+    bot = MagicMock()
+
+    async def _connect(**kwargs):
+        ch._running = False  # one pass through the loop, then fall out
+
+    bot.start = AsyncMock(side_effect=_connect)
+    monkeypatch.setattr(channel_mod, "_make_bot", lambda owner: bot)
+
+    await ch.start()
+
+    assert ch._client is bot
+    bot.start.assert_awaited_once_with(appid="a", secret="s")
+
+
 def test_qq_satisfies_channel_contract():
     from raven.channels import Channel
     from raven.channels.contract import capability_violations

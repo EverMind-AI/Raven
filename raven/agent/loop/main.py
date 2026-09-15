@@ -809,8 +809,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         applied to the currently-registered deep_research tool, so a tool built
         later by promotion inherits it too (mirrors ``set_deep_research_submit``)."""
         self._deep_research_broker = broker
-        if callable(set_broker := getattr(self.tools.get("deep_research"), "set_broker", None)):
-            set_broker(broker)
+        if callable(getattr(tool := self.tools.get("deep_research"), "set_broker", None)):
+            tool.set_broker(broker)
 
     def _maybe_promote_deep_research(self) -> None:
         """Swap the offer stand-in for the working tool once a key appears on disk,

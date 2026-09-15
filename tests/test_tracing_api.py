@@ -1141,3 +1141,37 @@ def test_the_request_size_signal_survives_the_shell(trace_dir):
     attrs = _spans_written(trace_dir)[0]["attributes"]
     assert attrs["llm.request_bytes"] > 5000
     assert attrs["llm.input.artifact_bytes"] < attrs["llm.request_bytes"]
+
+
+def test_child_scope_reparents_descendants_and_restores_the_caller() -> None:
+    """The subagent probe opens its spans under a span it does not own, then the
+    caller's own context must be exactly what it was -- the scope is a loan, not
+    an assignment. Nothing covered this before, and the body was reading the
+    context variable back after setting it rather than yielding what it set."""
+    from raven.tracing import context as ctx_mod
+
+    outer = ctx_mod.TraceCtx(trace_id="t-outer", parent_span_id="span-outer")
+    token = ctx_mod._CTX.set(outer)
+    try:
+        with ctx_mod.child_scope("span-child") as inner:
+            assert inner.parent_span_id == "span-child"
+            assert inner.trace_id == "t-outer", "the trace is the caller's; only the parent moves"
+            assert ctx_mod.current() is inner
+        assert ctx_mod.current() == outer
+    finally:
+        ctx_mod._CTX.reset(token)
+
+
+def test_child_scope_without_a_caller_context_starts_its_own_trace() -> None:
+    """An offline entry point has no ambient context; the scope must still hand
+    back a usable one rather than reparenting None."""
+    from raven.tracing import context as ctx_mod
+
+    token = ctx_mod._CTX.set(None)
+    try:
+        with ctx_mod.child_scope("span-child") as inner:
+            assert inner.parent_span_id == "span-child"
+            assert inner.trace_id
+        assert ctx_mod.current() is None
+    finally:
+        ctx_mod._CTX.reset(token)
