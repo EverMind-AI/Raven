@@ -153,6 +153,29 @@ async def test_a_dead_turn_runs_again_and_the_second_answer_wins(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_the_rerun_tells_the_reader_the_turn_is_starting_over(tmp_path):
+    """The reader has already watched one attempt produce nothing, so silence while
+    the whole turn runs again reads as a hang. What the line may not do is name the
+    one product that asked for the budget, because the loop serves every agent, or
+    call this the first attempt, because the budget allows more reruns than one.
+    """
+    notes: list[str] = []
+
+    async def _progress(text: str) -> None:
+        notes.append(text)
+
+    provider = _Scripted(_dead(), _answers("Alice Smith won it."))
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1)])
+
+    await agent._process_message(_req(), session_key="s1", on_progress=_progress)
+
+    spoken = [n for n in notes if "again" in n]
+    assert len(spoken) == 1, f"the rerun said nothing, or said it twice: {notes}"
+    assert "research" not in spoken[0].lower(), "the loop names no agent"
+    assert "first attempt" not in spoken[0].lower(), "nor a rerun number it cannot know"
+
+
+@pytest.mark.asyncio
 async def test_a_live_turn_is_never_re_run(tmp_path):
     """The budget is a ceiling on dead turns, not a repeat count."""
     provider = _Scripted(_answers("Alice Smith won it."))
