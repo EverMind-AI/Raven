@@ -143,7 +143,7 @@ class BackendHealth:
 class MemoryBackend(Protocol):
     """The single contract every memory plugin implements.
 
-    Seven methods, ordered by hot-path:
+    Eight methods, ordered by hot-path:
 
     1. :meth:`recall` — called by ``ContextEngine.assemble`` every turn
        (potentially twice: once for user-track memory with ``user_id``,
@@ -159,6 +159,8 @@ class MemoryBackend(Protocol):
        off the turn path, before or after ``start``.
     6. :meth:`delete` — asked by the memory browser when a person removes
        one memory; never on the turn path.
+    7. :meth:`recall_session` — asked after a sub-agent has run, to read
+       back what that conversation left behind; never on the turn path.
     """
 
     async def recall(
@@ -209,6 +211,25 @@ class MemoryBackend(Protocol):
         or ``is_final``; normal AgentLoop turns leave it ``None``.
         Backends that do not consume metadata ignore it silently.
 
+        Two keys are conventions every backend should honour if it can:
+
+        ``flush``
+            ``True`` means extract from this slice now rather than when the
+            backend's own cadence next comes round. The host sets it when it
+            is handing over a conversation that has already finished, and
+            will read the result back immediately -- waiting for a turn
+            counter that will never advance again would return nothing.
+
+        ``user_id`` / ``agent_id``
+            Whose memory this slice is, **for this call only**. The host sets
+            them when writing on behalf of a sub-agent that ran in a process
+            of its own: the content is that agent's, not the host's, and
+            filing it under the host would put it where recall for that agent
+            never looks. This does not make a second source for the backend's
+            own identity, which stays the one the host granted at build time;
+            it is an explicit per-call override and nothing reads it as a
+            default.
+
         Does not raise on transport / auth errors; it reports them.
         Both known callers act on the return value: the AgentLoop
         retries a turn's write with backoff and gives up after a fixed
@@ -221,6 +242,29 @@ class MemoryBackend(Protocol):
         that returns ``None`` (or anything else falsy-but-not-``False``)
         has not claimed the write was lost, so callers treat it as
         landed.
+        """
+        ...
+
+    async def recall_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[Memory]:
+        """Every memory held under ``session_id`` for one track.
+
+        An exact filter, not a search: no query, no ranking, no ``top_k``.
+        It answers "what did this conversation leave behind", which is what
+        the host asks after a sub-agent has run in a process of its own. That
+        is a different question from :meth:`recall`'s, and folding it in there
+        would mean a query nobody wrote and a score nothing computed.
+
+        Same XOR rule as :meth:`recall`: exactly one of ``user_id`` /
+        ``agent_id``. ``[]`` is a valid answer -- an empty session, and equally
+        a backend that cannot filter by session at all. A host feature built on
+        this degrades to "nothing to report" rather than failing, so a backend
+        is free not to implement it.
         """
         ...
 

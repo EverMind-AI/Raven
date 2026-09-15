@@ -83,6 +83,17 @@ class _DictBackend:
     async def health(self):
         return None
 
+    async def recall_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[Memory]:
+        # This fake has no sessions to filter by, which the contract allows:
+        # a host feature built on this degrades to "nothing to report".
+        return []
+
     async def delete(self, memory_id: str, *, kind: str | None = None) -> bool:
         # This fake keeps memories in a dict and has no removal of its own:
         # ``False`` is the documented answer for a backend that does not

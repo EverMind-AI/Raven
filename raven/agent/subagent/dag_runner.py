@@ -45,7 +45,7 @@ from raven.agent.subagent.instances import get_registry, hold_handle
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import (
     TRACE_BUDGET_S,
-    EverosIdentity,
+    MemoryScope,
     prime_from_turn,
     record_memories,
     trace_session_id,
@@ -266,7 +266,7 @@ async def run_dag(
     cancel: asyncio.Event | None = None,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     auto_instances: frozenset[str] = frozenset(),
-    everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
+    memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     desk: AdjudicationDesk | None = None,
@@ -617,7 +617,7 @@ async def run_dag(
                         unsettled=unsettled,
                         progress_publisher=progress_publisher,
                         state_for=state_for,
-                        everos_for=everos_for,
+                        memory_for=memory_for,
                         mode_for=mode_for,
                         capabilities=capabilities,
                         session_key=session_key,
@@ -1328,7 +1328,7 @@ async def _run_group(
     settled: asyncio.Event | None = None,
     unsettled: set[str] | None = None,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
-    everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
+    memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
@@ -1379,7 +1379,7 @@ async def _run_group(
                 node_activity=node_activity,
                 semaphore=semaphore,
                 state_for=state_for,
-                everos_for=everos_for,
+                memory_for=memory_for,
                 mode_for=mode_for,
                 capabilities=capabilities,
                 progress_publisher=progress_publisher,
@@ -1518,7 +1518,7 @@ async def _run_node(
     node_activity: dict[str, dict],
     semaphore: asyncio.Semaphore,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
-    everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
+    memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
@@ -1748,18 +1748,36 @@ async def _run_node(
     # Scheduled after the `async with semaphore` above has already exited, so a
     # node's slot is released the moment its own work is done -- not held for
     # however long the recorder's poll budget takes.
-    identity = everos_for(node.subagent) if everos_for is not None else None
-    if identity is not None:
+    scope = memory_for(node.subagent) if memory_for is not None else None
+    if scope is not None:
         _schedule_node_memory(
-            node, store=store, identity=identity, session_key=session_key, record_tasks=record_tasks, turn=turn
+            node, store=store, scope=scope, session_key=session_key, record_tasks=record_tasks, turn=turn
         )
+
+
+def _memory_backend():
+    """The configured memory backend, or ``None`` when there is not one.
+
+    Built per record rather than held: this runs after a node has already
+    answered, and a record nobody is waiting on must not keep a backend alive
+    for the life of the run.
+    """
+    from raven.config import load_config
+    from raven.config.raven import load_raven_config
+    from raven.core.plugin_stack import maybe_build_memory_backend
+
+    try:
+        return maybe_build_memory_backend(load_config().workspace_path, load_raven_config())
+    except Exception as exc:  # noqa: BLE001 - a record must never fail a node
+        logger.warning("DAG node memory record: no backend ({})", exc)
+        return None
 
 
 def _schedule_node_memory(
     node: DagNodeSpec,
     *,
     store: DagRunStore,
-    identity: EverosIdentity,
+    scope: MemoryScope,
     session_key: str | None,
     record_tasks: "set[asyncio.Task] | None" = None,
     turn: list[dict[str, Any]] | None = None,
@@ -1770,11 +1788,9 @@ def _schedule_node_memory(
     run must not wait on the host's bookkeeping (see `record_memories`'s own
     docstring, and the same reasoning `SubagentManager._schedule_memory_record`
     already applies to spawn and a direct chat). ``turn`` is only read for a
-    ``trace`` identity, whose record has no other conversation to poll for.
+    ``trace`` source, whose record has no other conversation to poll for.
     """
-    task = asyncio.create_task(
-        _record_node_memory(node, store=store, identity=identity, session_key=session_key, turn=turn)
-    )
+    task = asyncio.create_task(_record_node_memory(node, store=store, scope=scope, session_key=session_key, turn=turn))
     # `_RECORD_TASKS` is a GC anchor only (asyncio holds just a weak reference
     # to a running task): the actual cancellation path is `record_tasks`,
     # this run's own set, which `run_dag`'s cancellation branch reaps.
@@ -1789,7 +1805,7 @@ async def _record_node_memory(
     node: DagNodeSpec,
     *,
     store: DagRunStore,
-    identity: EverosIdentity,
+    scope: MemoryScope,
     session_key: str | None,
     turn: list[dict[str, Any]] | None = None,
 ) -> None:
@@ -1798,7 +1814,7 @@ async def _record_node_memory(
     Written through the store rather than to a local path: a DAG run's files go
     to the DAG core's file backend, which may not be this filesystem.
     """
-    if identity.source == "trace":
+    if scope.source == "trace":
         # The host owns both the write and the read here, so it mints the join
         # key instead of resolving one the node's own run committed.
         session_id = trace_session_id(node.subagent, f"{store.run_id}:{node.id}")
@@ -1808,7 +1824,10 @@ async def _record_node_memory(
             return session_id
 
         async def _prime(sid: str) -> bool:
-            return await prime_from_turn(identity=identity, session_id=sid, turn=rows)
+            backend = _memory_backend()
+            if backend is None:
+                return False
+            return await prime_from_turn(backend=backend, scope=scope, session_id=sid, turn=rows)
 
         prime, budget = _prime, TRACE_BUDGET_S
     else:
@@ -1825,7 +1844,7 @@ async def _record_node_memory(
             # under; looking up under `session_key or ""` instead would silently
             # miss every row for a `run_dag(session_key=None)` call.
             agent_id = await get_registry().lookup(session_key or "default", node.subagent, handle)
-            return f"{identity.session_prefix}{agent_id}" if agent_id else None
+            return f"{scope.session_prefix}{agent_id}" if agent_id else None
 
         prime, budget = None, None
 
@@ -1834,9 +1853,13 @@ async def _record_node_memory(
 
     try:
         kwargs = {"budget_s": budget} if budget is not None else {}
+        backend = _memory_backend()
+        if backend is None:
+            return
         await record_memories(
             agent=node.subagent,
-            identity=identity,
+            backend=backend,
+            scope=scope,
             resolve_session_id=_resolve,
             write=_write,
             instance=node.instance,
