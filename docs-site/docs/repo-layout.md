@@ -30,6 +30,8 @@ repository's commit conventions.
 
 | Package or module | Responsibility |
 |---|---|
+| `a2a` | A2A server interface for serving Raven to peer agents over the Agent2Agent protocol |
+| `a2a_client` | A2A client for calling configured remote agents, and the outbound origin boundary |
 | `acp` | ACP server interface for exposing Raven to external agent hosts |
 | `acp_client` | ACP client, capability negotiation, and adapters for third-party agent events |
 | `agent` | Agent Loop, Harness Modules, tool execution, and subagent orchestration |
