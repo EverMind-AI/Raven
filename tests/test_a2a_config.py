@@ -1,6 +1,6 @@
 """The a2a config section: defaults, peer lookup keys, and camelCase wire keys."""
 
-from raven.config.schema import A2aConfig, Config
+from raven.config.schema import A2aConfig, A2aPeerConfig, Config
 
 
 def test_a2a_defaults_are_off_and_empty():
@@ -18,10 +18,14 @@ def test_peer_accepts_camel_case_wire_keys():
     cfg = A2aConfig.model_validate(
         {
             "server": {"enabled": True, "token": "t0ken"},
-            "peers": [{"origin": "https://peer.example.com", "authScheme": "bearer", "credential": "sekrit"}],
+            # Deliberately not "bearer": that is also this field's default, so a
+            # broken camelCase alias would fall back to it and the assertion below
+            # would pass without the wire key ever having been read.
+            "peers": [{"origin": "https://peer.example.com", "authScheme": "X-Api-Key", "credential": "sekrit"}],
         }
     )
     assert cfg.server.enabled is True
     assert cfg.peers[0].origin == "https://peer.example.com"
-    assert cfg.peers[0].auth_scheme == "bearer"
+    assert cfg.peers[0].auth_scheme == "X-Api-Key"
     assert cfg.peers[0].credential == "sekrit"
+    assert A2aPeerConfig(origin="https://peer.example.com").auth_scheme == "bearer"
