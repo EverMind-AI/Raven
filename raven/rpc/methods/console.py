@@ -1096,6 +1096,7 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     from raven_everos.config import (
         WRITABLE_SECTIONS,
         clear_everos_section,
+        embedding_is_env_managed,
         everos_has_own_embedding,
         set_everos_section,
     )
@@ -1145,6 +1146,15 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
 
     if not clean:
         raise ConfigValidationError("fields must carry at least one non-empty value")
+    if section == "embedding" and embedding_is_env_managed():
+        # The exported variables outrank both files, so a save here would be
+        # accepted, written, and then ignored -- the silent no-op this card was
+        # just fixed for, arriving by the one route left. Naming the variables
+        # is the only thing raven can usefully do: it cannot edit a shell.
+        raise ConfigValidationError(
+            "the embedding endpoint is set by the EVEROS_EMBEDDING__MODEL / __BASE_URL / __API_KEY "
+            "environment variables, which outrank anything saved here; change them instead"
+        )
     if section == "embedding" and not everos_has_own_embedding():
         # Written where it is read from, so the card cannot edit one home while
         # the service and the knowledge base use the other. `provider` has no

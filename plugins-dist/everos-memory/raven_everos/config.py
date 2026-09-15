@@ -353,8 +353,17 @@ def everos_has_own_embedding() -> bool:
        not an endpoint, and filling the third from the host would hand EverOS a
        mixture of two operators' intentions rather than either one.
     """
-    if role_configured_in(load_everos_config(), "embedding"):
-        return True
+    return role_configured_in(load_everos_config(), "embedding") or embedding_is_env_managed()
+
+
+def embedding_is_env_managed() -> bool:
+    """Whether the endpoint EverOS uses comes from the exported variables.
+
+    Named apart from :func:`everos_has_own_embedding` because one surface needs
+    to tell the two homes apart rather than only know that one of them is in
+    force: a settings page can offer to edit a file, and cannot offer to edit
+    somebody's shell.
+    """
     return all(os.environ.get(f"EVEROS_EMBEDDING__{k}") for k in ("MODEL", "BASE_URL", "API_KEY"))
 
 

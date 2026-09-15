@@ -19,6 +19,21 @@ import pytest
 from raven_everos import config as ue
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_embedding_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Take the operator's documented override out of the ambient shell.
+
+    ``EVEROS_EMBEDDING__*`` is a real input to ``everos_has_own_embedding``,
+    so a developer who exports it turns every case here that assumes no
+    override into a different case -- silently, and only on their machine. A
+    case that reads one answer on one machine and another elsewhere is not
+    pinning anything. Cases that are about the override set it themselves,
+    after this has run.
+    """
+    for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS"):
+        monkeypatch.delenv(f"EVEROS_EMBEDDING__{name}", raising=False)
+
+
 @pytest.fixture
 def everos_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the ops library at a throwaway root that raven owns."""
