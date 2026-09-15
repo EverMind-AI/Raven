@@ -188,6 +188,7 @@ async def test_a_stall_after_streamed_output_is_not_retried_by_the_outer_ladder_
     assert seen == ["partial", "answer"]
 
 
+@pytest.mark.production_timing
 def test_the_ladder_comes_from_agents_defaults():
     class _Defaults:
         llm_error_retry_delays = [30, 60, 120]

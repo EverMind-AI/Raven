@@ -7,8 +7,11 @@ declaration.
 from __future__ import annotations
 
 import contextlib
+import fnmatch
+import functools
 import os
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +24,159 @@ import pytest
 # miss, and they failed on numbers nobody in this repo had touched.
 # `setdefault`, so a developer can still point a run at the live table.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+# matplotlib builds its font list into its config dir the first time a process
+# typesets anything: every system font is opened, and on macOS the list comes
+# from a `system_profiler` call -- 8 to 12 s. The dir defaults to a path under
+# HOME, and `_no_real_raven_home` hands every test a fresh HOME, so the list was
+# rebuilt on every run and thrown away with the temp dir. A git-ignored dir in
+# the checkout keeps it warm across runs; `setdefault` respects a developer's own.
+_MPL_CACHE = Path(__file__).resolve().parent.parent / ".pytest_cache" / "matplotlib"
+if os.environ.setdefault("MPLCONFIGDIR", str(_MPL_CACHE)) == str(_MPL_CACHE):
+    _MPL_CACHE.mkdir(parents=True, exist_ok=True)
+
+
+_WALL_CLOCK_EXEMPT_MARKERS = ("slow", "production_timing")
+_WALL_CLOCK_CEILING_S = 0.0
+_wall_clock_seconds: dict[str, float] = {}
+_wall_clock_hits: list[tuple[float, str]] = []
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    group = parser.getgroup("raven")
+    group.addoption(
+        "--wall-clock-ceiling",
+        type=float,
+        default=2.0,
+        help="seconds an unmarked test may spend in setup plus call before it is reported; 0 disables",
+    )
+    group.addoption(
+        "--wall-clock-ceiling-strict",
+        action="store_true",
+        help="fail an otherwise green session when any unmarked test is over the ceiling",
+    )
+    group.addoption(
+        "--shard",
+        default=None,
+        metavar="K/N",
+        help="collect only the K-th of N slices of the test files (1-based); files are dealt round-robin in sorted order",
+    )
+
+
+_SHARD: tuple[int, int] | None = None
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    global _WALL_CLOCK_CEILING_S, _SHARD
+    _WALL_CLOCK_CEILING_S = float(config.getoption("--wall-clock-ceiling"))
+    _wall_clock_seconds.clear()
+    _wall_clock_hits.clear()
+    _SHARD = None
+    spec = config.getoption("--shard")
+    if spec is not None:
+        try:
+            k, n = (int(part) for part in spec.split("/"))
+        except ValueError:
+            raise pytest.UsageError(f"--shard wants K/N, got {spec!r}") from None
+        if not 1 <= k <= n:
+            raise pytest.UsageError(f"--shard {spec}: K must be between 1 and N")
+        _SHARD = (k, n)
+
+
+def _no_recurse(pattern: str, directory: Path) -> bool:
+    """pytest's norecursedirs rule: a pattern with a slash matches the whole path."""
+    if "/" in pattern:
+        return fnmatch.fnmatch(str(directory), f"*/{pattern}")
+    return fnmatch.fnmatch(directory.name, pattern)
+
+
+@functools.cache
+def _test_file_index(
+    tests_root: Path, python_files: tuple[str, ...], norecursedirs: tuple[str, ...]
+) -> dict[Path, int]:
+    """Every test file pytest would collect under ``tests_root``, sorted.
+
+    Built from the ini values pytest itself collects by, so the index and the
+    collection agree: a file in a directory pytest never enters has no index,
+    and a file pytest would collect always has one. A collected file that had
+    no index would be run by every shard.
+    """
+    files = {
+        path
+        for pattern in python_files
+        for path in tests_root.rglob(pattern)
+        if "__pycache__" not in path.parts
+        and not any(
+            _no_recurse(rule, tests_root / parent)
+            for parent in path.relative_to(tests_root).parents
+            for rule in norecursedirs
+        )
+    }
+    return {path: index for index, path in enumerate(sorted(files))}
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
+    """Under ``--shard K/N``, leave the test files of the other shards alone.
+
+    Decided here, before the file is imported, so a shard pays collection for
+    its own modules only: importing all of them is two minutes of a CI runner.
+    Round-robin over the sorted list, so a slow family whose files sort together
+    (the ppt engine's) is spread over the shards rather than handed to one.
+    Answers True or None, never False: the hook is firstresult, and False would
+    stop pytest's own implementation, which is where --ignore and collect_ignore
+    are honoured.
+    """
+    if _SHARD is None or collection_path.suffix != ".py":
+        return None
+    python_files = tuple(config.getini("python_files"))
+    if not any(fnmatch.fnmatch(collection_path.name, pattern) for pattern in python_files):
+        return None
+    index = _test_file_index(config.rootpath / "tests", python_files, tuple(config.getini("norecursedirs"))).get(
+        collection_path
+    )
+    if index is None:
+        return None
+    k, n = _SHARD
+    return True if index % n != k - 1 else None
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Hold every unmarked test to the wall-clock ceiling.
+
+    The suite's slow tail was production backoff waited out by tests with error
+    stubs, and nothing failed when one more was added. Setup and call are added
+    up per test and judged at teardown, when both are in. Teardown itself is
+    left out: it runs the finalizers of every fixture the test shared, which
+    belong to no one test. Setup cuts the other way, a session fixture's build
+    lands on whichever test first asked for it, so a name on the list may be
+    paying for a fixture rather than for itself. A test that is slow for a
+    reason it can name carries ``slow`` or ``production_timing``.
+    """
+    if _WALL_CLOCK_CEILING_S <= 0:
+        return
+    if report.when in ("setup", "call"):
+        _wall_clock_seconds[report.nodeid] = _wall_clock_seconds.get(report.nodeid, 0.0) + report.duration
+        return
+    total = _wall_clock_seconds.pop(report.nodeid, 0.0)
+    if total <= _WALL_CLOCK_CEILING_S:
+        return
+    if any(marker in report.keywords for marker in _WALL_CLOCK_EXEMPT_MARKERS):
+        return
+    _wall_clock_hits.append((total, report.nodeid))
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Config) -> None:
+    if not _wall_clock_hits:
+        return
+    strict = config.getoption("--wall-clock-ceiling-strict")
+    verdict = "failing the session" if strict else "warning only; --wall-clock-ceiling-strict fails it"
+    terminalreporter.write_sep(
+        "=",
+        f"{len(_wall_clock_hits)} unmarked test(s) over the {_WALL_CLOCK_CEILING_S:g}s wall-clock ceiling ({verdict})",
+    )
+    for seconds, nodeid in sorted(_wall_clock_hits, reverse=True)[:50]:
+        terminalreporter.write_line(f"{seconds:7.2f}s  {nodeid}")
+    terminalreporter.write_line("mark it slow or production_timing with the reason, or take the wait out of the test")
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
@@ -46,7 +202,19 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Stash the real exit status so pytest_unconfigure can preserve it."""
+    """Stash the real exit status so pytest_unconfigure can preserve it.
+
+    The wall-clock verdict is applied here, on the controller only: an xdist
+    worker's exit status is not the run's, and the hits it saw were forwarded.
+    """
+    if (
+        _wall_clock_hits
+        and exitstatus == 0
+        and session.config.getoption("--wall-clock-ceiling-strict")
+        and not hasattr(session.config, "workerinput")
+    ):
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        exitstatus = int(session.exitstatus)
     session.config._raven_exitstatus = int(exitstatus)  # type: ignore[attr-defined]
 
 
@@ -164,7 +332,7 @@ def _restore_loguru_enabled_state():
 
 
 @pytest.fixture(autouse=True)
-def _no_real_raven_home(tmp_path_factory, monkeypatch):
+def _no_real_raven_home(tmp_path, monkeypatch):
     """Keep the suite out of the config file of whoever is running it.
 
     ``get_config_path()`` answers ``RAVEN_HOME/config.json``, and anything reading
@@ -192,8 +360,12 @@ def _no_real_raven_home(tmp_path_factory, monkeypatch):
     # Outside ``tmp_path`` rather than under it, and fresh per test. Tests use
     # ``tmp_path`` as a workspace root and enumerate it, so a directory this
     # fixture leaves in there shows up in their assertions; and a session-shared
-    # home would let one test read the config another one wrote.
-    home = tmp_path_factory.mktemp("default_home")
+    # home would let one test read the config another one wrote. A sibling of
+    # ``tmp_path`` rather than a second numbered directory: pytest picks the next
+    # number by scanning the whole base temp dir, and with 22k tests that scan
+    # cost 44 s per worker for the numbered dirs this fixture alone created.
+    home = tmp_path.with_name(f"{tmp_path.name}-home")
+    home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     # The suite's baseline permission mode is full access -- the behaviour the
     # whole suite was written against before the gate existed, and what a test
@@ -212,6 +384,42 @@ def _no_real_raven_home(tmp_path_factory, monkeypatch):
     monkeypatch.delenv("RAVEN_HOME", raising=False)
     monkeypatch.setattr("raven.home._current_config_path", None)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Collapse the production retry and grace ladders to a millisecond for the suite.
+
+    A stub that answers every call with an error drives the code under test
+    into its backoff, and the backoff is tuned for a real outage: the loop's
+    LLM-error ladder is 105 s, the provider's 7 s per model, a memory store
+    retries for 52 s, a subagent steer waits 3 s for a hook. One checkpoint
+    test slept 133 s that way and proved nothing by it.
+
+    The lengths stay. ``len(ladder)`` is how both retry ladders count their
+    attempts, so an empty tuple would change behaviour rather than speed; the
+    seconds collapse to a millisecond. Not to zero: the store pipeline waits
+    its backoff out with ``wait_for(stopping.wait(), timeout=delay)``, and a
+    zero timeout cancels that wait before it runs, so the stop it listens for
+    could never be heard. The steer grace keeps one poll's worth so the loop
+    body it guards stays exercised. A test that proves a timing property, or
+    asserts a default's value, opts out with ``@pytest.mark.production_timing``
+    and sets what it needs itself.
+    """
+    if request.node.get_closest_marker("production_timing"):
+        return
+    from raven.agent.subagent import manager
+    from raven.config import schema
+    from raven.memory_engine import store_pipeline
+    from raven.providers.base import LLMProvider
+
+    def shortened(delays):
+        return tuple(0.001 for _ in delays)
+
+    monkeypatch.setattr(LLMProvider, "_CHAT_RETRY_DELAYS", shortened(LLMProvider._CHAT_RETRY_DELAYS))
+    monkeypatch.setattr(schema, "LLM_ERROR_RETRY_DELAYS_DEFAULT", shortened(schema.LLM_ERROR_RETRY_DELAYS_DEFAULT))
+    monkeypatch.setattr(store_pipeline, "BACKOFF_S", shortened(store_pipeline.BACKOFF_S))
+    monkeypatch.setattr(manager, "_STEER_HOOK_GRACE_S", 0.05)
 
 
 @pytest.fixture(autouse=True)
