@@ -2957,7 +2957,6 @@ class SettingsEverosResult(_Strict):
     sections: dict[str, EverosSection]
     config_path: str
     available: bool = Field(
-        default=True,
         description="Whether this install has an EverOS to configure at all. False leaves sections empty and note set.",
     )
     note: str | None = Field(

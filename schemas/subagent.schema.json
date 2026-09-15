@@ -18,33 +18,10 @@
       "title": "SubagentEngineConfig",
       "type": "object"
     },
-    "SubagentEverosConfig": {
-      "description": "A sub-agent's everos identity, as the host must address it to read back\nwhat that sub-agent wrote.\n\nDeclared rather than discovered. The alternative -- reading the fork's own\nconfig.json next to its ``run.py`` -- would couple the host to a directory\nconvention that lives entirely inside each fork.",
+    "SubagentMemoryConfig": {
+      "additionalProperties": true,
+      "description": "How the host addresses one sub-agent's memories.\n\nOpaque to the host except the two keys below: a sub-agent runs in a\nprocess of its own, and whatever identifies its memories is the memory\nbackend's vocabulary, not raven's. This block is handed to the backend as\nit stands -- ``store``'s per-call ``user_id`` / ``agent_id`` override for\na trace, and ``recall_session``'s track for the read back. EverOS reads\n``user_id`` and ``agent_id``; another backend may want something else, and\nthe host has no business validating either.\n\nDeclared rather than discovered. The alternative -- reading the fork's own\nconfig.json next to its ``run.py`` -- would couple the host to a directory\nconvention that lives entirely inside each fork.\n\nThe old ``everos`` spelling still loads. Its ``base_url`` does not: no\nconfig, fixture or document ever set one, and honouring it would mean\nevery backend growing a per-call way to address a different server.",
       "properties": {
-        "agentId": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Agentid"
-        },
-        "baseUrl": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Baseurl"
-        },
         "sessionPrefix": {
           "default": "cli:",
           "title": "Sessionprefix",
@@ -58,21 +35,9 @@
           ],
           "title": "Source",
           "type": "string"
-        },
-        "userId": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Userid"
         }
       },
-      "title": "SubagentEverosConfig",
+      "title": "SubagentMemoryConfig",
       "type": "object"
     },
     "SubagentRouteConfig": {
@@ -169,17 +134,6 @@
           "title": "Env",
           "type": "object"
         },
-        "everos": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SubagentEverosConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "hidden": {
           "default": false,
           "title": "Hidden",
@@ -210,6 +164,17 @@
           ],
           "default": null,
           "title": "Mcps"
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubagentMemoryConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "name": {
           "title": "Name",
@@ -345,17 +310,6 @@
           "title": "Env",
           "type": "object"
         },
-        "everos": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SubagentEverosConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "idSource": {
           "default": "provisioned",
           "enum": [
@@ -390,6 +344,17 @@
           ],
           "default": null,
           "title": "Mcps"
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubagentMemoryConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "name": {
           "title": "Name",
