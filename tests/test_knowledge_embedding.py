@@ -292,6 +292,21 @@ def _config(base_url: str = "https://api.siliconflow.cn/v1", model: str = "BAAI/
     return EmbeddingConfig(model=model, base_url=base_url, api_key="k")
 
 
+def cjk(count: int) -> str:
+    """``count`` CJK ideographs, built from code points rather than written out.
+
+    Written out they would be a non-English string in a file that is not an
+    i18n fixture, which is what ``scripts/check_source_language.py`` refuses.
+    Built this way the tests keep the thing they are actually about: a CJK
+    character costs a whole token where the old estimate said three quarters,
+    and that is a property of the character class rather than of any word.
+
+    Every code point from U+4E00 is an assigned ideograph, and the range this
+    walks stays inside the one ``_is_cjk`` recognises.
+    """
+    return "".join(chr(0x4E00 + i % 0x1000) for i in range(count))
+
+
 @pytest.mark.parametrize(
     ("base_url", "expected"),
     [
@@ -315,7 +330,7 @@ def test_a_cjk_character_costs_a_whole_token_and_a_url_more_than_prose() -> None
     """The chunker's own estimate is utf-8 bytes over four, which reads a CJK
     character as three quarters of a token when it is one. That is what made
     chunks that looked within budget arrive over it."""
-    assert estimate_tokens("检查结果参考值" * 100) >= 700
+    assert estimate_tokens(cjk(700)) >= 700
     # Prose is the cheap case and is still counted at two characters a token,
     # because a knowledge base is mostly markdown, URLs and code, which are not.
     assert estimate_tokens("word " * 100) == 250
@@ -330,7 +345,7 @@ def test_cutting_lands_on_the_longest_prefix_that_fits() -> None:
     """By bisection rather than a flat characters-per-token multiplication:
     the cost per character is not uniform, so a paragraph followed by a code
     block would be cut in the wrong place by a single ratio."""
-    text = "检查结果" * 200 + "and then some english prose that costs far less per character"
+    text = cjk(800) + "and then some english prose that costs far less per character"
     cut = fit_to_tokens(text, 100)
 
     assert text.startswith(cut)
@@ -361,7 +376,7 @@ async def test_every_input_is_cut_to_the_model_limit_before_it_is_sent(mock_tran
 
     mock_transport(handler)
     client = embedding_client(_config())
-    long_cjk = "检查结果参考值" * 200
+    long_cjk = cjk(1400)
     vectors = await client.embed(["short one", long_cjk, "short two"])
 
     assert len(vectors) == 3
@@ -383,7 +398,7 @@ async def test_a_model_with_a_longer_context_is_not_cut_to_the_short_default(moc
 
     mock_transport(handler)
     client = embedding_client(_config(model="BAAI/bge-m3"))
-    text = "检查结果参考值" * 200
+    text = cjk(1400)
 
     await client.embed([text])
 
@@ -412,7 +427,7 @@ async def test_the_cut_is_kept_under_the_limit_rather_than_at_it(mock_transport)
     mock_transport(handler)
     client = embedding_client(_config())
 
-    await client.embed(["检查结果" * 400])
+    await client.embed([cjk(1600)])
 
     assert estimate_tokens(sent[0][0]) < client.max_input_tokens
 
@@ -429,7 +444,7 @@ async def test_a_plain_endpoint_is_left_alone(mock_transport) -> None:
 
     mock_transport(handler)
     client = embedding_client(_config(base_url="https://api.openai.com/v1"))
-    text = "检查结果参考值" * 500
+    text = cjk(3500)
 
     await client.embed([text])
 
