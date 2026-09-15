@@ -5441,6 +5441,9 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .kbback:hover { color: var(--text); background: var(--surface); }
 /* Tall enough to read a page of a document in, and the panel scrolls rather
    than the frame's own content being squeezed. */
+/* Rendered markdown scrolls in the pane like the table it replaced, and keeps
+   a reading measure rather than running the full width of a wide panel. */
+.kbprose { padding: 16px 4px 24px; max-width: 76ch; }
 .kbframe { width: 100%; height: calc(100% - 44px); min-height: 420px; border: 0;
   border-radius: 0 0 10px 10px; background: var(--surface); }
 

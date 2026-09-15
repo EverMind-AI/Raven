@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
 import { t } from '../../shell/bridge'
+import { md as mdHtml } from '../../shell/prose'
 import { open as openSettings, setTab as setSettingsTab } from '../settings/store'
 import * as store from './store'
 
@@ -207,6 +208,42 @@ function DocRow({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
   )
 }
 
+/* Markdown, rendered rather than framed.
+
+   Through the shell's own `md`, which is what the transcript and the workspace
+   already draw with, so a document reads the same wherever it is opened -- and
+   which escapes the source before anything else, so an upload cannot put
+   markup of its own into the page. */
+function MarkdownView({ doc }: { doc: KbDoc }): JSX.Element {
+  const [text, setText] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    let live = true
+    setText(null)
+    setErr(null)
+    store
+      .readText(doc)
+      /* Guarded because a reader can close one document and open another
+         before the first answers, and the slower answer must not land in the
+         pane that has moved on. */
+      .then((t) => live && setText(t))
+      .catch((e: unknown) => live && setErr((e as Error)?.message || String(e)))
+    return () => {
+      live = false
+    }
+  }, [doc.id])
+
+  if (err !== null) {
+    return (
+      <div className="empty-note">
+        <div className="ttl">{err}</div>
+      </div>
+    )
+  }
+  if (text === null) return <div className="empty-note" />
+  return <div className="kbprose prose" dangerouslySetInnerHTML={{ __html: mdHtml(text) }} />
+}
+
 /* The original file, framed.
 
    One iframe for every kind the browser can draw, and the gateway converts the
@@ -229,7 +266,9 @@ function DocViewer({ doc }: { doc: KbDoc }): JSX.Element {
         </button>
         <b title={doc.source}>{doc.source}</b>
       </div>
-      {kind === 'none' ? (
+      {kind === 'markdown' ? (
+        <MarkdownView doc={doc} />
+      ) : kind === 'none' ? (
         <div className="empty-note">
           <div className="ttl">{t('gui.kb.no_preview')}</div>
           {/* A download rather than a wall of bytes: the file is still theirs

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { KnowledgeApp } from './KnowledgePage'
 import * as store from './store'
@@ -1040,11 +1040,61 @@ describe('viewing the original file', () => {
     expect(document.querySelector('.kbframe')).toBeNull()
   })
 
+  it('renders markdown instead of framing its source', async () => {
+    /* The gateway serves .md as text/plain -- correctly, it is text -- so a
+       frame draws the hashes and the pipes, which is the file rather than the
+       document. */
+    vi.stubGlobal('fetch', async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '# Onboarding\n\nRead **this** first.\n',
+    }))
+    await openBase([doc({ id: 'd4', source: 'onboarding.md', status: 'ready' })])
+
+    await clickName('onboarding.md')
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(document.querySelector('.kbframe')).toBeNull()
+    const prose = document.querySelector('.kbprose') as HTMLElement
+    expect(prose).not.toBeNull()
+    /* h2, not h1: the shell's renderer starts headings there because the page
+       owns the h1 above them. */
+    expect(prose.querySelector('h2')?.textContent).toBe('Onboarding')
+    expect(prose.querySelector('strong')?.textContent).toBe('this')
+    vi.unstubAllGlobals()
+  })
+
+  it('escapes markup an upload put in its markdown', async () => {
+    /* Rendered through dangerouslySetInnerHTML, so the escaping is the whole
+       safety of it: an uploaded file is not trusted content. */
+    vi.stubGlobal('fetch', async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '# Hi\n\n<img src=x onerror="alert(1)">\n',
+    }))
+    await openBase([doc({ id: 'd5', source: 'evil.md', status: 'ready' })])
+
+    await clickName('evil.md')
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    const prose = document.querySelector('.kbprose') as HTMLElement
+    expect(prose.querySelector('img')).toBeNull()
+    expect(prose.innerHTML).toContain('&lt;img')
+    vi.unstubAllGlobals()
+  })
+
   it('sorts every offered format into framed, converted or neither', () => {
     const kind = (name: string) => store.previewKind(doc({ id: 'x', source: name }))
     expect(kind('a.pdf')).toBe('native')
     expect(kind('a.png')).toBe('native')
-    expect(kind('a.md')).toBe('native')
+    expect(kind('a.md')).toBe('markdown')
+    expect(kind('a.MARKDOWN')).toBe('markdown')
     expect(kind('a.docx')).toBe('converted')
     expect(kind('a.XLS')).toBe('converted')
     expect(kind('a.zip')).toBe('none')

@@ -30,6 +30,10 @@ const SHARED = new Set([
   'mini', 'ghost', 'gold', 'bad', 'danger', 'empty-note', 'ttl', 'ds', 'who', 'mdl',
   'nm', 'st', 'hint', 'mono', 'car', 'x', 'th', 'td', 'err', 'fl', 'mi', 'dots',
   'panel', 'inline', 'scard', 'fset', 'nlmsg', 'foldrow', 'pickm',
+  // The shell's markdown styling, shared on purpose: a document should read
+  // the same whether it is opened in the transcript, the workspace or a
+  // knowledge base, and that is one stylesheet rule rather than three.
+  'prose',
 ])
 
 // One island per entry: the source that names classes, and the prefix its own
