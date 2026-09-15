@@ -1,14 +1,15 @@
 """Where a knowledge base gets its vectors.
 
-The endpoint is the one the operator already configured for EverOS memory
-(``~/.everos/raven/everos.toml``, ``[embedding]``): an OpenAI-compatible base
-URL, a key and a model. Reusing it means a knowledge base needs no second
-credential and no picker fed from a provider catalogue.
+An OpenAI-compatible base URL, a key and a model, read from raven's own
+``embedding`` config section. A knowledge base indexes and answers inside the
+gateway process and never speaks to the memory service, so its endpoint is
+raven's to hold.
 
-Reading that file is *not* the same as depending on the EverOS service. Only
-the three strings are taken; the request goes straight to the embedding
-endpoint. The service is a separate process and has spent whole days
-unresponsive, and a knowledge base must not be able to fail for that reason.
+It was EverOS's to hold, read straight out of ``everos.toml``. That made a
+feature with nothing to do with memory fail whenever the memory plugin was
+absent, uninstalled or simply not the configured backend -- with no message
+naming the cause. The reader below still falls back to that file so an
+operator who has not moved the values keeps working, and says so once.
 """
 
 from __future__ import annotations
@@ -50,40 +51,29 @@ class EmbeddingConfig:
     """
 
 
-def everos_config_path() -> Path:
-    """Where raven keeps the EverOS config: the root raven recorded.
+def _legacy_everos_config_path() -> Path | None:
+    """The EverOS config file, from the root raven recorded for the plugin.
 
-    Through ``everos_root`` rather than off ``EVEROS_ROOT``, which raven
-    deliberately treats as an output. It *writes* that variable from
-    ``plugins.config["everos-memory"]["root"]`` so the choice is a recorded
-    decision, and its own module says why reading it back as an input is not
-    safe: a root inherited from an ambient environment and never written down
-    is silent data loss, because the memories stay on disk while raven reports
-    none.
-
-    Reading it as an input made this module answer two different things for one
-    installation -- the recorded root once the memory backend had booted and
-    exported the variable, and a hardcoded ``~/.everos/raven`` before that or in
-    a process that never boots it. On the deployment this was found on, those
-    were two different files with two different endpoints, one of them keyless.
-
-    ``everos_root`` already covers the install that has never written the file:
-    it falls back on its own.
+    Off ``plugins.config["everos-memory"]["root"]`` and plain ``tomllib``: the
+    fallback must not import the plugin, or a knowledge base would again be
+    unusable exactly where the plugin is not installed. ``None`` when no root
+    was ever recorded -- there is then no legacy file to inherit from.
     """
-    from raven_everos.config import everos_root
+    from raven.config.raven import load_raven_config
 
-    return everos_root() / "everos.toml"
+    try:
+        slice_ = (load_raven_config().plugins.config or {}).get("everos-memory") or {}
+    except Exception as exc:  # noqa: BLE001 - an unreadable config is not this module's to report
+        logger.warning("knowledge: cannot read raven config: {}", exc)
+        return None
+    root = slice_.get("root")
+    return Path(str(root)).expanduser() / "everos.toml" if root else None
 
 
-def load_embedding_config() -> EmbeddingConfig | None:
-    """The configured embedding endpoint, or ``None`` when there is not one.
-
-    ``None`` rather than a raise: a deployment with no embedding configured is
-    a deployment with no knowledge bases, which is an ordinary state. The
-    caller turns it into "configure this first", not into a failed start.
-    """
-    path = everos_config_path()
-    if not path.is_file():
+def _read_legacy_embedding() -> "EmbeddingConfig | None":
+    """The ``[embedding]`` section of the EverOS config, or ``None``."""
+    path = _legacy_everos_config_path()
+    if path is None or not path.is_file():
         return None
     try:
         with path.open("rb") as handle:
@@ -91,7 +81,6 @@ def load_embedding_config() -> EmbeddingConfig | None:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         logger.warning("knowledge: cannot read {}: {}", path, exc)
         return None
-
     model, base_url, api_key = section.get("model"), section.get("base_url"), section.get("api_key")
     if not (model and base_url and api_key):
         return None
@@ -102,6 +91,40 @@ def load_embedding_config() -> EmbeddingConfig | None:
         api_key=str(api_key),
         dimensions=int(dimensions) if isinstance(dimensions, int) and dimensions > 0 else None,
     )
+
+
+def load_embedding_config() -> EmbeddingConfig | None:
+    """The configured embedding endpoint, or ``None`` when there is not one.
+
+    Raven's own ``embedding`` section first; the EverOS config file second, for
+    an operator who has not moved the values across yet. ``None`` rather than a
+    raise: a deployment with no embedding configured is a deployment with no
+    knowledge bases, which is an ordinary state. The caller turns it into
+    "configure this first", not into a failed start.
+    """
+    from raven.config.raven import load_raven_config
+
+    try:
+        section = load_raven_config().embedding
+    except Exception as exc:  # noqa: BLE001 - fall through to the legacy file rather than fail the caller
+        logger.warning("knowledge: cannot read raven config: {}", exc)
+        section = None
+
+    if section is not None and section.model and section.base_url and section.api_key:
+        return EmbeddingConfig(
+            model=section.model,
+            base_url=section.base_url.rstrip("/"),
+            api_key=section.api_key,
+            dimensions=section.dimensions if section.dimensions and section.dimensions > 0 else None,
+        )
+
+    legacy = _read_legacy_embedding()
+    if legacy is not None:
+        logger.warning(
+            "knowledge: embedding endpoint read from the EverOS config; "
+            "run `raven doctor --fix` to move it into raven's own `embedding` section"
+        )
+    return legacy
 
 
 class EmbeddingClient:

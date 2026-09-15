@@ -85,6 +85,10 @@ EXTENSION_KEYS = (
     # the engine on would fail base Config validation.
     "evalEngine",
     "eval_engine",
+    # Raven's own embedding endpoint, used by the knowledge base. Same
+    # consequence as sessionTitle above if omitted: a config carrying the
+    # block would fail base Config validation instead of being read.
+    "embedding",
 )
 
 # Paths already warned about as malformed in this process; repeated
