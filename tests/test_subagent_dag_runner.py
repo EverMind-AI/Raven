@@ -4918,6 +4918,57 @@ async def test_a_dag_node_record_starts_the_backend_before_it_writes(
     assert backend.events == ["start", "store[liv/coder]", "recall[liv]", "recall[coder]", "stop"], backend.events
 
 
+async def test_a_dag_node_records_nothing_without_the_memory_plugin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No memory plugin is an ordinary install, not an error. The record path
+    must stop before the prime rather than hand `None` onward."""
+    from raven.agent.subagent import dag_runner as runner_mod
+    from raven.agent.subagent_memory import MemoryScope
+
+    primed: list[str] = []
+
+    async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
+        primed.append(session_id)
+        return True
+
+    monkeypatch.setattr(runner_mod, "prime_from_turn", _fake_prime)
+    monkeypatch.setattr(runner_mod, "_memory_backend", lambda: None)
+
+    await _run_one_node_dag(
+        tmp_path,
+        node_id="inspect",
+        subagent="Coder",
+        prompt="read it",
+        output="no readme",
+        memory_for=lambda _name: MemoryScope(
+            block={"user_id": "liv", "agent_id": "coder"},
+            session_prefix="cli:",
+            source="trace",
+        ),
+    )
+    await _drain_record_tasks()
+
+    assert primed == []
+
+
+def test_a_backend_the_factory_cannot_build_is_no_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A record is written after the node it describes has answered, so a
+    factory that raises must read as "no record" rather than fail the node."""
+    from raven.agent.subagent import dag_runner as runner_mod
+
+    monkeypatch.setattr(
+        "raven.core.plugin_stack.maybe_build_memory_backend",
+        _raising_factory,
+    )
+
+    assert runner_mod._memory_backend() is None
+
+
+def _raising_factory(*_a, **_k):
+    raise RuntimeError("the plugin is not installed")
+
+
 async def test_dag_node_primes_a_trace_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A `trace` node's record is primed with the same turn the log records,
     under the session id the host mints from this run and this node."""

@@ -3790,6 +3790,14 @@ export interface SettingsEverosResult {
     [k: string]: EverosSection;
   };
   config_path: string;
+  /**
+   * Whether this install has an EverOS to configure at all. False leaves sections empty and note set.
+   */
+  available: boolean;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  note?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4061,6 +4069,10 @@ export interface MemoryStatsResult {
   profiles: number;
   agent_cases: number;
   agent_skills: number;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  note?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4087,6 +4099,10 @@ export interface MemoryListResult {
   total: number;
   page: number;
   page_size: number;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  note?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
