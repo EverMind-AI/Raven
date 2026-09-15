@@ -283,6 +283,7 @@ async def test_d3_concurrent_commits_serialize_or_degrade(workspace):
 # =============================================================================
 
 
+@pytest.mark.slow
 async def test_d5_perf_1k_files_commit(workspace, capsys):
     """Measure commit_turn latency on a 1000-file workspace:
     - cold commit (full snapshot)

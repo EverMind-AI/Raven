@@ -1883,6 +1883,7 @@ async def test_a_cancelled_connect_does_not_leak_the_process(monkeypatch) -> Non
     assert not launched[0].alive, "the agent process is still running after a cancelled connect"
 
 
+@pytest.mark.slow
 async def test_a_connection_that_stopped_speaking_is_dead_and_gets_replaced() -> None:
     """The outage shape measured on a live npx adapter: the worker dies, the
     wrapper pid lives on, and `returncode is None` said "alive" forever -- so
@@ -1931,7 +1932,7 @@ async def test_a_probe_tells_a_wedged_agent_from_a_live_one() -> None:
     deaf = await AcpClient.launch(name="deaf", command=deaf_cfg.command, env=dict(deaf_cfg.env))
     try:
         assert deaf.alive, "the wedge is invisible to liveness -- which is why the probe exists"
-        assert await deaf.probe(2) is False
+        assert await deaf.probe(0.1) is False
     finally:
         await deaf.close()
 
@@ -1947,7 +1948,7 @@ async def test_a_stale_silent_connection_is_replaced_at_acquire(monkeypatch) -> 
     assert first.alive, "the wedged stub completes its handshake; the wedge starts after it"
 
     monkeypatch.setattr(pool_mod, "_STALE_AFTER_S", 0.0)
-    monkeypatch.setattr(pool_mod, "_PROBE_TIMEOUT_S", 2.0)
+    monkeypatch.setattr(pool_mod, "_PROBE_TIMEOUT_S", 0.05)
     second = await get_pool().acquire(name="wedged", command=cfg.command, env=dict(cfg.env))
 
     assert second is not first, "an unresponsive connection must be relaunched, not re-issued"

@@ -61,7 +61,29 @@ def config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
-async def test_list_returns_configured_entries_and_unconfigured_presets(config_path: Path) -> None:
+async def _probe_openai_without_network(cfg, *, source):
+    """An ``_probe_openai`` stand-in for tests about row shape, not live probing."""
+    from raven.agent.subagent.probe import ProbeResult
+
+    return ProbeResult(cfg.name, source, "openai", "unknown", "not probed in this test", "", 0)
+
+
+def _skip_live_probes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ``_rows(probe=True)`` off both the login shell and the network.
+
+    Neither a subprocess PATH capture nor an openai `/models` round trip carries
+    any signal a row-shape or config-wiring assertion reads; a test about PATH
+    capture itself (``test_list_groups_a_cli_entry_by_the_probe`` and friends)
+    sets its own ``_login_path`` instead of calling this.
+    """
+    monkeypatch.setattr("raven.agent.subagent.probe._login_path", lambda: "")
+    monkeypatch.setattr("raven.agent.subagent.probe._probe_openai", _probe_openai_without_network)
+
+
+async def test_list_returns_configured_entries_and_unconfigured_presets(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _skip_live_probes(monkeypatch)
     result = await subagents_list({})
     by_name = {row["name"]: row for row in result["rows"]}
 
@@ -267,7 +289,8 @@ async def test_list_defaults_to_probing(config_path: Path, monkeypatch) -> None:
     assert called is True
 
 
-async def test_probe_returns_the_same_row_shape_as_list(config_path: Path) -> None:
+async def test_probe_returns_the_same_row_shape_as_list(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _skip_live_probes(monkeypatch)
     listed = await subagents_list({})
     probed = await subagents_probe({})
     assert {r["name"] for r in listed["rows"]} == {r["name"] for r in probed["rows"]}
@@ -1784,6 +1807,7 @@ async def test_cancel_reports_false_when_nothing_is_running(config_path: Path) -
 async def test_list_reports_test_running_while_a_test_is_in_flight(config_path: Path, monkeypatch) -> None:
     from raven.agent.subagent.probe import TestResult
 
+    _skip_live_probes(monkeypatch)
     started = asyncio.Event()
     release = asyncio.Event()
 
