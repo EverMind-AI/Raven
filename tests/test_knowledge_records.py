@@ -7,7 +7,13 @@ import json
 
 import pytest
 
-from raven.knowledge._records import RecordStore
+from raven.knowledge._records import (
+    DEFAULT_CHUNK_OVERLAP,
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_SEPARATOR,
+    DEFAULT_TOP_K,
+    RecordStore,
+)
 
 
 @pytest.fixture
@@ -182,3 +188,138 @@ def test_the_requeue_is_persisted_not_just_in_memory(tmp_path) -> None:
     RecordStore(path)
     on_disk = json.loads(path.read_text(encoding="utf-8"))
     assert on_disk["documents"][doc.id]["status"] == "pending"
+
+
+def test_a_registry_written_before_origins_existed_still_loads(tmp_path) -> None:
+    """The field has a default for exactly this: every document in such a
+    registry is a file, which is what the default says."""
+    path = tmp_path / "records.json"
+    path.write_text(
+        json.dumps(
+            {
+                "bases": {
+                    "b1": {
+                        "name": "handbook",
+                        "description": "",
+                        "embedding_model": "bge-m3",
+                        "dimensions": 8,
+                        "created_at": "2026-08-24T00:00:00",
+                        "updated_at": "2026-08-24T00:00:00",
+                    }
+                },
+                "documents": {
+                    "d1": {
+                        "base_id": "b1",
+                        "source": "a.md",
+                        "media_type": "text/markdown",
+                        "size": 1,
+                        "status": "ready",
+                        "created_at": "2026-08-24T00:00:00",
+                        "updated_at": "2026-08-24T00:00:00",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = RecordStore(path)
+
+    assert store.get_document("d1").origin == "file"
+    assert store.get_document("d1").origin_ref == ""
+
+
+def test_rewriting_a_document_sends_it_back_to_the_queue(store) -> None:
+    base = _base(store)
+    doc = store.add_document(base_id=base.id, source="a.md", media_type="text/markdown", size=1)
+    store.set_status(doc.id, "failed", chunk_count=3, error="no parser")
+
+    updated = store.update_document(doc.id, source="b.md", media_type="text/markdown", size=9)
+
+    assert (updated.source, updated.size) == ("b.md", 9)
+    # Back to pending with nothing counted: the text those chunks were
+    # embedded from is gone, and reporting them would describe a document
+    # that no longer exists. The old failure goes with it.
+    assert (updated.status, updated.chunk_count, updated.error) == ("pending", 0, "")
+    assert store.pending_documents() == [updated]
+
+
+def test_rewriting_a_missing_document_returns_none(store) -> None:
+    assert store.update_document("nope", source="b.md", media_type="text/markdown", size=1) is None
+
+
+def test_settings_are_written_one_field_at_a_time(store) -> None:
+    base = _base(store)
+
+    store.configure_base(base.id, top_k=12)
+    store.configure_base(base.id, chunk_size=1024, chunk_overlap=200)
+
+    kept = store.get_base(base.id)
+    assert (kept.top_k, kept.chunk_size, kept.chunk_overlap) == (12, 1024, 200)
+    # The fields nobody sent stay where they were.
+    assert (kept.smart_chunking, kept.separator) == (True, "\n\n")
+
+
+def test_a_setting_nobody_defined_is_a_caller_mistake(store) -> None:
+    """Dropping it quietly would leave a surface reporting a value it never
+    stored."""
+    base = _base(store)
+
+    with pytest.raises(ValueError, match="not a knowledge base setting"):
+        store.configure_base(base.id, embedding_model="something-else")
+
+
+def test_configuring_a_base_that_is_gone_returns_none(store) -> None:
+    assert store.configure_base("nope", top_k=3) is None
+
+
+def test_a_registry_written_before_settings_existed_still_loads(tmp_path) -> None:
+    """Every field defaulted, so such a base loads with the behaviour it
+    already had rather than failing to load at all."""
+    path = tmp_path / "records.json"
+    path.write_text(
+        json.dumps(
+            {
+                "bases": {
+                    "b1": {
+                        "name": "handbook",
+                        "description": "",
+                        "embedding_model": "bge-m3",
+                        "dimensions": 8,
+                        "created_at": "2026-08-24T00:00:00",
+                        "updated_at": "2026-08-24T00:00:00",
+                    }
+                },
+                "documents": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    base = RecordStore(path).get_base("b1")
+
+    assert (base.top_k, base.smart_chunking, base.separator) == (
+        DEFAULT_TOP_K,
+        True,
+        DEFAULT_SEPARATOR,
+    )
+    assert (base.chunk_size, base.chunk_overlap, base.file_processing) == (
+        DEFAULT_CHUNK_SIZE,
+        DEFAULT_CHUNK_OVERLAP,
+        "",
+    )
+
+
+def test_a_new_base_starts_on_the_defaults_the_panel_shows(store) -> None:
+    """One source for these numbers: the record's fields, the handlers' fallback
+    for a base that predates them, and the panel's Restore Defaults all have to
+    agree, and three copies are three chances to drift."""
+    base = _base(store)
+
+    assert (base.top_k, base.chunk_size, base.chunk_overlap) == (
+        DEFAULT_TOP_K,
+        DEFAULT_CHUNK_SIZE,
+        DEFAULT_CHUNK_OVERLAP,
+    )
+    # The overlap has to leave a chunk with something of its own in it.
+    assert DEFAULT_CHUNK_OVERLAP < DEFAULT_CHUNK_SIZE

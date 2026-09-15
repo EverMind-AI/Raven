@@ -10,14 +10,28 @@ from __future__ import annotations
 
 import mimetypes
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
+from time import perf_counter
 
 from loguru import logger
 
 from raven.knowledge._chunker import ChunkerBase
-from raven.knowledge._embedding import EmbeddingClient, EmbeddingConfig, EmbeddingError, load_embedding_config
+from raven.knowledge._embedding import (
+    EmbeddingClient,
+    EmbeddingConfig,
+    EmbeddingError,
+    embedding_client,
+    load_embedding_config,
+)
 from raven.knowledge._parser import ParserBase, TextParser
-from raven.knowledge._records import KnowledgeBaseRecord, KnowledgeDocumentRecord, RecordStore
+from raven.knowledge._records import (
+    DEFAULT_TOP_K,
+    DocumentOrigin,
+    KnowledgeBaseRecord,
+    KnowledgeDocumentRecord,
+    RecordStore,
+)
 from raven.knowledge._structure import HeadingAwareChunker, StructuredTextParser
 from raven.knowledge._types import Chunk, VectorRecord, VectorSearchResult
 from raven.knowledge._vector_store import VectorStoreBase
@@ -46,6 +60,20 @@ class StaleBaseError(KnowledgeError):
     """
 
 
+@dataclass(frozen=True)
+class SearchOutcome:
+    """The hits, and what each half of the search cost.
+
+    Returned instead of a bare list because a recall surface has to report the
+    cost, and only this call can tell the embedding round trip apart from the
+    index query.
+    """
+
+    hits: list[VectorSearchResult] = field(default_factory=list)
+    embed_ms: float = 0.0
+    search_ms: float = 0.0
+
+
 def _default_parsers() -> list[ParserBase]:
     """Structured first, plain text for everything it does not claim.
 
@@ -54,6 +82,20 @@ def _default_parsers() -> list[ParserBase]:
     RST and plain text, which would otherwise have no parser at all.
     """
     return [StructuredTextParser(), TextParser()]
+
+
+def supported_extensions() -> list[str]:
+    """Every filename extension the default parsers offer uploads for.
+
+    What a file picker's ``accept`` and a folder walk's filter are built from.
+    A module function and not only a method, because the caller that needs it
+    is answering "what can be uploaded", which must not be the call that
+    builds a manager and its directories.
+    """
+    seen: set[str] = set()
+    for parser in _default_parsers():
+        seen.update(parser.supported_extensions())
+    return sorted(seen)
 
 
 class KnowledgeManager:
@@ -92,7 +134,7 @@ class KnowledgeManager:
             raise KnowledgeError(
                 "no embedding endpoint is configured; set [embedding] in the EverOS config before using a knowledge base"
             )
-        return EmbeddingClient(config)
+        return embedding_client(config)
 
     def embedding_available(self) -> bool:
         """Whether a base could be created right now."""
@@ -210,6 +252,15 @@ class KnowledgeManager:
             self._refuse_taken_name(name, allow=base_id)
         return self._records.rename_base(base_id, name=name, description=description)
 
+    def configure_base(self, base_id: str, **settings: object) -> KnowledgeBaseRecord | None:
+        """Write the settings a reader can change after the base exists.
+
+        Not the embedding model: the collection is sized to its width, so
+        changing it is a rebuild of every vector in the base rather than a
+        setting, and the stale-base check exists because that is detectable.
+        """
+        return self._records.configure_base(base_id, **settings)
+
     async def delete_base(self, base_id: str) -> bool:
         """Drop the base, its documents, their blobs and the collection.
 
@@ -244,12 +295,32 @@ class KnowledgeManager:
                     seen.append(media_type)
         return sorted(seen)
 
-    def add_document(self, base_id: str, *, filename: str, content: bytes) -> KnowledgeDocumentRecord:
+    def supported_extensions(self) -> list[str]:
+        """Every filename extension this manager's parsers offer uploads for."""
+        seen: set[str] = set()
+        for parser in self._parsers:
+            seen.update(parser.supported_extensions())
+        return sorted(seen)
+
+    def add_document(
+        self,
+        base_id: str,
+        *,
+        filename: str,
+        content: bytes,
+        origin: DocumentOrigin = "file",
+        origin_ref: str = "",
+    ) -> KnowledgeDocumentRecord:
         """Take an upload and queue it. Indexing happens separately.
 
         The bytes are kept: a reindex after a model change, and the page's own
         "show me this document", both need the original, and asking the user
         to upload it again is not a recovery path.
+
+        A note and a fetched page arrive here too, as the markdown they were
+        captured as. Nothing downstream needs to know which: one blob store,
+        one parser table, one indexer -- ``origin`` is what a row is labelled
+        with, not a second way of keeping a document.
         """
         if self._records.get_base(base_id) is None:
             raise KnowledgeError(f"no knowledge base {base_id!r}")
@@ -259,13 +330,45 @@ class KnowledgeManager:
             source=filename,
             media_type=media_type,
             size=len(content),
+            origin=origin,
+            origin_ref=origin_ref,
         )
+        self._write_blob(record.id, content)
+        return record
+
+    def _write_blob(self, document_id: str, content: bytes) -> None:
         self._blobs.mkdir(parents=True, exist_ok=True)
-        path = self._blob_path(record.id)
+        path = self._blob_path(document_id)
         tmp = path.with_suffix(".tmp")
         tmp.write_bytes(content)
         os.replace(tmp, path)
-        return record
+
+    async def replace_document(
+        self,
+        document_id: str,
+        *,
+        filename: str,
+        content: bytes,
+    ) -> KnowledgeDocumentRecord | None:
+        """Rewrite one document in place and queue it for indexing again.
+
+        The chunks of the old text go first. They are what a search answers
+        with, so leaving them until the reindex writes over them would answer
+        from a note the reader has already rewritten -- and if the reindex
+        fails, leave them for good.
+        """
+        record = self._records.get_document(document_id)
+        if record is None:
+            return None
+        await self._store.delete(record.base_id, document_id)
+        media_type = mimetypes.guess_type(filename)[0] or "text/plain"
+        self._write_blob(document_id, content)
+        return self._records.update_document(
+            document_id,
+            source=filename,
+            media_type=media_type,
+            size=len(content),
+        )
 
     def list_documents(self, base_id: str) -> list[KnowledgeDocumentRecord]:
         return self._records.list_documents(base_id)
@@ -367,26 +470,45 @@ class KnowledgeManager:
 
     # ── search ────────────────────────────────────────────────────
 
-    async def search(self, base_ids: list[str], query: str, top_k: int = 5) -> list[VectorSearchResult]:
+    async def search(self, base_ids: list[str], query: str, top_k: int | None = None) -> SearchOutcome:
         """Search across bases, merged and ranked together.
 
         One embedding call for the query, not one per base: they are searched
         with the same vector, and a base whose model no longer matches is
         refused rather than searched with it.
+
+        The two costs are timed apart because they answer different questions.
+        Embedding is a round trip to whatever endpoint is configured and runs
+        to hundreds of milliseconds; the store query is the index doing its
+        job. A surface that reports one number as "how long the search took"
+        should be reporting the second, or it is describing the provider.
         """
         bases = [b for b in (self._records.get_base(i) for i in base_ids) if b is not None]
         # Skipped rather than refused: asking a mixed set of bases is ordinary,
         # and one with no vectors is not an error in the others.
         bases = [b for b in bases if self.embeds(b)]
         if not bases or not query.strip():
-            return []
+            return SearchOutcome(hits=[], embed_ms=0.0, search_ms=0.0)
+        # The bases' own settings when the caller names no number, and the
+        # largest of them when several are asked at once: a base configured to
+        # answer with ten chunks should still be able to, and the merge below
+        # cuts the total back to that same figure.
+        if top_k is None:
+            top_k = max(int(getattr(b, "top_k", DEFAULT_TOP_K) or DEFAULT_TOP_K) for b in bases)
         client = self._client()
         for base in bases:
             await self._assert_current(base, client)
 
+        started = perf_counter()
         vector = (await client.embed([query]))[0]
+        embedded = perf_counter()
         hits: list[VectorSearchResult] = []
         for base in bases:
             hits.extend(await self._store.search(base.id, vector, top_k=top_k))
+        searched = perf_counter()
         hits.sort(key=lambda hit: hit.score, reverse=True)
-        return hits[:top_k]
+        return SearchOutcome(
+            hits=hits[:top_k],
+            embed_ms=(embedded - started) * 1000.0,
+            search_ms=(searched - embedded) * 1000.0,
+        )
