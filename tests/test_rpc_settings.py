@@ -107,12 +107,99 @@ async def test_everos_get_masks_key(everos_toml):
 
 
 async def test_everos_set_merges_section(everos_toml):
-    await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "m1", "api_key": "k1"}})
-    await rpc_console.settings_everos_set({"section": "embedding", "fields": {"base_url": "https://x/v1"}})
+    await rpc_console.settings_everos_set({"section": "rerank", "fields": {"model": "m1", "api_key": "k1"}})
+    await rpc_console.settings_everos_set({"section": "rerank", "fields": {"base_url": "https://x/v1"}})
     import tomllib
 
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"] == {"model": "m1", "api_key": "k1", "base_url": "https://x/v1"}
+    assert data["rerank"] == {"model": "m1", "api_key": "k1", "base_url": "https://x/v1"}
+
+
+class TestEmbeddingCardFollowsTheEndpointHome:
+    """The embedding endpoint is raven's, and everos.toml keeps an override.
+
+    The card has to read and write whichever of the two is in force. Reading
+    only the file left it blank for an install the wizard had just configured,
+    and filling it in from there wrote a second endpoint that silently
+    outranked the one a knowledge base goes on reading -- the divergence the
+    move was meant to end, recreated through the settings page.
+    """
+
+    async def test_the_card_shows_the_endpoint_raven_holds(self, everos_toml, tmp_path, monkeypatch) -> None:
+        import json
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps(
+                {"embedding": {"model": "Qwen/Qwen3-Embedding-4B", "baseUrl": "https://e.test/v1", "apiKey": "sk-1"}}
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("raven.home.get_config_path", lambda: cfg)
+        monkeypatch.setattr("raven.config.update.get_config_path", lambda: cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+
+        card = (await rpc_console.settings_everos({}))["sections"]["embedding"]
+
+        assert card["model"] == "Qwen/Qwen3-Embedding-4B"
+        assert card["base_url"] == "https://e.test/v1"
+        assert card["api_key_set"] is True
+
+    async def test_saving_the_card_writes_where_the_card_reads(self, everos_toml, tmp_path, monkeypatch) -> None:
+        import json
+        import tomllib
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("raven.home.get_config_path", lambda: cfg)
+        monkeypatch.setattr("raven.config.update.get_config_path", lambda: cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+
+        await rpc_console.settings_everos_set(
+            {
+                "section": "embedding",
+                "fields": {"model": "bge-m3", "base_url": "https://e.test/v1", "api_key": "sk-2"},
+            }
+        )
+
+        block = json.loads(cfg.read_text(encoding="utf-8"))["embedding"]
+        assert block == {"model": "bge-m3", "baseUrl": "https://e.test/v1", "apiKey": "sk-2"}
+        # And not into the file, where it would outrank what it just wrote.
+        assert "embedding" not in tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+
+    async def test_a_provider_is_refused_rather_than_dropped(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """Raven's block has no provider field. Accepting the value and
+        discarding it reads to the caller as one that was stored."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("raven.home.get_config_path", lambda: cfg)
+        monkeypatch.setattr("raven.config.update.get_config_path", lambda: cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+
+        with pytest.raises(ConfigValidationError, match="provider"):
+            await rpc_console.settings_everos_set(
+                {"section": "embedding", "fields": {"model": "m", "provider": "siliconflow"}}
+            )
+
+    async def test_an_operators_own_section_keeps_both_halves(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """Someone who wrote [embedding] into everos.toml chose that endpoint
+        for memory; the card stays on it for reading and for writing."""
+        import json
+        import tomllib
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("raven.home.get_config_path", lambda: cfg)
+        monkeypatch.setattr("raven.config.update.get_config_path", lambda: cfg)
+        everos_toml.write_text('[embedding]\nmodel = "bge-own"\napi_key = "k"\n', encoding="utf-8")
+
+        card = (await rpc_console.settings_everos({}))["sections"]["embedding"]
+        assert card["model"] == "bge-own"
+
+        await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "bge-own-2"}})
+
+        assert tomllib.loads(everos_toml.read_text(encoding="utf-8"))["embedding"]["model"] == "bge-own-2"
+        assert "embedding" not in json.loads(cfg.read_text(encoding="utf-8"))
 
 
 async def test_everos_set_rejects_bad_input(everos_toml):
@@ -144,10 +231,10 @@ async def test_everos_set_borrows_a_connected_provider(everos_toml, lender):
     in the file is the real key, copied -- not the provider's name."""
     lender({"apiKey": "sk-lent", "apiBase": "https://lender.example/v1"})
     await rpc_console.settings_everos_set(
-        {"section": "embedding", "fields": {"model": "qwen/qwen3-embedding-8b"}, "borrow_from": "openrouter"}
+        {"section": "rerank", "fields": {"model": "qwen/qwen3-embedding-8b"}, "borrow_from": "openrouter"}
     )
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"] == {
+    assert data["rerank"] == {
         "model": "qwen/qwen3-embedding-8b",
         "api_key": "sk-lent",
         "base_url": "https://lender.example/v1",
@@ -165,21 +252,19 @@ async def test_borrowing_reads_an_endpoints_section(everos_toml, lender):
             ]
         }
     )
-    await rpc_console.settings_everos_set(
-        {"section": "embedding", "fields": {"model": "m"}, "borrow_from": "openrouter"}
-    )
+    await rpc_console.settings_everos_set({"section": "rerank", "fields": {"model": "m"}, "borrow_from": "openrouter"})
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"]["api_key"] == "sk-from-endpoint"
-    assert data["embedding"]["base_url"] == "https://ep.example/v1"
+    assert data["rerank"]["api_key"] == "sk-from-endpoint"
+    assert data["rerank"]["base_url"] == "https://ep.example/v1"
 
 
 async def test_borrowing_reads_an_api_key_list_section(everos_toml, lender):
     """The other shape the precedence exists for: Gemini's rotation list never
     populates the flat field either."""
     lender({"apiKeyList": ["k-gem-1", "k-gem-2"], "apiBase": "https://gem.example/v1"}, name="gemini")
-    await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "m"}, "borrow_from": "gemini"})
+    await rpc_console.settings_everos_set({"section": "rerank", "fields": {"model": "m"}, "borrow_from": "gemini"})
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"]["api_key"] == "k-gem-1"
+    assert data["rerank"]["api_key"] == "k-gem-1"
 
 
 async def test_a_borrowed_key_beats_the_redaction_the_page_echoes(everos_toml, lender):
@@ -188,14 +273,14 @@ async def test_a_borrowed_key_beats_the_redaction_the_page_echoes(everos_toml, l
     lender({"apiKey": "sk-lent", "apiBase": "https://lender.example/v1"})
     await rpc_console.settings_everos_set(
         {
-            "section": "embedding",
+            "section": "rerank",
             "fields": {"model": "m", "api_key": "****set****", "base_url": "https://stale/v1"},
             "borrow_from": "openrouter",
         }
     )
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"]["api_key"] == "sk-lent"
-    assert data["embedding"]["base_url"] == "https://lender.example/v1"
+    assert data["rerank"]["api_key"] == "sk-lent"
+    assert data["rerank"]["base_url"] == "https://lender.example/v1"
 
 
 async def test_borrowing_keeps_the_section_url_when_the_lender_has_none(everos_toml, lender):
@@ -203,15 +288,15 @@ async def test_borrowing_keeps_the_section_url_when_the_lender_has_none(everos_t
     reader typed: only the key is certain to be worth copying."""
     lender({"apiKey": "sk-lent"}, name="custom")
     await rpc_console.settings_everos_set(
-        {"section": "embedding", "fields": {"base_url": "https://mine/v1"}, "borrow_from": "custom"}
+        {"section": "rerank", "fields": {"base_url": "https://mine/v1"}, "borrow_from": "custom"}
     )
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"]["api_key"] == "sk-lent"
+    assert data["rerank"]["api_key"] == "sk-lent"
     # `custom` carries a registry default address, so the borrow does have one to
     # give and it wins -- which is the same rule as every other lender. What the
     # section keeps on its own is covered by the endpoints case above, where the
     # entry supplies the address.
-    assert data["embedding"]["base_url"]
+    assert data["rerank"]["base_url"]
 
 
 async def test_borrowing_finds_a_provider_stored_under_another_spelling(everos_toml, lender):
@@ -220,11 +305,9 @@ async def test_borrowing_finds_a_provider_stored_under_another_spelling(everos_t
     used, which is exactly the case the invariant in
     `test_provider_resolution_invariants` exists to keep working."""
     lender({"apiKey": "sk-hyphen", "apiBase": "https://hyph.example/v1"}, name="some-vendor")
-    await rpc_console.settings_everos_set(
-        {"section": "embedding", "fields": {"model": "m"}, "borrow_from": "some-vendor"}
-    )
+    await rpc_console.settings_everos_set({"section": "rerank", "fields": {"model": "m"}, "borrow_from": "some-vendor"})
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"]["api_key"] == "sk-hyphen"
+    assert data["rerank"]["api_key"] == "sk-hyphen"
 
 
 async def test_borrowing_refuses_what_it_cannot_lend(everos_toml, lender):
@@ -232,14 +315,10 @@ async def test_borrowing_refuses_what_it_cannot_lend(everos_toml, lender):
     satisfies the first and has nothing to answer the second with."""
     lender({"apiKey": "sk-lent"})
     with pytest.raises(ConfigValidationError, match="no such provider"):
-        await rpc_console.settings_everos_set(
-            {"section": "embedding", "fields": {"model": "m"}, "borrow_from": "nobody"}
-        )
+        await rpc_console.settings_everos_set({"section": "rerank", "fields": {"model": "m"}, "borrow_from": "nobody"})
     lender({"apiBase": "http://127.0.0.1:11434/v1"}, name="ollama")
     with pytest.raises(ConfigValidationError, match="no api key to lend"):
-        await rpc_console.settings_everos_set(
-            {"section": "embedding", "fields": {"model": "m"}, "borrow_from": "ollama"}
-        )
+        await rpc_console.settings_everos_set({"section": "rerank", "fields": {"model": "m"}, "borrow_from": "ollama"})
 
 
 async def test_everos_clear_optional_only(everos_toml):
