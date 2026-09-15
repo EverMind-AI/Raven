@@ -230,6 +230,16 @@ class InstanceRow(_Strict):
             "instance that came from no orchestration, so its presence is what says the row has a source."
         ),
     )
+    turn_started_at_ms: int | None = Field(
+        default=None,
+        alias="turnStartedAtMs",
+        description=(
+            "When the turn this instance is answering right now began. Absent when it is answering "
+            "none, so presence is what says the instance is working and the number is what says "
+            "for how long. Not `updatedAtMs`, which every registry write stamps -- a binding "
+            "commit and a graph-origin write move it too, so it dates the row and not the turn."
+        ),
+    )
 
 
 class TranscriptToolCall(_Strict):
