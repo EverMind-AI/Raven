@@ -45,6 +45,7 @@ async def test_stats_reads_all_four_kinds(monkeypatch):
     out = await memory.memory_stats({})
     assert out == {
         "ok": True,
+        "note": None,
         "base_url": "http://x",
         "episodes": 7,
         "profiles": 1,
@@ -236,14 +237,69 @@ class TestWithoutTheMemoryPlugin:
         assert out["episodes"] == 0
 
     @pytest.mark.asyncio
-    async def test_list_fails_typed_and_names_the_distribution(self):
-        with everos_plugin_absent(), pytest.raises(InternalError) as exc:
-            await memory.memory_list({"kind": "episode"})
+    async def test_list_answers_an_empty_page_that_says_why(self):
+        """Not an error: there is no store to list, and a retry button offers
+        an action that cannot help. The page shows the sentence instead."""
+        with everos_plugin_absent():
+            out = await memory.memory_list({"kind": "episode"})
 
-        assert "everos-memory" in str(exc.value)
+        assert out["items"] == []
+        assert "everos-memory" in out["note"]
 
     @pytest.mark.asyncio
     async def test_an_unknown_kind_is_still_the_first_answer(self):
         """Argument validation does not depend on a backend being installed."""
         with everos_plugin_absent(), pytest.raises(ConfigValidationError):
             await memory.memory_list({"kind": "nope"})
+
+
+# ── why the page is empty ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_no_plugin_explains_itself_instead_of_showing_zeros():
+    """Four zeros read as "your memories are gone". They are not gone; this
+    install never had the plugin that keeps them."""
+    with everos_plugin_absent():
+        stats = await memory.memory_stats({})
+        listing = await memory.memory_list({"kind": "episode"})
+
+    assert stats["ok"] is False
+    assert "everos-memory" in stats["note"]
+    assert listing["items"] == [] and "everos-memory" in listing["note"]
+
+
+@pytest.mark.asyncio
+async def test_a_different_backend_says_this_page_is_not_where_they_are(monkeypatch):
+    """The plugin is installed and memory works -- somewhere this page does not
+    read. Showing zeros here says the opposite of what is true."""
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda *a, **k: SimpleNamespace(
+            memory=SimpleNamespace(backend="mem0", user_id="u", agent_id="a"), plugins=SimpleNamespace(config={})
+        ),
+    )
+
+    stats = await memory.memory_stats({})
+    listing = await memory.memory_list({"kind": "episode"})
+
+    assert stats["ok"] is False
+    assert "mem0" in stats["note"]
+    assert listing["items"] == [] and "mem0" in listing["note"]
+
+
+@pytest.mark.asyncio
+async def test_the_configured_backend_gets_no_note(monkeypatch):
+    """The note exists to explain an empty page, not to decorate a working one."""
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda *a, **k: SimpleNamespace(
+            memory=SimpleNamespace(backend="everos", user_id="u", agent_id="a"), plugins=SimpleNamespace(config={})
+        ),
+    )
+    post, _ = _post_returning([{"data": {"total_count": 3}} for _ in range(4)])
+    monkeypatch.setattr(memory, "_post", post)
+
+    stats = await memory.memory_stats({})
+
+    assert stats["note"] is None

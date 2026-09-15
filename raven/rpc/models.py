@@ -2972,6 +2972,18 @@ class SettingsEverosParams(_Strict):
 class SettingsEverosResult(_Strict):
     sections: dict[str, EverosSection]
     config_path: str
+    available: bool = Field(
+        default=True,
+        description="Whether this install has an EverOS to configure at all. False leaves sections empty and note set.",
+    )
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Why this page has nothing to show, when that is not a failure: the memory "
+            "plugin is not installed, or it is installed but is not what memory.backend "
+            "names. Null when the store was actually consulted."
+        ),
+    )
 
 
 class SettingsEverosSetParams(_Strict):
@@ -3180,6 +3192,14 @@ class MemoryStatsResult(_Strict):
     profiles: int
     agent_cases: int
     agent_skills: int
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Why this page has nothing to show, when that is not a failure: the memory "
+            "plugin is not installed, or it is installed but is not what memory.backend "
+            "names. Null when the store was actually consulted."
+        ),
+    )
 
 
 class MemoryItem(_Strict):
@@ -3213,6 +3233,14 @@ class MemoryListResult(_Strict):
     total: int
     page: int
     page_size: int
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Why this page has nothing to show, when that is not a failure: the memory "
+            "plugin is not installed, or it is installed but is not what memory.backend "
+            "names. Null when the store was actually consulted."
+        ),
+    )
 
 
 class MemoryDeleteParams(_Strict):

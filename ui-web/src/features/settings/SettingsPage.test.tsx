@@ -484,6 +484,19 @@ describe('settings island', () => {
     expect(tz.value).toBe('Asia/Shanghai')
   })
 
+  it('says the plugin is missing instead of four rows that read unset', async () => {
+    /* "not set" is what a present-but-unconfigured install looks like too, so
+       a person could fill in a model and a key here and have nothing happen. */
+    const note = 'the everos-memory distribution is not installed'
+    install(snap({ everos: { available: false, note, sections: {} } }))
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.memory').click()
+    })
+    expect(screen.getByText(note)).toBeTruthy()
+    expect(screen.queryByText('gui.set.unset')).toBeNull()
+  })
+
   it('saves an everos role through the source and folds the editor', async () => {
     const { calls } = install()
     await mount()
