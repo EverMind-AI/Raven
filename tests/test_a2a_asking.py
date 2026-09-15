@@ -2,7 +2,6 @@
 
 import asyncio
 
-import pytest
 from a2a.types import TaskState
 
 from raven.a2a.asking import A2aQuestionBroker
@@ -12,9 +11,7 @@ async def test_await_question_parks_and_then_returns_the_answer():
     parked = []
     broker = A2aQuestionBroker(on_park=parked.append)
 
-    waiting = asyncio.create_task(
-        broker.await_question("task-1", prompt="which one?", timeout_s=5.0)
-    )
+    waiting = asyncio.create_task(broker.await_question("task-1", prompt="which one?", timeout_s=5.0))
     await asyncio.sleep(0)
     assert parked == ["task-1"]
     assert not waiting.done()
