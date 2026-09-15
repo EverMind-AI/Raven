@@ -181,17 +181,25 @@ raven/a2a/               inbound -- the server face
   executor.py            AgentExecutor: an A2A task becomes one raven turn
   lifecycle.py           raven turn states -> TaskState; questions -> INPUT_REQUIRED
   auth.py                authenticating the caller
+  asking.py              the question broker; a parked task is a turn still running
   routes_aiohttp.py      JSON-RPC dispatch + A2A-Version; deleted on migration
-  gate.py                sub-agent refusal
+  runtime.py             executor + DefaultRequestHandler assembly, and the standalone site
+  gate.py                sub-agent refusal, and the one module the rpc surface may import
 raven/a2a_client/        outbound -- the client face
   client.py              JSON-RPC over the SDK client
   peers.py               origin -> credential lookup; the model never holds one
   tool.py                the single host-agent tool; withheld from sub-agents
 ```
 
-Import-linter gains one contract line: `raven.a2a` must not import `raven.cli`, matching
-the existing "the served surfaces do not import the launcher" rule that already binds
-`raven.rpc` and `raven.acp`.
+Seating the pair in the layer machinery takes four entries, not one, and a contract can
+only break on an edge it names -- so anything left out is simply unwatched. `raven.a2a`
+joins the served surfaces in "the served surfaces do not import the launcher", and joins
+the forbidden set of "inner layers know no surface" so no inner package may reach it.
+`raven.a2a_client` joins that same contract's inner seats, beside `acp_client`. And the ws
+gateway's mount is one surface hosting another, which this repo answers with a facade
+rather than an allowlist: `raven/rpc/` may name `raven.a2a.gate` and nothing else, pinned
+by a roster guard in `tests/test_l4_entrances.py`, exactly as `raven/acp/` reaches rpc only
+through `raven.rpc.bootstrap`.
 
 ## Inbound
 
