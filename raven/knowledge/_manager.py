@@ -223,6 +223,22 @@ class KnowledgeManager:
         path = self._blob_path(document_id)
         return path.read_bytes() if path.is_file() else None
 
+    def document_path(self, document_id: str) -> Path | None:
+        """Where the stored copy is, for a caller that must not read it all.
+
+        Beside ``read_document`` rather than instead of it: the indexer wants
+        the bytes, and a viewer wants a handle it can stream and convert from.
+        Reading a 25 MB upload into memory to hand it back out again is the
+        thing this exists to avoid.
+
+        The path is inside raven's state directory, which the viewer's own path
+        policy refuses on purpose. That is not a contradiction: a caller reaches
+        this by document id, so nothing the page sent names a location, and the
+        handle is served rather than the request's own path.
+        """
+        path = self._blob_path(document_id)
+        return path if path.is_file() else None
+
     async def delete_document(self, document_id: str) -> bool:
         record = self._records.get_document(document_id)
         if record is None:

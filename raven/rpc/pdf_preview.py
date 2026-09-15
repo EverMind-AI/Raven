@@ -49,7 +49,17 @@ from pathlib import Path
 
 from raven.utils import office
 
-RENDERABLE_SUFFIXES = frozenset({".pptx"})
+# What LibreOffice is asked to turn into a PDF. Decks were the first, because
+# the page can frame a PDF and cannot draw a .pptx; a knowledge base takes
+# uploads in the rest of the office formats and the page cannot draw those
+# either. The legacy trio is here deliberately -- .doc and .xls have no reader
+# in the browser and no pure-Python one worth trusting, so LibreOffice is not
+# one option among several for them, it is the only one.
+#
+# Not a general "anything LibreOffice opens" list: every suffix here is a
+# conversion the gateway will start on a page's say-so, and the timeout below
+# is sized for a document rather than for a spreadsheet nobody meant to render.
+RENDERABLE_SUFFIXES = frozenset({".pptx", ".ppt", ".docx", ".doc", ".xlsx", ".xls", ".odt", ".odp", ".ods", ".rtf"})
 
 # A deck of forty image-heavy pages converts in about half a minute on a cold
 # profile; three minutes is a hang, not a slow deck.

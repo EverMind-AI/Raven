@@ -621,3 +621,160 @@ async def test_rendering_needs_a_session_too(client: TestClient, tmp_path: Path,
 
     assert r.status == 401
     assert soffice.calls() == []
+
+
+# ---------------------------------------------------------------------------
+# /knowledge/file -- the original upload behind a knowledge document
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def kb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A knowledge manager rooted in tmp_path, wired to the route's lookup."""
+    from raven.knowledge import EmbeddingConfig, KnowledgeManager
+    from raven.rpc.methods import knowledge as knowledge_methods
+
+    # The width probe is what creating a base reaches the network for, and
+    # these tests are about what the route serves rather than about embedding.
+    # Stubbed at that one call rather than behind a fake client, so the test
+    # does not have to track EmbeddingClient's surface to stay passing.
+    manager = KnowledgeManager(
+        tmp_path / "kbroot",
+        embedding=EmbeddingConfig(model="stub-embed", base_url="https://embed.test/v1", api_key="k", dimensions=8),
+    )
+
+    async def _width(_client) -> int:
+        return 8
+
+    monkeypatch.setattr(manager, "_width_of", _width)
+    monkeypatch.setattr(knowledge_methods, "knowledge_manager", lambda: manager)
+    return manager
+
+
+async def _base(kb):
+    return await kb.create_base(name="handbook")
+
+
+async def test_knowledge_file_serves_the_upload_by_id(client: TestClient, kb) -> None:
+    """The bytes come back under the name they were uploaded with, not under
+    the blob's, which has no name to speak of."""
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="onboarding.md", content=b"# hi\n")
+
+    r = await client.get("/knowledge/file", params={"document": doc.id}, headers=auth())
+
+    assert r.status == 200
+    assert await r.read() == b"# hi\n"
+    # Decided from the record's filename: read off the extensionless blob this
+    # would be application/octet-stream, which downloads instead of showing.
+    assert r.headers["Content-Type"] == "text/plain; charset=utf-8"
+    assert r.headers["Content-Disposition"] == "inline"
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+
+
+async def test_knowledge_file_sandboxes_every_response(client: TestClient, kb) -> None:
+    """An upload can be HTML, which is a script carrier. Served same-origin
+    without this it would hand the page's own origin -- and with it the session
+    cookie and the RPC socket -- to whatever was uploaded."""
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="report.html", content=b"<p>hi</p>")
+
+    r = await client.get("/knowledge/file", params={"document": doc.id}, headers=auth())
+
+    assert r.headers["Content-Security-Policy"] == "sandbox"
+
+
+async def test_knowledge_file_lets_a_pdf_run_its_viewer(client: TestClient, kb) -> None:
+    """The browser's PDF viewer is script-driven and renders blank without it.
+    The origin stays opaque either way: allow-same-origin is never granted."""
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="scan.pdf", content=b"%PDF-1.4\n")
+
+    r = await client.get("/knowledge/file", params={"document": doc.id}, headers=auth())
+
+    assert r.headers["Content-Security-Policy"] == "sandbox allow-scripts"
+    assert r.headers["Content-Type"] == "application/pdf"
+
+
+async def test_knowledge_file_refuses_without_a_token(client: TestClient, kb) -> None:
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="onboarding.md", content=b"hi")
+
+    r = await client.get("/knowledge/file", params={"document": doc.id})
+
+    assert r.status == 401
+
+
+@pytest.mark.parametrize("document", ["", "nosuchdocument"])
+async def test_knowledge_file_answers_404_for_a_document_that_is_not_there(
+    client: TestClient, kb, document: str
+) -> None:
+    """Including the empty id: a request that names nothing is not a request
+    for everything."""
+    r = await client.get("/knowledge/file", params={"document": document}, headers=auth())
+
+    assert r.status == 404
+
+
+async def test_knowledge_file_takes_no_path_from_the_page(client: TestClient, kb, tmp_path: Path) -> None:
+    """The route is addressed by id, so there is no path to traverse. A path
+    parameter is not a second way in -- it is ignored, and the id still
+    decides."""
+    secret = tmp_path / "serve.json"
+    secret.write_text('{"token": "shh"}', encoding="utf-8")
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="onboarding.md", content=b"# hi\n")
+
+    r = await client.get(
+        "/knowledge/file",
+        params={"document": doc.id, "path": str(secret)},
+        headers=auth(),
+    )
+
+    assert r.status == 200
+    assert await r.read() == b"# hi\n"
+
+
+async def test_knowledge_file_refuses_a_render_it_cannot_do(client: TestClient, kb) -> None:
+    """Markdown has no PDF rendering and needs none; saying so beats starting
+    LibreOffice on a text file."""
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="onboarding.md", content=b"# hi\n")
+
+    r = await client.get("/knowledge/file", params={"document": doc.id, "render": "pdf"}, headers=auth())
+
+    assert r.status == 400
+
+
+async def test_knowledge_file_reports_a_host_with_no_libreoffice(
+    client: TestClient, kb, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """503 with the reason in the body, which is the page's only signal: an
+    empty frame cannot say "install LibreOffice"."""
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "find_soffice", lambda: None)
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="report.docx", content=b"PK\x03\x04stub")
+
+    r = await client.get("/knowledge/file", params={"document": doc.id, "render": "pdf"}, headers=auth())
+
+    assert r.status == 503
+    assert "LibreOffice" in await r.text()
+
+
+async def test_the_converter_is_handed_a_suffixed_name(kb) -> None:
+    """LibreOffice picks its input filter partly from the extension, and a
+    legacy .doc arriving as an extensionless blob is the case its sniffing is
+    worst at. The alias is the same inode, so the cache key does not move."""
+    from raven.rpc import knowledge_preview
+
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="report.doc", content=b"\xd0\xcf\x11\xe0stub")
+    blob = kb.document_path(doc.id)
+
+    alias = knowledge_preview._alias_for(doc, blob)
+
+    assert alias.suffix == ".doc"
+    assert alias.read_bytes() == blob.read_bytes()
+    assert alias.stat().st_size == blob.stat().st_size
