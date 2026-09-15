@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -12,6 +13,7 @@ import pytest
 
 from scripts.coverage_gate import (
     OMITTED_PATHS,
+    PRODUCTION_PATHSPECS,
     calculate_diff_coverage,
     check_baseline_update,
     check_ratchet,
@@ -232,3 +234,21 @@ def test_ratchet_reports_total_and_largest_file_decline(capsys: pytest.CaptureFi
     assert "Ratchet line: current=70.00% baseline=80.00% delta=-10.00pp" in output
     assert "Ratchet branch: current=50.00% baseline=75.00% delta=-25.00pp" in output
     assert "raven/example.py" in output
+
+
+def test_the_diff_gate_claims_only_trees_that_coverage_measures() -> None:
+    """A changed file under an unmeasured tree can never appear in the report,
+    so a production pathspec over one fails every PR that touches it: the gate
+    once named all of plugins-dist while coverage measured only raven_everos."""
+    repo = Path(__file__).resolve().parents[1]
+    measured = set(re.findall(r"--cov=(\S+)", (repo / "Makefile").read_text(encoding="utf-8")))
+    for spec in PRODUCTION_PATHSPECS:
+        if spec.startswith(":(glob,exclude)"):
+            continue
+        root = repo / spec.removeprefix(":(glob)").split("/**", 1)[0]
+        if (root / "__init__.py").is_file():
+            packages = {root.name}
+        else:
+            packages = {child.name for child in root.iterdir() if (child / "__init__.py").is_file()}
+        assert packages, f"{spec} names no importable package"
+        assert packages <= measured, f"{spec} covers {packages - measured}, which no --cov flag measures"
