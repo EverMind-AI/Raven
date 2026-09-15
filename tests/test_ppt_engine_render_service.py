@@ -236,7 +236,6 @@ def _running_with(marker: str) -> list[int]:
 
 @needs_soffice
 @needs_reader
-@pytest.mark.slow
 def test_the_chain_runs_from_a_deck_to_pages_and_words(rendered: Path, tmp_path: Path) -> None:
     renderer = LocalDeckRenderer()
     assert rendered.is_file() and rendered.stat().st_size > 0
@@ -372,7 +371,6 @@ def test_poppler_reads_the_same_page_as_pdfium(
 
 
 @needs_soffice
-@pytest.mark.slow
 def test_two_conversions_at_once_do_not_lock_each_other_out(tmp_path: Path) -> None:
     """The trap this module was written around.
 

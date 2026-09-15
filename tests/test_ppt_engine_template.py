@@ -2754,7 +2754,6 @@ def test_layout_pictures_names_the_layouts_photographs_and_replace_picture_swaps
     not __import__("raven_ppt.services.render", fromlist=["available"]).available().can_convert,
     reason="needs LibreOffice to render",
 )
-@pytest.mark.slow
 def test_a_washed_backdrop_renders_as_a_blend_not_a_slab(tmp_path: Path) -> None:
     """`alphaModFix` is the transparency the renderer honours: a black picture at 0.3
     over a white page has to come out grey, or the wash exists only in the XML."""

@@ -468,14 +468,12 @@ def _write_home_config(tmp_path: Path, name: str, body: str | None) -> Path:
     return home
 
 
-@pytest.mark.slow
 def test_doctor_bad_config_warns_exactly_once(tmp_path: Path) -> None:
     home = _write_home_config(tmp_path, "bad", '{"providers": {},}')
     out, _ = _run_doctor_subprocess(home)
     assert out.count("not valid JSON") == 1, out
 
 
-@pytest.mark.slow
 def test_doctor_config_line_three_states(tmp_path: Path) -> None:
     import re
 
@@ -495,7 +493,6 @@ def test_doctor_config_line_three_states(tmp_path: Path) -> None:
     assert "✓" in config_line, out_good
 
 
-@pytest.mark.slow
 def test_doctor_empty_config_is_invalid(tmp_path: Path) -> None:
     """An empty config.json runs on defaults (load_config sees a JSON syntax
     error), so doctor must not paint the Config line green."""
@@ -507,7 +504,6 @@ def test_doctor_empty_config_is_invalid(tmp_path: Path) -> None:
     assert code == 1, out
 
 
-@pytest.mark.slow
 def test_doctor_non_object_config_is_invalid(tmp_path: Path) -> None:
     """A valid-JSON non-object top level (e.g. null) carries no settings, so
     doctor must classify it invalid instead of green."""
@@ -519,7 +515,6 @@ def test_doctor_non_object_config_is_invalid(tmp_path: Path) -> None:
     assert code == 1, out
 
 
-@pytest.mark.slow
 def test_doctor_everos_without_embedding_shows_keyword_only(tmp_path: Path) -> None:
     """The Memory section must say recall is keyword-only when the embedding
     role is not configured in the user-level everos.toml."""
@@ -532,7 +527,6 @@ def test_doctor_everos_without_embedding_shows_keyword_only(tmp_path: Path) -> N
     assert "no embedding key" in out, out
 
 
-@pytest.mark.slow
 def test_doctor_everos_with_embedding_shows_semantic(tmp_path: Path) -> None:
     import re
 
@@ -548,7 +542,6 @@ def test_doctor_everos_with_embedding_shows_semantic(tmp_path: Path) -> None:
     assert re.search(r"Retrieval:\s*semantic", out), out
 
 
-@pytest.mark.slow
 def test_memory_retrieval_reaches_the_json_output(tmp_path: Path) -> None:
     home = _write_home_config(tmp_path, "everos_json", json.dumps({"memory": {"backend": "everos"}}))
     import os
