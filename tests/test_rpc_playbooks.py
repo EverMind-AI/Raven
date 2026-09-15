@@ -861,6 +861,9 @@ class _Runtime:
     async def load(self, name, params=None, fills=None, *, allow_disabled=False, confirmed=False):
         # Recorded at the moment of the call, so a context set afterwards is not
         # mistaken for one that was in force for the dispatch.
+        from raven.agent import workdir
+        from raven.providers.binding import active_binding
+
         self.calls.append(
             {
                 "name": name,
@@ -869,13 +872,36 @@ class _Runtime:
                 "allow_disabled": allow_disabled,
                 "confirmed": confirmed,
                 "context_at_call": self.context,
+                # Read here, not after the handler returns: the dispatch
+                # backgrounds itself from inside this call and keeps whatever
+                # context was in force at that moment.
+                "workdir_at_call": workdir.current(),
+                "binding_at_call": active_binding(),
             }
         )
         return self._plan
 
 
-def _loop_with(runtime):
-    return lambda: type("_Loop", (), {"_playbooks": runtime})()
+class _Binding:
+    def __init__(self, tag: str) -> None:
+        self.tag = tag
+
+
+def _loop_with(runtime, *, workdir_path=None, binding=None, workdir_raises=False):
+    """A stand-in loop offering the three things this handler asks a loop for."""
+
+    class _Loop:
+        _playbooks = runtime
+
+        def session_workdir(self, session_key):
+            if workdir_raises:
+                raise RuntimeError("override points at a deleted directory")
+            return workdir_path or Path("/tmp")
+
+        def binding_for_session(self, session_key):
+            return binding or _Binding("default")
+
+    return _Loop
 
 
 @pytest.mark.asyncio
@@ -1029,3 +1055,67 @@ async def test_a_playbook_the_runtime_cannot_load_is_named_as_such(library: Play
 
 def test_the_run_contract_is_mirrored_by_a_model_pair() -> None:
     assert "playbooks.run" in METHOD_MODELS
+
+
+@pytest.mark.asyncio
+async def test_the_run_carries_the_named_sessions_workspace_and_model(library: PlaybookStore, tmp_path: Path) -> None:
+    """Addressing a run is not the same as placing it.
+
+    The graph tool takes its nodes' cwd from ``workdir.current() or
+    self._workspace`` and resolves a raven-backed node's pair through the active
+    binding. Both are established by the turn path and by nothing else, so a run
+    entered here would otherwise work in the loop-wide workspace and on the
+    default model while reporting under the named conversation -- the wrong
+    project and the wrong model, in the right session's name.
+    """
+    library.save(_spec())
+    project = tmp_path / "some-project"
+    project.mkdir()
+    binding = _Binding("that-session's-pair")
+    rt = _Runtime()
+
+    await mod.playbooks_run(
+        {"name": "competitor-scan", "session_key": "web:c1"},
+        agent_loop_factory=_loop_with(rt, workdir_path=project, binding=binding),
+    )
+
+    assert rt.calls[0]["workdir_at_call"] == project
+    assert rt.calls[0]["binding_at_call"] is binding
+
+
+@pytest.mark.asyncio
+async def test_the_contexts_are_gone_once_the_call_is_over(library: PlaybookStore, tmp_path: Path) -> None:
+    """Bound around the dispatch, not leaked into the connection.
+
+    Every frame on this socket is its own task, but a handler that set these and
+    never reset them would hand the next call on the same task whatever the last
+    one chose.
+    """
+    from raven.agent import workdir
+    from raven.providers.binding import active_binding
+
+    library.save(_spec())
+    project = tmp_path / "some-project"
+    project.mkdir()
+    await mod.playbooks_run(
+        {"name": "competitor-scan", "session_key": "web:c1"},
+        agent_loop_factory=_loop_with(_Runtime(), workdir_path=project),
+    )
+    assert workdir.current() is None
+    assert active_binding() is None
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_workspace_will_not_resolve_is_refused(
+    library: PlaybookStore,
+) -> None:
+    """A stale directory override is the caller's to fix, and it is named as
+    one rather than surfacing as an internal error with the sentence buried."""
+    library.save(_spec())
+    rt = _Runtime()
+    with pytest.raises(RpcError):
+        await mod.playbooks_run(
+            {"name": "competitor-scan", "session_key": "web:c1"},
+            agent_loop_factory=_loop_with(rt, workdir_raises=True),
+        )
+    assert rt.calls == [], "nothing dispatches into a workspace that did not resolve"
