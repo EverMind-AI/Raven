@@ -258,7 +258,7 @@ class DecisionConsumer:
         option: TaskOption,
         inbound: TurnRequest,
         now_ms: int,
-    ) -> MenuReply:
+    ) -> MenuReply | None:
         """First leg: park the decision in AWAITING_CONFIRM and ask the
         user to confirm. No execution and no feedback signal yet —
         we'll record_accepted only after the user actually confirms."""

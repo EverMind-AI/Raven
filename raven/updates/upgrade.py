@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib import metadata
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -792,7 +793,7 @@ def spawn_detached_upgrade(
     if relaunch is not None:
         argv.append(json.dumps(relaunch))
 
-    kwargs: dict[str, object] = {} if sys.platform == "win32" else {"start_new_session": True}
+    kwargs: dict[str, Any] = {} if sys.platform == "win32" else {"start_new_session": True}
     try:
         subprocess.Popen(argv, env=env, **kwargs)  # noqa: S603 - argv is built from resolved executables
     except OSError as exc:

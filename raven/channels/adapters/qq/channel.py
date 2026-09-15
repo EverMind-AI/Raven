@@ -38,8 +38,13 @@ class _Fetched(NamedTuple):
     reason: str = ""
 
 
-def _make_bot_class(channel: "QQChannel") -> "type[botpy.Client]":
-    """Build a botpy Client subclass that forwards events to *channel*."""
+def _make_bot(channel: "QQChannel") -> "botpy.Client":
+    """Build a botpy Client that forwards events to *channel*.
+
+    Returns the instance rather than the class: the subclass is local, so a
+    ``type[botpy.Client]`` return would advertise the base class's constructor
+    (which takes ``intents``) instead of this one's, which takes nothing.
+    """
     intents = botpy.Intents(public_messages=True, direct_message=True)
 
     class _Bot(botpy.Client):
@@ -60,7 +65,7 @@ def _make_bot_class(channel: "QQChannel") -> "type[botpy.Client]":
         async def on_direct_message_create(self, message):
             await channel._on_message(message, is_group=False)
 
-    return _Bot
+    return _Bot()
 
 
 class QQChannel(ChannelBase):
@@ -85,7 +90,7 @@ class QQChannel(ChannelBase):
             logger.error("QQ app_id and secret not configured")
             return
         self._running = True
-        self._client = _make_bot_class(self)()
+        self._client = _make_bot(self)
         self._http = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
         logger.info("QQ bot started (C2C & Group supported)")
         while self._running:

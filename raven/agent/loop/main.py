@@ -18,7 +18,6 @@ from raven.agent.loop._shared import (
     DeepResearchTool,
     DirectChatHandoff,
     LLMProvider,
-    LoopOutcome,
     MemoryConsolidator,
     ModelBinding,
     Path,
@@ -68,7 +67,7 @@ if TYPE_CHECKING:
     from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
     from raven.sandbox.debug_server import SandboxDebugServer
-    from raven.spine.runner import Drain, Emit
+    from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
 
 
@@ -809,7 +808,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         applied to the currently-registered deep_research tool, so a tool built
         later by promotion inherits it too (mirrors ``set_deep_research_submit``)."""
         self._deep_research_broker = broker
-        if (tool := self.tools.get("deep_research")) is not None and hasattr(tool, "set_broker"):
+        if callable(getattr(tool := self.tools.get("deep_research"), "set_broker", None)):
             tool.set_broker(broker)
 
     def _maybe_promote_deep_research(self) -> None:
@@ -896,7 +895,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         inline_tool_stream: bool = False,
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
-    ) -> LoopOutcome:
+    ) -> "TurnOutcome":
         """Bind the turn to its session's model; see ``_run_turn`` for the turn.
 
         This is where a session's model becomes the one thing everything under

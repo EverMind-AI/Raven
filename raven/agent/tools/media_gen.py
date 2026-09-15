@@ -60,7 +60,7 @@ from raven.contracts.token_strategy import UsageSnapshot
 from raven.contracts.tool import Tool
 from raven.providers.usage import image_usage
 from raven.security.network import guarded_fetch
-from raven.utils.images import image_block
+from raven.utils.images import ImagePart, image_block
 
 if TYPE_CHECKING:
     from raven.config.schema import MediaToolConfig
@@ -490,7 +490,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         },
     }
 
-    def _image_part(self, ref: str) -> dict[str, Any]:
+    def _image_part(self, ref: str) -> ImagePart:
         """Build an OpenAI-style image_url content part from a path/URL/data URI."""
         if ref.startswith(("http://", "https://", "data:")):
             return image_block(ref)

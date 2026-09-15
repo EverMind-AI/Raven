@@ -104,6 +104,7 @@ def resolve_session_cross_channel(manager: SessionManager, value: str) -> str:
         cands = ", ".join(res.candidates[:8])
         raise typer.BadParameter(f"{value!r} matches multiple sessions: {cands}. Pass the full channel:chat_id key.")
     if res.status == "resolved":
+        assert res.key is not None  # noqa: S101 - resolve_key fills key on the resolved outcome
         return res.key
     return f"{_CLI_CHANNEL}:{value}"
 

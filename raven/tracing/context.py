@@ -109,8 +109,9 @@ def use(ctx: TraceCtx | None) -> Iterator[TraceCtx | None]:
 def child_scope(span_id: str) -> Iterator[TraceCtx]:
     """Re-parent descendants onto ``span_id`` (used by the subagent probe, P1)."""
     cur = _CTX.get() or TraceCtx(trace_id=new_trace_id())
-    token = _CTX.set(replace(cur, parent_span_id=span_id))
+    ctx = replace(cur, parent_span_id=span_id)
+    token = _CTX.set(ctx)
     try:
-        yield _CTX.get()  # type: ignore[misc]
+        yield ctx
     finally:
         _CTX.reset(token)

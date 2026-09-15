@@ -74,6 +74,9 @@ jobs:
       - name: Dependency hygiene (no direct import of a transitive dep)
         run: make lint-deps
 
+      - name: Type check (call correctness)
+        run: make lint-types
+
   # Four runners, each collecting and running a quarter of the test files
   # (`--shard`, dealt round-robin in tests/conftest.py), each writing coverage
   # data and no report; the `coverage` job below combines the four and runs

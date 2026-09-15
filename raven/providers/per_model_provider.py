@@ -178,7 +178,8 @@ class PerModelProvider(LLMProvider):
                 continue
             return response
 
-        return response  # type: ignore[return-value]  # chain always non-empty
+        assert response is not None  # noqa: S101 - the chain is never empty, so the loop above always ran
+        return response
 
     async def chat_stream(
         self,

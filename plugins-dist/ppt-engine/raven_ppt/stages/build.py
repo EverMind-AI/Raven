@@ -279,7 +279,9 @@ def _deck_title(project: Project) -> str | None:
     return topic or None
 
 
-def _as_delivered(project: Project, outcome: BuildOutcome, *, released: bool) -> tuple[Path, int, tuple[int, ...]]:
+def _as_delivered(
+    project: Project, outcome: BuildOutcome, *, released: bool
+) -> tuple[Path | None, int, tuple[int, ...]]:
     """The file to publish, its page count, and the pages left out of it.
 
     The build cap is the one route that publishes past a page the runner stood in

@@ -479,7 +479,7 @@ def _litellm_vendor_choices() -> list[str]:
     return sorted(n for n in LITELLM_PROVIDER_NAMES if normalize_provider_name(n) not in already_listed)
 
 
-def _prompt_litellm_vendor() -> Optional[str]:
+def _prompt_litellm_vendor() -> Any:
     """Ask for a vendor by name, completing against the ones LiteLLM routes to.
 
     Returns the provider name, ``_BACK`` to rewind to the picker, or ``None`` on

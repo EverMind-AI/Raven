@@ -579,7 +579,8 @@ def _uniform_border_color(rgb: Image.Image) -> tuple[int, int, int] | None:
         values = [corner[c] for corner in corners]
         if max(values) - min(values) > _MAX_CORNER_SPREAD:
             return None
-    return tuple(int(median(corner[c] for corner in corners)) for c in range(3))
+    red, green, blue = (int(median(corner[c] for corner in corners)) for c in range(3))
+    return red, green, blue
 
 
 def _rewrite(cropped: Image.Image, path: Path, fmt: str | None) -> None:
