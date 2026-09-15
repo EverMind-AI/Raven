@@ -13,6 +13,8 @@ DOCKER_IMAGE ?= raven:local
 COVERAGE_REPORT_ARGS = --cov=raven --cov=raven_everos --cov-branch --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=json --cov-report=html
 # One slice of the suite, K/N; the shard writes its .coverage data and no report.
 COVERAGE_SHARD ?= 1/1
+# Extra pytest flags for a shard; CI passes --idle-ceiling-strict, a local run stays warning-only.
+PYTEST_ARGS ?=
 COVERAGE_DATA_ARGS = --cov=raven --cov=raven_everos --cov-branch --cov-report=
 # Where the shards' .coverage.* files are gathered before they are combined.
 COVERAGE_DATA_DIR ?= coverage-data
@@ -94,7 +96,7 @@ coverage:
 	TERM=dumb uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q $(COVERAGE_REPORT_ARGS)
 
 coverage-shard:
-	TERM=dumb uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q --shard $(COVERAGE_SHARD) --durations=25 $(COVERAGE_DATA_ARGS)
+	TERM=dumb uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q --shard $(COVERAGE_SHARD) --durations=25 $(PYTEST_ARGS) $(COVERAGE_DATA_ARGS)
 
 coverage-combine:
 	uv run --frozen --python $(PYTHON_VERSION) coverage combine --keep $(COVERAGE_DATA_DIR)
