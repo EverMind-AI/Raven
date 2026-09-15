@@ -934,7 +934,9 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
         }
     from raven_everos.config import (
         WRITABLE_SECTIONS,
+        everos_has_own_embedding,
         get_everos_config_path,
+        host_embedding_section,
         load_everos_config,
     )
 
@@ -942,6 +944,12 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
     sections = {}
     for sec in WRITABLE_SECTIONS:
         cur = data.get(sec) or {}
+        if sec == "embedding" and not everos_has_own_embedding():
+            # The endpoint's other home. Reading only the file left this card
+            # blank for an install the wizard had just configured, and filling
+            # it in from there wrote a second endpoint that silently outranked
+            # the one a knowledge base goes on reading.
+            cur = host_embedding_section()
         model = str(cur.get("model") or "")
         # The shipped template seeds placeholder "<...>" model names.
         if model.startswith("<"):
@@ -966,6 +974,7 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     from raven_everos.config import (
         WRITABLE_SECTIONS,
         clear_everos_section,
+        everos_has_own_embedding,
         set_everos_section,
     )
 
@@ -1014,6 +1023,19 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
 
     if not clean:
         raise ConfigValidationError("fields must carry at least one non-empty value")
+    if section == "embedding" and not everos_has_own_embedding():
+        # Written where it is read from, so the card cannot edit one home while
+        # the service and the knowledge base use the other. `provider` has no
+        # place in the host's block and is refused rather than dropped: a value
+        # accepted and discarded reads to the caller as one that was stored.
+        if "provider" in clean:
+            raise ConfigValidationError("provider is not part of raven's embedding endpoint")
+        from raven.config.update import set_embedding_endpoint
+
+        set_embedding_endpoint(
+            {"model": clean.get("model"), "baseUrl": clean.get("base_url"), "apiKey": clean.get("api_key")}
+        )
+        return {"applied": True}
     set_everos_section(section, clean)
     return {"applied": True}
 

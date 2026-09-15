@@ -318,8 +318,7 @@ def embedding_env(values: Any) -> dict[str, str]:
     api_key = str(values.get("api_key") or "")
     if not (model and base_url and api_key):
         return {}
-    own = load_everos_config().get("embedding") or {}
-    if own.get("model") and not str(own.get("model", "")).startswith("<"):
+    if everos_has_own_embedding():
         return {}
     env = {
         "EVEROS_EMBEDDING__MODEL": model,
@@ -330,6 +329,22 @@ def embedding_env(values: Any) -> dict[str, str]:
     if isinstance(dimensions, int) and dimensions > 0:
         env["EVEROS_EMBEDDING__DIMENSIONS"] = str(dimensions)
     return env
+
+
+def everos_has_own_embedding() -> bool:
+    """Whether ``everos.toml`` carries an ``[embedding]`` an operator chose.
+
+    The one question that decides which of the endpoint's two homes is in
+    force, asked by everything that reads or writes it -- the binding, the
+    wizard, and the settings page -- so no surface can show one home while
+    another writes the other.
+
+    The shipped template seeds a placeholder ``"<...>"`` model name, which is
+    not a choice anybody made.
+    """
+    own = load_everos_config().get("embedding") or {}
+    model = str(own.get("model") or "")
+    return bool(model) and not model.startswith("<")
 
 
 def host_embedding_env() -> dict[str, str]:
