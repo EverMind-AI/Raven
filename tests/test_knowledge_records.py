@@ -323,3 +323,102 @@ def test_a_new_base_starts_on_the_defaults_the_panel_shows(store) -> None:
     )
     # The overlap has to leave a chunk with something of its own in it.
     assert DEFAULT_CHUNK_OVERLAP < DEFAULT_CHUNK_SIZE
+
+
+def test_a_registry_this_version_writes_still_loads_on_the_previous_one(tmp_path) -> None:
+    """The documented rollback. A previous loader builds each record by handing
+    every stored key to a dataclass constructor and drops the row when one is a
+    keyword it does not take -- so a field written beside the record makes
+    every base and document vanish from a build that is rolled back, with the
+    records still on disk and nothing listing them.
+
+    Stands in for that loader with the field set it accepts, which is what the
+    shipped build is: this asserts the stored shape, not our own reader."""
+    legacy_base = {"name", "embedding_model", "dimensions", "created_at", "updated_at", "description"}
+    legacy_doc = {
+        "base_id",
+        "source",
+        "media_type",
+        "size",
+        "status",
+        "created_at",
+        "updated_at",
+        "chunk_count",
+        "error",
+    }
+
+    store = RecordStore(tmp_path / "records.json")
+    base = store.create_base(name="handbook", embedding_model="bge-m3", dimensions=8)
+    store.configure_base(base.id, top_k=12, chunk_size=1024, smart_chunking=False)
+    store.add_document(base_id=base.id, source="a.md", media_type="text/markdown", size=1)
+    store.add_document(base_id=base.id, source="plan.md", media_type="text/markdown", size=2, origin="note")
+
+    raw = json.loads((tmp_path / "records.json").read_text(encoding="utf-8"))
+
+    assert set(raw["bases"]) and set(raw["documents"])
+    for fields in raw["bases"].values():
+        assert set(fields) <= legacy_base, f"a rolled-back loader refuses {sorted(set(fields) - legacy_base)}"
+    for fields in raw["documents"].values():
+        assert set(fields) <= legacy_doc, f"a rolled-back loader refuses {sorted(set(fields) - legacy_doc)}"
+
+
+def test_the_settings_survive_the_round_trip_they_are_kept_apart_for(tmp_path) -> None:
+    store = RecordStore(tmp_path / "records.json")
+    base = store.create_base(name="handbook", embedding_model="bge-m3", dimensions=8)
+    store.configure_base(base.id, top_k=12, chunk_size=1024, separator="\n---\n")
+    doc = store.add_document(
+        base_id=base.id,
+        source="docs.md",
+        media_type="text/markdown",
+        size=2,
+        origin="url",
+        origin_ref="https://example.com/docs",
+    )
+
+    reopened = RecordStore(tmp_path / "records.json")
+
+    kept = reopened.get_base(base.id)
+    assert (kept.top_k, kept.chunk_size, kept.separator) == (12, 1024, "\n---\n")
+    back = reopened.get_document(doc.id)
+    assert (back.origin, back.origin_ref) == ("url", "https://example.com/docs")
+
+
+def test_a_registry_using_none_of_them_is_written_as_it_always_was(tmp_path) -> None:
+    """The sibling keys appear only when there is something to put in them, so
+    an installation that has touched no setting writes what it always did."""
+    store = RecordStore(tmp_path / "records.json")
+    store.create_base(name="handbook", embedding_model="bge-m3", dimensions=8)
+
+    raw = json.loads((tmp_path / "records.json").read_text(encoding="utf-8"))
+
+    assert sorted(raw) == ["bases", "documents"]
+
+
+def test_a_field_from_a_later_version_is_ignored_rather_than_losing_the_row(tmp_path) -> None:
+    """The mirror of the case above: losing a base because a build after this
+    one added a field would be the same bug in the other direction."""
+    path = tmp_path / "records.json"
+    path.write_text(
+        json.dumps(
+            {
+                "bases": {
+                    "b1": {
+                        "name": "handbook",
+                        "description": "",
+                        "embedding_model": "bge-m3",
+                        "dimensions": 8,
+                        "created_at": "2026-08-24T00:00:00",
+                        "updated_at": "2026-08-24T00:00:00",
+                    }
+                },
+                "documents": {},
+                "base_settings": {"b1": {"top_k": 9, "a_field_from_the_future": True}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    base = RecordStore(path).get_base("b1")
+
+    assert base is not None
+    assert base.top_k == 9
