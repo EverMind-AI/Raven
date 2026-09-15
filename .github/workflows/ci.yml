@@ -80,7 +80,7 @@ jobs:
   # the gates once. Measured before the split: 12 minutes on one runner, of
   # which two were the four xdist workers importing every test module.
   unit:
-    name: unit (py${{ matrix.python }} / ${{ matrix.os }} / ${{ matrix.shard }} of ${{ strategy.job-total }})
+    name: unit (py${{ matrix.python }} / ${{ matrix.os }} / ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -90,7 +90,9 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         python: ["3.12"]
-        shard: [1, 2, 3, 4]
+        # K/N in one place: the denominator is not derived from the matrix size,
+        # which would silently drop files if another dimension were added.
+        shard: ["1/4", "2/4", "3/4", "4/4"]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -135,15 +137,15 @@ jobs:
         # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
         # set, and the highlighter then splits option names with escape codes, so
         # `"--flag" in result.stdout` assertions fail only on CI.
-        run: make coverage-shard COVERAGE_SHARD=${{ matrix.shard }}/${{ strategy.job-total }}
+        run: make coverage-shard COVERAGE_SHARD=${{ matrix.shard }}
 
       - name: Name the data file after the shard
-        run: mv .coverage .coverage.shard-${{ matrix.shard }}
+        run: mv .coverage .coverage.shard-${{ strategy.job-index }}
 
       - name: Upload coverage data
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-data-py${{ matrix.python }}-${{ matrix.os }}-${{ matrix.shard }}
+          name: coverage-data-py${{ matrix.python }}-${{ matrix.os }}-${{ strategy.job-index }}
           path: .coverage.shard-*
           include-hidden-files: true
           if-no-files-found: error
@@ -176,7 +178,7 @@ jobs:
       - name: Download the shards' coverage data
         uses: actions/download-artifact@v4
         with:
-          pattern: coverage-data-py3.12-ubuntu-latest-*
+          pattern: coverage-data-*
           path: coverage-data
           merge-multiple: true
 

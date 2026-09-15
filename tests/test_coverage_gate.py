@@ -246,6 +246,8 @@ def test_the_diff_gate_claims_only_trees_that_coverage_measures() -> None:
         if spec.startswith(":(glob,exclude)"):
             continue
         root = repo / spec.removeprefix(":(glob)").split("/**", 1)[0]
+        if not root.is_dir():
+            pytest.fail(f"{spec} names a directory that is not in the checkout: {root}")
         if (root / "__init__.py").is_file():
             packages = {root.name}
         else:

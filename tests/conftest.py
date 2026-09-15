@@ -7,6 +7,7 @@ declaration.
 from __future__ import annotations
 
 import contextlib
+import fnmatch
 import functools
 import os
 from collections.abc import Iterator
@@ -31,8 +32,8 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 # rebuilt on every run and thrown away with the temp dir. A git-ignored dir in
 # the checkout keeps it warm across runs; `setdefault` respects a developer's own.
 _MPL_CACHE = Path(__file__).resolve().parent.parent / ".pytest_cache" / "matplotlib"
-_MPL_CACHE.mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("MPLCONFIGDIR", str(_MPL_CACHE))
+if os.environ.setdefault("MPLCONFIGDIR", str(_MPL_CACHE)) == str(_MPL_CACHE):
+    _MPL_CACHE.mkdir(parents=True, exist_ok=True)
 
 
 _WALL_CLOCK_EXEMPT_MARKERS = ("slow", "production_timing")
@@ -68,6 +69,9 @@ _SHARD: tuple[int, int] | None = None
 def pytest_configure(config: pytest.Config) -> None:
     global _WALL_CLOCK_CEILING_S, _SHARD
     _WALL_CLOCK_CEILING_S = float(config.getoption("--wall-clock-ceiling"))
+    _wall_clock_seconds.clear()
+    _wall_clock_hits.clear()
+    _SHARD = None
     spec = config.getoption("--shard")
     if spec is not None:
         try:
@@ -79,10 +83,36 @@ def pytest_configure(config: pytest.Config) -> None:
         _SHARD = (k, n)
 
 
+def _no_recurse(pattern: str, directory: Path) -> bool:
+    """pytest's norecursedirs rule: a pattern with a slash matches the whole path."""
+    if "/" in pattern:
+        return fnmatch.fnmatch(str(directory), f"*/{pattern}")
+    return fnmatch.fnmatch(directory.name, pattern)
+
+
 @functools.cache
-def _test_file_index(tests_root: Path) -> dict[Path, int]:
-    files = sorted(p for p in tests_root.rglob("test_*.py") if "__pycache__" not in p.parts)
-    return {path: index for index, path in enumerate(files)}
+def _test_file_index(
+    tests_root: Path, python_files: tuple[str, ...], norecursedirs: tuple[str, ...]
+) -> dict[Path, int]:
+    """Every test file pytest would collect under ``tests_root``, sorted.
+
+    Built from the ini values pytest itself collects by, so the index and the
+    collection agree: a file in a directory pytest never enters has no index,
+    and a file pytest would collect always has one. A collected file that had
+    no index would be run by every shard.
+    """
+    files = {
+        path
+        for pattern in python_files
+        for path in tests_root.rglob(pattern)
+        if "__pycache__" not in path.parts
+        and not any(
+            _no_recurse(rule, tests_root / parent)
+            for parent in path.relative_to(tests_root).parents
+            for rule in norecursedirs
+        )
+    }
+    return {path: index for index, path in enumerate(sorted(files))}
 
 
 def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
@@ -92,14 +122,22 @@ def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool 
     its own modules only: importing all of them is two minutes of a CI runner.
     Round-robin over the sorted list, so a slow family whose files sort together
     (the ppt engine's) is spread over the shards rather than handed to one.
+    Answers True or None, never False: the hook is firstresult, and False would
+    stop pytest's own implementation, which is where --ignore and collect_ignore
+    are honoured.
     """
-    if _SHARD is None or collection_path.suffix != ".py" or not collection_path.name.startswith("test_"):
+    if _SHARD is None or collection_path.suffix != ".py":
         return None
-    index = _test_file_index(config.rootpath / "tests").get(collection_path)
+    python_files = tuple(config.getini("python_files"))
+    if not any(fnmatch.fnmatch(collection_path.name, pattern) for pattern in python_files):
+        return None
+    index = _test_file_index(config.rootpath / "tests", python_files, tuple(config.getini("norecursedirs"))).get(
+        collection_path
+    )
     if index is None:
         return None
     k, n = _SHARD
-    return index % n != k - 1
+    return True if index % n != k - 1 else None
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
@@ -350,7 +388,7 @@ def _no_real_raven_home(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Collapse the production retry and grace ladders to zero for the suite.
+    """Collapse the production retry and grace ladders to a millisecond for the suite.
 
     A stub that answers every call with an error drives the code under test
     into its backoff, and the backoff is tuned for a real outage: the loop's

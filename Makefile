@@ -28,7 +28,7 @@ help:
 	@echo "  test           Run focused Python checks and TUI tests"
 	@echo "  coverage       Run the default Python suite with line and branch coverage"
 	@echo "  coverage-shard Run slice COVERAGE_SHARD (K/N) of the suite, writing .coverage data only"
-	@echo "  coverage-combine Combine the shards' data in COVERAGE_DATA_DIR into coverage.json and coverage.xml"
+	@echo "  coverage-combine Combine the shards' .coverage.* files in COVERAGE_DATA_DIR (CI downloads them there) into coverage.json and coverage.xml"
 	@echo "  coverage-diff  Check changed executable lines against COVERAGE_BASE_REF"
 	@echo "  coverage-ratchet Check total line and branch coverage against the baseline"
 	@echo "  coverage-baseline-check Ensure a proposed baseline never lowers the target branch"
