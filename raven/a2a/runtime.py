@@ -125,7 +125,33 @@ class _RequestHandlerAdapter:
         return await self._handler.on_message_send(request, ServerCallContext())
 
     async def on_message_send_stream(self, params: Any, _context: Any) -> AsyncGenerator[Any, None]:
+        """The streaming sibling of `on_message_send`, and it needs the same two
+        interceptions for the same reason.
+
+        Without them a second `SendStreamingMessage` naming a live task is not
+        refused and not answered: the SDK queues it behind the running task and
+        drains it afterwards, so a full second raven turn starts for one task id
+        with no further action from the caller. Quieter than the non-streaming
+        case and the same violation of the spec's one-task-one-turn lifecycle.
+
+        Answering parks differently here, though: a streaming caller wants the
+        rest of the run, not one status object, so the answer hands it to the
+        subscription the protocol already has for watching a task it did not
+        start.
+        """
         request = _parse_params("on_message_send_stream", params)
+        task_id = request.message.task_id
+        if task_id:
+            executor = self._handler.agent_executor
+            if executor.answer(task_id, get_message_text(request.message)):
+                subscribe = SubscribeToTaskRequest(id=task_id)
+                async for event in self._handler.on_subscribe_to_task(subscribe, ServerCallContext()):
+                    yield event
+                return
+            if executor.is_running(task_id):
+                raise InvalidRequestError(
+                    message="that task is still running and is not waiting for input; wait for it to finish"
+                )
         async for event in self._handler.on_message_send_stream(request, ServerCallContext()):
             yield event
 
