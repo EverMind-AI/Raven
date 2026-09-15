@@ -473,6 +473,21 @@ def _session_text(memory_type: str, row: dict[str, Any]) -> str:
     return _joined(row.get("task_intent"), row.get("approach"), row.get("key_insight"))
 
 
+def _owner_override(metadata: dict[str, Any] | None, key: str) -> str:
+    """One per-call owner id from ``store``'s metadata, in either spelling.
+
+    The block reaches here as an agent wrote it in raven's config, which spells
+    its keys in camelCase; the contract documents them in snake_case. Reading
+    only one of the two made the override silently never fire for a real
+    config, filing a sub-agent's memories under the host's own identity --
+    which is where recall for that agent never looks.
+    """
+    if not metadata:
+        return ""
+    camel = key.split("_")[0] + "".join(w.title() for w in key.split("_")[1:])
+    return str(metadata.get(key) or metadata.get(camel) or "")
+
+
 class EverosBackend:
     """raven_everos's :class:`MemoryBackend` implementation."""
 
@@ -1162,8 +1177,8 @@ class EverosBackend:
         # untouched -- this is an override for one call, not a second source.
         payload = self._convert_messages(
             messages,
-            agent_id=str((metadata or {}).get("agent_id") or "") or self._agent_id,
-            user_id=str((metadata or {}).get("user_id") or "") or self._user_id,
+            agent_id=_owner_override(metadata, "agent_id") or self._agent_id,
+            user_id=_owner_override(metadata, "user_id") or self._user_id,
         )
         if not payload:
             # Nothing to write is not a failed write: the conversion drops

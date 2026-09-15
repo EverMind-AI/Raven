@@ -236,18 +236,21 @@ def configure_everos_env(root: Path | str | None = None) -> None:
 
 
 def configure_embedding_env(embedding: Any) -> bool:
-    """Hand EverOS the host's embedding endpoint, when the host has one.
+    """Offer EverOS the host's embedding endpoint, when EverOS has none of its own.
 
-    Through the env binding EverOS already documents
-    (``EVEROS_EMBEDDING__MODEL`` and friends) rather than by editing
-    ``everos.toml``: the file belongs to whoever manages the root, and on a
-    self-managed root raven promises not to write it. Environment wins over
-    the file in EverOS's settings, so a host that has configured the endpoint
-    is the one answer, and one that has not leaves whatever the file says.
+    The host's block is a default to fall back on, not a takeover: an operator
+    who wrote ``[embedding]`` into ``everos.toml`` chose that endpoint for
+    memory specifically, and reusing the host's is a convenience they are
+    entitled to decline. So this defers to the file and fills the gap only when
+    the file leaves one -- which is also what the settings page still edits.
 
-    The knowledge base reads the same section, which is the point: one endpoint
-    for the installation rather than one per feature. Returns whether anything
-    was set, so a caller can log which lane it took.
+    Delivered through the env binding EverOS already documents
+    (``EVEROS_EMBEDDING__MODEL`` and friends) rather than by writing the file:
+    the file belongs to whoever manages the root, and on a self-managed root
+    raven promised not to touch it. Env beats the file in EverOS's own source
+    order, which is exactly why the file is checked first here.
+
+    Returns whether anything was set, so a caller can log which lane it took.
 
     Must run BEFORE EverOS's cached ``load_settings()``, same as
     :func:`configure_everos_env`.
@@ -256,6 +259,11 @@ def configure_embedding_env(embedding: Any) -> bool:
     base_url = str(getattr(embedding, "base_url", "") or "")
     api_key = str(getattr(embedding, "api_key", "") or "")
     if not (model and base_url and api_key):
+        return False
+    own = load_everos_config().get("embedding") or {}
+    if own.get("model") and not str(own.get("model", "")).startswith("<"):
+        # EverOS was given an endpoint of its own. The shipped template seeds a
+        # placeholder "<...>" model name, which is not a choice anybody made.
         return False
     os.environ["EVEROS_EMBEDDING__MODEL"] = model
     os.environ["EVEROS_EMBEDDING__BASE_URL"] = base_url

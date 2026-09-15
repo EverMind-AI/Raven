@@ -48,6 +48,7 @@ from raven.agent.subagent_memory import (
     MemoryScope,
     prime_from_turn,
     record_memories,
+    started_backend,
     trace_session_id,
 )
 from raven.context_engine.segments.render import dispatch_language_line
@@ -1756,11 +1757,12 @@ async def _run_node(
 
 
 def _memory_backend():
-    """The configured memory backend, or ``None`` when there is not one.
+    """A fresh, unstarted memory backend, or ``None`` when there is not one.
 
     Built per record rather than held: this runs after a node has already
     answered, and a record nobody is waiting on must not keep a backend alive
-    for the life of the run.
+    for the life of the run. Its caller owns the ``start`` / ``stop`` pair
+    around the one record (``started_backend``).
     """
     from raven.config import load_config
     from raven.config.raven import load_raven_config
@@ -1823,13 +1825,7 @@ async def _record_node_memory(
         async def _resolve() -> str | None:
             return session_id
 
-        async def _prime(sid: str) -> bool:
-            backend = _memory_backend()
-            if backend is None:
-                return False
-            return await prime_from_turn(backend=backend, scope=scope, session_id=sid, turn=rows)
-
-        prime, budget = _prime, TRACE_BUDGET_S
+        prime_rows, budget = rows, TRACE_BUDGET_S
     else:
 
         async def _resolve() -> str | None:
@@ -1846,26 +1842,30 @@ async def _record_node_memory(
             agent_id = await get_registry().lookup(session_key or "default", node.subagent, handle)
             return f"{scope.session_prefix}{agent_id}" if agent_id else None
 
-        prime, budget = None, None
+        prime_rows, budget = None, None
 
     async def _write(text: str) -> None:
         await store.write_text(store.memory_path(node.id), text)
 
     try:
         kwargs = {"budget_s": budget} if budget is not None else {}
-        backend = _memory_backend()
-        if backend is None:
-            return
-        await record_memories(
-            agent=node.subagent,
-            backend=backend,
-            scope=scope,
-            resolve_session_id=_resolve,
-            write=_write,
-            instance=node.instance,
-            prime=prime,
-            **kwargs,
-        )
+        async with started_backend(_memory_backend(), label="DAG node memory record") as backend:
+            if backend is None:
+                return
+
+            async def _prime(sid: str) -> bool:
+                return await prime_from_turn(backend=backend, scope=scope, session_id=sid, turn=prime_rows or [])
+
+            await record_memories(
+                agent=node.subagent,
+                backend=backend,
+                scope=scope,
+                resolve_session_id=_resolve,
+                write=_write,
+                instance=node.instance,
+                prime=_prime if prime_rows is not None else None,
+                **kwargs,
+            )
     except Exception:  # noqa: BLE001 - a record must never fail a node
         logger.opt(exception=True).warning("Memory record for DAG node {} failed", node.id)
 

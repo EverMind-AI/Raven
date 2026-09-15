@@ -27,7 +27,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -131,6 +132,38 @@ def trace_session_id(agent: str, call_id: str) -> str:
     a transport that was never involved.
     """
     return f"trace:{agent}:{call_id}"
+
+
+@asynccontextmanager
+async def started_backend(backend: "MemoryBackend | None", *, label: str) -> AsyncIterator["MemoryBackend | None"]:
+    """``backend``, started for the length of one record and stopped after it.
+
+    The host's factory hands back a backend nobody has started, and a record
+    runs off the dispatch path where no started one is in reach. Handing an
+    unstarted backend to ``record_memories`` records "unavailable" without ever
+    attempting the write -- the shipped EverOS adapter's first ``store`` only
+    schedules its readiness probe and answers ``False`` -- and leaves the
+    adapter's HTTP client open once per record.
+
+    Yields ``None`` when there is no backend or it will not start, which is the
+    case every caller already handles as "no record to write".
+    """
+    if backend is None:
+        yield None
+        return
+    try:
+        await backend.start()
+    except Exception as exc:  # noqa: BLE001 - a record must never fail the call it describes
+        logger.warning("{}: backend did not start ({})", label, exc)
+        yield None
+        return
+    try:
+        yield backend
+    finally:
+        try:
+            await backend.stop()
+        except Exception:  # noqa: BLE001 - same
+            logger.opt(exception=True).debug("{}: backend stop failed", label)
 
 
 async def prime_from_turn(

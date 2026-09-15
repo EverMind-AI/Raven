@@ -358,3 +358,43 @@ def test_no_section_and_no_recorded_root_answers_none(raven_config) -> None:
     _write_config(raven_config, memory={"backend": None})
 
     assert load_embedding_config() is None
+
+
+def test_an_install_that_never_recorded_a_root_still_finds_its_endpoint(tmp_path, raven_config, monkeypatch) -> None:
+    """Root recording came after the memory plugin shipped.
+
+    An install from before it has a valid everos.toml at the machine-wide
+    legacy location and nothing in `plugins.config`. Resolving only the
+    recorded root lost such an install its knowledge-base endpoint entirely,
+    while the file sat on disk.
+    """
+    home = tmp_path / "home"
+    (home / ".raven").mkdir(parents=True)
+    (home / ".everos" / "raven").mkdir(parents=True)
+    _write(home / ".everos" / "raven", _FULL)
+    monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: home))
+    monkeypatch.setattr("raven.home.get_config_path", lambda: home / ".raven" / "config.json")
+    _write_config(raven_config, memory={"backend": "everos"})
+
+    config = load_embedding_config()
+
+    assert config is not None
+    assert config.model == "text-embedding-3-small"
+
+
+def test_a_relocated_install_does_not_adopt_the_default_ones_root(tmp_path, raven_config, monkeypatch) -> None:
+    """The legacy path is machine-wide, not derived from the config directory.
+
+    An instance running from a moved config that adopted it would read -- and
+    later converge -- a root belonging to an installation it exists to be
+    isolated from.
+    """
+    home = tmp_path / "home"
+    (home / ".everos" / "raven").mkdir(parents=True)
+    _write(home / ".everos" / "raven", _FULL)
+    monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: home))
+    monkeypatch.setattr("raven.home.get_config_path", lambda: tmp_path / "elsewhere" / "config.json")
+    monkeypatch.setattr("raven.config.paths.get_data_dir", lambda: tmp_path / "data")
+    _write_config(raven_config, memory={"backend": "everos"})
+
+    assert load_embedding_config() is None

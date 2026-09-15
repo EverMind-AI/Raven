@@ -28,6 +28,7 @@ from raven.agent.subagent.mcp_grant import McpGrant, MissingServer
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
+from raven.contracts.memory import Memory
 from raven.contracts.tool import ToolResult
 
 #: How long a drain waits for a cancelled background run to finish. Generous
@@ -4844,6 +4845,79 @@ async def test_a_node_passes_its_instance_to_the_record(tmp_path: Path, monkeypa
     assert seen["instance"] == "audit-a3f9c1"
 
 
+class _LifecycleBackend:
+    """A memory backend that records its own lifecycle, in order.
+
+    `object()` cannot stand in for one: nothing about it fails when the record
+    path hands it to `store` without ever awaiting `start`, and a real adapter
+    answers that with `False` -- the record says "unavailable" while the
+    service was running the whole time. Every call is logged rather than
+    asserted on the spot, because both the prime and the poll swallow whatever
+    a backend raises; the order this leaves behind is the evidence.
+    """
+
+    def __init__(self, memories: list[Memory] | None = None) -> None:
+        self.events: list[str] = []
+        self._memories = memories or []
+
+    async def start(self) -> None:
+        self.events.append("start")
+
+    async def stop(self) -> None:
+        self.events.append("stop")
+
+    async def store(self, session_id: str, messages: list[dict], *, metadata: dict | None = None) -> bool:
+        # Both spellings, as the shipped adapter reads them: raven's config
+        # writes camelCase and the contract documents snake_case, and a fake
+        # that understood only one would hide the mismatch this test is for.
+        meta = metadata or {}
+        owner = f"{meta.get('user_id') or meta.get('userId')}/{meta.get('agent_id') or meta.get('agentId')}"
+        self.events.append(f"store[{owner}]" if "start" in self.events else "store-before-start")
+        return True
+
+    async def recall_session(self, session_id: str, *, user_id=None, agent_id=None) -> list[Memory]:
+        owner = user_id or agent_id
+        self.events.append(f"recall[{owner}]" if "start" in self.events else "recall-before-start")
+        return self._memories if user_id else []
+
+
+async def test_a_dag_node_record_starts_the_backend_before_it_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`maybe_build_memory_backend` hands back a backend nobody started, and an
+    unstarted adapter answers the prime's `store` with `False` -- the record
+    then says "unavailable" while the service was up the whole time.
+
+    The prime and the poll are both real here, against a backend that logs what
+    happened to it: the order -- and the owner each half addressed -- is the
+    assertion.
+    """
+    from raven.agent.subagent import dag_runner as runner_mod
+    from raven.agent.subagent_memory import MemoryScope
+
+    backend = _LifecycleBackend([Memory(text="the readme is missing", metadata={"type": "episode"})])
+    monkeypatch.setattr(runner_mod, "_memory_backend", lambda: backend)
+    # One look, no backoff: the fake answers on the first one, and the trace
+    # budget would otherwise sleep two seconds waiting for a second.
+    monkeypatch.setattr(runner_mod, "TRACE_BUDGET_S", 1.0)
+
+    await _run_one_node_dag(
+        tmp_path,
+        node_id="inspect",
+        subagent="Coder",
+        prompt="read it",
+        output="no readme",
+        memory_for=lambda _name: MemoryScope(
+            block={"user_id": "liv", "agent_id": "coder"},
+            session_prefix="cli:",
+            source="trace",
+        ),
+    )
+    await _drain_record_tasks()
+
+    assert backend.events == ["start", "store[liv/coder]", "recall[liv]", "recall[coder]", "stop"], backend.events
+
+
 async def test_dag_node_primes_a_trace_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A `trace` node's record is primed with the same turn the log records,
     under the session id the host mints from this run and this node."""
@@ -4861,9 +4935,9 @@ async def test_dag_node_primes_a_trace_agent(tmp_path: Path, monkeypatch: pytest
         raise RuntimeError("no live everos in tests")
 
     monkeypatch.setattr(runner_mod, "prime_from_turn", _fake_prime)
-    # The record path builds a backend per record; this process has none
-    # running, and the prime and poll are both faked here anyway.
-    monkeypatch.setattr(runner_mod, "_memory_backend", lambda: object())
+    # The record path builds and starts a backend per record; this process has
+    # none running, and the prime and poll are both faked here anyway.
+    monkeypatch.setattr(runner_mod, "_memory_backend", _LifecycleBackend)
     # The prime lands (faked above), but the poll after it is real: nothing in
     # this test process is listening at the identity's base url, so make the
     # first look fail fast instead of sleeping through the whole poll budget.

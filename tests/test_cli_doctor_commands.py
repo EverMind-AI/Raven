@@ -1257,3 +1257,58 @@ def test_install_summary_browser_row_ticks_a_complete_download(
     assert "pw-cache" in browser_row
     assert "playwright install" not in browser_row
     assert "install.sh" not in browser_row
+
+
+# --------------------------------------------------------------------------- embedding relocation
+
+
+def _legacy_embedding(monkeypatch, tmp_path: Path, present: bool) -> None:
+    """Point the legacy reader at a file this test owns."""
+    from raven.knowledge import _embedding as emb
+
+    toml = tmp_path / "everos.toml"
+    if present:
+        toml.write_text(
+            '[embedding]\nmodel = "legacy-model"\nbase_url = "https://legacy.test/v1"\napi_key = "sk-legacy"\n',
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(emb, "_legacy_everos_config_path", lambda: toml if present else None)
+
+
+def test_doctor_offers_to_move_an_embedding_endpoint_it_finds(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A knowledge base indexes documents; it stops working the moment the
+    memory plugin is not the configured backend, which has nothing to do with
+    indexing. The wizard writes raven's block now, so this is for installs
+    configured before it moved."""
+    _legacy_embedding(monkeypatch, tmp_path, present=True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "embedding endpoint is recorded in EverOS's config" in " ".join(result.stdout.split())
+
+
+def test_doctor_fix_copies_the_endpoint_into_ravens_own_block(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _legacy_embedding(monkeypatch, tmp_path, present=True)
+
+    runner.invoke(app, ["doctor", "--fix"])
+
+    block = json.loads(healthy_config.read_text(encoding="utf-8"))["embedding"]
+    assert block["model"] == "legacy-model"
+    assert block["baseUrl"] == "https://legacy.test/v1"
+    assert block["apiKey"] == "sk-legacy"
+
+
+def test_doctor_says_nothing_when_there_is_nothing_to_move(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The finding exists to move a value that is somewhere else, not to nag an
+    install that never configured one."""
+    _legacy_embedding(monkeypatch, tmp_path, present=False)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "embedding endpoint is recorded" not in " ".join(result.stdout.split())

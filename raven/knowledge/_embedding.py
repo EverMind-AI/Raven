@@ -52,25 +52,87 @@ class EmbeddingConfig:
 
 
 def _legacy_everos_config_path() -> Path | None:
-    """The EverOS config file, from the root raven recorded for the plugin.
+    """Where an EverOS config would be, for an install that has not moved yet.
 
-    Off ``plugins.config["everos-memory"]["root"]`` and plain ``tomllib``: the
-    fallback must not import the plugin, or a knowledge base would again be
-    unusable exactly where the plugin is not installed. ``None`` when no root
-    was ever recorded -- there is then no legacy file to inherit from.
+    Three places, in the order the memory plugin itself resolves them, and with
+    plain ``tomllib`` rather than by importing the plugin -- or a knowledge base
+    would again be unusable exactly where the plugin is not installed:
+
+    1. the root raven recorded in ``plugins.config["everos-memory"]["root"]``;
+    2. the machine-wide legacy location, when this is the default installation
+       -- that path is not derived from the config directory, so an instance
+       running from a moved config must not adopt the default install's root;
+    3. the current default under the data directory.
+
+    ``None`` when none of them holds a file. An install that predates root
+    recording reaches (2), which is the case this fallback exists for: before
+    it, such an install lost its knowledge-base endpoint entirely while a valid
+    file sat on disk.
     """
+    from raven.config.paths import get_data_dir
     from raven.config.raven import load_raven_config
+    from raven.home import get_config_path
 
+    candidates: list[Path] = []
     try:
         slice_ = (load_raven_config().plugins.config or {}).get("everos-memory") or {}
     except Exception as exc:  # noqa: BLE001 - an unreadable config is not this module's to report
         logger.warning("knowledge: cannot read raven config: {}", exc)
-        return None
-    root = slice_.get("root")
-    return Path(str(root)).expanduser() / "everos.toml" if root else None
+        slice_ = {}
+    if slice_.get("root"):
+        candidates.append(Path(str(slice_["root"])).expanduser())
+    if get_config_path() == Path.home() / ".raven" / "config.json":
+        candidates.append(Path.home() / ".everos" / "raven")
+    candidates.append(get_data_dir() / "everos")
+
+    for root in candidates:
+        if (root / "everos.toml").is_file():
+            return root / "everos.toml"
+    return None
 
 
-def _read_legacy_embedding() -> "EmbeddingConfig | None":
+def adopt_legacy_endpoint(raw: dict) -> bool:
+    """Copy the memory backend's endpoint into raven's own block, in ``raw``.
+
+    Mutates the caller's already-loaded config dict rather than writing a file:
+    ``raven doctor --fix`` applies several corrections in one atomic write, and
+    a second writer here would race it.
+
+    The rendering lives with the reader that owns the shape -- which three
+    values matter and how they are spelled on disk -- so a caller states the
+    intent and nothing else.
+    """
+    legacy = read_legacy_embedding()
+    if legacy is None:
+        return False
+    block = raw.setdefault("embedding", {})
+    block["model"] = legacy.model
+    block["baseUrl"] = legacy.base_url
+    block["apiKey"] = legacy.api_key
+    if legacy.dimensions:
+        block["dimensions"] = legacy.dimensions
+    return True
+
+
+def endpoint_is_ravens_own() -> bool:
+    """Whether raven's own config already carries a complete endpoint.
+
+    Asked by ``raven doctor`` so it can offer to move one that is still only in
+    the memory backend's file. A question rather than a field read: which three
+    values make an endpoint usable is this module's rule, and a second copy of
+    it elsewhere is how two surfaces come to disagree about the same config.
+    """
+    from raven.config.raven import load_raven_config
+
+    try:
+        section = load_raven_config().embedding
+    except Exception as exc:  # noqa: BLE001 - an unreadable config is not this module's to report
+        logger.warning("knowledge: cannot read raven config: {}", exc)
+        return False
+    return bool(section.model and section.base_url and section.api_key)
+
+
+def read_legacy_embedding() -> "EmbeddingConfig | None":
     """The ``[embedding]`` section of the EverOS config, or ``None``."""
     path = _legacy_everos_config_path()
     if path is None or not path.is_file():
@@ -118,7 +180,7 @@ def load_embedding_config() -> EmbeddingConfig | None:
             dimensions=section.dimensions if section.dimensions and section.dimensions > 0 else None,
         )
 
-    legacy = _read_legacy_embedding()
+    legacy = read_legacy_embedding()
     if legacy is not None:
         logger.warning(
             "knowledge: embedding endpoint read from the EverOS config; "

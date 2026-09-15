@@ -1095,7 +1095,19 @@ def _config_everos_role(
         if not ok:
             continue
 
-        set_everos_section(section, result)
+        if section == "embedding":
+            # Raven's block, not this one's: a knowledge base reads the same
+            # endpoint, and writing it into everos.toml left the host's empty,
+            # so every other reader fell back and said so on each use.
+            _UI.set_embedding_endpoint(
+                {
+                    "model": result.get("model"),
+                    "baseUrl": result.get("base_url"),
+                    "apiKey": result.get("api_key"),
+                }
+            )
+        else:
+            set_everos_section(section, result)
         _UI.console.print(_UI.t("  [green]✓ {label} configured.[/green]", label=label))
         return
 
