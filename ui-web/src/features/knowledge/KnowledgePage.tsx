@@ -31,7 +31,11 @@ function CreateDialog({ model, onClose }: { model: string; onClose: () => void }
 
   const submit = (): void => {
     if (!name.trim()) return
-    void store.create(name)
+    // The empty option means no embedding at all, which makes a different base
+    // rather than a default one: sending only the name is what produced a base
+    // that was asked for as Disabled and came back carrying the configured
+    // model.
+    void store.create(name, '', embed !== '')
     onClose()
   }
   return (
@@ -254,6 +258,10 @@ function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getSt
             base outlives a config change, its vector width is fixed at
             creation, and a mismatch is why a search stops answering -- so it
             stays on screen rather than being something to go and look up. */}
+        {/* The model this base was built with, not the one configured now: a
+            base outlives a config change, its width is fixed at creation, and
+            a mismatch is why a search stops answering. A base made without one
+            says so, rather than borrowing today's model to fill the space. */}
         <span className="mdl">{base.embedding_model || t('gui.kb.embed_off')}</span>
         <Soon label={t('gui.kb.recall_test')} />
         <Soon label={t('gui.kb.settings')} />

@@ -855,11 +855,11 @@ describe('the create dialog', () => {
   }
 
   it('takes a name and an embedding model, and creates with them', async () => {
-    const made: string[] = []
+    const made: Array<[string, boolean | undefined]> = []
     source({
       status: async () => ({ configured: true, model: 'bge-m3' }),
-      create: async (name: string) => {
-        made.push(name)
+      create: async (name: string, _d: string, embedding?: boolean) => {
+        made.push([name, embedding])
         return base({ id: 'b1', name })
       },
     })
@@ -879,8 +879,53 @@ describe('the create dialog', () => {
       screen.getByText('gui.kb.create').click()
     })
 
-    expect(made).toEqual(['handbook'])
+    expect(made).toEqual([['handbook', true]])
     expect(document.querySelector('.kbdlg')).toBeNull()
+  })
+
+  it('makes a base with no vectors when the model is left Disabled', async () => {
+    /* The bug this pins: the choice was collected and dropped, so a base asked
+       for as Disabled came back carrying whatever model was configured -- and
+       its panel then truthfully showed a model nobody had chosen. */
+    const made: Array<[string, boolean | undefined]> = []
+    source({
+      status: async () => ({ configured: true, model: 'bge-m3' }),
+      create: async (name: string, _d: string, embedding?: boolean) => {
+        made.push([name, embedding])
+        return base({ id: 'b1', name, embedding_model: '' })
+      },
+    })
+    await mount()
+    await openDialog()
+
+    const field = document.getElementById('kbname') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(field, { target: { value: 't3' } })
+    })
+    // Disabled is the option the select opens on when nothing is picked.
+    expect((document.getElementById('kbembed') as HTMLSelectElement).value).toBe('bge-m3')
+    await act(async () => {
+      fireEvent.change(document.getElementById('kbembed') as HTMLSelectElement, { target: { value: '' } })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.create').click()
+    })
+
+    expect(made).toEqual([['t3', false]])
+  })
+
+  it('says Disabled on a base that has no model of its own', async () => {
+    source({
+      status: async () => ({ configured: true, model: 'bge-m3' }),
+      bases: async () => [base({ id: 'b1', name: 't3', embedding_model: '' })],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    expect(screen.getByText('gui.kb.embed_off')).toBeTruthy()
+    expect(screen.queryByText('bge-m3')).toBeNull()
   })
 
   it('will not create a base with no name', async () => {

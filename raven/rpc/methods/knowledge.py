@@ -91,13 +91,23 @@ async def knowledge_bases_create(params: dict[str, Any]) -> dict[str, Any]:
     which is why this reaches the endpoint and can therefore fail: a wrong width
     sizes the collection to something no vector fits, and that surfaces at the
     first insert with nothing pointing back here.
+
+    ``embedding=false`` makes a base with no model at all, which is the one
+    case that reaches no endpoint and cannot fail that way. It is also the one
+    choice here that cannot be revised later: a collection's width is fixed
+    when it is created, so a base made without one is rebuilt rather than
+    switched.
     """
     name = str(params.get("name") or "").strip()
     if not name:
         raise ConfigValidationError("name is required")
     manager = knowledge_manager()
     try:
-        base = await manager.create_base(name=name, description=str(params.get("description") or ""))
+        base = await manager.create_base(
+            name=name,
+            description=str(params.get("description") or ""),
+            embedding=params.get("embedding", True) is not False,
+        )
     except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
         raise InternalError(f"could not create the base: {exc}") from exc
     return {"base": _base_row(manager, base)}

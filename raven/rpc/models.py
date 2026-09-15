@@ -3606,6 +3606,11 @@ class KnowledgeDocument(_Strict):
 class KnowledgeBasesCreateParams(_Strict):
     name: str
     description: str | None = None
+    #: Whether the base is searched by vector. False is a base that keeps its
+    #: documents and is never embedded -- the choice a surface offers as
+    #: "Disabled", and one that cannot be changed afterwards, because a
+    #: collection's width is fixed when it is made.
+    embedding: bool = True
 
 
 class KnowledgeBasesCreateResult(_Strict):

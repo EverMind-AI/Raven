@@ -7,8 +7,8 @@ DS.knowledge = {
   /* Unwrapped here rather than in the island: the contract answers an object
      so it can grow a field beside the list, and the page wants the list. */
   bases: () => rpc.call('knowledge.bases.list', {}).then((r) => (r && r.bases) || []),
-  create: (name, description) =>
-    rpc.call('knowledge.bases.create', { name, description }).then((r) => r && r.base),
+  create: (name, description, embedding = true) =>
+    rpc.call('knowledge.bases.create', { name, description, embedding }).then((r) => r && r.base),
   remove: (id) => rpc.call('knowledge.bases.delete', { base_id: id }),
   documents: (baseId) =>
     rpc.call('knowledge.documents.list', { base_id: baseId }).then((r) => (r && r.documents) || []),

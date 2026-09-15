@@ -3711,6 +3711,7 @@ export interface KnowledgeBasesListResult {
 export interface KnowledgeBasesCreateParams {
   name: string;
   description?: string;
+  embedding?: boolean;
 }
 export interface KnowledgeBasesCreateResult {
   base: KnowledgeBase;
