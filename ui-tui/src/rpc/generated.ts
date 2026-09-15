@@ -1033,6 +1033,10 @@ export interface InstanceRow {
    * What the graph this instance belongs to was dispatched for. Absent, not empty, for an instance that came from no orchestration, so its presence is what says the row has a source.
    */
   runTitle?: string;
+  /**
+   * When the turn this instance is answering right now began. Absent when it is answering none, so presence is what says the instance is working and the number is what says for how long. Not updatedAtMs, which every registry write stamps: a binding commit and a graph-origin write move it too, so it dates the row and not the turn.
+   */
+  turnStartedAtMs?: number;
 }
 /**
  * One row of one instance's conversation. Preferred source is the instance's own log, which is written turn by turn and holds what the run did on the way; a conversation with no log falls back to its record directories, where a turn is a pair of files.
