@@ -155,9 +155,9 @@ export function idsOf(tab: DeskTab): string[] {
 
    Read from the tabs' own contents rather than a flag, so a conversation one
    second old and a draft answer the same way -- which is the whole point, since
-   the first message turns one into the other in place. And a conversation the
-   reader returns to answers the way it always did, because by then it has
-   something in it.
+   a promotion turns one into the other in place, on the same screen. And a
+   conversation the reader returns to answers the way it always did, because by
+   then it has something in it.
 
    Only ever a fallback: a reader who has stated an answer keeps it, open or
    shut, and that is what `palette.stated` returns. */

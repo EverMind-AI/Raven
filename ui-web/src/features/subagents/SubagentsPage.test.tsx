@@ -287,6 +287,22 @@ describe('subagents island, the list', () => {
     return instances([inst({ handle: 'one' })], { roster: async () => roster, ...over })
   }
 
+  /* The composer seam the roster borrows to get a conversation. Installed after
+     `startable`, which replaces `window.DS` wholesale. Answers the way the live
+     layer's does: a new id, and the session pointer moved onto it. */
+  function starter(over?: () => Promise<string>): string[] {
+    const made: string[] = []
+    window.DS!.composer = {
+      startConversation: over ?? (async () => {
+        const id = `made-${made.length + 1}`
+        made.push(id)
+        setCurrent(id)
+        return id
+      }),
+    } as unknown as NonNullable<typeof window.DS>['composer']
+    return made
+  }
+
   const plusFor = (agent: string): HTMLButtonElement | null =>
     Array.from(document.querySelectorAll<HTMLElement>('.agent-group')).find(
       (g) => g.querySelector('.agent-head b')?.textContent === agent,
@@ -302,6 +318,124 @@ describe('subagents island, the list', () => {
     expect(plusFor('mute')).toBeNull()
     expect(plusFor('off')).toBeNull()
     expect(plusFor('old')).toBeNull()
+  })
+
+  it('starts the conversation the instance needs, from the new-task screen', async () => {
+    /* A draft has no id, so the create is refused before its first await and
+       the press does nothing at all. Pressing the button is the reader asking
+       for both -- the conversation, then the instance in it. */
+    const asked: Array<[string, string]> = []
+    const fresh = inst({ handle: 'fresh', status: 'idle' })
+    let listed: InstanceRow[] = []
+    startable({
+      instances: async () => listed,
+      instanceCreate: async (agent, sessionKey) => {
+        asked.push([agent, sessionKey])
+        listed = [...listed, fresh]
+        return fresh
+      },
+    })
+    const made = starter()
+    setCurrent(null)
+    await mountGrouped()
+    await screen.findByText('hermes')
+    await act(async () => {
+      plusFor('hermes')!.click()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    /* One conversation, and the create filed under THAT one rather than under
+       the empty string the draft answers with. */
+    expect(made).toEqual(['made-1'])
+    expect(asked).toEqual([['hermes', 'made-1']])
+    /* And the reader is inside it, which is the other half of the ask. */
+    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'fresh' })
+    expect(store.getState().instances.map((r) => r.handle)).toContain('fresh')
+    expect(store.getState().starting).toBeNull()
+  })
+
+  it('keeps the conversation it is already in rather than starting another', async () => {
+    const asked: Array<[string, string]> = []
+    const fresh = inst({ handle: 'fresh', status: 'idle' })
+    startable({
+      instances: async () => [],
+      instanceCreate: async (agent, sessionKey) => {
+        asked.push([agent, sessionKey])
+        return fresh
+      },
+    })
+    const made = starter()
+    await mountGrouped()
+    await screen.findByText('hermes')
+    await act(async () => {
+      plusFor('hermes')!.click()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(made).toEqual([])
+    expect(asked).toEqual([['hermes', 's1']])
+  })
+
+  it('says so on the card when the conversation could not be started', async () => {
+    /* A promotion that fails is a run that did not start, so it belongs on the
+       same card the refused create uses -- not swallowed, and not reported after
+       the instance exists. */
+    const asked: string[] = []
+    startable({
+      instances: async () => [],
+      /* Present and expected never to be called: the create is what the
+         promotion was for, and a promotion that failed must not reach it. */
+      instanceCreate: async (agent) => {
+        asked.push(agent)
+        return inst({ handle: 'never' })
+      },
+    })
+    starter(async () => {
+      throw { data: { detail: 'the gateway refused a new session' } }
+    })
+    setCurrent(null)
+    await mountGrouped()
+    await screen.findByText('hermes')
+    await act(async () => {
+      plusFor('hermes')!.click()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(store.getState().startFail).toEqual({
+      agent: 'hermes', why: 'the gateway refused a new session',
+    })
+    expect(asked).toEqual([])
+    /* And the button comes back, rather than being held by a request that is
+       over. */
+    expect(store.getState().starting).toBeNull()
+  })
+
+  it('offers no button at all where no conversation can be started', async () => {
+    /* The demo canvas: no server to mint one. One predicate decides the offer
+       and the action, so a page that cannot act never draws the click. */
+    startable()
+    setCurrent(null)
+    await mountGrouped()
+    await screen.findByText('hermes')
+    expect(plusFor('hermes')).toBeNull()
+  })
+
+  it('offers the button again when the draft becomes a conversation', async () => {
+    /* Nothing else on this panel changes at that moment -- the roster is read on
+       mount and the promotion touches no state this store holds -- so the button
+       returns only if the session pointer itself is subscribed to. */
+    startable()
+    setCurrent(null)
+    await mountGrouped()
+    await screen.findByText('hermes')
+    expect(plusFor('hermes')).toBeNull()
+    await act(async () => {
+      setCurrent('s1')
+    })
+    expect(plusFor('hermes')).not.toBeNull()
   })
 
   it('creates an instance, lists it, and opens it', async () => {
