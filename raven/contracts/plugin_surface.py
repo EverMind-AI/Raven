@@ -72,6 +72,15 @@ class ServiceLocator:
 
     web_config: "Callable[[], Any] | None" = None
     """The host's ``tools.web``: the default a plugin's web-facing tool falls back to."""
+    embedding: Any = None
+    """The host's ``embedding`` block: an OpenAI-compatible endpoint as
+    ``model`` / ``base_url`` / ``api_key`` / ``dimensions``.
+
+    Lent rather than left to each plugin to configure, because it is not the
+    memory backend's endpoint: the knowledge base reads the same block, and
+    two copies of one endpoint is two things to rotate. ``None``, or a block
+    with any of the three strings empty, means the host has none and the
+    plugin keeps whatever it was configured with."""
 
 
 @dataclass(frozen=True)

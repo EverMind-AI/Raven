@@ -125,7 +125,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                     "id": mf.id,
                     "display_name": mf.display_name,
                     "version": mf.version,
-                    "enabled": mf.id not in disabled and mf.enabled_by_default,
+                    "enabled": mf.id not in disabled,
                     "bundled": mf.bundled,
                 }
             )
@@ -895,11 +895,48 @@ _EVEROS_FIELDS = ("model", "api_key", "base_url", "provider")
 _EVEROS_REQUIRED = ("llm", "embedding")
 
 
+def _everos_config_module():
+    """The plugin's config module, or a typed error naming what to install.
+
+    The module ships with the ``everos-memory`` distribution, so on an install
+    without it the import raises ``ModuleNotFoundError`` -- which reaches the
+    client as a generic internal error with a traceback, saying nothing a
+    person can act on. Both handlers below go through here so the absence is
+    reported once, in the words every other surface uses for it.
+    """
+    try:
+        import raven_everos.config as module
+    except ImportError as exc:
+        from raven.core.plugin_stack import everos_plugin_missing_note
+
+        raise ConfigValidationError(everos_plugin_missing_note()) from exc
+    return module
+
+
 async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
-    """Current EverOS model sections, api_key reduced to a set/unset flag."""
-    from raven.config.update_everos import (
+    """Current EverOS model sections, api_key reduced to a set/unset flag.
+
+    ``available`` is false with a ``note`` when this install has no EverOS to
+    configure. The page used to render four "not set" rows in that case --
+    identical to an install where the plugin is present and simply
+    unconfigured -- so a person could fill in a model and a key and have
+    nothing happen, with no way to learn why.
+    """
+    del params
+    from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
+
+    if not everos_plugin_installed():
+        return {
+            "available": False,
+            "note": everos_plugin_missing_note(),
+            "sections": {},
+            "config_path": "",
+        }
+    from raven_everos.config import (
         WRITABLE_SECTIONS,
+        everos_has_own_embedding,
         get_everos_config_path,
+        host_embedding_section,
         load_everos_config,
     )
 
@@ -907,8 +944,18 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
     sections = {}
     for sec in WRITABLE_SECTIONS:
         cur = data.get(sec) or {}
+        if sec == "embedding" and not everos_has_own_embedding():
+            # The endpoint's other home. Reading only the file left this card
+            # blank for an install the wizard had just configured, and filling
+            # it in from there wrote a second endpoint that silently outranked
+            # the one a knowledge base goes on reading.
+            cur = host_embedding_section()
         model = str(cur.get("model") or "")
-        # The shipped template seeds placeholder "<...>" model names.
+        # A guard against a hand-written "<fill me>", not the mechanism that
+        # makes an unconfigured role read as unset: the shipped template seeds
+        # every section with a real model name and an empty key, so a role
+        # nobody configured arrives here with a model. `api_key_set` is what
+        # carries "not configured" to the card.
         if model.startswith("<"):
             model = ""
         sections[sec] = {
@@ -917,14 +964,22 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
             "provider": str(cur.get("provider") or ""),
             "api_key_set": bool(cur.get("api_key")),
         }
-    return {"sections": sections, "config_path": str(get_everos_config_path())}
+    return {
+        "available": True,
+        "note": None,
+        "sections": sections,
+        "config_path": str(get_everos_config_path()),
+    }
 
 
 async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     """Merge fields into one EverOS section, or clear an optional section."""
-    from raven.config.update_everos import (
+    _everos_config_module()
+    from raven_everos.config import (
         WRITABLE_SECTIONS,
         clear_everos_section,
+        embedding_is_env_managed,
+        everos_has_own_embedding,
         set_everos_section,
     )
 
@@ -956,10 +1011,10 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     if borrow is not None:
         if not isinstance(borrow, str) or not borrow.strip():
             raise ConfigValidationError("borrow_from must be a provider name")
-        from raven.config.update_everos import borrow_provider_credentials
+        from raven.config.update_providers import lend_provider_credentials
 
         try:
-            lent = borrow_provider_credentials(borrow.strip())
+            lent = lend_provider_credentials(borrow.strip())
         except KeyError as exc:
             raise ConfigValidationError(f"no such provider: {borrow}") from exc
         except ValueError as exc:
@@ -973,6 +1028,28 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
 
     if not clean:
         raise ConfigValidationError("fields must carry at least one non-empty value")
+    if section == "embedding" and embedding_is_env_managed():
+        # The exported variables outrank both files, so a save here would be
+        # accepted, written, and then ignored -- the silent no-op this card was
+        # just fixed for, arriving by the one route left. Naming the variables
+        # is the only thing raven can usefully do: it cannot edit a shell.
+        raise ConfigValidationError(
+            "the embedding endpoint is set by the EVEROS_EMBEDDING__MODEL / __BASE_URL / __API_KEY "
+            "environment variables, which outrank anything saved here; change them instead"
+        )
+    if section == "embedding" and not everos_has_own_embedding():
+        # Written where it is read from, so the card cannot edit one home while
+        # the service and the knowledge base use the other. `provider` has no
+        # place in the host's block and is refused rather than dropped: a value
+        # accepted and discarded reads to the caller as one that was stored.
+        if "provider" in clean:
+            raise ConfigValidationError("provider is not part of raven's embedding endpoint")
+        from raven.config.update import set_embedding_endpoint
+
+        set_embedding_endpoint(
+            {"model": clean.get("model"), "baseUrl": clean.get("base_url"), "apiKey": clean.get("api_key")}
+        )
+        return {"applied": True}
     set_everos_section(section, clean)
     return {"applied": True}
 

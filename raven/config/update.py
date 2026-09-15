@@ -403,11 +403,11 @@ def set_memory_backend(
 ) -> str | None:
     """Patch ``memory.backend`` on the on-disk config. Returns previous value.
 
-    ``"everos"`` enables the EverOS backend; ``None`` disables backend-driven
-    memory entirely -- there is no second backend to fall back to, so recall and
-    storage simply stop happening. The onboarding wizard's
-    memory step writes the model sections to ``~/.everos/raven/everos.toml``
-    and flips this flag here.
+    The name is a ``memory_backends`` contribution name from an activated
+    plugin (e.g. ``"everos"``); ``None`` disables backend-driven memory --
+    recall and storage simply stop happening. The onboarding wizard's memory
+    step writes this from the plugin step's ``StepOutcome``: ``CONFIGURED``
+    records the contribution's own name, anything else clears it to ``None``.
     """
     path = config_path or get_config_path()
 
@@ -423,6 +423,38 @@ def set_memory_backend(
     return prev
 
 
+def set_embedding_endpoint(
+    fields: dict[str, Any],
+    *,
+    config_path: "Path | None" = None,
+) -> dict[str, Any]:
+    """Merge ``model`` / ``baseUrl`` / ``apiKey`` / ``dimensions`` into ``embedding``.
+
+    Raven's own block, not the memory backend's: a knowledge base reads it too,
+    so the wizard writes it here rather than into whichever backend happened to
+    ask for it. Merged, not replaced, so a run that configures only the model
+    keeps the key already recorded.
+
+    Returns the previous block, for a caller that wants to report the change.
+    """
+    path = config_path or get_config_path()
+    allowed = {"model", "baseUrl", "apiKey", "dimensions"}
+    clean = {k: v for k, v in fields.items() if k in allowed and v not in (None, "")}
+    if not clean:
+        return {}
+
+    def _apply(_text: str | None) -> tuple[str, Any]:
+        data = read_raw_or_raise(path)
+        section = data.setdefault("embedding", {})
+        prev = dict(section)
+        section.update(clean)
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    prev = atomic_update(path, _apply)
+    logger.info("config/update: embedding endpoint set ({})", ", ".join(sorted(clean)))
+    return prev or {}
+
+
 __all__ = [
     "update_cron_config",
     "reset_cron_config",
@@ -430,6 +462,7 @@ __all__ = [
     "set_sentinel_nudge_quota",
     "set_default_model",
     "set_sandbox_backend",
+    "set_embedding_endpoint",
     "set_memory_backend",
     "set_skill_blocked",
     "set_playbook_disabled",

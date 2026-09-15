@@ -125,7 +125,7 @@ def make_understand_media_tool(ctx: Any) -> Tool | None:
     del ctx
     # Point EverOS at raven's ~/.everos/raven home before any everos import
     # resolves settings (the multimodal parser/LLM read EVEROS_* at call time).
-    from raven.config.update_everos import (
+    from raven_everos.config import (
         configure_everos_env,
         ensure_everos_home,
         everos_owned,

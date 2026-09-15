@@ -1,12 +1,11 @@
-"""EverOS long-term memory cluster of the onboard wizard (Step 4).
+"""EverOS long-term memory screen of the ``raven onboard`` wizard (Step 4).
 
-Split out of ``onboard_commands`` because that module had grown past 5000
-lines; this file owns EverOS role configuration (llm / embedding / rerank /
-multimodal) end to end. Shared wizard UI state (``console``, ``_BACK``,
-``_QMARK``, questionary helpers, ...) still lives in ``onboard_commands`` --
-this module reaches it via the ``oc`` module reference (not a value import) so
-that test monkeypatches on ``onboard_commands`` attributes keep working
-whichever module a caller patches through.
+Owns EverOS role configuration (llm / embedding / rerank / multimodal) end to
+end. The wizard shell -- console, translation, prompt chrome, the back
+sentinel -- belongs to the host and arrives as one ``OnboardUI`` when
+:meth:`EverosOnboardStep.run` is called; the plugin never writes
+``memory.backend`` itself, it returns a ``StepOutcome`` and the host records
+the choice.
 """
 
 from __future__ import annotations
@@ -17,32 +16,32 @@ from urllib.parse import urlparse
 
 import typer
 
-from raven.cli import _onboard_shared as oc
-from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
-from raven.i18n import t
+from raven.plugins import OnboardUI, PluginContext, StepOutcome
+from raven_everos.config import recorded_slice
 
+# ponytail: module global; the wizard is one-shot and single-threaded. Thread
+# the parameter if a second concurrent wizard ever exists.
+_UI: OnboardUI | None = None
 
-def _set_memory_backend(backend: Optional[str]) -> None:
-    """Set ``memory.backend`` (``"everos"`` / ``None``) via the ops layer."""
-    from raven.config.update import set_memory_backend
-
-    set_memory_backend(backend)
+# Sentinel a required EverOS role returns when the user chooses to give up EverOS
+# rather than configure it; ``_step4_memory`` then leaves memory disabled.
+_ABORT_EVEROS = object()
 
 
 def _everos_section(section: str) -> dict[str, Any]:
-    from raven.config.update_everos import everos_section
+    from raven_everos.config import everos_section
 
     return everos_section(section)
 
 
 def _everos_role_configured(section: str) -> bool:
-    from raven.config.update_everos import everos_role_configured
+    from raven_everos.config import everos_role_configured
 
     return everos_role_configured(section)
 
 
-def _memory_enabled() -> bool:
-    """True iff EverOS memory is both selected AND usable on disk.
+def _configured() -> bool:
+    """True iff EverOS memory is usable on disk.
 
     "Usable" means the llm role is configured -- that is the whole requirement.
     embedding is advised but optional: without it the adapter searches lexically
@@ -50,10 +49,7 @@ def _memory_enabled() -> bool:
     on it here would tell a user who skipped it that memory is off (and skip the
     import step along with it).
     """
-    data = oc._load_raw_config()
-    if (data.get("memory") or {}).get("backend") != "everos":
-        return False
-    slice_ = _recorded_memory_slice(data)
+    slice_ = recorded_slice()
     if slice_.get("owned") is False:
         # A server the user runs. Its models live in a toml raven promised not
         # to read, and no root is recorded for it, so the address is the whole
@@ -62,12 +58,9 @@ def _memory_enabled() -> bool:
     return _everos_role_configured("llm")
 
 
-def _recorded_memory_slice(data: dict[str, Any] | None = None) -> dict[str, Any]:
-    """``plugins.config["everos-memory"]`` as raw JSON."""
-    data = oc._load_raw_config() if data is None else data
-    plugins = data.get("plugins") or {}
-    slice_ = (plugins.get("config") or {}).get("everos-memory") if isinstance(plugins, dict) else None
-    return slice_ if isinstance(slice_, dict) else {}
+def _leave_as_is() -> StepOutcome:
+    """The outcome for a lane that wrote nothing: whatever is on disk stands."""
+    return StepOutcome.CONFIGURED if _configured() else StepOutcome.DISABLED
 
 
 def _configured_target_url() -> str:
@@ -81,7 +74,7 @@ def _configured_target_url() -> str:
     """
     from raven_everos.server import DEFAULT_EVEROS_BASE_URL
 
-    port = _recorded_memory_slice().get("port")
+    port = recorded_slice().get("port")
     if isinstance(port, int) and port > 0:
         return f"http://localhost:{port}"
     # Deliberately not falling back to the recorded address. That address is
@@ -94,139 +87,23 @@ def _configured_target_url() -> str:
     return DEFAULT_EVEROS_BASE_URL
 
 
-# Providers whose main model can be reused as the EverOS memory LLM: they
-# speak the OpenAI chat-completions protocol that EverOS's bare OpenAI client
-# requires. OAuth providers (github_copilot / openai_codex) and non-OpenAI
-# wire protocols (anthropic / gemini) are excluded.
-_OPENAI_COMPATIBLE_PROVIDERS = {"openrouter", "openai", "deepseek", "custom"}
-
-# Fallback OpenAI-compatible base URLs for providers whose registry
-# ``default_api_base`` is empty (they rely on the SDK's built-in default,
-# which EverOS's bare client doesn't know). EverOS needs an explicit base_url.
-_PROVIDER_BASE_URL_FALLBACK = {
-    "openai": "https://api.openai.com/v1",
-    "deepseek": "https://api.deepseek.com/v1",
-    "openrouter": "https://openrouter.ai/api/v1",
-}
-
-
-def _resolve_model_provider(model: str) -> Optional[str]:
-    """Best-effort: which configured provider does ``model`` belong to?
-
-    Prefixed models (``openrouter/...`` / ``openai/gpt-4o``) read off the head.
-    A custom endpoint stores its model as a BARE id (e.g. ``qwen-max``) with no
-    prefix, so an unrecognized head falls back to ``"custom"`` when a custom
-    provider is actually configured with a key. Returns ``None`` when no match.
-    """
-    from raven.providers.registry import split_model_id
-
-    if not model:
-        return None
-    head, _ = split_model_id(model)
-    if head:
-        from raven.config.update_providers import provider_field_specs
-
-        try:
-            provider_field_specs(head)
-            return head
-        except KeyError:
-            pass
-    # No usable prefix → could be a bare custom-endpoint model.
-    from raven.config.schema import ProviderConfig
-    from raven.providers.auth import credential_status
-
-    custom = (oc._load_raw_config().get("providers") or {}).get("custom") or {}
-    if credential_status("custom", ProviderConfig.model_validate(custom)).ok:
-        return "custom"
-    # A bare id that still matches a known provider head (rare; e.g. a direct
-    # provider's bare default before prefixing) — accept the head if known.
-    return head if head in _OPENAI_COMPATIBLE_PROVIDERS else None
-
-
-def _model_is_openai_compatible(model: Optional[str]) -> bool:
-    """Heuristic: can the main chat model's provider be reused for memory LLM?
-
-    EverOS's memory LLM uses a bare OpenAI client, so the main model is
-    reusable only when its provider speaks the OpenAI chat protocol. Custom
-    endpoints are OpenAI-compatible by definition (the wizard only offers
-    ``custom`` for OpenAI-compatible endpoints).
-    """
-    if not model:
-        return False
-    return _resolve_model_provider(model) in _OPENAI_COMPATIBLE_PROVIDERS
-
-
-def _resolve_reuse_llm_creds(main_model: str) -> dict[str, Optional[str]]:
-    """Map a litellm-style main model to bare EverOS LLM settings.
-
-    EverOS sends ``EVEROS_LLM__MODEL`` to ``base_url`` via a bare OpenAI
-    client, so:
-      - strip the provider's litellm prefix to the bare model id the upstream
-        endpoint expects (``openrouter/anthropic/claude-x`` → ``anthropic/claude-x``;
-        a custom endpoint's bare id is used as-is);
-      - resolve the provider's real ``base_url`` (configured ``apiBase`` →
-        registry ``default_api_base`` → a known fallback);
-      - carry the provider's stored api_key.
-    """
-    from raven.providers.registry import find_by_name, normalize_provider_name, split_model_id
-
-    provider = _resolve_model_provider(main_model) or split_model_id(main_model)[0]
-    spec = find_by_name(provider)
-    # Through the ops library, so a section still stored under the provider's
-    # pre-rename name is found -- a raw lookup by the resolved name is not.
-    from raven.config.update_providers import get_provider_config
-
-    # No `if spec` gate: LiteLLM-only vendors have no spec of ours yet their
-    # section holds real credentials, and gating on the spec silently handed the
-    # probe an empty api_key while the main model was working fine.
-    try:
-        _resolved = get_provider_config(provider, redact_secrets=False)
-    except KeyError:
-        _resolved = {}
-    prov_cfg = {"apiKey": _resolved.get("api_key"), "apiBase": _resolved.get("api_base")} if _resolved else {}
-
-    # Strip the routing prefix to the bare model id the upstream endpoint
-    # expects: litellm consumes it, the raw OpenAI client must not see it. Only
-    # a prefix naming this provider is stripped -- a custom endpoint stores a
-    # bare id already, and anything else is part of the vendor's own model id.
-    bare_model = main_model
-    head, rest = split_model_id(main_model)
-    known_prefixes = set(spec.route_names) if spec else {normalize_provider_name(provider)}
-    if spec:
-        known_prefixes.add(normalize_provider_name(spec.model_prefix))
-    if head and head in known_prefixes:
-        bare_model = rest
-
-    base_url = (
-        prov_cfg.get("apiBase")
-        or (getattr(spec, "default_api_base", "") if spec else "")
-        or _PROVIDER_BASE_URL_FALLBACK.get(provider)
-    )
-    return {
-        "model": bare_model,
-        "api_key": prov_cfg.get("apiKey"),
-        "base_url": base_url,
-    }
-
-
 def _prompt_text(label: str, *, secret: bool = False, default: str = "", allow_back: bool = False) -> Any:
     """Prompt for free text. With ``allow_back``, an empty submit returns
-    ``oc._BACK`` (and a hint is shown); otherwise returns the stripped string."""
-    questionary = oc._require_questionary()
-    from raven.cli._styles import RAVEN_STYLE
+    ``_UI.back`` (and a hint is shown); otherwise returns the stripped string."""
+    questionary = _UI.require_questionary()
 
-    placeholder = oc._back_placeholder(allow_back)
+    placeholder = _UI.back_placeholder(allow_back)
     if secret:
-        value = questionary.password(label, placeholder=placeholder, style=RAVEN_STYLE, qmark=oc._QMARK).ask()
+        value = questionary.password(label, placeholder=placeholder, style=_UI.style, qmark=_UI.qmark).ask()
     else:
         value = questionary.text(
-            label, default=default, placeholder=placeholder, style=RAVEN_STYLE, qmark=oc._QMARK
+            label, default=default, placeholder=placeholder, style=_UI.style, qmark=_UI.qmark
         ).ask()
     if value is None:
         raise typer.Exit(1)
     value = value.strip()
     if allow_back and value == "":
-        return oc._BACK
+        return _UI.back
     return value
 
 
@@ -268,19 +145,19 @@ def _verify_everos_llm(
     continue_hint: Optional[str] = None,
 ) -> bool:
     """Probe the memory LLM with a real chat completion, offering retry/continue on failure."""
-    oc.console.print(t("  [dim]⏳ Verifying {label}…[/dim]", label=label))
+    _UI.console.print(_UI.t("  [dim]⏳ Verifying {label}…[/dim]", label=label))
     ok, detail = _probe_everos_chat(model, api_key=api_key, base_url=base_url)
     if ok:
-        oc.console.print(t("  [green]✓ {label} connected.[/green]", label=label))
+        _UI.console.print(_UI.t("  [green]✓ {label} connected.[/green]", label=label))
         return True
-    oc.console.print(t("  [yellow]✗ Couldn't verify {label}: {detail}[/yellow]", label=label, detail=detail))
+    _UI.console.print(_UI.t("  [yellow]✗ Couldn't verify {label}: {detail}[/yellow]", label=label, detail=detail))
     if continue_hint:
-        cont_label = t("Continue anyway ({hint})", hint=t(continue_hint))
+        cont_label = _UI.t("Continue anyway ({hint})", hint=_UI.t(continue_hint))
     else:
-        cont_label = t("Continue anyway")
-    choice = oc._failure_choice(
+        cont_label = _UI.t("Continue anyway")
+    choice = _UI.failure_choice(
         [
-            (t("Re-enter"), "rekey"),
+            (_UI.t("Re-enter"), "rekey"),
             (cont_label, "continue"),
         ],
         non_interactive=non_interactive,
@@ -303,19 +180,19 @@ def _verify_rerank(
     continue_hint: Optional[str] = None,
 ) -> bool:
     """Probe a rerank endpoint with a provider-specific request, offering retry/continue on failure."""
-    oc.console.print(t("  [dim]⏳ Verifying {label}…[/dim]", label=label))
+    _UI.console.print(_UI.t("  [dim]⏳ Verifying {label}…[/dim]", label=label))
     ok, detail = _probe_rerank(model, api_key=api_key, base_url=base_url, rerank_provider=rerank_provider)
     if ok:
-        oc.console.print(t("  [green]✓ {label} connected.[/green]", label=label))
+        _UI.console.print(_UI.t("  [green]✓ {label} connected.[/green]", label=label))
         return True
-    oc.console.print(t("  [yellow]✗ Couldn't verify {label}: {detail}[/yellow]", label=label, detail=detail))
+    _UI.console.print(_UI.t("  [yellow]✗ Couldn't verify {label}: {detail}[/yellow]", label=label, detail=detail))
     if continue_hint:
-        cont_label = t("Continue anyway ({hint})", hint=t(continue_hint))
+        cont_label = _UI.t("Continue anyway ({hint})", hint=_UI.t(continue_hint))
     else:
-        cont_label = t("Continue anyway")
-    choice = oc._failure_choice(
+        cont_label = _UI.t("Continue anyway")
+    choice = _UI.failure_choice(
         [
-            (t("Re-enter"), "rekey"),
+            (_UI.t("Re-enter"), "rekey"),
             (cont_label, "continue"),
         ],
         non_interactive=non_interactive,
@@ -436,16 +313,16 @@ def _verify_embedding_dim(
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     while True:
-        oc.console.print(t("  [dim]⏳ Checking embedding dimension…[/dim]"))
+        _UI.console.print(_UI.t("  [dim]⏳ Checking embedding dimension…[/dim]"))
         result = _probe_embedding_dim(url, headers, model)
 
         if result == _REQUIRED_EMBEDDING_DIM:
-            oc.console.print(t("  [green]✓ Supports {result}-dim.[/green]", result=result))
+            _UI.console.print(_UI.t("  [green]✓ Supports {result}-dim.[/green]", result=result))
             return True
 
         if isinstance(result, int) and result < _REQUIRED_EMBEDDING_DIM:
-            oc.console.print(
-                t(
+            _UI.console.print(
+                _UI.t(
                     "  [red]✗ Dimension too small: model outputs {result}-dim, EverOS requires >= {_REQUIRED_EMBEDDING_DIM}. Please pick another model.[/red]",
                     result=result,
                     _REQUIRED_EMBEDDING_DIM=_REQUIRED_EMBEDDING_DIM,
@@ -454,8 +331,8 @@ def _verify_embedding_dim(
             return False
 
         if isinstance(result, int) and result > _REQUIRED_EMBEDDING_DIM:
-            oc.console.print(
-                t(
+            _UI.console.print(
+                _UI.t(
                     "  [red]✗ Model outputs {result}-dim and does not support the dimensions parameter to truncate to {_REQUIRED_EMBEDDING_DIM}. Please pick another model.[/red]",
                     result=result,
                     _REQUIRED_EMBEDDING_DIM=_REQUIRED_EMBEDDING_DIM,
@@ -463,13 +340,13 @@ def _verify_embedding_dim(
             )
             return False
 
-        oc.console.print(t("  [yellow]✗ Couldn't verify dimension: {result}[/yellow]", result=result))
+        _UI.console.print(_UI.t("  [yellow]✗ Couldn't verify dimension: {result}[/yellow]", result=result))
         if non_interactive:
             return False
-        choice = oc._failure_choice(
+        choice = _UI.failure_choice(
             [
-                (t("Retry"), "retry"),
-                (t("Re-enter"), "rekey"),
+                (_UI.t("Retry"), "retry"),
+                (_UI.t("Re-enter"), "rekey"),
             ],
             non_interactive=False,
         )
@@ -795,7 +672,7 @@ def _reusable_creds(
 
     Two stores. The memory LLM's own section answers first for the roles
     configured after it, because a key typed into that step lives there and
-    nowhere else. Otherwise ``borrow_provider_credentials`` reads the provider
+    nowhere else. Otherwise ``lend_provider_credentials`` reads the provider
     section, which is the one place that knows the precedence a section can be
     written in -- ``endpoints``, then ``api_key_list``, then the flat pair. The
     origin only names which store answered, and separates the main chat model's
@@ -806,10 +683,8 @@ def _reusable_creds(
         key = llm_section.get("api_key")
         if key:
             return {"api_key": str(key), "base_url": str(llm_section.get("base_url") or "")}, "llm"
-    from raven.config.update_everos import borrow_provider_credentials
-
     try:
-        lent = borrow_provider_credentials(provider)
+        lent = _UI.lend_provider_credentials(provider)
     except (KeyError, ValueError):
         return None, ""
     # rerank reaches a different service path on the same vendor, and a key
@@ -821,7 +696,7 @@ def _reusable_creds(
         lent_url = str(lent.get("base_url") or "")
         if lent_url and lent_url.rstrip("/") != str(prov["base_url"]).rstrip("/"):
             return None, ""
-    origin = "main" if main_model and _resolve_model_provider(main_model) == provider else "config"
+    origin = "main" if main_model and _UI.resolve_main_model(main_model)["provider"] == provider else "config"
     return lent, origin
 
 
@@ -843,13 +718,12 @@ def _everos_pick_model(
     Reusing a provider does not carry that provider's model over: the roles want
     different models, and the memory LLM is not the main chat model.
     """
-    questionary = oc._require_questionary()
-    from raven.cli._styles import RAVEN_STYLE
+    questionary = _UI.require_questionary()
 
-    oc.console.print(t("  [dim]⏳ Loading models…[/dim]"))
+    _UI.console.print(_UI.t("  [dim]⏳ Loading models…[/dim]"))
     models = _fetch_everos_models(base_url, api_key, section=section, provider_name=provider_name)
     if recommendation:
-        oc.console.print(f"  [dim]{t(recommendation)}[/dim]")
+        _UI.console.print(f"  [dim]{_UI.t(recommendation)}[/dim]")
     if models:
         default_model = _match_everos_default(example, models)
         # An empty field where a value is expected reads as a broken prompt, so
@@ -857,8 +731,8 @@ def _everos_pick_model(
         # is a capability floor, and this endpoint not carrying that exact id
         # says nothing about whether it carries an equal.
         if not default_model:
-            oc.console.print(
-                t(
+            _UI.console.print(
+                _UI.t(
                     "  [dim]This endpoint does not list [bold]{example}[/bold] -- pick one of its own\n"
                     "  at that level from the list below.[/dim]",
                     example=example,
@@ -866,14 +740,14 @@ def _everos_pick_model(
                 highlight=False,
             )
         question = questionary.autocomplete(
-            t("Model ({a0} available — type to filter):", a0=len(models)),
+            _UI.t("Model ({a0} available — type to filter):", a0=len(models)),
             choices=models,
             default=default_model,
             ignore_case=True,
             match_middle=True,
-            placeholder=oc._back_placeholder(allow_back),
-            style=RAVEN_STYLE,
-            qmark=oc._QMARK,
+            placeholder=_UI.back_placeholder(allow_back),
+            style=_UI.style,
+            qmark=_UI.qmark,
         )
         # Trigger the completion popup immediately so the user sees
         # all available models without typing first.
@@ -886,19 +760,19 @@ def _everos_pick_model(
         app.pre_run_callables.append(_show_completions)
         chosen = question.ask()
     else:
-        oc.console.print(t("  [dim]Couldn't list models from this endpoint — type the id manually.[/dim]"))
+        _UI.console.print(_UI.t("  [dim]Couldn't list models from this endpoint — type the id manually.[/dim]"))
         chosen = questionary.text(
-            t("Model id (e.g. {example}):", example=example),
+            _UI.t("Model id (e.g. {example}):", example=example),
             default="",
-            placeholder=oc._back_placeholder(allow_back),
-            style=RAVEN_STYLE,
-            qmark=oc._QMARK,
+            placeholder=_UI.back_placeholder(allow_back),
+            style=_UI.style,
+            qmark=_UI.qmark,
         ).ask()
     if chosen is None:
         raise typer.Exit(1)
     chosen = chosen.strip()
     if allow_back and chosen == "":
-        return oc._BACK
+        return _UI.back
     if not chosen:
         raise typer.Exit(1)
     return chosen
@@ -915,10 +789,9 @@ def _everos_pick_creds_and_model(
     """Mirror the main provider step for one EverOS model: pick a source
     (curated provider / custom) → API key → model. Returns a dict with
     ``model`` / ``api_key`` / ``base_url`` (plus ``provider`` for rerank), or
-    ``oc._BACK`` when the user backs out of the source picker. Empty submit on any
+    ``_UI.back`` when the user backs out of the source picker. Empty submit on any
     field rewinds one step."""
-    questionary = oc._require_questionary()
-    from raven.cli._styles import RAVEN_STYLE
+    questionary = _UI.require_questionary()
 
     llm_section = _everos_section("llm")
 
@@ -928,7 +801,7 @@ def _everos_pick_creds_and_model(
     # is all this decides: every provider raven already holds a key for is
     # reusable, so moving the cursor off the default costs nothing either.
     if section == "llm":
-        default_provider = _resolve_model_provider(main_model or "")
+        default_provider = _UI.resolve_main_model(main_model or "")["provider"]
     else:
         default_provider = _match_provider_by_url(llm_section.get("base_url"))
 
@@ -942,31 +815,31 @@ def _everos_pick_creds_and_model(
             # highlighted: a default with no key on file still asks for one, and
             # a label promising reuse there would be a lie.
             _creds, origin = held[prov["name"]]
-            label = t(_KEY_REUSE_TAG[origin], label=t(prov["label"])) if origin else t(prov["label"])
+            label = _UI.t(_KEY_REUSE_TAG[origin], label=_UI.t(prov["label"])) if origin else _UI.t(prov["label"])
             choice = questionary.Choice(label, value=("provider", prov))
             choices.append(choice)
             if prov["name"] == default_provider:
                 default_choice = choice.value
         choices.append(
             questionary.Choice(
-                t("Other (custom OpenAI-compatible endpoint)"),
+                _UI.t("Other (custom OpenAI-compatible endpoint)"),
                 value=("custom",),
             )
         )
         choices.append(questionary.Separator())
-        choices.append(questionary.Choice(t("Back"), value=oc._BACK))
+        choices.append(questionary.Choice(_UI.t("Back"), value=_UI.back))
 
         src = questionary.select(
-            t("Pick a provider (or reuse / custom):"),
+            _UI.t("Pick a provider (or reuse / custom):"),
             choices=choices,
             default=default_choice,
-            style=RAVEN_STYLE,
-            qmark=oc._QMARK,
+            style=_UI.style,
+            qmark=_UI.qmark,
         ).ask()
         if src is None:
             raise typer.Exit(1)
-        if src is oc._BACK:
-            return oc._BACK
+        if src is _UI.back:
+            return _UI.back
         kind = src[0]
 
         # Resolve (api_key, base_url) from the chosen source.
@@ -979,25 +852,25 @@ def _everos_pick_creds_and_model(
                 # valid against the endpoint it was issued for.
                 api_key = creds["api_key"]
                 base_url = creds.get("base_url") or src[1]["base_url"]
-                oc.console.print(t(_KEY_REUSE_NOTE[origin]))
+                _UI.console.print(_UI.t(_KEY_REUSE_NOTE[origin]))
             else:
                 base_url = src[1]["base_url"]
-                api_key = oc._prompt_api_key(chosen_provider, allow_back=True)
-                if api_key is oc._BACK:
+                api_key = _UI.prompt_api_key(chosen_provider, allow_back=True)
+                if api_key is _UI.back:
                     continue
         else:  # custom
-            base_url = _prompt_text(t("Base URL (must include /v1):"), allow_back=True)
-            if base_url is oc._BACK:
+            base_url = _prompt_text(_UI.t("Base URL (must include /v1):"), allow_back=True)
+            if base_url is _UI.back:
                 continue
-            api_key = _prompt_text(t("API key (hidden):"), secret=True, allow_back=True)
-            if api_key is oc._BACK:
+            api_key = _prompt_text(_UI.t("API key (hidden):"), secret=True, allow_back=True)
+            if api_key is _UI.back:
                 continue
 
         # Guard against a source that resolved to an empty key / endpoint —
         # set_everos_section drops None values, which would otherwise persist a
         # section with a model but no usable endpoint.
         if not (api_key and base_url):
-            oc.console.print(t("  [yellow]✗ Missing API key or Base URL for this source — pick another.[/yellow]"))
+            _UI.console.print(_UI.t("  [yellow]✗ Missing API key or Base URL for this source — pick another.[/yellow]"))
             continue
 
         # rerank: resolve service type + override base_url when needed.
@@ -1010,19 +883,19 @@ def _everos_pick_creds_and_model(
                     base_url = chosen_prov_dict["rerank_base_url"]
             else:
                 rerank_provider = questionary.select(
-                    t("Rerank service type:"),
+                    _UI.t("Rerank service type:"),
                     choices=[
                         questionary.Choice("deepinfra", value="deepinfra"),
                         questionary.Choice("vllm", value="vllm"),
                         questionary.Choice("dashscope", value="dashscope"),
-                        questionary.Choice(t("Back"), value=oc._BACK),
+                        questionary.Choice(_UI.t("Back"), value=_UI.back),
                     ],
-                    style=RAVEN_STYLE,
-                    qmark=oc._QMARK,
+                    style=_UI.style,
+                    qmark=_UI.qmark,
                 ).ask()
                 if rerank_provider is None:
                     raise typer.Exit(1)
-                if rerank_provider is oc._BACK:
+                if rerank_provider is _UI.back:
                     continue
 
         model = _everos_pick_model(
@@ -1034,7 +907,7 @@ def _everos_pick_creds_and_model(
             provider_name=chosen_provider,
             recommendation=recommendation,
         )
-        if model is oc._BACK:
+        if model is _UI.back:
             continue
 
         result: dict[str, Any] = {"model": model, "api_key": api_key, "base_url": base_url}
@@ -1049,15 +922,14 @@ def _config_everos_role(
     """Configure one EverOS memory role (llm / embedding / rerank / multimodal)
     with the unified provider→key→model flow, reuse shortcuts, and a back loop.
 
-    Returns ``None`` normally; returns ``oc._ABORT_EVEROS`` when the user gives up a
+    Returns ``None`` normally; returns ``_ABORT_EVEROS`` when the user gives up a
     required role (the caller then disables EverOS, leaving no long-term memory)."""
-    questionary = oc._require_questionary()
-    from raven.cli._styles import RAVEN_STYLE
-    from raven.config.update_everos import clear_everos_section, set_everos_section
+    questionary = _UI.require_questionary()
+    from raven_everos.config import clear_everos_section, set_everos_section
 
     role = _EVEROS_ROLES[section]
-    label = t(role["label"])
-    purpose = t(role["purpose"])
+    label = _UI.t(role["label"])
+    purpose = _UI.t(role["purpose"])
     optional = role["optional"]
     verify_label = label
 
@@ -1073,30 +945,30 @@ def _config_everos_role(
     # Roles that want to be configured say so in their own ``tag`` -- calling all
     # three merely "optional" flattens the difference between losing semantic
     # recall entirely and losing a little ranking accuracy.
-    tag_markup = t(role["tag"]) if role.get("tag") else t("[dim](optional)[/dim]")
+    tag_markup = _UI.t(role["tag"]) if role.get("tag") else _UI.t("[dim](optional)[/dim]")
     lines = [f"  [bold][accent]{label}[/accent][/bold]" + (f" {tag_markup}" if optional else "")]
     lines.append(f"  [dim]{purpose}[/dim]")
     if role.get("cost"):
-        lines.append(f"  [dim]{t(role['cost'])}[/dim]")
-    oc.console.print()
+        lines.append(f"  [dim]{_UI.t(role['cost'])}[/dim]")
+    _UI.console.print()
     # highlight=False so Rich's default highlighter doesn't tint the dim prose
     # (parens/numbers/words) and make an informational hint read like an error.
-    oc.console.print("\n".join(lines), highlight=False)
+    _UI.console.print("\n".join(lines), highlight=False)
 
     while True:  # role-menu loop — a back-out of the source picker returns here
-        current = _everos_section(section).get("model") if _everos_role_configured(section) else None
+        current = _configured_model(section)
         if current:
             choices = [
-                questionary.Choice(t("Keep current: {current}", current=current), value="keep"),
-                questionary.Choice(t("Reconfigure"), value="redo"),
+                questionary.Choice(_UI.t("Keep current: {current}", current=current), value="keep"),
+                questionary.Choice(_UI.t("Reconfigure"), value="redo"),
             ]
             if optional:
-                choices.append(questionary.Choice(t("Skip"), value="off"))
+                choices.append(questionary.Choice(_UI.t("Skip"), value="off"))
             action = questionary.select(
-                t("Already configured — what now?"),
+                _UI.t("Already configured — what now?"),
                 choices=choices,
-                style=RAVEN_STYLE,
-                qmark=oc._QMARK,
+                style=_UI.style,
+                qmark=_UI.qmark,
             ).ask()
             if action is None:
                 raise typer.Exit(1)
@@ -1104,17 +976,17 @@ def _config_everos_role(
                 return
             if action == "off":
                 clear_everos_section(section)
-                oc.console.print(t("  [dim]{label} skipped.[/dim]", label=label))
+                _UI.console.print(_UI.t("  [dim]{label} skipped.[/dim]", label=label))
                 return
         elif optional:
             action = questionary.select(
-                t("Configure it?"),
+                _UI.t("Configure it?"),
                 choices=[
-                    questionary.Choice(t("Configure"), value="redo"),
-                    questionary.Choice(t("Skip"), value="skip"),
+                    questionary.Choice(_UI.t("Configure"), value="redo"),
+                    questionary.Choice(_UI.t("Skip"), value="skip"),
                 ],
-                style=RAVEN_STYLE,
-                qmark=oc._QMARK,
+                style=_UI.style,
+                qmark=_UI.qmark,
             ).ask()
             if action is None:
                 raise typer.Exit(1)
@@ -1123,7 +995,9 @@ def _config_everos_role(
                 # costs ordering, skipping embedding costs semantic recall
                 # entirely, and one of those deserves to be seen.
                 note = role.get("skip_note")
-                oc.console.print(t(note) if note else t("  [dim]Skipped {label}.[/dim]", label=label), highlight=False)
+                _UI.console.print(
+                    _UI.t(note) if note else _UI.t("  [dim]Skipped {label}.[/dim]", label=label), highlight=False
+                )
                 return
         # A required role with nothing configured falls straight into the picker.
 
@@ -1134,7 +1008,7 @@ def _config_everos_role(
             non_interactive=non_interactive,
             recommendation=role.get("recommendation"),
         )
-        if result is oc._BACK:
+        if result is _UI.back:
             if optional or _everos_role_configured(section):
                 # Optional roles offer Skip; a required role already configured
                 # falls back to its keep/reconfigure menu. Either way, re-show
@@ -1147,35 +1021,35 @@ def _config_everos_role(
             # altogether, and "no cross-session memory" is a consequence a user
             # should not discover weeks later by noticing the agent forgets
             # everything.
-            oc.console.print()
-            oc.console.print(
-                t(
+            _UI.console.print()
+            _UI.console.print(
+                _UI.t(
                     "  [yellow]⚠ {label} is required for long-term memory.[/yellow]\n  [dim]Without it Raven has no memory across sessions: every conversation starts\n  from nothing, with no recollection of your preferences or of what was done before.[/dim]",
                     label=label,
                 ),
                 highlight=False,
             )
             action = questionary.select(
-                t("What would you like to do?"),
+                _UI.t("What would you like to do?"),
                 choices=[
-                    questionary.Choice(t("Pick a provider / model"), value="retry"),
+                    questionary.Choice(_UI.t("Pick a provider / model"), value="retry"),
                     questionary.Choice(
-                        t("Give up (no long-term memory)"),
+                        _UI.t("Give up (no long-term memory)"),
                         value="abort",
                     ),
                 ],
-                style=RAVEN_STYLE,
-                qmark=oc._QMARK,
+                style=_UI.style,
+                qmark=_UI.qmark,
             ).ask()
             if action is None:
                 raise typer.Exit(1)
             if action == "retry":
                 continue
-            return oc._ABORT_EVEROS
+            return _ABORT_EVEROS
 
         if role["verify"] and skip_test:
-            oc.console.print(
-                t("  [dim]Skipping the {verify_label} test call (--skip-test).[/dim]", verify_label=verify_label)
+            _UI.console.print(
+                _UI.t("  [dim]Skipping the {verify_label} test call (--skip-test).[/dim]", verify_label=verify_label)
             )
             ok = True
         elif section == "llm":
@@ -1221,9 +1095,41 @@ def _config_everos_role(
         if not ok:
             continue
 
-        set_everos_section(section, result)
-        oc.console.print(t("  [green]✓ {label} configured.[/green]", label=label))
+        if section == "embedding":
+            # Raven's block, not this one's: a knowledge base reads the same
+            # endpoint, and writing it into everos.toml left the host's empty,
+            # so every other reader fell back and said so on each use.
+            #
+            # Which leaves this screen collecting a value it does not own, for
+            # a consumer it knows nothing about. That asymmetry is recorded as
+            # a debt on the host's own EmbeddingConfig, not a licence to grow
+            # more of it here: a second role that turns out to be raven's
+            # belongs behind another lent handle, never written direct.
+            _UI.set_embedding_endpoint(
+                {
+                    "model": result.get("model"),
+                    "baseUrl": result.get("base_url"),
+                    "apiKey": result.get("api_key"),
+                }
+            )
+        else:
+            set_everos_section(section, result)
+        _UI.console.print(_UI.t("  [green]✓ {label} configured.[/green]", label=label))
         return
+
+
+def _configured_model(section: str) -> str | None:
+    """The model this role will actually run with, or ``None``.
+
+    Embedding's endpoint lives in raven's block now, so reading the toml alone
+    answered ``None`` for a role the wizard had configured a moment earlier --
+    and the menu then offered "Configure it?" instead of "Keep current".
+    """
+    from raven_everos.config import host_embedding_section
+
+    if not _everos_role_configured(section):
+        return None
+    return _everos_section(section).get("model") or host_embedding_section().get("model")
 
 
 def _lock_holder(root: Path | str):
@@ -1251,18 +1157,18 @@ def _stop_for_reload(root: Path | str) -> bool:
     holder = _lock_holder(root)
     if holder is None:
         return False
-    oc.console.print(t("  [dim]Restarting the service so it picks up the new configuration...[/dim]"))
+    _UI.console.print(_UI.t("  [dim]Restarting the service so it picks up the new configuration...[/dim]"))
     # The pid the lock named, not the one the pidfile remembers. Asking the
     # pidfile here would report "not ours" about the very process just
     # identified, which is the state the lock lookup exists to get out of.
     outcome = stop_pid(holder.pid)
     if outcome is not StopOutcome.STOPPED:
         reason = {
-            StopOutcome.SIGNAL_FAILED: t("the stop signal could not be delivered"),
-            StopOutcome.STILL_DRAINING: t("it is still finishing memory work"),
-        }.get(outcome, t("it did not stop"))
-        oc.console.print(
-            t(
+            StopOutcome.SIGNAL_FAILED: _UI.t("the stop signal could not be delivered"),
+            StopOutcome.STILL_DRAINING: _UI.t("it is still finishing memory work"),
+        }.get(outcome, _UI.t("it did not stop"))
+        _UI.console.print(
+            _UI.t(
                 "  [yellow]! The service is still running ({reason}), so it keeps the models it started with. The new ones take effect the next time it starts.[/yellow]",
                 reason=reason,
             ),
@@ -1323,7 +1229,7 @@ def _ask_managed_port(root: Path | str, *, default: int | None = None, force_pro
     # best answer available: ignoring it is what "start the everos server at
     # its configured address, not the default" was about.
     if default is None:
-        slice_ = _recorded_memory_slice()
+        slice_ = recorded_slice()
         recorded = slice_.get("port")
         if not (isinstance(recorded, int) and recorded > 0):
             recorded = urlparse(str(slice_.get("base_url") or "")).port
@@ -1339,29 +1245,31 @@ def _ask_managed_port(root: Path | str, *, default: int | None = None, force_pro
         holder = _lock_holder(root)
         if holder is not None and holder.port == current:
             return current
-        oc.console.print(t("  [yellow]! Port {current} is already in use by something else.[/yellow]", current=current))
+        _UI.console.print(
+            _UI.t("  [yellow]! Port {current} is already in use by something else.[/yellow]", current=current)
+        )
     while True:
         answer = _prompt_text(
-            t("Memory service port:"),
+            _UI.t("Memory service port:"),
             default=str(current),
         )
         text = str(answer)
         if not text:
-            oc.console.print(t("  [dim]Keeping {current}.[/dim]", current=current))
+            _UI.console.print(_UI.t("  [dim]Keeping {current}.[/dim]", current=current))
             return current
         if not text.isdigit():
-            oc.console.print(t("  [dim]Not a port ({answer}).[/dim]", answer=answer))
+            _UI.console.print(_UI.t("  [dim]Not a port ({answer}).[/dim]", answer=answer))
             continue
         port = int(text)
         if not (0 < port <= 65535):
-            oc.console.print(t("  [dim]Not a valid port ({port}); range is 1-65535.[/dim]", port=port))
+            _UI.console.print(_UI.t("  [dim]Not a valid port ({port}); range is 1-65535.[/dim]", port=port))
             continue
         if _port_is_free(port):
             return port
         holder = _lock_holder(root)
         if holder is not None and holder.port == port:
             return port
-        oc.console.print(t("  [yellow]! Port {port} is also in use.[/yellow]", port=port))
+        _UI.console.print(_UI.t("  [yellow]! Port {port} is also in use.[/yellow]", port=port))
 
 
 def _retry_or_skip_address() -> str:
@@ -1373,20 +1281,19 @@ def _retry_or_skip_address() -> str:
     stays available and is what the caller turns into "memory off"; what is not
     on offer is being redirected into a managed setup nobody asked for.
     """
-    questionary = oc._require_questionary()
-    from raven.cli._styles import RAVEN_STYLE
+    questionary = _UI.require_questionary()
 
     choice = questionary.select(
-        t("What now?"),
+        _UI.t("What now?"),
         choices=[
-            questionary.Choice(t("Enter a different address"), value="retry"),
+            questionary.Choice(_UI.t("Enter a different address"), value="retry"),
             questionary.Choice(
-                t("Skip"),
+                _UI.t("Skip"),
                 value="skip",
             ),
         ],
-        style=RAVEN_STYLE,
-        qmark=oc._QMARK,
+        style=_UI.style,
+        qmark=_UI.qmark,
     ).ask()
     if choice is None:
         raise typer.Exit(1)
@@ -1414,21 +1321,21 @@ def _use_self_managed_everos() -> bool:
     from raven_everos.server import ProbeVerdict, probe_health
 
     while True:
-        host = _prompt_text(t("Host (e.g. 127.0.0.1):"), default="localhost")
-        port = _prompt_text(t("Port:"))
+        host = _prompt_text(_UI.t("Host (e.g. 127.0.0.1):"), default="localhost")
+        port = _prompt_text(_UI.t("Port:"))
         if not port.isdigit():
-            oc.console.print(t("  [red]x Not a port: {port}[/red]", port=port))
+            _UI.console.print(_UI.t("  [red]x Not a port: {port}[/red]", port=port))
             if _retry_or_skip_address() == "retry":
                 continue
             return False
 
         base_url = f"http://{host}:{port}"
-        oc.console.print(t("  [dim]Checking {base_url}...[/dim]", base_url=base_url))
+        _UI.console.print(_UI.t("  [dim]Checking {base_url}...[/dim]", base_url=base_url))
         result = probe_health(base_url)
         if result is ProbeVerdict.OK:
             break
-        oc.console.print(
-            t("  [red]x No EverOS answered at {base_url} ({a1}).[/red]", base_url=base_url, a1=result.value),
+        _UI.console.print(
+            _UI.t("  [red]x No EverOS answered at {base_url} ({a1}).[/red]", base_url=base_url, a1=result.value),
             highlight=False,
         )
         if _retry_or_skip_address() == "retry":
@@ -1444,10 +1351,9 @@ def _use_self_managed_everos() -> bool:
         # touching. Not recording a path is what makes the promise structural.
         remove=("root", "port"),
     )
-    _set_memory_backend("everos")
     caps = " ".join(_capability_lines(base_url))
-    oc.console.print(
-        t(
+    _UI.console.print(
+        _UI.t(
             "  [green]v Raven will use the EverOS at {base_url}.[/green]\n      capability  {caps}\n  [dim]You run it: Raven never edits its config and never starts or stops it.\n  If it is down when a session begins, that session has no long-term memory.[/dim]",
             base_url=base_url,
             caps=caps,
@@ -1497,16 +1403,16 @@ def _restart_here(root: Any, target: str) -> bool:
     from raven_everos.server import ensure_everos_server
 
     _set_base_url(target)
-    oc.console.print(t("  [dim]Starting the service at {target}...[/dim]", target=target))
+    _UI.console.print(_UI.t("  [dim]Starting the service at {target}...[/dim]", target=target))
     try:
         asyncio.run(ensure_everos_server(target))
     except RuntimeError as exc:
-        oc.console.print(
-            t("  [red]x Could not start it at {target}: {exc}[/red]", target=target, exc=exc),
+        _UI.console.print(
+            _UI.t("  [red]x Could not start it at {target}: {exc}[/red]", target=target, exc=exc),
             highlight=False,
         )
         return False
-    oc.console.print(t("  [green]v EverOS service is running at {target}.[/green]", target=target))
+    _UI.console.print(_UI.t("  [green]v EverOS service is running at {target}.[/green]", target=target))
     return True
 
 
@@ -1556,7 +1462,7 @@ def _adopt_root(root: Any) -> None:
     """
     from raven.config.update import set_plugin_config_fields
 
-    theirs = _recorded_memory_slice().get("owned") is False
+    theirs = recorded_slice().get("owned") is False
     set_plugin_config_fields(
         "everos-memory",
         {"root": str(root), "owned": True},
@@ -1572,21 +1478,20 @@ def _memory_source_menu() -> str:
     Skipping is an answer here rather than something reachable only by walking
     into a lane and backing out of it.
     """
-    questionary = oc._require_questionary()
-    from raven.cli._styles import RAVEN_STYLE
+    questionary = _UI.require_questionary()
 
     choice = questionary.select(
-        t("Where should long-term memory come from?"),
+        _UI.t("Where should long-term memory come from?"),
         choices=[
-            questionary.Choice(t("Let Raven run EverOS for me"), value="managed"),
+            questionary.Choice(_UI.t("Let Raven run EverOS for me"), value="managed"),
             questionary.Choice(
-                t("I run my own EverOS -- connect to it"),
+                _UI.t("I run my own EverOS -- connect to it"),
                 value="self",
             ),
-            questionary.Choice(t("Skip for now"), value="skip"),
+            questionary.Choice(_UI.t("Skip for now"), value="skip"),
         ],
-        style=RAVEN_STYLE,
-        qmark=oc._QMARK,
+        style=_UI.style,
+        qmark=_UI.qmark,
     ).ask()
     if choice is None:
         raise typer.Exit(1)
@@ -1601,19 +1506,18 @@ def _found_root_menu(state: Any) -> str:
     an existing setup had the service stopped and restarted on a different port
     before the question appeared.
     """
-    questionary = oc._require_questionary()
-    from raven.cli._styles import RAVEN_STYLE
+    questionary = _UI.require_questionary()
 
-    where = state.declared_url or t("(no address declared)")
+    where = state.declared_url or _UI.t("(no address declared)")
     if state.serving:
-        status = t("running at {where}", where=where)
+        status = _UI.t("running at {where}", where=where)
     elif state.busy_elsewhere:
-        status = t("its data is in use, but not at that address")
+        status = _UI.t("its data is in use, but not at that address")
     else:
-        status = t("not running ({where} declared)", where=where)
-    oc.console.print()
-    oc.console.print(
-        t(
+        status = _UI.t("not running ({where} declared)", where=where)
+    _UI.console.print()
+    _UI.console.print(
+        _UI.t(
             "  [green]v Found a memory directory Raven can take over[/green]\n      memory dir  {a0}\n      state       {status}",
             a0=state.root,
             status=status,
@@ -1621,24 +1525,24 @@ def _found_root_menu(state: Any) -> str:
         highlight=False,
     )
     choice = questionary.select(
-        t("What would you like to do?"),
+        _UI.t("What would you like to do?"),
         choices=[
-            questionary.Choice(t("Use it as it is"), value="reuse"),
+            questionary.Choice(_UI.t("Use it as it is"), value="reuse"),
             questionary.Choice(
-                t("Reconfigure it (port and models)"),
+                _UI.t("Reconfigure it (port and models)"),
                 value="redo",
             ),
-            questionary.Choice(t("Back"), value="back"),
+            questionary.Choice(_UI.t("Back"), value="back"),
         ],
-        style=RAVEN_STYLE,
-        qmark=oc._QMARK,
+        style=_UI.style,
+        qmark=_UI.qmark,
     ).ask()
     if choice is None:
         raise typer.Exit(1)
     return str(choice)
 
 
-def _use_found_root(state: Any) -> None:
+def _use_found_root(state: Any) -> StepOutcome:
     """Serve memory from ``state.root`` at whatever address it is already on.
 
     Nothing is stopped, moved or reconfigured: the user asked to use this
@@ -1657,26 +1561,24 @@ def _use_found_root(state: Any) -> None:
     """
     if state.serving:
         _set_base_url(str(state.declared_url))
-        _set_memory_backend("everos")
         _report_everos_capabilities()
-        return
+        return StepOutcome.CONFIGURED
 
     if state.busy_elsewhere:
         holder = _lock_holder(state.root)
         if holder is not None and holder.port:
             found_at = f"http://localhost:{holder.port}"
-            oc.console.print(
-                t("  [dim]It is answering at {found_at} (pid {a1}).[/dim]", found_at=found_at, a1=holder.pid),
+            _UI.console.print(
+                _UI.t("  [dim]It is answering at {found_at} (pid {a1}).[/dim]", found_at=found_at, a1=holder.pid),
                 highlight=False,
             )
             _set_base_url(found_at)
-            _set_memory_backend("everos")
             _report_everos_capabilities()
-            return
+            return StepOutcome.CONFIGURED
         detail = f"  [dim]{holder.cmdline}[/dim]\n" if holder is not None else ""
-        pid_line = t("pid {pid} holds", pid=holder.pid) if holder is not None else t("something holds")
-        oc.console.print(
-            t(
+        pid_line = _UI.t("pid {pid} holds", pid=holder.pid) if holder is not None else _UI.t("something holds")
+        _UI.console.print(
+            _UI.t(
                 "  [yellow]! {pid_line} {a1} but serves no HTTP.[/yellow]\n{detail}  [dim]Stop it and re-run `raven onboard`.[/dim]",
                 pid_line=pid_line,
                 a1=state.root,
@@ -1684,39 +1586,37 @@ def _use_found_root(state: Any) -> None:
             ),
             highlight=False,
         )
-        return
+        return _leave_as_is()
 
     target = state.declared_url or _configured_target_url()
     target = _with_port(target, _ask_managed_port(state.root, default=urlparse(target).port))
     while True:
         if _restart_here(state.root, target):
-            _set_memory_backend("everos")
             _report_everos_capabilities()
-            return
-        questionary = oc._require_questionary()
-        from raven.cli._styles import RAVEN_STYLE
+            return StepOutcome.CONFIGURED
+        questionary = _UI.require_questionary()
 
         action = questionary.select(
-            t("What to do?"),
+            _UI.t("What to do?"),
             choices=[
-                questionary.Choice(t("Retry"), value="retry"),
-                questionary.Choice(t("Change port"), value="change"),
-                questionary.Choice(t("Skip"), value="skip"),
+                questionary.Choice(_UI.t("Retry"), value="retry"),
+                questionary.Choice(_UI.t("Change port"), value="change"),
+                questionary.Choice(_UI.t("Skip"), value="skip"),
             ],
-            style=RAVEN_STYLE,
-            qmark=oc._QMARK,
+            style=_UI.style,
+            qmark=_UI.qmark,
         ).ask()
         if action is None:
             raise typer.Exit(1)
         if action == "skip":
-            return
+            return _leave_as_is()
         if action == "change":
             target = _with_port(target, _ask_managed_port(state.root, default=urlparse(target).port, force_prompt=True))
 
 
 def _step4_memory(
-    *, skip: bool, non_interactive: bool, main_model: Optional[str], warnings: list[str], skip_test: bool = False
-) -> object:
+    *, step_no: int, non_interactive: bool, main_model: Optional[str], warnings: list[str], skip_test: bool = False
+) -> StepOutcome:
     """Step 4 -- EverOS long-term memory.
 
     Three lanes, asked once: raven runs everos, the user runs it, or neither
@@ -1729,58 +1629,27 @@ def _step4_memory(
     lane writes only after a probe answers, and a refused address returns to the
     lane question with nothing written. Skipping leaves the config as it is.
 
-    ``None`` means no long-term memory this session, not a fallback to something
-    simpler. ``_memory_enabled`` gates on the llm role alone, so a seeded but
-    modelless config reads as "not configured yet"; embedding and rerank are
-    offered but never gate, since skipping them costs recall quality rather than
-    memory itself.
+    ``StepOutcome.DISABLED`` means no long-term memory this session, not a
+    fallback to something simpler. ``_configured`` gates on the llm role alone,
+    so a seeded but modelless config reads as "not configured yet"; embedding
+    and rerank are offered but never gate, since skipping them costs recall
+    quality rather than memory itself.
     """
-    oc._step_header(4, t("EverOS long-term memory"))
+    _UI.step_header(step_no, _UI.t("EverOS long-term memory"))
 
     import sys
 
     if sys.platform == "win32":
-        oc.console.print(
-            t(
+        _UI.console.print(
+            _UI.t(
                 "  [yellow]⚠ EverOS memory engine does not support native Windows.[/yellow]\n"
                 "  [dim]Run Raven inside WSL for full memory support.[/dim]\n"
                 "  [dim]Skipping memory configuration.[/dim]"
             )
         )
-        _set_memory_backend(None)
-        return None
+        return StepOutcome.DISABLED
 
-    if not everos_plugin_installed():
-        # Nothing is written. Every lane below configures, starts or probes a
-        # service this install does not carry, and turning the backend off here
-        # would answer for the user a question only installing the plugin
-        # settles.
-        oc.console.print(
-            t(
-                "  [yellow]⚠ Long-term memory cannot be configured in this installation.[/yellow]\n  [dim]{note}[/dim]",
-                note=everos_plugin_missing_note(),
-            ),
-            highlight=False,
-        )
-        return None
-
-    if skip or non_interactive:
-        # Never configured the required models here → disable backend-driven
-        # memory so runtime doesn't activate EverOS without an llm/embedding.
-        # (``_memory_enabled`` already gates on both required models, so an
-        # already-enabled+configured setup is preserved.)
-        if not _memory_enabled():
-            _set_memory_backend(None)
-        oc.console.print(
-            t(
-                "  [dim]Long-term memory stays off.[/dim]\n"
-                "  [dim]Run `raven onboard` again whenever you want to configure it.[/dim]"
-            )
-        )
-        return None
-
-    questionary = oc._require_questionary()
-    from raven.cli._styles import RAVEN_STYLE
+    questionary = _UI.require_questionary()
     from raven_everos import roots
 
     while True:
@@ -1790,26 +1659,24 @@ def _step4_memory(
             # Same rule as ``--skip-memory``: a configured setup is left exactly
             # as it is, and a seeded-but-modelless one resolves to off so the
             # runtime does not activate everos with no models behind it.
-            if not _memory_enabled():
-                _set_memory_backend(None)
-            oc.console.print(
-                t(
+            _UI.console.print(
+                _UI.t(
                     "  [dim]Long-term memory left as it is.[/dim]\n"
                     "  [dim]Run `raven onboard` again whenever you want to configure it.[/dim]"
                 )
             )
-            return None
+            return _leave_as_is()
 
         if source == "self":
             if _use_self_managed_everos():
-                return None
+                return StepOutcome.CONFIGURED
             # A refused address is a server not started or a port mistyped, not
             # a change of mind: back to the one question this step asks. Nothing
             # was written, so the setup that was working a moment ago still is.
             continue
 
-        oc.console.print(t("  [dim]Looking for a memory directory Raven can take over...[/dim]"))
-        from raven.config.update_everos import applicable_legacy_root, default_everos_root, recorded_slice
+        _UI.console.print(_UI.t("  [dim]Looking for a memory directory Raven can take over...[/dim]"))
+        from raven_everos.config import applicable_legacy_root, default_everos_root, recorded_slice
 
         # The wizard owns the candidate list: it reads the config record and the
         # host defaults and hands them to the cargo-side describer, which
@@ -1831,8 +1698,7 @@ def _step4_memory(
             continue
         _adopt_root(found.root)
         if action == "reuse":
-            _use_found_root(found)
-            return None
+            return _use_found_root(found)
         break
 
     if not _everos_role_configured("llm"):
@@ -1842,8 +1708,8 @@ def _step4_memory(
         # Wrapped by hand: rich re-wraps at the terminal width and drops the
         # two-space indent on continuation lines, which reads as a stray
         # left-flush sentence under an indented block.
-        oc.console.print(
-            t(
+        _UI.console.print(
+            _UI.t(
                 "  [dim]Raven's long-term memory comes from EverOS. What it can do grows with\n"
                 "  what you configure:[/dim]\n"
                 "  [dim]    memory LLM only    conversations become memories; recall matches keywords[/dim]\n"
@@ -1857,7 +1723,7 @@ def _step4_memory(
     # + ome.toml) BEFORE writing model sections — set_everos_section merges
     # into the template so default sections (memory/sqlite/lancedb/api) are
     # preserved. Also creates ome.toml which the runtime requires.
-    from raven.config.update_everos import configure_everos_env, ensure_everos_home, owned_everos_root
+    from raven_everos.config import configure_everos_env, ensure_everos_home, owned_everos_root
 
     # owned_everos_root, not everos_root: after a user declined to share theirs,
     # the recorded root is still theirs, and building there would adopt it.
@@ -1885,36 +1751,34 @@ def _step4_memory(
             warnings=warnings,
             skip_test=skip_test,
         )
-        if outcome is oc._ABORT_EVEROS:
-            _set_memory_backend(None)
-            oc.console.print(
-                t(
+        if outcome is _ABORT_EVEROS:
+            _UI.console.print(
+                _UI.t(
                     "  [yellow]⚠ Gave up long-term memory: Raven will not remember anything "
                     "between sessions.[/yellow]\n"
                     "  [dim]Run `raven onboard` again whenever you want to configure it.[/dim]"
                 )
             )
-            return None
+            return StepOutcome.DISABLED
 
     # Verify EverOS server is reachable (auto-starts if needed)
     import asyncio
 
-    from raven.config.raven import load_raven_config
-    from raven_everos.health import configured_base_url
+    from raven_everos.health import base_url_from_slice
     from raven_everos.server import ensure_everos_server
 
     # The configured address, not the default: the memory backend connects to
     # whatever ``plugins.config`` names, so probing 18791 on a setup that moved
     # everos elsewhere reports on a server nobody uses -- and then spawns a
     # second instance that cannot hold the OME lock.
-    base_url = configured_base_url(load_raven_config())
+    base_url = base_url_from_slice(recorded_slice())
 
     # The models were just written; a process already running booted with the
     # old ones and will not re-read them.
     _stop_for_reload(root)
 
-    oc.console.print()
-    oc.console.print(t("  [dim]Starting EverOS service...[/dim]"))
+    _UI.console.print()
+    _UI.console.print(_UI.t("  [dim]Starting EverOS service...[/dim]"))
     # A failed start is not a decision to abandon long-term memory. The models
     # are already on disk at this point, so "defer" keeps the whole
     # configuration and lets the runtime start the service on the next session;
@@ -1922,26 +1786,26 @@ def _step4_memory(
     while True:
         try:
             asyncio.run(ensure_everos_server(base_url))
-            oc.console.print(t("  [green]✓ EverOS service is running.[/green]"))
+            _UI.console.print(_UI.t("  [green]✓ EverOS service is running.[/green]"))
             break
         except RuntimeError as exc:
-            oc.console.print(t("  [red]✗ EverOS service failed to start: {exc}[/red]", exc=exc))
+            _UI.console.print(_UI.t("  [red]✗ EverOS service failed to start: {exc}[/red]", exc=exc))
             action = questionary.select(
-                t("What to do?"),
+                _UI.t("What to do?"),
                 choices=[
-                    questionary.Choice(t("Retry"), value="retry"),
-                    questionary.Choice(t("Change port"), value="change"),
+                    questionary.Choice(_UI.t("Retry"), value="retry"),
+                    questionary.Choice(_UI.t("Change port"), value="change"),
                     questionary.Choice(
-                        t("Leave it for later (settings kept, Raven retries next start)"),
+                        _UI.t("Leave it for later (settings kept, Raven retries next start)"),
                         value="defer",
                     ),
                     questionary.Choice(
-                        t("Turn long-term memory off"),
+                        _UI.t("Turn long-term memory off"),
                         value="disable",
                     ),
                 ],
-                style=RAVEN_STYLE,
-                qmark=oc._QMARK,
+                style=_UI.style,
+                qmark=_UI.qmark,
             ).ask()
             if action is None:
                 raise typer.Exit(1) from exc
@@ -1954,25 +1818,22 @@ def _step4_memory(
                 _set_base_url(base_url)
                 continue
             if action == "defer":
-                _set_memory_backend("everos")
-                oc.console.print(
-                    t(
+                _UI.console.print(
+                    _UI.t(
                         "  [yellow]! Memory settings kept. Raven will try to start the "
                         "service again on the next session.[/yellow]"
                     )
                 )
-                return None
-            _set_memory_backend(None)
-            oc.console.print(
-                t(
+                return StepOutcome.CONFIGURED
+            _UI.console.print(
+                _UI.t(
                     "  [yellow]! Long-term memory turned off. Run `raven onboard` "
                     "again whenever you want it back.[/yellow]"
                 )
             )
-            return None
+            return StepOutcome.DISABLED
     _report_everos_capabilities()
-    _set_memory_backend("everos")
-    return None
+    return StepOutcome.CONFIGURED
 
 
 def _report_everos_capabilities() -> None:
@@ -1989,30 +1850,29 @@ def _report_everos_capabilities() -> None:
     Silent on a server too old to report capabilities -- reading that silence as
     "unavailable" would condemn a working install.
     """
-    from raven.config.raven import load_raven_config
     from raven_everos.health import (
         DEGRADING_SECTIONS,
         REQUIRED_SECTIONS,
-        configured_base_url,
+        base_url_from_slice,
         probe_capabilities,
     )
 
     # The configured address, not the default: probing the wrong port reports on
     # a server nobody is using, and reads as "not running".
-    report = probe_capabilities(configured_base_url(load_raven_config()))
+    report = probe_capabilities(base_url_from_slice(recorded_slice()))
     if not report.reports_capabilities:
         return
     configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if _everos_role_configured(s)]
     broken = [s for s in configured if report.available(s) is False]
     if not broken:
         names = " and ".join(configured)
-        oc.console.print(
-            t("  [green]✓ {names} {a1} available.[/green]", names=names, a1="is" if len(configured) == 1 else "are")
+        _UI.console.print(
+            _UI.t("  [green]✓ {names} {a1} available.[/green]", names=names, a1="is" if len(configured) == 1 else "are")
         )
         return
     names = " and ".join(broken)
-    oc.console.print(
-        t(
+    _UI.console.print(
+        _UI.t(
             "  [yellow]⚠ {names} is configured but EverOS could not build it.[/yellow]\n  [dim]Memory runs degraded until this is fixed.[/dim]\n  [dim]Check: {a1}[/dim]",
             names=names,
             a1=_everos_server_log_hint(),
@@ -2024,3 +1884,40 @@ def _everos_server_log_hint() -> str:
     from raven_everos.server import server_log_path
 
     return str(server_log_path())
+
+
+class EverosOnboardStep:
+    """The ``onboard`` contribution: one screen, run by the host's wizard."""
+
+    def __init__(self, ctx: PluginContext) -> None:
+        self._ctx = ctx
+
+    def run(
+        self,
+        ui: OnboardUI,
+        *,
+        step_no: int,
+        non_interactive: bool,
+        main_model: str | None,
+        warnings: list[str],
+        skip_test: bool,
+    ) -> StepOutcome:
+        global _UI
+        _UI = ui
+        return _step4_memory(
+            step_no=step_no,
+            non_interactive=non_interactive,
+            main_model=main_model,
+            warnings=warnings,
+            skip_test=skip_test,
+        )
+
+    def configured(self) -> bool:
+        return _configured()
+
+
+def make_onboard_step(ctx: PluginContext) -> EverosOnboardStep:
+    return EverosOnboardStep(ctx)
+
+
+__all__ = ["EverosOnboardStep", "make_onboard_step"]

@@ -268,16 +268,19 @@ class OrganGlueMixin:
 
         Skill IDs surface with a ``<source>/<native_id>`` prefix
         (``local/git-resolver`` / ``mass/abc`` / ``everos/xyz``).
-        Only the ``everos/`` prefix is forwarded — static libraries
-        (``local`` / ``mass``) have no feedback channel; the dispatcher
-        is silent for them (no warning, just skipped). Unprefixed legacy
-        ids (e.g. raw skill names emitted by the pre-SkillForgeRouter
-        ``SkillService.select`` path) are also skipped — they predate
-        the qualified-id convention and there's no safe routing target.
+        Only the configured backend's prefix (``memory.backend``, the
+        same name :class:`BackendSkillSource` stamps on its hits) is
+        forwarded — static libraries (``local`` / ``mass``) have no
+        feedback channel; the dispatcher is silent for them (no warning,
+        just skipped). Unprefixed legacy ids (e.g. raw skill names
+        emitted by the pre-SkillForgeRouter ``SkillService.select``
+        path) are also skipped — they predate the qualified-id
+        convention and there's no safe routing target.
 
         No-ops when:
         - ``self.backend is None`` (no plugin wired)
-        - No qualified-id matches the ``everos/`` prefix
+        - ``memory.backend`` names no backend, so no prefix can match
+        - No qualified-id carries the configured backend's prefix
         - The injected + used lists are both empty / None
 
         Exceptions from :meth:`backend.feedback` are caught + logged.
@@ -285,10 +288,11 @@ class OrganGlueMixin:
         plugin's feedback handler raised — feedback is best-effort
         telemetry, not load-bearing state.
         """
-        if self.backend is None:
+        source_name = self.memory_config.backend
+        if self.backend is None or not source_name:
             return
-        injected_native = _filter_qualified_ids(injected_skill_ids, "everos")
-        used_native = _filter_qualified_ids(used_skill_ids, "everos")
+        injected_native = _filter_qualified_ids(injected_skill_ids, source_name)
+        used_native = _filter_qualified_ids(used_skill_ids, source_name)
         if not injected_native and not used_native:
             return
         signals = {

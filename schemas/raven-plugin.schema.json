@@ -2,7 +2,7 @@
   "$comment": "generated, do not edit; regenerate via: uv run python scripts/export_agent_schemas.py",
   "$defs": {
     "Contributes": {
-      "description": "All contribution arrays for a single manifest.\n\n``memory_backends``, ``tools``, ``hooks``, ``services``, ``tool_gates``\nand ``session_observers`` are consumed today; the model keeps extra\nfields silently so future contribution types don't break older hosts\nreading newer manifests.",
+      "description": "All contribution arrays for a single manifest.\n\n``memory_backends``, ``tools``, ``hooks``, ``services``, ``tool_gates``,\n``session_observers`` and ``onboard`` are consumed today; the model keeps\nextra fields silently so future contribution types don't break older hosts\nreading newer manifests.",
       "properties": {
         "hooks": {
           "items": {
@@ -16,6 +16,13 @@
             "$ref": "#/$defs/MemoryBackendContribution"
           },
           "title": "Memory Backends",
+          "type": "array"
+        },
+        "onboard": {
+          "items": {
+            "$ref": "#/$defs/OnboardContribution"
+          },
+          "title": "Onboard",
           "type": "array"
         },
         "services": {
@@ -90,6 +97,27 @@
         "factory"
       ],
       "title": "MemoryBackendContribution",
+      "type": "object"
+    },
+    "OnboardContribution": {
+      "description": "One ``[[plugin.contributes.onboard]]`` entry.\n\n``factory`` is a ``module.path:callable`` resolving to a\n``Callable[[PluginContext], OnboardStep]`` -- it returns one object\nsatisfying :class:`~raven.contracts.onboard.OnboardStep`. ``raven\nonboard`` lends the wizard shell as one ``OnboardUI`` and records the\nreturned ``StepOutcome``; the plugin never writes ``memory.backend``\nitself (paper: contracts/onboard.py).",
+      "properties": {
+        "factory": {
+          "minLength": 1,
+          "title": "Factory",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "factory"
+      ],
+      "title": "OnboardContribution",
       "type": "object"
     },
     "ServiceContribution": {
@@ -207,11 +235,6 @@
           ],
           "default": null,
           "title": "Display Name"
-        },
-        "enabled_by_default": {
-          "default": false,
-          "title": "Enabled By Default",
-          "type": "boolean"
         },
         "id": {
           "minLength": 1,

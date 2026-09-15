@@ -1151,11 +1151,48 @@ class MemoryConfig(_Base):
 
     agent_id: str = "default"
     """Bare agent identity passed as ``backend.recall(agent_id=...)`` by
-    ``EverosSkillSource`` for agent-track skill recall."""
+    ``BackendSkillSource`` for agent-track skill recall."""
 
     memory_top_k: int = 5
     """Top-K passed to ``backend.recall(user_id=user_id)`` per turn for
     the ``# Recalled memory`` block."""
+
+
+class EmbeddingConfig(_Base):
+    """The OpenAI-compatible embedding endpoint raven itself uses.
+
+    Raven's own, not the memory backend's. A knowledge base indexes and
+    answers from inside the gateway process and never speaks to the memory
+    service, yet it used to read this endpoint out of EverOS's config file --
+    so selecting a different memory backend, or none, left the knowledge base
+    with no vectors and no way to say why.
+
+    The memory backend is handed these values at ``start()`` rather than
+    keeping its own copy, which is the same direction the host already sends
+    its data root in.
+
+    Known debt: only where this is *stored* moved. It is still collected in one
+    place alone -- the memory plugin's onboarding screen, through the
+    ``set_embedding_endpoint`` handle the wizard lends it -- so an install with
+    no memory plugin has no interactive way to fill it in, and a knowledge base
+    is left to ``config.json`` by hand or to ``raven doctor --fix`` when an
+    older EverOS config happens to still be on disk. Closing it means the host
+    asking for an endpoint itself, which is another screen in a wizard that is
+    already seven steps long; the two questions have to be reconciled into one
+    before either is worth adding.
+    """
+
+    model: str = ""
+    """Model id as the endpoint names it, e.g. ``"Qwen/Qwen3-Embedding-4B"``."""
+    base_url: str = ""
+    """Base URL of an OpenAI-compatible ``/embeddings`` endpoint."""
+    api_key: str = ""
+    """Bearer token for that endpoint."""
+    dimensions: int | None = None
+    """Vector width, when the operator pinned one. ``None`` means ask the
+    model, and a pinned value is checked against it rather than trusted --
+    see ``raven.knowledge._manager._width_of`` for why a wrong width is worse
+    than an unknown one."""
 
 
 class HubSourceConfig(_Base):
@@ -1493,6 +1530,7 @@ class RavenConfig(_Base):
     # Plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 
     # The full base config (agents, channels, providers, tools, routing).
     # Kept as a nested field so we can round-trip the JSON with the base loader.

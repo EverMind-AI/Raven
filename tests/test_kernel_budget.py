@@ -79,6 +79,26 @@ stopped: 9 lines.
 
 The count is 2,771, and the twenty above it is the same headroom this docstring
 argued for the first time, not room set aside to spend.
+
+2,791 -> 2,960 (2026-09-14): the memory seam grew two declared shapes.
+``contracts/memory.py`` gained ``health()`` with ``HealthCheck`` / ``BackendHealth``
+(what ``raven doctor`` and ``raven import`` read instead of the plugin's
+internals), and ``contracts/onboard.py`` is a new paper (``OnboardUI`` /
+``OnboardStep`` / ``StepOutcome``, the screen a memory plugin contributes to
+``raven onboard``). Measured at 2,938 on top of the ``CallRecord`` round
+above; the headroom is the same twenty-odd lines as above, for the same reason.
+
+2,960 -> 2,990 (2026-09-15): two grants the seam round left implicit. A
+memory backend gained ``delete()``, which the memory browser needs in order to
+stop deleting a derived index row behind a source of truth that keeps the text;
+and ``ServiceLocator`` gained the host's embedding block, so the knowledge base
+and the memory backend read one endpoint rather than a copy each. Measured at
+2,969; the headroom is the same twenty-odd lines, for the same reason.
+
+2,990 -> 3,040 (2026-09-15): ``recall_session`` joins the memory paper,
+so the host can read back what a sub-agent left behind through the contract
+rather than that backend's HTTP API, and ``store``'s two metadata conventions
+are written down where a plugin author reads them. Measured at 3,013.
 """
 
 from __future__ import annotations
@@ -89,7 +109,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 2_791
+CONTRACTS_LINE_CEILING = 3_040
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

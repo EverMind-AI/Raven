@@ -105,7 +105,7 @@ class TestDescribeOneRoot:
 class TestDiscoveryOrder:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        from raven.config import update_everos as ue
+        from raven_everos import config as ue
 
         self.default = tmp_path / "data" / "everos"
         self.legacy = tmp_path / "home" / ".everos" / "raven"
@@ -122,7 +122,7 @@ class TestDiscoveryOrder:
     def _discover_as_the_wizard_does(self):
         """Mirror the wizard's derivation: discover() takes the candidate list
         from its caller now, so the test supplies it the same way onboard does."""
-        from raven.config import update_everos as ue
+        from raven_everos import config as ue
 
         recorded = ue.recorded_slice().get("root")
         return roots.discover(
@@ -133,7 +133,7 @@ class TestDiscoveryOrder:
     def test_the_recorded_root_comes_first(self, tmp_path: Path, _isolate) -> None:
         """Switching roots behind the user's back would change which memories
         raven has, so a recorded root wins even over a healthier candidate."""
-        from raven.config import update_everos as ue
+        from raven_everos import config as ue
 
         recorded = tmp_path / "recorded"
         _write_root(recorded)
@@ -192,7 +192,7 @@ class TestDiscoveryOrder:
         question appeared. It is now decided by the lane the user picks in the
         wizard, and this module has no field for it.
         """
-        from raven.config import update_everos as ue
+        from raven_everos import config as ue
 
         recorded = tmp_path / "recorded"
         _write_root(recorded)
@@ -204,7 +204,7 @@ class TestDiscoveryOrder:
         assert not hasattr(state, "owned")
 
     def test_no_duplicate_candidates(self, _isolate) -> None:
-        from raven.config import update_everos as ue
+        from raven_everos import config as ue
 
         _write_root(self.default)
         _isolate.setattr(ue, "_recorded_slice", lambda: {"root": str(self.default), "owned": True})

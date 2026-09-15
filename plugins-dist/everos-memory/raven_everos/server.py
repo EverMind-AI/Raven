@@ -238,7 +238,7 @@ def _require_llm_configured() -> None:
     ``memory.backend`` defaults to ``"everos"`` in the schema while the
     everos.toml template ships ``[llm]`` with an empty ``api_key``.
     """
-    from raven.config.update_everos import everos_role_configured, get_everos_config_path
+    from raven_everos.config import everos_role_configured, get_everos_config_path
 
     if everos_role_configured("llm"):
         return
@@ -260,7 +260,7 @@ def _everos_executable() -> str:
     raven pins.
 
     POSIX only -- the EverOS path is gated off on native Windows by both
-    callers (``onboard_everos._step4_memory`` and ``EverosBackend.start``).
+    callers (``raven_everos.onboard._step4_memory`` and ``EverosBackend.start``).
     """
     sibling = Path(sys.executable).parent / "everos"
     if sibling.is_file() and os.access(sibling, os.X_OK):
@@ -685,6 +685,26 @@ def _child_env() -> dict[str, str]:
     for key in list(env):
         if key.startswith("EVEROS_API__"):
             del env[key]
+    # Bookkeeping raven keeps for itself across its own restart; EverOS has no
+    # use for it, and a child's environment is not the place to leave notes.
+    from raven_everos.config import PROVENANCE_ENV
+
+    env.pop(PROVENANCE_ENV, None)
+    # The embedding endpoint is raven's, and every spawn needs it in the child
+    # -- not only the ones a started backend bound first. The wizard launches a
+    # server of its own before any session exists, and its "Keep current" answer
+    # reaches that launch without passing a writer at all; filling it in here
+    # rather than at each launch is what makes those two the same case.
+    #
+    # Applied whole rather than per missing key, and with no guard against
+    # overwriting: `host_embedding_env` is empty exactly when EverOS already
+    # has an endpoint of its own, and a backend that bound one into this
+    # process left a complete set, which is one of the two ways it can. So
+    # there is nothing here to protect, and a per-key fill would be the one
+    # thing worth avoiding -- three variables from two sources.
+    from raven_everos.config import host_embedding_env
+
+    env.update(host_embedding_env())
     return env
 
 
@@ -728,7 +748,7 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
     the backend talked to another. Writing it makes the root self-describing, and
     both the child and any later reader agree by construction.
     """
-    from raven.config.update_everos import everos_root, set_everos_api
+    from raven_everos.config import everos_root, set_everos_api
 
     everos = _everos_executable()
     root = everos_root()

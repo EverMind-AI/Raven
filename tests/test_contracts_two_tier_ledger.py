@@ -81,6 +81,9 @@ LEDGER = {
         "ImageURL",
         "LLMProvider",
         "LLMResponse",
+        "BackendHealth",
+        "HealthCheck",
+        "HealthStatus",
         "Memory",
         "MemoryBackend",
         "ProviderHTTPError",
@@ -133,6 +136,11 @@ LEDGER = {
         # The session-retirement notification (session_events.py): the store
         # says a session is gone, with the removal outcome.
         "SessionObserver",
+        # The onboarding screen (onboard.py): the host lends the wizard shell,
+        # the plugin returns an outcome and the host records the choice.
+        "OnboardStep",
+        "OnboardUI",
+        "StepOutcome",
     },
     "factory_loop": {
         "AgentHook",
@@ -259,7 +267,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("18", "396e6a8c0663f8b8979711eac1c879cf4b070d2ad36e2628d37ba2e063dcaed2")
+PINNED_CONTRACT_SURFACE = ("25", "bc66c3f019fda7d8fb39cafdf506f26e9041fc0a597243c3bafbd572449377ba")
 
 
 def _render(node) -> str:

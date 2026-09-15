@@ -54,77 +54,6 @@ _LEGACY_EVEROS_SUFFIX = (".everos", "raven")
 WRITABLE_SECTIONS = ("llm", "embedding", "rerank", "multimodal", "api")
 
 
-def borrow_provider_credentials(provider: str) -> dict[str, str]:
-    """The api_key and base_url of a provider raven is already connected to.
-
-    Only a group an everos section can hold whole: see the header check below.
-
-    Read through ``provider_endpoints``, which is the one place that knows the
-    precedence a section can be written in -- ``endpoints`` first, then
-    ``api_key_list``, then the flat pair. Reading ``api_key`` off the section
-    instead answers "" for both of the shapes that precedence exists for, so a
-    provider serving traffic every day would be offered as a lender and then
-    refuse to lend.
-
-    This asks a narrower question than ``credential_status``, which owns "is
-    this Provider usable": a provider can be perfectly usable and have nothing
-    to lend, because an OAuth token file and a keyless local address both
-    satisfy usability without a key that means anything anywhere else.
-
-    Copied, not referenced. The alternative -- storing the provider's name and
-    resolving it on every read -- would follow a later key change on its own,
-    but this file is read by EverOS as well as by raven, and a field only raven
-    resolves is a field EverOS reads as an endpoint it cannot reach. `provider`
-    is also already taken there for EverOS's own meaning (`[rerank]` carries
-    one). The CLI's onboarding already copies (see `_resolve_reuse_llm_creds`),
-    so copying is the meaning the file already has.
-
-    Raises:
-        KeyError: no such provider is configured.
-        ValueError: it is configured but has nothing an everos section can hold
-            whole -- no key to lend, or a group that authenticates with headers.
-    """
-    from raven.config import load_config
-    from raven.providers.endpoints import provider_endpoints
-    from raven.providers.registry import find_by_name
-
-    # `ProvidersConfig.get`, never attribute access: a provider stored under a
-    # hyphenated or camelCase key is invisible to the attribute, and the ones
-    # raven carries no spec for are exactly the ones stored that way. It
-    # canonicalises the name itself. Parsed rather than raw, because the file
-    # spells its fields in camelCase and `provider_endpoints` reads the
-    # schema's names.
-    section = load_config().providers.get(provider)
-    if section is None:
-        raise KeyError(provider)
-
-    # The first endpoint holding a key. A section can offer several, and any one
-    # of them is a key that works against the same address.
-    lent = next((e for e in provider_endpoints(section) if e.api_key), None)
-    if lent is None:
-        raise ValueError(f"{provider} has no api key to lend")
-    # A url/key/header group is reachable only whole. The everos sections hold a
-    # model, an api_key and a base_url and nothing else -- EverOS's own
-    # LLMSettings has no header field to bind -- so a group whose requests only
-    # authenticate with a header cannot be expressed here. Lending the pair
-    # without it hands over a credential that will be refused at the far end and
-    # reports a provider serving traffic every day as unreachable.
-    if lent.extra_headers:
-        raise ValueError(
-            f"{provider} authenticates with headers ({', '.join(sorted(lent.extra_headers))}), "
-            "which an everos section cannot carry"
-        )
-
-    spec = find_by_name(provider)
-    base_url = str(lent.api_base or "") or str(getattr(spec, "default_api_base", "") or "")
-    out = {"api_key": lent.api_key}
-    # A provider with no address of its own leaves the section's own base_url
-    # alone rather than blanking it: the reader may have typed one that works.
-    if base_url:
-        out["base_url"] = base_url
-    return out
-
-
 def default_everos_root() -> Path:
     """Where a fresh install puts raven's own EverOS home.
 
@@ -149,7 +78,7 @@ def legacy_everos_root() -> Path:
 
 def _is_default_installation() -> bool:
     """Whether this process is the installation that owns ``~/.raven``."""
-    from raven.config.loader import get_config_path
+    from raven.home import get_config_path
 
     return get_config_path() == Path.home() / ".raven" / "config.json"
 
@@ -187,25 +116,57 @@ def root_is_raven_owned(root: Path | str) -> bool:
     return any(resolved == owned for owned in raven_owned_roots())
 
 
-def _recorded_slice() -> dict[str, Any]:
-    """raven's ``plugins.config["everos-memory"]``, read as raw JSON.
+def _raven_config_raw() -> dict[str, Any]:
+    """raven's config.json, parsed and nothing more.
 
     Raw rather than through the validated config so that ``raven doctor`` and
-    the runtime can ask "which root" without paying for schema validation, and
-    so an unrelated validation error elsewhere cannot make the memory path
-    unreadable. An absent or unparseable file reads as "nothing recorded".
+    the runtime can ask small questions of it without paying for schema
+    validation, and so an unrelated validation error elsewhere cannot make the
+    memory path unreadable. An absent or unparseable file reads as empty.
     """
-    from raven.config.loader import get_config_path
+    from raven.home import get_config_path
 
     try:
         with get_config_path().open(encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError, ValueError):
         return {}
-    if not isinstance(data, dict):
+    return data if isinstance(data, dict) else {}
+
+
+def host_embedding_section() -> dict[str, str]:
+    """raven's ``embedding`` block, in this module's spelling.
+
+    Raven's config writes camelCase; everos.toml and the rest of this module
+    speak snake_case, so the two names each value can have are resolved here
+    once rather than at every reader.
+
+    Empty when the block is absent or incomplete -- all three values are what
+    :func:`configure_embedding_env` needs before it binds anything, so anything
+    less is not an endpoint.
+    """
+    block = _raven_config_raw().get("embedding")
+    if not isinstance(block, dict):
         return {}
+    got = {
+        "model": str(block.get("model") or ""),
+        "base_url": str(block.get("baseUrl") or block.get("base_url") or ""),
+        "api_key": str(block.get("apiKey") or block.get("api_key") or ""),
+    }
+    return got if all(got.values()) else {}
+
+
+def _recorded_slice() -> dict[str, Any]:
+    """raven's ``plugins.config["everos-memory"]``, read as raw JSON.
+
+    Falls back to the friendlier ``everos`` key, which older configs recorded
+    the slice under. An absent or unparseable file reads as "nothing recorded".
+    """
+    data = _raven_config_raw()
     plugins = data.get("plugins") or {}
     slice_ = (plugins.get("config") or {}).get("everos-memory") if isinstance(plugins, dict) else None
+    if not isinstance(slice_, dict) and isinstance(plugins, dict):
+        slice_ = (plugins.get("config") or {}).get("everos")
     return slice_ if isinstance(slice_, dict) else {}
 
 
@@ -214,9 +175,9 @@ def fallback_everos_root() -> Path:
 
     The legacy location when it holds a config, so an install from before the
     move keeps its memories; otherwise the current default. Derives its answer
-    without reading raven's config, which is what lets ``_migrate_config`` use it
-    while holding a config dict of its own -- calling :func:`everos_root` there
-    would re-read whatever path is globally current, not the file being migrated.
+    without reading raven's config so it can be asked before any config is on
+    disk -- a fresh install, or a root question asked ahead of onboarding
+    writing one.
     """
     legacy = applicable_legacy_root()
     if legacy is not None and (legacy / "everos.toml").is_file():
@@ -302,6 +263,150 @@ def configure_everos_env(root: Path | str | None = None) -> None:
     """
     resolved = Path(root).expanduser() if root is not None else everos_root()
     os.environ["EVEROS_ROOT"] = str(resolved)
+
+
+def configure_embedding_env(embedding: Any) -> bool:
+    """Offer EverOS the host's embedding endpoint, when EverOS has none of its own.
+
+    The host's block is a default to fall back on, not a takeover: an operator
+    who wrote ``[embedding]`` into ``everos.toml`` chose that endpoint for
+    memory specifically, and reusing the host's is a convenience they are
+    entitled to decline. So this defers to the file and fills the gap only when
+    the file leaves one -- which is also what the settings page still edits.
+
+    Delivered through the env binding EverOS already documents
+    (``EVEROS_EMBEDDING__MODEL`` and friends) rather than by writing the file:
+    the file belongs to whoever manages the root, and on a self-managed root
+    raven promised not to touch it. Env beats the file in EverOS's own source
+    order, which is exactly why the file is checked first here.
+
+    Returns whether anything was set, so a caller can log which lane it took.
+
+    Must run BEFORE EverOS's cached ``load_settings()``, same as
+    :func:`configure_everos_env`.
+    """
+    env = embedding_env(
+        {
+            "model": getattr(embedding, "model", ""),
+            "base_url": getattr(embedding, "base_url", ""),
+            "api_key": getattr(embedding, "api_key", ""),
+            "dimensions": getattr(embedding, "dimensions", None),
+        }
+    )
+    os.environ.update(env)
+    _BOUND_HERE.update(env)
+    os.environ[PROVENANCE_ENV] = ",".join(sorted(_BOUND_HERE))
+    return bool(env)
+
+
+def embedding_env(values: Any) -> dict[str, str]:
+    """``values`` rendered as EverOS's embedding variables, or ``{}``.
+
+    Split out from :func:`configure_embedding_env` because two consumers need
+    the same answer in different forms: that function binds it into this
+    process, and the child environment a spawn builds fills it in for a launch
+    nobody bound it for. Both go through here so the deference below is decided
+    once.
+
+    Empty when the three values are not all present -- fewer than three is not
+    an endpoint -- and empty when ``everos.toml`` carries an ``[embedding]`` of
+    its own, which :func:`everos_has_own_embedding` decides: an operator who
+    wrote one chose that endpoint for memory specifically, and reusing the
+    host's is a convenience they may decline.
+    """
+    model = str(values.get("model") or "")
+    base_url = str(values.get("base_url") or "")
+    api_key = str(values.get("api_key") or "")
+    if not (model and base_url and api_key):
+        return {}
+    if everos_has_own_embedding():
+        return {}
+    env = {
+        "EVEROS_EMBEDDING__MODEL": model,
+        "EVEROS_EMBEDDING__BASE_URL": base_url,
+        "EVEROS_EMBEDDING__API_KEY": api_key,
+    }
+    dimensions = values.get("dimensions")
+    if isinstance(dimensions, int) and dimensions > 0:
+        env["EVEROS_EMBEDDING__DIMENSIONS"] = str(dimensions)
+    return env
+
+
+def everos_has_own_embedding() -> bool:
+    """Whether EverOS already has an embedding endpoint of its own.
+
+    The one question that decides whether the host's endpoint is used at all,
+    asked by everything that reads or writes it -- the binding, the spawn, the
+    wizard, and the settings page -- so no surface can show one home while
+    another writes the other.
+
+    Both of the places EverOS itself reads, since both are an operator saying
+    which endpoint memory should use:
+
+    1. ``everos.toml``, by :func:`role_configured_in`'s criterion -- model
+       **and** key, not a second criterion beside it. The shipped template
+       seeds every section with a real model name and an empty key, so "has a
+       model" is true of a root nobody has configured; reading it that way made
+       a fresh managed install look like a deliberate choice, and the service
+       the wizard had just started ran keyword-only while the wizard said
+       embedding was configured.
+    2. the ``EVEROS_EMBEDDING__*`` variables EverOS documents, which outrank
+       the file in its own resolution order. All three or none: two of them is
+       not an endpoint, and filling the third from the host would hand EverOS a
+       mixture of two operators' intentions rather than either one.
+    """
+    return role_configured_in(load_everos_config(), "embedding") or embedding_is_env_managed()
+
+
+_EMBEDDING_ENV_KEYS = (
+    "EVEROS_EMBEDDING__MODEL",
+    "EVEROS_EMBEDDING__BASE_URL",
+    "EVEROS_EMBEDDING__API_KEY",
+)
+
+PROVENANCE_ENV = "RAVEN_EVEROS_EMBEDDING_BOUND"
+"""Where the provenance below is kept so it outlives this module object.
+
+``raven gateway --restart`` re-launches through ``os.execv``, which keeps the
+environment and builds a new interpreter: the values survive and a set built at
+import does not. A restarted gateway then read its own binding as somebody
+else's export -- blank settings card, refused save, and no second bind -- for
+the rest of its life. Provenance has to travel with the thing it describes.
+"""
+
+_BOUND_HERE: set[str] = {k for k in os.environ.get(PROVENANCE_ENV, "").split(",") if k}
+"""Which of those variables this process, or the one it replaced, set itself.
+
+Provenance, not a cache. ``configure_embedding_env`` puts the host's endpoint
+into ``os.environ`` so the in-process EverOS imports and every child see it --
+after which the variables are present and complete, and a reader that asks only
+"are all three set" cannot tell the host's own binding from an operator's
+export. It answered "an operator exported these" about values raven had written
+a moment earlier, and the settings card then refused an edit by telling the
+person to change variables they had never set.
+"""
+
+
+def embedding_is_env_managed() -> bool:
+    """Whether the endpoint EverOS uses came from outside this process.
+
+    Named apart from :func:`everos_has_own_embedding` because one surface needs
+    to tell the homes apart rather than only know that one is in force: a
+    settings page can offer to edit a file, and cannot offer to edit somebody's
+    shell.
+
+    All three present and not all three ours. Partly ours cannot arise -- a
+    fragment is not an endpoint, so the binding replaces it whole -- and is
+    read the conservative way if it ever does.
+    """
+    if not all(os.environ.get(k) for k in _EMBEDDING_ENV_KEYS):
+        return False
+    return not all(k in _BOUND_HERE for k in _EMBEDDING_ENV_KEYS)
+
+
+def host_embedding_env() -> dict[str, str]:
+    """The binding raven's own ``embedding`` block earns, or ``{}``."""
+    return embedding_env(host_embedding_section())
 
 
 def ensure_everos_home(root: Path | str | None = None) -> None:
@@ -409,8 +514,17 @@ def everos_role_configured(section: str) -> bool:
     Lives beside the writers rather than in the wizard so a reader does not have
     to import it: the wizard module costs ~290ms to load, which `raven doctor`
     (a millisecond command) would otherwise pay just to answer this.
+
+    ``embedding`` has two homes since its endpoint became raven's: the toml
+    still wins when an operator wrote one there, and raven's block fills the
+    gap -- the same precedence :func:`configure_embedding_env` binds with.
+    Asking the toml alone made doctor, the wizard's recap and the
+    unavailable-embedding warning all answer "not configured" the moment the
+    wizard wrote the endpoint where it now belongs.
     """
-    return role_configured_in(load_everos_config(), section)
+    if role_configured_in(load_everos_config(), section):
+        return True
+    return section == "embedding" and bool(host_embedding_section())
 
 
 def set_everos_section(section: str, fields: dict[str, Any]) -> None:

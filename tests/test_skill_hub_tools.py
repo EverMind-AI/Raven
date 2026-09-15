@@ -131,9 +131,12 @@ class TestUseSkill:
     async def test_missing_skill_id_errors(self) -> None:
         assert (await UseSkillTool().execute(skill_id=None)).startswith("Error")
 
-    async def test_unknown_source_errors(self) -> None:
+    async def test_unknown_source_falls_back_to_an_on_disk_lookup(self) -> None:
+        """The on-disk source's name is whatever ``memory.backend`` says, so an
+        unqualified prefix can no longer be checked against a hardcoded list:
+        anything but ``hub`` is looked up on disk and misses there."""
         out = await UseSkillTool().execute(skill_id="weird/x")
-        assert out.startswith("Error") and "unknown skill source" in out
+        assert out.startswith("Error") and "no weird skill" in out
 
     async def test_local_with_scripts(self, tmp_path: Path) -> None:
         meta = _meta(tmp_path, "x", "body here", with_scripts=True)
