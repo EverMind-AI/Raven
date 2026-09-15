@@ -2041,6 +2041,9 @@ Read it against the plan this instance serves. If it reports finished work, resu
         """
         from raven.spine import ChatType, Origin, Source, TurnRequest
 
+        # Wired by set_submit before any announce (see __init__); the announce
+        # path is the only caller and it runs after the gateway has wired it.
+        assert self._submit is not None
         self._submit(
             TurnRequest(
                 origin=Origin.SUBAGENT,

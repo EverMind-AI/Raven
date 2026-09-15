@@ -49,6 +49,21 @@ def _group_msg(mid="m1", content="hello"):
 # ── parsing ────────────────────────────────────────────────────────────
 
 
+def test_the_bot_factory_hands_back_a_client_not_the_class():
+    """``start()`` assigns the factory's return straight to ``self._client`` and
+    then awaits ``self._client.start(...)``, so handing back the class would fail
+    at the first connect rather than here. The factory cannot declare
+    ``type[botpy.Client]`` either: the local subclass takes no constructor
+    arguments while the base one requires ``intents``."""
+    import botpy
+
+    from raven.channels.adapters.qq.channel import _make_bot
+
+    bot = _make_bot(MagicMock())
+
+    assert isinstance(bot, botpy.Client)
+
+
 def test_clean_content():
     assert qp.clean_content(SimpleNamespace(content="  hi  ")) == "hi"
     assert qp.clean_content(SimpleNamespace(content="")) == ""

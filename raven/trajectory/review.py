@@ -125,7 +125,12 @@ def _ordered_spans(spans_file: Path) -> list[dict[str, Any]]:
             continue
         if isinstance(span, dict):
             spans.append(span)
-    spans.sort(key=lambda s: s.get("startTime") if isinstance(s.get("startTime"), str) else "")
+
+    def _start_time(span: dict) -> str:
+        value = span.get("startTime")
+        return value if isinstance(value, str) else ""
+
+    spans.sort(key=_start_time)
     return spans
 
 

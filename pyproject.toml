@@ -286,6 +286,47 @@ ignore = ["DEP002", "DEP004"]
 DEP001 = ["raven_everos", "requests", "cryptography"]
 DEP003 = ["raven_everos", "requests", "cryptography"]
 
+[tool.ty]
+# A call-correctness gate, not a typing-strictness project. The rules left on
+# are the ones this tree already satisfies: 124 of ty's 133, measured at zero
+# or cleared to zero in the change that added this block. They answer "is this
+# call, override or annotation self-consistent" -- the class of error a test
+# only finds by executing the line, which is exactly what a bundled plugin's
+# render path or a rarely-taken CLI branch does not do in CI.
+#
+# The nine below are switched off with their measured backlog, not because they
+# are wrong. Each is a separate piece of work; the number is the count on the
+# commit that added this block, so a later reader can tell progress from drift.
+#
+# Rule levels are pinned by pinning ty itself (dependency-groups, exact version):
+# at 0.0.x the rule set still moves, and a gate whose meaning changes under a
+# transitive bump is not a gate. Bumping it is a reviewed change.
+#
+# Scope note: tests/ is out (113 diagnostics under this same set). Tests are
+# run, so a broken call there fails loudly; unexecuted production code is what
+# this gate is for. Bringing tests in is sized, separate work.
+#
+# Environment note: measured identical with `--extra dev` and with
+# `--all-extras` (1205 both ways), unlike deptry, whose verdict does move with
+# what is installed. The Makefile still uses --all-extras so that turning any
+# resolution-sensitive rule back on does not silently change meaning.
+[tool.ty.rules]
+unresolved-attribute = "ignore"    # 725 -- mostly third-party without type information
+invalid-argument-type = "ignore"   # 231 -- needs annotations added, not a call bug
+invalid-method-override = "ignore" #  66 -- real Liskov findings, sized separately
+invalid-return-type = "ignore"     #  39
+invalid-assignment = "ignore"      #  33
+not-subscriptable = "ignore"       #  32
+unsupported-operator = "ignore"    #  28
+unresolved-import = "ignore"       #  21 -- missing stubs and real typos, mixed
+not-iterable = "ignore"            #  21
+redundant-condition = "ignore"     #   7 (warn by default)
+unsupported-base = "ignore"        #   2 (warn by default)
+
+# Off by default upstream, on here: a bare `# ty: ignore` silences every rule on
+# that line forever, including ones written after it. Suppressions name a rule.
+blanket-ignore-comment = "error"
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"
@@ -480,6 +521,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.8.0",
     "ruff==0.15.12",
+    "ty==0.0.80",
 ]
 
 [tool.importlinter]
