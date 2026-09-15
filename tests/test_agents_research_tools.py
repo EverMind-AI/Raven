@@ -291,9 +291,9 @@ def test_the_digest_follows_the_sessions_mode_not_the_base_config(tmp_path):
     async def run():
         set_current_session("s-deep")
         _shared_for(ctx).session_gear["s-deep"] = SessionGear(digest_model="deep/strong", digest_verbatim_head_chars=0)
-        deep = await tool._try_digest(page, "the founding date", "https://a.example/one")
+        deep, _ = await tool._try_digest(page, "the founding date", "https://a.example/one")
         set_current_session("s-ungeared")
-        base = await tool._try_digest(page, "the founding date", "https://a.example/two")
+        base, _ = await tool._try_digest(page, "the founding date", "https://a.example/two")
         return deep, base
 
     deep, base = asyncio.run(run())
