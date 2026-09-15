@@ -532,3 +532,727 @@ def test_the_new_methods_are_declared_in_the_contract() -> None:
         "playbooks.oauth.clear",
     ):
         assert method in METHOD_MODELS
+
+
+# ---------------------------------------------------------------------------
+# The library as a thing a person changes
+# ---------------------------------------------------------------------------
+
+
+async def test_enabling_says_what_is_in_force_and_whether_it_moved(
+    library: PlaybookStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`changed` is what lets a caller tell "you did that" from "it was already
+    so" without a second read."""
+    library.save(_spec())
+    seen: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        "raven.config.update.set_playbook_disabled",
+        lambda name, disabled: (seen.append((name, disabled)), True)[1],
+    )
+
+    out = await mod.playbooks_set_enabled({"name": "competitor-scan", "enabled": False})
+
+    assert out == {"name": "competitor-scan", "enabled": False, "changed": True}
+    assert seen == [("competitor-scan", True)], "enabled=False means disabled=True"
+    METHOD_MODELS["playbooks.set_enabled"][1].model_validate(out)
+
+
+async def test_enabling_reports_a_no_op_rather_than_claiming_a_change(
+    library: PlaybookStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library.save(_spec())
+    monkeypatch.setattr("raven.config.update.set_playbook_disabled", lambda name, disabled: False)
+
+    out = await mod.playbooks_set_enabled({"name": "competitor-scan", "enabled": True})
+
+    assert out["changed"] is False
+    assert out["enabled"] is True, "the state in force is still reported"
+
+
+async def test_enabling_wants_a_state_not_a_toggle(library: PlaybookStore) -> None:
+    """Omitted or non-boolean is refused rather than read as one of the two: a
+    toggle would land two clients racing on one name wherever ordering falls."""
+    library.save(_spec())
+    for bad in ({}, {"enabled": "yes"}, {"enabled": 1}):
+        with pytest.raises(RpcError):
+            await mod.playbooks_set_enabled({"name": "competitor-scan", **bad})
+
+
+async def test_enabling_an_unknown_playbook_is_refused(library: PlaybookStore) -> None:
+    with pytest.raises(RpcError):
+        await mod.playbooks_set_enabled({"name": "nope", "enabled": True})
+
+
+async def test_validate_answers_its_findings_rather_than_raising(
+    library: PlaybookStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A playbook that does not validate is the ordinary reason to call this, so
+    the findings are the result. An error code would make the ordinary answer
+    look like a broken call, and carries one string where this carries the list."""
+    library.save(_spec())
+    monkeypatch.setattr(
+        "raven.playbook.validate.validate_structure",
+        lambda spec, known_agents=None: ["merge: depends on a node that does not exist"],
+    )
+
+    out = await mod.playbooks_validate({"name": "competitor-scan"})
+
+    assert out["ok"] is False
+    assert out["errors"] == ["merge: depends on a node that does not exist"]
+    assert out["name"] == "competitor-scan"
+    assert out["path"].endswith("playbook.md")
+    METHOD_MODELS["playbooks.validate"][1].model_validate(out)
+
+
+async def test_validate_says_ok_with_an_empty_list_not_a_missing_one(
+    library: PlaybookStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Paired with the case above so neither is satisfied by a handler that
+    always answers the same shape."""
+    library.save(_spec())
+    monkeypatch.setattr("raven.playbook.validate.validate_structure", lambda spec, known_agents=None: [])
+
+    out = await mod.playbooks_validate({"name": "competitor-scan"})
+
+    assert out["ok"] is True
+    assert out["errors"] == []
+
+
+async def test_validate_reports_an_unparsable_file_as_a_finding(library: PlaybookStore, tmp_path: Path) -> None:
+    """The library is hand-edited text, so a file that will not load is a normal
+    answer here -- the same rule the list already follows for its rows."""
+    directory = tmp_path / "user" / "broken"
+    directory.mkdir(parents=True)
+    (directory / "playbook.md").write_text("not a playbook at all", encoding="utf-8")
+
+    out = await mod.playbooks_validate({"name": "broken"})
+
+    assert out["ok"] is False
+    assert out["errors"], "the load failure is the finding"
+
+
+async def test_deleting_a_user_playbook_takes_its_directory_and_its_deny_entry(
+    library: PlaybookStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A gone name has no business on the deny list: a later playbook reusing it
+    should start enabled like any other new one."""
+    library.save(_spec())
+    directory = tmp_path / "user" / "competitor-scan"
+    assert directory.is_dir()
+    seen: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        "raven.config.update.set_playbook_disabled",
+        lambda name, disabled: (seen.append((name, disabled)), True)[1],
+    )
+
+    out = await mod.playbooks_delete({"name": "competitor-scan"})
+
+    assert out == {"name": "competitor-scan", "deleted": True, "uncovered_builtin": False}
+    assert not directory.exists()
+    assert seen == [("competitor-scan", False)], "off the deny list, not onto it"
+    METHOD_MODELS["playbooks.delete"][1].model_validate(out)
+
+
+async def test_deleting_a_builtin_is_refused_and_says_what_to_do(library: PlaybookStore, tmp_path: Path) -> None:
+    """It ships with the package, so there is no file of the host's to remove and
+    the next install would put it back."""
+    builtin = tmp_path / "builtin" / "shipped"
+    builtin.mkdir(parents=True)
+    PlaybookStore(tmp_path / "builtin", builtin_root=tmp_path / "builtin").save(_spec("shipped"))
+
+    with pytest.raises(RpcError) as caught:
+        await mod.playbooks_delete({"name": "shipped"})
+
+    assert "disable" in str(caught.value), "the refusal names the operation that does exist"
+
+
+async def test_deleting_a_shadowing_playbook_says_the_builtin_is_back(
+    library: PlaybookStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting it does not remove the name, it uncovers the builtin -- which a
+    caller would otherwise have to re-read the list to discover."""
+    PlaybookStore(tmp_path / "builtin", builtin_root=tmp_path / "builtin").save(_spec("competitor-scan"))
+    # `overwrite` because the store refuses a name its builtin layer already
+    # holds -- which is precisely the shadowing this case is about.
+    library.save(_spec("competitor-scan"), overwrite=True)
+    monkeypatch.setattr("raven.config.update.set_playbook_disabled", lambda name, disabled: True)
+
+    out = await mod.playbooks_delete({"name": "competitor-scan"})
+
+    assert out["uncovered_builtin"] is True
+
+
+async def test_deleting_an_unknown_playbook_is_refused(library: PlaybookStore) -> None:
+    with pytest.raises(RpcError):
+        await mod.playbooks_delete({"name": "nope"})
+
+
+# ---------------------------------------------------------------------------
+# A name is joined to the library root, so its shape is a boundary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "handler_name, extra",
+    [
+        ("playbooks_get", {}),
+        ("playbooks_validate", {}),
+        ("playbooks_set_enabled", {"enabled": True}),
+        ("playbooks_delete", {}),
+        ("playbooks_credentials_get", {}),
+    ],
+)
+async def test_a_traversing_name_never_reaches_the_store(
+    library: PlaybookStore, tmp_path: Path, handler_name: str, extra: dict
+) -> None:
+    """``../sibling`` resolves outside the library and the store classifies it as
+    a user playbook, so every handler that takes a name has to refuse the shape
+    before it looks anything up -- the lookup is itself the escape.
+
+    Parametrised over every name-taking handler rather than the one that
+    deletes: the read handlers reach out of the library too, and a guard on the
+    destructive verb alone leaves the class open.
+    """
+    # The library root has to exist, or `origin_of` answers None for everything
+    # and the handlers refuse on "no such playbook" -- which would pass this
+    # case for the wrong reason and hide the traversal entirely.
+    library.save(_spec("competitor-scan"))
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "playbook.md").write_text("bait", encoding="utf-8")
+    assert library.origin_of("../victim") == "user", "the escape this guards is reachable"
+
+    with pytest.raises(RpcError):
+        await getattr(mod, handler_name)({"name": "../victim", **extra})
+
+    assert victim.is_dir(), "nothing outside the library may be touched"
+    assert (victim / "playbook.md").is_file()
+
+
+@pytest.mark.parametrize("bad", ["../victim", "..", "a/b", "/etc", "Up", "a b", "-lead", ""])
+async def test_only_a_library_shaped_name_is_accepted(library: PlaybookStore, bad: str) -> None:
+    """The same rule ``raven playbook create`` enforces on the way out, applied
+    on the way in. Upper case and a leading dash are here because they are the
+    two the pattern rejects that are NOT traversals -- a guard written only
+    against ``..`` would let them through to a lookup.
+
+    The refusal has to be about the shape, not about the name being unknown, or
+    every case here passes on an empty library and the guard is never exercised.
+    """
+    library.save(_spec("competitor-scan"))
+
+    with pytest.raises(RpcError) as caught:
+        await mod.playbooks_validate({"name": bad})
+
+    assert "kebab-case" in str(caught.value) or "name is required" in str(caught.value), (
+        f"refused for the wrong reason: {caught.value}"
+    )
+
+
+async def test_the_shape_is_checked_before_anything_resolves_a_path(
+    library: PlaybookStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``origin_of`` is itself an escape: on a traversing name it stats a file
+    outside the library and answers ``user`` about it. So the shape has to be
+    refused before the lookup, not merely before the delete."""
+    library.save(_spec("competitor-scan"))
+    asked: list[str] = []
+    real = library.origin_of
+    monkeypatch.setattr(library, "origin_of", lambda n: (asked.append(n), real(n))[1])
+
+    with pytest.raises(RpcError):
+        await mod.playbooks_delete({"name": "../victim"})
+
+    assert asked == [], "the store was consulted about a name that should never have reached it"
+
+
+async def test_a_library_shaped_name_still_works(library: PlaybookStore) -> None:
+    """Paired with the case above so neither is satisfied by a handler that
+    refuses everything."""
+    library.save(_spec("competitor-scan"))
+    assert (await mod.playbooks_validate({"name": "competitor-scan"}))["name"] == "competitor-scan"
+
+
+# ---------------------------------------------------------------- playbooks.run
+
+
+class _Plan:
+    def __init__(self, kind: str = "dag", reply: str = "DAG r-1: started") -> None:
+        self.kind = kind
+        self.reply = reply
+
+
+class _Runtime:
+    """A stand-in for the loop's playbook runtime, recording how it was driven."""
+
+    def __init__(self, plan: object | None = None) -> None:
+        self.context: dict | None = None
+        self.calls: list[dict] = []
+        self._plan = plan if plan is not None else _Plan()
+
+    def set_context(self, *, channel, chat_id, session_key) -> None:
+        self.context = {"channel": channel, "chat_id": chat_id, "session_key": session_key}
+
+    async def load(self, name, params=None, fills=None, *, allow_disabled=False, confirmed=False):
+        # Recorded at the moment of the call, so a context set afterwards is not
+        # mistaken for one that was in force for the dispatch.
+        from raven.agent import workdir
+        from raven.providers.binding import active_binding
+
+        self.calls.append(
+            {
+                "name": name,
+                "params": params,
+                "fills": fills,
+                "allow_disabled": allow_disabled,
+                "confirmed": confirmed,
+                "context_at_call": self.context,
+                # Read here, not after the handler returns: the dispatch
+                # backgrounds itself from inside this call and keeps whatever
+                # context was in force at that moment.
+                "workdir_at_call": workdir.current(),
+                "binding_at_call": active_binding(),
+            }
+        )
+        return self._plan
+
+
+class _Binding:
+    def __init__(self, tag: str) -> None:
+        self.tag = tag
+
+
+def _loop_with(runtime, *, workdir_path=None, binding=None, workdir_raises=False):
+    """A stand-in loop offering the three things this handler asks a loop for."""
+
+    class _Loop:
+        _playbooks = runtime
+
+        def session_workdir(self, session_key):
+            if workdir_raises:
+                raise RuntimeError("override points at a deleted directory")
+            return workdir_path or Path("/tmp")
+
+        def binding_for_session(self, session_key):
+            return binding or _Binding("default")
+
+    return _Loop
+
+
+@pytest.mark.asyncio
+async def test_a_run_answers_the_executors_own_plan(library: PlaybookStore) -> None:
+    library.save(_spec())
+    rt = _Runtime(_Plan("dag", "DAG abc123: started 'competitor-scan' (3 steps)"))
+    out = await mod.playbooks_run(
+        {"name": "competitor-scan", "session_key": "web:c1"},
+        agent_loop_factory=_loop_with(rt),
+    )
+    assert out == {
+        "name": "competitor-scan",
+        "kind": "dag",
+        "reply": "DAG abc123: started 'competitor-scan' (3 steps)",
+    }, "the plan is relayed verbatim, run id included, not re-shaped here"
+
+
+@pytest.mark.asyncio
+async def test_the_run_is_addressed_before_it_dispatches(library: PlaybookStore) -> None:
+    """The finding this handler exists for.
+
+    Progress and the completion announce are addressed to a conversation. The
+    address is read inside the dispatch, so one set afterwards arrives for the
+    next call -- and unset, every consumer falls back to a ``cli:direct``
+    default, which is a page-initiated run reporting where nobody is looking.
+    """
+    library.save(_spec())
+    rt = _Runtime()
+    await mod.playbooks_run(
+        {"name": "competitor-scan", "session_key": "web:c1"},
+        agent_loop_factory=_loop_with(rt),
+    )
+    assert rt.calls[0]["context_at_call"] == {
+        "channel": "web",
+        "chat_id": "c1",
+        "session_key": "web:c1",
+    }, "the address has to be in force when load runs, not merely set at some point"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["", "web", ":c1", "web:", "   "])
+async def test_a_session_key_that_names_no_conversation_is_refused(library: PlaybookStore, bad: str) -> None:
+    """Refused rather than defaulted.
+
+    ``set_context`` forwards to the graph tool only when both halves are
+    present, so a half-formed key would silently leave the run on the
+    ``cli:direct`` default -- dispatched, and reporting nowhere the caller can
+    see. A refusal is the one outcome that cannot be mistaken for success.
+    """
+    library.save(_spec())
+    rt = _Runtime()
+    with pytest.raises(RpcError):
+        await mod.playbooks_run(
+            {"name": "competitor-scan", "session_key": bad},
+            agent_loop_factory=_loop_with(rt),
+        )
+    assert rt.calls == [], "nothing may dispatch before the address is known good"
+
+
+@pytest.mark.asyncio
+async def test_the_caller_says_whether_it_already_asked(library: PlaybookStore) -> None:
+    """``confirmed`` is the caller's statement, not this layer's assumption.
+
+    A page that shows a confirmation and one that fires on a single click are
+    both legitimate, and only the page knows which it is; asserting it here
+    would skip the gate with nobody having seen the graph.
+    """
+    library.save(_spec())
+    for sent, expected in ((True, True), (False, False), (None, False)):
+        rt = _Runtime()
+        args = {"name": "competitor-scan", "session_key": "web:c1"}
+        if sent is not None:
+            args["confirmed"] = sent
+        await mod.playbooks_run(args, agent_loop_factory=_loop_with(rt))
+        assert rt.calls[0]["confirmed"] is expected
+
+
+@pytest.mark.asyncio
+async def test_a_client_on_this_socket_named_the_playbook_itself(library: PlaybookStore) -> None:
+    """Disabling takes a playbook out of what the *model* is offered.
+
+    This caller is not the model: it holds the session cookie, which is the
+    user's own credential. The same answer the CLI gives, for the reason the
+    CLI gives it.
+    """
+    library.save(_spec())
+    rt = _Runtime()
+    await mod.playbooks_run(
+        {"name": "competitor-scan", "session_key": "web:c1"},
+        agent_loop_factory=_loop_with(rt),
+    )
+    assert rt.calls[0]["allow_disabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_params_and_fills_reach_the_runtime(library: PlaybookStore) -> None:
+    library.save(_spec())
+    rt = _Runtime()
+    await mod.playbooks_run(
+        {
+            "name": "competitor-scan",
+            "session_key": "web:c1",
+            "params": {"target": "acme"},
+            "fills": {"market": {"promptTemplate": "look at acme"}},
+        },
+        agent_loop_factory=_loop_with(rt),
+    )
+    assert rt.calls[0]["params"] == {"target": "acme"}
+    assert rt.calls[0]["fills"] == {"market": {"promptTemplate": "look at acme"}}
+
+
+@pytest.mark.asyncio
+async def test_a_traversing_name_never_reaches_the_runtime(library: PlaybookStore) -> None:
+    library.save(_spec())
+    rt = _Runtime()
+    with pytest.raises(RpcError):
+        await mod.playbooks_run(
+            {"name": "../victim", "session_key": "web:c1"},
+            agent_loop_factory=_loop_with(rt),
+        )
+    assert rt.calls == []
+
+
+@pytest.mark.asyncio
+async def test_no_runtime_refuses_rather_than_answering_an_empty_dispatch(
+    library: PlaybookStore,
+) -> None:
+    """A write, so it refuses.
+
+    Answering a run with an empty shape would leave the caller drawing a
+    dispatch that was never made.
+    """
+    library.save(_spec())
+    with pytest.raises(RpcError):
+        await mod.playbooks_run({"name": "competitor-scan", "session_key": "web:c1"})
+
+
+@pytest.mark.asyncio
+async def test_a_playbook_the_runtime_cannot_load_is_named_as_such(library: PlaybookStore) -> None:
+    """The directory exists -- the shape guard proved that -- and it still will
+    not load, which is a file to fix rather than a name to correct."""
+    library.save(_spec())
+    rt = _Runtime()
+    rt._plan = None
+    with pytest.raises(RpcError):
+        await mod.playbooks_run(
+            {"name": "competitor-scan", "session_key": "web:c1"},
+            agent_loop_factory=_loop_with(rt),
+        )
+
+
+def test_the_run_contract_is_mirrored_by_a_model_pair() -> None:
+    assert "playbooks.run" in METHOD_MODELS
+
+
+@pytest.mark.asyncio
+async def test_the_run_carries_the_named_sessions_workspace_and_model(library: PlaybookStore, tmp_path: Path) -> None:
+    """Addressing a run is not the same as placing it.
+
+    The graph tool takes its nodes' cwd from ``workdir.current() or
+    self._workspace`` and resolves a raven-backed node's pair through the active
+    binding. Both are established by the turn path and by nothing else, so a run
+    entered here would otherwise work in the loop-wide workspace and on the
+    default model while reporting under the named conversation -- the wrong
+    project and the wrong model, in the right session's name.
+    """
+    library.save(_spec())
+    project = tmp_path / "some-project"
+    project.mkdir()
+    binding = _Binding("that-session's-pair")
+    rt = _Runtime()
+
+    await mod.playbooks_run(
+        {"name": "competitor-scan", "session_key": "web:c1"},
+        agent_loop_factory=_loop_with(rt, workdir_path=project, binding=binding),
+    )
+
+    assert rt.calls[0]["workdir_at_call"] == project
+    assert rt.calls[0]["binding_at_call"] is binding
+
+
+@pytest.mark.asyncio
+async def test_the_contexts_are_gone_once_the_call_is_over(library: PlaybookStore, tmp_path: Path) -> None:
+    """Bound around the dispatch, not leaked into the connection.
+
+    Every frame on this socket is its own task, but a handler that set these and
+    never reset them would hand the next call on the same task whatever the last
+    one chose.
+    """
+    from raven.agent import workdir
+    from raven.providers.binding import active_binding
+
+    library.save(_spec())
+    project = tmp_path / "some-project"
+    project.mkdir()
+    await mod.playbooks_run(
+        {"name": "competitor-scan", "session_key": "web:c1"},
+        agent_loop_factory=_loop_with(_Runtime(), workdir_path=project),
+    )
+    assert workdir.current() is None
+    assert active_binding() is None
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_workspace_will_not_resolve_is_refused(
+    library: PlaybookStore,
+) -> None:
+    """A stale directory override is the caller's to fix, and it is named as
+    one rather than surfacing as an internal error with the sentence buried."""
+    library.save(_spec())
+    rt = _Runtime()
+    with pytest.raises(RpcError):
+        await mod.playbooks_run(
+            {"name": "competitor-scan", "session_key": "web:c1"},
+            agent_loop_factory=_loop_with(rt, workdir_raises=True),
+        )
+    assert rt.calls == [], "nothing dispatches into a workspace that did not resolve"
+
+
+# ------------------------------------------------------------- playbooks.create
+
+
+class _Generated:
+    def __init__(self, spec, notes=()):
+        self.spec = spec
+        self.notes = list(notes)
+
+
+class _Generator:
+    """Records what it was asked for, and answers or raises as told."""
+
+    def __init__(self, result=None, raises=None, hangs=False):
+        self.calls: list[tuple] = []
+        self._result = result
+        self._raises = raises
+        self._hangs = hangs
+
+    async def generate(self, workflow, skills=None):
+        import asyncio
+
+        self.calls.append((workflow, skills))
+        if self._hangs:
+            await asyncio.sleep(3600)
+        if self._raises is not None:
+            raise self._raises
+        return self._result
+
+
+class _CreateRuntime:
+    def __init__(self, store, generator, *, adopts=True):
+        self.store = store
+        self.generator = generator
+        self._adopts = adopts
+        self.adopted: list[str] = []
+
+    def adopt(self, name: str) -> bool:
+        self.adopted.append(name)
+        return self._adopts
+
+
+def _create_loop(runtime):
+    return lambda: type("_Loop", (), {"_playbooks": runtime})()
+
+
+@pytest.mark.asyncio
+async def test_creating_writes_the_file_and_says_where_it_landed(library: PlaybookStore) -> None:
+    gen = _Generator(_Generated(_spec("weekly-digest"), notes=["assumed the report goes to PM"]))
+    rt = _CreateRuntime(library, gen)
+    out = await mod.playbooks_create(
+        {"name": "weekly-digest", "workflow": "pull feedback, then summarise it"},
+        agent_loop_factory=_create_loop(rt),
+    )
+    assert out["name"] == "weekly-digest"
+    assert out["created"] is True
+    assert out["errors"] == []
+    assert out["path"].endswith("weekly-digest/playbook.md")
+    assert Path(out["path"]).is_file(), "the answer names a file that exists"
+    assert out["notes"] == ["assumed the report goes to PM"]
+    assert out["adopted"] is True
+    assert rt.adopted == ["weekly-digest"], "the live library is handed the new file in this call"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_generation_answers_the_whole_list_of_reasons(library: PlaybookStore) -> None:
+    """The reason this answers rather than raises.
+
+    ``PlaybookGenerationError`` joins its reasons into one message and keeps the
+    list beside it; a refusal would carry the joined sentence, and a caller that
+    has just spent model time on this is owed the list.
+    """
+    from raven.playbook import PlaybookGenerationError
+
+    reasons = ["node 'draft' names no agent", "params.target is referenced but not declared"]
+    rt = _CreateRuntime(library, _Generator(raises=PlaybookGenerationError(reasons)))
+    out = await mod.playbooks_create(
+        {"name": "weekly-digest", "workflow": "something the composer cannot resolve"},
+        agent_loop_factory=_create_loop(rt),
+    )
+    assert out["created"] is False
+    assert out["path"] == ""
+    assert out["errors"] == reasons, "each reason on its own, not one joined string"
+    assert library.origin_of("weekly-digest") is None, "and nothing was written"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["../victim", "a/b", "Upper", "-lead", ""])
+async def test_a_name_that_is_not_a_library_name_is_refused_before_a_generation(
+    library: PlaybookStore, bad: str
+) -> None:
+    gen = _Generator(_Generated(_spec()))
+    rt = _CreateRuntime(library, gen)
+    with pytest.raises(RpcError):
+        await mod.playbooks_create({"name": bad, "workflow": "anything"}, agent_loop_factory=_create_loop(rt))
+    assert gen.calls == [], "the shape is checked before any model time is spent"
+
+
+@pytest.mark.asyncio
+async def test_an_existing_name_is_refused_before_a_generation(library: PlaybookStore) -> None:
+    """Checked ahead of the composer, not after.
+
+    A generation is a minute of model time; discovering the collision afterwards
+    would spend it and throw the result away.
+    """
+    library.save(_spec("competitor-scan"))
+    gen = _Generator(_Generated(_spec()))
+    rt = _CreateRuntime(library, gen)
+    with pytest.raises(RpcError):
+        await mod.playbooks_create(
+            {"name": "competitor-scan", "workflow": "anything"},
+            agent_loop_factory=_create_loop(rt),
+        )
+    assert gen.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_workflow_is_required_because_it_is_all_the_generator_sees(
+    library: PlaybookStore,
+) -> None:
+    gen = _Generator(_Generated(_spec()))
+    rt = _CreateRuntime(library, gen)
+    with pytest.raises(RpcError):
+        await mod.playbooks_create({"name": "weekly-digest", "workflow": "   "}, agent_loop_factory=_create_loop(rt))
+    assert gen.calls == []
+
+
+@pytest.mark.asyncio
+async def test_named_skills_reach_the_composer(library: PlaybookStore) -> None:
+    gen = _Generator(_Generated(_spec("weekly-digest")))
+    rt = _CreateRuntime(library, gen)
+    await mod.playbooks_create(
+        {"name": "weekly-digest", "workflow": "w", "skills": ["web-research", "", "writing"]},
+        agent_loop_factory=_create_loop(rt),
+    )
+    assert gen.calls == [("w", ["web-research", "writing"])], "blank entries are not pinned"
+
+
+@pytest.mark.asyncio
+async def test_a_file_the_live_library_would_not_load_says_so(library: PlaybookStore) -> None:
+    """Written and unusable is a third state, and it is reported as one.
+
+    ``created`` alone would send a caller to run a name that cannot resolve.
+    """
+    rt = _CreateRuntime(library, _Generator(_Generated(_spec("weekly-digest"))), adopts=False)
+    out = await mod.playbooks_create({"name": "weekly-digest", "workflow": "w"}, agent_loop_factory=_create_loop(rt))
+    assert out["created"] is True
+    assert out["adopted"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_generation_that_never_finishes_is_given_up_on(library: PlaybookStore) -> None:
+    """Bounded with the budget the conversational entry declares -- read from it
+    rather than copied, so the two cannot drift apart."""
+    rt = _CreateRuntime(library, _Generator(hangs=True))
+    original = mod._generation_budget_s
+    mod._generation_budget_s = lambda: 0.05
+    try:
+        out = await mod.playbooks_create(
+            {"name": "weekly-digest", "workflow": "w"}, agent_loop_factory=_create_loop(rt)
+        )
+    finally:
+        mod._generation_budget_s = original
+    assert out["created"] is False
+    assert out["errors"] and "did not finish" in out["errors"][0]
+
+
+@pytest.mark.asyncio
+async def test_a_name_taken_while_generating_refuses_rather_than_claiming_a_write(
+    library: PlaybookStore,
+) -> None:
+    """The other request's file is the one on disk, so this answer must not
+    read as though it wrote it."""
+    gen = _Generator(_Generated(_spec("weekly-digest")))
+    rt = _CreateRuntime(library, gen)
+
+    original = library.save
+
+    def _save_racing(spec, **kw):
+        from raven.playbook import PlaybookExistsError
+
+        raise PlaybookExistsError("taken while generating")
+
+    library.save = _save_racing  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RpcError):
+            await mod.playbooks_create({"name": "weekly-digest", "workflow": "w"}, agent_loop_factory=_create_loop(rt))
+    finally:
+        library.save = original  # type: ignore[method-assign]
+    assert rt.adopted == [], "nothing is handed to the live library when nothing was written"
+
+
+@pytest.mark.asyncio
+async def test_creating_with_no_runtime_refuses(library: PlaybookStore) -> None:
+    with pytest.raises(RpcError):
+        await mod.playbooks_create({"name": "weekly-digest", "workflow": "w"})
+
+
+def test_the_create_contract_is_mirrored_by_a_model_pair() -> None:
+    assert "playbooks.create" in METHOD_MODELS
