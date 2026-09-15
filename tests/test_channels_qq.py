@@ -49,12 +49,17 @@ def _group_msg(mid="m1", content="hello"):
 # ── parsing ────────────────────────────────────────────────────────────
 
 
-def test_the_bot_factory_hands_back_a_client_not_the_class():
+async def test_the_bot_factory_hands_back_a_client_not_the_class():
     """``start()`` assigns the factory's return straight to ``self._client`` and
     then awaits ``self._client.start(...)``, so handing back the class would fail
     at the first connect rather than here. The factory cannot declare
     ``type[botpy.Client]`` either: the local subclass takes no constructor
-    arguments while the base one requires ``intents``."""
+    arguments while the base one requires ``intents``.
+
+    Async because ``botpy.Client.__init__`` calls ``asyncio.get_event_loop()``,
+    which raises when no loop is current -- the state an earlier test leaves
+    behind on CI. Under ``asyncio_mode = "auto"`` this body runs inside a loop,
+    so the call is answered by that loop instead of by ambient state."""
     import botpy
 
     from raven.channels.adapters.qq.channel import _make_bot
