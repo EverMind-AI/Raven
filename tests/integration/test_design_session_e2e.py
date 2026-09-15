@@ -19,6 +19,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow(reason="Starts a real Design ACP process and completes a protocol round trip")
 @pytest.mark.parametrize("link_level", ["designs", "session"])
 async def test_design_acp_refuses_symlink_before_model_or_tools(tmp_path: Path, link_level: str) -> None:
     repo = Path(__file__).resolve().parents[2]
@@ -27,10 +28,11 @@ async def test_design_acp_refuses_symlink_before_model_or_tools(tmp_path: Path, 
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.txt").write_text("Outside workspace sentinel")
+    requests = []
     updates = []
 
     async def reject_model(reader, writer):
-        await reader.readline()
+        requests.append(await reader.readline())
         writer.write(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
         await writer.drain()
         writer.close()
@@ -55,7 +57,8 @@ async def test_design_acp_refuses_symlink_before_model_or_tools(tmp_path: Path, 
         )
         config = json.loads((repo / "agents/raven-design/config.json").read_text())
         config["tools"]["restrictToWorkspace"] = True
-        config["plugins"]["config"]["design-engine"]["visualDomainSelector"]["enabled"] = False
+        # Session naming runs independently of the design turn's directory guard.
+        config["sessionTitle"] = {"enabled": False}
         config["memory"]["backend"] = None
         config["plugins"]["disabled"] = ["everos-memory"]
         config["plugins"]["config"].pop("everos-memory", None)
@@ -111,6 +114,7 @@ async def test_design_acp_refuses_symlink_before_model_or_tools(tmp_path: Path, 
             assert "Design session directory unavailable" in answer
             assert "symlink" in answer.lower()
             assert "Outside workspace sentinel" not in answer
+            assert not requests
             assert not any(update.get("sessionUpdate") == "tool_call" for update in updates)
             assert sorted(p.name for p in outside.iterdir()) == ["secret.txt"]
             assert (outside / "secret.txt").read_text() == "Outside workspace sentinel"
