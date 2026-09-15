@@ -2628,7 +2628,7 @@ def register(app: typer.Typer) -> None:
         search_provider: Optional[str] = typer.Option(
             None,
             "--search-provider",
-            help="web_search vendor: serper, anysearch, serpapi, tavily, exa, brave or firecrawl",
+            help="web_search vendor: serper, anysearch, serpapi, tavily, exa, brave, firecrawl or serply",
         ),
         fetch_provider: Optional[str] = typer.Option(
             None,

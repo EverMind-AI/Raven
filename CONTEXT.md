@@ -425,7 +425,7 @@ _Avoid_: "provider" unqualified — that is the LLM Provider in this vocabulary;
 
 **Web Search Provider** / **Web Fetch Provider** (`agent/tools/web.py`, `SEARCH_PROVIDERS` / `FETCH_PROVIDERS`):
 Which interchangeable backend each web tool calls: `tools.web.search.provider` selects
-`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave` or `firecrawl`, and
+`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, `firecrawl` or `serply`, and
 `tools.web.fetch.provider` selects `jina` (default), `anysearch`, `tavily`, `exa` or
 `firecrawl`. Every endpoint is a literal in the tool, so a selection names a vendor and
 never a URL. `web_search` is registered whatever the config holds and *withheld* from the
