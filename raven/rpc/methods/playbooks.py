@@ -121,14 +121,8 @@ async def playbooks_list(params: dict) -> dict:
 
 async def playbooks_get(params: dict) -> dict:
     """One playbook, whole: params, nodes, and where the file lives."""
-    from raven.rpc.errors import ConfigValidationError
-
-    name = str(params.get("name") or "").strip()
-    if not name:
-        raise ConfigValidationError("name is required")
+    name = _known_name(params.get("name"))
     store = _store()
-    if store.origin_of(name) is None:
-        raise ConfigValidationError(f"no playbook named {name}")
     spec = store.load(name)
     # Imported here rather than at module scope: this module is loaded to
     # register RPC methods, and the MCP client package pulls the SDK in with it.
@@ -209,16 +203,40 @@ async def playbooks_get(params: dict) -> dict:
 # needs to draw the tab.
 
 
-def _spec_or_raise(name: str):
+def _known_name(raw: Any) -> str:
+    """One playbook's name, checked for shape before it reaches the store.
+
+    The shape check is not cosmetic and is not the store's job. A name is joined
+    to the library root to resolve a directory, so ``../sibling`` resolves
+    *outside* the library and is classified as a user playbook -- which made
+    every name-taking handler here read, and one of them delete, a path the
+    caller chose. ``NAME_RE`` is the boundary the library already defines and
+    ``raven playbook create`` already enforces; this is the same rule on the way
+    in rather than only on the way out.
+
+    Checked BEFORE the first lookup, because the lookup is itself the escape:
+    ``origin_of`` answers ``user`` for a traversal, so a guard placed after it
+    has already been told the wrong answer.
+
+    Answers the clean name so a caller cannot go on using the raw one.
+    """
+    import re
+
+    from raven.playbook.types import NAME_RE
     from raven.rpc.errors import ConfigValidationError
 
-    name = str(name or "").strip()
+    name = str(raw or "").strip()
     if not name:
         raise ConfigValidationError("name is required")
-    store = _store()
-    if store.origin_of(name) is None:
+    if not re.fullmatch(NAME_RE, name):
+        raise ConfigValidationError(f"playbook names are kebab-case ({NAME_RE}); got {name!r}")
+    if _store().origin_of(name) is None:
         raise ConfigValidationError(f"no playbook named {name}")
-    return store.load(name)
+    return name
+
+
+def _spec_or_raise(name: str):
+    return _store().load(_known_name(name))
 
 
 async def playbooks_credentials_get(params: dict) -> dict:
@@ -384,12 +402,7 @@ async def playbooks_set_enabled(params: dict) -> dict:
     from raven.config.update import set_playbook_disabled
     from raven.rpc.errors import ConfigValidationError
 
-    name = str(params.get("name") or "").strip()
-    if not name:
-        raise ConfigValidationError("name is required")
-    store = _store()
-    if store.origin_of(name) is None:
-        raise ConfigValidationError(f"no playbook named {name}")
+    name = _known_name(params.get("name"))
     enabled = params.get("enabled")
     if not isinstance(enabled, bool):
         raise ConfigValidationError("enabled must be true or false")
@@ -414,15 +427,9 @@ async def playbooks_validate(params: dict) -> dict:
     from raven.agent.subagent.registry import AgentRegistry
     from raven.config.loader import load_config
     from raven.playbook.validate import validate_structure
-    from raven.rpc.errors import ConfigValidationError
 
-    name = str(params.get("name") or "").strip()
-    if not name:
-        raise ConfigValidationError("name is required")
+    name = _known_name(params.get("name"))
     store = _store()
-    origin = store.origin_of(name)
-    if origin is None:
-        raise ConfigValidationError(f"no playbook named {name}")
 
     errors: list[str] = []
     spec = None
@@ -458,13 +465,9 @@ async def playbooks_delete(params: dict) -> dict:
     from raven.config.update import set_playbook_disabled
     from raven.rpc.errors import ConfigValidationError
 
-    name = str(params.get("name") or "").strip()
-    if not name:
-        raise ConfigValidationError("name is required")
+    name = _known_name(params.get("name"))
     store = _store()
     origin = store.origin_of(name)
-    if origin is None:
-        raise ConfigValidationError(f"no playbook named {name}")
     if origin == "builtin":
         raise ConfigValidationError(f"{name} is a builtin and cannot be deleted; disable it instead")
 
