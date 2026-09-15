@@ -235,6 +235,37 @@ def configure_everos_env(root: Path | str | None = None) -> None:
     os.environ["EVEROS_ROOT"] = str(resolved)
 
 
+def configure_embedding_env(embedding: Any) -> bool:
+    """Hand EverOS the host's embedding endpoint, when the host has one.
+
+    Through the env binding EverOS already documents
+    (``EVEROS_EMBEDDING__MODEL`` and friends) rather than by editing
+    ``everos.toml``: the file belongs to whoever manages the root, and on a
+    self-managed root raven promises not to write it. Environment wins over
+    the file in EverOS's settings, so a host that has configured the endpoint
+    is the one answer, and one that has not leaves whatever the file says.
+
+    The knowledge base reads the same section, which is the point: one endpoint
+    for the installation rather than one per feature. Returns whether anything
+    was set, so a caller can log which lane it took.
+
+    Must run BEFORE EverOS's cached ``load_settings()``, same as
+    :func:`configure_everos_env`.
+    """
+    model = str(getattr(embedding, "model", "") or "")
+    base_url = str(getattr(embedding, "base_url", "") or "")
+    api_key = str(getattr(embedding, "api_key", "") or "")
+    if not (model and base_url and api_key):
+        return False
+    os.environ["EVEROS_EMBEDDING__MODEL"] = model
+    os.environ["EVEROS_EMBEDDING__BASE_URL"] = base_url
+    os.environ["EVEROS_EMBEDDING__API_KEY"] = api_key
+    dimensions = getattr(embedding, "dimensions", None)
+    if isinstance(dimensions, int) and dimensions > 0:
+        os.environ["EVEROS_EMBEDDING__DIMENSIONS"] = str(dimensions)
+    return True
+
+
 def ensure_everos_home(root: Path | str | None = None) -> None:
     """Ensure the EverOS home directory has the required config files.
 

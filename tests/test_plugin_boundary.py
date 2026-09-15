@@ -27,14 +27,12 @@ _HOST_PRIVATE = re.compile(
 
 # Host surfaces built on everos's wire protocol rather than on MemoryBackend.
 # They need a contract that does not exist yet (browse / delete memories,
-# sub-agent trace records) and are out of this round's scope. ``_embedding.py``
-# and ``console.py`` are here for a second reason: they borrow everos config
-# for other features.
+# sub-agent trace records). ``console.py`` is here for a second reason: the
+# settings page reads everos config for the model roles behind extraction.
 HOST_WIRE_PROTOCOL_SURFACES: frozenset[str] = frozenset(
     {
         "raven/agent/subagent/manager.py",
         "raven/agent/subagent_memory.py",
-        "raven/knowledge/_embedding.py",
         "raven/rpc/methods/console.py",
         "raven/rpc/methods/memory.py",
     }

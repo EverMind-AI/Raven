@@ -637,6 +637,15 @@ class EverosBackend:
         """
         return self._state
 
+    def _host_embedding(self) -> Any:
+        """The host's embedding block, through the service grant.
+
+        Off ``ctx.services`` rather than read from raven's config: a plugin
+        does not open the host's config file, and this endpoint is the host's
+        to hand over.
+        """
+        return getattr(self._services, "embedding", None)
+
     async def start(self) -> None:
         try:
             self._validate_identity()
@@ -660,10 +669,21 @@ class EverosBackend:
         # Deferred from construction (make_backend) so that building a
         # backend to ask health() -- raven doctor's path -- stays read-only.
         # Runs here, once identity is known good, on every start path.
-        from raven_everos.config import configure_everos_env, ensure_everos_home, everos_owned, everos_root
+        from raven_everos.config import (
+            configure_embedding_env,
+            configure_everos_env,
+            ensure_everos_home,
+            everos_owned,
+            everos_root,
+        )
 
         root = everos_root()
         configure_everos_env(root)
+        # The host owns the embedding endpoint: one installation, one endpoint,
+        # read by the knowledge base too. Sent down here rather than kept in
+        # everos.toml, the same direction the data root above travels.
+        if configure_embedding_env(self._host_embedding()):
+            self._logger.info("EverosBackend: embedding endpoint taken from the host config")
         # See tools.py: a root the user manages is read-only, template files
         # included.
         if everos_owned():

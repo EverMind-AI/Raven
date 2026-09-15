@@ -1158,6 +1158,33 @@ class MemoryConfig(_Base):
     the ``# Recalled memory`` block."""
 
 
+class EmbeddingConfig(_Base):
+    """The OpenAI-compatible embedding endpoint raven itself uses.
+
+    Raven's own, not the memory backend's. A knowledge base indexes and
+    answers from inside the gateway process and never speaks to the memory
+    service, yet it used to read this endpoint out of EverOS's config file --
+    so selecting a different memory backend, or none, left the knowledge base
+    with no vectors and no way to say why.
+
+    The memory backend is handed these values at ``start()`` rather than
+    keeping its own copy, which is the same direction the host already sends
+    its data root in.
+    """
+
+    model: str = ""
+    """Model id as the endpoint names it, e.g. ``"Qwen/Qwen3-Embedding-4B"``."""
+    base_url: str = ""
+    """Base URL of an OpenAI-compatible ``/embeddings`` endpoint."""
+    api_key: str = ""
+    """Bearer token for that endpoint."""
+    dimensions: int | None = None
+    """Vector width, when the operator pinned one. ``None`` means ask the
+    model, and a pinned value is checked against it rather than trusted --
+    see ``raven.knowledge._manager._width_of`` for why a wrong width is worse
+    than an unknown one."""
+
+
 class HubSourceConfig(_Base):
     """Skill Hub remote-source settings (the OpenAPI skill marketplace).
 
@@ -1543,6 +1570,7 @@ class RavenConfig(_Base):
     # Plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 
     # The full base config (agents, channels, providers, tools, routing).
     # Kept as a nested field so we can round-trip the JSON with the base loader.

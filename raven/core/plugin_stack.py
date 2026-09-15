@@ -208,6 +208,7 @@ def maybe_build_memory_backend(
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
         notify=notify,
+        embedding=config.embedding,
     )
     try:
         backend = registry.build_memory_backend(

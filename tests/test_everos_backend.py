@@ -2459,3 +2459,75 @@ class TestHealth:
         h = await _backend(tmp_path).health()
         assert h.ready is False
         assert any(c.label == "server" and "start it yourself" in (c.hint or "") for c in h.checks)
+
+
+@pytest.mark.asyncio
+class TestTheHostOwnsTheEmbeddingEndpoint:
+    """One installation, one embedding endpoint.
+
+    The knowledge base reads the same block, so the backend takes it from the
+    host rather than keeping a second copy in everos.toml -- two copies of one
+    endpoint is two things to rotate, and the knowledge base used to read this
+    one out of the plugin's file, which made a feature with nothing to do with
+    memory fail whenever the plugin was absent.
+    """
+
+    @staticmethod
+    def _env_keys(monkeypatch) -> None:
+        for key in (
+            "EVEROS_EMBEDDING__MODEL",
+            "EVEROS_EMBEDDING__BASE_URL",
+            "EVEROS_EMBEDDING__API_KEY",
+            "EVEROS_EMBEDDING__DIMENSIONS",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+    async def test_a_configured_host_endpoint_reaches_everos(self, monkeypatch) -> None:
+        import os
+
+        from raven_everos.config import configure_embedding_env
+
+        self._env_keys(monkeypatch)
+        block = SimpleNamespace(model="m1", base_url="https://e.test/v1", api_key="sk-1", dimensions=1024)
+
+        assert configure_embedding_env(block) is True
+        assert os.environ["EVEROS_EMBEDDING__MODEL"] == "m1"
+        assert os.environ["EVEROS_EMBEDDING__BASE_URL"] == "https://e.test/v1"
+        assert os.environ["EVEROS_EMBEDDING__API_KEY"] == "sk-1"
+        assert os.environ["EVEROS_EMBEDDING__DIMENSIONS"] == "1024"
+
+    async def test_a_half_filled_block_sets_nothing(self, monkeypatch) -> None:
+        """All three strings or none: a model with no key cannot embed, and a
+        partial override would shadow a working everos.toml with a broken one."""
+        import os
+
+        from raven_everos.config import configure_embedding_env
+
+        self._env_keys(monkeypatch)
+        block = SimpleNamespace(model="m1", base_url="", api_key="sk-1", dimensions=None)
+
+        assert configure_embedding_env(block) is False
+        assert "EVEROS_EMBEDDING__MODEL" not in os.environ
+
+    async def test_no_host_block_sets_nothing(self, monkeypatch) -> None:
+        import os
+
+        from raven_everos.config import configure_embedding_env
+
+        self._env_keys(monkeypatch)
+
+        assert configure_embedding_env(None) is False
+        assert "EVEROS_EMBEDDING__MODEL" not in os.environ
+
+    async def test_an_unpinned_width_is_left_to_the_model(self, monkeypatch) -> None:
+        """A wrong width sizes the collection to something no vector fits, so
+        an absent one is never invented here."""
+        import os
+
+        from raven_everos.config import configure_embedding_env
+
+        self._env_keys(monkeypatch)
+        block = SimpleNamespace(model="m1", base_url="https://e.test/v1", api_key="sk-1", dimensions=None)
+
+        assert configure_embedding_env(block) is True
+        assert "EVEROS_EMBEDDING__DIMENSIONS" not in os.environ

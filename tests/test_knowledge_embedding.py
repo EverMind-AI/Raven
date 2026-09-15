@@ -1,5 +1,9 @@
-"""Tests for reading the embedding endpoint out of the EverOS config, and for
-the client that calls it."""
+"""Tests for resolving the embedding endpoint, and for the client that calls it.
+
+Raven's own ``embedding`` section is the answer; the EverOS config file is a
+fallback for an operator who has not moved the values across. Both layers are
+exercised here, plus the case where neither is configured.
+"""
 
 from __future__ import annotations
 
@@ -22,21 +26,40 @@ from raven.knowledge._embedding import (
 
 
 @pytest.fixture
-def everos_root(tmp_path, monkeypatch):
-    """The recorded root, not the environment variable.
+def raven_config(tmp_path, monkeypatch):
+    """A config file this test owns, aimed at by ``load_raven_config``."""
+    from raven.config.loader import get_config_path, set_config_path
 
-    raven writes ``EVEROS_ROOT`` from the root it recorded rather than reading
-    it, so a test that sets the variable is testing a path the product does not
-    take -- and did not notice this module reading a different file than raven
-    itself uses.
+    path = tmp_path / "config.json"
+    path.write_text("{}", encoding="utf-8")
+    before = get_config_path()
+    set_config_path(path)
+    yield path
+    set_config_path(before)
+
+
+def _write_config(path, **sections) -> None:
+    path.write_text(json.dumps(sections), encoding="utf-8")
+
+
+@pytest.fixture
+def everos_root(tmp_path, raven_config):
+    """A legacy EverOS root, recorded the way raven records it.
+
+    Through ``plugins.config["everos-memory"]["root"]`` rather than the
+    plugin's own helper: the fallback reads the recorded root with plain
+    tomllib, because importing the plugin here would put a knowledge base back
+    at the mercy of whether the memory plugin is installed.
     """
     root = tmp_path / "everos"
     root.mkdir()
-    monkeypatch.setattr("raven_everos.config.everos_root", lambda: root)
+    _write_config(raven_config, plugins={"config": {"everos-memory": {"root": str(root)}}})
     # Set too, and to somewhere else on purpose: the read must not fall back to
     # it now that the recorded root is the answer.
-    monkeypatch.setenv("EVEROS_ROOT", str(tmp_path / "not-this-one"))
-    return root
+    monkeypatch_env = pytest.MonkeyPatch()
+    monkeypatch_env.setenv("EVEROS_ROOT", str(tmp_path / "not-this-one"))
+    yield root
+    monkeypatch_env.undo()
 
 
 def _write(root, body: str) -> None:
@@ -61,9 +84,12 @@ class TestTheRavenPinDecidesWhenItIsSet:
 
     @staticmethod
     def _pin(monkeypatch, *, model, provider, credentials):
-        from raven.config.raven import KnowledgeConfig, RavenConfig
+        from raven.config.raven import KnowledgeConfig, load_raven_config
 
-        config = RavenConfig()
+        # Built from what is on disk, not from a bare RavenConfig: the legacy
+        # fallback reads the recorded EverOS root off this same object, and a
+        # stub without it would hide the very file these cases put there.
+        config = load_raven_config()
         config.knowledge = KnowledgeConfig(embedding_model=model, embedding_provider=provider)
         monkeypatch.setattr("raven.config.raven.load_raven_config", lambda: config)
         monkeypatch.setattr(
@@ -359,7 +385,7 @@ async def test_a_pinned_width_is_reported_without_a_call(mock_transport) -> None
     assert calls == []
 
 
-def test_the_recorded_root_wins_over_the_environment(tmp_path, monkeypatch) -> None:
+def test_the_recorded_root_wins_over_the_environment(tmp_path, monkeypatch, raven_config) -> None:
     """The bug this replaced: reading EVEROS_ROOT made one installation answer
     two different things -- the recorded root once the memory backend had
     exported the variable, a hardcoded ~/.everos/raven before that. On the
@@ -372,7 +398,7 @@ def test_the_recorded_root_wins_over_the_environment(tmp_path, monkeypatch) -> N
     ambient.mkdir()
     _write(ambient, _FULL.replace("text-embedding-3-small", "wrong-model"))
 
-    monkeypatch.setattr("raven_everos.config.everos_root", lambda: recorded)
+    _write_config(raven_config, plugins={"config": {"everos-memory": {"root": str(recorded)}}})
     monkeypatch.setenv("EVEROS_ROOT", str(ambient))
 
     config = load_embedding_config()
@@ -545,3 +571,60 @@ async def test_a_plain_endpoint_is_left_alone(mock_transport) -> None:
     await client.embed([text])
 
     assert sent[0][0] == text
+
+
+# --------------------------------------------------------------------------- resolution order
+
+
+def test_ravens_own_section_is_the_answer(raven_config) -> None:
+    """The endpoint a knowledge base uses is raven's to hold: it indexes and
+    answers inside the gateway process and never speaks to the memory service."""
+    _write_config(
+        raven_config,
+        embedding={"model": "host-model", "baseUrl": "https://host.test/v1/", "apiKey": "sk-host"},
+    )
+
+    config = load_embedding_config()
+
+    assert config is not None
+    assert (config.model, config.base_url, config.api_key) == ("host-model", "https://host.test/v1", "sk-host")
+
+
+def test_ravens_own_section_wins_over_the_legacy_file(everos_root, raven_config) -> None:
+    """An operator who filled raven's section is done; the old file is history."""
+    _write(everos_root, _FULL)
+    _write_config(
+        raven_config,
+        embedding={"model": "host-model", "baseUrl": "https://host.test/v1", "apiKey": "sk-host"},
+        plugins={"config": {"everos-memory": {"root": str(everos_root)}}},
+    )
+
+    config = load_embedding_config()
+
+    assert config is not None
+    assert config.model == "host-model"
+
+
+def test_a_half_filled_section_falls_through_to_the_legacy_file(everos_root, raven_config) -> None:
+    """All three strings or nothing. A model with no key cannot embed, and
+    treating it as an answer would hide a usable legacy file behind it."""
+    _write(everos_root, _FULL)
+    _write_config(
+        raven_config,
+        embedding={"model": "host-model"},
+        plugins={"config": {"everos-memory": {"root": str(everos_root)}}},
+    )
+
+    config = load_embedding_config()
+
+    assert config is not None
+    assert config.model == "text-embedding-3-small"
+
+
+def test_no_section_and_no_recorded_root_answers_none(raven_config) -> None:
+    """An install with no embedding configured has no knowledge bases, which is
+    an ordinary state -- and with no memory plugin there is no file to inherit
+    from either. The caller turns this into "configure this first"."""
+    _write_config(raven_config, memory={"backend": None})
+
+    assert load_embedding_config() is None
