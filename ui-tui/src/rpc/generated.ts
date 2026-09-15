@@ -4296,6 +4296,51 @@ export interface PlaybooksDeleteResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksRunParams".
+ */
+export interface PlaybooksRunParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
+  name: string;
+  /**
+   * The conversation this run reports to, as its own `channel:chat_id`. Required because a run's progress and completion announce are addressed to a conversation, and an RPC call is an origin nothing else sets one for.
+   */
+  session_key: string;
+  /**
+   * Values for the playbook's declared `params`. A parameter this machine holds as a stored secret is filled from there and must not be sent.
+   */
+  params?: {
+    [k: string]: JsonValue;
+  };
+  /**
+   * Node fields the author left blank, keyed by the node id written in the file. Only `subagent`, `nodeSummary` and `promptTemplate` may be filled; aimed at a field the author already wrote, the whole call is refused.
+   */
+  fills?: {
+    [k: string]: JsonValue;
+  };
+  /**
+   * The caller's statement that it already put this run to the user, so the graph-level gate does not ask a second time. Send it only when a person actually saw the run and agreed.
+   */
+  confirmed?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksRunResult".
+ */
+export interface PlaybooksRunResult {
+  name: string;
+  /**
+   * `dag`: dispatched, `reply` is the receipt. `guidance`: prompt-mode composition instructions. `gaps`: nothing was dispatched and `reply` names what is missing. `questions`: it cannot proceed and `reply` says why.
+   */
+  kind: 'dag' | 'guidance' | 'gaps' | 'questions';
+  /**
+   * The executor's own answer, verbatim. For a dispatched graph this is the receipt the run id is read out of.
+   */
+  reply: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ApprovalRespondParams".
  */
 export interface ApprovalRespondParams {

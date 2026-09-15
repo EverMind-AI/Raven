@@ -23,6 +23,7 @@ from loguru import logger
 if TYPE_CHECKING:
     from raven.playbook import PlaybookSpec, PlaybookStore
     from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods.session import AgentLoopFactory
 
 
 def _store() -> PlaybookStore:
@@ -493,7 +494,95 @@ async def playbooks_delete(params: dict) -> dict:
     return {"name": name, "deleted": True, "uncovered_builtin": uncovered}
 
 
-def register_playbooks_methods(dispatcher: Dispatcher) -> None:
+#: Whether a call arriving on this socket counts as the user naming the playbook
+#: themselves. The two entries that existed answer differently, and both say why:
+#: ``PlaybookRuntime.load``'s ``allow_disabled`` is "for the CLI, where the user
+#: named the playbook themselves", while the conversation path leaves it false
+#: because there the model chose. A client here holds the session cookie, which is
+#: the user's own credential and not something a model is handed, so it is read as
+#: the user's hand -- disabling takes a playbook out of what the *model* is
+#: offered, and this caller is not the model.
+_CALLER_NAMED_IT = True
+
+
+async def playbooks_run(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """Run one playbook, through the same entry the model's tool and the CLI use.
+
+    Answers the executor's own plan verbatim -- ``kind`` and ``reply`` -- rather
+    than a shape of this layer's devising. A ``dag`` playbook dispatches and the
+    reply is the receipt (the run id is in it, and ``_run_id_of`` states why it
+    lives in the text rather than in a field of its own); a ``prompt`` one comes
+    back as composition guidance; ``gaps`` means nothing was dispatched and names
+    what is still needed; ``questions`` says why it cannot proceed.
+
+    ``session_key`` is required, and is the whole reason this is not a thinner
+    wrapper. A run's progress and its completion announce are addressed to a
+    conversation, which the loop sets per turn on every origin it knows about.
+    An RPC call is an origin it does not: the address is a ``ContextVar`` whose
+    every consumer falls back to a ``cli:direct`` default, so a page-initiated
+    run would report somewhere nobody is looking. The key is the conversation's
+    own ``channel:chat_id``, the same pair every origin dict carries.
+
+    ``confirmed`` is the caller's own statement that it already put this run to
+    the user, which is what the executor's gate reads to avoid asking a second
+    time. Taken from the caller rather than assumed here: a page that shows a
+    confirmation and one that fires on a single click are both legitimate, and
+    only the page knows which it is. Asserting it on their behalf would skip the
+    gate with nobody having seen the graph.
+    """
+    from raven.rpc.errors import ConfigValidationError
+
+    name = _known_name(params.get("name"))
+
+    session_key = str(params.get("session_key") or "").strip()
+    channel, sep, chat_id = session_key.partition(":")
+    if not (sep and channel and chat_id):
+        raise ConfigValidationError(f"session_key must be a conversation's channel:chat_id; got {session_key!r}")
+
+    loop = None
+    if agent_loop_factory is not None:
+        try:
+            loop = agent_loop_factory()
+        except Exception:  # noqa: BLE001 - no loop is a refusal, not a crash
+            loop = None
+    runtime = getattr(loop, "_playbooks", None)
+    if runtime is None:
+        # A write, so it refuses rather than degrading to empty: answering a run
+        # with "nothing happened" would leave the caller drawing a dispatch that
+        # was never made. Both causes read the same to a caller and are named
+        # together -- playbooks switched off builds no runtime at all.
+        raise ConfigValidationError("playbooks are not running on this host, so nothing can be dispatched")
+
+    # Addressed before the dispatch, not after: the origin is read inside
+    # ``execute``, so setting it afterwards would arrive for the next call.
+    runtime.set_context(channel=channel, chat_id=chat_id, session_key=session_key)
+
+    plan = await runtime.load(
+        name,
+        params.get("params") or {},
+        params.get("fills") or {},
+        allow_disabled=_CALLER_NAMED_IT,
+        confirmed=bool(params.get("confirmed")),
+    )
+    if plan is None:
+        # ``_known_name`` already proved the directory exists, so a miss here is
+        # the runtime's own view disagreeing: a file that will not parse is absent
+        # from it. Told apart rather than reported as one, because one is fixed by
+        # editing the file and the other by enabling the playbook -- and with
+        # ``allow_disabled`` true above, only the first can actually reach here.
+        raise ConfigValidationError(f"playbook {name!r} does not load; validate it to see why")
+    return {"name": name, "kind": plan.kind, "reply": plan.reply}
+
+
+def register_playbooks_methods(
+    dispatcher: Dispatcher,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> None:
     dispatcher.register("playbooks.list", playbooks_list)
     dispatcher.register("playbooks.get", playbooks_get)
     dispatcher.register("playbooks.credentials.get", playbooks_credentials_get)
@@ -505,6 +594,11 @@ def register_playbooks_methods(dispatcher: Dispatcher) -> None:
     dispatcher.register("playbooks.validate", playbooks_validate)
     dispatcher.register("playbooks.delete", playbooks_delete)
 
+    async def _run(p: dict) -> dict:
+        return await playbooks_run(p, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("playbooks.run", _run)
+
 
 __all__ = [
     "playbooks_credentials_clear",
@@ -514,5 +608,6 @@ __all__ = [
     "playbooks_list",
     "playbooks_oauth_authorize",
     "playbooks_oauth_clear",
+    "playbooks_run",
     "register_playbooks_methods",
 ]
