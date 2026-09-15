@@ -924,7 +924,9 @@ pitch and the size the template drew, and that tuple is exactly what `place` tak
 computing a position without it is guessing at coordinates the page already holds.
 
 `ppt_theme` gives `THEMES` and `rgb`. `ppt_icons` gives `add_icon(slide, name, left,
-top, size, colour, width_pt=1.75)`, `swap_icon(slide, shape, name, colour=None)`, `find_icons(term)` and `ICON_NAMES`.
+top, size, colour, width_pt=None)` -- the pen is a twelfth of the side, the icons' own
+2-on-24 weight, unless `width_pt` fixes it -- `swap_icon(slide, shape, name, colour=None)`,
+`find_icons(term)` and `ICON_NAMES`.
 
 **Repeated units, in detail.** A content page is usually one small group repeated, and
 each repeat is written like any other line: `replace_text(slide, "the words that unit

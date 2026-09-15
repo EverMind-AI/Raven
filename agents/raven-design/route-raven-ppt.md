@@ -48,8 +48,9 @@ def icon_runs(name):
     return runs
 
 
-def add_icon(slide, name, left_in, top_in, size_in, rgb, width_pt=1.5):
-    scale, pen = size_in * EMU / 24.0, Pt(width_pt)
+def add_icon(slide, name, left_in, top_in, size_in, rgb, width_pt=None):
+    scale = size_in * EMU / 24.0
+    pen = Pt(width_pt) if width_pt else Emu(int(scale * 2))  # Tabler's 2 on a 24 grid
     for run in icon_runs(name):
         pts = [(left_in * EMU + x * scale, top_in * EMU + y * scale) for x, y in run]
         xs, ys = [x for x, _ in pts], [y for _, y in pts]
@@ -71,6 +72,6 @@ def add_icon(slide, name, left_in, top_in, size_in, rgb, width_pt=1.5):
             shape._element.remove(style)
 ```
 
-A run whose whole span is thinner than the pen is one of upstream's dots and is painted rather than stroked, which is what the `dot` branch is for; the `p:style` element has to go or the theme stamps a drop shadow under every stroke. An icon is a mark and not an illustration: around 0.7in on a card, one weight and one colour across the deck, and no filled coloured disc behind each one. Both imports live on `raven-python`, a shim on this session's PATH that runs the interpreter raven itself runs on, and not on the `python3` that PATH resolves to: probe with `raven-python -c "import raven_ppt, pptx"` and run the build script with `raven-python`; do not look for a `.venv`, build one of your own, or install python-pptx. `icons` is the module `icons.py` and not a directory, so listing that path comes back empty whether or not the package is there -- the import is the only thing that answers. If that import is not available here, design the marks yourself -- do not generate them as pictures.
+A run whose whole span is thinner than the pen is one of upstream's dots and is painted rather than stroked, which is what the `dot` branch is for; the `p:style` element has to go or the theme stamps a drop shadow under every stroke. An icon is a mark and not an illustration: around 0.7in on a card, one weight and one colour across the deck, and no filled coloured disc behind each one. The pen follows the size -- a twelfth of the side, which is the weight the icons were drawn at -- so do not pass a fixed `width_pt`: 1.5pt on a 0.7in icon is a hairline at a third of that weight. Both imports live on `raven-python`, a shim on this session's PATH that runs the interpreter raven itself runs on, and not on the `python3` that PATH resolves to: probe with `raven-python -c "import raven_ppt, pptx"` and run the build script with `raven-python`; do not look for a `.venv`, build one of your own, or install python-pptx. `icons` is the module `icons.py` and not a directory, so listing that path comes back empty whether or not the package is there -- the import is the only thing that answers. If that import is not available here, design the marks yourself -- do not generate them as pictures.
 
 With no image credentials configured, say so plainly and carry those pages on typography, grid and colour. Do not claim a search or a generation you did not run.

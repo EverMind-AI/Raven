@@ -222,8 +222,9 @@ def icon_runs(name):
     return runs
 
 
-def add_icon(slide, name, left_in, top_in, size_in, rgb, width_pt=1.5):
-    scale, pen = size_in * EMU / 24.0, Pt(width_pt)
+def add_icon(slide, name, left_in, top_in, size_in, rgb, width_pt=None):
+    scale = size_in * EMU / 24.0
+    pen = Pt(width_pt) if width_pt else Emu(int(scale * 2))  # Tabler's 2 on a 24 grid
     for run in icon_runs(name):
         pts = [(left_in * EMU + x * scale, top_in * EMU + y * scale) for x, y in run]
         xs, ys = [x for x, _ in pts], [y for _, y in pts]
