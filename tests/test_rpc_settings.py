@@ -279,22 +279,27 @@ async def test_default_permission_mode_is_a_settings_key(cfg):
         await rpc_console.settings_set({"key": "permissions.mode", "value": "yolo"})
 
 
-async def test_everos_rpcs_name_the_missing_distribution(everos_toml):
-    """Without the plugin, both handlers say what to install.
-
-    The module they import ships with ``everos-memory``, so on an install
-    without it the import used to reach the client as a generic internal error
-    carrying a traceback -- a page cannot act on that, and its own catch turns
-    it into a row that reads "not set", which is what a configured-but-empty
-    section looks like too.
-    """
+async def test_reading_without_the_plugin_says_there_is_nothing_to_configure(everos_toml):
+    """The page used to render four "not set" rows here -- identical to an
+    install where the plugin is present and merely unconfigured -- so a person
+    could fill in a model and a key and have nothing happen, with no way to
+    learn why."""
     from tests._everos_presence import everos_plugin_absent
 
     with everos_plugin_absent():
-        for call in (
-            rpc_console.settings_everos({}),
-            rpc_console.settings_everos_set({"section": "llm", "fields": {"model": "m"}}),
-        ):
-            with pytest.raises(ConfigValidationError) as caught:
-                await call
-            assert "everos-memory" in str(caught.value)
+        out = await rpc_console.settings_everos({})
+
+    assert out["available"] is False
+    assert out["sections"] == {}
+    assert "everos-memory" in out["note"]
+
+
+async def test_writing_without_the_plugin_is_a_typed_error(everos_toml):
+    """A save has somewhere to fail, unlike a read: the page surfaces a write
+    error. What it must not be is a traceback wrapped as an internal error."""
+    from tests._everos_presence import everos_plugin_absent
+
+    with everos_plugin_absent(), pytest.raises(ConfigValidationError) as caught:
+        await rpc_console.settings_everos_set({"section": "llm", "fields": {"model": "m"}})
+
+    assert "everos-memory" in str(caught.value)

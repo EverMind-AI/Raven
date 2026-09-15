@@ -24,6 +24,9 @@ export interface MemStats {
   profiles: number
   agent_cases: number
   agent_skills: number
+  /* Why the counts are all zero, when that is not a failure: no memory
+     plugin installed, or one installed that memory.backend does not name. */
+  note?: string | null
 }
 
 export interface MemListRequest {
@@ -36,6 +39,9 @@ export interface MemListRequest {
 export interface MemListResult {
   items?: MemItem[]
   total?: number
+  /* Same note MemStats carries: an empty page with a reason rather than an
+     error with a retry button that cannot help. */
+  note?: string | null
 }
 
 /* The DS.memory contract both the fixture source (demo shell) and the rpc

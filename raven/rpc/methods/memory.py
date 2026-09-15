@@ -37,6 +37,11 @@ if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
 
 _HTTP_TIMEOUT_S = 15.0
+# The backend contribution whose store this page reads. Named once: the page
+# is EverOS-shaped down to its four tabs, so every check for "is this page
+# looking at the right store" has to mean the same thing.
+_EVEROS_BACKEND = "everos"
+
 _USER_KINDS = ("episode", "profile")
 _AGENT_KINDS = ("agent_case", "agent_skill")
 _KINDS = _USER_KINDS + _AGENT_KINDS
@@ -122,15 +127,46 @@ def _project(kind: str, row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _unavailable_note() -> str | None:
+    """Why this page has nothing to show, in a sentence, or ``None``.
+
+    Two ways to arrive at an empty memory browser that are not a failure and
+    that a person cannot tell apart from one: the plugin is not installed, and
+    the plugin is installed but is not what ``memory.backend`` names. Both used
+    to render as four zeros or a retry button, which reads as "your memories
+    are gone" rather than "this page is not where they are".
+    """
+    from raven.config.raven import load_raven_config
+
+    if not everos_plugin_installed():
+        return everos_plugin_missing_note()
+    try:
+        backend = load_raven_config().memory.backend
+    except Exception:  # noqa: BLE001 - an unreadable config is not this page's to report
+        return None
+    if backend == _EVEROS_BACKEND:
+        return None
+    if not backend:
+        return "Long-term memory is turned off, so there is nothing stored to browse."
+    return (
+        f"Long-term memory runs on {backend!r}, and this page reads EverOS's store only. "
+        "Nothing here is what recall uses."
+    )
+
+
 async def memory_stats(params: dict) -> dict:
     """``memory.stats`` — never raises; the page opens even when EverOS is down."""
     del params
-    if not everos_plugin_installed():
-        # Same shape as an unreachable server, because it is the same answer to
-        # the page's question: no counts, and nothing it can do about it here.
-        logger.warning("memory.stats: {}", everos_plugin_missing_note())
+    note = _unavailable_note()
+    if note is not None:
+        # Same shape as an unreachable server plus the one thing that shape
+        # could never carry: why. Without it the page says zero and leaves the
+        # reader to guess between "not installed", "not the configured
+        # backend", and "your memories are gone".
+        logger.warning("memory.stats: {}", note)
         return {
             "ok": False,
+            "note": note,
             "base_url": "",
             "episodes": 0,
             "profiles": 0,
@@ -155,6 +191,7 @@ async def memory_stats(params: dict) -> dict:
             ok = False
     return {
         "ok": ok,
+        "note": None,
         "base_url": base_url,
         "episodes": counts["episode"],
         "profiles": counts["profile"],
@@ -167,8 +204,12 @@ async def memory_list(params: dict) -> dict:
     kind = str(params.get("kind") or "")
     if kind not in _KINDS:
         raise ConfigValidationError(f"unknown memory kind: {kind!r}")
-    if not everos_plugin_installed():
-        raise InternalError(everos_plugin_missing_note())
+    note = _unavailable_note()
+    if note is not None:
+        # An empty page carrying the reason, not an error. This is not a
+        # failure -- there is simply no EverOS store to list here -- and a
+        # retry button offers an action that cannot help.
+        return {"items": [], "total": 0, "page": 1, "page_size": 0, "note": note}
     page = max(1, int(params.get("page") or 1))
     page_size = min(100, max(1, int(params.get("page_size") or 20)))
     q = str(params.get("q") or "").strip()
@@ -184,7 +225,7 @@ async def memory_list(params: dict) -> dict:
             )
             rows = (payload.get("data") or {}).get(_KIND_FIELD[kind]) or []
             items = [_project(kind, r) for r in rows]
-            return {"items": items, "total": len(items), "page": 1, "page_size": page_size}
+            return {"items": items, "total": len(items), "page": 1, "page_size": page_size, "note": None}
         payload = await _post(
             base_url,
             "/api/v1/memory/get",
@@ -195,6 +236,7 @@ async def memory_list(params: dict) -> dict:
         items = [_project(kind, r) for r in rows]
         return {
             "items": items,
+            "note": None,
             "total": int(data.get("total_count", len(items))),
             "page": page,
             "page_size": page_size,
