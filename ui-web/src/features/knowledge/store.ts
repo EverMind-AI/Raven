@@ -339,10 +339,25 @@ function suffixOf(doc: KbDoc): string {
   return dot < 0 ? '' : name.slice(dot + 1).toLowerCase()
 }
 
-export function previewKind(doc: KbDoc): 'native' | 'converted' | 'none' {
+/* Markdown is its own kind because framing it shows the source. The gateway
+   serves .md as text/plain -- correctly, it is text -- and a frame then draws
+   the hashes and the pipes, which is the file rather than the document. */
+const MARKDOWN = new Set(['md', 'markdown', 'mdx'])
+
+export function previewKind(doc: KbDoc): 'markdown' | 'native' | 'converted' | 'none' {
   const ext = suffixOf(doc)
+  if (MARKDOWN.has(ext)) return 'markdown'
   if (CONVERTED.has(ext)) return 'converted'
   return NATIVE.has(ext) ? 'native' : 'none'
+}
+
+/* The text behind a document, for the kinds the page renders itself rather
+   than frames. Read through the same route the frame uses, so there is one
+   answer to "where do these bytes come from". */
+export async function readText(doc: KbDoc): Promise<string> {
+  const res = await fetch(previewUrl(doc))
+  if (!res.ok) throw new Error((await res.text()).trim() || `${res.status} ${res.statusText}`)
+  return res.text()
 }
 
 export function previewUrl(doc: KbDoc): string {
