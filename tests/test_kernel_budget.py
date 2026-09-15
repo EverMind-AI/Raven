@@ -87,6 +87,13 @@ internals), and ``contracts/onboard.py`` is a new paper (``OnboardUI`` /
 ``OnboardStep`` / ``StepOutcome``, the screen a memory plugin contributes to
 ``raven onboard``). Measured at 2,938 on top of the ``CallRecord`` round
 above; the headroom is the same twenty-odd lines as above, for the same reason.
+
+2,960 -> 2,990 (2026-09-15): two grants the seam round left implicit. A
+memory backend gained ``delete()``, which the memory browser needs in order to
+stop deleting a derived index row behind a source of truth that keeps the text;
+and ``ServiceLocator`` gained the host's embedding block, so the knowledge base
+and the memory backend read one endpoint rather than a copy each. Measured at
+2,969; the headroom is the same twenty-odd lines, for the same reason.
 """
 
 from __future__ import annotations
@@ -97,7 +104,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 2_960
+CONTRACTS_LINE_CEILING = 2_990
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

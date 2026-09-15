@@ -143,7 +143,7 @@ class BackendHealth:
 class MemoryBackend(Protocol):
     """The single contract every memory plugin implements.
 
-    Six methods, ordered by hot-path:
+    Seven methods, ordered by hot-path:
 
     1. :meth:`recall` — called by ``ContextEngine.assemble`` every turn
        (potentially twice: once for user-track memory with ``user_id``,
@@ -157,6 +157,8 @@ class MemoryBackend(Protocol):
     4. :meth:`start` / :meth:`stop` — lifecycle, awaited by the host.
     5. :meth:`health` — asked by ``raven doctor`` and ``raven import``,
        off the turn path, before or after ``start``.
+    6. :meth:`delete` — asked by the memory browser when a person removes
+       one memory; never on the turn path.
     """
 
     async def recall(
@@ -219,6 +221,26 @@ class MemoryBackend(Protocol):
         that returns ``None`` (or anything else falsy-but-not-``False``)
         has not claimed the write was lost, so callers treat it as
         landed.
+        """
+        ...
+
+    async def delete(self, memory_id: str, *, kind: str | None = None) -> bool:
+        """Remove one memory from what :meth:`recall` can return.
+
+        ``kind`` is backend-native and opaque to the host: the host echoes back
+        whatever its own listing handed it and never interprets the value, the
+        same escape hatch ``Memory.metadata`` is.
+
+        ``False`` means this memory was not deleted -- the backend does not
+        support deletion at all, does not support this kind, or had no such
+        row. A no-op implementation returning ``False`` is valid and idiomatic,
+        like :meth:`feedback`; a caller turns it into "this cannot be deleted
+        here" rather than reporting a removal that did not happen.
+
+        Whatever the backend treats as its source of truth is what must change.
+        Deleting only a derived index leaves the memory recallable again the
+        moment that index is rebuilt, which is indistinguishable from the
+        delete never happening -- and worse, because the user was told it had.
         """
         ...
 

@@ -83,6 +83,12 @@ class _DictBackend:
     async def health(self):
         return None
 
+    async def delete(self, memory_id: str, *, kind: str | None = None) -> bool:
+        # This fake keeps memories in a dict and has no removal of its own:
+        # ``False`` is the documented answer for a backend that does not
+        # delete, and the contract test asserts exactly that.
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Run the contract base against the fake backend

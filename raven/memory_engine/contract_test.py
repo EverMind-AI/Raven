@@ -152,6 +152,19 @@ class MemoryBackendContractTests:
             assert isinstance(c, HealthCheck)
             assert c.status in ("ok", "degraded", "missing")
 
+    async def test_delete_reports_a_bool_and_tolerates_an_unknown_id(self, backend) -> None:
+        """A backend that cannot delete says so; it does not raise.
+
+        The caller is a person clicking a button, and the two answers it has to
+        tell apart are "gone" and "this cannot be removed here". An exception
+        is neither, and an id nothing matches is the ordinary shape of a second
+        click on a row someone else already removed.
+        """
+        answer = await backend.delete("no-such-id-9d1f", kind="no-such-kind")
+
+        assert isinstance(answer, bool)
+        assert answer is False
+
 
 class LifecycleContractTests:
     """Lifecycle tests run **without** the ``backend`` fixture so they
