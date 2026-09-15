@@ -288,13 +288,13 @@ DEP003 = ["raven_everos", "requests", "cryptography"]
 
 [tool.ty]
 # A call-correctness gate, not a typing-strictness project. Of ty's 133 rules,
-# 108 are live here and this tree satisfies all of them -- measured at zero, or
-# cleared to zero in the change that added this block. They answer "is this
+# 109 are live here and this tree satisfies all of them -- measured at zero, or
+# cleared to zero. They answer "is this
 # call, override or annotation self-consistent" -- the class of error a test
 # only finds by executing the line, which is exactly what a bundled plugin's
 # render path or a rarely-taken CLI branch does not do in CI.
 #
-# The other 25: eleven switched off below, and fourteen that ship disabled
+# The other 24: ten switched off below, and fourteen that ship disabled
 # upstream and are left that way (the `unsound-*` family, `division-by-zero`,
 # the `possibly-*` family and friends). Those fourteen are unmeasured, not
 # satisfied -- turning any of them on is its own sized change.
@@ -315,6 +315,16 @@ DEP003 = ["raven_everos", "requests", "cryptography"]
 # `--all-extras` (1205 both ways), unlike deptry, whose verdict does move with
 # what is installed. The Makefile still uses --all-extras so that turning any
 # resolution-sensitive rule back on does not silently change meaning.
+# The three agent products keep their plugin package beside them rather than in
+# plugins-dist, so their roots are not on the path a plain run sees. ruff has the
+# same list for plugins-dist under [tool.ruff] src, for the same reason.
+[tool.ty.environment]
+extra-paths = [
+    "agents/raven-code/plugins/code-flow",
+    "agents/raven-oncall/plugins/oncall-flow",
+    "agents/raven-research/plugins/research-flow",
+]
+
 [tool.ty.rules]
 # 725: 432 of them are the agent-loop mixins reaching for attributes the host
 # class owns (`Self@<method>` has no attribute ...), and 180 more are attribute
@@ -333,10 +343,6 @@ invalid-return-type = "ignore"     #  39 -- hid a regression introduced while wr
 invalid-assignment = "ignore"      #  33
 not-subscriptable = "ignore"       #  32
 unsupported-operator = "ignore"    #  28
-# 21: 8 are real (stale module paths in scripts/, and one import naming
-# `SkillForgeRouterConfig` from raven.config.schema, where it does not live);
-# the rest are lxml's stub layout and packages only present inside soffice.
-unresolved-import = "ignore"       #  21
 not-iterable = "ignore"            #  21
 redundant-condition = "ignore"     #   7 (warn by default)
 unsupported-base = "ignore"        #   2 (warn by default)
@@ -529,6 +535,7 @@ dev = [
     "import-linter>=2.14",
     "json-repair>=0.59.5",
     "jsonschema>=4.23.0",
+    "lxml-stubs>=0.5.1",
     "packaging>=26.1",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",

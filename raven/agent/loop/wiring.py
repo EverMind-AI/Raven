@@ -48,7 +48,8 @@ if TYPE_CHECKING:
     from raven.agent.subagent.charter import Charter
     from raven.agent.subagent.delegate import DelegateTable
     from raven.agent.tools.deliverables import DeliverableStore
-    from raven.config.schema import PlaybookConfig, SkillForgeRouterConfig
+    from raven.config.raven import SkillForgeRouterConfig
+    from raven.config.schema import PlaybookConfig
     from raven.contracts.asking import QuestionResponder
     from raven.providers.pool import ProviderPool
     from raven.skill_hub import SkillHubClient
