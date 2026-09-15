@@ -77,6 +77,9 @@ export interface KnowledgeSource {
      searched by vector. Not revisable: a collection's width is fixed when it
      is made, so the choice belongs to creation or nowhere. */
   create(name: string, description: string, embedding?: boolean): Promise<KbBase>
+  /* A base's name, which is the one thing about it that carries no index
+     consequence. Refused when another base already holds it. */
+  rename(id: string, name: string): Promise<KbBase>
   remove(id: string): Promise<unknown>
   /* Write one base's settings. Not the embedding model: the store is sized to
      its vector width, so changing it is a rebuild rather than a setting. */

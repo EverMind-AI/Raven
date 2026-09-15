@@ -543,7 +543,7 @@ describe('documents and search', () => {
     await act(async () => {
       await store.open_('b1')
     })
-    expect(document.querySelectorAll('.kbops .dots').length).toBe(2)
+    expect(document.querySelectorAll('.kbtable .kbops .dots').length).toBe(2)
     await openRowMenu('done.md')
     expect(screen.getByText('gui.kb.doc_reindex')).toBeTruthy()
     expect(screen.getByText('gui.kb.delete')).toBeTruthy()
@@ -2212,5 +2212,164 @@ describe('picking several files at once', () => {
       store.back()
     })
     expect(store.getState().picked).toEqual([])
+  })
+})
+
+describe('renaming and deleting a base', () => {
+  const openRail = async (over: Partial<KnowledgeSource> = {}) => {
+    toastHost()
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook', documents: 8 })],
+      documents: async () => [],
+      ...over,
+    })
+    await mount()
+  }
+
+  const openBaseMenu = async () => {
+    await act(async () => {
+      ;(document.querySelector('.kbrail .kbops .dots') as HTMLButtonElement).click()
+    })
+  }
+
+  it('puts both actions behind the row, and neither in front of it', async () => {
+    /* A column of dots down an untouched list is noise, so the control shows
+       on the row being pointed at or on the open one. */
+    await openRail()
+
+    expect(document.querySelector('.kbrail .kbmenu')).toBeNull()
+    await openBaseMenu()
+    const items = [...document.querySelectorAll('.kbrail .kbmenu .mi')].map((b) => b.textContent)
+    expect(items).toEqual(['gui.kb.rename', 'gui.kb.delete_base'])
+  })
+
+  it('still opens the base when the row itself is clicked', async () => {
+    /* The menu is a control inside the row, and a button cannot hold another,
+       so the row stopped being one. It has to keep doing what it did. */
+    await openRail()
+
+    await act(async () => {
+      ;(document.querySelector('.kbrail .kbopenb') as HTMLButtonElement).click()
+    })
+
+    expect(store.getState().openId).toBe('b1')
+  })
+
+  it('renames a base and keeps the row it renamed', async () => {
+    const asked: Array<[string, string]> = []
+    await openRail({
+      rename: async (id: string, name: string) => {
+        asked.push([id, name])
+        return base({ id, name, documents: 8 })
+      },
+    })
+
+    await openBaseMenu()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.rename').closest('button') as HTMLButtonElement).click()
+    })
+    const field = document.getElementById('kbrename') as HTMLInputElement
+    /* Opens on the name it has, selected, so replacing it is one gesture. */
+    expect(field.value).toBe('handbook')
+
+    await act(async () => {
+      fireEvent.change(field, { target: { value: '  staff handbook  ' } })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.save').closest('button') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+
+    expect(asked).toEqual([['b1', 'staff handbook']])
+    expect(store.getState().bases[0]!.name).toBe('staff handbook')
+    expect(document.getElementById('kbrename')).toBeNull()
+  })
+
+  it('spends no request on a name that did not change', async () => {
+    let calls = 0
+    await openRail({
+      rename: async (id: string, name: string) => {
+        calls += 1
+        return base({ id, name })
+      },
+    })
+
+    await openBaseMenu()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.rename').closest('button') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.save').closest('button') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+
+    expect(calls).toBe(0)
+    expect(document.getElementById('kbrename')).toBeNull()
+  })
+
+  it('keeps the dialog open and says why when the name is taken', async () => {
+    /* The engine refuses a name another base holds -- the same rule creation
+       applies, or renaming would be the way around it. Throwing the typed name
+       away with the dialog would mean typing it again. */
+    await openRail({
+      rename: async () => {
+        throw new Error('a knowledge base called staff handbook already exists')
+      },
+    })
+
+    await openBaseMenu()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.rename').closest('button') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      fireEvent.change(document.getElementById('kbrename') as HTMLInputElement, {
+        target: { value: 'staff handbook' },
+      })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.save').closest('button') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+
+    expect(toasts()).toEqual(['a knowledge base called staff handbook already exists'])
+    expect(document.getElementById('kbrename')).not.toBeNull()
+  })
+
+  it('warns before deleting, naming the base and what goes with it', async () => {
+    const removed: string[] = []
+    await openRail({
+      remove: async (id: string) => {
+        removed.push(id)
+        return {}
+      },
+    })
+
+    await openBaseMenu()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.delete_base').closest('button') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+
+    /* Asked, not done: everything in the base goes with it. The prompt names
+       the base and how many documents are in it. */
+    expect(confirms).toEqual(['gui.kb.delete_body {"name":"handbook","n":8}'])
+    expect(removed).toEqual(['b1'])
+  })
+
+  it('leaves the panel behind when the base it belonged to is deleted', async () => {
+    await openRail({ remove: async () => ({}) })
+    await act(async () => {
+      await store.open_('b1')
+    })
+    expect(store.getState().openId).toBe('b1')
+
+    await openBaseMenu()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.delete_base').closest('button') as HTMLButtonElement).click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(store.getState().openId).toBeNull()
   })
 })
