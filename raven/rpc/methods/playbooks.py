@@ -386,17 +386,14 @@ async def playbooks_oauth_clear(params: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# The library as a thing a person changes, not only reads.
+# The library as a thing a person changes and runs, not only reads.
 #
-# Everything below has been reachable from `raven playbook` since the library
-# shipped; what it has not been is reachable from anything else. A surface that
-# can draw a playbook as disabled and offer no way to enable it is showing a
-# state it cannot act on, which is the gap these close.
-#
-# Deliberately not here: `run` and `create`. Both take model time -- a graph to
-# completion, a generation -- and a JSON-RPC call that occupies the socket for
-# minutes blocks every other call on it. They need a dispatch that answers with
-# a handle and reports progress, which is a different change.
+# Everything below is reachable from `raven playbook`, and the rule these
+# handlers keep is that they reach it through the same door rather than around
+# it: enabling writes the deny list the CLI writes, running goes through the
+# runtime the model's own tool goes through, and creation binds the composer
+# both creation entries bind. A second path to the same library would be a
+# second place for its rules to live.
 
 
 async def playbooks_set_enabled(params: dict) -> dict:
