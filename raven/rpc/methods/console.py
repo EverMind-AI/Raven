@@ -1069,7 +1069,11 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
             # the one a knowledge base goes on reading.
             cur = host_embedding_section()
         model = str(cur.get("model") or "")
-        # The shipped template seeds placeholder "<...>" model names.
+        # A guard against a hand-written "<fill me>", not the mechanism that
+        # makes an unconfigured role read as unset: the shipped template seeds
+        # every section with a real model name and an empty key, so a role
+        # nobody configured arrives here with a model. `api_key_set` is what
+        # carries "not configured" to the card.
         if model.startswith("<"):
             model = ""
         sections[sec] = {

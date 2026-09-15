@@ -308,10 +308,9 @@ def embedding_env(values: Any) -> dict[str, str]:
 
     Empty when the three values are not all present -- fewer than three is not
     an endpoint -- and empty when ``everos.toml`` carries an ``[embedding]`` of
-    its own: an operator who wrote one chose that endpoint for memory
-    specifically, and reusing the host's is a convenience they may decline. The
-    shipped template seeds a placeholder ``"<...>"`` model name, which is not a
-    choice anybody made.
+    its own, which :func:`everos_has_own_embedding` decides: an operator who
+    wrote one chose that endpoint for memory specifically, and reusing the
+    host's is a convenience they may decline.
     """
     model = str(values.get("model") or "")
     base_url = str(values.get("base_url") or "")
