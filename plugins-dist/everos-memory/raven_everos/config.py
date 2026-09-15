@@ -116,13 +116,13 @@ def root_is_raven_owned(root: Path | str) -> bool:
     return any(resolved == owned for owned in raven_owned_roots())
 
 
-def _recorded_slice() -> dict[str, Any]:
-    """raven's ``plugins.config["everos-memory"]``, read as raw JSON.
+def _raven_config_raw() -> dict[str, Any]:
+    """raven's config.json, parsed and nothing more.
 
     Raw rather than through the validated config so that ``raven doctor`` and
-    the runtime can ask "which root" without paying for schema validation, and
-    so an unrelated validation error elsewhere cannot make the memory path
-    unreadable. An absent or unparseable file reads as "nothing recorded".
+    the runtime can ask small questions of it without paying for schema
+    validation, and so an unrelated validation error elsewhere cannot make the
+    memory path unreadable. An absent or unparseable file reads as empty.
     """
     from raven.home import get_config_path
 
@@ -131,8 +131,38 @@ def _recorded_slice() -> dict[str, Any]:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError, ValueError):
         return {}
-    if not isinstance(data, dict):
+    return data if isinstance(data, dict) else {}
+
+
+def host_embedding_section() -> dict[str, str]:
+    """raven's ``embedding`` block, in this module's spelling.
+
+    Raven's config writes camelCase; everos.toml and the rest of this module
+    speak snake_case, so the two names each value can have are resolved here
+    once rather than at every reader.
+
+    Empty when the block is absent or incomplete -- all three values are what
+    :func:`configure_embedding_env` needs before it binds anything, so anything
+    less is not an endpoint.
+    """
+    block = _raven_config_raw().get("embedding")
+    if not isinstance(block, dict):
         return {}
+    got = {
+        "model": str(block.get("model") or ""),
+        "base_url": str(block.get("baseUrl") or block.get("base_url") or ""),
+        "api_key": str(block.get("apiKey") or block.get("api_key") or ""),
+    }
+    return got if all(got.values()) else {}
+
+
+def _recorded_slice() -> dict[str, Any]:
+    """raven's ``plugins.config["everos-memory"]``, read as raw JSON.
+
+    Falls back to the friendlier ``everos`` key, which older configs recorded
+    the slice under. An absent or unparseable file reads as "nothing recorded".
+    """
+    data = _raven_config_raw()
     plugins = data.get("plugins") or {}
     slice_ = (plugins.get("config") or {}).get("everos-memory") if isinstance(plugins, dict) else None
     if not isinstance(slice_, dict) and isinstance(plugins, dict):
@@ -379,8 +409,17 @@ def everos_role_configured(section: str) -> bool:
     Lives beside the writers rather than in the wizard so a reader does not have
     to import it: the wizard module costs ~290ms to load, which `raven doctor`
     (a millisecond command) would otherwise pay just to answer this.
+
+    ``embedding`` has two homes since its endpoint became raven's: the toml
+    still wins when an operator wrote one there, and raven's block fills the
+    gap -- the same precedence :func:`configure_embedding_env` binds with.
+    Asking the toml alone made doctor, the wizard's recap and the
+    unavailable-embedding warning all answer "not configured" the moment the
+    wizard wrote the endpoint where it now belongs.
     """
-    return role_configured_in(load_everos_config(), section)
+    if role_configured_in(load_everos_config(), section):
+        return True
+    return section == "embedding" and bool(host_embedding_section())
 
 
 def set_everos_section(section: str, fields: dict[str, Any]) -> None:
