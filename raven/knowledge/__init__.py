@@ -11,7 +11,7 @@ question about a document.
 from raven.knowledge._chunker import ApproxTokenChunker, ChunkerBase
 from raven.knowledge._embedding import EmbeddingClient, EmbeddingConfig, EmbeddingError, load_embedding_config
 from raven.knowledge._lancedb import LanceDBVectorStore
-from raven.knowledge._manager import KnowledgeError, KnowledgeManager, StaleBaseError
+from raven.knowledge._manager import DuplicateBaseNameError, KnowledgeError, KnowledgeManager, StaleBaseError
 from raven.knowledge._parser import ParserBase, TextParser
 from raven.knowledge._records import (
     KnowledgeBaseRecord,
@@ -48,6 +48,7 @@ __all__ = [
     "ParserBase",
     "RecordStore",
     "Section",
+    "DuplicateBaseNameError",
     "StaleBaseError",
     "StructuredTextParser",
     "TextBlock",

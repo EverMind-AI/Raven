@@ -27,6 +27,15 @@ class KnowledgeError(RuntimeError):
     """A knowledge base could not do what was asked of it."""
 
 
+class DuplicateBaseNameError(KnowledgeError):
+    """A base already goes by that name.
+
+    Names are how a person tells their bases apart -- the rail shows nothing
+    else -- so two bases called the same thing leaves them picking between two
+    identical rows and finding out which was which by opening both.
+    """
+
+
 class StaleBaseError(KnowledgeError):
     """The base was indexed with an embedding model that is no longer configured.
 
@@ -144,6 +153,7 @@ class KnowledgeManager:
         The absence is recorded as an empty model and a zero width, which is
         what every reader here already tests for.
         """
+        self._refuse_taken_name(name)
         if not embedding:
             return self._records.create_base(name=name, embedding_model="", dimensions=0, description=description)
         client = self._client()
@@ -158,6 +168,23 @@ class KnowledgeManager:
         # is an edit, and a collection that followed it would strand its rows.
         await self._store.create_collection(record.id, width)
         return record
+
+    def _refuse_taken_name(self, name: str, *, allow: str | None = None) -> None:
+        """Stop a second base taking a name another one already has.
+
+        Compared casefolded and stripped, because two bases called "t3" and
+        "T3 " are the same problem as two called "t3": the rail shows the name
+        and nothing else, so the reader cannot tell them apart either way.
+        What is stored is still what was typed.
+
+        ``allow`` is the base being renamed, which may of course keep its own
+        name -- without it, saving a rename that changed only the description
+        would fail against itself.
+        """
+        wanted = name.strip().casefold()
+        for base in self._records.list_bases():
+            if base.id != allow and base.name.strip().casefold() == wanted:
+                raise DuplicateBaseNameError(f"a knowledge base called {base.name!r} already exists")
 
     @staticmethod
     def embeds(base: KnowledgeBaseRecord) -> bool:
@@ -178,6 +205,9 @@ class KnowledgeManager:
     def rename_base(
         self, base_id: str, *, name: str | None = None, description: str | None = None
     ) -> KnowledgeBaseRecord | None:
+        # The same rule as creation, or renaming is the way around it.
+        if name is not None:
+            self._refuse_taken_name(name, allow=base_id)
         return self._records.rename_base(base_id, name=name, description=description)
 
     async def delete_base(self, base_id: str) -> bool:
