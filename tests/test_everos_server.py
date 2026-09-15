@@ -1260,3 +1260,27 @@ class TestFindingTheHolderWithoutLsof:
         monkeypatch.setattr(_server, "_read_pidfile", lambda: None)
 
         assert _server._lock_holder_pid(tmp_path / "ome.db.lock", tmp_path) == 222
+
+
+class TestChildEnv:
+    """What the spawned server is handed, which is the only thing it reads."""
+
+    def test_a_deliberate_binding_outranks_the_host_block(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A started backend binds the endpoint for the root it knows. The fill
+        below is for the launches nobody bound, so it must not overwrite one."""
+        monkeypatch.setenv("EVEROS_EMBEDDING__MODEL", "bound-by-the-backend")
+        monkeypatch.setattr(
+            "raven_everos.config.host_embedding_env",
+            lambda: {"EVEROS_EMBEDDING__MODEL": "from-ravens-block"},
+        )
+
+        assert everos_server._child_env()["EVEROS_EMBEDDING__MODEL"] == "bound-by-the-backend"
+
+    def test_a_port_inherited_from_ravens_own_environment_is_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """EverOS resolves env above the toml, so an inherited EVEROS_API__PORT
+        would outrank the [api] section that is meant to be the sole authority
+        on where a server for this root listens."""
+        monkeypatch.setenv("EVEROS_API__PORT", "9999")
+        monkeypatch.setattr("raven_everos.config.host_embedding_env", dict)
+
+        assert "EVEROS_API__PORT" not in everos_server._child_env()
