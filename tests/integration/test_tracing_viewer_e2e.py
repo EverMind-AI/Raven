@@ -272,6 +272,8 @@ def _sessions_across_two_files(tmp_path):
     Carries events of both shapes on purpose. One is attributed by session id,
     the other only by session key -- and the key-only shape is the one a reader
     can drop silently, which is exactly what happened until a review caught it.
+    A third shape carries neither, so the comparisons below also reach the
+    derived per-day session that both readers have to spell the same way.
     """
     logs = tmp_path / "logs"
     early = _span("split-session", "span-early", start="2026-07-01T00:00:00+00:00")
@@ -280,7 +282,12 @@ def _sessions_across_two_files(tmp_path):
     _write_spans(logs / "archive" / "2026-07-01" / "audit-spans-2026-07-01-1.log", [early])
     _write_spans(
         logs / "audit-spans.log",
-        [late, _span("other-session", "span-other"), _span("third-session", "span-third")],
+        [
+            late,
+            _span("other-session", "span-other"),
+            _span("third-session", "span-third"),
+            _sessionless_span("span-sessionless"),
+        ],
     )
     _write_events(
         logs / "audit-events.log",
