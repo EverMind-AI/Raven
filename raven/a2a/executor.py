@@ -31,6 +31,7 @@ from loguru import logger
 
 from raven.a2a.asking import A2aQuestionBroker
 from raven.a2a.lifecycle import task_state_for
+from raven.contracts.asking import QuestionResponder
 
 TURN_FAILED_MESSAGE = "The agent turn failed. Ask the operator of this agent to check its logs."
 
@@ -44,7 +45,7 @@ class RunTurn(Protocol):
     `AgentProfileSource`) instead of a type alias.
     """
 
-    async def __call__(self, prompt: str, *, conversation_id: str, broker: A2aQuestionBroker | None) -> str: ...
+    async def __call__(self, prompt: str, *, conversation_id: str, broker: QuestionResponder | None) -> str: ...
 
 
 class RavenAgentExecutor(AgentExecutor):

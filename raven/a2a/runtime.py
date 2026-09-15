@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, Callable
-from typing import Any, Protocol
+from typing import Any
 
 from a2a.helpers import get_message_text
 from a2a.server.context import ServerCallContext
@@ -39,26 +39,13 @@ from google.protobuf.message import Message as ProtoMessage
 from loguru import logger
 
 from raven.a2a.card import build_agent_card
-from raven.a2a.executor import RavenAgentExecutor
+from raven.a2a.executor import RavenAgentExecutor, RunTurn
 from raven.a2a.routes_aiohttp import add_a2a_routes
 from raven.config.schema import A2aConfig
 from raven.contracts.asking import QuestionResponder
 from raven.permissions.turn import start_permission_turn
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
-
-
-class RunTurn(Protocol):
-    """One inbound A2A prompt run as a raven turn.
-
-    A plain `Callable[[str], Awaitable[str]]` alias cannot express the
-    keyword-only `conversation_id`/`broker` parameters below, so this is a
-    `Protocol` (same idiom as `raven/playbook/agent_profiles.py`'s
-    `AgentProfileSource`) instead of a type alias.
-    """
-
-    async def __call__(self, prompt: str, *, conversation_id: str, broker: QuestionResponder | None) -> str: ...
-
 
 #: JSON-RPC method name -> the protobuf request type ``ParseDict`` should build.
 #: Keyed by the same ``on_*`` names ``routes_aiohttp.METHODS`` maps JSON-RPC
