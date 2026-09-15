@@ -56,9 +56,52 @@ from raven.security.network import validate_url_target
 from research_flow.support.evidence_round import EvidenceRound
 from research_flow.support.harness_text import search_closed_notice
 from research_flow.support.ledger import ledger_append as _ledger_append
+from research_flow.support.ledger import verbatim_append as _verbatim_append
+from research_flow.support.ledger import verbatim_path as _verbatim_path
 from research_flow.support.search_saturation import SearchSaturation
 
-DigestFn = Callable[[str, str], Awaitable[str]]
+DigestFn = Callable[[str, str], Awaitable["str | DigestOutput"]]
+
+
+@dataclass(frozen=True)
+class DigestOutput:
+    """What a digest function may return instead of a bare string.
+
+    ``text`` is what the model sees. ``ledger`` is a write-only annotation copied into
+    the client-side ledger's fetch row (under its own keys) and STRIPPED from the tool
+    result before it is returned -- see :func:`_strip_ledger_only`. The digest sidecar
+    uses it to record which entities it appended and in which mode, which is not
+    something the model reading the page may see.
+    """
+
+    text: str
+    ledger: dict[str, Any] | None = None
+
+
+_LEDGER_ONLY = "_ledger_only"
+
+
+def _ledger_only_field(side: dict[str, Any] | None) -> dict[str, Any]:
+    return {_LEDGER_ONLY: side} if side else {}
+
+
+def _strip_ledger_only(out: str) -> str:
+    """Remove the ledger-only annotation from an envelope.
+
+    Envelopes without it are returned as the same object, so every fetch that does not
+    use the annotation stays byte-identical -- this is on the hot path of every fetch.
+    """
+    if _LEDGER_ONLY not in out:
+        return out
+    try:
+        payload = json.loads(out)
+    except (TypeError, ValueError):
+        return out
+    if not isinstance(payload, dict) or _LEDGER_ONLY not in payload:
+        return out
+    payload.pop(_LEDGER_ONLY, None)
+    return json.dumps(payload, ensure_ascii=False)
+
 
 _SESSION: ContextVar[str] = ContextVar("research_flow_session", default="")
 """Which session's tool state the current task is operating on. See the module docstring."""
@@ -813,6 +856,23 @@ class WebSearchTool(Tool):
             shaping = dict(shaping)
             shaping["n_served_at_capture"] = shaping.pop("n_served")
             shaping["n_served"] = None
+        # The rendered SERP verbatim, when the body sink is on. Here rather than at the
+        # return, for the reason this method exists: every logged search reaches this
+        # line, including a suppressed row and a replay.
+        if _verbatim_path():
+            _verbatim_append(
+                {
+                    "ts": time.time(),
+                    "op": "tool_body",
+                    "tool": "web_search",
+                    "phase": "delivered",
+                    "query": query,
+                    "page": page,
+                    "replay": replay,
+                    "chars": len(rendered),
+                    "text": rendered,
+                }
+            )
         _ledger_append(
             {
                 "ts": time.time(),
@@ -1590,16 +1650,58 @@ class WebFetchTool(Tool):
         out = None
         try:
             out = await self._fetch(url, extractMode, maxChars, info_to_extract, **kwargs)
-            return out
+            return _strip_ledger_only(out)
         finally:
             # ``out`` is None only when _fetch raised or was cancelled; record that as its
             # own outcome rather than skipping the line, so "cancelled" and "never issued"
             # stay distinguishable in the ledger.
+            # The delivered envelope verbatim, when the body sink is on. Same ``finally``
+            # as the ledger row and for the same reason: several return points, plus a
+            # cancellation at the registry's ceiling that reaches none of them.
+            # ``_strip_ledger_only`` so what is recorded is what the model actually got;
+            # it returns the same object when the annotation is absent, and the whole
+            # branch is skipped when the sink is off.
+            if out is not None and _verbatim_path():
+                _delivered = _strip_ledger_only(out)
+                _verbatim_append(
+                    {
+                        "ts": time.time(),
+                        "op": "tool_body",
+                        "tool": "web_fetch",
+                        "phase": "delivered",
+                        "url": url,
+                        "chars": len(_delivered),
+                        "text": _delivered,
+                    }
+                )
             _ledger_append(
                 self._fetch_record(url, out)
                 if out is not None
                 else {"ts": time.time(), "op": "fetch", "url": url, "ok": False, "outcome": "aborted", "chars": 0}
             )
+
+    def _record_source(self, url: str, text: str, extractor: str) -> None:
+        """The page as fetched, before the digest decides what survives of it.
+
+        The delivered envelope is not a substitute: a digested fetch delivers a median
+        5.59% of this text and the other 94.41% is written nowhere, which is why "what
+        did the digest throw away" can only be answered by fetching the page a second
+        time, later, against a web that has moved.
+        """
+        if not _verbatim_path():
+            return
+        _verbatim_append(
+            {
+                "ts": time.time(),
+                "op": "tool_body",
+                "tool": "web_fetch",
+                "phase": "source",
+                "url": url,
+                "extractor": extractor,
+                "chars": len(text),
+                "text": text,
+            }
+        )
 
     def _fetch_record(self, url: str, out: str) -> dict[str, Any]:
         """Ledger line for one fetch, read off the tool's own structured envelope."""
@@ -1638,6 +1740,13 @@ class WebFetchTool(Tool):
         ):
             if key in payload and out_key not in record:
                 record[out_key] = payload[key]
+        # Annotations a digest function asked to have ledgered but not shown
+        # (``DigestOutput.ledger``). Merged under their own keys; ``setdefault`` so a
+        # digest can never overwrite a column this row already owns.
+        side = payload.get(_LEDGER_ONLY)
+        if isinstance(side, dict):
+            for k, v in side.items():
+                record.setdefault(k, v)
         return record
 
     async def _get_with_retry(self, url: str, headers: dict[str, str]) -> httpx.Response:
@@ -1726,6 +1835,7 @@ class WebFetchTool(Tool):
 
         encoding_lost = _encoding_lost(text)
         source_chars = len(text)
+        self._record_source(url, text, self.spec.extractor)
 
         recovery: dict[str, Any] = {}
         if fallbacks_tried:
@@ -1736,7 +1846,7 @@ class WebFetchTool(Tool):
 
         # A page that lost its encoding is not worth a digest call: the
         # model would distill replacement characters.
-        extracted = None if encoding_lost else await self._try_digest(text, info_to_extract, url)
+        extracted, side = (None, None) if encoding_lost else await self._try_digest(text, info_to_extract, url)
         if extracted is not None:
             return json.dumps(
                 {
@@ -1751,6 +1861,7 @@ class WebFetchTool(Tool):
                     "length": len(extracted),
                     "text": extracted,
                     **recovery,
+                    **_ledger_only_field(side),
                 },
                 ensure_ascii=False,
             )
@@ -1945,14 +2056,17 @@ class WebFetchTool(Tool):
             raise _ProviderPageError("AnySearch returned no page content")
         return text, r.status_code
 
-    async def _try_digest(self, text: str, info_to_extract: str | None, url: str) -> str | None:
+    async def _try_digest(
+        self, text: str, info_to_extract: str | None, url: str
+    ) -> tuple[str | None, dict[str, Any] | None]:
         """Distill a long page down to what the caller asked for.
 
-        Returns ``None`` whenever the digest path does not apply or fails,
-        so ``execute`` falls back to plain truncation.
+        Returns ``(text, ledger_annotation)``, and ``(None, None)`` whenever the digest
+        path does not apply or fails, so ``execute`` falls back to plain truncation. A
+        digest may return a bare string (annotation ``None``) or a :class:`DigestOutput`.
         """
         if self.digest_fn is None or not info_to_extract or len(text) <= self.digest_threshold_chars:
-            return None
+            return None, None
         try:
             extracted = await asyncio.wait_for(
                 self.digest_fn(text, info_to_extract),
@@ -1965,11 +2079,15 @@ class WebFetchTool(Tool):
                 type(e).__name__,
                 e,
             )
-            return None
+            return None, None
+        side: dict[str, Any] | None = None
+        if isinstance(extracted, DigestOutput):
+            side = extracted.ledger or None
+            extracted = extracted.text
         if isinstance(extracted, str) and extracted.strip():
-            return extracted
+            return extracted, side
         logger.warning("WebFetch digest returned empty for {}; falling back to truncation", url)
-        return None
+        return None, None
 
 
 __all__ = [
@@ -1978,6 +2096,7 @@ __all__ = [
     "FETCH_PROVIDERS",
     "SEARCH_PROVIDERS",
     "DigestFn",
+    "DigestOutput",
     "FetchProviderSpec",
     "SearchProviderSpec",
     "WebFetchTool",

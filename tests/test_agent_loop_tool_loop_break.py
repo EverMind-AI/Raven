@@ -50,6 +50,21 @@ def workspace():
         ("ok, wrote 3 files", False),
         ("Error: 429 rate limit, retry later", False),  # transient → not hard
         ("request timed out", False),  # transient → not hard
+        # A JSON envelope, which is the only thing web_fetch ever returns. Every
+        # deterministic failure it has arrives this way, and none of them are caught
+        # by the textual tests: the payload starts with "{" and spells the key
+        # '"error":' rather than "error:".
+        ('{"error": "Jina API key not configured", "url": "https://a.example"}', True),
+        ('{"error": "URL validation failed: blocked host", "url": "https://a.example"}', True),
+        ('{"url": "https://a.example", "text": "the page", "length": 9}', False),
+        # Transient markers are tested before the envelope, so a retryable failure
+        # stays retryable however it is wrapped.
+        ('{"error": "Jina answered HTTP 429", "url": "https://a.example"}', False),
+        # An empty error field is not a failure: a tool that reports its outcome in
+        # this key and had none must not be read as having failed.
+        ('{"error": "", "url": "https://a.example"}', False),
+        ("{not json at all", False),
+        ('{"error": "x"}'[:-1], False),  # truncated payload: unparseable, so undecided
     ],
 )
 def test_is_hard_tool_failure(result, expected):

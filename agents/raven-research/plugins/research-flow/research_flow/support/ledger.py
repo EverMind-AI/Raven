@@ -198,6 +198,66 @@ def _resolve_session_seq(path: str) -> int:
         return 1
 
 
+VERBATIM_ENV = "RAVEN_VERBATIM_SINK"
+"""Names the verbatim sink: the text the trajectory drops. Off unless set; env only.
+
+Why this is a second file rather than more fields on the ledger, which already has a row
+per fetch: the ledger's rows are read, and read cheaply. Several consumers partition it
+by ``op`` and most only count rows; a fetch row carrying its page would grow the file
+from ~5 MB to ~250 MB per run and make every one of them read a quarter of a gigabyte to
+count. Worse, :func:`_resolve_session_seq` recovers the re-run split by reading the
+**last 64 KB** of the file and parsing the last complete line - a single 250 KB row
+leaves no complete line in that window, so the split would silently reset to 1 and an
+offline replay would over-count a re-run question exactly the way that function exists
+to prevent.
+
+Off by default and named by the environment rather than the config: the product side is
+long-lived and would otherwise accumulate pages per turn with no reader, and a page
+store is not a nicety the answer path should ever pay for.
+"""
+
+
+def verbatim_path() -> str | None:
+    """Where the verbatim sink writes, or ``None`` when it is off. The ONLY resolver."""
+    return os.environ.get(VERBATIM_ENV)
+
+
+def verbatim_append(record: dict[str, Any]) -> None:
+    """Append one verbatim record, if a sink is configured. Readers partition on ``op``.
+
+    Why this is needed at all: by the time a tool result reaches disk it has been through
+    three lossy stages, and the trajectory keeps none of the originals. Measured over two
+    360-item runs:
+
+      * the **digest** discards the page at the tool seam - the model saw a median 5.59%
+        of the fetched text and the remaining 94.41% is not written anywhere;
+      * the context **trimmer** replaces 44.9% / 50.2% of tool messages with
+        :data:`~research_flow.support.harness_text.TOOL_OUTPUT_ELIDED`, always as a
+        prefix, leaving long items about three readable results;
+      * the **ingest cap** truncates what is left.
+
+    So "what did this tool actually return" is unanswerable after the fact, and any
+    pricing of the digest seam can only be done on the short-trajectory stratum - whose
+    survivorship bias runs one way, because it drops the items that searched longest.
+    This sink is the smallest thing that closes that, and it is an instrument:
+    append-only, read by nobody at run time, and a write failure is logged and swallowed,
+    because an instrument that can kill the run it measures is worse than no instrument.
+
+    ``session_seq`` is stamped here for the same reason :func:`ledger_append` stamps it:
+    several call sites, one definition of a line.
+    """
+    if not (path := verbatim_path()):
+        return
+    if path not in _session_seq:
+        _session_seq[path] = _resolve_session_seq(path)
+    record.setdefault("session_seq", _session_seq[path])
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:  # noqa: BLE001 - same reasoning as ledger_append below
+        logger.error("verbatim sink append failed ({}): {}", path, e)
+
+
 def ledger_append(record: dict[str, Any]) -> None:
     """Append one line to the client-side ledger, if one is configured.
 

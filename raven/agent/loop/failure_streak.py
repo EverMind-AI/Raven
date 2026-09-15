@@ -9,6 +9,7 @@ adapting). Both live here rather than in the loop, which only does the counting.
 
 from __future__ import annotations
 
+import json
 import re
 
 # Failure markers a plain retry would likely clear — these must NOT count toward
@@ -75,6 +76,21 @@ def is_hard_tool_failure(result: object) -> bool:
         return False
     if s.strip().rstrip(".").lower() in _EMPTY_SUCCESS_MARKERS:
         return False
+    # A JSON envelope carrying a top-level ``error``. ``web_fetch`` returns one for
+    # every deterministic failure it has -- a spent API quota, a rejected URL, a reader
+    # HTTP error -- and none of them are caught by the textual tests below, because the
+    # payload starts with ``{`` and spells the key ``"error":`` rather than ``error:``.
+    # That made this predicate, the only tool-failure circuit breaker in the loop, blind
+    # to the entire reader path. Worse than not firing: a failed fetch read as a success
+    # and reset the streak ``web_search`` had already accumulated. Transient markers are
+    # tested above, so a 429 or a timeout inside the envelope still reads as retryable.
+    if s.lstrip().startswith("{"):
+        try:
+            payload = json.loads(s)
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict) and payload.get("error"):
+            return True
     m = re.search(r"Exit code:\s*(-?\d+)", s)
     if m:
         return m.group(1) != "0"
