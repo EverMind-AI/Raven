@@ -39,15 +39,12 @@ const driven = (onAnswer: (s: string) => void, over: Partial<ClarifyReq> = {}) =
   Object.assign(stdin, { isTTY: true, ref: noop, setRawMode: noop, unref: noop })
   Object.assign(stderr, { isTTY: true })
 
-  const instance = renderSync(
-    <ClarifyPrompt onAnswer={onAnswer} onCancel={noop} req={req(over)} t={DEFAULT_THEME} />,
-    {
-      patchConsole: false,
-      stderr: stderr as NodeJS.WriteStream,
-      stdin: stdin as NodeJS.ReadStream,
-      stdout: stdout as NodeJS.WriteStream
-    }
-  )
+  const instance = renderSync(<ClarifyPrompt onAnswer={onAnswer} onCancel={noop} req={req(over)} t={DEFAULT_THEME} />, {
+    patchConsole: false,
+    stderr: stderr as NodeJS.WriteStream,
+    stdin: stdin as NodeJS.ReadStream,
+    stdout: stdout as NodeJS.WriteStream
+  })
 
   return {
     // One keystroke per write: ink's input parser reads a multi-character write
@@ -70,7 +67,7 @@ const driven = (onAnswer: (s: string) => void, over: Partial<ClarifyReq> = {}) =
   }
 }
 
-const DOWN = "\u001B[B"
+const DOWN = '\u001B[B'
 const TAB = '\t'
 const ENTER = '\r'
 

@@ -52,9 +52,7 @@ export const $dagNodeTraces = atom<ReadonlyMap<string, DagNodeTraceEntry>>(new M
 const signature = (entry: DagNodeTraceEntry) => {
   const { messages, settled } = entry
   const last = messages.at(-1)
-  const toolCallSignature = (last?.tool_calls ?? [])
-    .map(call => `${call.name}:${call.arguments}`)
-    .join('|')
+  const toolCallSignature = (last?.tool_calls ?? []).map(call => `${call.name}:${call.arguments}`).join('|')
 
   return [
     settled ? 1 : 0,

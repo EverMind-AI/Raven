@@ -813,7 +813,7 @@ describe('createChatStream — direct-chat routing', () => {
       expect(cancelParams(sent)).toEqual([])
     })
 
-    it('does not carry the main agent\'s arm into a direct view', async () => {
+    it("does not carry the main agent's arm into a direct view", async () => {
       // The gap the per-view arm closes. Ctrl+C on the main turn arms; the user
       // switches to an instance before the cancel lands; the second Ctrl+C used
       // to read the stale arm and take the LOCAL force-reset rung -- resetting
@@ -861,7 +861,7 @@ describe('createChatStream — direct-chat routing', () => {
       expect(getUiState().escapeArmed).toBe(true)
     })
 
-    it('drops the arm when that lane\'s own cancelled turn comes back', async () => {
+    it("drops the arm when that lane's own cancelled turn comes back", async () => {
       const { fake, stream } = await withCapture()
       const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
       enterDirect(target.agent, target.handle)

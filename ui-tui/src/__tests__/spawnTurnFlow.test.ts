@@ -24,9 +24,7 @@ afterEach(() => {
   resetTurnState()
 })
 
-const status = (
-  over: Partial<SubagentStatusEvent['payload']> = {}
-): SubagentStatusEvent['payload'] => ({
+const status = (over: Partial<SubagentStatusEvent['payload']> = {}): SubagentStatusEvent['payload'] => ({
   task_id: '1a021575',
   agent: 'raven-research',
   label: 'research carbon monoxide',
@@ -56,9 +54,7 @@ describe('turnController spawn runs', () => {
   it('keeps the record id and the clocks across later frames', () => {
     turnController.reset()
     turnController.recordSpawnStatus(status())
-    turnController.recordSpawnStatus(
-      status({ call_id: '20260827T02Z-1a021575', started_at: 1000, status: 'running' })
-    )
+    turnController.recordSpawnStatus(status({ call_id: '20260827T02Z-1a021575', started_at: 1000, status: 'running' }))
     turnController.recordSpawnStatus(status({ ended_at: 5000, status: 'completed' }))
 
     const [run] = getTurnState().spawnRuns
