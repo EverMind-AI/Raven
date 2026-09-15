@@ -230,9 +230,15 @@ def _touched(cached: Path) -> Path:
 
 def _sweep(root: Path) -> None:
     cutoff = time.time() - CACHE_TTL_S
-    for entry in root.glob("*.pdf"):
+    # ``*`` under the root's own subdirectories as well as the root: a renderer
+    # that has to give its input a meaningful suffix keeps a copy of the source
+    # beside the output, and a sweep that only counts the outputs lets those
+    # accumulate for as long as the installation lives. Their owner removes
+    # them when the document goes; this is what bounds the ones whose owner
+    # never got the chance.
+    for entry in (*root.glob("*.pdf"), *root.glob("*/*")):
         try:
-            if entry.stat().st_mtime < cutoff:
+            if entry.is_file() and entry.stat().st_mtime < cutoff:
                 entry.unlink()
         except OSError:
             continue

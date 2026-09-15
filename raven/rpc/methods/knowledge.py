@@ -13,6 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 from raven.knowledge import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
@@ -241,10 +243,17 @@ async def knowledge_bases_delete(params: dict[str, Any]) -> dict[str, Any]:
     base_id = str(params.get("base_id") or "")
     if not base_id:
         raise ConfigValidationError("base_id is required")
+    manager = knowledge_manager()
+    # Listed before the delete, because afterwards there is nothing left to ask
+    # which documents the base held.
+    doomed = [doc.id for doc in manager.list_documents(base_id)]
     try:
-        removed = await knowledge_manager().delete_base(base_id)
+        removed = await manager.delete_base(base_id)
     except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
         raise InternalError(f"could not delete the base: {exc}") from exc
+    if removed:
+        for document_id in doomed:
+            _forget_preview(document_id)
     return {"removed": bool(removed)}
 
 
@@ -458,6 +467,27 @@ async def knowledge_documents_index(params: dict[str, Any]) -> dict[str, Any]:
     return {"document": _doc_row(doc)}
 
 
+def _forget_preview(document_id: str) -> None:
+    """Drop the source copy a preview retained for this document.
+
+    Rendering an office file needs a path whose suffix says what the bytes are,
+    and a blob is stored under a bare id -- so previewing one leaves a second
+    copy of its content in the cache. The engine deletes blobs and chunks and
+    knows nothing about that copy, which lives in the rpc layer beside the
+    renderer that made it, so removing it is this layer's to do.
+
+    Never fails the delete: the row is gone either way, and a reader who cannot
+    be rid of a document because of a cache file is worse off than one whose
+    cache is swept a week later.
+    """
+    from raven.rpc import knowledge_preview
+
+    try:
+        knowledge_preview.forget(document_id)
+    except Exception as exc:  # noqa: BLE001 - a cache copy is not worth a failed delete
+        logger.warning("knowledge: could not drop the retained source for {}: {}", document_id, exc)
+
+
 async def knowledge_documents_delete(params: dict[str, Any]) -> dict[str, Any]:
     """Take one document out of its base, with its chunks and its blob.
 
@@ -477,6 +507,7 @@ async def knowledge_documents_delete(params: dict[str, Any]) -> dict[str, Any]:
         removed = await knowledge_manager().delete_document(document_id)
     except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
         raise InternalError(f"delete failed: {exc}") from exc
+    _forget_preview(document_id)
     return {"removed": bool(removed)}
 
 

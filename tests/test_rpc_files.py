@@ -778,3 +778,78 @@ async def test_the_converter_is_handed_a_suffixed_name(kb) -> None:
     assert alias.suffix == ".doc"
     assert alias.read_bytes() == blob.read_bytes()
     assert alias.stat().st_size == blob.stat().st_size
+
+
+async def test_deleting_a_document_takes_its_retained_source_with_it(kb) -> None:
+    """Previewing an office file leaves a second copy of its content in the
+    cache, because the renderer needs a path whose suffix says what the bytes
+    are and a blob is stored under a bare id. Deleting the document unlinks
+    the blob and knows nothing about that copy, so without this the content
+    stays on disk under a name nothing lists."""
+    from raven.rpc import knowledge_preview
+    from raven.rpc.methods import knowledge as kb_methods
+
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="notice.xls", content=b"\xd0\xcf\x11\xe0stub")
+    alias = knowledge_preview._alias_for(doc, kb.document_path(doc.id))
+    assert alias.is_file()
+
+    kb_methods._set_manager_for_tests(kb)
+    try:
+        await kb_methods.knowledge_documents_delete({"document_id": doc.id})
+    finally:
+        kb_methods._set_manager_for_tests(None)
+
+    assert not alias.is_file()
+
+
+async def test_deleting_a_base_takes_every_retained_source_with_it(kb) -> None:
+    """The same for the base around them: its delete visits blobs only."""
+    from raven.rpc import knowledge_preview
+    from raven.rpc.methods import knowledge as kb_methods
+
+    base = await _base(kb)
+    aliases = []
+    for name in ("one.xls", "two.doc"):
+        doc = kb.add_document(base.id, filename=name, content=b"\xd0\xcf\x11\xe0stub")
+        aliases.append(knowledge_preview._alias_for(doc, kb.document_path(doc.id)))
+    assert all(a.is_file() for a in aliases)
+
+    kb_methods._set_manager_for_tests(kb)
+    try:
+        await kb_methods.knowledge_bases_delete({"base_id": base.id})
+    finally:
+        kb_methods._set_manager_for_tests(None)
+
+    assert not any(a.is_file() for a in aliases)
+
+
+async def test_a_retained_source_nobody_deleted_is_swept_like_a_rendering(kb, monkeypatch) -> None:
+    """What bounds the ones whose document went away by some other route. The
+    sweep counted only the renderings in the cache root, so these accumulated
+    for as long as the installation lived."""
+    import os
+
+    from raven.rpc import knowledge_preview, pdf_preview
+
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="notice.xls", content=b"\xd0\xcf\x11\xe0stub")
+    alias = knowledge_preview._alias_for(doc, kb.document_path(doc.id))
+
+    stale = time.time() - (pdf_preview.CACHE_TTL_S + 3600)
+    os.utime(alias, (stale, stale))
+    pdf_preview._sweep(pdf_preview.cache_dir())
+
+    assert not alias.is_file()
+
+
+async def test_the_sweep_leaves_a_retained_source_still_in_use(kb) -> None:
+    from raven.rpc import knowledge_preview, pdf_preview
+
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="notice.xls", content=b"\xd0\xcf\x11\xe0stub")
+    alias = knowledge_preview._alias_for(doc, kb.document_path(doc.id))
+
+    pdf_preview._sweep(pdf_preview.cache_dir())
+
+    assert alias.is_file()
