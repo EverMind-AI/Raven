@@ -28,8 +28,6 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from loguru import logger
-
 from raven.rpc import pdf_preview
 
 if TYPE_CHECKING:
@@ -96,11 +94,7 @@ async def pdf_for(record: "KnowledgeDocumentRecord", blob: Path) -> Path:
 
 
 def _alias_dir() -> Path:
-    # Under the pdf-preview cache but not in its root: the root holds
-    # ``<key>.pdf`` outputs, and ``published_pdf`` looks for a sibling PDF
-    # beside whatever it is given. An alias sitting next to those would let one
-    # document's rendering answer for another's.
-    return pdf_preview.cache_dir() / "sources"
+    return pdf_preview.sources_dir()
 
 
 def _alias_for(record: "KnowledgeDocumentRecord", blob: Path) -> Path:
@@ -118,29 +112,15 @@ def _alias_for(record: "KnowledgeDocumentRecord", blob: Path) -> Path:
 
 
 def forget(document_id: str) -> None:
-    """Drop the retained source copy for one document, if there is one.
+    """Drop the retained source copy for this document, if there is one.
 
     There is one whenever an office file has been previewed: rendering needs a
     path whose suffix says what the bytes are, and a blob is stored under a
-    bare id. The copy is a hard link where the filesystem allows it and a full
-    second copy where it does not, so leaving it behind after a delete keeps
-    the document's content on disk under a name nothing lists -- and for a
-    copy, its bytes as well.
-
-    Matched on the id rather than on the name the record carries, because a
-    note that was renamed leaves an alias under the old suffix, and the point
-    of this call is that nothing is left.
+    bare id. Leaving it behind after a delete keeps the document's content on
+    disk under a name nothing lists -- and where the filesystem has no hard
+    links, its bytes a second time.
     """
-    directory = _alias_dir()
-    if not directory.is_dir():
-        return
-    for alias in directory.glob(f"{document_id}.*"):
-        try:
-            alias.unlink()
-        except OSError:
-            # A sweep will take it later; failing a delete over its cache copy
-            # would leave the reader with a row they cannot be rid of.
-            logger.debug("knowledge: could not remove the retained source {}", alias)
+    pdf_preview.forget_source(document_id)
 
 
 __all__ = ["DocumentMissingError", "forget", "is_renderable", "named", "pdf_for", "resolve"]

@@ -480,10 +480,13 @@ def _forget_preview(document_id: str) -> None:
     be rid of a document because of a cache file is worse off than one whose
     cache is swept a week later.
     """
-    from raven.rpc import knowledge_preview
+    # Through the module that owns the cache directory rather than the one that
+    # fills it: `knowledge_preview` imports this module, so reaching back for it
+    # here would put the two in an import cycle.
+    from raven.rpc import pdf_preview
 
     try:
-        knowledge_preview.forget(document_id)
+        pdf_preview.forget_source(document_id)
     except Exception as exc:  # noqa: BLE001 - a cache copy is not worth a failed delete
         logger.warning("knowledge: could not drop the retained source for {}: {}", document_id, exc)
 

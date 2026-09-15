@@ -47,6 +47,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from loguru import logger
+
 from raven.utils import office
 
 # What LibreOffice is asked to turn into a PDF. Decks were the first, because
@@ -134,6 +136,41 @@ def published_pdf(source: Path, workspace: Path | None = None) -> Path | None:
     except OSError:
         return None
     return None
+
+
+def sources_dir() -> Path:
+    """Where a renderer keeps a suffixed copy of what it was asked to convert.
+
+    Under the cache but not in its root: the root holds ``<key>.pdf`` outputs
+    and ``published_pdf`` looks for a sibling PDF beside whatever it is given,
+    so a copy sitting next to those would let one document's rendering answer
+    for another's.
+    """
+    return cache_dir() / "sources"
+
+
+def forget_source(document_id: str) -> None:
+    """Drop the retained copy for one document, if there is one.
+
+    Here rather than with the caller that makes it, because this module owns
+    the directory: a function that empties part of this cache belongs beside
+    the one that fills it, and reaching back the other way puts the two rpc
+    modules in an import cycle.
+
+    Matched on the id rather than on a name, because a suffix that has since
+    changed would leave a copy behind and the point of this call is that
+    nothing is left.
+    """
+    directory = sources_dir()
+    if not directory.is_dir():
+        return
+    for entry in directory.glob(f"{document_id}.*"):
+        try:
+            entry.unlink()
+        except OSError:
+            # A sweep takes it later. Failing a delete over its cache copy
+            # would leave a reader with a row they cannot be rid of.
+            logger.debug("pdf-preview: could not remove the retained source {}", entry)
 
 
 def cache_key(source: Path) -> str:
