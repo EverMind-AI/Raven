@@ -24,19 +24,25 @@ ENGINE_PACKAGE = "raven_design"
 
 PRODUCT = "raven-design"
 
+# The build interpreter the deck skill names. `python3` on PATH is whichever
+# the machine has; the one with python-pptx and raven_ppt is the one this
+# launcher runs on, and a symlink to a venv's python loses the venv (CPython
+# resolves it back to the base interpreter), so the shim is a shell wrapper.
+INTERPRETER_SHIM = "raven-python"
+
 MODES_DIR = HERE / "modes"
 MODE_LABELS = {
     "medium": (
         "Medium",
-        "Bounded: 60 tool iterations. A quick draft or a small revision.",
+        "400 tool iterations at low reasoning effort. A quick draft or a small revision.",
     ),
     "high": (
         "High",
-        "The default: 150 tool iterations.",
+        "The default: 400 tool iterations.",
     ),
     "max": (
         "Max",
-        "300 tool iterations. A full deliverable where the ceiling matters more than the bill.",
+        "400 tool iterations at the host's full reasoning effort. A full deliverable where the ceiling matters more than the bill.",
     ),
 }
 BASELINE_MODE = "high"
@@ -56,6 +62,20 @@ def env_value(name: str) -> str | None:
 def state_root() -> Path:
     """Everything this product persists lands here, never in this folder."""
     return render.product_state_root(PRODUCT, override=env_value("DESIGN_STATE_ROOT"))
+
+
+def write_interpreter_shim(root: Path) -> Path:
+    """Write ``<root>/bin/raven-python`` running this interpreter; return the bin dir.
+
+    Rewritten on every launch: a reinstall moves the interpreter, and a shim
+    pointing at the old one would fail exactly the way `python3` does.
+    """
+    bin_dir = root / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    shim = bin_dir / INTERPRETER_SHIM
+    shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+    return bin_dir
 
 
 def engine_skill_dir() -> Path | None:
@@ -192,6 +212,15 @@ def render_config(source: Path) -> Path:
     # Still no plugins.dirs: the design-engine wheel arrives by entry point,
     # never by directory (the everos-memory shape).
     root.mkdir(parents=True, exist_ok=True)
+
+    # Appended, never prepended: `python3` stays the machine's own, and an
+    # operator's pathAppend keeps every entry they wrote ahead of ours.
+    exec_config = config.setdefault("tools", {}).setdefault("exec", {})
+    if isinstance(exec_config, dict):
+        own = str(exec_config.get("pathAppend") or "")
+        bin_dir = str(write_interpreter_shim(root))
+        exec_config["pathAppend"] = os.pathsep.join(part for part in (own, bin_dir) if part)
+
     render.sweep_stale_renders(root)
     return render.write_rendered(config, root)
 

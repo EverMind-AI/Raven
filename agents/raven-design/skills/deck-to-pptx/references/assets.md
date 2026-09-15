@@ -17,26 +17,68 @@ choose from; one query per page, asked while that page is being drawn, gets what
 back. Search what the material names -- a product, a company, a standard, a benchmark, a
 paper -- and the furniture no material ever links: the logos and the marks.
 
-`web_search` returns pages. For pictures, ask Serper's image surface directly with the key
-already configured at `tools.web.search.apiKey`:
-
-```python
-httpx.post(
-    "https://google.serper.dev/images",
-    json={"q": query, "num": 20},
-    headers={"X-API-KEY": key, "Content-Type": "application/json"},
-)
-```
-
-Each hit carries `imageUrl`, `imageWidth`, `imageHeight`, `domain` and `link`. Drop anything
-under 640px wide or under 360px tall -- below that it is soft at half-page width. Keep the
-`link` beside what you took: it is what the page's source note credits.
+`web_search` returns pages. For pictures call `image_search`, with every picture the deck
+needs as `queries=[...]` in one call; the results come back grouped by query. Each hit
+carries the direct image URL, its pixel size, the domain and the page it came from, and
+anything under 640px wide is already dropped -- below that it is soft at half-page width.
+Keep the page link beside what you took: it is what the page's source note credits. When
+`image_search` is not in your tool list, this deployment has no image search: say so, and
+generate or go without.
 
 Look at what you fetched before placing it. A hit that is the right size can still be a
 thumbnail sheet, a watermarked stock frame, or somebody else's slide about the subject.
 
 A fetched mark that already has an alpha channel lands on the page's own ground with
 nothing behind it. The worst thing to do with a cut-out is to box it in a white rectangle.
+
+## A paper's figures and formulas
+
+Both run on `raven-python`; the imports are not on the machine's `python3`.
+
+```python
+import pymupdf
+
+doc = pymupdf.open("paper.pdf")
+
+# Find the figure by its caption -- the colon keeps in-text mentions out -- whichever page carries it.
+page, caption = next((p, hit) for p in doc for hit in p.search_for("Figure 2:"))
+
+# A raster figure is embedded as an image and comes out at its own resolution.
+for i, info in enumerate(page.get_images(full=True)):
+    pix = pymupdf.Pixmap(doc, info[0])
+    if pix.n - pix.alpha >= 4:
+        pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
+    pix.save(f"assets/p{page.number + 1}_img{i}.png")
+
+# A vector figure or a table has no embedded image: crop the page region above the
+# caption instead, then look at the crop and move the rectangle until the whole figure
+# and nothing else is inside it.
+region = pymupdf.Rect(page.rect.x0 + 40, caption.y0 - 300, page.rect.x1 - 40, caption.y0 - 4)
+page.get_pixmap(clip=region, dpi=220).save("assets/fig2.png")
+```
+
+```python
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+
+def formula_png(tex, path, size_pt=28, rgb="1F2A44"):
+    """mathtext: LaTeX math without the packages -- \\mathrm, \\frac, \\sqrt, sub/superscripts,
+    Greek; no \\text{}, no align environments."""
+    fig = plt.figure(figsize=(0.01, 0.01))
+    fig.text(0, 0, f"${tex}$", fontsize=size_pt, color=f"#{rgb}")
+    fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.04, transparent=True)
+    plt.close(fig)
+
+
+formula_png(r"\mathrm{Attention}(Q,K,V)=\mathrm{softmax}\left(\frac{QK^{T}}{\sqrt{d_k}}\right)V", "assets/eq1.png")
+```
+
+Place the PNG with `add_picture` by width only, so the aspect holds; at 300 dpi a 28pt
+formula is about 0.4in tall on its main line, which is body-text size on a 13.333in page.
+Rendered black-on-transparent, it sits on a light ground or a card without a box behind it.
 
 ## Generating one
 

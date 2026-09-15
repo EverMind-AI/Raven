@@ -13,9 +13,11 @@ outline. Name its absolute path in the reply.
 | Need | Call | Note |
 | --- | --- | --- |
 | Facts the material does not carry | `web_search`, then `web_fetch` the page | there is no other search |
-| A real logo, product shot, published chart | `https://google.serper.dev/images` | key at `tools.web.search.apiKey`, see `references/assets.md` |
+| A real logo, product shot, published chart | `image_search` | direct image URL, pixel size and source page per hit; see `references/assets.md` |
 | A picture that does not exist yet | `image_generate` | reference pictures go in `images`, up to six |
 | An icon | `raven_ppt.services.assets.icons` | 1304 outline icons, see `references/assets.md` |
+| A figure or table from a paper you were given | PyMuPDF (`fitz`) on `raven-python` | crop the page region, or pull the embedded image; see `references/assets.md` |
+| A formula | matplotlib mathtext on `raven-python` | a transparent PNG, never typed as text; see `references/assets.md` |
 | Render a page to look at it | `soffice --headless --convert-to pdf`, then `pdftoppm` | |
 
 With no image key configured, `image_generate` says so. Say which pages would have had a
@@ -78,6 +80,17 @@ reply which you took and where from. Do not default any of them silently.
 11. After generating, rebuild the page and look at the render. Only the composed page counts.
 12. Read the deck's own render before delivering. Every page.
 
+## Technical decks
+
+A paper walk-through, a method or an architecture talk runs on the paper's own pictures.
+Crop each figure and table out of the PDF you were given (`references/assets.md`); with no
+PDF in hand, `image_search` the published figure. Redraw only what the paper has no picture
+of, and say so in the caption. A formula is rendered, not typed: mathtext to a transparent
+PNG, one formula per picture, its main line about the size of the body text beside it. Caption
+both with the paper's own figure and equation numbers. After placing either, render the page
+and look at it: a crop that took the neighbouring column, a fraction bar sitting on a card
+edge, a figure shrunk under half the page width -- the reading is what catches them.
+
 ## The numbers a page is measured against
 
 13.333 x 7.5in is 16:9. Keep content **0.7in** clear of every edge.
@@ -106,12 +119,12 @@ If it does not fit at these sizes, split the page or cut it -- never shrink the 
   the row height from that, then place the rule. Set every element in a row from one
   baseline, and put every ground down before any word, or the fill covers the copy.
 
-- **`python3` on the path is not the interpreter that has `python-pptx`.** Check with
-  `python3 -c "import pptx"` before writing the build script. Where it fails, the one that
-  works is the raven install's own `.venv/bin/python`, and `raven_ppt` (the icons) is on
-  its path too. Run the script with that interpreter, or put its `site-packages` on
-  `sys.path` at the top of the script. A build whose first line is
-  `from pptx import Presentation` dies on line one otherwise.
+- **`python3` on the path is not the interpreter that has `python-pptx`.** `raven-python`
+  is: a shim on this session's PATH that runs raven's own interpreter, where `pptx` and
+  `raven_ppt` (the icons) both import. Check with `raven-python -c "import pptx, raven_ppt"`
+  and run the build script as `raven-python build.py`. Do not hunt for a `.venv`, build a
+  venv of your own or install python-pptx: a build whose first line is
+  `from pptx import Presentation` dies on line one under `python3`, and nowhere else.
 - `spAutoFit` with `word_wrap=False` makes LibreOffice re-centre the text. Remove
   `a:spAutoFit` and `a:normAutofit` from `bodyPr` when alignment has to hold.
 - `shape.shadow.inherit = False` on every drawn shape, or the theme stamps a drop shadow.

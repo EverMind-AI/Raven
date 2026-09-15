@@ -3,7 +3,7 @@
   "agents": {
     "defaults": {
       "contextWindowTokens": 262144,
-      "maxToolIterations": 150,
+      "maxToolIterations": 400,
       "llmCallTimeout": 1800,
       "compaction": {
         "enabled": true,
