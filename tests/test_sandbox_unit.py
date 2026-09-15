@@ -454,8 +454,9 @@ class TestDirectExecutor:
         # first it arrives while the task is still unwinding the drain, and two
         # cancels pending on a task that has not run yet are one CancelledError
         # -- the reap then really did wait out its 5 s guard.
-        while not killed:
-            await asyncio.sleep(0)
+        async with asyncio.timeout(1):
+            while not killed:
+                await asyncio.sleep(0)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task

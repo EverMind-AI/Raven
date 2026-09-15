@@ -54,8 +54,12 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
 
     The suite's slow tail was production backoff waited out by tests with error
     stubs, and nothing failed when one more was added. Setup and call are added
-    up per test and judged at teardown, when both are in. A test that is slow
-    for a reason it can name carries ``slow`` or ``production_timing``.
+    up per test and judged at teardown, when both are in. Teardown itself is
+    left out: it runs the finalizers of every fixture the test shared, which
+    belong to no one test. Setup cuts the other way, a session fixture's build
+    lands on whichever test first asked for it, so a name on the list may be
+    paying for a fixture rather than for itself. A test that is slow for a
+    reason it can name carries ``slow`` or ``production_timing``.
     """
     if _WALL_CLOCK_CEILING_S <= 0:
         return
@@ -77,7 +81,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Co
     verdict = "failing the session" if strict else "warning only; --wall-clock-ceiling-strict fails it"
     terminalreporter.write_sep(
         "=",
-        f"{len(_wall_clock_hits)} unmarked test(s) over the {_WALL_CLOCK_CEILING_S:.1f}s wall-clock ceiling ({verdict})",
+        f"{len(_wall_clock_hits)} unmarked test(s) over the {_WALL_CLOCK_CEILING_S:g}s wall-clock ceiling ({verdict})",
     )
     for seconds, nodeid in sorted(_wall_clock_hits, reverse=True)[:50]:
         terminalreporter.write_line(f"{seconds:7.2f}s  {nodeid}")
@@ -298,8 +302,11 @@ def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
     test slept 133 s that way and proved nothing by it.
 
     The lengths stay. ``len(ladder)`` is how both retry ladders count their
-    attempts, so an empty tuple would change behaviour rather than speed; only
-    the seconds go to zero. The steer grace keeps one poll's worth so the loop
+    attempts, so an empty tuple would change behaviour rather than speed; the
+    seconds collapse to a millisecond. Not to zero: the store pipeline waits
+    its backoff out with ``wait_for(stopping.wait(), timeout=delay)``, and a
+    zero timeout cancels that wait before it runs, so the stop it listens for
+    could never be heard. The steer grace keeps one poll's worth so the loop
     body it guards stays exercised. A test that proves a timing property, or
     asserts a default's value, opts out with ``@pytest.mark.production_timing``
     and sets what it needs itself.
@@ -311,12 +318,12 @@ def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
     from raven.memory_engine import store_pipeline
     from raven.providers.base import LLMProvider
 
-    def zeroed(delays):
-        return tuple(0.0 for _ in delays)
+    def shortened(delays):
+        return tuple(0.001 for _ in delays)
 
-    monkeypatch.setattr(LLMProvider, "_CHAT_RETRY_DELAYS", zeroed(LLMProvider._CHAT_RETRY_DELAYS))
-    monkeypatch.setattr(schema, "LLM_ERROR_RETRY_DELAYS_DEFAULT", zeroed(schema.LLM_ERROR_RETRY_DELAYS_DEFAULT))
-    monkeypatch.setattr(store_pipeline, "BACKOFF_S", zeroed(store_pipeline.BACKOFF_S))
+    monkeypatch.setattr(LLMProvider, "_CHAT_RETRY_DELAYS", shortened(LLMProvider._CHAT_RETRY_DELAYS))
+    monkeypatch.setattr(schema, "LLM_ERROR_RETRY_DELAYS_DEFAULT", shortened(schema.LLM_ERROR_RETRY_DELAYS_DEFAULT))
+    monkeypatch.setattr(store_pipeline, "BACKOFF_S", shortened(store_pipeline.BACKOFF_S))
     monkeypatch.setattr(manager, "_STEER_HOOK_GRACE_S", 0.05)
 
 
