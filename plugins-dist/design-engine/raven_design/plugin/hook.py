@@ -6,7 +6,8 @@ routing -- and projected the resident Task State onto a transient copy of the
 transcript before every model call (fork ``agent/loop/main.py:1184-1230``).
 Here both ride the loop's own hook phases, per the amended verdict:
 
-* ``before_user_inbound`` -- run one selection over the fixed domain catalog
+* ``before_user_inbound`` -- repoint the turn to its session's directory under
+  ``<workdir>/designs/``, then run one selection over the fixed domain catalog
   and append the card block below a separator to the model's view of the
   inbound text. The session record keeps the user's own words on every turn
   outcome: the loop persists ``inbound_original`` on the healthy save and --
@@ -35,13 +36,11 @@ Here both ride the loop's own hook phases, per the amended verdict:
   switch. Selection failure degrades to the full description catalog for the
   turn (the fork's shape), never to a broken turn.
 
-* ``before_iteration`` -- project the current Task State as an
-  ``append_note`` before every model call (the C2/HIGH-1 seat). State is
-  keyed by the bound working directory -- the only session identity the tool
-  seat shares with this hook -- so two sessions pointed at one directory
-  share one resident list (the fork keyed per session id; ledgered as D5's
-  fourth loss line, self-healing because ``initialize`` replaces the whole
-  state). The fork
+* ``before_iteration`` -- repoint turns that skipped the inbound phase, then
+  project the current Task State as an ``append_note`` before every model call.
+  State is keyed by the bound working directory, shared with the tool seat.
+  Each session uses its own directory by default, isolating both its resident
+  list and its relative file paths. The fork
   stripped stale projections from a transient copy; a note appended here
   stays where it landed in the transcript, so an older projection can also
   be eaten by a mid-turn compaction -- both are the ledgered D5 loss, and
@@ -60,6 +59,7 @@ Here both ride the loop's own hook phases, per the amended verdict:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 import subprocess
@@ -69,6 +69,7 @@ from typing import TYPE_CHECKING, Any
 from raven.agent import workdir
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.memory_engine.skill_local.registry import SkillRegistry
+from raven.utils.paths import mint_slug
 from raven_design.selector import VisualDomainSkillSelector
 
 if TYPE_CHECKING:
@@ -90,6 +91,7 @@ _PROTOTYPE_WORKSPACE = Path("/nonexistent/design-engine-prototype")
 _MALFORMED_SLICE_ERROR = 'the design-engine config slice is malformed; fix plugins.config["design-engine"]'
 
 _METADATA_KEY = "design_engine"
+DESIGNS_DIRNAME = "designs"
 
 # A turn ends on the first reply without a tool call, and `completion_notice`
 # rides that reply out. In a direct chat the notice is a nudge with a next turn
@@ -269,18 +271,35 @@ class DesignEngineHook(AgentHook):
         return "design_engine"
 
     @staticmethod
-    def _session_key() -> str | None:
+    def _state_key() -> str | None:
         bound = workdir.current()
         return str(bound) if bound is not None else None
 
+    def _own_folder(self, bound: Path, session_key: str) -> Path:
+        """Keep state and artifacts together across resumed and concurrent turns."""
+        if not self._cfg.workdir_per_session:
+            return bound
+        name = mint_slug(session_key.rpartition(":")[2], max_chars=48) or "session"
+        digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:16]
+        dirname = f"{name}-{digest}"
+        if bound.name == dirname and bound.parent.name == DESIGNS_DIRNAME:
+            return bound
+        own = bound / DESIGNS_DIRNAME / dirname
+        own.mkdir(parents=True, exist_ok=True)
+        workdir.repoint(own)
+        return own
+
     async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
-        if self._selector is None:
-            return HookDecision()
         text = ctx.inbound_content
         # D1 clause 2: hooks fire before slash dispatch, so a command-shaped
         # inbound must pass through untouched or "/new" stops working; a blank
         # one has nothing to classify.
         if not text or not text.strip() or text.lstrip().startswith("/"):
+            return HookDecision()
+        bound = workdir.current()
+        if bound is not None:
+            self._own_folder(bound, ctx.session_key)
+        if self._selector is None:
             return HookDecision()
         try:
             selection = await self._selector.select(text)
@@ -294,19 +313,21 @@ class DesignEngineHook(AgentHook):
         return HookDecision(modified_content=f"{text}\n\n---\n{block}")
 
     async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
-        if self._manager is None:
-            return HookDecision()
-        key = self._session_key()
-        if key is None:
-            return HookDecision()
-        try:
-            block = self._manager.render(key)
-        except Exception as exc:
-            logger.warning("design-engine: task-state projection failed: %s", exc)
-            return HookDecision()
-        if not block:
-            return HookDecision()
-        return HookDecision(append_note=block)
+        blocks: list[str] = []
+        bound = workdir.current()
+        if bound is not None and ctx.iteration in (0, 1):
+            own = self._own_folder(bound, ctx.session_key)
+            if own != bound:
+                blocks.append(f"Working directory for this design session: {own}. Resolve relative paths here.")
+        key = self._state_key()
+        if self._manager is not None and key is not None:
+            try:
+                block = self._manager.render(key)
+                if block:
+                    blocks.append(block)
+            except Exception as exc:
+                logger.warning("design-engine: task-state projection failed: %s", exc)
+        return HookDecision(append_note="\n\n".join(blocks) or None)
 
     async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
         """Send the turn back once when its reply would carry a stale ledger.
@@ -324,7 +345,7 @@ class DesignEngineHook(AgentHook):
             return HookDecision()
         if not str(getattr(response, "content", None) or "").strip():
             return HookDecision()
-        key = self._session_key()
+        key = self._state_key()
         if key is None:
             return HookDecision()
         try:

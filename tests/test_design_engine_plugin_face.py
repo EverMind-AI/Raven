@@ -20,6 +20,7 @@ import pytest
 from raven.agent import workdir
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
+from raven.agent.tools.filesystem import ReadFileTool, WriteFileTool
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
 from raven.contracts.loop_hooks import AgentHookContext
 from raven.spine import ChatType, Origin, Source, TurnRequest
@@ -104,6 +105,7 @@ async def test_a_malformed_slice_casts_the_fail_closed_sentinel():
 def test_strict_slice_typing_refuses_coercion_and_unknown_keys():
     for bad in (
         {"enabled": "false"},
+        {"enabled": True, "workdirPerSession": "false"},
         {"enabled": True, "visualDomainSelector": {"preferredMax": "2"}},
         {"enabled": True, "visualDomainSelector": {"preferredMax": 99}},
         {"enabled": True, "render": {"timeoutSeconds": True}},
@@ -210,23 +212,164 @@ def test_task_state_surfaces_need_a_state_root(tmp_path):
     assert hook._manager is not None
 
 
+@pytest.mark.asyncio
+async def test_directory_isolation_runs_without_selector_or_task_state(tmp_path):
+    config = {"enabled": True, "visualDomainSelector": {"enabled": False}, "taskState": {"enabled": False}}
+    hook = make_hook(_fresh(config))
+    with workdir.bind(tmp_path):
+        await hook.before_user_inbound(AgentHookContext(session_key="acp:a", inbound_content="draw a poster"))
+        own = workdir.current()
+        assert own.parent == tmp_path / "designs" and own.is_dir()
+
+    disabled = make_hook(_fresh({**config, "workdirPerSession": False}))
+    assert disabled is None
+
+
+@pytest.mark.asyncio
+async def test_shared_directory_mode_retains_existing_files_and_task_state(tmp_path):
+    manager = TaskStateManager(tmp_path / "state")
+    manager.apply(
+        str(tmp_path),
+        [{"operation": "initialize", "state": {"goal": "Existing design", "items": [{"title": "Finish it"}]}}],
+    )
+    hook = DesignEngineHook(EngineConfig.from_slice({"enabled": True, "workdirPerSession": False}), None, manager)
+    ctx = AgentHookContext(session_key="acp:a", inbound_content="continue", iteration=1)
+    with workdir.bind(tmp_path):
+        await hook.before_user_inbound(ctx)
+        decision = await hook.before_iteration(ctx)
+        assert workdir.current() == tmp_path
+        assert "Existing design" in decision.append_note
+    assert not (tmp_path / "designs").exists()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_sessions_keep_files_state_and_completion_separate(tmp_path, monkeypatch):
+    import raven_design.plugin as plugin
+    from raven_design.rendering.service import RenderService
+
+    async def render_paths(service, request):
+        return {
+            "source": str(service.path_policy.resolve_source(request.path)),
+            "output": str(service.path_policy.resolve_output_dir(request.output_dir)),
+        }
+
+    monkeypatch.setattr(plugin, "_render_extra_missing", lambda: [])
+    monkeypatch.setattr(RenderService, "render", render_paths)
+    root = tmp_path / "work"
+    root.mkdir()
+    (root / "result.txt").write_text("Legacy shared artifact", encoding="utf-8")
+    config = {
+        "enabled": True,
+        "visualDomainSelector": {"enabled": False},
+        "render": {"backend": "direct"},
+        "taskState": {"stateRoot": str(tmp_path / "state")},
+    }
+    plugin_ctx = _fresh(config)
+    hook = make_hook(plugin_ctx)
+    tool = make_update_task_state(plugin_ctx)
+    render_tool = make_render_file(plugin_ctx)
+    manager = hook._manager
+    manager.apply(
+        str(root),
+        [{"operation": "initialize", "state": {"goal": "Legacy shared task", "items": [{"title": "Old work"}]}}],
+    )
+    barrier = asyncio.Barrier(2)
+    folders: dict[str, Path] = {}
+
+    async def turn(key: str, goal: str, complete: bool) -> None:
+        ctx = AgentHookContext(session_key=key, inbound_content=goal, iteration=1, metadata={})
+        with workdir.bind(root):
+            await hook.before_user_inbound(ctx)
+            first = await hook.before_iteration(ctx)
+            assert "Not initialized" in first.append_note
+            assert "Legacy shared task" not in first.append_note
+            folders[key] = workdir.current()
+            result = await tool.execute(
+                [{"operation": "initialize", "state": {"goal": goal, "items": [{"title": goal}]}}]
+            )
+            assert result.startswith("Task State updated"), result
+            await WriteFileTool().execute(path="result.txt", content=goal)
+            await barrier.wait()
+
+            ctx.iteration = 2
+            assert f"Goal: {goal}" in (await hook.before_iteration(ctx)).append_note
+            assert goal in await ReadFileTool().execute(path="result.txt")
+            paths = json.loads(await render_tool.execute(path="result.txt", output_dir="out"))
+            assert paths == {"source": str(folders[key] / "result.txt"), "output": str(folders[key] / "out")}
+            if complete:
+                await tool.execute([{"operation": "complete", "item_number": 1}])
+            ctx.response = _text_response("delivered")
+            assert (await hook.after_iteration(ctx)).rollback is not complete
+            ctx.outbound_content = "delivered"
+            notice = (await hook.after_send(ctx)).modified_content
+            assert (notice is None) is complete
+
+    await asyncio.wait_for(
+        asyncio.gather(turn("acp:a", "Poster A", True), turn("acp:b", "Website B", False)), timeout=10
+    )
+    assert folders["acp:a"] != folders["acp:b"]
+    assert all(folder.parent == root / "designs" for folder in folders.values())
+    assert (root / "result.txt").read_text() == "Legacy shared artifact"
+    assert manager.get(str(root))["goal"] == "Legacy shared task"
+    assert workdir.current() is None
+
+    resumed = DesignEngineHook(EngineConfig.from_slice(config), None, TaskStateManager(tmp_path / "state"))
+    with workdir.bind(root):
+        ctx = AgentHookContext(session_key="acp:a", iteration=1)
+        decision = await resumed.before_iteration(ctx)
+        assert workdir.current() == folders["acp:a"]
+        assert "Goal: Poster A" in decision.append_note and "Progress: 1/1 completed" in decision.append_note
+        assert str(folders["acp:a"]) in decision.append_note
+        assert "Poster A" in await ReadFileTool().execute(path="result.txt")
+        await resumed.before_iteration(ctx)
+        assert workdir.current() == folders["acp:a"]
+
+
+@pytest.mark.asyncio
+async def test_session_folder_names_preserve_distinct_full_keys(tmp_path):
+    hook = DesignEngineHook(EngineConfig.from_slice({"enabled": True}), None, None)
+    keys = [
+        "acp:alpha",
+        "tui:alpha",
+        "acp:session_a",
+        "acp:session-a",
+        "acp:" + "a" * 200 + "x",
+        "acp:" + "a" * 200 + "y",
+        "acp:../../",
+        "acp:\u8bbe\u8ba1" * 100,
+    ]
+    folders = []
+    for key in keys:
+        with workdir.bind(tmp_path):
+            await hook.before_iteration(AgentHookContext(session_key=key, iteration=1))
+            own = workdir.current()
+            assert own.parent == tmp_path / "designs"
+            assert own.name.isascii() and len(own.name) <= 80
+            folders.append(own)
+    assert len(set(folders)) == len(keys)
+    assert workdir.current() is None
+
+
 # --- the selector hook: the four D1 clauses --------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_command_shaped_and_blank_inbounds_pass_untouched():
+async def test_command_shaped_and_blank_inbounds_pass_untouched(tmp_path):
     stub = _StubSelector(_selection())
     hook = DesignEngineHook(EngineConfig.from_slice(SHIPPED_SLICE), stub, None)
     for text in ("/new", "  /model haiku", "", "   ", None):
-        decision = await hook.before_user_inbound(SimpleNamespace(inbound_content=text))
+        with workdir.bind(tmp_path):
+            decision = await hook.before_user_inbound(AgentHookContext(session_key="acp:s1", inbound_content=text))
+            assert workdir.current() == tmp_path
         assert decision.modified_content is None
     assert stub.queries == [], "no selection call was spent on any of them"
+    assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.asyncio
 async def test_the_selection_block_rides_below_a_separator_with_local_ids():
     hook = DesignEngineHook(EngineConfig.from_slice(SHIPPED_SLICE), _StubSelector(_selection()), None)
-    decision = await hook.before_user_inbound(SimpleNamespace(inbound_content="design a logo"))
+    decision = await hook.before_user_inbound(AgentHookContext(session_key="acp:s1", inbound_content="design a logo"))
     rewritten = decision.modified_content
     assert rewritten.startswith("design a logo\n\n---\n")
     assert f"`{FOUNDATION_SKILL_ID}`" in rewritten
@@ -239,7 +382,7 @@ async def test_the_selection_block_rides_below_a_separator_with_local_ids():
 @pytest.mark.asyncio
 async def test_a_selection_failure_outside_the_selectors_guard_passes_untouched():
     hook = DesignEngineHook(EngineConfig.from_slice(SHIPPED_SLICE), _StubSelector(error=RuntimeError("boom")), None)
-    decision = await hook.before_user_inbound(SimpleNamespace(inbound_content="design a logo"))
+    decision = await hook.before_user_inbound(AgentHookContext(session_key="acp:s1", inbound_content="design a logo"))
     assert decision.modified_content is None and decision.short_circuit_result is None
 
 
@@ -308,16 +451,83 @@ def _text_response(content: str) -> LLMResponse:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [Origin.USER, Origin.SUBAGENT])
+async def test_loop_uses_the_session_directory_for_tools_and_prompt(tmp_path, origin):
+    config = {
+        "enabled": True,
+        "visualDomainSelector": {"enabled": False},
+        "taskState": {"stateRoot": str(tmp_path / "state")},
+    }
+    plugin_ctx = _fresh(config)
+    hook = make_hook(plugin_ctx)
+    task_tool = make_update_task_state(plugin_ctx)
+    provider = _ScriptedProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="state",
+                        name="update_task_state",
+                        arguments={
+                            "operations": [
+                                {
+                                    "operation": "initialize",
+                                    "state": {"goal": "Ship a poster", "items": [{"title": "Write it"}]},
+                                }
+                            ]
+                        },
+                    ),
+                    ToolCallRequest(
+                        id="write", name="write_file", arguments={"path": "poster.txt", "content": "Session poster"}
+                    ),
+                ],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="complete",
+                        name="update_task_state",
+                        arguments={"operations": [{"operation": "complete", "item_number": 1}]},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            _text_response("delivered"),
+        ]
+    )
+    loop = _loop(tmp_path / "home", provider, [hook])
+    loop.tools.register(task_tool)
+    root = tmp_path / "work"
+    root.mkdir()
+    req = _req("make a poster")
+    with workdir.bind(root):
+        out = await loop._process_message(req, origin=origin)
+        own = workdir.current()
+    assert out is not None
+    assert own.parent == root / "designs"
+    assert (own / "poster.txt").read_text() == "Session poster"
+    assert not (root / "poster.txt").exists()
+    assert str(own) in str(provider.calls[0]["messages"])
+    assert "Goal: Ship a poster" in str(provider.calls[1]["messages"])
+    assert hook._manager.get(str(own))["items"][0]["status"] == "completed"
+    assert workdir.current() is None
+
+
+@pytest.mark.asyncio
 async def test_task_state_projection_rides_append_note_per_iteration(tmp_path):
     manager = TaskStateManager(tmp_path / "ts")
     seen_keys: list[str] = []
 
     class Probe(DesignEngineHook):
         async def before_iteration(self, ctx):
-            key = self._session_key()
+            decision = await super().before_iteration(ctx)
+            key = self._state_key()
             if key is not None:
                 seen_keys.append(key)
-            return await super().before_iteration(ctx)
+            return decision
 
     cfg = EngineConfig.from_slice(SHIPPED_SLICE)
     hook = Probe(cfg, None, manager)
@@ -329,7 +539,7 @@ async def test_task_state_projection_rides_append_note_per_iteration(tmp_path):
     with workdir.bind(tmp_path):
         out = await loop._process_message(_req("start the task"))
     assert out is not None and seen_keys, "the phase fired inside the workdir bind"
-    assert seen_keys[0] == str(tmp_path)
+    assert Path(seen_keys[0]).parent == tmp_path / "designs"
 
     manager.apply(
         seen_keys[0],

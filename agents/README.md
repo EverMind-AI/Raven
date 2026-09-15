@@ -171,6 +171,17 @@ Agent vocabulary:
 
 Agent notes:
 
+- `raven-design` gives each session its own working directory under
+  `<workdir>/designs/<session-slug>-<hash>/`, following the deck agent's
+  per-session directory mechanism. The hash uses the full session key so
+  channel names, normalized characters and truncated names remain distinct.
+  Task State is still stored under the configured `taskState.stateRoot`,
+  keyed by this session directory; relative file and render paths use the
+  same directory. Resuming a session with the same working directory returns
+  to its files and Task State. Set
+  `plugins.config["design-engine"].workdirPerSession` to `false` to keep the
+  caller's directory directly. Existing files and Task State from the shared
+  directory are left there: their owning session cannot be inferred safely.
 - `raven-ppt` (the deck agent) needs the ten bundled templates the
   `ppt-engine` plugin offers, and gets them from the clone: they are tracked
   under `plugins-dist/ppt-engine/raven_ppt/assets/templates/`, which the
