@@ -56,9 +56,19 @@ class RavenAgentExecutor(AgentExecutor):
 
     def __init__(self, run_turn: RunTurn) -> None:
         self._run_turn = run_turn
-        # One broker per in-flight task, so a later `SendMessage` naming that
-        # task id can reach the turn that is still parked waiting on it.
-        self._brokers: dict[str, A2aQuestionBroker] = {}
+        # ONE broker for every task, not one per task. `AskUserTool`'s broker is a
+        # per-process slot (raven/agent/tools/ask_user.py) that the turn path
+        # installs into, so a per-task broker is overwritten by the next task to
+        # start -- and the earlier task's question then parks in an object
+        # `answer` no longer looks in, so its resume silently does nothing and the
+        # turn falls through to the ask's default. The broker keys its own waiters
+        # by conversation id, so one instance serves concurrent tasks safely and
+        # installing it repeatedly is a no-op.
+        self._broker = A2aQuestionBroker(on_park=self._on_park)
+        # conversation id -> the turn to report a park against. Keyed that way
+        # because `on_park` is told the conversation id, being what the tool
+        # parks under; `execute` owns the entry for its own turn's lifetime.
+        self._turns: dict[str, tuple[RequestContext, EventQueue]] = {}
         # A2A's task id (caller-visible, used to resume) and raven's conversation
         # id (server-minted, what AskUserTool actually parks futures under) are
         # different strings; this maps the former to the latter for `answer`.
@@ -66,6 +76,16 @@ class RavenAgentExecutor(AgentExecutor):
         # Holds the on-park status-update task so it survives GC: the loop only
         # keeps a weak reference to a task nothing else points at.
         self._background: set[asyncio.Task[None]] = set()
+
+    def _on_park(self, conversation_id: str) -> None:
+        """Report the turn waiting on `conversation_id` as needing input."""
+        turn = self._turns.get(conversation_id)
+        if turn is None:
+            return
+        context, event_queue = turn
+        task = asyncio.create_task(event_queue.enqueue_event(self._status(context, "question")))
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Run one turn for `context`'s task, reporting working then a terminal state."""
@@ -75,45 +95,38 @@ class RavenAgentExecutor(AgentExecutor):
         await event_queue.enqueue_event(self._initial_task(context))
         await event_queue.enqueue_event(self._status(context, "running"))
 
-        def on_park(_conversation_id: str) -> None:
-            task = asyncio.create_task(event_queue.enqueue_event(self._status(context, "question")))
-            self._background.add(task)
-            task.add_done_callback(self._background.discard)
-
-        broker = A2aQuestionBroker(on_park=on_park)
         # Minted here, not by run_turn: the executor owns the task-id ->
         # conversation-id mapping, so `answer` needs the value before the turn
         # (which never hands it back out) has even started.
         conversation_id = f"a2a:{uuid.uuid4()}"
-        self._brokers[context.task_id] = broker
         self._conversation_ids[context.task_id] = conversation_id
+        self._turns[conversation_id] = (context, event_queue)
         try:
-            answer = await self._run_turn(prompt, conversation_id=conversation_id, broker=broker)
+            answer = await self._run_turn(prompt, conversation_id=conversation_id, broker=self._broker)
         except Exception:
             logger.opt(exception=True).error("a2a turn failed for task {}", context.task_id)
             await event_queue.enqueue_event(self._status(context, "failed", TURN_FAILED_MESSAGE))
             return
         finally:
-            self._brokers.pop(context.task_id, None)
             self._conversation_ids.pop(context.task_id, None)
+            self._turns.pop(conversation_id, None)
         await event_queue.enqueue_event(self._status(context, "done", answer))
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Report `context`'s task as cancelled; there is no in-flight turn to stop here."""
         logger.info("a2a task {} cancelled by the caller", context.task_id)
-        self._brokers.pop(context.task_id, None)
-        self._conversation_ids.pop(context.task_id, None)
+        if (conversation_id := self._conversation_ids.pop(context.task_id, None)) is not None:
+            self._turns.pop(conversation_id, None)
         await event_queue.enqueue_event(self._status(context, "cancelled"))
 
     def answer(self, task_id: str, text: str) -> bool:
         """Resolve the question `task_id`'s turn is waiting on. False if none is parked."""
-        broker = self._brokers.get(task_id)
         conversation_id = self._conversation_ids.get(task_id)
-        if broker is None or conversation_id is None:
+        if conversation_id is None:
             return False
         # AskUserTool parks its future under the turn's conversation id, not the
         # caller-visible task id -- translate before resolving.
-        return broker.answer(conversation_id, text)
+        return self._broker.answer(conversation_id, text)
 
     def _initial_task(self, context: RequestContext) -> Task:
         """The bare submitted-state Task a new task must exist as before any status update."""

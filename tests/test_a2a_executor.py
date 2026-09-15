@@ -142,7 +142,7 @@ async def test_answer_on_an_unknown_task_id_reports_that_it_did_nothing():
 
 
 async def test_two_parked_tasks_are_tracked_and_answered_independently():
-    """`_brokers` is a dict keyed by task id, not a single slot -- answering one
+    """One broker serves both, keyed per conversation -- answering one
     concurrently-parked task must not resolve or evict the other one.
     """
     from a2a.types import TaskState
@@ -159,7 +159,7 @@ async def test_two_parked_tasks_are_tracked_and_answered_independently():
     turn_b = asyncio.create_task(executor.execute(ctx_b, queue_b))
     await _drain_until(lambda: len(queue_a.events) >= 3 and len(queue_b.events) >= 3)
 
-    assert set(executor._brokers) == {"task-1", "task-2"}
+    assert set(executor._conversation_ids) == {"task-1", "task-2"}
 
     assert executor.answer("task-1", "first answer") is True
     await turn_a
@@ -167,11 +167,38 @@ async def test_two_parked_tasks_are_tracked_and_answered_independently():
     assert queue_a.events[-1].status.message.parts[0].text == "chose: first answer"
     # task-2 is untouched: still parked, still reachable, not swept away by
     # task-1's completion popping its own entry out of the shared dict.
-    assert set(executor._brokers) == {"task-2"}
+    assert set(executor._conversation_ids) == {"task-2"}
     assert not turn_b.done()
 
     assert executor.answer("task-2", "second answer") is True
     await turn_b
     assert queue_b.events[-1].status.state == TaskState.TASK_STATE_COMPLETED
     assert queue_b.events[-1].status.message.parts[0].text == "chose: second answer"
-    assert executor._brokers == {}
+    assert executor._conversation_ids == {}
+    assert executor._turns == {}
+
+
+async def test_every_task_is_handed_the_same_broker():
+    """One broker instance for the whole executor, not one per task.
+
+    `AskUserTool`'s broker is a per-process slot that the turn path installs
+    into, so a per-task broker is overwritten by the next task to start, and the
+    earlier task's question then parks in an object `answer` no longer looks in:
+    its resume does nothing and the turn falls through to the ask's default.
+    Measured before this invariant held -- injecting a single suspension between
+    the install and the park made two concurrent tasks both answer "(no answer)".
+    """
+    seen = []
+
+    async def run_turn(prompt, *, conversation_id, broker):
+        seen.append(broker)
+        return "ok"
+
+    executor = RavenAgentExecutor(run_turn)
+    second = FakeContext()
+    second.task_id = "task-2"
+    await executor.execute(FakeContext(), FakeQueue())
+    await executor.execute(second, FakeQueue())
+
+    assert len(seen) == 2
+    assert seen[0] is seen[1], "a per-task broker loses the shared ask_user slot race"
