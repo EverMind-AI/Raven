@@ -88,6 +88,14 @@ class _Adapter(Protocol):
         project_id: str | None = None,
     ) -> None: ...
 
+    async def get_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None,
+        agent_id: str | None,
+    ) -> Any: ...
+
 
 class _NoOpAdapter:
     """Adapter that does nothing. Used as a graceful fallback so callers
@@ -97,6 +105,9 @@ class _NoOpAdapter:
         return None
 
     async def memorize(self, *a: Any, **kw: Any) -> None:
+        return None
+
+    async def get_session(self, *a: Any, **kw: Any) -> Any:
         return None
 
 
@@ -151,6 +162,16 @@ _SHUTDOWN_FLUSH_BUDGET_S: float = 5.0
 # person's delete has no replacement, and the map's value is free text that
 # only this adapter and a human reader ever look at.
 _DELETED_BY: str = "deleted-by-user"
+
+# One page is the whole answer here: a session read is scoped to one call's
+# worth of extraction, not to an account's history.
+_SESSION_PAGE_SIZE: int = 100
+
+# Which array of a ``/get`` body holds each kind. Episodes are the user track
+# and cases the agent track; profiles and skills are deliberately not read back
+# for a session, because they accumulate across calls and describe what an
+# agent *is* rather than what this call did.
+_SESSION_ARRAY: dict[str, str] = {"episode": "episodes", "agent_case": "agent_cases"}
 
 
 def _store_budget(message_count: int) -> float:
@@ -380,6 +401,43 @@ class _HttpEverosAdapter:
             )
             fr.raise_for_status()
 
+    async def get_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None,
+        agent_id: str | None,
+    ) -> Any:
+        """Everything filed under ``session_id`` for one track.
+
+        ``/get`` with a ``session_id`` filter rather than ``/search``: there is
+        no query here and nothing to rank. The endpoint takes exactly one owner
+        per call, so the caller names the track.
+        """
+        owner_key, memory_types = ("user_id", ("episode",)) if user_id else ("agent_id", ("agent_case",))
+        owner_id = user_id or agent_id
+        if not owner_id:
+            return None
+        out: list[dict[str, Any]] = []
+        for memory_type in memory_types:
+            r = await self._client.post(
+                f"{self._base_url}/api/v2/memory/get",
+                json={
+                    owner_key: owner_id,
+                    "memory_type": memory_type,
+                    "filters": {"session_id": session_id},
+                    "page_size": _SESSION_PAGE_SIZE,
+                },
+                headers=self._headers(),
+                timeout=_RECALL_TIMEOUT_S,
+            )
+            r.raise_for_status()
+            data = (r.json() or {}).get("data") or {}
+            for row in data.get(_SESSION_ARRAY[memory_type]) or []:
+                if isinstance(row, dict):
+                    out.append({**row, "_memory_type": memory_type})
+        return out
+
 
 # ---------------------------------------------------------------------------
 # EverosBackend — host's MemoryBackend implementation
@@ -399,6 +457,31 @@ _DEGRADATION_NOTE = {
     "rerank": "not configured (agent-track recall uses the LLM lane instead of a cross-encoder)",
     "multimodal": "not configured (images, PDFs and audio stay out of memory)",
 }
+
+
+def _joined(*parts: Any) -> str:
+    """The given fields as one whitespace-normalised line, empties dropped.
+
+    Deliberately uncapped. The reader is a sub-agent whose file tool already
+    handles length, so trimming here would only drop the end of what the
+    sub-agent concluded -- which is where a narrative keeps its findings.
+    """
+    return " - ".join(" ".join(str(p).split()) for p in parts if p and str(p).strip())
+
+
+def _session_text(memory_type: str, row: dict[str, Any]) -> str:
+    """One session row rendered as the line a reader gets.
+
+    Which fields carry the content is EverOS's own shape, so the rendering
+    lives here rather than in the host that asked: the host reads
+    ``Memory.text`` and knows nothing about episodes or cases.
+    """
+    if memory_type == "episode":
+        # ``summary`` is a hard 200-character prefix of ``episode`` (verified
+        # against everos 1.2.1), so it is the fallback, never the choice:
+        # taking it drops the rest of the sentence it cuts mid-word.
+        return _joined(row.get("subject"), row.get("episode") or row.get("summary"))
+    return _joined(row.get("task_intent"), row.get("approach"), row.get("key_insight"))
 
 
 class EverosBackend:
@@ -1092,10 +1175,15 @@ class EverosBackend:
         """
         if not messages:
             return True
+        # Per-call owners when the caller named them: the host writes on
+        # behalf of a sub-agent that ran elsewhere, and the content is that
+        # agent's. Filing it under this backend's own identity would put it
+        # where recall for that agent never looks. The default identity is
+        # untouched -- this is an override for one call, not a second source.
         payload = self._convert_messages(
             messages,
-            agent_id=self._agent_id,
-            user_id=self._user_id,
+            agent_id=str((metadata or {}).get("agent_id") or "") or self._agent_id,
+            user_id=str((metadata or {}).get("user_id") or "") or self._user_id,
         )
         if not payload:
             # Nothing to write is not a failed write: the conversion drops
@@ -1112,7 +1200,12 @@ class EverosBackend:
         if self._state is not ServiceState.READY:
             self._kick_probe()
             return False
-        if metadata and "is_final" in metadata:
+        if metadata and metadata.get("flush"):
+            # The caller is handing over a conversation that has already
+            # ended and will read the result back now. Waiting for the turn
+            # counter would wait for a turn that never comes.
+            is_final = True
+        elif metadata and "is_final" in metadata:
             is_final = bool(metadata["is_final"])
         else:
             # ``attempt`` is the caller's own retry count for this exact
@@ -1183,6 +1276,55 @@ class EverosBackend:
         if is_final:
             self._unflushed.discard(session_id)
         return True
+
+    async def recall_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[Memory]:
+        """Everything EverOS holds under ``session_id`` for one track.
+
+        Raises nothing: a caller asking what a finished sub-agent left behind
+        is writing an audit trail, and an unreachable service means "nothing to
+        report", not a failed run. Degrades the same way :meth:`recall` does --
+        empty, with a probe kicked so the next look might answer.
+        """
+        if (user_id is None) == (agent_id is None):
+            self._logger.warning(
+                "recall_session needs exactly one of user_id / agent_id (got user_id=%r, agent_id=%r)",
+                user_id,
+                agent_id,
+            )
+            return []
+        if self._adapter is None:
+            return []
+        if self._state is not ServiceState.READY:
+            self._kick_probe()
+            return []
+        try:
+            rows = await self._adapter.get_session(session_id, user_id=user_id, agent_id=agent_id)
+        except Exception as e:  # noqa: BLE001 - an audit trail must not fail a run
+            self._demote_from_exception(e)
+            self._logger.warning(
+                "EverosBackend.recall_session failed (%s); state=%s; returning empty",
+                e,
+                self._state.value,
+            )
+            return []
+        out: list[Memory] = []
+        for row in rows or []:
+            memory_type = str(row.get("_memory_type") or "")
+            text = _session_text(memory_type, row)
+            if text:
+                out.append(
+                    Memory(
+                        text=text,
+                        metadata={"id": row.get("id", ""), "type": memory_type, "session_id": session_id},
+                    )
+                )
+        return out
 
     async def delete(self, memory_id: str, *, kind: str | None = None) -> bool:
         """Remove one memory the way EverOS itself removes one.

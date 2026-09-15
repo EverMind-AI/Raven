@@ -94,6 +94,11 @@ stop deleting a derived index row behind a source of truth that keeps the text;
 and ``ServiceLocator`` gained the host's embedding block, so the knowledge base
 and the memory backend read one endpoint rather than a copy each. Measured at
 2,969; the headroom is the same twenty-odd lines, for the same reason.
+
+2,990 -> 3,040 (2026-09-15): ``recall_session`` joins the memory paper,
+so the host can read back what a sub-agent left behind through the contract
+rather than that backend's HTTP API, and ``store``'s two metadata conventions
+are written down where a plugin author reads them. Measured at 3,013.
 """
 
 from __future__ import annotations
@@ -104,7 +109,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 2_990
+CONTRACTS_LINE_CEILING = 3_040
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

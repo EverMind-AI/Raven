@@ -71,7 +71,7 @@ from raven.agent.subagent.history import dag_root, nodes_root, session_history_r
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
-from raven.agent.subagent_memory import EverosIdentity
+from raven.agent.subagent_memory import MemoryScope
 from raven.config.raven import SubagentDagConfig
 from raven.config.schema import MCPServerConfig
 from raven.contracts.tool import Tool, ToolResult
@@ -353,7 +353,7 @@ class SubAgentDagTool(Tool):
         announce_exception: ExceptionAnnouncer | None = None,
         adopt: TaskAdopter | None = None,
         state_for: "Callable[[str, str | None, str], Any] | None" = None,
-        everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
+        memory_for: "Callable[[str], MemoryScope | None] | None" = None,
         mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
         charge: QuotaCharger | None = None,
         ask: "Ask | None" = None,
@@ -388,7 +388,7 @@ class SubAgentDagTool(Tool):
         # declares one leaves a Memory record on the same terms `spawn` and a
         # direct chat do. Injected for the same reason as `state_for`: this
         # tool is built from the same config as the manager but does not own one.
-        self._everos_for = everos_for
+        self._memory_for = memory_for
         # The manager's mode resolution, so a node that names an `instance` runs at
         # the effort level a user set on that instance, on the same terms `spawn`
         # and a direct chat do. Injected for the same reason as `state_for`: this
@@ -1757,7 +1757,7 @@ class SubAgentDagTool(Tool):
                 semaphore=self._gate,
                 session_key=origin.conversation,
                 state_for=self._state_for,
-                everos_for=self._everos_for,
+                memory_for=self._memory_for,
                 mode_for=self._mode_for,
                 capabilities=self._capability_map(),
                 run_id=run_id,

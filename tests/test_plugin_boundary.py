@@ -25,14 +25,13 @@ _HOST_PRIVATE = re.compile(
     re.M,
 )
 
-# Host surfaces built on everos's wire protocol rather than on MemoryBackend.
-# They need a contract that does not exist yet (browse / delete memories,
-# sub-agent trace records). ``console.py`` is here for a second reason: the
-# settings page reads everos config for the model roles behind extraction.
+# The two GUI surfaces still shaped around EverOS's own store: the memory
+# browser reads its four kinds over EverOS's HTTP API, and the settings page
+# edits the model roles behind EverOS's extraction. Both need the wire contract
+# generalised before a second backend could answer them, which is a frontend
+# change; everything else the host does now goes through MemoryBackend.
 HOST_WIRE_PROTOCOL_SURFACES: frozenset[str] = frozenset(
     {
-        "raven/agent/subagent/manager.py",
-        "raven/agent/subagent_memory.py",
         "raven/rpc/methods/console.py",
         "raven/rpc/methods/memory.py",
     }

@@ -2618,3 +2618,121 @@ class TestDeleteChangesTheSourceOfTruth:
         assert await backend.delete("p1", kind="profile") is False
         assert await backend.delete("c1", kind="agent_case") is False
         assert path.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.asyncio
+class TestRecallSession:
+    """Reading back what one finished call left behind.
+
+    An exact filter, not a search: the host asks after a sub-agent has run in a
+    process of its own, and there is no query to rank by.
+    """
+
+    @staticmethod
+    def _ready(adapter):
+        from raven_everos.backend import EverosBackend, ServiceState
+
+        ctx = MagicMock()
+        ctx.config = {"base_url": "http://localhost:18791"}
+        ctx.services.agent_id = "default"
+        ctx.services.user_id = "default"
+        ctx.logger = MagicMock()
+        b = EverosBackend(ctx, adapter=adapter)
+        b._state = ServiceState.READY
+        return b
+
+    async def test_one_track_per_call_reaches_the_adapter(self) -> None:
+        adapter = MagicMock()
+        adapter.get_session = AsyncMock(return_value=[])
+        backend = self._ready(adapter)
+
+        await backend.recall_session("cli:abc", user_id="u1")
+
+        adapter.get_session.assert_awaited_once_with("cli:abc", user_id="u1", agent_id=None)
+
+    async def test_rows_become_memories_with_their_kind(self) -> None:
+        adapter = MagicMock()
+        adapter.get_session = AsyncMock(
+            return_value=[
+                {"id": "e1", "_memory_type": "episode", "subject": "Audit", "episode": "Ran the audit."},
+                {
+                    "id": "c1",
+                    "_memory_type": "agent_case",
+                    "task_intent": "fix the tokenizer",
+                    "key_insight": "contractions are one token",
+                },
+            ]
+        )
+        backend = self._ready(adapter)
+
+        out = await backend.recall_session("cli:abc", agent_id="a1")
+
+        assert [m.metadata["type"] for m in out] == ["episode", "agent_case"]
+        assert out[0].text == "Audit - Ran the audit."
+        assert "contractions are one token" in out[1].text
+
+    async def test_both_tracks_or_neither_is_a_caller_bug(self) -> None:
+        adapter = MagicMock()
+        adapter.get_session = AsyncMock(return_value=[])
+        backend = self._ready(adapter)
+
+        assert await backend.recall_session("s") == []
+        assert await backend.recall_session("s", user_id="u", agent_id="a") == []
+        adapter.get_session.assert_not_awaited()
+
+    async def test_an_unreachable_service_is_empty_not_a_raise(self) -> None:
+        """A caller writing an audit trail gets "nothing to report", not a
+        failed run."""
+        import httpx
+
+        adapter = MagicMock()
+        adapter.get_session = AsyncMock(side_effect=httpx.ReadTimeout("hung"))
+        backend = self._ready(adapter)
+
+        assert await backend.recall_session("s", user_id="u") == []
+
+
+@pytest.mark.asyncio
+class TestStoreConventions:
+    """The two metadata keys the contract asks every backend to honour."""
+
+    @staticmethod
+    def _ready(adapter):
+        from raven_everos.backend import EverosBackend, ServiceState
+
+        ctx = MagicMock()
+        ctx.config = {"base_url": "http://localhost:18791"}
+        ctx.services.agent_id = "host-agent"
+        ctx.services.user_id = "host-user"
+        ctx.logger = MagicMock()
+        b = EverosBackend(ctx, adapter=adapter)
+        b._state = ServiceState.READY
+        return b
+
+    async def test_flush_extracts_now_rather_than_on_the_next_turn(self) -> None:
+        """The caller is handing over a conversation that has already ended and
+        will read the result back immediately."""
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        backend = self._ready(adapter)
+        backend._flush_every_turns = 100
+
+        await backend.store("s", [{"role": "user", "content": "x"}], metadata={"flush": True})
+
+        assert adapter.memorize.await_args.kwargs["is_final"] is True
+
+    async def test_per_call_owners_do_not_change_the_backends_identity(self) -> None:
+        """The content is a sub-agent's; filing it under the host would put it
+        where recall for that agent never looks. The default identity stays the
+        one the host granted."""
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        backend = self._ready(adapter)
+
+        await backend.store(
+            "s",
+            [{"role": "user", "content": "x"}],
+            metadata={"user_id": "sub-user", "agent_id": "sub-agent"},
+        )
+
+        assert (backend._user_id, backend._agent_id) == ("host-user", "host-agent")
