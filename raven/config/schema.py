@@ -2466,6 +2466,8 @@ def borrows_openrouter_key(tool: MediaToolConfig) -> bool:
     names a model or a key) yet keyless. Unconfigured sections borrow nothing,
     which is what keeps a chat credential from quietly enabling tools that
     bill per call."""
+    if tool.model.startswith(("MiniMax-H", "I2V-")):
+        return False
     return bool((tool.api_key or tool.model) and not tool.api_key)
 
 
