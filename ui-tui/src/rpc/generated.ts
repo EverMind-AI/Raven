@@ -4336,6 +4336,51 @@ export interface PlaybooksRunResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksCreateParams".
+ */
+export interface PlaybooksCreateParams {
+  /**
+   * Short kebab-case name; becomes the library directory name. Must not already exist in either layer.
+   */
+  name: string;
+  /**
+   * The whole procedure in plain language: steps in order, what each produces and consumes, per-run parameters, trigger phrases, and any MCP server a step needs. The generator sees only this text.
+   */
+  workflow: string;
+  /**
+   * Skill names to pin to specific steps, when the caller named some.
+   */
+  skills?: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksCreateResult".
+ */
+export interface PlaybooksCreateResult {
+  name: string;
+  /**
+   * Whether a playbook now exists. False only when the generation failed, in which case `errors` says why.
+   */
+  created: boolean;
+  /**
+   * Where the file landed; empty when nothing was created.
+   */
+  path: string;
+  /**
+   * The composer's own open questions -- assumptions it made and gaps it could not close. Written into the file's prose for review and returned here so a client need not read the file back.
+   */
+  notes: string[];
+  /**
+   * Why the composer could not produce a valid playbook. Non-empty exactly when `created` is false.
+   */
+  errors: string[];
+  /**
+   * Whether the live library loaded the new file, so it is usable in this process without a restart.
+   */
+  adopted: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ApprovalRespondParams".
  */
 export interface ApprovalRespondParams {
