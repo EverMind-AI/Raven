@@ -339,12 +339,15 @@ def everos_has_own_embedding() -> bool:
     wizard, and the settings page -- so no surface can show one home while
     another writes the other.
 
-    The shipped template seeds a placeholder ``"<...>"`` model name, which is
-    not a choice anybody made.
+    Model **and** key, which is :func:`role_configured_in`'s criterion and not
+    a second one: the shipped template seeds every section with a real model
+    name and an empty key, so "has a model" is true of a root nobody has
+    configured. Reading it that way made a fresh managed install look like an
+    operator's deliberate choice -- the host's endpoint was never bound, and
+    the service the wizard had just started ran keyword-only while the wizard
+    said embedding was configured.
     """
-    own = load_everos_config().get("embedding") or {}
-    model = str(own.get("model") or "")
-    return bool(model) and not model.startswith("<")
+    return role_configured_in(load_everos_config(), "embedding")
 
 
 def host_embedding_env() -> dict[str, str]:
