@@ -52,7 +52,12 @@ class InstallFault:
 
 
 def marker_path() -> Path:
-    from raven.config.loader import raven_home
+    # From raven.home, where it is defined, not from the raven.config re-export:
+    # importing anything under raven.config runs that package's __init__, which
+    # pulls the whole settings stack in. The marker is written while uv is about
+    # to delete this environment, so the fewer modules this path needs to import
+    # at that moment, the better.
+    from raven.home import raven_home
 
     return raven_home() / MARKER_NAME
 
