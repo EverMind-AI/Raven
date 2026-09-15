@@ -28,11 +28,11 @@ def detect_image_mime(data: bytes) -> str | None:
 def image_block(data_uri: str) -> ImagePart:
     """The single place the image content-part shape is written.
 
-    CI runs no type checker, so this annotation does not gate a merge -- but an
-    editor language server does flag a mistyped key against a TypedDict, and the
-    signature documents the shape that ``dict[str, Any]`` could not. Combined
-    with being the only constructor, a wrong key ("imageURL") stops being a
-    silent dropped picture in five places and becomes one line with a test.
+    A mistyped key is checked against the TypedDict by `make lint-types` and by
+    an editor language server, and the signature documents the shape that
+    ``dict[str, Any]`` could not. Combined with being the only constructor, a
+    wrong key ("imageURL") stops being a silent dropped picture in five places
+    and becomes one line with a test.
     """
     return {"type": "image_url", "image_url": {"url": data_uri}}
 

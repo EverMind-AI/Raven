@@ -25,7 +25,7 @@ from loguru import logger
 from raven.agent import workdir
 from raven.i18n import zh_lexicon
 from raven.security.trust import wrap_untrusted
-from raven.utils.images import detect_image_mime, image_block
+from raven.utils.images import ImagePart, detect_image_mime, image_block
 
 # Ceilings on what one message may carry. ``prepare_image`` caps each image on
 # its own (1568 tokens, 4.5MB of base64); nothing capped the whole message, and a
@@ -641,7 +641,7 @@ def build_user_content(
     return images + [{"type": "text", "text": body}]
 
 
-def _inline_image(raw: bytes, mime: str, path: Path, notes: list[str]) -> dict[str, Any] | None:
+def _inline_image(raw: bytes, mime: str, path: Path, notes: list[str]) -> ImagePart | None:
     """One image, preprocessed and encoded, with its note appended.
 
     Preprocessing can fail (a truncated upload, a format Pillow cannot decode,

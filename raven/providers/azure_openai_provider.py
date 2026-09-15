@@ -88,6 +88,7 @@ class AzureOpenAIProvider(LLMProvider):
 
     def _build_headers(self) -> dict[str, str]:
         """Build headers for Azure OpenAI API with api-key header."""
+        assert self.api_key is not None  # noqa: S101 - the constructor refuses an empty api_key
         return {
             "Content-Type": "application/json",
             "api-key": self.api_key,  # Azure OpenAI uses api-key header, not Authorization

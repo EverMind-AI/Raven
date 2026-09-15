@@ -2515,7 +2515,8 @@ def _as_size(box, taken_by: str) -> tuple[float, float, float, float]:
             "pass the ppt_layout Box itself, or divide each number by 914400"
         )
     try:
-        return tuple(float(number) for number in numbers)
+        left, top, width, height = (float(number) for number in numbers)
+        return left, top, width, height
     except (TypeError, ValueError):
         raise ValueError(wanted) from None
 

@@ -432,7 +432,7 @@ class PptReviewTool(Tool):
         seconds: dict[int, float] = {}
         misread: list[int] = []
 
-        async def one(number: int) -> tuple[int, list[dict[str, str]]] | None:
+        async def one(number: int) -> tuple[int, list[dict[str, str]], str] | None:
             async with reading:
                 started = time.monotonic()
                 try:

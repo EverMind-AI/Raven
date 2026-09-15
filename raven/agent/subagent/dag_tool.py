@@ -1042,7 +1042,7 @@ class SubAgentDagTool(Tool):
         mcp_scope: str | None = None,
         mcp_credential_gaps: "Callable[[], frozenset[str]] | None" = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> str | ToolResult:
         """Run one graph. ``mcp_servers`` is this run's own MCP definitions.
 
         Not a model-facing argument: it is absent from :meth:`parameters`, and
@@ -1074,7 +1074,7 @@ class SubAgentDagTool(Tool):
         background: bool,
         confirm: bool = False,
         task_summary: str = "",
-    ) -> str:
+    ) -> str | ToolResult:
         # Refused whole rather than per node, and ahead of validation, for the
         # same reason validation runs early: a refused graph must cost zero
         # sub-agent dispatches.

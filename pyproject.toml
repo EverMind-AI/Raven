@@ -288,13 +288,13 @@ DEP003 = ["raven_everos", "requests", "cryptography"]
 
 [tool.ty]
 # A call-correctness gate, not a typing-strictness project. Of ty's 133 rules,
-# 109 are live here and this tree satisfies all of them -- measured at zero, or
+# 110 are live here and this tree satisfies all of them -- measured at zero, or
 # cleared to zero. They answer "is this
 # call, override or annotation self-consistent" -- the class of error a test
 # only finds by executing the line, which is exactly what a bundled plugin's
 # render path or a rarely-taken CLI branch does not do in CI.
 #
-# The other 24: ten switched off below, and fourteen that ship disabled
+# The other 23: nine switched off below, and fourteen that ship disabled
 # upstream and are left that way (the `unsound-*` family, `division-by-zero`,
 # the `possibly-*` family and friends). Those fourteen are unmeasured, not
 # satisfied -- turning any of them on is its own sized change.
@@ -346,12 +346,6 @@ invalid-argument-type = "ignore"   # 231
 # an async generator. Enabling this rule would mean suppressing 65 lines to keep
 # one, so it stays off until that declaration is fixed.
 invalid-method-override = "ignore" #  66
-# 39: the family that hid a regression introduced while writing this gate, so
-# worth clearing -- but sampled as roughly half annotations narrower than the
-# code (a generator-built tuple typed `tuple[int, int, int]`) and half return
-# types that genuinely admit a value the signature refuses (a `Path | None`
-# returned where `Path` is promised). Each needs a per-case ruling.
-invalid-return-type = "ignore"     #  39
 invalid-assignment = "ignore"      #  33
 not-subscriptable = "ignore"       #  32
 unsupported-operator = "ignore"    #  28

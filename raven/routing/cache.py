@@ -132,7 +132,8 @@ class BenchmarkCache:
             # Stale — try API first
             try:
                 await self._do_refresh()
-                return self._data  # type: ignore[return-value]
+                assert self._data is not None  # noqa: S101 - _do_refresh sets it or raises
+                return self._data
             except Exception:
                 logger.warning("API refresh failed, using stale cache")
                 self._data = data
@@ -141,7 +142,8 @@ class BenchmarkCache:
         # 3. No cache — try API
         try:
             await self._do_refresh()
-            return self._data  # type: ignore[return-value]
+            assert self._data is not None  # noqa: S101 - _do_refresh sets it or raises
+            return self._data
         except Exception:
             # 4. Fallback to snapshot
             logger.warning("API unavailable, falling back to snapshot.json")
