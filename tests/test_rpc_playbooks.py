@@ -1322,16 +1322,17 @@ async def test_a_file_the_live_library_would_not_load_says_so(library: PlaybookS
 
 @pytest.mark.asyncio
 async def test_a_generation_that_never_finishes_is_given_up_on(library: PlaybookStore) -> None:
-    """Bounded with the same budget the conversational entry declares, so the
-    two entries do not disagree about how long a generation may take."""
+    """Bounded with the budget the conversational entry declares -- read from it
+    rather than copied, so the two cannot drift apart."""
     rt = _CreateRuntime(library, _Generator(hangs=True))
-    mod._GENERATION_BUDGET_S = 0.05
+    original = mod._generation_budget_s
+    mod._generation_budget_s = lambda: 0.05
     try:
         out = await mod.playbooks_create(
             {"name": "weekly-digest", "workflow": "w"}, agent_loop_factory=_create_loop(rt)
         )
     finally:
-        mod._GENERATION_BUDGET_S = 180.0
+        mod._generation_budget_s = original
     assert out["created"] is False
     assert out["errors"] and "did not finish" in out["errors"][0]
 

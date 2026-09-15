@@ -639,10 +639,18 @@ async def playbooks_run(
     return {"name": name, "kind": plan.kind, "reply": plan.reply}
 
 
-#: The bound the model-facing entry puts on one generation, reused rather than
-#: chosen again: creation is a draft plus repair rounds, and the two entries
-#: should not disagree about how long that may take.
-_GENERATION_BUDGET_S = 180.0
+def _generation_budget_s() -> float:
+    """How long one generation may take, read from the entry that declares it.
+
+    Taken from the conversational tool's own ``timeout_seconds`` rather than
+    written again here. Creation is a draft plus repair rounds and the two
+    entries should not disagree about how long that may take -- and a number
+    copied is a number that drifts, where a number read moves for both the
+    moment either is reconsidered.
+    """
+    from raven.agent.tools.create_playbook import CreatePlaybookTool
+
+    return float(CreatePlaybookTool.timeout_seconds)
 
 
 async def playbooks_create(
@@ -701,8 +709,9 @@ async def playbooks_create(
             f"a {store.origin_of(name)} playbook named {name!r} already exists; pick another name"
         )
 
+    budget = _generation_budget_s()
     try:
-        generated = await asyncio.wait_for(runtime.generator.generate(workflow, skills), _GENERATION_BUDGET_S)
+        generated = await asyncio.wait_for(runtime.generator.generate(workflow, skills), budget)
     except PlaybookGenerationError as exc:
         return {
             "name": name,
@@ -718,7 +727,7 @@ async def playbooks_create(
             "created": False,
             "path": "",
             "notes": [],
-            "errors": [f"generation did not finish within {_GENERATION_BUDGET_S:.0f}s"],
+            "errors": [f"generation did not finish within {budget:.0f}s"],
             "adopted": False,
         }
 
