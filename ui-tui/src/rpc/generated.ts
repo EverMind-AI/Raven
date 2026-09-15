@@ -1802,6 +1802,12 @@ export interface KnowledgeBase {
   created_at: string;
   updated_at: string;
   documents: number;
+  top_k?: number;
+  smart_chunking?: boolean;
+  separator?: string;
+  chunk_size?: number;
+  chunk_overlap?: number;
+  file_processing?: string;
 }
 /**
  * One uploaded document and where its indexing got to.
@@ -1824,6 +1830,8 @@ export interface KnowledgeDocument {
   error: string;
   created_at: string;
   updated_at: string;
+  origin?: string;
+  origin_ref?: string;
 }
 /**
  * One search hit. ``score`` is a similarity, so higher is nearer -- the
@@ -1836,6 +1844,9 @@ export interface KnowledgeHit {
   score: number;
   document_id: string;
   text: string;
+  chunk_index?: number;
+  total_chunks?: number;
+  source?: string;
 }
 /**
  * Just enough of one step to draw the graph: which step it is, and what it
@@ -4800,6 +4811,7 @@ export interface KnowledgeStatusParams {}
 export interface KnowledgeStatusResult {
   configured: boolean;
   model: string;
+  extensions?: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4843,6 +4855,26 @@ export interface KnowledgeBasesRenameParams {
  * via the `definition` "KnowledgeBasesRenameResult".
  */
 export interface KnowledgeBasesRenameResult {
+  base: KnowledgeBase;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBasesSettingsParams".
+ */
+export interface KnowledgeBasesSettingsParams {
+  base_id: string;
+  top_k?: number;
+  smart_chunking?: boolean;
+  separator?: string;
+  chunk_size?: number;
+  chunk_overlap?: number;
+  file_processing?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBasesSettingsResult".
+ */
+export interface KnowledgeBasesSettingsResult {
   base: KnowledgeBase;
 }
 /**
@@ -4893,6 +4925,53 @@ export interface KnowledgeDocumentsAddResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsAddNoteParams".
+ */
+export interface KnowledgeDocumentsAddNoteParams {
+  base_id: string;
+  title?: string;
+  text: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsAddNoteResult".
+ */
+export interface KnowledgeDocumentsAddNoteResult {
+  document: KnowledgeDocument;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsUpdateNoteParams".
+ */
+export interface KnowledgeDocumentsUpdateNoteParams {
+  document_id: string;
+  title?: string;
+  text: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsUpdateNoteResult".
+ */
+export interface KnowledgeDocumentsUpdateNoteResult {
+  document: KnowledgeDocument;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsAddUrlParams".
+ */
+export interface KnowledgeDocumentsAddUrlParams {
+  base_id: string;
+  url: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsAddUrlResult".
+ */
+export interface KnowledgeDocumentsAddUrlResult {
+  document: KnowledgeDocument;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "KnowledgeDocumentsIndexParams".
  */
 export interface KnowledgeDocumentsIndexParams {
@@ -4937,6 +5016,8 @@ export interface KnowledgeSearchParams {
  */
 export interface KnowledgeSearchResult {
   hits: KnowledgeHit[];
+  search_ms?: number;
+  embed_ms?: number;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

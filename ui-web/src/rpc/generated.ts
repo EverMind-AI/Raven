@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 168 methods, 96 component schemas.
+// 172 methods, 96 component schemas.
 
 /* eslint-disable */
 /**
@@ -1429,6 +1429,12 @@ export interface KnowledgeBase {
   created_at: string;
   updated_at: string;
   documents: number;
+  top_k?: number;
+  smart_chunking?: boolean;
+  separator?: string;
+  chunk_size?: number;
+  chunk_overlap?: number;
+  file_processing?: string;
 }
 /**
  * One uploaded document and where its indexing got to.
@@ -1448,6 +1454,8 @@ export interface KnowledgeDocument {
   error: string;
   created_at: string;
   updated_at: string;
+  origin?: string;
+  origin_ref?: string;
 }
 /**
  * One search hit. ``score`` is a similarity, so higher is nearer -- the
@@ -1457,6 +1465,9 @@ export interface KnowledgeHit {
   score: number;
   document_id: string;
   text: string;
+  chunk_index?: number;
+  total_chunks?: number;
+  source?: string;
 }
 /**
  * Just enough of one step to draw the graph: which step it is, and what it
@@ -3587,6 +3598,7 @@ export interface KnowledgeStatusParams {}
 export interface KnowledgeStatusResult {
   configured: boolean;
   model: string;
+  extensions?: string[];
 }
 export interface KnowledgeBasesListParams {}
 export interface KnowledgeBasesListResult {
@@ -3606,6 +3618,18 @@ export interface KnowledgeBasesRenameParams {
   description?: string;
 }
 export interface KnowledgeBasesRenameResult {
+  base: KnowledgeBase;
+}
+export interface KnowledgeBasesSettingsParams {
+  base_id: string;
+  top_k?: number;
+  smart_chunking?: boolean;
+  separator?: string;
+  chunk_size?: number;
+  chunk_overlap?: number;
+  file_processing?: string;
+}
+export interface KnowledgeBasesSettingsResult {
   base: KnowledgeBase;
 }
 export interface KnowledgeBasesDeleteParams {
@@ -3631,6 +3655,29 @@ export interface KnowledgeDocumentsAddParams {
 export interface KnowledgeDocumentsAddResult {
   document: KnowledgeDocument;
 }
+export interface KnowledgeDocumentsAddNoteParams {
+  base_id: string;
+  title?: string;
+  text: string;
+}
+export interface KnowledgeDocumentsAddNoteResult {
+  document: KnowledgeDocument;
+}
+export interface KnowledgeDocumentsUpdateNoteParams {
+  document_id: string;
+  title?: string;
+  text: string;
+}
+export interface KnowledgeDocumentsUpdateNoteResult {
+  document: KnowledgeDocument;
+}
+export interface KnowledgeDocumentsAddUrlParams {
+  base_id: string;
+  url: string;
+}
+export interface KnowledgeDocumentsAddUrlResult {
+  document: KnowledgeDocument;
+}
 export interface KnowledgeDocumentsIndexParams {
   document_id: string;
 }
@@ -3653,6 +3700,8 @@ export interface KnowledgeSearchParams {
 }
 export interface KnowledgeSearchResult {
   hits: KnowledgeHit[];
+  search_ms?: number;
+  embed_ms?: number;
 }
 export interface ClipboardPasteParams {}
 export interface ClipboardPasteResult {
@@ -3941,9 +3990,13 @@ export interface RpcMethods {
   'knowledge.bases.list': { params: KnowledgeBasesListParams; result: KnowledgeBasesListResult };
   'knowledge.bases.create': { params: KnowledgeBasesCreateParams; result: KnowledgeBasesCreateResult };
   'knowledge.bases.rename': { params: KnowledgeBasesRenameParams; result: KnowledgeBasesRenameResult };
+  'knowledge.bases.settings': { params: KnowledgeBasesSettingsParams; result: KnowledgeBasesSettingsResult };
   'knowledge.bases.delete': { params: KnowledgeBasesDeleteParams; result: KnowledgeBasesDeleteResult };
   'knowledge.documents.list': { params: KnowledgeDocumentsListParams; result: KnowledgeDocumentsListResult };
   'knowledge.documents.add': { params: KnowledgeDocumentsAddParams; result: KnowledgeDocumentsAddResult };
+  'knowledge.documents.add_note': { params: KnowledgeDocumentsAddNoteParams; result: KnowledgeDocumentsAddNoteResult };
+  'knowledge.documents.update_note': { params: KnowledgeDocumentsUpdateNoteParams; result: KnowledgeDocumentsUpdateNoteResult };
+  'knowledge.documents.add_url': { params: KnowledgeDocumentsAddUrlParams; result: KnowledgeDocumentsAddUrlResult };
   'knowledge.documents.index': { params: KnowledgeDocumentsIndexParams; result: KnowledgeDocumentsIndexResult };
   'knowledge.documents.delete': { params: KnowledgeDocumentsDeleteParams; result: KnowledgeDocumentsDeleteResult };
   'knowledge.search': { params: KnowledgeSearchParams; result: KnowledgeSearchResult };
@@ -4016,10 +4069,14 @@ export const RPC_METHODS = [
   "knowledge.bases.delete",
   "knowledge.bases.list",
   "knowledge.bases.rename",
+  "knowledge.bases.settings",
   "knowledge.documents.add",
+  "knowledge.documents.add_note",
+  "knowledge.documents.add_url",
   "knowledge.documents.delete",
   "knowledge.documents.index",
   "knowledge.documents.list",
+  "knowledge.documents.update_note",
   "knowledge.search",
   "knowledge.status",
   "mcp.list",
