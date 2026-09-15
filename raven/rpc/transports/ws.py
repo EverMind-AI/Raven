@@ -521,18 +521,13 @@ def build_app(
     app.router.add_get("/rpc", gateway.handle_ws)
     app.router.add_get("/oauth/callback", handle_oauth_callback)
 
-    from raven.a2a.gate import mount_if_allowed
-    from raven.a2a.runtime import build_request_handler, make_run_turn_from_factory
+    from raven.a2a.gate import mount_gateway_face
     from raven.config import load_config
 
-    # A fresh handler bound to a factory that re-resolves the loop on every call --
-    # not the loop itself -- because at this point in a gateway boot the loop may
-    # not exist yet, and a later hot-reload swaps it for a new one in place.
-    a2a_config = load_config().a2a
-    gateway.a2a_handler = build_request_handler(
-        a2a_config, make_run_turn_from_factory(gateway.agent_loop_factory)
-    )
-    mount_if_allowed(app, a2a_config, handler=gateway.a2a_handler)
+    # The gate is the only module this surface may import out of raven/a2a/ -- it
+    # assembles the handler behind its own enabled/sub-agent checks. None here means
+    # the face did not mount.
+    gateway.a2a_handler = mount_gateway_face(app, load_config().a2a, agent_loop_factory=gateway.agent_loop_factory)
 
     def guard_delivery(request: web.Request) -> None:
         if not gateway._origin_ok(request):
