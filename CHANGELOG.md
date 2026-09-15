@@ -121,6 +121,15 @@ All notable changes to Raven are documented here.
   ledger (plus what it submitted itself), and `ops_declare` refuses a
   `remote_dir` a live sibling campaign is still writing rounds into.
 
+- A command run by `exec` no longer reads this process's stdin. It inherited
+  it, and when raven serves as an ACP sub-agent that stdin is the pipe the
+  client answers permission requests on: a command that reads its input
+  (`ssh` without `-n`, `cat`, `python3 -`) consumed the frames arriving while
+  it ran, and every other session sharing the process waited out the 300 s
+  approval deadline on an answer the client had written within a millisecond.
+  Measured with four sessions in one process: 18 of 183 approvals lost, each
+  inside another session's `ssh`. The command's stdin now reads EOF at once, as the
+  background executor's already did.
 - The web file viewer opens a sub-agent's report again. `/file` anchored the
   state-directory fence on the session's working directory whenever the page
   named a session, so the fence exempted `~/.raven/tmp/<channel>` and refused
