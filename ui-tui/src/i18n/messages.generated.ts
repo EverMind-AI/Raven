@@ -1866,7 +1866,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.kb.proc_local': 'Local Document',
     'gui.kb.proc_notdl': 'Not downloaded',
     'gui.kb.proc_notcfg': 'Not configured',
-    'gui.kb.proc_settings': 'Go to settings'
+    'gui.kb.proc_settings': 'Go to settings',
+    'gui.kb.picked_n': '{n} selected',
+    'gui.kb.pick_row': 'Select {name}',
+    'gui.kb.pick_all': 'Select every file',
+    'gui.kb.docs_reindex': 'Reindex',
+    'gui.kb.docs_delete_body': 'Delete {count} files? Their chunks and stored copies go with them.'
   },
   zh: {
     'gui.act.ing.ask_user': '等待你回答',
@@ -3429,6 +3434,11 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.kb.proc_local': '本地文档',
     'gui.kb.proc_notdl': '未下载',
     'gui.kb.proc_notcfg': '未配置',
-    'gui.kb.proc_settings': '前往设置'
+    'gui.kb.proc_settings': '前往设置',
+    'gui.kb.picked_n': '已选择 {n} 项',
+    'gui.kb.pick_row': '选择 {name}',
+    'gui.kb.pick_all': '全选',
+    'gui.kb.docs_reindex': '重新索引',
+    'gui.kb.docs_delete_body': '确定删除 {count} 个文件？它们的分块与已保存的副本会一并删除。'
   }
 } as Record<Locale, Record<string, string>>

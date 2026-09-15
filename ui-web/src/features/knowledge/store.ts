@@ -36,6 +36,10 @@ interface State {
   recall: boolean
   /* The settings panel is up. */
   settings: boolean
+  /* Which rows are ticked, by document id. A set rather than a flag on each
+     row: the rows are re-read from the engine on every reload, and a flag
+     would be lost with them. */
+  picked: string[]
   /* The document whose original file is on screen, or null for the table.
      Held as the record rather than an id: the viewer needs the name and the
      media type to decide what it is showing, and a row that is deleted while
@@ -74,6 +78,7 @@ const EMPTY: State = {
   searching: false,
   recall: false,
   settings: false,
+  picked: [],
   viewing: null,
   dialog: null,
   adding: null,
@@ -163,7 +168,7 @@ export async function open_(id: string): Promise<void> {
   /* A query typed in the base being left must not spend a request, nor land
      its hits in the base being opened. */
   cancelSearch()
-  set({ openId: id, docs: [], query: '', hits: null, viewing: null })
+  set({ openId: id, docs: [], query: '', hits: null, viewing: null, picked: [] })
   try {
     const docs = await source().documents(id)
     /* The reader may have gone back or opened another base while this was in
@@ -176,7 +181,7 @@ export async function open_(id: string): Promise<void> {
 
 export function back(): void {
   cancelSearch()
-  set({ openId: null, docs: [], query: '', hits: null, viewing: null })
+  set({ openId: null, docs: [], query: '', hits: null, viewing: null, picked: [] })
 }
 
 /* At most this many files out of one folder. A source tree holds tens of
@@ -353,6 +358,112 @@ export async function addUrl(url: string): Promise<void> {
   }
 }
 
+/* ── picking rows ──────────────────────────────────────────────────────
+
+   Two things a reader does to a row -- index it again, be rid of it -- read
+   the same on twenty rows as on one, and doing either twenty times through a
+   per-row menu is the same click twenty times. */
+export function togglePick(id: string): void {
+  set({
+    picked: state.picked.includes(id)
+      ? state.picked.filter((p) => p !== id)
+      : [...state.picked, id],
+  })
+}
+
+/* The header tick. On when every row is picked, and pressing it then clears
+   rather than re-picking, which is what every list of checkboxes does. */
+export function pickAll(on: boolean): void {
+  set({ picked: on ? state.docs.map((d) => d.id) : [] })
+}
+
+export function clearPicks(): void {
+  set({ picked: [] })
+}
+
+/* The picked rows, in the order the list shows them rather than the order they
+   were ticked in: this is what the actions below report progress against. */
+function pickedDocs(): KbDoc[] {
+  return state.docs.filter((d) => state.picked.includes(d.id))
+}
+
+/* Index every picked row again, one at a time.
+
+   Sequential for the same reason an upload is: each one embeds its chunks
+   through the configured endpoint, and twenty at once is twenty of those in
+   flight against a rate limit nobody raised. One failing is recorded on its
+   own row and does not stop the rest. */
+export async function reindexPicked(): Promise<void> {
+  const baseId = state.openId
+  const rows = pickedDocs()
+  if (!baseId || state.busy || !rows.length) return
+  set({
+    busy: true,
+    adding: { done: 0, total: rows.length },
+    docs: state.docs.map((d) =>
+      state.picked.includes(d.id) ? { ...d, status: 'indexing', error: '' } : d,
+    ),
+  })
+  let failed = 0
+  let firstError = ''
+  try {
+    for (const doc of rows) {
+      if (state.openId !== baseId) break
+      try {
+        const indexed = await source().index(doc.id)
+        if (state.openId === baseId) {
+          set({ docs: state.docs.map((d) => (d.id === indexed.id ? indexed : d)) })
+        }
+      } catch (e) {
+        failed += 1
+        if (!firstError) firstError = (e as Error)?.message || String(e)
+        /* Put the row back the way it was: the optimistic `indexing` above is
+           a promise this call just failed to keep. */
+        if (state.openId === baseId) {
+          set({ docs: state.docs.map((d) => (d.id === doc.id ? doc : d)) })
+        }
+      }
+      set({ adding: { done: (state.adding?.done || 0) + 1, total: rows.length } })
+    }
+  } finally {
+    set({ busy: false, adding: null })
+    if (failed === 1) toast(firstError)
+    else if (failed > 1) toast(t('gui.kb.some_failed', { count: failed }))
+    void load()
+  }
+}
+
+/* Remove every picked row, after asking once for all of them.
+
+   Once rather than per row: twenty confirmations is a dialog a reader clicks
+   through without reading, which is worse than one that names the number. */
+export function removePicked(): void {
+  const baseId = state.openId
+  const rows = pickedDocs()
+  if (!baseId || !rows.length) return
+  shell().confirmAsk(
+    t('gui.kb.doc_delete'),
+    t('gui.kb.docs_delete_body', { count: rows.length }),
+    t('gui.kb.doc_delete'),
+    () => {
+      const gone = new Set(rows.map((d) => d.id))
+      /* Off the list first, and un-picked with it: the rows are the thing the
+         reader asked to be rid of, and the reload below is what corrects a
+         delete that did not land. */
+      set({ docs: state.docs.filter((d) => !gone.has(d.id)), picked: [] })
+      void Promise.allSettled(rows.map((d) => source().removeDoc(d.id)))
+        .then((results) => {
+          const failed = results.filter((r) => r.status === 'rejected').length
+          if (failed) toast(t('gui.kb.some_failed', { count: failed }))
+        })
+        .finally(() => {
+          if (state.openId === baseId) void reopen(baseId)
+          void load()
+        })
+    },
+  )
+}
+
 /* Index a document again, for a row that is not `ready`.
 
    The same call `upload` makes; what is new is that it can be made a second
@@ -411,7 +522,10 @@ export function removeDoc(doc: KbDoc): void {
 async function reopen(baseId: string): Promise<void> {
   try {
     const docs = await source().documents(baseId)
-    if (state.openId === baseId) set({ docs })
+    /* Ticks that point at rows which are no longer there would keep counting
+       towards "N selected" and towards what the two buttons act on. */
+    const here = new Set(docs.map((d) => d.id))
+    if (state.openId === baseId) set({ docs, picked: state.picked.filter((p) => here.has(p)) })
   } catch {
     /* The row list stays as the optimistic removal left it; the next open
        corrects it. Toasting twice for one failure helps nobody. */

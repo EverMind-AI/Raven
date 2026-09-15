@@ -5309,15 +5309,30 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 
 /* A grid rather than a table element: the failure reason is a full-width row
    under the one it explains, which a table would need a colspan for. */
+/* The name takes what the fixed columns leave, so the fixed ones are kept as
+   narrow as their contents allow: a tick column bought at the name's expense
+   leaves a list whose names read as one character. */
 .kbtable {
-  display: grid; grid-template-columns: minmax(0, 1fr) 84px 110px 120px 44px;
+  display: grid; grid-template-columns: 26px minmax(0, 1fr) 64px 92px 88px 36px;
   align-items: center; row-gap: 1px;
 }
+/* The tick sits in its own narrow column so the name still starts at one
+   place down the list, picked or not. */
+.kbtable .kbtick { padding-left: 2px; padding-right: 0; }
+.kbtable .kbtick input { accent-color: var(--amber); cursor: pointer; margin: 0; }
+/* A picked row reads as picked across its whole width, not only at its
+   tick, which is what makes a selection scannable. */
+.kbtable .td.kbsel { background: var(--surface); }
+/* The count and the two things that can be done to what it counts. `danger`
+   is on the one that cannot be undone. */
+.kbsub.kbpicked .who { font-weight: 600; color: var(--text); }
+.kbsub.kbpicked .mini.danger { color: var(--clay); }
+.kbsub.kbpicked .mini.danger:hover:not(:disabled) { border-color: var(--clay); }
 .kbtable .th {
   font-size: 11.5px; color: var(--muted); font-weight: 600;
-  padding: 0 8px 8px; border-bottom: 1px solid var(--line-soft);
+  padding: 0 6px 8px; border-bottom: 1px solid var(--line-soft);
 }
-.kbtable .td { font-size: 12.5px; padding: 11px 8px; border-bottom: 1px solid var(--line-soft);
+.kbtable .td { font-size: 12.5px; padding: 11px 6px; border-bottom: 1px solid var(--line-soft);
   min-width: 0; }
 .kbtable .td.nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kbtable .td.st { font-size: 12px; }
