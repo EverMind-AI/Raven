@@ -778,6 +778,7 @@ function assembleSession(sessionId, sessionSpans, sessionEvents) {
     surface,
     resumedFrom,
     resumedTo: null,
+    isBackground: shardIndex.isBackgroundSessionId(sessionId),
     startedAt: sessionSpans.map((span) => span.startTime).sort((a, b) => parseTime(a) - parseTime(b))[0] || null,
     updatedAt: sessionSpans.map((span) => span.endTime).sort((a, b) => parseTime(b) - parseTime(a))[0] || null,
     traceCount: traces.length,
@@ -852,6 +853,7 @@ function buildSessionList() {
       surface: shardIndex.preferredValue(row.counts.surface),
       resumedFrom: sessionStart?.event?.resumedFrom || null,
       resumedTo: null,
+      isBackground: shardIndex.isBackgroundSessionId(row.sessionId),
       startedAt: row.startedAt,
       updatedAt: row.updatedAt,
       // Exact, and the reason there is no traceCount here: see the note in

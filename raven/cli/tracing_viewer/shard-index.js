@@ -85,6 +85,12 @@ function backgroundSessionId(startTime) {
   return `${BACKGROUND_SESSION_PREFIX}${day || 'undated'}`;
 }
 
+// Asked of a row rather than matched on the prefix by every caller: the prefix
+// is this module's to mint, so it is this module's to recognize.
+function isBackgroundSessionId(sessionId) {
+  return typeof sessionId === 'string' && sessionId.startsWith(BACKGROUND_SESSION_PREFIX);
+}
+
 function pairKey(id, key) {
   // Serialized rather than joined on a separator character: a separator is
   // only safe if no id or key can contain it, and neither is constrained here.
@@ -370,6 +376,7 @@ module.exports = {
   electIdentity,
   resolvePairSessionId,
   backgroundSessionId,
+  isBackgroundSessionId,
   preferredValue,
   isUuidLike,
   mergedIndex

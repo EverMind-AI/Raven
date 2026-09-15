@@ -658,6 +658,36 @@ def test_a_span_with_no_session_is_still_reachable(tmp_path):
     assert "span-background" in reachable
 
 
+def test_a_background_row_says_so_on_both_readers(tmp_path):
+    """The row a reader must be able to pass over says what it is.
+
+    Newest-first ordering puts a background day at the top whenever the last
+    thing the store saw belonged to no session, and the panel opens on whatever
+    is first. Answering that by matching the id's prefix in the page would put
+    the naming convention in a second place; the reader that mints the prefix
+    declares it instead, and both readers have to agree because a session list
+    row and a whole-corpus session are compared field for field elsewhere.
+    """
+    _write_spans(
+        tmp_path / "logs" / "audit-spans.log",
+        [
+            _span("real-session", "span-in-session", start="2026-08-01T00:00:00+00:00"),
+            _sessionless_span("span-background", start="2026-08-02T00:00:00+00:00"),
+        ],
+    )
+
+    with _viewer(tmp_path) as port:
+        full = _get(port, "/api/data")
+        listed = _get(port, "/api/sessions")
+
+    flagged = {session["sessionId"]: session["isBackground"] for session in full["sessions"]}
+    assert flagged == {"real-session": False, "background:2026-08-02": True}
+    assert {row["sessionId"]: row["isBackground"] for row in listed["sessions"]} == flagged
+    # The ordering the page then has to work around: the background day is newer,
+    # so it is the row a caller taking the first one would land on.
+    assert listed["sessions"][0]["sessionId"] == "background:2026-08-02"
+
+
 def test_a_sidecar_from_the_previous_schema_does_not_hide_background_spans(tmp_path):
     """A sidecar written before background spans were indexed must be rebuilt.
 
