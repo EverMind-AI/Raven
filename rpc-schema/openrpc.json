@@ -5514,6 +5514,95 @@
       ]
     },
     {
+      "name": "playbooks.run",
+      "summary": "Run one playbook, through the same entry the model's tool and `raven playbook run` use. A `dag` playbook dispatches in the background and the reply is the receipt carrying the run id; a `prompt` one answers composition guidance. `gaps` means nothing was dispatched and the reply names what is still needed. The call can block while the graph-level `confirm` gate puts the run to the conversation named by `session_key`, and a conversation still busy at that deadline is a \"not now\" -- the graph does not run unseen.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
+          }
+        },
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "The conversation this run reports to, as its own `channel:chat_id`. Required because a run's progress and completion announce are addressed to a conversation, and an RPC call is an origin nothing else sets one for."
+          }
+        },
+        {
+          "name": "params",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "Values for the playbook's declared `params`. A parameter this machine holds as a stored secret is filled from there and must not be sent."
+          }
+        },
+        {
+          "name": "fills",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "Node fields the author left blank, keyed by the node id written in the file. Only `subagent`, `nodeSummary` and `promptTemplate` may be filled; aimed at a field the author already wrote, the whole call is refused."
+          }
+        },
+        {
+          "name": "confirmed",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "The caller's statement that it already put this run to the user, so the graph-level gate does not ask a second time. Send it only when a person actually saw the run and agreed."
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksRunResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "kind",
+            "reply"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "dag",
+                "guidance",
+                "gaps",
+                "questions"
+              ],
+              "description": "`dag`: dispatched, `reply` is the receipt. `guidance`: prompt-mode composition instructions. `gaps`: nothing was dispatched and `reply` names what is missing. `questions`: it cannot proceed and `reply` says why."
+            },
+            "reply": {
+              "type": "string",
+              "description": "The executor's own answer, verbatim. For a dispatched graph this is the receipt the run id is read out of."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
       "name": "approval.respond",
       "summary": "Answer a pending approval request.",
       "params": [

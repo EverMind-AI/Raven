@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 171 methods, 96 component schemas.
+// 172 methods, 96 component schemas.
 
 /* eslint-disable */
 /**
@@ -3126,6 +3126,43 @@ export interface PlaybooksDeleteResult {
    */
   uncovered_builtin: boolean;
 }
+export interface PlaybooksRunParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
+  name: string;
+  /**
+   * The conversation this run reports to, as its own `channel:chat_id`. Required because a run's progress and completion announce are addressed to a conversation, and an RPC call is an origin nothing else sets one for.
+   */
+  session_key: string;
+  /**
+   * Values for the playbook's declared `params`. A parameter this machine holds as a stored secret is filled from there and must not be sent.
+   */
+  params?: {
+    [k: string]: JsonValue;
+  };
+  /**
+   * Node fields the author left blank, keyed by the node id written in the file. Only `subagent`, `nodeSummary` and `promptTemplate` may be filled; aimed at a field the author already wrote, the whole call is refused.
+   */
+  fills?: {
+    [k: string]: JsonValue;
+  };
+  /**
+   * The caller's statement that it already put this run to the user, so the graph-level gate does not ask a second time. Send it only when a person actually saw the run and agreed.
+   */
+  confirmed?: boolean;
+}
+export interface PlaybooksRunResult {
+  name: string;
+  /**
+   * `dag`: dispatched, `reply` is the receipt. `guidance`: prompt-mode composition instructions. `gaps`: nothing was dispatched and `reply` names what is missing. `questions`: it cannot proceed and `reply` says why.
+   */
+  kind: 'dag' | 'guidance' | 'gaps' | 'questions';
+  /**
+   * The executor's own answer, verbatim. For a dispatched graph this is the receipt the run id is read out of.
+   */
+  reply: string;
+}
 export interface ApprovalRespondParams {
   approval_id: string;
   /**
@@ -3985,6 +4022,7 @@ export interface RpcMethods {
   'playbooks.set_enabled': { params: PlaybooksSetEnabledParams; result: PlaybooksSetEnabledResult };
   'playbooks.validate': { params: PlaybooksValidateParams; result: PlaybooksValidateResult };
   'playbooks.delete': { params: PlaybooksDeleteParams; result: PlaybooksDeleteResult };
+  'playbooks.run': { params: PlaybooksRunParams; result: PlaybooksRunResult };
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult };
   'clarify.respond': { params: ClarifyRespondParams; result: ClarifyRespondResult };
   'confirm.respond': { params: ConfirmRespondParams; result: ConfirmRespondResult };
@@ -4122,6 +4160,7 @@ export const RPC_METHODS = [
   "playbooks.list",
   "playbooks.oauth.authorize",
   "playbooks.oauth.clear",
+  "playbooks.run",
   "playbooks.set_enabled",
   "playbooks.validate",
   "plug.auth",

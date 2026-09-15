@@ -772,3 +772,196 @@ async def test_a_library_shaped_name_still_works(library: PlaybookStore) -> None
     refuses everything."""
     library.save(_spec("competitor-scan"))
     assert (await mod.playbooks_validate({"name": "competitor-scan"}))["name"] == "competitor-scan"
+
+
+# ---------------------------------------------------------------- playbooks.run
+
+
+class _Plan:
+    def __init__(self, kind: str = "dag", reply: str = "DAG r-1: started") -> None:
+        self.kind = kind
+        self.reply = reply
+
+
+class _Runtime:
+    """A stand-in for the loop's playbook runtime, recording how it was driven."""
+
+    def __init__(self, plan: object | None = None) -> None:
+        self.context: dict | None = None
+        self.calls: list[dict] = []
+        self._plan = plan if plan is not None else _Plan()
+
+    def set_context(self, *, channel, chat_id, session_key) -> None:
+        self.context = {"channel": channel, "chat_id": chat_id, "session_key": session_key}
+
+    async def load(self, name, params=None, fills=None, *, allow_disabled=False, confirmed=False):
+        # Recorded at the moment of the call, so a context set afterwards is not
+        # mistaken for one that was in force for the dispatch.
+        self.calls.append(
+            {
+                "name": name,
+                "params": params,
+                "fills": fills,
+                "allow_disabled": allow_disabled,
+                "confirmed": confirmed,
+                "context_at_call": self.context,
+            }
+        )
+        return self._plan
+
+
+def _loop_with(runtime):
+    return lambda: type("_Loop", (), {"_playbooks": runtime})()
+
+
+@pytest.mark.asyncio
+async def test_a_run_answers_the_executors_own_plan(library: PlaybookStore) -> None:
+    library.save(_spec())
+    rt = _Runtime(_Plan("dag", "DAG abc123: started 'competitor-scan' (3 steps)"))
+    out = await mod.playbooks_run(
+        {"name": "competitor-scan", "session_key": "web:c1"},
+        agent_loop_factory=_loop_with(rt),
+    )
+    assert out == {
+        "name": "competitor-scan",
+        "kind": "dag",
+        "reply": "DAG abc123: started 'competitor-scan' (3 steps)",
+    }, "the plan is relayed verbatim, run id included, not re-shaped here"
+
+
+@pytest.mark.asyncio
+async def test_the_run_is_addressed_before_it_dispatches(library: PlaybookStore) -> None:
+    """The finding this handler exists for.
+
+    Progress and the completion announce are addressed to a conversation. The
+    address is read inside the dispatch, so one set afterwards arrives for the
+    next call -- and unset, every consumer falls back to a ``cli:direct``
+    default, which is a page-initiated run reporting where nobody is looking.
+    """
+    library.save(_spec())
+    rt = _Runtime()
+    await mod.playbooks_run(
+        {"name": "competitor-scan", "session_key": "web:c1"},
+        agent_loop_factory=_loop_with(rt),
+    )
+    assert rt.calls[0]["context_at_call"] == {
+        "channel": "web",
+        "chat_id": "c1",
+        "session_key": "web:c1",
+    }, "the address has to be in force when load runs, not merely set at some point"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["", "web", ":c1", "web:", "   "])
+async def test_a_session_key_that_names_no_conversation_is_refused(library: PlaybookStore, bad: str) -> None:
+    """Refused rather than defaulted.
+
+    ``set_context`` forwards to the graph tool only when both halves are
+    present, so a half-formed key would silently leave the run on the
+    ``cli:direct`` default -- dispatched, and reporting nowhere the caller can
+    see. A refusal is the one outcome that cannot be mistaken for success.
+    """
+    library.save(_spec())
+    rt = _Runtime()
+    with pytest.raises(RpcError):
+        await mod.playbooks_run(
+            {"name": "competitor-scan", "session_key": bad},
+            agent_loop_factory=_loop_with(rt),
+        )
+    assert rt.calls == [], "nothing may dispatch before the address is known good"
+
+
+@pytest.mark.asyncio
+async def test_the_caller_says_whether_it_already_asked(library: PlaybookStore) -> None:
+    """``confirmed`` is the caller's statement, not this layer's assumption.
+
+    A page that shows a confirmation and one that fires on a single click are
+    both legitimate, and only the page knows which it is; asserting it here
+    would skip the gate with nobody having seen the graph.
+    """
+    library.save(_spec())
+    for sent, expected in ((True, True), (False, False), (None, False)):
+        rt = _Runtime()
+        args = {"name": "competitor-scan", "session_key": "web:c1"}
+        if sent is not None:
+            args["confirmed"] = sent
+        await mod.playbooks_run(args, agent_loop_factory=_loop_with(rt))
+        assert rt.calls[0]["confirmed"] is expected
+
+
+@pytest.mark.asyncio
+async def test_a_client_on_this_socket_named_the_playbook_itself(library: PlaybookStore) -> None:
+    """Disabling takes a playbook out of what the *model* is offered.
+
+    This caller is not the model: it holds the session cookie, which is the
+    user's own credential. The same answer the CLI gives, for the reason the
+    CLI gives it.
+    """
+    library.save(_spec())
+    rt = _Runtime()
+    await mod.playbooks_run(
+        {"name": "competitor-scan", "session_key": "web:c1"},
+        agent_loop_factory=_loop_with(rt),
+    )
+    assert rt.calls[0]["allow_disabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_params_and_fills_reach_the_runtime(library: PlaybookStore) -> None:
+    library.save(_spec())
+    rt = _Runtime()
+    await mod.playbooks_run(
+        {
+            "name": "competitor-scan",
+            "session_key": "web:c1",
+            "params": {"target": "acme"},
+            "fills": {"market": {"promptTemplate": "look at acme"}},
+        },
+        agent_loop_factory=_loop_with(rt),
+    )
+    assert rt.calls[0]["params"] == {"target": "acme"}
+    assert rt.calls[0]["fills"] == {"market": {"promptTemplate": "look at acme"}}
+
+
+@pytest.mark.asyncio
+async def test_a_traversing_name_never_reaches_the_runtime(library: PlaybookStore) -> None:
+    library.save(_spec())
+    rt = _Runtime()
+    with pytest.raises(RpcError):
+        await mod.playbooks_run(
+            {"name": "../victim", "session_key": "web:c1"},
+            agent_loop_factory=_loop_with(rt),
+        )
+    assert rt.calls == []
+
+
+@pytest.mark.asyncio
+async def test_no_runtime_refuses_rather_than_answering_an_empty_dispatch(
+    library: PlaybookStore,
+) -> None:
+    """A write, so it refuses.
+
+    Answering a run with an empty shape would leave the caller drawing a
+    dispatch that was never made.
+    """
+    library.save(_spec())
+    with pytest.raises(RpcError):
+        await mod.playbooks_run({"name": "competitor-scan", "session_key": "web:c1"})
+
+
+@pytest.mark.asyncio
+async def test_a_playbook_the_runtime_cannot_load_is_named_as_such(library: PlaybookStore) -> None:
+    """The directory exists -- the shape guard proved that -- and it still will
+    not load, which is a file to fix rather than a name to correct."""
+    library.save(_spec())
+    rt = _Runtime()
+    rt._plan = None
+    with pytest.raises(RpcError):
+        await mod.playbooks_run(
+            {"name": "competitor-scan", "session_key": "web:c1"},
+            agent_loop_factory=_loop_with(rt),
+        )
+
+
+def test_the_run_contract_is_mirrored_by_a_model_pair() -> None:
+    assert "playbooks.run" in METHOD_MODELS
