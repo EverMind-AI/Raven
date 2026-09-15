@@ -40,8 +40,8 @@ let extLoaded = false;
    plugins.disabled is still read at startup, and its toast still says so. */
 function persistDisabledTools() {
   rpc.call('settings.set', { key: 'tools.disabledTools', value: disabledToolsLive })
-    .then(() => toast('已保存 · 下一轮对话生效'))
-    .catch((e) => toast(`保存失败：${e.message || e}`));
+    .then(() => toast(T('gui.op.saved_next_turn')))
+    .catch((e) => toast(T('gui.op.save_failed', { detail: e.message || e })));
 }
 
 function mkToolRow(t) {
@@ -89,8 +89,8 @@ function mkPluginRow(p) {
         ? pluginsDisabledLive.filter((x) => x !== id)
         : [...new Set([...pluginsDisabledLive, id])];
       rpc.call('settings.set', { key: 'plugins.disabled', value: pluginsDisabledLive })
-        .then(() => toast('已保存 · 重启引擎后生效'))
-        .catch((e) => toast(`保存失败：${e.message || e}`));
+        .then(() => toast(T('gui.op.saved_restart')))
+        .catch((e) => toast(T('gui.op.save_failed', { detail: e.message || e })));
     },
   });
   return o;
