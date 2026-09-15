@@ -532,3 +532,157 @@ def test_the_new_methods_are_declared_in_the_contract() -> None:
         "playbooks.oauth.clear",
     ):
         assert method in METHOD_MODELS
+
+
+# ---------------------------------------------------------------------------
+# The library as a thing a person changes
+# ---------------------------------------------------------------------------
+
+
+async def test_enabling_says_what_is_in_force_and_whether_it_moved(
+    library: PlaybookStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`changed` is what lets a caller tell "you did that" from "it was already
+    so" without a second read."""
+    library.save(_spec())
+    seen: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        "raven.config.update.set_playbook_disabled",
+        lambda name, disabled: (seen.append((name, disabled)), True)[1],
+    )
+
+    out = await mod.playbooks_set_enabled({"name": "competitor-scan", "enabled": False})
+
+    assert out == {"name": "competitor-scan", "enabled": False, "changed": True}
+    assert seen == [("competitor-scan", True)], "enabled=False means disabled=True"
+    METHOD_MODELS["playbooks.set_enabled"][1].model_validate(out)
+
+
+async def test_enabling_reports_a_no_op_rather_than_claiming_a_change(
+    library: PlaybookStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library.save(_spec())
+    monkeypatch.setattr("raven.config.update.set_playbook_disabled", lambda name, disabled: False)
+
+    out = await mod.playbooks_set_enabled({"name": "competitor-scan", "enabled": True})
+
+    assert out["changed"] is False
+    assert out["enabled"] is True, "the state in force is still reported"
+
+
+async def test_enabling_wants_a_state_not_a_toggle(library: PlaybookStore) -> None:
+    """Omitted or non-boolean is refused rather than read as one of the two: a
+    toggle would land two clients racing on one name wherever ordering falls."""
+    library.save(_spec())
+    for bad in ({}, {"enabled": "yes"}, {"enabled": 1}):
+        with pytest.raises(RpcError):
+            await mod.playbooks_set_enabled({"name": "competitor-scan", **bad})
+
+
+async def test_enabling_an_unknown_playbook_is_refused(library: PlaybookStore) -> None:
+    with pytest.raises(RpcError):
+        await mod.playbooks_set_enabled({"name": "nope", "enabled": True})
+
+
+async def test_validate_answers_its_findings_rather_than_raising(
+    library: PlaybookStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A playbook that does not validate is the ordinary reason to call this, so
+    the findings are the result. An error code would make the ordinary answer
+    look like a broken call, and carries one string where this carries the list."""
+    library.save(_spec())
+    monkeypatch.setattr(
+        "raven.playbook.validate.validate_structure",
+        lambda spec, known_agents=None: ["merge: depends on a node that does not exist"],
+    )
+
+    out = await mod.playbooks_validate({"name": "competitor-scan"})
+
+    assert out["ok"] is False
+    assert out["errors"] == ["merge: depends on a node that does not exist"]
+    assert out["name"] == "competitor-scan"
+    assert out["path"].endswith("playbook.md")
+    METHOD_MODELS["playbooks.validate"][1].model_validate(out)
+
+
+async def test_validate_says_ok_with_an_empty_list_not_a_missing_one(
+    library: PlaybookStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Paired with the case above so neither is satisfied by a handler that
+    always answers the same shape."""
+    library.save(_spec())
+    monkeypatch.setattr("raven.playbook.validate.validate_structure", lambda spec, known_agents=None: [])
+
+    out = await mod.playbooks_validate({"name": "competitor-scan"})
+
+    assert out["ok"] is True
+    assert out["errors"] == []
+
+
+async def test_validate_reports_an_unparsable_file_as_a_finding(library: PlaybookStore, tmp_path: Path) -> None:
+    """The library is hand-edited text, so a file that will not load is a normal
+    answer here -- the same rule the list already follows for its rows."""
+    directory = tmp_path / "user" / "broken"
+    directory.mkdir(parents=True)
+    (directory / "playbook.md").write_text("not a playbook at all", encoding="utf-8")
+
+    out = await mod.playbooks_validate({"name": "broken"})
+
+    assert out["ok"] is False
+    assert out["errors"], "the load failure is the finding"
+
+
+async def test_deleting_a_user_playbook_takes_its_directory_and_its_deny_entry(
+    library: PlaybookStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A gone name has no business on the deny list: a later playbook reusing it
+    should start enabled like any other new one."""
+    library.save(_spec())
+    directory = tmp_path / "user" / "competitor-scan"
+    assert directory.is_dir()
+    seen: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        "raven.config.update.set_playbook_disabled",
+        lambda name, disabled: (seen.append((name, disabled)), True)[1],
+    )
+
+    out = await mod.playbooks_delete({"name": "competitor-scan"})
+
+    assert out == {"name": "competitor-scan", "deleted": True, "uncovered_builtin": False}
+    assert not directory.exists()
+    assert seen == [("competitor-scan", False)], "off the deny list, not onto it"
+    METHOD_MODELS["playbooks.delete"][1].model_validate(out)
+
+
+async def test_deleting_a_builtin_is_refused_and_says_what_to_do(library: PlaybookStore, tmp_path: Path) -> None:
+    """It ships with the package, so there is no file of the host's to remove and
+    the next install would put it back."""
+    builtin = tmp_path / "builtin" / "shipped"
+    builtin.mkdir(parents=True)
+    PlaybookStore(tmp_path / "builtin", builtin_root=tmp_path / "builtin").save(_spec("shipped"))
+
+    with pytest.raises(RpcError) as caught:
+        await mod.playbooks_delete({"name": "shipped"})
+
+    assert "disable" in str(caught.value), "the refusal names the operation that does exist"
+
+
+async def test_deleting_a_shadowing_playbook_says_the_builtin_is_back(
+    library: PlaybookStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting it does not remove the name, it uncovers the builtin -- which a
+    caller would otherwise have to re-read the list to discover."""
+    PlaybookStore(tmp_path / "builtin", builtin_root=tmp_path / "builtin").save(_spec("competitor-scan"))
+    # `overwrite` because the store refuses a name its builtin layer already
+    # holds -- which is precisely the shadowing this case is about.
+    library.save(_spec("competitor-scan"), overwrite=True)
+    monkeypatch.setattr("raven.config.update.set_playbook_disabled", lambda name, disabled: True)
+
+    out = await mod.playbooks_delete({"name": "competitor-scan"})
+
+    assert out["uncovered_builtin"] is True
+
+
+async def test_deleting_an_unknown_playbook_is_refused(library: PlaybookStore) -> None:
+    with pytest.raises(RpcError):
+        await mod.playbooks_delete({"name": "nope"})

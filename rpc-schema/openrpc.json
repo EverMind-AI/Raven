@@ -5352,6 +5352,137 @@
       }
     },
     {
+      "name": "playbooks.set_enabled",
+      "summary": "Take one playbook off the deny list or put it on it. `enabled` is the state wanted, not a toggle, so two clients asking at once agree. Disabling removes it from what the model is offered and nothing else; it stays runnable by name from the CLI. Answers with the state in force and whether this call changed it.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "schema": {
+            "type": "boolean",
+            "description": "The state wanted. true takes the name off the deny list, false puts it on."
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksSetEnabledResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean",
+              "description": "The state now in force."
+            },
+            "changed": {
+              "type": "boolean",
+              "description": "False when it was already in that state, so a caller can tell 'you did that' from 'it was already so'."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "playbooks.validate",
+      "summary": "Check one playbook without running it: the spec's shape, then the field rules, then its steps against this machine's agent table. Answers findings rather than raising, because a playbook that does not validate is the ordinary reason to call this.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksValidateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "ok": {
+              "type": "boolean",
+              "description": "True when errors is empty."
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Every finding, in the order the validator reports them. Empty when the playbook is sound."
+            },
+            "path": {
+              "type": "string",
+              "description": "The file the findings refer to."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "playbooks.delete",
+      "summary": "Remove a user playbook's directory. Refused for a builtin, which ships with the package and would return on the next install -- disable those instead. The name comes off the deny list as it goes, so a later playbook reusing it starts enabled.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksDeleteResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "deleted": {
+              "type": "boolean"
+            },
+            "uncovered_builtin": {
+              "type": "boolean",
+              "description": "True when a user playbook was shadowing a builtin of the same name, so the name is still in the library and now resolves to the builtin."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
       "name": "approval.respond",
       "summary": "Answer a pending approval request.",
       "params": [
