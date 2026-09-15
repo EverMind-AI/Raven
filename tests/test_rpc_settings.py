@@ -13,6 +13,21 @@ from raven.rpc.methods import console as rpc_console
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_embedding_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Take the operator's documented override out of the ambient shell.
+
+    ``EVEROS_EMBEDDING__*`` is a real input to ``everos_has_own_embedding``,
+    so a developer who exports it turns every case here that assumes no
+    override into a different case -- silently, and only on their machine. A
+    case that reads one answer on one machine and another elsewhere is not
+    pinning anything. Cases that are about the override set it themselves,
+    after this has run.
+    """
+    for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS"):
+        monkeypatch.delenv(f"EVEROS_EMBEDDING__{name}", raising=False)
+
+
 @pytest.fixture()
 def cfg(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
@@ -180,6 +195,21 @@ class TestEmbeddingCardFollowsTheEndpointHome:
             await rpc_console.settings_everos_set(
                 {"section": "embedding", "fields": {"model": "m", "provider": "siliconflow"}}
             )
+
+    async def test_a_save_the_environment_would_outrank_is_refused(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """The exported variables beat both files, so a save accepted here
+        would be written and then ignored -- the silent no-op this card was
+        just fixed for, arriving by the one route left."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("raven.home.get_config_path", lambda: cfg)
+        monkeypatch.setattr("raven.config.update.get_config_path", lambda: cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+        for name, value in (("MODEL", "op/model"), ("BASE_URL", "https://op/v1"), ("API_KEY", "sk-op")):
+            monkeypatch.setenv(f"EVEROS_EMBEDDING__{name}", value)
+
+        with pytest.raises(ConfigValidationError, match="EVEROS_EMBEDDING__MODEL"):
+            await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "whatever"}})
 
     async def test_an_operators_own_section_keeps_both_halves(self, everos_toml, tmp_path, monkeypatch) -> None:
         """Someone who wrote [embedding] into everos.toml chose that endpoint
