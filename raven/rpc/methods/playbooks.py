@@ -521,6 +521,8 @@ async def playbooks_run(
     only the page knows which it is. Asserting it on their behalf would skip the
     gate with nobody having seen the graph.
     """
+    from raven.agent import workdir
+    from raven.providers.binding import use_binding
     from raven.rpc.errors import ConfigValidationError
 
     name = _known_name(params.get("name"))
@@ -548,13 +550,32 @@ async def playbooks_run(
     # ``execute``, so setting it afterwards would arrive for the next call.
     runtime.set_context(channel=channel, chat_id=chat_id, session_key=session_key)
 
-    plan = await runtime.load(
-        name,
-        params.get("params") or {},
-        params.get("fills") or {},
-        allow_disabled=_CALLER_NAMED_IT,
-        confirmed=bool(params.get("confirmed")),
-    )
+    try:
+        session_workdir = loop.session_workdir(session_key)
+    except Exception as exc:  # noqa: BLE001 - a bad override is the caller's to fix
+        raise ConfigValidationError(
+            f"session {session_key!r} has no usable working directory; clear its override to recover"
+        ) from exc
+
+    # Two contexts, entered around the dispatch rather than left to their
+    # defaults. The turn path establishes both and a graph reads both: the tool
+    # takes its nodes' cwd from ``workdir.current() or self._workspace``, and
+    # resolves a raven-backed node's pair through the active binding. Outside
+    # them a run aimed at one session would work in the loop-wide workspace and
+    # on the default model while reporting to that session -- the wrong project
+    # and the wrong model, under the right conversation's name.
+    #
+    # Around ``load``, not merely before it: the dispatch backgrounds itself with
+    # ``create_task``, which copies the context it is created in, and a binding
+    # that has already been reset by then is one the detached run never sees.
+    with workdir.bind(session_workdir), use_binding(loop.binding_for_session(session_key)):
+        plan = await runtime.load(
+            name,
+            params.get("params") or {},
+            params.get("fills") or {},
+            allow_disabled=_CALLER_NAMED_IT,
+            confirmed=bool(params.get("confirmed")),
+        )
     if plan is None:
         # ``_known_name`` already proved the directory exists, so a miss here is
         # the runtime's own view disagreeing: a file that will not parse is absent
