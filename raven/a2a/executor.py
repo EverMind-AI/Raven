@@ -120,6 +120,10 @@ class RavenAgentExecutor(AgentExecutor):
             self._turns.pop(conversation_id, None)
         await event_queue.enqueue_event(self._status(context, "cancelled"))
 
+    def is_running(self, task_id: str) -> bool:
+        """Whether a turn for `task_id` is still in flight here."""
+        return task_id in self._conversation_ids
+
     def answer(self, task_id: str, text: str) -> bool:
         """Resolve the question `task_id`'s turn is waiting on. False if none is parked."""
         conversation_id = self._conversation_ids.get(task_id)
