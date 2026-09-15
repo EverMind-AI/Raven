@@ -686,3 +686,89 @@ async def test_deleting_a_shadowing_playbook_says_the_builtin_is_back(
 async def test_deleting_an_unknown_playbook_is_refused(library: PlaybookStore) -> None:
     with pytest.raises(RpcError):
         await mod.playbooks_delete({"name": "nope"})
+
+
+# ---------------------------------------------------------------------------
+# A name is joined to the library root, so its shape is a boundary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "handler_name, extra",
+    [
+        ("playbooks_get", {}),
+        ("playbooks_validate", {}),
+        ("playbooks_set_enabled", {"enabled": True}),
+        ("playbooks_delete", {}),
+        ("playbooks_credentials_get", {}),
+    ],
+)
+async def test_a_traversing_name_never_reaches_the_store(
+    library: PlaybookStore, tmp_path: Path, handler_name: str, extra: dict
+) -> None:
+    """``../sibling`` resolves outside the library and the store classifies it as
+    a user playbook, so every handler that takes a name has to refuse the shape
+    before it looks anything up -- the lookup is itself the escape.
+
+    Parametrised over every name-taking handler rather than the one that
+    deletes: the read handlers reach out of the library too, and a guard on the
+    destructive verb alone leaves the class open.
+    """
+    # The library root has to exist, or `origin_of` answers None for everything
+    # and the handlers refuse on "no such playbook" -- which would pass this
+    # case for the wrong reason and hide the traversal entirely.
+    library.save(_spec("competitor-scan"))
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "playbook.md").write_text("bait", encoding="utf-8")
+    assert library.origin_of("../victim") == "user", "the escape this guards is reachable"
+
+    with pytest.raises(RpcError):
+        await getattr(mod, handler_name)({"name": "../victim", **extra})
+
+    assert victim.is_dir(), "nothing outside the library may be touched"
+    assert (victim / "playbook.md").is_file()
+
+
+@pytest.mark.parametrize("bad", ["../victim", "..", "a/b", "/etc", "Up", "a b", "-lead", ""])
+async def test_only_a_library_shaped_name_is_accepted(library: PlaybookStore, bad: str) -> None:
+    """The same rule ``raven playbook create`` enforces on the way out, applied
+    on the way in. Upper case and a leading dash are here because they are the
+    two the pattern rejects that are NOT traversals -- a guard written only
+    against ``..`` would let them through to a lookup.
+
+    The refusal has to be about the shape, not about the name being unknown, or
+    every case here passes on an empty library and the guard is never exercised.
+    """
+    library.save(_spec("competitor-scan"))
+
+    with pytest.raises(RpcError) as caught:
+        await mod.playbooks_validate({"name": bad})
+
+    assert "kebab-case" in str(caught.value) or "name is required" in str(caught.value), (
+        f"refused for the wrong reason: {caught.value}"
+    )
+
+
+async def test_the_shape_is_checked_before_anything_resolves_a_path(
+    library: PlaybookStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``origin_of`` is itself an escape: on a traversing name it stats a file
+    outside the library and answers ``user`` about it. So the shape has to be
+    refused before the lookup, not merely before the delete."""
+    library.save(_spec("competitor-scan"))
+    asked: list[str] = []
+    real = library.origin_of
+    monkeypatch.setattr(library, "origin_of", lambda n: (asked.append(n), real(n))[1])
+
+    with pytest.raises(RpcError):
+        await mod.playbooks_delete({"name": "../victim"})
+
+    assert asked == [], "the store was consulted about a name that should never have reached it"
+
+
+async def test_a_library_shaped_name_still_works(library: PlaybookStore) -> None:
+    """Paired with the case above so neither is satisfied by a handler that
+    refuses everything."""
+    library.save(_spec("competitor-scan"))
+    assert (await mod.playbooks_validate({"name": "competitor-scan"}))["name"] == "competitor-scan"

@@ -5127,7 +5127,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         }
       ],
@@ -5160,7 +5162,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         }
       ],
@@ -5203,7 +5207,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         },
         {
@@ -5241,7 +5247,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         },
         {
@@ -5272,7 +5280,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         },
         {
@@ -5328,7 +5338,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         },
         {
@@ -5359,7 +5371,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         },
         {
@@ -5376,7 +5390,11 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": [],
+          "required": [
+            "name",
+            "enabled",
+            "changed"
+          ],
           "properties": {
             "name": {
               "type": "string"
@@ -5406,7 +5424,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         }
       ],
@@ -5415,7 +5435,12 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": [],
+          "required": [
+            "name",
+            "ok",
+            "errors",
+            "path"
+          ],
           "properties": {
             "name": {
               "type": "string"
@@ -5452,7 +5477,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         }
       ],
@@ -5461,7 +5488,11 @@
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": [],
+          "required": [
+            "name",
+            "deleted",
+            "uncovered_builtin"
+          ],
           "properties": {
             "name": {
               "type": "string"

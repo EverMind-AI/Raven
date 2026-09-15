@@ -3885,10 +3885,13 @@ class PlaybooksSetEnabledParams(_Strict):
 
 
 class PlaybooksSetEnabledResult(_Strict):
-    name: str = ""
-    enabled: bool = Field(False, description="The state now in force.")
+    # Required, every field: the handler answers all of them on every success,
+    # so a default here would advertise a shape the server never sends and
+    # leave both generated clients typing them optional.
+    name: str
+    enabled: bool = Field(..., description="The state now in force.")
     changed: bool = Field(
-        False,
+        ...,
         description=(
             "False when it was already in that state, so a caller can tell 'you did that' from "
             "'it was already so' without a second read."
@@ -3901,13 +3904,13 @@ class PlaybooksValidateParams(_Strict):
 
 
 class PlaybooksValidateResult(_Strict):
-    name: str = ""
-    ok: bool = Field(False, description="True when errors is empty.")
+    name: str
+    ok: bool = Field(..., description="True when errors is empty.")
     errors: list[str] = Field(
-        default_factory=list,
+        ...,
         description=("Every finding, in the order the validator reports them. Empty when the playbook is sound."),
     )
-    path: str = Field("", description="The file the findings refer to.")
+    path: str = Field(..., description="The file the findings refer to.")
 
 
 class PlaybooksDeleteParams(_Strict):
@@ -3915,10 +3918,10 @@ class PlaybooksDeleteParams(_Strict):
 
 
 class PlaybooksDeleteResult(_Strict):
-    name: str = ""
-    deleted: bool = False
+    name: str
+    deleted: bool
     uncovered_builtin: bool = Field(
-        False,
+        ...,
         description=(
             "True when a user playbook was shadowing a builtin of the same name, so the name is still "
             "in the library and now resolves to the builtin."
