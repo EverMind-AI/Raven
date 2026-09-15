@@ -164,19 +164,17 @@ def test_every_seat_the_contract_names_is_something_the_guard_can_walk() -> None
         assert _python_files(name), name
 
 
-def _acp_rpc_facade_strays(pkg_root):
-    """Every import of ``raven.rpc`` from the acp surface that is not on the
-    facade roster, as ``file:line`` strays.
+def _facade_strays(pkg_root, sibling: str, facade: set[str]):
+    """Every import of `sibling` from the surface at `pkg_root` that is not on its
+    `facade` roster, as ``file:line`` strays.
 
-    The surfaces-law contracts pin the zero directions; this pins the one
-    directed edge that legitimately remains -- acp hosts an rpc stack over its
-    translator -- to the single module built for hosting. A second rpc import
-    appearing under raven/acp means someone reached past the facade into the
-    sibling surface's insides, which is the exact disease the law retired.
+    The surfaces-law contracts pin the zero directions; this pins the directed edges
+    that legitimately remain -- one surface hosting another -- each to the single module
+    built for hosting. A second import of the sibling means someone reached past the
+    facade into that surface's insides, which is the exact disease the law retired.
     """
     import ast
 
-    facade = {"raven.rpc.bootstrap"}
     strays = []
     for p in sorted(pkg_root.rglob("*.py")):
         if "__pycache__" in p.parts:
@@ -188,9 +186,19 @@ def _acp_rpc_facade_strays(pkg_root):
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 mods = [node.module]
             for m in mods:
-                if (m == "raven.rpc" or m.startswith("raven.rpc.")) and m not in facade:
+                if (m == sibling or m.startswith(sibling + ".")) and m not in facade:
                     strays.append(f"{p.relative_to(pkg_root.parent.parent)}:{node.lineno} -> {m}")
     return strays
+
+
+def _acp_rpc_facade_strays(pkg_root):
+    """acp hosts an rpc stack over its translator, through one bootstrap facade."""
+    return _facade_strays(pkg_root, "raven.rpc", {"raven.rpc.bootstrap"})
+
+
+def _rpc_a2a_facade_strays(pkg_root):
+    """The ws gateway mounts the a2a face, through one gate facade."""
+    return _facade_strays(pkg_root, "raven.a2a", {"raven.a2a.gate"})
 
 
 def test_acp_reaches_rpc_only_through_the_bootstrap_facade():
@@ -199,6 +207,15 @@ def test_acp_reaches_rpc_only_through_the_bootstrap_facade():
         "acp reached past the rpc facade; host through raven.rpc.bootstrap or "
         "move the shared piece inward, and widen this roster only with the "
         "reason in the diff:\n" + "\n".join(strays)
+    )
+
+
+def test_rpc_reaches_a2a_only_through_the_gate_facade():
+    strays = _rpc_a2a_facade_strays(REPO / "raven" / "rpc")
+    assert strays == [], (
+        "rpc reached past the a2a gate; mount through raven.a2a.gate or move the "
+        "shared piece inward, and widen this roster only with the reason in the "
+        "diff:\n" + "\n".join(strays)
     )
 
 
@@ -213,3 +230,17 @@ def test_the_facade_roster_guard_bites(tmp_path):
     )
     strays = _acp_rpc_facade_strays(pkg)
     assert len(strays) == 1 and "dispatcher" in strays[0], strays
+
+    # The a2a roster is its own set, so it needs its own probe: the gate is legal,
+    # reaching into the runtime the gate exists to hide is not. a2a_client is an
+    # inner shelf rather than a surface, so naming it is not a stray.
+    rpc_pkg = tmp_path / "raven" / "rpc"
+    rpc_pkg.mkdir(parents=True)
+    (rpc_pkg / "sneaky.py").write_text(
+        "from raven.a2a.gate import mount_gateway_face\n"
+        "from raven.a2a.runtime import build_request_handler\n"
+        "from raven.a2a_client.tool import A2aTool\n",
+        encoding="utf-8",
+    )
+    strays = _rpc_a2a_facade_strays(rpc_pkg)
+    assert len(strays) == 1 and "runtime" in strays[0], strays

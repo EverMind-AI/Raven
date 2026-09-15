@@ -11,6 +11,7 @@ overrides it, so the seam covers them and covers a future product for free.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from aiohttp import web
@@ -30,15 +31,49 @@ def refuse_if_subagent() -> str | None:
     return REFUSAL if is_subagent_process() else None
 
 
-def mount_if_allowed(app: web.Application, config: A2aConfig, *, handler: Any) -> bool:
-    """Mount the A2A routes onto `app` when enabled and permitted. Returns whether it did."""
+def may_mount(config: A2aConfig) -> bool:
+    """Whether this process may mount the A2A face: enabled, and not a sub-agent."""
     if not config.server.enabled:
         return False
     reason = refuse_if_subagent()
     if reason is not None:
         logger.info("not mounting the A2A face: {}", reason)
         return False
+    return True
+
+
+def mount_if_allowed(app: web.Application, config: A2aConfig, *, handler: Any) -> bool:
+    """Mount the A2A routes onto `app` when enabled and permitted. Returns whether it did."""
+    if not may_mount(config):
+        return False
     from raven.a2a.routes_aiohttp import add_a2a_routes
 
     add_a2a_routes(app, config, handler)
     return True
+
+
+def mount_gateway_face(
+    app: web.Application,
+    config: A2aConfig,
+    *,
+    agent_loop_factory: Callable[[], Any | None],
+) -> Any | None:
+    """Build this process's A2A handler and mount it on a gateway app, or return None.
+
+    The assembly lives here, not at the call site, so the rpc surface imports this one
+    module and nothing else out of ``raven/a2a/``. CONTEXT.md's surfaces law forbids a
+    served surface from reaching into a sibling surface's insides, and the repo's answer
+    for a legitimate hosting edge is a facade plus a roster guard -- the way ``raven/acp/``
+    reaches rpc only through ``raven.rpc.bootstrap``.
+
+    The handler is bound to a factory that re-resolves the loop per call rather than to a
+    loop: at gateway-boot time the loop may not exist yet, and a later hot-reload swaps it
+    in place. Building it behind `may_mount` is also what makes the default-OFF face cost
+    nothing -- a2a-sdk is never imported in a gateway that does not serve A2A.
+    """
+    if not may_mount(config):
+        return None
+    from raven.a2a.runtime import build_request_handler, make_run_turn_from_factory
+
+    handler = build_request_handler(config, make_run_turn_from_factory(agent_loop_factory))
+    return handler if mount_if_allowed(app, config, handler=handler) else None

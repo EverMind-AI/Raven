@@ -45,3 +45,38 @@ def test_the_mount_is_skipped_when_disabled(monkeypatch):
     monkeypatch.delenv("RAVEN_SUBAGENT", raising=False)
     app = web.Application()
     assert mount_if_allowed(app, A2aConfig(), handler=object()) is False
+
+
+def test_the_gateway_facade_builds_nothing_when_the_face_is_off(monkeypatch):
+    """A disabled face must not assemble a handler, which is what keeps the
+    default-OFF promise free: building one imports a2a-sdk."""
+    from raven.a2a.gate import mount_gateway_face
+
+    monkeypatch.delenv("RAVEN_SUBAGENT", raising=False)
+    app = web.Application()
+    called = []
+    assert mount_gateway_face(app, A2aConfig(), agent_loop_factory=lambda: called.append(1)) is None
+    assert list(app.router.routes()) == []
+    assert called == []
+
+
+def test_the_gateway_facade_mounts_a_real_handler_when_enabled(monkeypatch):
+    from raven.a2a.gate import mount_gateway_face
+
+    monkeypatch.delenv("RAVEN_SUBAGENT", raising=False)
+    app = web.Application()
+    cfg = A2aConfig.model_validate({"server": {"enabled": True, "token": "t0ken"}})
+    handler = mount_gateway_face(app, cfg, agent_loop_factory=lambda: None)
+    assert handler is not None
+    assert hasattr(handler, "on_message_send")
+    assert list(app.router.routes()) != []
+
+
+def test_the_gateway_facade_is_refused_in_a_subagent_process(monkeypatch):
+    from raven.a2a.gate import mount_gateway_face
+
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+    app = web.Application()
+    cfg = A2aConfig.model_validate({"server": {"enabled": True, "token": "t0ken"}})
+    assert mount_gateway_face(app, cfg, agent_loop_factory=lambda: None) is None
+    assert list(app.router.routes()) == []
