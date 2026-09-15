@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from raven.knowledge._embedding import EmbeddingConfig
-from raven.knowledge._manager import KnowledgeError, KnowledgeManager, StaleBaseError
+from raven.knowledge._manager import DuplicateBaseNameError, KnowledgeError, KnowledgeManager, StaleBaseError
 
 DIM = 8
 _VOCAB = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]
@@ -371,3 +371,64 @@ class TestABaseWithNoEmbeddingModel:
 
         assert manager.embeds(plain) is False
         assert manager.embeds(vectored) is True
+
+
+class TestTwoBasesCannotShareAName:
+    """The rail shows a base's name and nothing else.
+
+    Two rows reading "t3" leave a reader picking between them and finding out
+    which was which by opening both -- and a delete then asks them to be sure
+    about which of two identical rows they meant.
+    """
+
+    async def test_a_second_base_cannot_take_the_name(self, manager) -> None:
+        await manager.create_base(name="t3")
+
+        with pytest.raises(DuplicateBaseNameError):
+            await manager.create_base(name="t3")
+
+        assert [b.name for b in manager.list_bases()] == ["t3"]
+
+    @pytest.mark.parametrize("second", ["T3", "t3 ", " T3"])
+    async def test_case_and_spacing_do_not_make_it_a_different_name(self, manager, second: str) -> None:
+        """Two bases called "t3" and "T3 " are the same problem as two called
+        "t3": the reader cannot tell those apart either."""
+        await manager.create_base(name="t3")
+
+        with pytest.raises(DuplicateBaseNameError):
+            await manager.create_base(name=second)
+
+    async def test_what_was_typed_is_what_is_stored(self, manager) -> None:
+        """Compared casefolded, kept as written: the rule is about telling
+        bases apart, not about how a name may be spelled."""
+        base = await manager.create_base(name="Handbook")
+
+        assert base.name == "Handbook"
+
+    async def test_a_rename_cannot_take_a_name_either(self, manager) -> None:
+        """Or renaming is simply the way around the rule."""
+        await manager.create_base(name="t1")
+        second = await manager.create_base(name="t2")
+
+        with pytest.raises(DuplicateBaseNameError):
+            manager.rename_base(second.id, name="t1")
+
+        assert manager.get_base(second.id).name == "t2"
+
+    async def test_a_base_may_keep_its_own_name(self, manager) -> None:
+        """Without this, saving a rename that touched only the description
+        would fail against the base itself."""
+        base = await manager.create_base(name="t1")
+
+        renamed = manager.rename_base(base.id, name="t1", description="notes")
+
+        assert renamed.name == "t1"
+        assert renamed.description == "notes"
+
+    async def test_a_freed_name_can_be_taken_again(self, manager) -> None:
+        first = await manager.create_base(name="t3")
+        await manager.delete_base(first.id)
+
+        again = await manager.create_base(name="t3")
+
+        assert again.name == "t3"

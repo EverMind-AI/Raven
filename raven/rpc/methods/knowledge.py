@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from raven.knowledge import DuplicateBaseNameError
 from raven.rpc.errors import ConfigValidationError, InternalError
 
 if TYPE_CHECKING:
@@ -108,6 +109,10 @@ async def knowledge_bases_create(params: dict[str, Any]) -> dict[str, Any]:
             description=str(params.get("description") or ""),
             embedding=params.get("embedding", True) is not False,
         )
+    except DuplicateBaseNameError as exc:
+        # The caller's mistake, not the gateway's: reported as a validation
+        # error so the page shows the sentence rather than "internal error".
+        raise ConfigValidationError(str(exc)) from None
     except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
         raise InternalError(f"could not create the base: {exc}") from exc
     return {"base": _base_row(manager, base)}

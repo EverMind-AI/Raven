@@ -478,3 +478,22 @@ async def test_search_without_a_base_or_a_query_is_refused() -> None:
         await kb.knowledge_search({"base_ids": [], "query": "what"})
     with pytest.raises(ConfigValidationError):
         await kb.knowledge_search({"base_ids": ["b1"], "query": "   "})
+
+
+async def test_a_duplicate_name_is_the_callers_mistake_not_the_gateways(monkeypatch) -> None:
+    """Reported as a validation error so the page shows the sentence.
+
+    Through InternalError it arrived as "could not create the base: ..." with
+    the reason buried inside a message that reads like a fault in the gateway,
+    which is the wrong thing to tell someone who typed a name twice.
+    """
+    from raven.knowledge import DuplicateBaseNameError
+
+    manager = _FakeManager([], {})
+    manager.create_raises = DuplicateBaseNameError("a knowledge base called 't3' already exists")
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_bases_create({"name": "t3"})
+
+    assert "already exists" in str(caught.value)
