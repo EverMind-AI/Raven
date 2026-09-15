@@ -16,7 +16,7 @@ outline. Name its absolute path in the reply.
 | A real logo, product shot, published chart | `image_search` | direct image URL, pixel size and source page per hit; see `references/assets.md` |
 | A picture that does not exist yet | `image_generate` | reference pictures go in `images`, up to six |
 | An icon | `raven_ppt.services.assets.icons` | 1304 outline icons, see `references/assets.md` |
-| A figure or table from a paper you were given | PyMuPDF (`fitz`) on `raven-python` | crop the page region, or pull the embedded image; see `references/assets.md` |
+| A figure or table from a paper | PyMuPDF on `raven-python` | from the PDF you were given, else one you downloaded; crop the region or pull the embedded image; see `references/assets.md` |
 | A formula | matplotlib mathtext on `raven-python` | a transparent PNG, never typed as text; see `references/assets.md` |
 | Render a page to look at it | `soffice --headless --convert-to pdf`, then `pdftoppm` | |
 
@@ -83,9 +83,10 @@ reply which you took and where from. Do not default any of them silently.
 ## Technical decks
 
 A paper walk-through, a method or an architecture talk runs on the paper's own pictures.
-Crop each figure and table out of the PDF you were given (`references/assets.md`); with no
-PDF in hand, `image_search` the published figure. Redraw only what the paper has no picture
-of, and say so in the caption. A formula is rendered, not typed: mathtext to a transparent
+Crop each figure and table out of the PDF (`references/assets.md`). With no PDF in hand,
+get one first: `web_search` the title, download the PDF the publisher or arXiv serves, and
+crop from that; `image_search` for the published figure is the last resort, when no PDF can
+be had. Redraw only what the paper has no picture of, and say so in the caption. A formula is rendered, not typed: mathtext to a transparent
 PNG, one formula per picture, its main line about the size of the body text beside it. Caption
 both with the paper's own figure and equation numbers. After placing either, render the page
 and look at it: a crop that took the neighbouring column, a fraction bar sitting on a card
