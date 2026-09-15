@@ -596,10 +596,13 @@ async def instances_forget(
     so forgetting a busy instance stops its turn. The directories here stay
     either way.
 
-    Any mode override held against the handle goes with the row. The manager
-    keys it by ``(session_key, agent, handle)`` and a handle is reusable, so
-    leaving it behind would silently put a later instance of the same name at
-    an effort level nobody chose for it.
+    Every per-instance override held against the handle goes with the row -- the
+    mode and the model both. The manager keys them by ``(session_key, agent,
+    handle)`` and a handle is reusable, so one left behind silently puts a later
+    instance of the same name at an effort level, or on a model, nobody chose
+    for it. Cleared together rather than one at a time: they are keyed the same
+    way and forgotten by the same call, and dropping one while the other leaks
+    is how a pair comes to disagree.
     """
     registry = get_registry()
     session_key = str(params.get("session_key") or "")
@@ -616,8 +619,10 @@ async def instances_forget(
         manager = _manager(agent_loop_factory)
         if manager is not None:
             manager.set_instance_mode(session_key, agent, handle, None)
+            manager.set_instance_model(session_key, agent, handle, None)
             if paired is not None:
                 manager.set_instance_mode(session_key, agent, paired, None)
+                manager.set_instance_model(session_key, agent, paired, None)
     if removed and row is not None and row.get("kind") == "acp" and row.get("agentId"):
         await _delete_acp_session(agent, str(row["agentId"]))
     return {"removed": bool(removed)}

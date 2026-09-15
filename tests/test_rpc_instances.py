@@ -53,6 +53,17 @@ class _FakeManager:
     steered: list[tuple[str, str, str, str]] = []
     steer_status = "injected"
 
+    # The two per-instance overrides, no-ops here and overridden by the fakes
+    # that care. On the base because `instances_forget` clears BOTH and a fake
+    # missing one is a blind spot rather than a smaller manager: a handler that
+    # grew a second call would fail against the fake and pass against the real
+    # object, which is the wrong way round.
+    def set_instance_mode(self, session_key, agent, handle, mode):
+        return mode
+
+    def set_instance_model(self, session_key, agent, handle, model):
+        return model
+
     async def steer_instance(self, session_key: str, agent: str, handle: str, text: str) -> str:
         self.steered.append((session_key, agent, handle, text))
         return self.steer_status
@@ -282,6 +293,62 @@ async def test_forget_drops_one_row_and_reports_it(_isolated_registry: Any) -> N
 
     assert await instances_forget({"session_key": "s1", "agent": "A", "handle": "h"}) == {"removed": True}
     assert await instances_forget({"session_key": "s1", "agent": "A", "handle": "h"}) == {"removed": False}
+
+
+class _OverrideRecordingManager(_FakeManager):
+    """Records which per-instance overrides were cleared, and for which handle."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cleared_modes: list[tuple[str, str, str]] = []
+        self.cleared_models: list[tuple[str, str, str]] = []
+
+    def set_instance_mode(self, session_key, agent, handle, mode):
+        if mode is None:
+            self.cleared_modes.append((session_key, agent, handle))
+        return mode
+
+    def set_instance_model(self, session_key, agent, handle, model):
+        if model is None:
+            self.cleared_models.append((session_key, agent, handle))
+        return model
+
+
+async def test_forget_drops_every_override_held_against_the_handle(_isolated_registry: Any) -> None:
+    """A handle is reusable, so an override left behind lands on whoever gets the
+    name next -- at an effort, or on a model, nobody chose for them.
+
+    Both overrides, not just the mode: they are keyed the same way and forgotten
+    by the same call, and covering one while the other leaks is how the pair came
+    to disagree in the first place.
+    """
+    await _isolated_registry.upsert_spawn("s1", "A", "h", "completed")
+    manager = _OverrideRecordingManager()
+
+    await instances_forget(
+        {"session_key": "s1", "agent": "A", "handle": "h"},
+        agent_loop_factory=lambda: _FakeLoop(manager),
+    )
+
+    assert manager.cleared_modes == [("s1", "A", "h")]
+    assert manager.cleared_models == [("s1", "A", "h")]
+
+
+async def test_forget_drops_the_paired_handles_overrides_too(_isolated_registry: Any) -> None:
+    """A collapsed graph row is two records under two handles, and forgetting it
+    forgets both -- so both carry overrides that must go with them."""
+    await _isolated_registry.upsert_dag_node("s1", "run1", "node1", "A", "completed")
+    await _isolated_registry.upsert_spawn("s1", "A", "named", "completed")
+    await _isolated_registry.link_dag_node("s1", "A", "named", "run1", "node1")
+    manager = _OverrideRecordingManager()
+
+    await instances_forget(
+        {"session_key": "s1", "agent": "A", "handle": "named"},
+        agent_loop_factory=lambda: _FakeLoop(manager),
+    )
+
+    assert len(manager.cleared_models) == 2, f"named and paired, got {manager.cleared_models}"
+    assert manager.cleared_models == manager.cleared_modes, "the pair must be forgotten together"
 
 
 async def test_forget_keeps_the_record_directories(tmp_path: Path, _isolated_registry: Any) -> None:
