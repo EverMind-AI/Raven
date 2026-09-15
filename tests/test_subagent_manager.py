@@ -2319,20 +2319,17 @@ async def _unavailable_everos(*args: Any, **kwargs: Any) -> list:
     raise RuntimeError("no live everos in tests")
 
 
-class TestHostEverosAddressWithoutThePlugin:
-    """No plugin means no host-run everos, so there is no host address either.
+class TestMemoryScopeWithoutThePlugin:
+    """A memory block is read from config, not from any backend.
 
-    The constant that used to be returned here is the plugin's own, and reading
-    it was an unguarded import in the middle of a background writer -- one that
-    turned every spawn of an everos-declaring agent into a traceback.
+    The host used to reach into the plugin for a default address, an unguarded
+    import in the middle of a background writer that turned every spawn of a
+    memory-declaring agent into a traceback. There is no address here now: what
+    a memory belongs to is the backend's vocabulary, and the backend is asked
+    for it rather than the host assembling one.
     """
 
-    def test_the_host_address_is_empty_rather_than_a_traceback(self) -> None:
-        with everos_plugin_absent():
-            assert manager_mod._host_everos_base_url() == ""
-
-    def test_an_agent_that_named_its_own_address_keeps_it(self, tmp_path: Path, monkeypatch) -> None:
-        """Only the default comes from the plugin; a declared address does not."""
+    def test_the_block_is_read_without_the_plugin_present(self, tmp_path: Path, monkeypatch) -> None:
         manager = _third_party_manager(
             tmp_path,
             monkeypatch,
@@ -2340,16 +2337,36 @@ class TestHostEverosAddressWithoutThePlugin:
                 ThirdPartyCliSubagentConfig(
                     name="Raven-Code",
                     command="raven --prompt {prompt}",
-                    everos={"agentId": "raven-code", "baseUrl": "http://box:9000"},
+                    memory={"agentId": "raven-code"},
                 )
             ],
         )
 
         with everos_plugin_absent():
-            identity = manager.everos_identity("Raven-Code")
+            scope = manager.memory_scope("Raven-Code")
 
-        assert identity is not None
-        assert identity.base_url == "http://box:9000"
+        assert scope is not None
+        assert scope.agent_id == "raven-code"
+
+    def test_a_declared_address_is_dropped_rather_than_honoured(self, tmp_path: Path, monkeypatch) -> None:
+        """Nothing ever set one, and honouring it would mean every backend
+        growing a per-call way to address a different server."""
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[
+                ThirdPartyCliSubagentConfig(
+                    name="Raven-Code",
+                    command="raven --prompt {prompt}",
+                    memory={"agentId": "raven-code", "baseUrl": "http://box:9000"},
+                )
+            ],
+        )
+
+        scope = manager.memory_scope("Raven-Code")
+
+        assert scope is not None
+        assert "baseUrl" not in scope.block and "base_url" not in scope.block
 
 
 class TestTraceSourceWiring:
@@ -2358,7 +2375,7 @@ class TestTraceSourceWiring:
     async def test_trace_agent_primes_with_prompt_and_answer(self, tmp_path: Path, monkeypatch) -> None:
         primed: list[tuple[str, list[dict]]] = []
 
-        async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+        async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
             primed.append((session_id, turn))
             return True
 
@@ -2369,12 +2386,15 @@ class TestTraceSourceWiring:
                 ThirdPartyAcpSubagentConfig(
                     name="Coder",
                     command="hermes acp",
-                    everos={"userId": "liv", "agentId": "coder", "source": "trace"},
+                    memory={"userId": "liv", "agentId": "coder", "source": "trace"},
                 )
             ],
         )
         with (
             patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            # The record path builds a backend per record; this process runs
+            # none, and the prime and the poll are both faked here.
+            patch("raven.agent.subagent.manager.SubagentManager._memory_backend", lambda self: object()),
             patch("raven.agent.subagent_memory.collect_memories", _unavailable_everos),
         ):
             await _run_one_spawn(manager, agent="Coder", prompt="read it", reply="no readme")
@@ -2389,7 +2409,7 @@ class TestTraceSourceWiring:
     async def test_agent_source_is_never_primed(self, tmp_path: Path, monkeypatch) -> None:
         primed: list[str] = []
 
-        async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+        async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
             primed.append(session_id)
             return True
 
@@ -2400,11 +2420,14 @@ class TestTraceSourceWiring:
                 ThirdPartyCliSubagentConfig(
                     name="Raven-Code",
                     command="raven --prompt {prompt}",
-                    everos={"agentId": "raven-code"},
+                    memory={"agentId": "raven-code"},
                 )
             ],
         )
-        with patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime):
+        with (
+            patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            patch("raven.agent.subagent.manager.SubagentManager._memory_backend", lambda self: object()),
+        ):
             await _run_one_spawn(manager, agent="Raven-Code", prompt="read it", reply="done")
             await _drain_record_tasks(manager)
 
@@ -2417,7 +2440,7 @@ class TestTraceSourceWiring:
         # backend raised, so that prefix is part of the turn too.
         primed: list[list[dict]] = []
 
-        async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+        async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
             primed.append(turn)
             return True
 
@@ -2428,12 +2451,15 @@ class TestTraceSourceWiring:
                 ThirdPartyAcpSubagentConfig(
                     name="Coder",
                     command="hermes acp",
-                    everos={"userId": "liv", "agentId": "coder", "source": "trace"},
+                    memory={"userId": "liv", "agentId": "coder", "source": "trace"},
                 )
             ],
         )
         with (
             patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            # The record path builds a backend per record; this process runs
+            # none, and the prime and the poll are both faked here.
+            patch("raven.agent.subagent.manager.SubagentManager._memory_backend", lambda self: object()),
             patch("raven.agent.subagent_memory.collect_memories", _unavailable_everos),
         ):
             await _run_one_failing_spawn(manager, agent="Coder", prompt="read it", error="boom")
@@ -2454,7 +2480,7 @@ class TestTraceSourceWiring:
         """
         primed: list[tuple[str, list[dict]]] = []
 
-        async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+        async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
             primed.append((session_id, turn))
             return True
 
@@ -2466,13 +2492,16 @@ class TestTraceSourceWiring:
                     name="Coder",
                     command="cat {agent_id}",
                     resume_command="cat --resume {agent_id}",
-                    everos={"userId": "liv", "agentId": "coder", "source": "trace"},
+                    memory={"userId": "liv", "agentId": "coder", "source": "trace"},
                 )
             ],
         )
         manager.registry._backends["Coder"] = _StubThirdPartyBackend(reply="no readme")
         with (
             patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            # The record path builds a backend per record; this process runs
+            # none, and the prime and the poll are both faked here.
+            patch("raven.agent.subagent.manager.SubagentManager._memory_backend", lambda self: object()),
             patch("raven.agent.subagent_memory.collect_memories", _unavailable_everos),
         ):
             await manager.chat(session_key="cli", agent="Coder", handle="h1", text="read it")
