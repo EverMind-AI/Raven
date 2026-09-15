@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { KnowledgeApp } from './KnowledgePage'
 import * as store from './store'
 
-import type { KbBase, KbDoc, KnowledgeSource } from './types'
+import type { KbBase, KbDoc, KbSearch, KnowledgeSource } from './types'
 import type { Shell } from '../../shell/bridge'
 
 function base(over: Partial<KbBase> & { id: string }): KbBase {
@@ -80,7 +80,7 @@ function source(over: Partial<KnowledgeSource> = {}): void {
       documents: async () => [],
       upload: async (_b: string, file: File) => doc({ id: 'd1', source: file.name }),
       index: async (id: string) => doc({ id, status: 'ready', chunk_count: 2 }),
-      search: async () => [],
+      search: async () => ({ hits: [], search_ms: 0, embed_ms: 0 }),
       removeDoc: async () => {},
       ...over,
     },
@@ -109,8 +109,14 @@ afterEach(() => {
    buttons on every row is a wall across a table, and the design puts them
    where a reader goes looking for "what can I do with this file". */
 async function openRowMenu(name: string): Promise<void> {
-  const row = [...document.querySelectorAll('.kbtable .td.nm')].find((c) => c.textContent === name)
-  const dots = row!.parentElement!.querySelector('.kbops .dots') as HTMLButtonElement
+  /* The table is a grid, so every cell is a sibling and there is no row
+     element to scope to: the name cell and the actions cell are matched by
+     position instead. Asking the name cell's parent for `.kbops .dots` finds
+     the first one in the whole table, which is the right answer only when
+     there is one row. */
+  const names = [...document.querySelectorAll('.kbtable .td.nm')]
+  const at = names.findIndex((c) => c.textContent === name)
+  const dots = [...document.querySelectorAll('.kbtable .kbops .dots')][at] as HTMLButtonElement
   await act(async () => {
     dots.click()
   })
@@ -139,17 +145,15 @@ describe('the knowledge page', () => {
     expect(opened.length).toBe(1)
   })
 
-  /* The hits UI left with the search box: the panel is a file table now, and
-     Recall Test is where searching comes back. What survived the move is the
-     store logic underneath -- the request token and the debounce -- so these
-     assert what the store holds rather than what is painted, which is also
-     where the races they pin actually live. A test that drove the removed
-     input would have to be deleted; one that drives the store does not. */
+  /* The hits UI left with the search box, and came back as Recall Test. What
+     survived the move is the store logic underneath -- the request token --
+     so these assert what the store holds rather than what is painted, which
+     is also where the race they pin actually lives. */
   it('keeps the newest answer when an older one lands after it', async () => {
     /* Both requests are for the same base, so the openId guard passes for each:
-       without a request token the slower prefix repainted the panel under the
-       text the reader had finished typing. */
-    const gates: Array<(h: Array<{ score: number; document_id: string; text: string }>) => void> = []
+       without a request token the slower question repainted the panel under the
+       answer to the newer one. */
+    const gates: Array<(r: KbSearch) => void> = []
     source({
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [doc({ id: 'd1', status: 'ready' })],
@@ -163,97 +167,54 @@ describe('the knowledge page', () => {
     const second = store.searchNow('quarterly revenue')
     await act(async () => {
       /* The newest answers first, the stale one second -- the order that broke it. */
-      gates[1]!([{ score: 0.9, document_id: 'd1', text: 'the newest answer' }])
+      gates[1]!({ hits: [{ score: 0.9, document_id: 'd1', text: 'the newest answer' }], search_ms: 5, embed_ms: 90 })
       await second
-      gates[0]!([{ score: 0.4, document_id: 'd1', text: 'the stale answer' }])
+      gates[0]!({ hits: [{ score: 0.4, document_id: 'd1', text: 'the stale answer' }], search_ms: 9, embed_ms: 90 })
       await first
     })
     const texts = (store.getState().hits ?? []).map((h) => h.text)
     expect(texts).toEqual(['the newest answer'])
   })
 
-  it('clears the hits through the debounced path when the box is emptied', async () => {
-    /* The four cases above moved onto `searchNow`, which left `search`'s own
-       empty-query branch with no cover: stale hits sitting over the document
-       list after the reader clears the field would ship green. */
+  it('spends one request per press, and none for an empty question', async () => {
+    /* Every keystroke used to run a search, and each one embeds the query
+       through the configured endpoint -- billed, and on a client whose timeout
+       is in minutes. The button is what makes a question cost once. */
+    let calls = 0
     source({
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [doc({ id: 'd1', source: 'handbook.md', status: 'ready' })],
-      search: async () => [{ score: 0.8, document_id: 'd1', text: 'the answer' }],
-    })
-    await mount()
-    await act(async () => {
-      await store.open_('b1')
-    })
-    await act(async () => {
-      await store.searchNow('what')
-    })
-    expect((store.getState().hits ?? []).map((h) => h.text)).toEqual(['the answer'])
-    await act(async () => {
-      store.search('')
-    })
-    /* Null, not empty: "asked and found nothing" and "not asked" are different
-       states, and the panel shows the documents again only for the second. */
-    expect(store.getState().hits).toBeNull()
-    expect(screen.getByText('handbook.md')).toBeTruthy()
-  })
-
-  it('answers Enter without waiting out the debounce', async () => {
-    let calls = 0
-    source({
-      bases: async () => [base({ id: 'b1' })],
-      documents: async () => [doc({ id: 'd1', status: 'ready' })],
       search: async () => {
         calls += 1
-        return [{ score: 0.5, document_id: 'd1', text: 'straight away' }]
+        return { hits: [{ score: 0.8, document_id: 'd1', text: 'the answer' }], search_ms: 6, embed_ms: 180 }
       },
     })
     await mount()
     await act(async () => {
       await store.open_('b1')
     })
-    /* The box this used to type into is gone. What it pinned is still real:
-       a debounced keystroke followed by an immediate ask must spend one
-       request, not two, and must not leave the timer behind to fire a second. */
+
     await act(async () => {
-      store.search('quarterly')
+      store.setQuery('quarterly')
     })
     expect(calls).toBe(0)
+
     await act(async () => {
       await store.searchNow('quarterly')
     })
-    expect((store.getState().hits ?? []).map((h) => h.text)).toEqual(['straight away'])
-    /* One request, not two: Enter cancels the keystroke's pending timer rather
-       than racing it. */
     expect(calls).toBe(1)
+    expect((store.getState().hits ?? []).map((h) => h.text)).toEqual(['the answer'])
+
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 400))
+      await store.searchNow('   ')
     })
+    /* Null, not empty: "asked and found nothing" and "not asked" are different
+       states, and only the first one has a count to report. */
     expect(calls).toBe(1)
+    expect(store.getState().hits).toBeNull()
   })
 
-  it('spends one request for a burst of keystrokes, not one each', async () => {
-    let calls = 0
-    source({
-      bases: async () => [base({ id: 'b1' })],
-      documents: async () => [doc({ id: 'd1', status: 'ready' })],
-      search: async () => {
-        calls += 1
-        return []
-      },
-    })
-    await mount()
-    await act(async () => {
-      await store.open_('b1')
-    })
-    for (const q of ['q', 'qu', 'qua', 'quar']) store.search(q)
-    expect(calls).toBe(0)
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 400))
-    })
-    /* Four keystrokes, one embedding request. */
-    expect(calls).toBe(1)
-  })
+
 
   it('lists the bases with their document counts', async () => {
     source({ bases: async () => [base({ id: 'b1', name: 'handbook', documents: 3 })] })
@@ -566,29 +527,6 @@ describe('documents and search', () => {
     expect(screen.getByText('gui.kb.no_docs')).toBeTruthy()
   })
 
-  it('shows hits for a query and the documents again when it is cleared', async () => {
-    source({
-      bases: async () => [base({ id: 'b1' })],
-      documents: async () => [doc({ id: 'd1', status: 'ready' })],
-      search: async () => [{ score: 0.8123, document_id: 'd1', text: 'the answer' }],
-    })
-    await mount()
-    await act(async () => {
-      await store.open_('b1')
-    })
-    await act(async () => {
-      await store.searchNow('what')
-    })
-    expect((store.getState().hits ?? []).map((h) => h.text)).toEqual(['the answer'])
-    await act(async () => {
-      await store.searchNow('  ')
-    })
-    /* Whitespace is not a query: it clears rather than asking, and the panel
-       is back to the documents. */
-    expect(store.getState().hits).toBeNull()
-    expect(screen.getByText('onboarding.md')).toBeTruthy()
-  })
-
   it('gives every row the same actions, and the failed one its reason', async () => {
     /* Deliberately not "only where they are the way out", which is what the
        stacked rows before this did: a table row carries one menu whatever its
@@ -731,7 +669,10 @@ describe('documents and search', () => {
   })
 
   it('tells an empty result apart from not having asked', async () => {
-    source({ bases: async () => [base({ id: 'b1' })], search: async () => [] })
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      search: async () => ({ hits: [], search_ms: 4, embed_ms: 120 }),
+    })
     await mount()
     await act(async () => {
       await store.open_('b1')
@@ -813,19 +754,20 @@ describe('the two-panel layout', () => {
       await store.open_('b1')
     })
 
-    for (const label of ['gui.kb.recall_test', 'gui.kb.settings']) {
-      const btn = screen.getByText(label).closest('button') as HTMLButtonElement
-      expect(btn.disabled).toBe(true)
-      expect(btn.title).toBe('gui.kb.soon')
-    }
     await openRowMenu('onboarding.md')
     for (const label of ['gui.kb.doc_view_chunks', 'gui.kb.doc_disable']) {
       expect((screen.getByText(label).closest('button') as HTMLButtonElement).disabled).toBe(true)
     }
-    /* Adding a file is the one data source the engine already takes, so that
-       button is wired rather than stubbed beside a working upload. */
-    const add = screen.getByText('+ gui.kb.add_source').closest('label')!
-    expect(add.querySelector('input[type="file"]')).toBeTruthy()
+    /* Every data source in the menu is wired, so the button that opens it is
+       not one of the stubs. */
+    const add = screen.getByText('+ gui.kb.add_source').closest('button') as HTMLButtonElement
+    expect(add.disabled).toBe(false)
+    /* Recall Test and Settings are wired now too, so neither is a stub. */
+    for (const label of ['gui.kb.recall_test', 'gui.kb.settings']) {
+      const btn = screen.getByText(label).closest('button') as HTMLButtonElement
+      expect(btn.disabled).toBe(false)
+      expect(btn.title).toBe('')
+    }
   })
 })
 
@@ -1071,6 +1013,80 @@ describe('viewing the original file', () => {
     vi.unstubAllGlobals()
   })
 
+  it('gives each file a glyph for its family, not for its extension', () => {
+    /* Folded the way ragflow's own map folds xls, xlsx and csv onto one sheet
+       icon: a reader scanning the column asks "document, spreadsheet or
+       picture", and forty glyphs answer that no better than eight. */
+    const fam = (name: string) => store.fileFamily(doc({ id: 'x', source: name }))
+    expect([fam('a.doc'), fam('a.docx'), fam('a.rtf')]).toEqual(['doc', 'doc', 'doc'])
+    expect([fam('a.xls'), fam('a.xlsx'), fam('a.csv')]).toEqual(['sheet', 'sheet', 'sheet'])
+    expect([fam('a.ppt'), fam('a.pptx')]).toEqual(['slide', 'slide'])
+    expect(fam('a.pdf')).toBe('pdf')
+    expect(fam('a.md')).toBe('md')
+    expect(fam('a.PNG')).toBe('image')
+    expect(fam('a.json')).toBe('data')
+    /* Anything unrecognised still gets a page, never a blank column. */
+    expect([fam('a.zip'), fam('README')]).toEqual(['file', 'file'])
+  })
+
+  it('draws the glyph inside the control that opens the file', async () => {
+    await openBase([doc({ id: 'd9', source: 'sheet.xlsx', status: 'ready' })])
+
+    const opener = document.querySelector('.kbtable .td.nm .kbopen') as HTMLButtonElement
+    expect(opener.querySelector('svg.kbico')).not.toBeNull()
+    /* Inside the button, not beside it: the whole cell is the way in, and an
+       icon that did nothing when clicked would be the one part that is not. */
+    await act(async () => {
+      ;(opener.querySelector('svg.kbico') as SVGElement).closest('button')!.click()
+    })
+    expect(document.querySelector('.kbframe')).not.toBeNull()
+  })
+
+  it('badges a lettered file with its own extension, not its family name', async () => {
+    /* A .doc badged DOCX and an .odt badged DOC are both wrong on a row whose
+       name says otherwise. */
+    expect(store.formatLabel(doc({ id: 'x', source: 'a.docx' }))).toBe('DOCX')
+    expect(store.formatLabel(doc({ id: 'x', source: 'a.doc' }))).toBe('DOC')
+    expect(store.formatLabel(doc({ id: 'x', source: 'a.ODT' }))).toBe('ODT')
+    expect(store.formatLabel(doc({ id: 'x', source: 'a.pptx' }))).toBe('PPTX')
+    /* Clipped to what a badge holds, and never empty. */
+    expect(store.formatLabel(doc({ id: 'x', source: 'a.markdown' }))).toBe('MARK')
+    expect(store.formatLabel(doc({ id: 'x', source: 'README' }))).toBe('FILE')
+  })
+
+  it('letters the formats a reader names by extension, and draws the rest', async () => {
+    await openBase([
+      doc({ id: 'd1', source: 'report.docx', status: 'ready' }),
+      doc({ id: 'd2', source: 'notes.md', status: 'ready' }),
+      doc({ id: 'd3', source: 'photo.png', status: 'ready' }),
+    ])
+
+    const marks = [...document.querySelectorAll('.kbtable .kbico')]
+    /* DOCX reads as its own name; markdown gets the mark people recognise for
+       it rather than the letters MD; a picture has no extension anyone thinks
+       in, so it keeps a drawn mark. */
+    expect(marks[0]!.querySelector('text')?.textContent).toBe('DOCX')
+    expect(marks[1]!.querySelector('text')).toBeNull()
+    expect(marks[1]!.querySelector('rect')).not.toBeNull()
+    expect(marks[2]!.querySelector('rect')).toBeNull()
+  })
+
+  it('tags the glyph with its family so the column reads by colour', async () => {
+    /* At 15px the drawing inside the page outline is a smudge; the family
+       class is what the stylesheet colours, so losing it would leave eight
+       identical grey pages down the column. */
+    await openBase([
+      doc({ id: 'd1', source: 'budget.xlsx', status: 'ready' }),
+      doc({ id: 'd2', source: 'scan.pdf', status: 'ready' }),
+    ])
+
+    const marks = [...document.querySelectorAll('.kbtable .kbico')]
+    expect(marks.map((m) => m.getAttribute('class'))).toEqual([
+      'kbico kbf-sheet',
+      'kbico kbf-pdf',
+    ])
+  })
+
   it('sorts every offered format into framed, converted or neither', () => {
     const kind = (name: string) => store.previewKind(doc({ id: 'x', source: name }))
     expect(kind('a.pdf')).toBe('native')
@@ -1082,5 +1098,910 @@ describe('viewing the original file', () => {
     expect(kind('a.zip')).toBe('none')
     /* No suffix at all is not a format anyone can guess at. */
     expect(kind('README')).toBe('none')
+  })
+})
+
+describe('adding a data source', () => {
+  const openBase = async (over: Partial<KnowledgeSource> = {}, docs: KbDoc[] = []) => {
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => docs,
+      status: async () => ({ configured: true, model: 'bge-m3', extensions: ['.md', '.txt'] }),
+      ...over,
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+  }
+
+  const openSourceMenu = async () => {
+    await act(async () => {
+      ;(screen.getByText('+ gui.kb.add_source').closest('button') as HTMLButtonElement).click()
+    })
+  }
+
+  const file = (name: string) => new File(['body'], name, { type: 'text/markdown' })
+
+  it('offers the four kinds of data source behind one button', async () => {
+    await openBase()
+    await openSourceMenu()
+
+    const items = [...document.querySelectorAll('.kbsrc .kbmenu .mi')].map((b) => b.textContent)
+    expect(items).toEqual(['gui.kb.src_file', 'gui.kb.src_note', 'gui.kb.src_folder', 'gui.kb.src_url'])
+  })
+
+  it('picks a folder with the attribute that makes a chooser a folder chooser', async () => {
+    /* Without `webkitdirectory` this is the file input again; it is the whole
+       difference between the two menu entries. */
+    await openBase()
+
+    const inputs = [...document.querySelectorAll('.kbsrc input[type="file"]')]
+    expect(inputs.map((i) => i.hasAttribute('webkitdirectory'))).toEqual([false, true])
+    expect(inputs.every((i) => i.hasAttribute('multiple'))).toBe(true)
+  })
+
+  it('uploads several files one after another, not all at once', async () => {
+    /* Each upload carries its bytes base64 in one websocket frame under a
+       25 MB ceiling: N at once is N of those in memory and a frame ceiling
+       nobody raised. */
+    const order: string[] = []
+    let live = 0
+    let most = 0
+    await openBase({
+      upload: async (_b: string, f: File) => {
+        live += 1
+        most = Math.max(most, live)
+        order.push(f.name)
+        await Promise.resolve()
+        live -= 1
+        return doc({ id: f.name, source: f.name })
+      },
+      index: async (id: string) => doc({ id, source: id, status: 'ready' }),
+    })
+
+    await act(async () => {
+      await store.uploadAll([file('a.md'), file('b.md'), file('c.md')])
+    })
+
+    expect(order).toEqual(['a.md', 'b.md', 'c.md'])
+    expect(most).toBe(1)
+  })
+
+  it('adds the rest of a folder when one file in it fails', async () => {
+    /* A folder of forty where the third is unreadable should land the other
+       thirty-nine; ragflow reports the same partial success. */
+    await openBase({
+      upload: async (_b: string, f: File) => {
+        if (f.name === 'bad.md') throw new Error('nope')
+        return doc({ id: f.name, source: f.name })
+      },
+      index: async (id: string) => doc({ id, source: id, status: 'ready' }),
+    })
+
+    await act(async () => {
+      await store.uploadAll([file('a.md'), file('bad.md'), file('c.md')])
+    })
+
+    expect(store.getState().docs.map((d) => d.source)).toEqual(['a.md', 'c.md'])
+    expect(toasts()).toEqual(['nope'])
+  })
+
+  it('keeps only the files this build can index out of a folder', async () => {
+    /* A source tree is mostly things no parser claims. Uploading them to watch
+       them fail is not a file list. */
+    await openBase()
+
+    const kept = store.indexable([file('notes.md'), file('logo.png'), file('readme.TXT'), file('Makefile')])
+
+    expect(kept.map((f) => f.name)).toEqual(['notes.md', 'readme.TXT'])
+  })
+
+  it('takes any file into a base that was made without an embedding model', async () => {
+    /* Such a base indexes nothing at all: it keeps documents to open and to
+       hand to a turn, so "what a parser claims" is not a question about it,
+       and filtering by that would throw away what it is for. */
+    source({
+      bases: async () => [base({ id: 'b1', name: 'scratch', embedding_model: '', dimensions: 0 })],
+      documents: async () => [],
+      status: async () => ({ configured: true, model: 'bge-m3', extensions: ['.md'] }),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    const kept = store.indexable([file('notes.md'), file('scan.pdf'), file('logo.png')])
+
+    expect(kept.map((f) => f.name)).toEqual(['notes.md', 'scan.pdf', 'logo.png'])
+  })
+
+  it('says so rather than starting when a folder holds nothing indexable', async () => {
+    const tried: string[] = []
+    await openBase({
+      upload: async (_b: string, f: File) => {
+        tried.push(f.name)
+        return doc({ id: f.name })
+      },
+    })
+
+    await act(async () => {
+      await store.uploadFolder([file('logo.png'), file('a.bin')])
+    })
+
+    expect(tried).toEqual([])
+    expect(toasts()[0]).toContain('gui.kb.none_supported')
+  })
+
+  it('refuses a folder too big to take quietly', async () => {
+    /* A source tree holds tens of thousands of files and each is its own
+       request; starting that because somebody picked the wrong directory is
+       not a thing to do without saying. */
+    const tried: string[] = []
+    await openBase({
+      upload: async (_b: string, f: File) => {
+        tried.push(f.name)
+        return doc({ id: f.name })
+      },
+    })
+
+    const many = Array.from({ length: store.FOLDER_MAX + 1 }, (_, i) => file(`f${i}.md`))
+    await act(async () => {
+      await store.uploadFolder(many)
+    })
+
+    expect(tried).toEqual([])
+    expect(toasts()[0]).toContain('gui.kb.too_many')
+  })
+
+  it('writes a note as markdown and indexes it like any other document', async () => {
+    const wrote: [string, string][] = []
+    await openBase({
+      addNote: async (_b: string, title: string, text: string) => {
+        wrote.push([title, text])
+        return doc({ id: 'n1', source: `${title}.md`, origin: 'note' })
+      },
+      index: async (id: string) => doc({ id, source: 'Plan.md', origin: 'note', status: 'ready' }),
+    })
+    await openSourceMenu()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.src_note').closest('button') as HTMLButtonElement).click()
+    })
+
+    const body = document.querySelector('.kbnote') as HTMLTextAreaElement
+    const title = document.getElementById('kbnotetitle') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(title, { target: { value: 'Plan' } })
+      fireEvent.change(body, { target: { value: '# Plan\n\nship it' } })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.create').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(wrote).toEqual([['Plan', '# Plan\n\nship it']])
+    /* The dialog closes on success: one left standing over the row it just
+       made is the reader wondering whether it worked. */
+    expect(document.querySelector('.kbnote')).toBeNull()
+  })
+
+  it('will not save an empty note', async () => {
+    await openBase()
+    await openSourceMenu()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.src_note').closest('button') as HTMLButtonElement).click()
+    })
+
+    const save = screen.getByText('gui.kb.create').closest('button') as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+  })
+
+  it('opens an existing note on its own text rather than on an empty box', async () => {
+    /* An editor that opens empty and saves erases the note. */
+    const note = doc({ id: 'n1', source: 'Plan.md', origin: 'note', status: 'ready' })
+    const saved: [string, string, string][] = []
+    await openBase(
+      {
+        updateNote: async (id: string, title: string, text: string) => {
+          saved.push([id, title, text])
+          return { ...note, source: `${title}.md` }
+        },
+        index: async (id: string) => ({ ...note, id, status: 'ready' }),
+      },
+      [note],
+    )
+    const read = vi.spyOn(store, 'readText').mockResolvedValue('# Plan\n\nship it')
+
+    await openRowMenu('Plan.md')
+    await act(async () => {
+      ;(screen.getByText('gui.kb.doc_edit_note').closest('button') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    const body = document.querySelector('.kbnote') as HTMLTextAreaElement
+    expect(body.value).toBe('# Plan\n\nship it')
+    /* The title comes back off the filename, which is what it was written to. */
+    expect((document.getElementById('kbnotetitle') as HTMLInputElement).value).toBe('Plan')
+
+    await act(async () => {
+      fireEvent.change(body, { target: { value: '# Plan\n\nshipped' } })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.note_save').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(saved).toEqual([['n1', 'Plan', '# Plan\n\nshipped']])
+    read.mockRestore()
+  })
+
+  it('offers to edit a note and nothing else', async () => {
+    /* Every other origin is a copy of something the reader holds elsewhere;
+       editing it here would make this base the only place the change exists. */
+    await openBase({}, [
+      doc({ id: 'd1', source: 'handbook.md', status: 'ready' }),
+      doc({ id: 'n1', source: 'Plan.md', origin: 'note', status: 'ready' }),
+    ])
+
+    await openRowMenu('handbook.md')
+    expect(screen.queryByText('gui.kb.doc_edit_note')).toBeNull()
+
+    await openRowMenu('Plan.md')
+    expect(screen.queryByText('gui.kb.doc_edit_note')).not.toBeNull()
+  })
+
+  it('sends a url to the gateway to read, and closes on success', async () => {
+    const asked: string[] = []
+    await openBase({
+      addUrl: async (_b: string, url: string) => {
+        asked.push(url)
+        return doc({ id: 'u1', source: 'Raven Docs.md', origin: 'url', origin_ref: url })
+      },
+      index: async (id: string) => doc({ id, source: 'Raven Docs.md', origin: 'url', status: 'ready' }),
+    })
+    await openSourceMenu()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.src_url').closest('button') as HTMLButtonElement).click()
+    })
+
+    await act(async () => {
+      fireEvent.change(document.getElementById('kburl') as HTMLInputElement, {
+        target: { value: '  https://example.com/docs  ' },
+      })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.url_add').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(asked).toEqual(['https://example.com/docs'])
+    expect(document.getElementById('kburl')).toBeNull()
+  })
+
+  it('says it is reading while the gateway fetches the page', async () => {
+    /* The fetch runs to a 30s timeout. A dialog that only greys its own button
+       out for that long reads as one that ignored the click. */
+    let release: (d: KbDoc) => void = () => {}
+    await openBase({
+      addUrl: () => new Promise<KbDoc>((resolve) => (release = resolve)),
+      index: async (id: string) => doc({ id, origin: 'url', status: 'ready' }),
+    })
+    await openSourceMenu()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.src_url').closest('button') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      fireEvent.change(document.getElementById('kburl') as HTMLInputElement, {
+        target: { value: 'https://example.com/docs' },
+      })
+    })
+
+    expect(document.querySelector('.kbwait')).toBeNull()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.url_add').closest('button') as HTMLButtonElement).click()
+    })
+
+    const wait = document.querySelector('.kbwait') as HTMLElement
+    expect(wait.textContent).toContain('gui.kb.url_reading')
+    /* Announced, not only drawn. */
+    expect(wait.getAttribute('role')).toBe('status')
+    expect(wait.querySelector('.kbring')).not.toBeNull()
+    /* And the address cannot be edited out from under the request in flight. */
+    expect((document.getElementById('kburl') as HTMLInputElement).disabled).toBe(true)
+
+    await act(async () => {
+      release(doc({ id: 'u1', source: 'Docs.md', origin: 'url' }))
+      await Promise.resolve()
+    })
+    expect(document.querySelector('.kbwait')).toBeNull()
+  })
+
+  it('closes the dialog as soon as the row exists, not when indexing ends', async () => {
+    /* From the moment there is a row, the row's own status column is what
+       reports the embedding -- holding the reader in front of a modal until it
+       finishes tells them nothing the list is not already showing. */
+    let finishIndex: (d: KbDoc) => void = () => {}
+    await openBase({
+      addUrl: async () => doc({ id: 'u1', source: 'Docs.md', origin: 'url', status: 'pending' }),
+      index: () => new Promise<KbDoc>((resolve) => (finishIndex = resolve)),
+    })
+    await openSourceMenu()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.src_url').closest('button') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      fireEvent.change(document.getElementById('kburl') as HTMLInputElement, {
+        target: { value: 'https://example.com/docs' },
+      })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.url_add').closest('button') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+
+    expect(document.getElementById('kburl')).toBeNull()
+    expect(store.getState().docs.map((d) => d.status)).toEqual(['pending'])
+
+    await act(async () => {
+      finishIndex(doc({ id: 'u1', source: 'Docs.md', origin: 'url', status: 'ready' }))
+      await Promise.resolve()
+    })
+    expect(store.getState().docs.map((d) => d.status)).toEqual(['ready'])
+  })
+
+  it('leaves the url dialog open when the page could not be read', async () => {
+    /* The address is usually nearly right; throwing it away with the dialog
+       means typing it again. */
+    await openBase({
+      addUrl: async () => {
+        throw new Error('the reader answered HTTP 404')
+      },
+    })
+    await openSourceMenu()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.src_url').closest('button') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      fireEvent.change(document.getElementById('kburl') as HTMLInputElement, {
+        target: { value: 'https://example.com/gone' },
+      })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.url_add').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(toasts()).toEqual(['the reader answered HTTP 404'])
+    expect(document.getElementById('kburl')).not.toBeNull()
+  })
+
+  it('names a row by where it came from, not by the format it is stored in', async () => {
+    /* A note and a captured page are both markdown on disk. A column of "File"
+       against all three answers nothing. */
+    await openBase({}, [
+      doc({ id: 'd1', source: 'handbook.md', status: 'ready' }),
+      doc({ id: 'n1', source: 'Plan.md', origin: 'note', status: 'ready' }),
+      doc({ id: 'u1', source: 'Docs.md', origin: 'url', origin_ref: 'https://x', status: 'ready' }),
+    ])
+
+    const rows = [...document.querySelectorAll('.kbtable .td.nm')]
+    const types = rows.map((r) => r.nextElementSibling?.textContent)
+    expect(types).toEqual(['gui.kb.doc_type_file', 'gui.kb.doc_type_note', 'gui.kb.doc_type_url'])
+    /* And each gets its own glyph, for the same reason. */
+    const marks = [...document.querySelectorAll('.kbtable .kbico')].map((m) => m.getAttribute('class'))
+    expect(marks).toEqual(['kbico kbf-md', 'kbico kbf-note', 'kbico kbf-link'])
+  })
+
+  it('keeps a captured page pointing at the address it was read from', async () => {
+    /* A copy taken once. Without the address, a reader looking at a stale copy
+       has no way back to the live page. */
+    const page = doc({
+      id: 'u1',
+      source: 'Docs.md',
+      origin: 'url',
+      origin_ref: 'https://example.com/docs',
+      status: 'ready',
+    })
+    await openBase({}, [page])
+    const read = vi.spyOn(store, 'readText').mockResolvedValue('# Docs')
+
+    await act(async () => {
+      ;(screen.getByText('Docs.md').closest('button') as HTMLButtonElement).click()
+    })
+
+    const link = document.querySelector('.kbvhd .kbfrom') as HTMLAnchorElement
+    expect(link.href).toBe('https://example.com/docs')
+    /* Someone else's page: it does not get this one's referrer, and it opens
+       away from the app rather than replacing it. */
+    expect(link.rel).toBe('noopener noreferrer')
+    expect(link.target).toBe('_blank')
+    read.mockRestore()
+  })
+
+  it('shows the drop target only while something is being dragged over it', async () => {
+    await openBase()
+    expect(document.querySelector('.kbdrop')).toBeNull()
+
+    const pane = document.querySelector('.kbpane') as HTMLElement
+    await act(async () => {
+      fireEvent.dragEnter(pane, { dataTransfer: { types: ['Files'] } })
+    })
+    expect(document.querySelector('.kbdrop')).not.toBeNull()
+
+    /* Counted rather than set: dragging across a child fires leave on the
+       parent, and a boolean would flicker the highlight off mid-drag. */
+    await act(async () => {
+      fireEvent.dragEnter(pane, { dataTransfer: { types: ['Files'] } })
+      fireEvent.dragLeave(pane)
+    })
+    expect(document.querySelector('.kbdrop')).not.toBeNull()
+
+    await act(async () => {
+      fireEvent.dragLeave(pane)
+    })
+    expect(document.querySelector('.kbdrop')).toBeNull()
+  })
+
+  it('takes dropped files through the same filter a picked folder goes through', async () => {
+    const tried: string[] = []
+    await openBase({
+      upload: async (_b: string, f: File) => {
+        tried.push(f.name)
+        return doc({ id: f.name, source: f.name })
+      },
+      index: async (id: string) => doc({ id, source: id, status: 'ready' }),
+    })
+
+    const pane = document.querySelector('.kbpane') as HTMLElement
+    await act(async () => {
+      fireEvent.drop(pane, { dataTransfer: { files: [file('notes.md'), file('logo.png')], items: [] } })
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(tried).toEqual(['notes.md'])
+    expect(document.querySelector('.kbdrop')).toBeNull()
+  })
+})
+
+describe('the recall test', () => {
+  const HITS: KbSearch = {
+    hits: [
+      { score: 0.8123, document_id: 'd1', text: 'the nearest passage', chunk_index: 7, total_chunks: 12, source: 'handbook.md' },
+      { score: 0.4011, document_id: 'gone', text: 'from a deleted row', chunk_index: 0, total_chunks: 3, source: 'old.md' },
+    ],
+    search_ms: 6,
+    embed_ms: 182.4,
+  }
+
+  const openPanel = async (over: Partial<KnowledgeSource> = {}, over2: Partial<KbBase> = {}) => {
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook', ...over2 })],
+      documents: async () => [doc({ id: 'd1', source: 'handbook.md', status: 'ready' })],
+      ...over,
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    const button = screen.getByText('gui.kb.recall_test').closest('button') as HTMLButtonElement
+    if (!button.disabled) {
+      await act(async () => {
+        button.click()
+      })
+    }
+    return button
+  }
+
+  const ask = async (q: string) => {
+    const field = document.querySelector('.kbask .kbname') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(field, { target: { value: q } })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.recall_run').closest('button') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+  }
+
+  afterEach(() => {
+    try {
+      localStorage.clear()
+    } catch {
+      /* not every environment has one */
+    }
+  })
+
+  it('reports the count that came back, not the limit that was asked for', async () => {
+    await openPanel({ search: async () => HITS })
+    await ask('what is the leave policy')
+
+    expect((document.querySelector('.kbstats b') as HTMLElement).textContent).toBe('gui.kb.recall_n {"n":2}')
+    /* The index's own time, not the round trip to the embedding endpoint --
+       that one is an order of magnitude larger and describes the provider. */
+    expect((document.querySelector('.kbstats span') as HTMLElement).textContent).toBe(
+      'gui.kb.recall_ms {"ms":6}',
+    )
+    expect((document.querySelector('.kbstats span') as HTMLElement).title).toContain('182.4')
+  })
+
+  it('asks for as many chunks as the base is configured for', async () => {
+    const asked: Array<number | undefined> = []
+    await openPanel(
+      {
+        search: async (_b: string[], _q: string, topK?: number) => {
+          asked.push(topK)
+          return HITS
+        },
+      },
+      { top_k: 9 },
+    )
+    await ask('anything')
+
+    /* The base's own Top K, so the slider in its settings is visibly the thing
+       that decides what comes back. */
+    expect(asked).toEqual([9])
+  })
+
+  it('shows the score beside the rank, and where in its document the chunk sat', async () => {
+    await openPanel({ search: async () => HITS })
+    await ask('what is the leave policy')
+
+    const first = document.querySelector('.kbhit') as HTMLElement
+    expect((first.querySelector('.kbhitsc') as HTMLElement).textContent).toBe('0.812')
+    expect((first.querySelector('.kbhitrk') as HTMLElement).textContent).toBe('gui.kb.recall_rank {"n":1}')
+    /* One-based for a reader: chunk_index 7 is the eighth piece. */
+    expect((first.querySelector('.kbhitix') as HTMLElement).textContent).toBe('#8')
+    expect((first.querySelector('.kbhitix') as HTMLElement).title).toContain('"total":12')
+  })
+
+  it('opens the nearest hit and leaves the rest folded', async () => {
+    /* Ten chunks of prose at once is a wall, not a list: the reader is
+       scanning for which document answered before reading any of it. */
+    await openPanel({ search: async () => HITS })
+    await ask('what is the leave policy')
+
+    expect(document.querySelectorAll('.kbhittx').length).toBe(1)
+    expect((document.querySelector('.kbhittx') as HTMLElement).textContent).toBe('the nearest passage')
+
+    const second = [...document.querySelectorAll('.kbhithd')][1] as HTMLButtonElement
+    await act(async () => {
+      second.click()
+    })
+    expect(document.querySelectorAll('.kbhittx').length).toBe(2)
+  })
+
+  it('names a hit whose document is no longer in the list', async () => {
+    /* A search answers from the index, and a row deleted since is still in it
+       until the next write. The hit carries its own source for exactly this. */
+    await openPanel({ search: async () => HITS })
+    await ask('what is the leave policy')
+
+    const names = [...document.querySelectorAll('.kbhitnm')].map((e) => e.textContent)
+    expect(names).toEqual(['handbook.md', 'old.md'])
+  })
+
+  it('tells nothing found apart from nothing asked', async () => {
+    await openPanel({ search: async () => ({ hits: [], search_ms: 4, embed_ms: 120 }) })
+
+    expect(screen.getByText('gui.kb.recall_empty')).toBeTruthy()
+    await ask('nothing like this')
+    expect(screen.getByText('gui.kb.recall_none')).toBeTruthy()
+    expect(document.querySelector('.kbstats b')!.textContent).toBe('gui.kb.recall_n {"n":0}')
+  })
+
+  it('will not offer a recall test on a base that has no vectors', async () => {
+    /* `search` skips such a base rather than failing, which from here would
+       look like a base that answers nothing to every question. */
+    const button = await openPanel({}, { embedding_model: '', dimensions: 0 })
+
+    expect(button.disabled).toBe(true)
+    expect(button.title).toBe('gui.kb.recall_off')
+    expect(document.querySelector('.kbask')).toBeNull()
+  })
+
+  it('remembers what this browser has asked, newest first and without repeats', async () => {
+    await openPanel({ search: async () => HITS })
+    await ask('first question')
+    await ask('second question')
+    await ask('first question')
+
+    expect(store.history()).toEqual(['first question', 'second question'])
+  })
+
+  it('does not remember a question the search never answered', async () => {
+    let fail = true
+    await openPanel({
+      search: async () => {
+        if (fail) throw new Error('endpoint said 401')
+        return HITS
+      },
+    })
+    await ask('a question that failed')
+    expect(toasts()).toEqual(['endpoint said 401'])
+    expect(store.history()).toEqual([])
+
+    fail = false
+    await ask('a question that worked')
+    expect(store.history()).toEqual(['a question that worked'])
+  })
+
+  it('puts a remembered question back in the box and runs it', async () => {
+    const asked: string[] = []
+    await openPanel({
+      search: async (_b: string[], q: string) => {
+        asked.push(q)
+        return HITS
+      },
+    })
+    await ask('what is the leave policy')
+
+    await act(async () => {
+      ;(document.querySelector('.kbpast') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      ;(screen.getByText('what is the leave policy').closest('button') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+
+    expect(asked).toEqual(['what is the leave policy', 'what is the leave policy'])
+    expect((document.querySelector('.kbask .kbname') as HTMLInputElement).value).toBe(
+      'what is the leave policy',
+    )
+  })
+
+  it('forgets the history when asked to', async () => {
+    await openPanel({ search: async () => HITS })
+    await ask('something private')
+    expect(store.history()).toEqual(['something private'])
+
+    await act(async () => {
+      ;(document.querySelector('.kbpast') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.recall_forget').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(store.history()).toEqual([])
+  })
+
+  it('survives a history that storage hands back as something else', async () => {
+    /* localStorage is writable by anything on the origin, and one number in
+       that array renders as a blank row and throws on `.trim()`. */
+    localStorage.setItem('raven.gui.kbq', JSON.stringify(['ok', 42, null, '  ']))
+    expect(store.history()).toEqual(['ok'])
+
+    localStorage.setItem('raven.gui.kbq', '{not json')
+    expect(store.history()).toEqual([])
+  })
+})
+
+describe('the knowledge base settings', () => {
+  const openSettings = async (over: Partial<KnowledgeSource> = {}, on: Partial<KbBase> = {}) => {
+    const saved: Array<Record<string, unknown>> = []
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook', ...on })],
+      documents: async () => [doc({ id: 'd1', status: 'ready' })],
+      settings: async (_b: string, values) => {
+        saved.push(values as Record<string, unknown>)
+        return base({ id: 'b1', name: 'handbook', ...on, ...values })
+      },
+      ...over,
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.settings').closest('button') as HTMLButtonElement).click()
+    })
+    return saved
+  }
+
+  const field = (label: string): HTMLElement =>
+    (screen.getByText(label).closest('.kbset') as HTMLElement)
+
+  it('shows the fields the design asks for, and no rerank model', async () => {
+    await openSettings()
+
+    for (const label of ['gui.kb.set_proc', 'gui.kb.set_embed', 'gui.kb.set_topk', 'gui.kb.set_smart', 'gui.kb.set_sep', 'gui.kb.set_size', 'gui.kb.set_lap']) {
+      expect(screen.getByText(label)).toBeTruthy()
+    }
+    expect(screen.queryByText('gui.kb.set_rerank')).toBeNull()
+    expect(document.body.textContent).not.toContain('Rerank')
+  })
+
+  it('gives every setting a sentence saying what it does', async () => {
+    /* A dialog of nouns -- Top K, Overlap Size -- tells a reader nothing about
+       what moving them costs. */
+    await openSettings()
+
+    const helps = [...document.querySelectorAll('.kbsets .kbhelp')]
+    expect(helps.length).toBe(7)
+    for (const help of helps) {
+      expect(help.getAttribute('title')).toBeTruthy()
+      /* Reachable without a pointer, or the sentence only exists for people
+         who can hover. */
+      expect(help.getAttribute('tabindex')).toBe('0')
+      expect(help.getAttribute('aria-label')).toBe(help.getAttribute('title'))
+    }
+  })
+
+  it('shows the embedding model without offering to change it', async () => {
+    /* The store is sized to its vector width when the base is created, so a
+       dropdown here would be a way to invalidate every vector in the base. */
+    await openSettings({}, { embedding_model: 'BAAI/bge-large-zh-v1.5' })
+
+    const row = field('gui.kb.set_embed')
+    expect(row.textContent).toContain('BAAI/bge-large-zh-v1.5')
+    expect(row.querySelector('select')).toBeNull()
+    expect(row.querySelector('input')).toBeNull()
+  })
+
+  it('lists the processors it will offer, every one of them unavailable', async () => {
+    /* The list is the answer to "what will this eventually do"; a lone "Don't
+       use" in a select answers nothing. Nothing is wired, so every row says
+       why it cannot be picked rather than looking like a choice. */
+    await openSettings()
+
+    expect((field('gui.kb.set_proc').querySelector('.kbpick') as HTMLElement).textContent).toContain(
+      'gui.kb.set_proc_off',
+    )
+    await act(async () => {
+      ;(document.querySelector('.kbpick') as HTMLButtonElement).click()
+    })
+
+    const rows = [...document.querySelectorAll('.kbprocr')]
+    expect(rows.map((r) => (r.querySelector('.nm') as HTMLElement).textContent)).toEqual([
+      'gui.kb.proc_local',
+      'PaddleOCR',
+      'MinerU',
+      'Doc2X',
+      'Mistral',
+      'gui.kb.proc_settings',
+      'gui.kb.set_proc_off',
+    ])
+    expect(rows.every((r) => r.getAttribute('aria-disabled') === 'true')).toBe(true)
+    /* Ours is a download away; the rest are other people's services and want a key. */
+    expect((rows[0]!.querySelector('.st') as HTMLElement).textContent).toBe('gui.kb.proc_notdl')
+    expect((rows[1]!.querySelector('.st') as HTMLElement).textContent).toBe('gui.kb.proc_notcfg')
+    /* And the list says which one is actually in force. */
+    expect(rows[6]!.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('wears the raven mark for the processor that is ours', async () => {
+    await openSettings()
+    await act(async () => {
+      ;(document.querySelector('.kbpick') as HTMLButtonElement).click()
+    })
+
+    const mine = document.querySelector('.kbprocr .provider-icon') as HTMLImageElement
+    expect(mine.getAttribute('src')).toContain('assets/raven.svg')
+    /* Named, so the dark-mode rule can spare it the inversion every monochrome
+       vendor mark gets: it is a gradient, and inverting it prints the wrong
+       colours rather than a legible drawing. */
+    expect(mine.getAttribute('data-provider')).toBe('raven')
+  })
+
+  it('opens on what the base is set to, and saves what was moved', async () => {
+    const saved = await openSettings({}, { top_k: 12, chunk_size: 1024, chunk_overlap: 200 })
+
+    const slider = field('gui.kb.set_topk').querySelector('input[type="range"]') as HTMLInputElement
+    expect(slider.value).toBe('12')
+    expect((field('gui.kb.set_size').querySelector('input') as HTMLInputElement).value).toBe('1024')
+    expect((field('gui.kb.set_lap').querySelector('input') as HTMLInputElement).value).toBe('200')
+
+    await act(async () => {
+      fireEvent.change(slider, { target: { value: '7' } })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.set_save').closest('button') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+
+    expect(saved[0]!.top_k).toBe(7)
+    /* Closed and the row updated: the base in the list is what the panel
+       behind this dialog is drawn from. */
+    expect(document.querySelector('.kbsets')).toBeNull()
+    expect(store.getState().bases[0]!.top_k).toBe(7)
+  })
+
+  it('shows a base that predates these settings as the defaults it behaves as', async () => {
+    await openSettings({}, { top_k: undefined, chunk_size: undefined })
+
+    expect((field('gui.kb.set_topk').querySelector('input') as HTMLInputElement).value).toBe(
+      String(store.DEFAULTS.top_k),
+    )
+    expect((field('gui.kb.set_size').querySelector('input') as HTMLInputElement).value).toBe(
+      String(store.DEFAULTS.chunk_size),
+    )
+    expect(store.DEFAULTS.top_k).toBe(6)
+  })
+
+  it('escapes the separator so two newlines can be typed into one line', async () => {
+    const saved = await openSettings({}, { smart_chunking: false, separator: '\n\n' })
+
+    const input = field('gui.kb.set_sep').querySelector('input') as HTMLInputElement
+    expect(input.value).toBe('\\n\\n')
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '\\n---\\n' } })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.set_save').closest('button') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+
+    expect(saved[0]!.separator).toBe('\n---\n')
+  })
+
+  it('will not save an overlap that swallows the chunk it overlaps', async () => {
+    /* Every chunk would contain the whole of the one before it. Refused here
+       as well as by the engine, because a disabled Save says which of the two
+       numbers is wrong while a toast after the fact does not. */
+    await openSettings({}, { chunk_size: 512, chunk_overlap: 50 })
+
+    const save = screen.getByText('gui.kb.set_save').closest('button') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+
+    await act(async () => {
+      fireEvent.change(field('gui.kb.set_lap').querySelector('input')!, { target: { value: '512' } })
+    })
+    expect(save.disabled).toBe(true)
+
+    /* And an emptied field is mid-edit, not a zero. */
+    await act(async () => {
+      fireEvent.change(field('gui.kb.set_size').querySelector('input')!, { target: { value: '' } })
+    })
+    expect(save.disabled).toBe(true)
+  })
+
+  it('puts the defaults back without saving them', async () => {
+    const saved = await openSettings({}, { top_k: 40, chunk_size: 2048, chunk_overlap: 400 })
+
+    await act(async () => {
+      ;(screen.getByText('gui.kb.set_restore').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect((field('gui.kb.set_topk').querySelector('input') as HTMLInputElement).value).toBe(
+      String(store.DEFAULTS.top_k),
+    )
+    expect((field('gui.kb.set_size').querySelector('input') as HTMLInputElement).value).toBe(
+      String(store.DEFAULTS.chunk_size),
+    )
+    expect((field('gui.kb.set_lap').querySelector('input') as HTMLInputElement).value).toBe(
+      String(store.DEFAULTS.chunk_overlap),
+    )
+    /* Restoring is an edit like any other: nothing is written until Save. */
+    expect(saved).toEqual([])
+  })
+
+  it('toggles smart chunking and disables the separator it replaces', async () => {
+    const saved = await openSettings({}, { smart_chunking: true })
+
+    const toggle = field('gui.kb.set_smart').querySelector('.kbtog') as HTMLButtonElement
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    /* Nothing plainly splits on a separator while the structure is doing it. */
+    expect((field('gui.kb.set_sep').querySelector('input') as HTMLInputElement).disabled).toBe(true)
+
+    await act(async () => {
+      toggle.click()
+    })
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect((field('gui.kb.set_sep').querySelector('input') as HTMLInputElement).disabled).toBe(false)
+
+    await act(async () => {
+      ;(screen.getByText('gui.kb.set_save').closest('button') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    expect(saved[0]!.smart_chunking).toBe(false)
+  })
+
+  it('says that chunking changes reach only what is added next', async () => {
+    /* The chunks already in the base were cut by the old numbers and stay that
+       way until they are indexed again, which is the question a reader has the
+       moment they move these. */
+    await openSettings()
+
+    expect(screen.getByText('gui.kb.set_newonly')).toBeTruthy()
   })
 })

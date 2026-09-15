@@ -713,9 +713,26 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) img.provider-icon { filter: invert(1); }
 }
-/* Every mark in the bundle is monochrome, so every one of them inverts. The
-   exception that used to sit here was for NVIDIA's green drawing; the black one
-   that replaced it wants the same inversion as the rest. */
+/* Every vendor mark in the bundle is monochrome, so every one of them inverts.
+   The exception that used to sit here was for NVIDIA's green drawing; the
+   black one that replaced it wants the same inversion as the rest.
+
+   These five are not vendor marks of that kind. Four are full-colour brand
+   tiles for the file processors, where the colour is how the brand is
+   recognised, and the fifth is raven's own gradient. Inverting any of them
+   prints the wrong colours rather than a legible mark. */
+:root[data-theme="dark"] img.provider-icon[data-provider="raven"],
+:root[data-theme="dark"] img.provider-icon[data-provider="paddleocr"],
+:root[data-theme="dark"] img.provider-icon[data-provider="mineru"],
+:root[data-theme="dark"] img.provider-icon[data-provider="doc2x"],
+:root[data-theme="dark"] img.provider-icon[data-provider="mistral"] { filter: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) img.provider-icon[data-provider="raven"],
+  :root:not([data-theme="light"]) img.provider-icon[data-provider="paddleocr"],
+  :root:not([data-theme="light"]) img.provider-icon[data-provider="mineru"],
+  :root:not([data-theme="light"]) img.provider-icon[data-provider="doc2x"],
+  :root:not([data-theme="light"]) img.provider-icon[data-provider="mistral"] { filter: none; }
+}
 
 /* Context is a quantity, so it gets a quantity's shape: a ring that fills --
    and only the ring. The fill and its colour already answer "is this fine?"
@@ -5275,7 +5292,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .kbrow[aria-current] { background: var(--surface); border-color: var(--line); }
 .kbrow .nm { font-size: 13px; font-weight: 600; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
-.kbpane { overflow-y: auto; min-width: 0; padding: 0 2px 8px 4px; }
+.kbpane { position: relative; overflow-y: auto; min-width: 0; padding: 0 2px 8px 4px; }
 .kbhd { display: flex; align-items: center; gap: 10px; padding-bottom: 12px;
   border-bottom: 1px solid var(--line-soft); }
 .kbhd b { font-size: 14px; font-weight: 600; overflow: hidden;
@@ -5286,9 +5303,9 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kbsub { display: flex; align-items: center; gap: 10px; margin: 12px 0 14px; }
 .kbsub .who { margin-right: auto; }
-/* The file input is hidden behind its own label, so the label has to look and
-   behave like the button it stands in for. */
-.kbsub label.kbsrc { cursor: pointer; flex: none; }
+/* The source menu is anchored to its own button, which sits at the end of this
+   row -- so the popup opens under the button rather than under the panel. */
+.kbsub .kbsrc { flex: none; }
 
 /* A grid rather than a table element: the failure reason is a full-width row
    under the one it explains, which a table would need a colspan for. */
@@ -5348,22 +5365,221 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 }
 .kbdlg .kbname:focus { border-color: var(--amber); }
 .kbdlg select.mini { width: 100%; text-align: left; }
+/* A note is written, not filled in: the dialog that holds one is sized for
+   paragraphs rather than for a name and a picker. */
+.kbdlg.kbwide { width: min(680px, 100%); }
+.kbdlg .kbnote {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
+  padding: 10px 12px; color: var(--text); font: 13px/1.55 var(--mono); outline: none;
+  min-height: 260px; resize: vertical;
+}
+.kbdlg .kbnote:focus { border-color: var(--amber); }
+.kbdlg .kbnote:disabled { color: var(--faint); }
+
+/* The drop target covers the panel it belongs to rather than a strip of it: a
+   reader dragging a file at a list is aiming at the list. Pointer events stay
+   off so the dragleave that ends the drag comes from the panel, not from this
+   overlay appearing under the cursor. */
+.kbdrop {
+  position: absolute; inset: 0; z-index: var(--z-pop); pointer-events: none;
+  border-radius: 12px; border: 2px dashed var(--amber);
+  /* Tinted rather than filled: the list underneath is what the reader is
+     aiming at, and a target that hides it is a target they cannot aim. */
+  background: color-mix(in srgb, var(--amber-dp) 42%, transparent);
+}
+/* The panel scrolls, so the overlay spans the whole list rather than the part
+   of it on screen. Sticky keeps the label in the middle of what the reader can
+   actually see, instead of centred in a metre of file rows. */
+.kbdrop span {
+  position: sticky; top: 45%; display: block; text-align: center;
+  font-size: 13px; font-weight: 600; color: var(--text);
+}
 .kbdlg .hint { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
 /* kbacts, not acts: `.acts` is the transcript's message-action row, and its
    `.acts button` makes every button a 27px borderless icon square -- which
    outranks `.mini` and left Cancel and Create as two grey words touching each
    other. A shared stylesheet has one namespace, so the island takes a name of
    its own rather than fighting the specificity. */
-.kbdlg .kbacts { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.kbdlg .kbacts { display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  margin-top: 18px; }
+/* Reading a web page runs to a 30s timeout, and a dialog that only greys its
+   own button out looks like a dialog that ignored the click. The note says
+   what is happening; the ring says it is still happening. */
+.kbwait { display: flex; align-items: center; gap: 8px; margin-right: auto;
+  font-size: 12.5px; color: var(--muted); }
+.kbring {
+  width: 12px; height: 12px; flex: none; border-radius: 50%;
+  border: 1.5px solid var(--line); border-top-color: var(--amber);
+  animation: kbspin .8s linear infinite;
+}
+@keyframes kbspin { to { transform: rotate(360deg); } }
+/* A ring that cannot spin still reads as a marker that something is pending,
+   which is the whole of what it has to say. */
+@media (prefers-reduced-motion: reduce) { .kbring { animation: none; } }
+
+/* the settings panel -------------------------------------------------- */
+/* Label and control on one row, the way a form of short settings reads --
+   rather than label-above-control, which doubles the height of a dialog whose
+   controls are a select, a number and a switch. */
+.kbsets .kbset { display: flex; align-items: center; gap: 16px; padding: 11px 0;
+  border-bottom: 1px solid var(--line-soft); }
+.kbsets .kbset:last-of-type { border-bottom: 0; }
+.kbsetl { display: flex; align-items: center; gap: 6px; flex: 0 0 168px;
+  font-size: 13px; font-weight: 600; }
+.kbsetc { flex: 1 1 auto; min-width: 0; display: flex; justify-content: flex-end; }
+.kbset select.mini, .kbset .kbname { width: 100%; max-width: 260px; }
+/* The circled i. Focusable, so the sentence behind it is reachable without a
+   pointer. */
+.kbhelp {
+  flex: none; width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--line);
+  color: var(--faint); font: 600 9.5px/12px var(--serif); text-align: center; cursor: help;
+}
+.kbhelp:hover, .kbhelp:focus { color: var(--text); border-color: var(--muted); outline: none; }
+/* What the model is, not a way to change it: the store is sized to its width
+   when the base is made. */
+.kbfixed { font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kbsetc .kbslide { flex: 1 1 auto; display: flex; flex-direction: column;
+  align-items: stretch; gap: 2px; max-width: 260px; }
+.kbslide b { align-self: flex-end; font-size: 13px; }
+.kbslide input[type="range"] { width: 100%; accent-color: var(--amber); }
+.kbends { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); }
+/* The number and its unit read as one control, so the unit sits inside the
+   field's line rather than after it. */
+.kbunit { display: flex; align-items: center; gap: 8px; max-width: 260px; }
+.kbunit .kbname { text-align: right; }
+.kbunit > span { flex: none; font-size: 11.5px; color: var(--faint); }
+.kbadv {
+  display: flex; align-items: center; justify-content: space-between; width: 100%;
+  background: none; border: 0; border-top: 1px solid var(--line-soft); cursor: pointer;
+  padding: 14px 0 12px; margin-top: 4px; color: var(--text); font: 600 13.5px var(--sans);
+}
+.kbtog {
+  flex: none; width: 38px; height: 21px; padding: 2px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); display: flex;
+}
+.kbtog > span { width: 15px; height: 15px; border-radius: 50%; background: var(--faint);
+  transition: transform .14s ease; }
+.kbtog[aria-checked="true"] { background: var(--moss); border-color: var(--moss); }
+.kbtog[aria-checked="true"] > span { background: var(--paper); transform: translateX(17px); }
+@media (prefers-reduced-motion: reduce) { .kbtog > span { transition: none; } }
+/* Restore sits away from Save, at the other end: one undoes the reader's work
+   and the other keeps it, and they should not be a pair of adjacent buttons. */
+.kbfoot { border-top: 1px solid var(--line-soft); padding-top: 16px; }
+.kbrestore { margin-right: auto; }
+
+/* The file-processing picker. A list rather than a select, because every row
+   carries a mark and the state it is in, and neither fits an option. */
+.kbproc { position: relative; flex: 1 1 auto; max-width: 260px; display: flex; }
+.kbpick {
+  flex: 1 1 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
+  padding: 9px 12px; color: var(--muted); font: 13px var(--sans); cursor: pointer;
+}
+.kbpick:hover { border-color: var(--muted); }
+.kbprocm { left: 0; right: 0; top: calc(100% + 5px); min-width: 250px; padding: 5px; }
+/* Nothing is selectable yet, so every row reads as unavailable rather than as
+   a choice that would be ignored. */
+.kbprocr {
+  display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 7px;
+  font-size: 12.5px; color: var(--faint); cursor: default;
+}
+.kbprocr .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.kbprocr .st { flex: none; font-size: 11px; color: var(--faint); }
+.kbprocr .provider-icon { flex: none; width: 17px; height: 17px; border-radius: 5px;
+  opacity: .45; }
+/* The first row is ours and the only one whose absence is a download rather
+   than a key, so it reads at full strength while the rest are greyed. */
+.kbprocr:first-child, .kbprocr.kbon { color: var(--text); }
+.kbprocr:first-child .provider-icon, .kbprocr.kbon .provider-icon { opacity: 1; }
+.kbprocr:first-child .st { color: var(--muted); }
+/* Go to settings and Don't use are the list's own actions, not processors. */
+.kbprocs { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--line-soft); }
+.kbprocs .provider-icon { opacity: .9; }
+.kbprocr.kbon { background: var(--surface); }
+
+/* the recall panel ---------------------------------------------------- */
+/* Question, then the button that spends the request. The field grows; the
+   button does not, because its label does not change length. */
+.kbask { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.kbaskf { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
+.kbaskf .kbname { flex: 1 1 auto; min-width: 0; padding-right: 36px; }
+/* Inside the field's right edge, where a reader looks for the history of what
+   they have typed into it. */
+.kbpast {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: none; border: 0; cursor: pointer; padding: 4px 6px;
+  color: var(--faint); font-size: 15px; line-height: 1; border-radius: 7px;
+}
+.kbpast:hover { color: var(--text); background: var(--surface); }
+.kbaskf .kbmenu { top: calc(100% + 4px); left: 0; right: auto; min-width: 240px; max-width: 100%; }
+.kbaskf .kbmenu .mi { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The count first and heaviest: it is the answer to what the reader pressed. */
+.kbstats { display: flex; align-items: baseline; gap: 12px; margin: 14px 0 8px;
+  font-size: 12px; color: var(--muted); }
+.kbstats b { font-size: 12.5px; color: var(--text); }
+.kbstats span { font-family: var(--mono); cursor: help; }
+/* Tall enough to read several results in, and scrolling rather than growing
+   the dialog past the window. */
+.kbhits { display: grid; gap: 8px; max-height: min(52vh, 460px); overflow-y: auto;
+  margin-top: 2px; padding-right: 2px; }
+.kbhit { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.kbhithd {
+  width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 11px;
+  background: none; border: 0; cursor: pointer; color: var(--text); font: 12.5px var(--sans);
+  text-align: left;
+}
+/* The ordinal, not the rank: the rank is spelled out at the other end, and
+   this is what a reader counts down the list with. */
+.kbhitn { flex: none; min-width: 20px; padding: 1px 6px; border-radius: 6px;
+  background: var(--raised); color: var(--muted); font-size: 11px; text-align: center; }
+.kbhitnm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.kbhitix, .kbhitsc { flex: none; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+/* The score is the measurement the test was run to see, so it reads as one. */
+.kbhitsc { color: var(--amber); }
+.kbhitrk { flex: none; font-size: 11.5px; color: var(--muted); }
+.kbhitcv { flex: none; color: var(--faint); font-size: 12px; }
+.kbhithd:hover { background: var(--raised); border-radius: 10px; }
+/* The chunk as it was embedded, whitespace and all: this panel exists to show
+   what the index actually holds, and reflowing it would show something else. */
+.kbhittx {
+  padding: 2px 12px 12px 41px; font-size: 12.5px; line-height: 1.6; color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
 /* the file viewer ---------------------------------------------------- */
 /* The name is the way into the file, so it reads as the row's own text and
    behaves as the control it is. */
 .kbopen {
   background: none; border: 0; padding: 0; text-align: left; cursor: pointer;
-  color: var(--text); font: inherit; max-width: 100%;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); font: inherit; max-width: 100%; min-width: 0;
+  display: flex; align-items: center; gap: 9px;
 }
+/* Only the name truncates. The glyph is the one part of the cell that says
+   what the file is before it is read, so it keeps its width whatever the name
+   does. */
+.kbopen > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kbopen:hover { color: var(--amber); }
+.kbico {
+  flex: none; width: 15px; height: 15px; color: var(--faint);
+  fill: none; stroke: currentColor; stroke-width: 1.5;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+/* At this size the drawing inside the page outline is a smudge; the colour is
+   what tells one row's type from the next, so each family carries its own. */
+.kbf-doc   { color: var(--sky); }
+.kbf-sheet { color: var(--moss); }
+.kbf-slide { color: var(--gold); }
+.kbf-pdf   { color: var(--clay); }
+.kbf-md    { color: var(--text); }
+.kbf-image { color: var(--amber); }
+.kbf-data  { color: var(--muted); }
+.kbf-txt   { color: var(--sky); }
+/* A note and a captured page were left on the default grey when they were
+   added, which is the one thing this block exists to stop. */
+.kbf-note  { color: var(--moss); }
+.kbf-link  { color: var(--link); }
 .kbvhd { display: flex; align-items: center; gap: 10px; padding-bottom: 12px;
   border-bottom: 1px solid var(--line-soft); }
 .kbvhd b { font-size: 13.5px; font-weight: 600; min-width: 0;
@@ -5373,6 +5589,12 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   color: var(--muted); font-size: 16px; line-height: 1; border-radius: 7px;
 }
 .kbback:hover { color: var(--text); background: var(--surface); }
+/* Where a captured page came from, beside its name: one line, truncated, and
+   never pushing the name it belongs to off the header. */
+.kbfrom {
+  min-width: 0; flex: 0 1 auto; font-size: 11.5px; color: var(--link);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 /* Tall enough to read a page of a document in, and the panel scrolls rather
    than the frame's own content being squeezed. */
 /* Rendered markdown scrolls in the pane like the table it replaced, and keeps

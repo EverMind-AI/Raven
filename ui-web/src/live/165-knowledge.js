@@ -10,6 +10,10 @@ DS.knowledge = {
   create: (name, description, embedding = true) =>
     rpc.call('knowledge.bases.create', { name, description, embedding }).then((r) => r && r.base),
   remove: (id) => rpc.call('knowledge.bases.delete', { base_id: id }),
+  /* Spread rather than listed: the contract leaves out what it is not sent,
+     and naming every field here would send nulls for the untouched ones. */
+  settings: (baseId, values) =>
+    rpc.call('knowledge.bases.settings', { base_id: baseId, ...values }).then((r) => r && r.base),
   documents: (baseId) =>
     rpc.call('knowledge.documents.list', { base_id: baseId }).then((r) => (r && r.documents) || []),
   /* The bytes ride up through fs.upload, whose answer is a workspace path --
@@ -34,6 +38,21 @@ DS.knowledge = {
     const added = await rpc.call('knowledge.documents.add', { base_id: baseId, path: up.path });
     return added && added.document;
   },
+  /* A note is markdown the reader typed, so it goes up as text rather than
+     through fs.upload: there is no file on their disk to read. */
+  addNote: (baseId, title, text) =>
+    rpc
+      .call('knowledge.documents.add_note', { base_id: baseId, title, text })
+      .then((r) => r && r.document),
+  updateNote: (documentId, title, text) =>
+    rpc
+      .call('knowledge.documents.update_note', { document_id: documentId, title, text })
+      .then((r) => r && r.document),
+  /* The gateway reads the page. A browser cannot fetch a third-party site on
+     the reader's behalf, and the bytes have to reach that process to be
+     chunked anyway. */
+  addUrl: (baseId, url) =>
+    rpc.call('knowledge.documents.add_url', { base_id: baseId, url }).then((r) => r && r.document),
   index: (documentId) =>
     rpc.call('knowledge.documents.index', { document_id: documentId }).then((r) => r && r.document),
   /* Answers nothing: a document that was already gone and one this call
@@ -41,6 +60,10 @@ DS.knowledge = {
      follows is what the row is drawn from either way. */
   removeDoc: (documentId) =>
     rpc.call('knowledge.documents.delete', { document_id: documentId }).then(() => undefined),
-  search: (baseIds, query) =>
-    rpc.call('knowledge.search', { base_ids: baseIds, query }).then((r) => (r && r.hits) || []),
+  /* The whole answer, not just the list: the recall panel reports what the
+     search cost, and only this frame carries it. */
+  search: (baseIds, query, topK) =>
+    rpc
+      .call('knowledge.search', { base_ids: baseIds, query, top_k: topK })
+      .then((r) => ({ hits: (r && r.hits) || [], search_ms: (r && r.search_ms) || 0, embed_ms: (r && r.embed_ms) || 0 })),
 };
