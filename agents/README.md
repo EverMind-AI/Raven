@@ -177,7 +177,11 @@ Agent notes:
   channel names, normalized characters and truncated names remain distinct.
   Task State is still stored under the configured `taskState.stateRoot`,
   keyed by this session directory; relative file and render paths use the
-  same directory. Resuming a session with the same working directory returns
+  same directory. A symlink used as `designs/` or as the session directory
+  stops the turn before model or tool execution, preserving the original
+  working directory's access boundary. The caller's working directory may
+  itself be a symlink; its resolved location is the root. Resuming a session
+  with the same working directory returns
   to its files and Task State. Set
   `plugins.config["design-engine"].workdirPerSession` to `false` to keep the
   caller's directory directly. Existing files and Task State from the shared

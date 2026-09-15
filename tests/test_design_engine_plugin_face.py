@@ -350,6 +350,100 @@ async def test_session_folder_names_preserve_distinct_full_keys(tmp_path):
     assert workdir.current() is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["before_user_inbound", "before_iteration"])
+@pytest.mark.parametrize("link_level", ["designs", "session"])
+@pytest.mark.parametrize("target_kind", ["outside", "inside", "missing"])
+async def test_session_directory_rejects_redirected_children(tmp_path, phase, link_level, target_kind):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.txt"
+    secret.write_text("Outside workspace sentinel")
+    target = root / "another-session" if target_kind == "inside" else outside
+    if target_kind == "inside":
+        target.mkdir()
+    elif target_kind == "missing":
+        target = outside / "missing"
+    hook = DesignEngineHook(EngineConfig.from_slice({"enabled": True}), None, None)
+    ctx = AgentHookContext(session_key="acp:linked", inbound_content="draw a poster", iteration=1)
+    with workdir.bind(root):
+        await hook.before_user_inbound(ctx)
+        own = workdir.current()
+    own.rmdir()
+    link = own
+    if link_level == "designs":
+        own.parent.rmdir()
+        link = own.parent
+    link.symlink_to(target, target_is_directory=True)
+    before = set(tmp_path.rglob("*"))
+
+    with workdir.bind(root):
+        decision = await getattr(hook, phase)(ctx)
+        assert decision.short_circuit_result is not None
+        assert "symlink" in str(decision.short_circuit_result).lower()
+        assert workdir.current() == root
+        reader = ReadFileTool(workspace=root, allowed_dirs=(root,))
+        assert "Outside workspace sentinel" not in await reader.execute(path=str(secret))
+        assert "Outside workspace sentinel" not in await reader.execute(path=str(link / "secret.txt"))
+        writer = WriteFileTool(workspace=root, allowed_dirs=(root,))
+        result = await writer.execute(path=str(outside / "created.txt"), content="Must not be written")
+        assert "outside allowed directories" in result
+    assert set(tmp_path.rglob("*")) == before
+    assert secret.read_text() == "Outside workspace sentinel"
+    assert workdir.current() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("link_level", ["designs", "session"])
+async def test_repointed_session_is_revalidated_before_iteration(tmp_path, link_level):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("Outside workspace sentinel")
+    hook = DesignEngineHook(EngineConfig.from_slice({"enabled": True}), None, None)
+    ctx = AgentHookContext(session_key="acp:replaced", inbound_content="draw a poster", iteration=1)
+    with workdir.bind(root):
+        await hook.before_user_inbound(ctx)
+        own = workdir.current()
+        own.rmdir()
+        link = own
+        if link_level == "designs":
+            own.parent.rmdir()
+            link = own.parent
+        link.symlink_to(outside, target_is_directory=True)
+        decision = await hook.before_iteration(ctx)
+        assert decision.short_circuit_result is not None
+        assert workdir.current() == root
+        result = await ReadFileTool(workspace=root, allowed_dirs=(root,)).execute(path=str(outside / "secret.txt"))
+        assert "outside allowed directories" in result
+    assert not (outside / own.name).exists()
+
+
+@pytest.mark.asyncio
+async def test_session_directory_accepts_a_symlinked_workspace_root(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    alias = tmp_path / "workspace-alias"
+    alias.symlink_to(root, target_is_directory=True)
+    ctx = AgentHookContext(session_key="acp:alias", inbound_content="draw a poster", iteration=1)
+    hook = DesignEngineHook(EngineConfig.from_slice({"enabled": True}), None, None)
+    with workdir.bind(alias):
+        assert (await hook.before_user_inbound(ctx)).short_circuit_result is None
+        own = workdir.current()
+        assert own == own.resolve()
+        assert own.parent == root / "designs"
+        assert (await hook.before_iteration(ctx)).short_circuit_result is None
+        assert workdir.current() == own
+        await WriteFileTool(workspace=alias, allowed_dirs=(alias,)).execute(path="poster.txt", content="Session poster")
+    with workdir.bind(alias):
+        assert (await hook.before_iteration(ctx)).short_circuit_result is None
+        assert workdir.current() == own
+        assert "Session poster" in await ReadFileTool(workspace=alias, allowed_dirs=(alias,)).execute(path="poster.txt")
+
+
 # --- the selector hook: the four D1 clauses --------------------------------------
 
 
@@ -514,6 +608,33 @@ async def test_loop_uses_the_session_directory_for_tools_and_prompt(tmp_path, or
     assert "Goal: Ship a poster" in str(provider.calls[1]["messages"])
     assert hook._manager.get(str(own))["items"][0]["status"] == "completed"
     assert workdir.current() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [Origin.USER, Origin.SUBAGENT])
+@pytest.mark.parametrize("obstacle", ["symlink", "file"])
+async def test_loop_stops_when_session_directory_is_unsafe(tmp_path, origin, obstacle):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if obstacle == "symlink":
+        (root / "designs").symlink_to(outside, target_is_directory=True)
+    else:
+        (root / "designs").write_text("Not a directory")
+    provider = _ScriptedProvider([_text_response("The unsafe turn must not reach the model")])
+    selector = _StubSelector(_selection())
+    manager = TaskStateManager(tmp_path / "state")
+    hook = DesignEngineHook(EngineConfig.from_slice({"enabled": True}), selector, manager)
+    loop = _loop(tmp_path / "home", provider, [hook])
+    with workdir.bind(root):
+        result = await loop._process_message(_req("draw a poster"), origin=origin)
+        assert workdir.current() == root
+    assert result is not None and "Design session directory unavailable" in result[0]
+    assert not provider.calls
+    assert not selector.queries
+    assert not list(outside.iterdir())
+    assert not list((tmp_path / "state").rglob("*.json"))
 
 
 @pytest.mark.asyncio

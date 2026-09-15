@@ -282,10 +282,19 @@ class DesignEngineHook(AgentHook):
         name = mint_slug(session_key.rpartition(":")[2], max_chars=48) or "session"
         digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:16]
         dirname = f"{name}-{digest}"
-        if bound.name == dirname and bound.parent.name == DESIGNS_DIRNAME:
-            return bound
-        own = bound / DESIGNS_DIRNAME / dirname
-        own.mkdir(parents=True, exist_ok=True)
+        root = bound.parent.parent if bound.name == dirname and bound.parent.name == DESIGNS_DIRNAME else bound
+        root = root.resolve()
+        own = root / DESIGNS_DIRNAME / dirname
+        try:
+            # The live workdir becomes a tool access root; child links must not redirect it.
+            if own.resolve() != own:
+                raise ValueError(f"Symlinked design session directory is not allowed: {own}")
+            own.mkdir(parents=True, exist_ok=True)
+            if own.resolve(strict=True) != own:
+                raise ValueError(f"Symlinked design session directory is not allowed: {own}")
+        except (OSError, RuntimeError, ValueError):
+            workdir.repoint(root)
+            raise
         workdir.repoint(own)
         return own
 
@@ -298,7 +307,11 @@ class DesignEngineHook(AgentHook):
             return HookDecision()
         bound = workdir.current()
         if bound is not None:
-            self._own_folder(bound, ctx.session_key)
+            try:
+                self._own_folder(bound, ctx.session_key)
+            except (OSError, RuntimeError, ValueError) as exc:
+                # The host ignores raised hooks, so a directory refusal must stop the turn explicitly.
+                return HookDecision(short_circuit_result=(f"Design session directory unavailable: {exc}", []))
         if self._selector is None:
             return HookDecision()
         try:
@@ -316,7 +329,10 @@ class DesignEngineHook(AgentHook):
         blocks: list[str] = []
         bound = workdir.current()
         if bound is not None and ctx.iteration in (0, 1):
-            own = self._own_folder(bound, ctx.session_key)
+            try:
+                own = self._own_folder(bound, ctx.session_key)
+            except (OSError, RuntimeError, ValueError) as exc:
+                return HookDecision(short_circuit_result=f"Design session directory unavailable: {exc}")
             if own != bound:
                 blocks.append(f"Working directory for this design session: {own}. Resolve relative paths here.")
         key = self._state_key()
