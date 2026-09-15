@@ -6846,6 +6846,270 @@
     "gui.panel.skill_n": {
       "en": "{n} skills",
       "zh": "{n} 个技能"
+    },
+    "gui.kb.src_file": {
+      "en": "File",
+      "zh": "文件"
+    },
+    "gui.kb.src_note": {
+      "en": "Note",
+      "zh": "笔记"
+    },
+    "gui.kb.src_folder": {
+      "en": "Folder",
+      "zh": "文件夹"
+    },
+    "gui.kb.src_url": {
+      "en": "URL",
+      "zh": "网址"
+    },
+    "gui.kb.doc_type_note": {
+      "en": "Note",
+      "zh": "笔记"
+    },
+    "gui.kb.doc_type_url": {
+      "en": "URL",
+      "zh": "网址"
+    },
+    "gui.kb.doc_edit_note": {
+      "en": "Edit note",
+      "zh": "编辑笔记"
+    },
+    "gui.kb.note_title": {
+      "en": "Title",
+      "zh": "标题"
+    },
+    "gui.kb.note_title_hint": {
+      "en": "Optional -- the first line is used when this is empty",
+      "zh": "可不填，留空时取正文第一行"
+    },
+    "gui.kb.note_body": {
+      "en": "Text",
+      "zh": "正文"
+    },
+    "gui.kb.note_body_hint": {
+      "en": "Markdown. Headings become the boundaries this is split on.",
+      "zh": "支持 Markdown，标题会成为切分的边界。"
+    },
+    "gui.kb.note_new": {
+      "en": "New note",
+      "zh": "新建笔记"
+    },
+    "gui.kb.note_edit": {
+      "en": "Edit note",
+      "zh": "编辑笔记"
+    },
+    "gui.kb.note_save": {
+      "en": "Save",
+      "zh": "保存"
+    },
+    "gui.kb.url_new": {
+      "en": "Add a URL",
+      "zh": "添加网址"
+    },
+    "gui.kb.url_label": {
+      "en": "Address",
+      "zh": "网址"
+    },
+    "gui.kb.url_hint": {
+      "en": "The page is read and stored as text. It is not kept up to date.",
+      "zh": "会读取该页面并保存为文本，之后不会自动更新。"
+    },
+    "gui.kb.url_add": {
+      "en": "Add",
+      "zh": "添加"
+    },
+    "gui.kb.drop_here": {
+      "en": "Drop files to add them",
+      "zh": "拖放文件以添加"
+    },
+    "gui.kb.adding_n": {
+      "en": "Adding {done} of {total}...",
+      "zh": "正在添加第 {done} / {total} 个..."
+    },
+    "gui.kb.none_supported": {
+      "en": "No file in there can be indexed. Supported: {kinds}",
+      "zh": "其中没有可索引的文件。支持的类型：{kinds}"
+    },
+    "gui.kb.too_many": {
+      "en": "That folder holds {count} files; {limit} at a time is the most this takes.",
+      "zh": "该文件夹有 {count} 个文件，一次最多添加 {limit} 个。"
+    },
+    "gui.kb.some_failed": {
+      "en": "{count} of them could not be added.",
+      "zh": "其中 {count} 个未能添加。"
+    },
+    "gui.kb.url_reading": {
+      "en": "Reading the page...",
+      "zh": "正在读取页面..."
+    },
+    "gui.kb.note_saving": {
+      "en": "Saving...",
+      "zh": "正在保存..."
+    },
+    "gui.kb.recall_title": {
+      "en": "Recall Test",
+      "zh": "召回测试"
+    },
+    "gui.kb.recall_ask": {
+      "en": "Ask the base a question",
+      "zh": "向知识库提问"
+    },
+    "gui.kb.recall_run": {
+      "en": "Search",
+      "zh": "搜索"
+    },
+    "gui.kb.recall_n": {
+      "en": "{n} results",
+      "zh": "{n} 条结果"
+    },
+    "gui.kb.recall_ms": {
+      "en": "{ms}ms",
+      "zh": "{ms}ms"
+    },
+    "gui.kb.recall_cost": {
+      "en": "{ms}ms in the index, {embed}ms embedding the question",
+      "zh": "索引耗时 {ms}ms，向量化问题耗时 {embed}ms"
+    },
+    "gui.kb.recall_rank": {
+      "en": "Rank #{n}",
+      "zh": "第 {n} 名"
+    },
+    "gui.kb.recall_chunk": {
+      "en": "Chunk {n} of {total}",
+      "zh": "第 {n} / {total} 块"
+    },
+    "gui.kb.recall_score": {
+      "en": "Score {score}",
+      "zh": "得分 {score}"
+    },
+    "gui.kb.recall_none": {
+      "en": "Nothing came back for that.",
+      "zh": "没有召回任何内容。"
+    },
+    "gui.kb.recall_empty": {
+      "en": "Ask something to see what this base answers with.",
+      "zh": "输入问题，看看这个知识库会召回什么。"
+    },
+    "gui.kb.recall_off": {
+      "en": "This base was made without an embedding model, so nothing in it is searchable.",
+      "zh": "该知识库创建时未选择向量模型，因此无法检索。"
+    },
+    "gui.kb.recall_recent": {
+      "en": "Recent questions",
+      "zh": "最近的提问"
+    },
+    "gui.kb.recall_forget": {
+      "en": "Clear",
+      "zh": "清除"
+    },
+    "gui.kb.recall_gone": {
+      "en": "no longer in this base",
+      "zh": "已不在该知识库中"
+    },
+    "gui.kb.set_title": {
+      "en": "Knowledge Base Settings",
+      "zh": "知识库设置"
+    },
+    "gui.kb.set_proc": {
+      "en": "File Processing",
+      "zh": "文件处理"
+    },
+    "gui.kb.set_proc_help": {
+      "en": "What a file is put through on the way in -- OCR, layout analysis. Nothing yet: files are read as they are.",
+      "zh": "文件入库前的预处理，例如 OCR、版面分析。暂未启用：文件按原样读取。"
+    },
+    "gui.kb.set_proc_off": {
+      "en": "Don't use",
+      "zh": "不使用"
+    },
+    "gui.kb.set_embed": {
+      "en": "Embedding Model",
+      "zh": "向量模型"
+    },
+    "gui.kb.set_embed_help": {
+      "en": "Fixed when the base was created. Its vector width sizes the store, so changing it would mean re-embedding every document.",
+      "zh": "创建知识库时确定，不可更改。向量维度决定了存储结构，更换模型需要对所有文档重新向量化。"
+    },
+    "gui.kb.set_topk": {
+      "en": "Top K",
+      "zh": "Top K"
+    },
+    "gui.kb.set_topk_help": {
+      "en": "At most this many chunks come back from one search of this base.",
+      "zh": "每次检索该知识库最多返回的分块数量。"
+    },
+    "gui.kb.set_adv": {
+      "en": "Advanced Settings",
+      "zh": "高级设置"
+    },
+    "gui.kb.set_smart": {
+      "en": "Smart Chunking",
+      "zh": "智能分块"
+    },
+    "gui.kb.set_smart_help": {
+      "en": "Split on the structure the file has -- headings, slides, pages -- instead of on length alone.",
+      "zh": "按文件自身的结构切分，例如标题、幻灯片、页面，而不是仅按长度切分。"
+    },
+    "gui.kb.set_sep": {
+      "en": "Separator",
+      "zh": "分隔符"
+    },
+    "gui.kb.set_sep_help": {
+      "en": "Where a plain split is allowed to cut, when smart chunking is off.",
+      "zh": "关闭智能分块时，普通切分允许断开的位置。"
+    },
+    "gui.kb.set_size": {
+      "en": "Chunk Size",
+      "zh": "分块大小"
+    },
+    "gui.kb.set_size_help": {
+      "en": "What one chunk is aimed at. A chunk over the embedding model's own limit is refused by it.",
+      "zh": "单个分块的目标大小。超过向量模型输入上限的分块会被拒绝。"
+    },
+    "gui.kb.set_lap": {
+      "en": "Overlap Size",
+      "zh": "重叠大小"
+    },
+    "gui.kb.set_lap_help": {
+      "en": "How much of the previous chunk each one repeats, so a sentence split across two is still findable.",
+      "zh": "每个分块重复前一个分块的长度，避免被切断的句子无法检索到。"
+    },
+    "gui.kb.set_tokens": {
+      "en": "tokens",
+      "zh": "tokens"
+    },
+    "gui.kb.set_newonly": {
+      "en": "Chunking changes only apply to newly added content",
+      "zh": "分块设置仅对新添加的内容生效"
+    },
+    "gui.kb.set_restore": {
+      "en": "Restore Defaults",
+      "zh": "恢复默认"
+    },
+    "gui.kb.set_save": {
+      "en": "Save",
+      "zh": "保存"
+    },
+    "gui.kb.set_saved": {
+      "en": "Settings saved.",
+      "zh": "设置已保存。"
+    },
+    "gui.kb.proc_local": {
+      "en": "Local Document",
+      "zh": "本地文档"
+    },
+    "gui.kb.proc_notdl": {
+      "en": "Not downloaded",
+      "zh": "未下载"
+    },
+    "gui.kb.proc_notcfg": {
+      "en": "Not configured",
+      "zh": "未配置"
+    },
+    "gui.kb.proc_settings": {
+      "en": "Go to settings",
+      "zh": "前往设置"
     }
   }
 }

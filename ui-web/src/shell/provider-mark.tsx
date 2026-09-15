@@ -32,6 +32,7 @@ const ICONS: Record<string, string> = {
   dashscope: 'alibabacloud',
   deepseek: 'deepseek',
   dmxapi: 'dmxapi',
+  doc2x: 'doc2x',
   fireworks_ai: 'fireworks',
   gemini: 'gemini',
   github_copilot: 'githubcopilot',
@@ -44,6 +45,7 @@ const ICONS: Record<string, string> = {
   minimax_cn_api: 'minimax',
   minimax_cn: 'minimax',
   minimax_global: 'minimax',
+  mineru: 'mineru',
   mistral: 'mistral',
   modelscope: 'modelscope',
   moonshot: 'moonshot',
@@ -53,6 +55,7 @@ const ICONS: Record<string, string> = {
   openai: 'openai',
   openai_codex: 'codex',
   openrouter: 'openrouter',
+  paddleocr: 'paddleocr',
   perplexity: 'perplexity',
   poe: 'poe',
   ppio: 'ppio',
@@ -255,6 +258,13 @@ export function vendorIconPath(vendor: string): string | null {
 export function providerIconPath(id: string): string | null {
   const icon = ICONS[id]
   return icon ? assetUrl(icon) : null
+}
+
+/* Raven's own mark, for a row that is this installation rather than a vendor.
+   Not under `providers/` -- it is not one -- but it wants the same digest, or
+   a replaced drawing stays cached under the URL its predecessor held. */
+export function ravenIconPath(): string {
+  return `assets/raven.svg${stamp()}`
 }
 
 /* An icon that degrades instead of breaking.

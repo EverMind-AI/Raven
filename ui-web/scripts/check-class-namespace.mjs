@@ -34,6 +34,10 @@ const SHARED = new Set([
   // the same whether it is opened in the transcript, the workspace or a
   // knowledge base, and that is one stylesheet rule rather than three.
   'prose',
+  // Every vendor logo on the page wears this, from one component and one rule
+  // in shell/provider-mark.tsx -- including its dark-mode handling, which an
+  // island restyling the class for itself would get wrong.
+  'provider-icon',
 ])
 
 // One island per entry: the source that names classes, and the prefix its own
