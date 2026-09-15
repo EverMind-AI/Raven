@@ -35,6 +35,11 @@
         "thinkClosingTagRequired": false,
         "maxIterations": 20,
         "wallClockSeconds": 3600,
+        "deadEndRetry": {
+          "enabled": true,
+          "maxRetries": 1,
+          "reasons": []
+        },
         "budgetNote": {
           "enabled": true,
           "warnRatio": 0.3
