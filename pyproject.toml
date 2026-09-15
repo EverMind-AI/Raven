@@ -334,12 +334,24 @@ unresolved-attribute = "ignore"    # 725
 # 231: sampled, not enumerated -- loose annotations and unnarrowed unions rather
 # than a single shape.
 invalid-argument-type = "ignore"   # 231
-# 66: the highest-harm family here. The sampled ones are tool subclasses whose
-# `execute` renames a parameter of the base (`path` -> `file_path`); tool
-# arguments arrive as keywords from a model-facing JSON schema, so a rename is
-# reachable, and several already carry `# type: ignore[override]`.
+# 66, and enumerated rather than sampled: 53 are Tool subclasses declaring named
+# parameters against a base of `execute(self, **kwargs: Any)`, which is how a
+# tool publishes its JSON schema -- the pattern, not a defect. 9 are provider
+# wrappers that take `**kwargs` and forward, so the named parameter ty wants is
+# reachable at runtime. 3 rename a parameter (`path` -> `file_path`) together
+# with the `parameters` override that renames the schema key, so the tool and
+# the schema agree. The one left is real and is a kernel contract question:
+# LLMProvider.chat_stream is declared `async def -> AsyncIterator[ChatDelta]`,
+# which types a coroutine returning an iterator, while every implementation is
+# an async generator. Enabling this rule would mean suppressing 65 lines to keep
+# one, so it stays off until that declaration is fixed.
 invalid-method-override = "ignore" #  66
-invalid-return-type = "ignore"     #  39 -- hid a regression introduced while writing this gate
+# 39: the family that hid a regression introduced while writing this gate, so
+# worth clearing -- but sampled as roughly half annotations narrower than the
+# code (a generator-built tuple typed `tuple[int, int, int]`) and half return
+# types that genuinely admit a value the signature refuses (a `Path | None`
+# returned where `Path` is promised). Each needs a per-case ruling.
+invalid-return-type = "ignore"     #  39
 invalid-assignment = "ignore"      #  33
 not-subscriptable = "ignore"       #  32
 unsupported-operator = "ignore"    #  28
