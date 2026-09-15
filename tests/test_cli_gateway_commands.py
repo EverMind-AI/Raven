@@ -100,6 +100,20 @@ def test_gateway_without_api_key_reaches_runtime_construction(tmp_config: Path, 
 # is the right place to cover the deeper paths.
 
 
+def test_run_starts_the_litellm_warm_up_before_the_first_request() -> None:
+    """``run()``, the body ``bounded_asyncio.run`` executes, starts the LiteLLM
+    import in the background at boot, or the first ``model.save_key`` pays it
+    inline. ``run()`` is a closure that blocks forever, so its source is pinned
+    rather than executed."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    run_body = src.split("async def run():", 1)[1].split("bounded_asyncio.run(run())", 1)[0]
+    assert "warm_up_in_background()" in run_body
+
+
 def test_gateway_refuses_second_instance(tmp_config: Path, monkeypatch) -> None:
     """When the instance lock is already held, gateway exits 1 with a clear
     message and never builds the agent/channel stack."""

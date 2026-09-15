@@ -287,10 +287,12 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     from loguru import logger
 
     from raven.cli._console_feature import register_console_feature
+    from raven.providers.litellm_setup import warm_up_in_background
     from raven.rpc.bootstrap import build_rpc_stack
     from raven.rpc.transports.ws import WsGateway, build_app, pick_port
 
     register_console_feature()
+    warm_up_in_background()
 
     # Declared before anything can emit a span. The page runs on the terminal's
     # channel by design (one session pool), so `channel.id` cannot tell the two

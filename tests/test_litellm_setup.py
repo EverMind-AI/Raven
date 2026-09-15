@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import sys
+import threading
 
 from raven.providers.litellm_setup import import_litellm
 
@@ -152,3 +153,37 @@ def test_a_row_the_installed_catalogue_already_has_is_left_alone(monkeypatch) ->
     litellm_setup._register_raven_model_rows(litellm)
 
     assert litellm.model_cost["deepseek/deepseek-flash"] is theirs
+
+
+def test_warm_up_in_background_imports_on_a_daemon_thread(monkeypatch) -> None:
+    """The boot paths call this so the first request that needs litellm does
+    not pay the import; the work happens off the calling thread."""
+    from raven.providers import litellm_setup
+
+    seen: list[str] = []
+    monkeypatch.setattr(litellm_setup, "import_litellm", lambda: seen.append(threading.current_thread().name))
+
+    thread = litellm_setup.warm_up_in_background()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert thread.daemon
+    assert seen == ["litellm-warmup"]
+
+
+def test_warm_up_in_background_swallows_an_import_failure(monkeypatch, caplog) -> None:
+    """A broken install must not take the boot thread down with it; the
+    on-demand import is what reports the failure to the caller that needs it."""
+    from raven.providers import litellm_setup
+
+    def broken() -> None:
+        raise ModuleNotFoundError("No module named 'litellm'")
+
+    monkeypatch.setattr(litellm_setup, "import_litellm", broken)
+
+    with caplog.at_level(logging.ERROR, logger="raven.providers.litellm_setup"):
+        thread = litellm_setup.warm_up_in_background()
+        thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert "warm-up failed" in caplog.text

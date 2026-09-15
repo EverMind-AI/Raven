@@ -31,6 +31,7 @@ from raven.cli._helpers import (
 )
 from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_resolving_provider
+from raven.providers.litellm_setup import warm_up_in_background
 from raven.utils import asyncio_runner as bounded_asyncio
 from raven.utils.workspace import sync_workspace_templates
 
@@ -476,6 +477,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
 
             with suppress(NotImplementedError, RuntimeError, ValueError):
                 asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, _on_term)
+            warm_up_in_background()
             health_server = None
             gw_teardown = None
             gw_scheduler = None
