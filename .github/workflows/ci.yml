@@ -119,10 +119,9 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        # Bytecode for site-packages is written here, once, instead of by each
-        # of the four xdist workers on first import into a fresh venv.
-        env:
-          UV_COMPILE_BYTECODE: "1"
+        # No UV_COMPILE_BYTECODE here: compiling the twenty thousand files of
+        # site-packages took this step from 3 s to 14 s and bought back 8 s of
+        # collection, measured over two runs of this workflow.
         run: uv sync --locked --all-extras --dev --python ${{ matrix.python }}
 
       # The four workers each compiled the checkout's 1900 modules on import;
