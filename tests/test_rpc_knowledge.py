@@ -43,11 +43,17 @@ class _FakeManager:
     def get_base(self, base_id: str):
         return next((b for b in self._bases if b.id == base_id), None)
 
-    async def create_base(self, *, name: str, description: str = ""):
+    async def create_base(self, *, name: str, description: str = "", embedding: bool = True):
         if self.create_raises is not None:
             raise self.create_raises
         made = _FakeBase(f"b{len(self._bases) + 1}", name)
         made.description = description
+        # An empty model is how a base with no vectors is recorded, which is
+        # what every reader tests for.
+        if not embedding:
+            made.embedding_model = ""
+            made.dimensions = 0
+        self.created_with_embedding = embedding
         self._bases.append(made)
         return made
 

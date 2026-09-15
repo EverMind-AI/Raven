@@ -45,7 +45,10 @@ export interface KbStatus {
 export interface KnowledgeSource {
   status(): Promise<KbStatus>
   bases(): Promise<KbBase[]>
-  create(name: string, description: string): Promise<KbBase>
+  /* ``embedding`` false makes a base that keeps its documents and is never
+     searched by vector. Not revisable: a collection's width is fixed when it
+     is made, so the choice belongs to creation or nowhere. */
+  create(name: string, description: string, embedding?: boolean): Promise<KbBase>
   remove(id: string): Promise<unknown>
   documents(baseId: string): Promise<KbDoc[]>
   /* Two calls behind one name: the bytes go up through `fs.upload`, which is

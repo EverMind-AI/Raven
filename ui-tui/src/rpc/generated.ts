@@ -4820,6 +4820,7 @@ export interface KnowledgeBasesListResult {
 export interface KnowledgeBasesCreateParams {
   name: string;
   description?: string;
+  embedding?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

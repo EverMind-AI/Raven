@@ -87,12 +87,12 @@ export async function load(): Promise<void> {
   }
 }
 
-export async function create(name: string, description = ''): Promise<void> {
+export async function create(name: string, description = '', embedding = true): Promise<void> {
   const trimmed = name.trim()
   if (!trimmed || state.busy) return
   set({ busy: true })
   try {
-    await source().create(trimmed, description)
+    await source().create(trimmed, description, embedding)
     await load()
   } catch (e) {
     /* Creating measures the model's width against the endpoint, so it reaches

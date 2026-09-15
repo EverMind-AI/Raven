@@ -5243,9 +5243,21 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    the right. The drill-down this replaced put a Back button between a reader
    and the base they were comparing against. Same split proportions as the
    settings model rail, because it is the same shape of question. */
+/* The knowledge page is a workspace, not a document: it fills the pane rather
+   than sitting as a fixed box in a column of content, which left a bordered
+   rectangle floating above a screen of nothing. Scoped to this page because
+   `.wrap` is every page's centred reading column, and the pages that really
+   are documents want to keep it. */
+#kbPage .work { overflow: hidden; }
+#kbPage .wrap {
+  max-width: none; height: 100%; min-height: 0;
+  display: flex; flex-direction: column; padding: 18px 22px 22px;
+}
 .kbsplit {
   display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 14px;
-  height: min(64vh, 620px); margin-top: 14px;
+  /* Fills what the pane gives it; the two panes inside do the scrolling, which
+     is why the page itself no longer needs to. */
+  flex: 1; min-height: 0;
   border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px;
 }
 .kbrail { overflow-y: auto; display: grid; gap: 2px; align-content: start;

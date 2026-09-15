@@ -131,7 +131,21 @@ class KnowledgeManager:
 
     # ── bases ─────────────────────────────────────────────────────
 
-    async def create_base(self, *, name: str, description: str = "") -> KnowledgeBaseRecord:
+    async def create_base(self, *, name: str, description: str = "", embedding: bool = True) -> KnowledgeBaseRecord:
+        """A new base, with or without vectors.
+
+        ``embedding=False`` is a base that keeps its documents and is never
+        searched by vector: no model, no width, and no collection to size. The
+        case is real -- a place to put files that the agent reads whole, or
+        that a person opens from the page -- and it is the one shape that must
+        not quietly acquire an index, because a base built with a model cannot
+        be un-built without a rebuild.
+
+        The absence is recorded as an empty model and a zero width, which is
+        what every reader here already tests for.
+        """
+        if not embedding:
+            return self._records.create_base(name=name, embedding_model="", dimensions=0, description=description)
         client = self._client()
         width = await self._width_of(client)
         record = self._records.create_base(
@@ -144,6 +158,16 @@ class KnowledgeManager:
         # is an edit, and a collection that followed it would strand its rows.
         await self._store.create_collection(record.id, width)
         return record
+
+    @staticmethod
+    def embeds(base: KnowledgeBaseRecord) -> bool:
+        """Whether this base has vectors at all.
+
+        One question, asked in one place: indexing, searching and the staleness
+        check each have to skip a base with no model, and three spellings of
+        "is the model empty" is how one of them ends up not skipping.
+        """
+        return bool(base.embedding_model)
 
     def list_bases(self) -> list[KnowledgeBaseRecord]:
         return self._records.list_bases()
@@ -263,6 +287,13 @@ class KnowledgeManager:
         if base is None:
             return self._records.set_status(document_id, "failed", error="its knowledge base is gone")
 
+        if not self.embeds(base):
+            # Stored, not indexed, and ready is the truth of it: the file is in
+            # the base and can be opened. Calling it failed would send a reader
+            # looking for a fault, and leaving it pending would promise an
+            # indexer that is never coming.
+            return self._records.set_status(document_id, "ready", chunk_count=0)
+
         self._records.set_status(document_id, "indexing")
         try:
             client = self._client()
@@ -314,6 +345,9 @@ class KnowledgeManager:
         refused rather than searched with it.
         """
         bases = [b for b in (self._records.get_base(i) for i in base_ids) if b is not None]
+        # Skipped rather than refused: asking a mixed set of bases is ordinary,
+        # and one with no vectors is not an error in the others.
+        bases = [b for b in bases if self.embeds(b)]
         if not bases or not query.strip():
             return []
         client = self._client()

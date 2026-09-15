@@ -6748,6 +6748,13 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "name": "embedding",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
         }
       ],
       "result": {

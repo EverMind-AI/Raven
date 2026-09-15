@@ -311,3 +311,63 @@ async def test_the_query_is_embedded_once_for_all_bases(manager) -> None:
 async def test_an_empty_query_searches_nothing(manager) -> None:
     base, _ = await _ready_base(manager)
     assert await manager.search([base.id], "   ") == []
+
+
+class TestABaseWithNoEmbeddingModel:
+    """A base that keeps its documents and is never searched by vector.
+
+    The case is real -- somewhere to put files the agent reads whole, or that a
+    person opens from the page -- and it has to reach no endpoint at all. It is
+    also not revisable: a collection's width is fixed when it is made, so a base
+    created without one is rebuilt rather than switched.
+    """
+
+    async def test_it_is_created_without_reaching_the_endpoint(self, manager) -> None:
+        base = await manager.create_base(name="files", embedding=False)
+
+        assert base.embedding_model == ""
+        assert base.dimensions == 0
+        # Nothing was embedded, so nothing was asked of the endpoint -- the
+        # width probe is the call this avoids.
+        assert manager.stub.calls == []
+
+    async def test_a_document_is_stored_and_not_indexed(self, manager) -> None:
+        """Ready, because the file is in the base and can be opened. Failed
+        would send a reader looking for a fault; pending would promise an
+        indexer that is never coming."""
+        base = await manager.create_base(name="files", embedding=False)
+        doc = manager.add_document(base.id, filename="notes.md", content=b"# hi\n")
+
+        indexed = await manager.index_document(doc.id)
+
+        assert indexed.status == "ready"
+        assert indexed.chunk_count == 0
+        assert manager.stub.calls == []
+        # And the bytes are still there to open.
+        assert manager.read_document(doc.id) == b"# hi\n"
+
+    async def test_it_is_skipped_rather_than_refused_by_a_search(self, manager) -> None:
+        """Asking a mixed set is ordinary, and a base with no vectors is not an
+        error in the others."""
+        plain = await manager.create_base(name="files", embedding=False)
+        vectored = await manager.create_base(name="handbook")
+        doc = manager.add_document(vectored.id, filename="handbook.md", content=b"onboarding is here\n")
+        await manager.index_document(doc.id)
+
+        hits = await manager.search([plain.id, vectored.id], "onboarding")
+
+        assert [h.chunk.source for h in hits] == ["handbook.md"]
+
+    async def test_searching_only_such_a_base_answers_nothing(self, manager) -> None:
+        plain = await manager.create_base(name="files", embedding=False)
+
+        assert await manager.search([plain.id], "anything") == []
+
+    async def test_the_question_has_one_answer(self, manager) -> None:
+        """Three readers skip these bases; three spellings of "is the model
+        empty" is how one of them ends up not skipping."""
+        plain = await manager.create_base(name="files", embedding=False)
+        vectored = await manager.create_base(name="handbook")
+
+        assert manager.embeds(plain) is False
+        assert manager.embeds(vectored) is True
