@@ -729,7 +729,11 @@ def main() -> None:
                 file=sys.stderr,
                 flush=True,
             )
-            if MODE == "no_models":
+            if MODE == "refuse_restore" and params.get("value") == "stub:model-a":
+                # Takes a switch and refuses the way back, which is the shape a
+                # host has to survive: it moved the session and cannot unmove it.
+                err(request_id, -32011, "will not switch back to 'stub:model-a'")
+            elif MODE == "no_models":
                 err(request_id, -32602, "unknown configuration option 'model'")
             elif params.get("configId") != "model":
                 err(request_id, -32602, f"unknown configuration option {params.get('configId')!r}")

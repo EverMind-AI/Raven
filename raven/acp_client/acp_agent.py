@@ -1617,6 +1617,7 @@ class AcpAgentBackend:
                 model,
                 exc.message,
             )
+            return
         except AcpError as exc:
             logger.warning(
                 "acp agent {!r}: could not set model {!r} on session {} ({}); running on its default",
@@ -1626,8 +1627,12 @@ class AcpAgentBackend:
                 exc,
             )
             return
-        # Recorded only once the agent has taken it, so a refused switch does not
-        # leave this host believing it moved a session it did not.
+        # Reached only when the agent took it, which both refusal arms above
+        # return before. That is what keeps this record true in either
+        # direction: a refused switch must not leave this host believing it
+        # moved a session it did not, and a refused restore must not erase the
+        # note that it DID -- without which every later turn with no override
+        # returns early and the session is never brought back at all.
         if model:
             self._model_pushed[session_id] = target
         else:

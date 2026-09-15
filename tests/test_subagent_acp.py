@@ -4011,6 +4011,65 @@ async def test_clearing_a_model_puts_the_session_back_on_the_agents_own(tmp_path
     assert frames[-1].endswith("model=stub:model-a"), f"the restore, got {frames!r}"
 
 
+async def test_a_refused_restore_is_retried_rather_than_recorded_as_done(tmp_path: Path) -> None:
+    """A refusal must leave this host's record of the session untouched.
+
+    Forgetting the switch on a refused clear is the worst of both: the session
+    stays on the override, nothing is left saying so, and every later turn with
+    no override returns early -- so it is never retried and the control and the
+    session disagree for good.
+    """
+    cfg = stub_config("refuser", mode="refuse_restore")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="refuser",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("refuser", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    key = {"workspace": tmp_path, "executor": None, "session_key": "s", "instance": "h1"}
+
+    await backend.run("ping", task_id="t1", session_model="stub:model-b", **key)
+    # The clear: the agent refuses to go back.
+    await backend.run("ping", task_id="t2", **key)
+    # And a third turn, still with no override, must try again rather than give up.
+    await backend.run("ping", task_id="t3", **key)
+
+    connection = await get_pool().acquire(
+        name="refuser", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    restores = [ln for ln in connection.client.stderr_tail(6000).splitlines() if "model=stub:model-a" in ln]
+    assert len(restores) == 2, f"the refused restore must be retried, saw {len(restores)}"
+
+
+async def test_a_refused_switch_is_not_recorded_as_a_move(tmp_path: Path) -> None:
+    """The mirror: a set the agent would not take must not leave this host
+    believing it moved the session, or a later clear sends a restore to undo
+    something that never happened."""
+    cfg = stub_config("norefuse", mode="no_models")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="norefuse",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("norefuse", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    key = {"workspace": tmp_path, "executor": None, "session_key": "s", "instance": "h1"}
+
+    await backend.run("ping", task_id="t1", session_model="stub:model-b", **key)
+    await backend.run("ping", task_id="t2", **key)
+
+    connection = await get_pool().acquire(
+        name="norefuse", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(6000).splitlines() if "set_config_option" in ln]
+    assert not any("model=stub:model-a" in ln for ln in frames), (
+        f"nothing was moved, so nothing may be restored; saw {frames!r}"
+    )
+
+
 async def test_an_untouched_session_is_never_reset(tmp_path: Path) -> None:
     """Restoring is for undoing this host's own move. A session it never touched
     is already on the agent's choice, and a frame saying so is a round trip on
