@@ -176,7 +176,10 @@ def _render(source: Path, target: Path, timeout_s: float) -> None:
     executable = find_soffice()
     if executable is None:
         raise PdfPreviewUnavailableError(
-            "LibreOffice is not installed on the gateway host, so a deck cannot be shown as a PDF. "
+            # Named for what the reader asked to see, not for the first
+            # caller this had: a spreadsheet reported as a deck reads like
+            # the wrong file was opened.
+            f"LibreOffice is not installed on the gateway host, so {source.name} cannot be shown. "
             "Install it with: " + office.install_hint()
         )
     root = cache_dir()
@@ -191,7 +194,7 @@ def _render(source: Path, target: Path, timeout_s: float) -> None:
             done = office.to_pdf(source, staged, executable=executable, timeout_s=timeout_s, profile_root=scratch)
         except TimeoutError as exc:
             raise PdfPreviewTimeoutError(
-                f"LibreOffice took longer than {timeout_s:g}s to render the deck and was stopped"
+                f"LibreOffice took longer than {timeout_s:g}s to render {source.name} and was stopped"
             ) from exc
         except FileNotFoundError as exc:
             raise PdfPreviewUnavailableError(

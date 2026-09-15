@@ -144,6 +144,38 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /etc/nginx/sites-enabled/default
 
+# LibreOffice, because the page cannot draw a .docx, .xlsx or .pptx and the
+# gateway converts those to PDF to show them (raven/rpc/pdf_preview.py through
+# raven/utils/office.py). Without it every office file in a knowledge base --
+# and every deck -- answers the viewer with "LibreOffice is not installed",
+# which is a hosted image telling its user to go and install something on it.
+#
+# The three app packages rather than the `libreoffice` metapackage: the filters
+# for Writer, Calc and Impress formats are what a conversion needs, and the
+# metapackage adds Base, Draw, Math and a JRE that no conversion here opens.
+# --no-install-recommends holds that line.
+#
+# Fonts are not optional decoration. A slim image ships none, and LibreOffice
+# renders every glyph it cannot find as a box -- so a Chinese document, which
+# this project expects, would convert to a PDF of tofu. Noto CJK covers those
+# and DejaVu the Latin text beside them.
+#
+# It is the largest thing in this image (roughly 500 MB with the fonts). Build
+# with --build-arg RAVEN_OFFICE=0 for a deployment that will never preview an
+# office file; the viewer then says what is missing and how to add it, which is
+# the same message a host without it gives today.
+ARG RAVEN_OFFICE=1
+RUN if [ "${RAVEN_OFFICE}" = "1" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            fonts-dejavu-core \
+            fonts-noto-cjk \
+            libreoffice-calc \
+            libreoffice-impress \
+            libreoffice-writer \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # /data is the single persistence root: HOME and RAVEN_HOME both point into it,
 # so config.json, the workspace, sessions, logs and the memory store land under
 # one mountable volume.
