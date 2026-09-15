@@ -34,6 +34,7 @@
         "enabled": true,
         "thinkClosingTagRequired": false,
         "maxIterations": 20,
+        "wallClockSeconds": 3600,
         "budgetNote": {
           "enabled": true,
           "warnRatio": 0.3

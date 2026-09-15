@@ -286,6 +286,30 @@ class AskUserConfig(_Base):
     brief: bool = False
 
 
+class DeadEndRetryConfig(_Base):
+    """Run a turn again, from the original question, when the first try answered nothing.
+
+    On by class default, which nothing else here is without a measurement behind it.
+    The reason is structural rather than optimistic: a dead turn has no answer to
+    damage, and "no answer" scores as wrong, so the count of right answers among the
+    turns this fires on starts at zero and a second attempt can only raise it. What a
+    measurement normally buys is the ratio of benefit to risk, and the risk term here
+    is zero.
+
+    It re-runs rather than salvages. Squeezing an answer out of the failed attempt was
+    measured on 25 real duds: 23 produced content, none hit the right answer, all
+    confidently wrong. That converts a detectable zero into an undetectable one and
+    empties this trigger at the same time.
+
+    ``reasons`` narrows the trigger to dead ends whose reason starts with one of these
+    prefixes; empty means every one of them.
+    """
+
+    enabled: bool = True
+    max_retries: int = 1
+    reasons: tuple[str, ...] = ()
+
+
 # Two rejection classes, both denylists (an invented label passes). First the
 # base label of a superseded build: suffixed variants are legitimate - they name
 # a profile, not a semantics - so only the base is checked here.
@@ -504,6 +528,17 @@ class FlowConfig(_Base):
     enabled: bool = False
     version: str = "dr@3.7"
     max_iterations: int | None = None
+    wall_clock_seconds: float | None = None
+    """How long one turn may run, checked between iterations; ``None`` is unbounded.
+
+    Between iterations and never mid-generation, so a deadline can overrun by at most
+    one iteration. Cancelling a call in flight would discard a finished generation and
+    leave the turn with no answer at all, which is a worse outcome than finishing late,
+    and a deadline landing between a tool result and the model reading it leaves a
+    trajectory nothing can interpret. The turn ends through the same wrap-up path as the
+    iteration cap, so a spent budget never produces a silent turn.
+    """
+    dead_end_retry: DeadEndRetryConfig = Field(default_factory=DeadEndRetryConfig)
     context_window_tokens: int | None = None
     think_closing_tag_required: bool = True
     prompt_section_override: str | None = None

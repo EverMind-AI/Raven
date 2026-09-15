@@ -236,6 +236,12 @@ TWIN_DRFLOW_EXCEPTIONS = {
 #: must be PRESENT in the trunk slice and ABSENT from the fork's, so an entry cannot
 #: outlive the divergence: when the fork gains the knob, the row moves to the table above.
 TWIN_DRFLOW_PRODUCT_ONLY = {
+    "wallClockSeconds": (
+        "the product path had no clock of any kind: a turn could only be ended by the "
+        "iteration cap, and a research turn that kept finding leads ran until it hit one. "
+        "The fork bounded its runs from outside, in the harness that launched them, so it "
+        "never needed the knob and its schema would refuse the key"
+    ),
     "plainFirst": (
         "medium and high answer settled general knowledge without a research round: "
         "web tools withheld for the first model call, the plain draft judged, anything "

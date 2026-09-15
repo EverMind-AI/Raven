@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.hook.composite import CompositeHook
+from raven.agent.loop import TURN_BUDGETS_KEY
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from research_flow.config import FlowConfig
 from research_flow.gates.ask_user import (
@@ -219,6 +220,15 @@ class TurnFrame(AgentHook):
         set_first_turn(False)
         set_plain_turn(False)
         set_prior_sources(())
+        # The bounds this product asks the loop to run the turn under. Data rather
+        # than config the loop reads: the loop serves every agent and must not know
+        # any of them, so an agent that leaves this key alone is bounded exactly as
+        # it was before the key existed.
+        ctx.metadata[TURN_BUDGETS_KEY] = {
+            "wall_clock_seconds": self._cfg.wall_clock_seconds,
+            "dead_end_retries": self._cfg.dead_end_retry.max_retries if self._cfg.dead_end_retry.enabled else 0,
+            "dead_end_reasons": list(self._cfg.dead_end_retry.reasons),
+        }
         ctx.metadata.pop(_TURN_MODE_KEY, None)
         text = ctx.inbound_content or ""
         ctx.metadata[_USER_TEXT_KEY] = text

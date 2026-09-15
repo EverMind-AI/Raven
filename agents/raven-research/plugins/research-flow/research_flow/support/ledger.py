@@ -111,7 +111,14 @@ def open_product_ledger(token: str) -> str | None:
     Failure is degradation, never an exception: an unwritable directory leaves the
     ledger off and the appendix reports ``ledger_not_configured`` as before. An
     appendix is a nicety; the answer is not.
+
+    Opening twice in one context releases the earlier file rather than stranding it.
+    The turn boundary this is called on is the loop's first iteration, and a turn the
+    loop re-runs reaches that boundary again; without the release, the first file is
+    unreachable from the ContextVar that the matching close reads, so it would survive
+    every close and accumulate against the one-file-per-turn contract above.
     """
+    close_product_ledger()
     if _ledger_dir is None:
         _product_path.set(None)
         return None
