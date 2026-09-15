@@ -295,6 +295,7 @@ def configure_embedding_env(embedding: Any) -> bool:
     )
     os.environ.update(env)
     _BOUND_HERE.update(env)
+    os.environ[PROVENANCE_ENV] = ",".join(sorted(_BOUND_HERE))
     return bool(env)
 
 
@@ -363,8 +364,18 @@ _EMBEDDING_ENV_KEYS = (
     "EVEROS_EMBEDDING__API_KEY",
 )
 
-_BOUND_HERE: set[str] = set()
-"""Which of those variables this process set itself.
+PROVENANCE_ENV = "RAVEN_EVEROS_EMBEDDING_BOUND"
+"""Where the provenance below is kept so it outlives this module object.
+
+``raven gateway --restart`` re-launches through ``os.execv``, which keeps the
+environment and builds a new interpreter: the values survive and a set built at
+import does not. A restarted gateway then read its own binding as somebody
+else's export -- blank settings card, refused save, and no second bind -- for
+the rest of its life. Provenance has to travel with the thing it describes.
+"""
+
+_BOUND_HERE: set[str] = {k for k in os.environ.get(PROVENANCE_ENV, "").split(",") if k}
+"""Which of those variables this process, or the one it replaced, set itself.
 
 Provenance, not a cache. ``configure_embedding_env`` puts the host's endpoint
 into ``os.environ`` so the in-process EverOS imports and every child see it --
