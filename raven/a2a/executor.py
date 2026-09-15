@@ -10,7 +10,7 @@ trust domain. So a raised turn puts a fixed sentence on the wire and the real
 cause in this host's log -- never the traceback, never the exception's own
 message.
 
-A turn that asks a question does not suspend either: ``self._run_turn(...)``
+A turn that asks a question does not suspend either: ``self._turn_runner(...)``
 stays a live coroutine awaiting a future inside its task's ``A2aQuestionBroker``,
 while the SDK's own producer/consumer split already runs ``execute`` in the
 background and lets ``on_message_send`` return as soon as it sees the resulting
@@ -56,7 +56,7 @@ class RavenAgentExecutor(AgentExecutor):
     """
 
     def __init__(self, run_turn: RunTurn) -> None:
-        self._run_turn = run_turn
+        self._turn_runner = run_turn
         # ONE broker for every task, not one per task. `AskUserTool`'s broker is a
         # per-process slot (raven/agent/tools/ask_user.py) that the turn path
         # installs into, so a per-task broker is overwritten by the next task to
@@ -103,7 +103,7 @@ class RavenAgentExecutor(AgentExecutor):
         self._conversation_ids[context.task_id] = conversation_id
         self._turns[conversation_id] = (context, event_queue)
         try:
-            answer = await self._run_turn(prompt, conversation_id=conversation_id, broker=self._broker)
+            answer = await self._turn_runner(prompt, conversation_id=conversation_id, broker=self._broker)
         except Exception:
             logger.opt(exception=True).error("a2a turn failed for task {}", context.task_id)
             await event_queue.enqueue_event(self._status(context, "failed", TURN_FAILED_MESSAGE))
