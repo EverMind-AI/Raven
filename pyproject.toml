@@ -287,12 +287,17 @@ DEP001 = ["raven_everos", "requests", "cryptography"]
 DEP003 = ["raven_everos", "requests", "cryptography"]
 
 [tool.ty]
-# A call-correctness gate, not a typing-strictness project. The rules left on
-# are the ones this tree already satisfies: 124 of ty's 133, measured at zero
-# or cleared to zero in the change that added this block. They answer "is this
+# A call-correctness gate, not a typing-strictness project. Of ty's 133 rules,
+# 108 are live here and this tree satisfies all of them -- measured at zero, or
+# cleared to zero in the change that added this block. They answer "is this
 # call, override or annotation self-consistent" -- the class of error a test
 # only finds by executing the line, which is exactly what a bundled plugin's
 # render path or a rarely-taken CLI branch does not do in CI.
+#
+# The other 25: eleven switched off below, and fourteen that ship disabled
+# upstream and are left that way (the `unsound-*` family, `division-by-zero`,
+# the `possibly-*` family and friends). Those fourteen are unmeasured, not
+# satisfied -- turning any of them on is its own sized change.
 #
 # The nine below are switched off with their measured backlog, not because they
 # are wrong. Each is a separate piece of work; the number is the count on the
