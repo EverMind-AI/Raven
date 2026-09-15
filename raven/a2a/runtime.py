@@ -32,7 +32,7 @@ from a2a.types import (
     SendMessageRequest,
     SubscribeToTaskRequest,
 )
-from a2a.utils.errors import InvalidParamsError
+from a2a.utils.errors import InvalidParamsError, InvalidRequestError
 from aiohttp import web
 from google.protobuf.json_format import ParseDict
 from google.protobuf.message import Message as ProtoMessage
@@ -111,6 +111,17 @@ class _RequestHandlerAdapter:
             executor = self._handler.agent_executor
             if executor.answer(task_id, get_message_text(request.message)):
                 return await self._handler.on_get_task(GetTaskRequest(id=task_id), ServerCallContext())
+            # Named a task whose turn is still running, but nothing is parked on a
+            # question. The SDK refuses only TERMINAL tasks, so handing this on
+            # would start a SECOND raven turn for one task id -- against the spec's
+            # "one A2A task maps to one raven turn", and with the two turns'
+            # bookkeeping overwriting each other. Refuse instead. Reachable in
+            # ordinary use on the gateway-mounted hosting, where no question ever
+            # parks (see `make_run_turn_from_factory`), so every resume lands here.
+            if executor.is_running(task_id):
+                raise InvalidRequestError(
+                    message="that task is still running and is not waiting for input; wait for it to finish"
+                )
         return await self._handler.on_message_send(request, ServerCallContext())
 
     async def on_message_send_stream(self, params: Any, _context: Any) -> AsyncGenerator[Any, None]:
