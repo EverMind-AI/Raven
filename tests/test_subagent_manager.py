@@ -2536,6 +2536,49 @@ class TestTraceSourceWiring:
 
         assert backend.events == ["start", "store[liv/coder]", "recall[liv]", "recall[coder]", "stop"], backend.events
 
+    async def test_an_install_without_the_memory_plugin_records_nothing(self, tmp_path: Path, monkeypatch) -> None:
+        """No memory plugin is an ordinary install, not an error. The record
+        path must stop before the prime rather than hand `None` onward."""
+        primed: list[str] = []
+
+        async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
+            primed.append(session_id)
+            return True
+
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[
+                ThirdPartyAcpSubagentConfig(
+                    name="Coder",
+                    command="hermes acp",
+                    memory={"userId": "liv", "agentId": "coder", "source": "trace"},
+                )
+            ],
+        )
+        with (
+            patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            patch("raven.agent.subagent.manager.SubagentManager._memory_backend", lambda self: None),
+        ):
+            await _run_one_spawn(manager, agent="Coder", prompt="read it", reply="no readme")
+            await _drain_record_tasks(manager)
+
+        assert primed == []
+
+    async def test_a_backend_the_factory_cannot_build_is_no_backend(self, tmp_path: Path, monkeypatch) -> None:
+        """A record is written after the call it describes has answered, so a
+        factory that raises must read as "no record" rather than reach the run."""
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[ThirdPartyAcpSubagentConfig(name="Coder", command="hermes acp", memory={"agentId": "coder"})],
+        )
+        with patch(
+            "raven.core.plugin_stack.maybe_build_memory_backend",
+            side_effect=RuntimeError("the plugin is not installed"),
+        ):
+            assert manager._memory_backend() is None
+
     async def test_a_direct_chat_primes_with_prompt_and_answer(self, tmp_path: Path, monkeypatch) -> None:
         """The `chat()` lane reaches `prime_from_turn` through its own `finally`
         block, not `_run_subagent_inner`'s the spawn lane above exercises -- so

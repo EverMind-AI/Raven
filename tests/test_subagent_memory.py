@@ -566,3 +566,108 @@ class TestMonotonic:
         turn = [{"role": "user", "content": "a"}]
 
         assert subagent_memory_mod._monotonic(turn) == turn
+
+
+class TestStartedBackend:
+    """The record path owns the backend's lifecycle, and survives it failing.
+
+    A record is an audit trail written after the call it describes has already
+    answered, so nothing here may reach the caller as an exception -- but a
+    backend that never started must also not be written to, and one that was
+    started must be stopped whatever the record did.
+    """
+
+    async def test_no_backend_yields_nothing_to_write_to(self) -> None:
+        async with subagent_memory_mod.started_backend(None, label="test") as backend:
+            assert backend is None
+
+    async def test_a_backend_that_will_not_start_is_never_written_to(self) -> None:
+        events: list[str] = []
+
+        class _WontStart:
+            async def start(self) -> None:
+                events.append("start")
+                raise RuntimeError("no service")
+
+            async def stop(self) -> None:
+                events.append("stop")
+
+        async with subagent_memory_mod.started_backend(_WontStart(), label="test") as backend:
+            assert backend is None, "a failed start must not hand the caller a backend"
+
+        # Not stopped: nothing was opened, and a `stop` after a failed `start`
+        # is the one call an adapter is least likely to have made safe.
+        assert events == ["start"]
+
+    async def test_a_failing_stop_does_not_lose_the_record(self) -> None:
+        did_the_work = False
+
+        class _WontStop:
+            async def start(self) -> None:
+                return None
+
+            async def stop(self) -> None:
+                raise RuntimeError("socket already gone")
+
+        async with subagent_memory_mod.started_backend(_WontStop(), label="test") as backend:
+            assert backend is not None
+            did_the_work = True
+
+        assert did_the_work
+
+
+class TestRecordFailureModes:
+    """A prime or a poll that fails is a status in the record, never a raise."""
+
+    async def test_a_prime_that_raises_records_unavailable_without_polling(self) -> None:
+        backend = _FakeBackend()
+        backend.rows["user_id"] = [_memory("something extracted")]
+        written, write = _sink()
+
+        async def _prime(_session_id: str) -> bool:
+            raise RuntimeError("everos refused the handover")
+
+        await record_memories(
+            agent="Coder",
+            backend=backend,
+            scope=_scope(source="trace"),
+            resolve_session_id=_key,
+            write=write,
+            prime=_prime,
+        )
+
+        record = json.loads(written[0])
+        assert record["status"] == "unavailable"
+        assert record["memories"] == []
+        # Nothing landed, so nothing can have been extracted: spending the
+        # budget confirming an absence already known is the bug this guards.
+        assert backend.reads == []
+
+    async def test_a_poll_that_raises_records_unavailable(self) -> None:
+        backend = _FakeBackend()
+        backend.raises = RuntimeError("connection refused")
+        written, write = _sink()
+
+        await record_memories(
+            agent="Coder",
+            backend=backend,
+            scope=_scope(),
+            resolve_session_id=_key,
+            write=write,
+            budget_s=0.0,
+        )
+
+        record = json.loads(written[0])
+        assert record["status"] == "unavailable"
+        assert record["memories"] == []
+
+
+class TestAsMsEpoch:
+    """Timestamps arrive in whatever shape the turn log wrote them."""
+
+    def test_an_unparseable_string_is_no_timestamp_rather_than_a_raise(self) -> None:
+        assert subagent_memory_mod._as_ms_epoch("last tuesday") is None
+
+    def test_a_shape_with_no_clock_in_it_is_no_timestamp(self) -> None:
+        assert subagent_memory_mod._as_ms_epoch({"when": 1}) is None
+        assert subagent_memory_mod._as_ms_epoch(None) is None
