@@ -121,6 +121,14 @@ All notable changes to Raven are documented here.
   ledger (plus what it submitted itself), and `ops_declare` refuses a
   `remote_dir` a live sibling campaign is still writing rounds into.
 
+- `exec` on this computer refuses a typed `ssh` to a machine the connection
+  registry knows, and names the two paths that exist for it: `machine=<id>`
+  for a look (capped at 60 s, nothing left running) and the on-call agent's
+  `ops_submit` for anything longer. Two field runs on 2026-09-14 had put the
+  machine's address in the task statement, and the coding nodes started GPU
+  work over raw ssh from the local shell 58 times, past the cap, the sweep
+  and the ledger. `scp` and `rsync` to the machine are untouched; a registry
+  that cannot be read refuses nothing.
 - The web file viewer opens a sub-agent's report again. `/file` anchored the
   state-directory fence on the session's working directory whenever the page
   named a session, so the fence exempted `~/.raven/tmp/<channel>` and refused

@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import re
 import shlex
+from pathlib import PurePosixPath
 from typing import Any
 
 # Long enough to tail a large log or hash a directory; far short of any solver
@@ -94,6 +95,166 @@ def machines_registered() -> bool:
         return bool(load())
     except Exception:  # noqa: BLE001 -- a malformed registry must leave the plain shell working
         return False
+
+
+# Values ssh takes as a separate word, so the destination is not confused with
+# one of them. Only the flags that can precede a destination are listed.
+# What punctuation_chars hands back as its own token, split by what the token
+# does to the command. A separator ends it, so the words after one belong to the
+# next command and not to this ssh.
+_COMMAND_SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
+
+# A redirection does not end the command: `ssh 2>/dev/null -p 58717 root@host`
+# is a single ssh. Reading one as a terminator -- or, worse, reading `&>` as a
+# word and taking it for the destination -- lost the registered host that came
+# after it (reviewed 2026-09-20). The operator and the file it names are
+# stepped over instead, and this ssh's own words keep being read.
+_REDIRECTIONS = frozenset({"<", ">", ">>", "<<", "<<<", "<&", ">&", "&>", "&>>", ">|", "<>"})
+
+# An -o option's name and its value are separated by an equals sign or by
+# whitespace; OpenSSH honours both spellings.
+_OPTION_SPLIT = re.compile(r"\s*=\s*|\s+")
+
+_SSH_VALUE_FLAGS = frozenset("bcDEeFIiJLlmOoQRSWw")
+
+
+def _ssh_destinations(command: str) -> list[tuple[str, int]]:
+    """Every host and port an ``ssh`` word in a shell command would connect to.
+
+    Empty when no token runs the ssh client, or when the line cannot be
+    tokenised at all. Every ssh in the line is collected, not the first: a
+    compound line reaches each of its commands, so stopping at one destination
+    lets ``ssh <unregistered>; ssh <registered>`` through on the strength of
+    the half that was allowed.
+
+    Tokenised with ``punctuation_chars`` so that unspaced operators separate
+    words the way a shell reads them -- ``true&&ssh`` is two commands, and
+    plain splitting hands back one token that is neither.
+
+    The executable may be written ``ssh``, ``/usr/bin/ssh`` or ``\\ssh`` (a
+    backslash suppresses alias lookup and still runs the client), and all three
+    reach the far side.
+
+    The port is read from ``-p`` and from an ``-o`` port option in either of the
+    spellings OpenSSH honours -- ``-o Port=58717`` and ``-o "Port 58717"`` --
+    because the registry holds several machines at one address on different
+    ports: the address alone picks whichever row is listed first and names the
+    wrong machine.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        # An unbalanced quote is not a shell line this can read; the shell will
+        # reject it too, so nothing reaches a machine either way.
+        return []
+
+    found: list[tuple[str, int]] = []
+    index = 0
+    while index < len(tokens):
+        if PurePosixPath(tokens[index].lstrip("\\")).name != "ssh":
+            index += 1
+            continue
+        index += 1
+        port = 22
+        destination: str | None = None
+        while index < len(tokens):
+            word = tokens[index]
+            if word in _COMMAND_SEPARATORS or PurePosixPath(word.lstrip("\\")).name == "ssh":
+                # The command ended, or the next one began; either way this
+                # ssh's arguments are over and the token is left for the outer
+                # loop to read.
+                break
+            following = tokens[index + 1] if index + 1 < len(tokens) else None
+            if word in _REDIRECTIONS:
+                # The operator and the file it names; the file is skipped only
+                # when there is one, so a redirection left dangling before a
+                # separator does not swallow the separator.
+                index += 1
+                if following is not None and following not in _COMMAND_SEPARATORS and following not in _REDIRECTIONS:
+                    index += 1
+                continue
+            if word.isdigit() and following in _REDIRECTIONS:
+                # `2>&1` arrives as the three tokens 2, >& and 1, so a bare file
+                # descriptor can stand in front of the operator. Without this
+                # the digit was taken for the destination and the real host,
+                # further along the line, was never read. The tokens do not say
+                # whether a space separated the digit from the operator, so a
+                # destination that is itself a bare integer is read as a
+                # descriptor here -- a shape no registry row has, since an
+                # address carries dots or letters.
+                index += 1
+                continue
+            index += 1
+            if destination is not None:
+                continue
+            if word.startswith("-") and len(word) > 1:
+                value = ""
+                if word.startswith("-p") or word.startswith("-o"):
+                    value = word[2:]
+                    if not value and index < len(tokens):
+                        value = tokens[index]
+                        index += 1
+                    if word.startswith("-o"):
+                        # `ssh -G` prints `port 58717` for -o Port=58717 and for
+                        # -o "Port 58717" alike. Splitting only on the equals
+                        # sign dropped the spaced spelling's value and left the
+                        # port at 22, so a machine registered on another port
+                        # went unrecognised (reviewed 2026-09-20).
+                        pair = _OPTION_SPLIT.split(value.strip(), maxsplit=1)
+                        value = pair[1].strip() if len(pair) == 2 and pair[0].lower() == "port" else ""
+                    if value.isdigit():
+                        port = int(value)
+                elif len(word) == 2 and word[1] in _SSH_VALUE_FLAGS:
+                    index += 1
+                continue
+            destination = word.rsplit("@", 1)[-1].strip("[]").lower()
+        if destination:
+            found.append((destination, port))
+    return found
+
+
+def raw_ssh_target(command: str) -> dict[str, Any] | None:
+    """The registered machine a plain-shell command reaches over its own ssh.
+
+    ``None`` when the command runs no ssh client, or names a destination the
+    registry does not know, or the registry cannot be read: the plain shell
+    keeps working for everything that is not the bypass this looks for.
+
+    Host and port are both matched, and the host as a whole word rather than a
+    substring -- ``203.0.113.70`` is not ``203.0.113.7``, and a machine the
+    registry does not hold must still be reachable from here.
+
+    The bypass is measured, not hypothetical. Two field runs on 2026-09-14
+    put the machine's address in the task statement, and the coding nodes
+    typed ``ssh -p <port> root@<ip> '... &'`` from the local shell 58 times to
+    start GPU work: the look here is capped at 60 s and on-call's job runner
+    was not theirs to call, so the address was the path of least resistance,
+    and the ledger never saw the runs. Only ssh is matched -- ``scp`` and
+    ``rsync`` move files and start nothing on the far side.
+    """
+    destinations = _ssh_destinations(command)
+    if not destinations:
+        return None
+    try:
+        from raven.ops.connections import load
+
+        rows = load()
+    except Exception:  # noqa: BLE001 -- a malformed registry must leave the plain shell working
+        return None
+    for host, port in destinations:
+        for row in rows:
+            row_host = str(row.get("host") or "").strip().lower()
+            if not row_host or row_host != host:
+                continue
+            try:
+                row_port = int(row.get("port") or 22)
+            except (TypeError, ValueError):
+                row_port = 22
+            if row_port == port:
+                return row
+    return None
 
 
 def _runner_for_connection(conn_id: str, *, cap_seconds: float | None = None):
