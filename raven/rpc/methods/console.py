@@ -1013,8 +1013,27 @@ _EVEROS_FIELDS = ("model", "api_key", "base_url", "provider")
 _EVEROS_REQUIRED = ("llm", "embedding")
 
 
+def _everos_config_module():
+    """The plugin's config module, or a typed error naming what to install.
+
+    The module ships with the ``everos-memory`` distribution, so on an install
+    without it the import raises ``ModuleNotFoundError`` -- which reaches the
+    client as a generic internal error with a traceback, saying nothing a
+    person can act on. Both handlers below go through here so the absence is
+    reported once, in the words every other surface uses for it.
+    """
+    try:
+        import raven_everos.config as module
+    except ImportError as exc:
+        from raven.core.plugin_stack import everos_plugin_missing_note
+
+        raise ConfigValidationError(everos_plugin_missing_note()) from exc
+    return module
+
+
 async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
     """Current EverOS model sections, api_key reduced to a set/unset flag."""
+    _everos_config_module()
     from raven_everos.config import (
         WRITABLE_SECTIONS,
         get_everos_config_path,
@@ -1040,6 +1059,7 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
 
 async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     """Merge fields into one EverOS section, or clear an optional section."""
+    _everos_config_module()
     from raven_everos.config import (
         WRITABLE_SECTIONS,
         clear_everos_section,
