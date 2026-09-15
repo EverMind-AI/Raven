@@ -39,6 +39,9 @@ _needs_render = pytest.mark.skipif(
     not (_CAPS.can_convert and _CAPS.can_rasterise),
     reason=f"needs LibreOffice and a PDF rasteriser: {_CAPS.explain()}",
 )
+# Every route here converts through a real LibreOffice process and rasterises
+# the result; the seconds are the tool's, and the tests exist to prove that chain.
+pytestmark = pytest.mark.slow
 
 pytest.importorskip("pptx")
 pytest.importorskip("fitz")

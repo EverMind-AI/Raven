@@ -17,6 +17,7 @@ records propagating to root, so they still reach the log file sink.
 import logging
 import os
 import sys
+import threading
 
 # litellm attaches its stderr handler to all three (litellm/_logging.py).
 _LITELLM_LOGGERS = ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy")
@@ -127,3 +128,24 @@ def import_litellm():
     _detach_tty_handlers(loggers)
 
     return litellm
+
+
+def warm_up_in_background() -> threading.Thread:
+    """Start the litellm import on a daemon thread and return it.
+
+    Every raven import of litellm is deferred, so the first request that needs
+    it pays the import inline: saving a key from the settings page waited 3 to
+    5 s on it. A serving process calls this once at boot. A failure is logged
+    and left alone; the on-demand import reports it to the caller that needs
+    litellm.
+    """
+
+    def warm() -> None:
+        try:
+            import_litellm()
+        except Exception:
+            logging.getLogger(__name__).exception("litellm warm-up failed; the on-demand import will report it")
+
+    thread = threading.Thread(target=warm, name="litellm-warmup", daemon=True)
+    thread.start()
+    return thread
