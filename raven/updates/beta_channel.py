@@ -28,6 +28,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
+from raven.home import raven_home
 from raven.updates.upgrade import ReleaseInfo, UpgradeError
 
 _STATE_NAME = "beta.json"
@@ -74,8 +75,6 @@ def release_key(value: str) -> tuple[int, int, int, int, int]:
 
 
 def _state_path() -> Path:
-    from raven.config.loader import raven_home
-
     return raven_home() / _STATE_NAME
 
 
