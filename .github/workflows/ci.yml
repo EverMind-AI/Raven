@@ -119,7 +119,18 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
+        # Bytecode for site-packages is written here, once, instead of by each
+        # of the four xdist workers on first import into a fresh venv.
+        env:
+          UV_COMPILE_BYTECODE: "1"
         run: uv sync --locked --all-extras --dev --python ${{ matrix.python }}
+
+      # The four workers each compiled the checkout's 1900 modules on import;
+      # one pass here writes the .pyc once. Measured on a laptop: 25 s of a 40 s
+      # cold collection was compilation, 10 s of it in modules this step covers
+      # (pytest rewrites test files through its own cache, which it does not).
+      - name: Compile the checkout to bytecode
+        run: uv run --frozen --no-sync --python ${{ matrix.python }} python -m compileall -q -j 0 raven tests plugins-dist agents evolver
 
       # Stdlib only. The dedicated gate is the `page` job below; this step
       # keeps the build honest inside the test matrix too, because
@@ -137,7 +148,11 @@ jobs:
         # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
         # set, and the highlighter then splits option names with escape codes, so
         # `"--flag" in result.stdout` assertions fail only on CI.
-        run: make coverage-shard COVERAGE_SHARD=${{ matrix.shard }}
+        # The idle ceiling fails the shard here and only here: a test that waits
+        # out a production sleep waits the same seconds on every machine, so the
+        # verdict is portable; the flag stays off addopts because the Windows
+        # job runs pytest with --noconftest, where the option does not exist.
+        run: make coverage-shard COVERAGE_SHARD=${{ matrix.shard }} PYTEST_ARGS=--idle-ceiling-strict
 
       - name: Name the data file after the shard
         run: mv .coverage .coverage.shard-${{ strategy.job-index }}
