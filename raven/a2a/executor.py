@@ -46,6 +46,9 @@ class RavenAgentExecutor(AgentExecutor):
         # One broker per in-flight task, so a later `SendMessage` naming that
         # task id can reach the turn that is still parked waiting on it.
         self._brokers: dict[str, A2aQuestionBroker] = {}
+        # Holds the on-park status-update task so it survives GC: the loop only
+        # keeps a weak reference to a task nothing else points at.
+        self._background: set[asyncio.Task[None]] = set()
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Run one turn for `context`'s task, reporting working then a terminal state."""
@@ -56,7 +59,9 @@ class RavenAgentExecutor(AgentExecutor):
         await event_queue.enqueue_event(self._status(context, "running"))
 
         def on_park(_task_id: str) -> None:
-            asyncio.create_task(event_queue.enqueue_event(self._status(context, "question")))
+            task = asyncio.create_task(event_queue.enqueue_event(self._status(context, "question")))
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
 
         self._brokers[context.task_id] = A2aQuestionBroker(on_park=on_park)
         try:
