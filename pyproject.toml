@@ -28,13 +28,12 @@ dependencies = [
     "pyyaml>=6.0",
     "prompt-toolkit>=3.0.0",
     "json-repair>=0.30.0",
-    # everos token-aware truncation (text.py). Currently also a
-    # transitive dep of litellm — pinning it directly so the everos
-    # extractor keeps working if upstream ever drops it.
+    # Token-aware truncation. Also a transitive dep of litellm; named here
+    # because the host counts tokens on its own turn path and must not lose
+    # that to someone else's dependency change.
     "tiktoken>=0.7.0,<1.0.0",
     "questionary>=2.0.0,<3.0.0",
     "watchfiles>=0.21,<2.0",
-    "everos[multimodal]==1.2.3",
     "tomli-w>=1.2.0",
     # UTS-46 host mapping for the browser's navigation check. Already present
     # transitively (httpx), declared here because the check is security-load-
@@ -48,10 +47,10 @@ dependencies = [
     # transitive dep (via lancedb) -- pinning it directly so routing keeps
     # working if upstream ever drops it.
     "numpy>=2.0,<3.0",
-    # Image downscale/recompress for read_file (agent/tools/media.py). Reaches
-    # us anyway via everos[multimodal] -> everalgo-parser, but that is a
-    # three-hop transitive path — pinning it directly so reading an image keeps
-    # working if any link in that chain drops it.
+    # Image downscale/recompress for read_file (agent/tools/media.py). Named
+    # directly: it used to arrive three hops away through the memory plugin's
+    # own dependencies, and reading an image is not the memory plugin's to
+    # keep working.
     "pillow>=10.0.0",
     # Rasterises a QR-login channel's scan URL server-side, so the page shows an
     # <img> instead of carrying a QR encoder. Not in the channel extras where it
@@ -60,10 +59,10 @@ dependencies = [
     # its [pil] backend is pillow, already here.
     "qrcode[pil]>=8.0",
     # Embedded vector store behind raven.knowledge -- a knowledge base indexes
-    # and answers from inside the gateway process, so it must not need a server.
-    # Already resolved here as a transitive dep of everos, which keeps its own
-    # memory in it; named directly for the same reason numpy above is, so
-    # retrieval keeps working if that chain ever changes.
+    # and answers from inside the gateway process, so it must not need a
+    # server. Named directly for the same reason numpy above is: it used to
+    # arrive through the memory plugin, and a knowledge base is not the memory
+    # plugin's to keep working.
     "lancedb>=0.33,<1.0",
     "ripgrep-bin>=15.2.0,<16.0.0",
     "aiohttp>=3.13.4",
