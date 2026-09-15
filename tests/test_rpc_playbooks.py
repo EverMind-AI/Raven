@@ -1169,3 +1169,203 @@ async def test_the_registered_validate_is_given_the_loop_to_ask(library: Playboo
         {"jsonrpc": "2.0", "id": 1, "method": "playbooks.validate", "params": {"name": "competitor-scan"}}
     )
     assert resp["result"]["ok"] is False, "the loop's table reached the handler through registration"
+
+
+# ------------------------------------------------------------- playbooks.create
+
+
+class _Generated:
+    def __init__(self, spec, notes=()):
+        self.spec = spec
+        self.notes = list(notes)
+
+
+class _Generator:
+    """Records what it was asked for, and answers or raises as told."""
+
+    def __init__(self, result=None, raises=None, hangs=False):
+        self.calls: list[tuple] = []
+        self._result = result
+        self._raises = raises
+        self._hangs = hangs
+
+    async def generate(self, workflow, skills=None):
+        import asyncio
+
+        self.calls.append((workflow, skills))
+        if self._hangs:
+            await asyncio.sleep(3600)
+        if self._raises is not None:
+            raise self._raises
+        return self._result
+
+
+class _CreateRuntime:
+    def __init__(self, store, generator, *, adopts=True):
+        self.store = store
+        self.generator = generator
+        self._adopts = adopts
+        self.adopted: list[str] = []
+
+    def adopt(self, name: str) -> bool:
+        self.adopted.append(name)
+        return self._adopts
+
+
+def _create_loop(runtime):
+    return lambda: type("_Loop", (), {"_playbooks": runtime})()
+
+
+@pytest.mark.asyncio
+async def test_creating_writes_the_file_and_says_where_it_landed(library: PlaybookStore) -> None:
+    gen = _Generator(_Generated(_spec("weekly-digest"), notes=["assumed the report goes to PM"]))
+    rt = _CreateRuntime(library, gen)
+    out = await mod.playbooks_create(
+        {"name": "weekly-digest", "workflow": "pull feedback, then summarise it"},
+        agent_loop_factory=_create_loop(rt),
+    )
+    assert out["name"] == "weekly-digest"
+    assert out["created"] is True
+    assert out["errors"] == []
+    assert out["path"].endswith("weekly-digest/playbook.md")
+    assert Path(out["path"]).is_file(), "the answer names a file that exists"
+    assert out["notes"] == ["assumed the report goes to PM"]
+    assert out["adopted"] is True
+    assert rt.adopted == ["weekly-digest"], "the live library is handed the new file in this call"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_generation_answers_the_whole_list_of_reasons(library: PlaybookStore) -> None:
+    """The reason this answers rather than raises.
+
+    ``PlaybookGenerationError`` joins its reasons into one message and keeps the
+    list beside it; a refusal would carry the joined sentence, and a caller that
+    has just spent model time on this is owed the list.
+    """
+    from raven.playbook import PlaybookGenerationError
+
+    reasons = ["node 'draft' names no agent", "params.target is referenced but not declared"]
+    rt = _CreateRuntime(library, _Generator(raises=PlaybookGenerationError(reasons)))
+    out = await mod.playbooks_create(
+        {"name": "weekly-digest", "workflow": "something the composer cannot resolve"},
+        agent_loop_factory=_create_loop(rt),
+    )
+    assert out["created"] is False
+    assert out["path"] == ""
+    assert out["errors"] == reasons, "each reason on its own, not one joined string"
+    assert library.origin_of("weekly-digest") is None, "and nothing was written"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["../victim", "a/b", "Upper", "-lead", ""])
+async def test_a_name_that_is_not_a_library_name_is_refused_before_a_generation(
+    library: PlaybookStore, bad: str
+) -> None:
+    gen = _Generator(_Generated(_spec()))
+    rt = _CreateRuntime(library, gen)
+    with pytest.raises(RpcError):
+        await mod.playbooks_create({"name": bad, "workflow": "anything"}, agent_loop_factory=_create_loop(rt))
+    assert gen.calls == [], "the shape is checked before any model time is spent"
+
+
+@pytest.mark.asyncio
+async def test_an_existing_name_is_refused_before_a_generation(library: PlaybookStore) -> None:
+    """Checked ahead of the composer, not after.
+
+    A generation is a minute of model time; discovering the collision afterwards
+    would spend it and throw the result away.
+    """
+    library.save(_spec("competitor-scan"))
+    gen = _Generator(_Generated(_spec()))
+    rt = _CreateRuntime(library, gen)
+    with pytest.raises(RpcError):
+        await mod.playbooks_create(
+            {"name": "competitor-scan", "workflow": "anything"},
+            agent_loop_factory=_create_loop(rt),
+        )
+    assert gen.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_workflow_is_required_because_it_is_all_the_generator_sees(
+    library: PlaybookStore,
+) -> None:
+    gen = _Generator(_Generated(_spec()))
+    rt = _CreateRuntime(library, gen)
+    with pytest.raises(RpcError):
+        await mod.playbooks_create({"name": "weekly-digest", "workflow": "   "}, agent_loop_factory=_create_loop(rt))
+    assert gen.calls == []
+
+
+@pytest.mark.asyncio
+async def test_named_skills_reach_the_composer(library: PlaybookStore) -> None:
+    gen = _Generator(_Generated(_spec("weekly-digest")))
+    rt = _CreateRuntime(library, gen)
+    await mod.playbooks_create(
+        {"name": "weekly-digest", "workflow": "w", "skills": ["web-research", "", "writing"]},
+        agent_loop_factory=_create_loop(rt),
+    )
+    assert gen.calls == [("w", ["web-research", "writing"])], "blank entries are not pinned"
+
+
+@pytest.mark.asyncio
+async def test_a_file_the_live_library_would_not_load_says_so(library: PlaybookStore) -> None:
+    """Written and unusable is a third state, and it is reported as one.
+
+    ``created`` alone would send a caller to run a name that cannot resolve.
+    """
+    rt = _CreateRuntime(library, _Generator(_Generated(_spec("weekly-digest"))), adopts=False)
+    out = await mod.playbooks_create({"name": "weekly-digest", "workflow": "w"}, agent_loop_factory=_create_loop(rt))
+    assert out["created"] is True
+    assert out["adopted"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_generation_that_never_finishes_is_given_up_on(library: PlaybookStore) -> None:
+    """Bounded with the same budget the conversational entry declares, so the
+    two entries do not disagree about how long a generation may take."""
+    rt = _CreateRuntime(library, _Generator(hangs=True))
+    mod._GENERATION_BUDGET_S = 0.05
+    try:
+        out = await mod.playbooks_create(
+            {"name": "weekly-digest", "workflow": "w"}, agent_loop_factory=_create_loop(rt)
+        )
+    finally:
+        mod._GENERATION_BUDGET_S = 180.0
+    assert out["created"] is False
+    assert out["errors"] and "did not finish" in out["errors"][0]
+
+
+@pytest.mark.asyncio
+async def test_a_name_taken_while_generating_refuses_rather_than_claiming_a_write(
+    library: PlaybookStore,
+) -> None:
+    """The other request's file is the one on disk, so this answer must not
+    read as though it wrote it."""
+    gen = _Generator(_Generated(_spec("weekly-digest")))
+    rt = _CreateRuntime(library, gen)
+
+    original = library.save
+
+    def _save_racing(spec, **kw):
+        from raven.playbook import PlaybookExistsError
+
+        raise PlaybookExistsError("taken while generating")
+
+    library.save = _save_racing  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RpcError):
+            await mod.playbooks_create({"name": "weekly-digest", "workflow": "w"}, agent_loop_factory=_create_loop(rt))
+    finally:
+        library.save = original  # type: ignore[method-assign]
+    assert rt.adopted == [], "nothing is handed to the live library when nothing was written"
+
+
+@pytest.mark.asyncio
+async def test_creating_with_no_runtime_refuses(library: PlaybookStore) -> None:
+    with pytest.raises(RpcError):
+        await mod.playbooks_create({"name": "weekly-digest", "workflow": "w"})
+
+
+def test_the_create_contract_is_mirrored_by_a_model_pair() -> None:
+    assert "playbooks.create" in METHOD_MODELS
