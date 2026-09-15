@@ -74,8 +74,10 @@ interface State {
 /* A dialog, and what it was opened on: `doc` is the note being rewritten, and
    its absence means a new one. */
 export interface Dialog {
-  kind: 'note' | 'url'
+  kind: 'note' | 'url' | 'rename'
   doc?: KbDoc
+  /* The base being renamed. Only `rename` carries one. */
+  base?: KbBase
 }
 
 const EMPTY: State = {
@@ -152,6 +154,30 @@ export async function create(name: string, description = '', embedding = true): 
        the network and can fail. Said out loud: a base that is not there is not
        something to discover later. */
     toast(said(e))
+  } finally {
+    set({ busy: false })
+  }
+}
+
+/* Rename one base. The only field of it a reader can edit: the embedding model
+   and its width are what the collection was built to, so those are a rebuild
+   rather than an edit, and the document count is a fact rather than a setting.
+
+   The engine refuses a name another base already holds -- the same rule
+   creation applies, or renaming would be the way around it -- so the answer is
+   reported rather than assumed. */
+export async function renameBase(base: KbBase, name: string): Promise<void> {
+  const wanted = name.trim()
+  if (state.busy || !wanted || wanted === base.name) {
+    set({ dialog: null })
+    return
+  }
+  set({ busy: true })
+  try {
+    const renamed = await source().rename(base.id, wanted)
+    set({ bases: state.bases.map((b) => (b.id === renamed.id ? renamed : b)), dialog: null })
+  } catch (e) {
+    toast((e as Error)?.message || String(e))
   } finally {
     set({ busy: false })
   }
@@ -300,6 +326,10 @@ export async function uploadFolder(files: File[]): Promise<void> {
 
 export function openDialog(kind: 'note' | 'url', doc?: KbDoc): void {
   set({ dialog: { kind, doc } })
+}
+
+export function openRename(base: KbBase): void {
+  set({ dialog: { kind: 'rename', base } })
 }
 
 export function closeDialog(): void {

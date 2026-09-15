@@ -93,12 +93,122 @@ function CreateDialog({ model, onClose }: { model: string; onClose: () => void }
   )
 }
 
-function BaseRow({ base, on }: { base: KbBase; on: boolean }): JSX.Element {
+function BaseRow({ base, on, busy }: { base: KbBase; on: boolean; busy: boolean }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const shut = (): void => setOpen(false)
+    const id = setTimeout(() => document.addEventListener('click', shut), 0)
+    return () => {
+      clearTimeout(id)
+      document.removeEventListener('click', shut)
+    }
+  }, [open])
+
+  /* A row rather than one button, because the menu is a control inside it and
+     a button cannot hold another. The whole row still opens the base: the
+     opener is what fills it, and the menu sits on top at its end. */
   return (
-    <button className="kbrow" aria-current={on || undefined} onClick={() => void store.open_(base.id)}>
-      <span className="nm">{base.name}</span>
-      <span className="who">{t('gui.kb.docs', { n: base.documents })}</span>
-    </button>
+    <div className="kbrow" aria-current={on || undefined}>
+      <button className="kbopenb" onClick={() => void store.open_(base.id)}>
+        <span className="nm">{base.name}</span>
+        <span className="who">{t('gui.kb.docs', { n: base.documents })}</span>
+      </button>
+      <div className="kbops">
+        <button
+          className="mini ghost dots"
+          aria-label={t('gui.kb.base_ops', { name: base.name })}
+          aria-expanded={open}
+          onClick={(e) => {
+            e.stopPropagation()
+            setOpen((v) => !v)
+          }}
+        >
+          &#8943;
+        </button>
+        {open && (
+          <div className="kbmenu" role="menu">
+            <button
+              className="mi"
+              role="menuitem"
+              disabled={busy}
+              onClick={() => {
+                setOpen(false)
+                store.openRename(base)
+              }}
+            >
+              <svg className="kbmi" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z" />
+                <path d="M14.5 6.5l3 3" />
+              </svg>
+              {t('gui.kb.rename')}
+            </button>
+            {/* Everything in the base goes with it, so it is asked about
+                rather than done -- see `remove`, which names what is lost. */}
+            <button
+              className="mi danger"
+              role="menuitem"
+              disabled={busy}
+              onClick={() => {
+                setOpen(false)
+                store.remove(base)
+              }}
+            >
+              <svg className="kbmi" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 7h16M10 7V5h4v2M6 7l1 13h10l1-13M10 11v6M14 11v6" />
+              </svg>
+              {t('gui.kb.delete_base')}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* One field, and the only one of a base a reader can edit. */
+function RenameDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.Element {
+  const [name, setName] = useState(base.name)
+  const field = useRef<HTMLInputElement>(null)
+  useEffect(() => field.current?.select(), [])
+
+  const close = (): void => store.closeDialog()
+  const submit = (): void => {
+    if (name.trim()) void store.renameBase(base, name)
+  }
+  return (
+    <div className="kbmodal" role="dialog" aria-modal="true" aria-label={t('gui.kb.rename_title')}>
+      <div className="kbdlg">
+        <button className="x" aria-label={t('gui.kb.cancel')} onClick={close}>
+          &times;
+        </button>
+        <div className="ttl">{t('gui.kb.rename_title')}</div>
+
+        <label className="fl" htmlFor="kbrename">
+          {t('gui.kb.name')}
+        </label>
+        <input
+          id="kbrename"
+          ref={field}
+          className="kbname"
+          value={name}
+          onChange={(e) => setName(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit()
+            if (e.key === 'Escape') close()
+          }}
+        />
+
+        <div className="kbacts">
+          <button className="mini ghost" onClick={close}>
+            {t('gui.kb.cancel')}
+          </button>
+          <button className="mini" disabled={busy || !name.trim()} onClick={submit}>
+            {t('gui.kb.save')}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -1303,7 +1413,9 @@ export function KnowledgeApp(): JSX.Element {
             + {t('gui.kb.new')}
           </button>
           {s.bases.length ? (
-            s.bases.map((base) => <BaseRow key={base.id} base={base} on={base.id === s.openId} />)
+            s.bases.map((base) => (
+              <BaseRow key={base.id} base={base} on={base.id === s.openId} busy={s.busy} />
+            ))
           ) : (
             <div className="hint">{t('gui.kb.none')}</div>
           )}
@@ -1348,6 +1460,9 @@ export function KnowledgeApp(): JSX.Element {
       {creating && <CreateDialog model={s.status?.model ?? ''} onClose={() => setCreating(false)} />}
       {s.dialog?.kind === 'note' && <NoteDialog doc={s.dialog.doc} busy={s.busy} />}
       {s.dialog?.kind === 'url' && <UrlDialog busy={s.busy} />}
+      {s.dialog?.kind === 'rename' && s.dialog.base && (
+        <RenameDialog base={s.dialog.base} busy={s.busy} />
+      )}
       {s.recall && open && <RecallDialog s={s} />}
       {s.settings && open && <SettingsDialog base={open} busy={s.busy} />}
     </>

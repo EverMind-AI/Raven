@@ -1999,7 +1999,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.kb.pick_row': 'Select {name}',
     'gui.kb.pick_all': 'Select every file',
     'gui.kb.docs_reindex': 'Reindex',
-    'gui.kb.docs_delete_body': 'Delete {count} files? Their chunks and stored copies go with them.'
+    'gui.kb.docs_delete_body': 'Delete {count} files? Their chunks and stored copies go with them.',
+    'gui.kb.base_ops': 'What can be done with {name}',
+    'gui.kb.rename': 'Rename',
+    'gui.kb.rename_title': 'Rename knowledge base',
+    'gui.kb.delete_base': 'Delete Knowledge Base',
+    'gui.kb.save': 'Save'
   },
   zh: {
     'gui.act.ing.ask_user': '等待你回答',
@@ -3690,6 +3695,11 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.kb.pick_row': '选择 {name}',
     'gui.kb.pick_all': '全选',
     'gui.kb.docs_reindex': '重新索引',
-    'gui.kb.docs_delete_body': '确定删除 {count} 个文件？它们的分块与已保存的副本会一并删除。'
+    'gui.kb.docs_delete_body': '确定删除 {count} 个文件？它们的分块与已保存的副本会一并删除。',
+    'gui.kb.base_ops': '对 {name} 的操作',
+    'gui.kb.rename': '重命名',
+    'gui.kb.rename_title': '重命名知识库',
+    'gui.kb.delete_base': '删除知识库',
+    'gui.kb.save': '保存'
   }
 } as Record<Locale, Record<string, string>>

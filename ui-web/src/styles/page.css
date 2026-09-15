@@ -5327,11 +5327,36 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .kbrail .kbadd { justify-self: stretch; margin-bottom: 8px; }
 .kbrail .hint { font-size: 12px; color: var(--muted); padding: 6px 8px; line-height: 1.6; }
 .kbrow {
-  display: grid; gap: 2px; text-align: left; cursor: pointer; width: 100%;
+  position: relative; display: flex; align-items: center; width: 100%;
   border: 1px solid transparent; border-radius: 9px; background: none;
-  padding: 8px 10px; color: var(--text); font: inherit;
+  color: var(--text);
+}
+/* The opener fills the row, so clicking anywhere but the menu opens the base. */
+.kbopenb {
+  flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; text-align: left;
+  cursor: pointer; border: 0; background: none; padding: 8px 10px;
+  color: inherit; font: inherit;
 }
 .kbrow:hover { background: var(--surface); }
+/* The menu is there when the row is pointed at, when it is the open one, and
+   while its own menu is up -- so it does not vanish under the cursor that is
+   using it. A column of dots down an untouched list is noise. */
+.kbrow .kbops { position: absolute; right: 6px; opacity: 0; }
+.kbrow:hover .kbops,
+.kbrow[aria-current] .kbops,
+.kbrow .kbops:focus-within,
+.kbrow .kbops:has([aria-expanded="true"]) { opacity: 1; }
+/* Left of the menu, or a long name runs under it. */
+.kbrow:hover .kbopenb, .kbrow[aria-current] .kbopenb { padding-right: 34px; }
+/* A glyph beside each entry, at the size the label reads at. The label stays
+   on one line: "Delete Knowledge Base" wrapped in the rail's width, and a
+   two-line menu entry reads as two entries. */
+.kbmenu .mi { display: flex; align-items: center; gap: 9px; white-space: nowrap; }
+/* Wide enough for that entry, and still inside the rail, which scrolls rather
+   than letting a menu hang over the panel beside it. */
+.kbrail .kbmenu { min-width: 202px; }
+.kbmi { flex: none; width: 15px; height: 15px; fill: none; stroke: currentColor;
+  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 /* The selected base is the subject of the whole right-hand panel, so it is
    marked by fill rather than by a border a reader has to look for. */
 .kbrow[aria-current] { background: var(--surface); border-color: var(--line); }

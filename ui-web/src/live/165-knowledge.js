@@ -9,6 +9,8 @@ DS.knowledge = {
   bases: () => rpc.call('knowledge.bases.list', {}).then((r) => (r && r.bases) || []),
   create: (name, description, embedding = true) =>
     rpc.call('knowledge.bases.create', { name, description, embedding }).then((r) => r && r.base),
+  rename: (id, name) =>
+    rpc.call('knowledge.bases.rename', { base_id: id, name }).then((r) => r && r.base),
   remove: (id) => rpc.call('knowledge.bases.delete', { base_id: id }),
   /* Spread rather than listed: the contract leaves out what it is not sent,
      and naming every field here would send nulls for the untouched ones. */
