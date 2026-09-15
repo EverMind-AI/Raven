@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tomllib
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +27,11 @@ def _no_ambient_embedding_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS"):
         monkeypatch.delenv(f"EVEROS_EMBEDDING__{name}", raising=False)
+    import raven_everos.config as _ue
+
+    # Provenance is process-global; a case that bound the host endpoint would
+    # otherwise tell the next one that raven had already written those.
+    _ue._BOUND_HERE.clear()
 
 
 @pytest.fixture()
@@ -195,6 +201,36 @@ class TestEmbeddingCardFollowsTheEndpointHome:
             await rpc_console.settings_everos_set(
                 {"section": "embedding", "fields": {"model": "m", "provider": "siliconflow"}}
             )
+
+    async def test_the_card_survives_ravens_own_startup_binding(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """The page as a running install reaches it: after `backend.start()`.
+
+        That call puts the host endpoint into this process, and a reader
+        without provenance then saw three complete variables and told the card
+        an operator owned them -- so the card went blank and the save was
+        refused by naming variables nobody had set.
+        """
+        import json
+
+        import raven_everos.config as ue
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps({"embedding": {"model": "ravens/model", "baseUrl": "https://ravens/v1", "apiKey": "sk-raven"}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("raven.home.get_config_path", lambda: cfg)
+        monkeypatch.setattr("raven.config.update.get_config_path", lambda: cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+        ue.configure_embedding_env(
+            SimpleNamespace(model="ravens/model", base_url="https://ravens/v1", api_key="sk-raven")
+        )
+
+        card = (await rpc_console.settings_everos({}))["sections"]["embedding"]
+        assert card["model"] == "ravens/model", "the card must still show what raven holds"
+
+        await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "edited"}})
+        assert json.loads(cfg.read_text(encoding="utf-8"))["embedding"]["model"] == "edited"
 
     async def test_a_save_the_environment_would_outrank_is_refused(self, everos_toml, tmp_path, monkeypatch) -> None:
         """The exported variables beat both files, so a save accepted here

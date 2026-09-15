@@ -32,6 +32,9 @@ def _no_ambient_embedding_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS"):
         monkeypatch.delenv(f"EVEROS_EMBEDDING__{name}", raising=False)
+    # Provenance is process-global; a case that bound the host endpoint would
+    # otherwise tell the next one that raven had already written those.
+    ue._BOUND_HERE.clear()
 
 
 @pytest.fixture
@@ -590,6 +593,41 @@ class TestEmbeddingHasTwoHomes:
 
         assert ue.everos_has_own_embedding() is False
         assert ue.host_embedding_env()["EVEROS_EMBEDDING__MODEL"] == "ravens/model"
+
+    def test_ravens_own_binding_is_not_an_operators_export(
+        self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The runtime sequence, in the order it actually happens.
+
+        `configure_embedding_env` puts the host's endpoint into this process so
+        the in-process imports and every child see it. From that moment all
+        three variables are set and complete -- and a reader that asks only
+        "are all three set" told the settings card that an operator had
+        exported them, which then refused an edit by naming variables the
+        person had never set. Clearing the variables before each case, which is
+        what makes the other cases deterministic, is also what hides this one:
+        it has to be the sequence, not a prepared state.
+        """
+        import shutil
+
+        from everos.entrypoints.cli.commands.init_cmd import _EVEROS_TEMPLATE
+
+        everos_home.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_EVEROS_TEMPLATE, everos_home)
+        self._raven_config(
+            tmp_path, monkeypatch, {"model": "ravens/model", "baseUrl": "https://ravens/v1", "apiKey": "sk-raven"}
+        )
+        endpoint = SimpleNamespace(model="ravens/model", base_url="https://ravens/v1", api_key="sk-raven")
+
+        assert ue.embedding_is_env_managed() is False, "nothing is exported yet"
+        assert ue.configure_embedding_env(endpoint) is True, "the host endpoint should bind"
+        assert os.environ["EVEROS_EMBEDDING__MODEL"] == "ravens/model"
+
+        # Everything below is asked after the binding, which is where a reader
+        # without provenance changes its answer.
+        assert ue.embedding_is_env_managed() is False
+        assert ue.everos_has_own_embedding() is False
+        assert ue.configure_embedding_env(endpoint) is True, "a second start must still bind"
 
     def test_the_toml_keeps_precedence_when_it_has_one(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
