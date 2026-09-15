@@ -1454,6 +1454,49 @@ def test_step4_memory_all_disabled_clears_backend(tmp_env: Path, monkeypatch: py
     assert calls == [None]
 
 
+def test_skipping_preserves_a_backend_that_contributes_no_screen(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``onboard`` is an optional contribution, so a backend without one is a
+    normal shape -- a third-party plugin configured by hand, or one whose
+    author wrote no wizard. Reading "no screen" as "not configured" made the
+    skip lane clear exactly the choice the user made deliberately, and the
+    recap and import step then reported it off."""
+    import json
+
+    config = tmp_env
+    config.write_text(json.dumps({"memory": {"backend": "mem0"}}), encoding="utf-8")
+    monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("everos", _FakeMemoryStep(None))])
+    calls: list[str | None] = []
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
+
+    assert onboard_commands._memory_enabled() is True
+    onboard_commands._step4_memory(skip=True, non_interactive=False, main_model=None, warnings=[])
+
+    assert calls == []
+    assert json.loads(config.read_text())["memory"]["backend"] == "mem0"
+
+
+def test_skipping_still_clears_a_selected_backend_its_own_screen_calls_unconfigured(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rule the clause exists for: the shipped default is seeded into every
+    fresh config, and a user who never finished configuring it must not have a
+    modelless backend activated behind them."""
+    import json
+
+    config = tmp_env
+    config.write_text(json.dumps({"memory": {"backend": "everos"}}), encoding="utf-8")
+    monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("everos", _FakeMemoryStep(None))])
+    calls: list[str | None] = []
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
+
+    assert onboard_commands._memory_enabled() is False
+    onboard_commands._step4_memory(skip=True, non_interactive=False, main_model=None, warnings=[])
+
+    assert calls == [None]
+
+
 def test_step4_memory_back_returns_sentinel_without_writing(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The first screen backs out: the wizard returns ``_BACK`` and nothing
     is recorded, not even for the screen that never ran."""

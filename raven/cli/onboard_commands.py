@@ -1864,11 +1864,23 @@ def _memory_enabled() -> bool:
     The recorded name is read first so a config with memory off answers
     without a plugin being built at all -- the recap and the import step ask
     this on every run.
+
+    A backend that contributes no onboard screen answers ``True`` on the
+    strength of having been selected. ``onboard`` is an optional contribution,
+    so "no screen" is the normal shape for a backend configured by hand, and
+    reading it as "not configured" made the wizard erase such a choice: the
+    skip lane clears a backend it believes nobody set up. Only a backend whose
+    own screen says it is unconfigured is cleared -- which is the case that
+    rule exists for, the shipped default seeded into a config nobody has
+    finished.
     """
     selected = _selected_backend()
     if not selected:
         return False
-    return any(name == selected and step.configured() for name, step in _memory_steps())
+    steps = [step for name, step in _memory_steps() if name == selected]
+    if not steps:
+        return True
+    return any(step.configured() for step in steps)
 
 
 def _step4_memory(
