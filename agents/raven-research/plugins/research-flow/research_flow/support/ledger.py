@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -211,6 +212,13 @@ leaves no complete line in that window, so the split would silently reset to 1 a
 offline replay would over-count a re-run question exactly the way that function exists
 to prevent.
 
+That same argument is why this file does NOT borrow the ledger's ``session_seq``. The
+tail read works there because the ledger's rows are small; here the rows are exactly the
+oversized ones the paragraph above describes, so a sequence recovered that way resets to
+1 on the first record wider than the window and two runs become indistinguishable. Runs
+are told apart by :func:`_verbatim_run_id` instead, which is minted in memory and never
+recovered from disk.
+
 Off by default and named by the environment rather than the config: the product side is
 long-lived and would otherwise accumulate pages per turn with no reader, and a page
 store is not a nicety the answer path should ever pay for.
@@ -220,6 +228,29 @@ store is not a nicety the answer path should ever pay for.
 def verbatim_path() -> str | None:
     """Where the verbatim sink writes, or ``None`` when it is off. The ONLY resolver."""
     return os.environ.get(VERBATIM_ENV)
+
+
+_verbatim_run: str | None = None
+"""This process's tag on the sink. See :func:`_verbatim_run_id`."""
+
+
+def _verbatim_run_id() -> str:
+    """Which run of the sink this process is, minted rather than recovered.
+
+    The ledger answers the same question by reading its own tail, and that is the one
+    technique this file cannot use: its rows are the large ones, so the read that
+    recovers the answer is the read a large row defeats. Minting removes the recovery
+    step entirely - nothing has to be parsed back, so no row size can break it, and two
+    processes appending to one sink are distinguishable however big their records are.
+
+    Opaque and unordered on purpose. A reader that wants the runs in order has ``ts`` on
+    every row; a sequence number here would imply this process knows what came before it,
+    which is the claim that was wrong.
+    """
+    global _verbatim_run
+    if _verbatim_run is None:
+        _verbatim_run = uuid.uuid4().hex[:12]
+    return _verbatim_run
 
 
 def verbatim_append(record: dict[str, Any]) -> None:
@@ -243,14 +274,12 @@ def verbatim_append(record: dict[str, Any]) -> None:
     append-only, read by nobody at run time, and a write failure is logged and swallowed,
     because an instrument that can kill the run it measures is worse than no instrument.
 
-    ``session_seq`` is stamped here for the same reason :func:`ledger_append` stamps it:
-    several call sites, one definition of a line.
+    ``run_id`` is stamped here for the same reason :func:`ledger_append` stamps
+    ``session_seq``: several call sites, one definition of a line.
     """
     if not (path := verbatim_path()):
         return
-    if path not in _session_seq:
-        _session_seq[path] = _resolve_session_seq(path)
-    record.setdefault("session_seq", _session_seq[path])
+    record.setdefault("run_id", _verbatim_run_id())
     try:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")

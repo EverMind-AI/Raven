@@ -71,6 +71,41 @@ def test_is_hard_tool_failure(result, expected):
     assert is_hard_tool_failure(result) is expected
 
 
+def test_different_envelope_failures_are_different_classes():
+    """The streak key is ``(tool, failure_class)``, and the break threshold is two. If
+    every envelope classified alike, a blocked URL followed by a reader's HTTP refusal
+    would fire the stop-repeating nudge at a model that had changed both its cause and
+    its approach -- the case this whole function exists to keep apart."""
+    blocked = '{"error": "URL validation failed: blocked host", "url": "https://a.example"}'
+    refused = '{"error": "Jina answered HTTP 403", "url": "https://b.example"}'
+    keyless = '{"error": "Jina API key not configured. Set it in the config", "url": "https://c.example"}'
+
+    classes = {failure_class(blocked), failure_class(refused), failure_class(keyless)}
+
+    assert len(classes) == 3
+    # Not vacuous: all three must still COUNT, which is the other half of the fix.
+    assert all(is_hard_tool_failure(x) for x in (blocked, refused, keyless))
+
+
+def test_the_same_envelope_failure_on_two_urls_is_one_class():
+    """The other direction, and the one that keeps the nudge reachable: a model
+    walking a dead reader across different pages is repeating one dead approach. The
+    URL rides in the envelope's own key, so it cannot split the streak."""
+    first = '{"error": "Jina answered HTTP 403", "url": "https://a.example"}'
+    second = '{"error": "Jina answered HTTP 403", "url": "https://zzz.example/deep/path"}'
+
+    assert failure_class(first) == failure_class(second)
+
+
+def test_an_envelope_class_is_read_off_the_error_not_the_payload():
+    """A payload whose other keys differ is still the same failure, and a payload with
+    no error is not a failure at all."""
+    assert failure_class('{"error": "boom", "url": "https://a.example", "status": 500}') == failure_class(
+        '{"error": "boom", "url": "https://b.example"}'
+    )
+    assert failure_class('{"url": "https://a.example", "text": "the page"}') == "other"
+
+
 @pytest.mark.parametrize(
     "result,expected",
     [

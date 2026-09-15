@@ -29,6 +29,26 @@ _TRANSIENT_FAILURE_MARKERS = (
 _EMPTY_SUCCESS_MARKERS = ("no matches found", "no files found")
 
 
+def _envelope_error(text: str) -> str | None:
+    """The top-level ``error`` of a JSON envelope, or ``None`` if this is not one.
+
+    One parse, two readers: :func:`is_hard_tool_failure` decides whether an envelope
+    counts, and :func:`failure_class` decides what it counts AS. Splitting that decision
+    across two different tests is what let the first of them start counting envelopes
+    while the second still read them as undifferentiated text.
+    """
+    if not text.lstrip().startswith("{"):
+        return None
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    return error.strip() if isinstance(error, str) and error.strip() else None
+
+
 def failure_class(model_text: str) -> str:
     """Which kind of failure this is, for streak accounting.
 
@@ -36,7 +56,23 @@ def failure_class(model_text: str) -> str:
     call", and two different errors from one tool mean it is still adapting.
     Counting them together fires the nudge at a model that is working through
     a problem, which is the opposite of what the nudge is for.
+
+    A JSON envelope is classified by its own ``error`` string rather than by the
+    ladder below, which cannot see into one: the whole payload starts with ``{`` and
+    spells the key ``"error":``, so every envelope failure falls through to ``other``
+    and a blocked URL, a spent key and a reader's HTTP status all become one streak.
+    Two of those in a row would fire the nudge at a model that changed both its cause
+    and its approach, which is the case this function exists to keep apart.
+
+    The envelope class is the error text itself, not a bucket, and that is the one
+    place coarseness buys nothing. Coarseness is for model-facing prose, which varies
+    without meaning anything; an envelope's ``error`` is written by the tool from a
+    small fixed vocabulary, so equal strings really are the same failure and different
+    ones really are different. The variable parts a page brings with it -- the URL, the
+    host -- travel in the envelope's own keys, not in this one.
     """
+    if (error := _envelope_error(model_text)) is not None:
+        return f"envelope:{' '.join(error.lower().split())[:120]}"
     low = model_text[:200].lower()
     if "[truncated]" in low:
         return "truncated"
@@ -84,13 +120,8 @@ def is_hard_tool_failure(result: object) -> bool:
     # to the entire reader path. Worse than not firing: a failed fetch read as a success
     # and reset the streak ``web_search`` had already accumulated. Transient markers are
     # tested above, so a 429 or a timeout inside the envelope still reads as retryable.
-    if s.lstrip().startswith("{"):
-        try:
-            payload = json.loads(s)
-        except (TypeError, ValueError):
-            payload = None
-        if isinstance(payload, dict) and payload.get("error"):
-            return True
+    if _envelope_error(s) is not None:
+        return True
     m = re.search(r"Exit code:\s*(-?\d+)", s)
     if m:
         return m.group(1) != "0"

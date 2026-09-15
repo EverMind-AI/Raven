@@ -59,7 +59,7 @@ class _RefusingTransport(httpx.AsyncBaseTransport):
 def _sink(monkeypatch, tmp_path: Path) -> Path:
     path = tmp_path / "bodies.jsonl"
     monkeypatch.setenv(ledger_mod.VERBATIM_ENV, str(path))
-    ledger_mod._session_seq.pop(str(path), None)  # noqa: SLF001
+    monkeypatch.setattr(ledger_mod, "_verbatim_run", None)
     return path
 
 
@@ -105,7 +105,7 @@ async def test_the_reader_branch_records_the_page_and_the_envelope(monkeypatch, 
     assert phases["source"]["chars"] == len("the whole page")
     assert json.loads(phases["delivered"]["text"])["text"] == "the whole page"
     assert all(r["op"] == "tool_body" and r["tool"] == "web_fetch" for r in rows)
-    assert all(r["session_seq"] == 1 for r in rows)
+    assert len({r["run_id"] for r in rows}) == 1
 
 
 @pytest.mark.asyncio
@@ -204,3 +204,41 @@ async def test_an_unwritable_sink_is_loud_and_harmless(monkeypatch, tmp_path):
 
     assert json.loads(out)["text"] == "page body"
     assert errors and "verbatim sink append failed" in errors[0]
+
+
+def test_two_runs_stay_apart_across_a_record_wider_than_a_tail_window(monkeypatch, tmp_path):
+    """The reason this file does not borrow the ledger's ``session_seq``.
+
+    That sequence is recovered by reading the last 64 KB of the file and parsing the
+    last complete line, which works for the ledger because its rows are small. These
+    rows are the large ones -- the module cites 250 KB -- so a recovered sequence resets
+    to 1 on the first record wider than the window, and rows from two runs become
+    indistinguishable. A minted tag has nothing to recover, so no record size reaches it.
+    """
+    path = _sink(monkeypatch, tmp_path)
+
+    ledger_mod.verbatim_append({"op": "tool_body", "phase": "source", "text": "x" * 70_000})
+    monkeypatch.setattr(ledger_mod, "_verbatim_run", None)  # a second process on the same sink
+    ledger_mod.verbatim_append({"op": "tool_body", "phase": "source", "text": "y" * 70_000})
+
+    first, second = _rows(path)
+    assert first["run_id"] != second["run_id"]
+
+
+def test_one_process_stamps_one_run_however_many_rows_it_writes(monkeypatch, tmp_path):
+    """The other direction: the tag partitions runs, so it must not vary within one."""
+    path = _sink(monkeypatch, tmp_path)
+
+    for n in range(3):
+        ledger_mod.verbatim_append({"op": "tool_body", "phase": "source", "text": f"page {n}"})
+
+    assert len({r["run_id"] for r in _rows(path)}) == 1
+
+
+def test_a_caller_that_knows_better_keeps_its_own_tag(monkeypatch, tmp_path):
+    """``setdefault``, so the stamp never overwrites a field a caller owned."""
+    path = _sink(monkeypatch, tmp_path)
+
+    ledger_mod.verbatim_append({"op": "tool_body", "run_id": "replayed-from-elsewhere", "text": "x"})
+
+    assert _rows(path)[0]["run_id"] == "replayed-from-elsewhere"
