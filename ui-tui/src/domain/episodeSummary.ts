@@ -594,9 +594,7 @@ export const segmentTurn = (episodes: Episode[], liveIndex?: number): Segment[] 
 
   for (const ep of episodes) {
     const speaks =
-      Boolean((ep.narration ?? '').trim()) ||
-      Boolean(ep.steer) ||
-      hasMeaningfulReasoning((ep.reasoning ?? '').trim())
+      Boolean((ep.narration ?? '').trim()) || Boolean(ep.steer) || hasMeaningfulReasoning((ep.reasoning ?? '').trim())
 
     // Anything the model said closes the stretch of work before it.
     if (speaks) {

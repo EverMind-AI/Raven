@@ -121,7 +121,13 @@ describe('hydrateDagRuns', () => {
       text: '',
       tool_calls: [{ arguments: '{"nodes":[]}', id: 'call-1', name: 'run_subagent_dag' }]
     },
-    { dag_run_id: 'dag-1', name: 'run_subagent_dag', role: 'tool', text: 'DAG run dag-1 finished', tool_call_id: 'call-1' }
+    {
+      dag_run_id: 'dag-1',
+      name: 'run_subagent_dag',
+      role: 'tool',
+      text: 'DAG run dag-1 finished',
+      tool_call_id: 'call-1'
+    }
   ]
 
   it('attaches the run its call started', async () => {
@@ -157,7 +163,6 @@ describe('hydrateDagRuns', () => {
   })
 })
 
-
 describe('useSessionLifecycle resumeById staleness guard', () => {
   const ROWS_WITH_DAG = [
     {
@@ -165,7 +170,13 @@ describe('useSessionLifecycle resumeById staleness guard', () => {
       text: '',
       tool_calls: [{ arguments: '{"nodes":[]}', id: 'call-1', name: 'run_subagent_dag' }]
     },
-    { dag_run_id: 'dag-a', name: 'run_subagent_dag', role: 'tool', text: 'DAG run dag-a finished', tool_call_id: 'call-1' }
+    {
+      dag_run_id: 'dag-a',
+      name: 'run_subagent_dag',
+      role: 'tool',
+      text: 'DAG run dag-a finished',
+      tool_call_id: 'call-1'
+    }
   ]
   const ROWS_PLAIN = [{ role: 'assistant', text: 'hello from b' }]
 
@@ -187,7 +198,7 @@ describe('useSessionLifecycle resumeById staleness guard', () => {
     syncQueue: vi.fn()
   })
 
-  const deferred = <T,>() => {
+  const deferred = <T>() => {
     let resolve!: (value: T) => void
     const promise = new Promise<T>(res => {
       resolve = res

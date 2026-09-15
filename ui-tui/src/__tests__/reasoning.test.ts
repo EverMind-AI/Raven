@@ -69,9 +69,7 @@ describe('cleanThinkingText', () => {
     // A ticker fragment is a face glyph followed by its verb. Treating any run
     // of non-letters as the face deleted the sentence ahead of every verb-like
     // word, which on non-Latin reasoning is most of the line.
-    expect(cleanThinkingText('先看调用顺序 pondering... 再看锁的粒度')).toBe(
-      '先看调用顺序 pondering... 再看锁的粒度'
-    )
+    expect(cleanThinkingText('先看调用顺序 pondering... 再看锁的粒度')).toBe('先看调用顺序 pondering... 再看锁的粒度')
     expect(cleanThinkingText('the queue is processing the tail')).toBe('the queue is processing the tail')
   })
 
