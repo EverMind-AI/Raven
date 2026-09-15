@@ -22,6 +22,7 @@ import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
+from a2a.helpers import get_message_text
 from a2a.server.context import ServerCallContext
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
@@ -97,7 +98,21 @@ class _RequestHandlerAdapter:
         self._handler = handler
 
     async def on_message_send(self, params: Any, _context: Any) -> Any:
+        """Dispatch a fresh `SendMessage`, or answer one parked on a question.
+
+        A resume names an existing task id in `message.task_id` (empty, its
+        proto3 default, on a fresh call). When that task has a turn parked in
+        `RavenAgentExecutor` (raven/a2a/asking.py's `A2aQuestionBroker`), this
+        answers that waiting turn and returns its current status instead of
+        handing the message to `DefaultRequestHandler`, which would otherwise
+        start a second turn for the same task id.
+        """
         request = _parse_params("on_message_send", params)
+        task_id = request.message.task_id
+        if task_id:
+            executor = self._handler.agent_executor
+            if executor.answer(task_id, get_message_text(request.message)):
+                return await self._handler.on_get_task(GetTaskRequest(id=task_id), ServerCallContext())
         return await self._handler.on_message_send(request, ServerCallContext())
 
     async def on_message_send_stream(self, params: Any, _context: Any) -> AsyncGenerator[Any, None]:
