@@ -787,12 +787,16 @@ describe('the two-panel layout', () => {
        not one of the stubs. */
     const add = screen.getByText('+ gui.kb.add_source').closest('button') as HTMLButtonElement
     expect(add.disabled).toBe(false)
-    /* Recall Test and Settings are wired now too, so neither is a stub. */
-    for (const label of ['gui.kb.recall_test', 'gui.kb.settings']) {
-      const btn = screen.getByText(label).closest('button') as HTMLButtonElement
-      expect(btn.disabled).toBe(false)
-      expect(btn.title).toBe('')
-    }
+    /* Recall Test is wired now too, so it is no longer a stub. */
+    const recall = screen.getByText('gui.kb.recall_test').closest('button') as HTMLButtonElement
+    expect(recall.disabled).toBe(false)
+    expect(recall.title).toBe('')
+    /* Settings is a glyph, so its name is on the control rather than in it --
+       the title is what says which button this is, not that it is unbuilt. */
+    const gear = screen.getByLabelText('gui.kb.settings') as HTMLButtonElement
+    expect(gear.disabled).toBe(false)
+    expect(gear.querySelector('svg')).not.toBeNull()
+    expect(gear.textContent).toBe('')
   })
 })
 
@@ -1817,7 +1821,7 @@ describe('the knowledge base settings', () => {
       await store.open_('b1')
     })
     await act(async () => {
-      ;(screen.getByText('gui.kb.settings').closest('button') as HTMLButtonElement).click()
+      ;(screen.getByLabelText('gui.kb.settings') as HTMLButtonElement).click()
     })
     return saved
   }

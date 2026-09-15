@@ -1137,8 +1137,20 @@ function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getSt
             {t('gui.kb.recall_test')}
           </button>
         )}
-        <button className="mini ghost" onClick={() => store.openSettings()}>
-          {t('gui.kb.settings')}
+        {/* A glyph rather than a word: the header already carries the base's
+            name and its model, and a row of text buttons after those reads as
+            more text. The name is on the control for anyone not reading the
+            drawing -- a pointer, a screen reader, a keyboard. */}
+        <button
+          className="mini ghost kbgear"
+          aria-label={t('gui.kb.settings')}
+          title={t('gui.kb.settings')}
+          onClick={() => store.openSettings()}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 6.5h6M15 6.5h6M3 12h12M19 12h2M3 17.5h4M13 17.5h8" />
+            <path d="M12 4.3v4.4M17 9.8v4.4M10 15.3v4.4" />
+          </svg>
         </button>
       </div>
       {/* One row, two jobs: what the base is, or what is picked out of it.

@@ -5346,6 +5346,14 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .kbhd > button:first-of-type { margin-left: auto; }
 .kbhd .mdl { font-family: var(--mono); font-size: 11px; color: var(--faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The settings control is its drawing, so the button is sized to the glyph
+   rather than to a label it does not have. */
+.kbgear { flex: none; padding: 5px 7px; line-height: 0; }
+.kbgear svg {
+  width: 16px; height: 16px; display: block; fill: none; stroke: currentColor;
+  stroke-width: 1.6; stroke-linecap: round;
+}
+
 .kbsub { display: flex; align-items: center; gap: 10px; margin: 12px 0 14px; }
 .kbsub .who { margin-right: auto; }
 /* The source menu is anchored to its own button, which sits at the end of this
