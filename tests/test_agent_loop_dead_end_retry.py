@@ -215,10 +215,8 @@ async def test_the_reason_filter_narrows_the_trigger(tmp_path):
 
 @pytest.mark.asyncio
 async def test_a_spent_wall_clock_stops_the_retry(tmp_path, monkeypatch):
-    """Each attempt gets its own clock, which is safe only while the first attempt
-    died early -- the usual case, because a failing run is a shortcut. When the
-    first attempt instead SPENT the budget, a retry would hand back a fresh copy of
-    the clock that had just fired, so the turn stops with whatever it has.
+    """A turn whose budget is already gone stops with what it has rather than
+    starting an attempt that would break on its own first iteration.
 
     The clock is a counter rather than a wait: one tick per reading, which puts the
     loop's own per-iteration readings inside the budget and the turn-level one past
@@ -237,6 +235,54 @@ async def test_a_spent_wall_clock_stops_the_retry(tmp_path, monkeypatch):
     # the loop's own clock had cut it short instead, the turn would have wrapped up
     # with an answer and there would have been no dead end to decline to re-run.
     assert provider.calls == _RECOVERY_BUDGET
+
+
+@pytest.mark.asyncio
+async def test_the_rerun_continues_the_turn_s_episode_numbering(tmp_path):
+    """``EpisodeStart.index`` is the 0-based step within the TURN, and the loop
+    numbers episodes from an iteration count that restarts every time the turn is
+    run again. The TUI keys episode rows and their fold state by this index, so two
+    attempts numbering from zero would not merely look odd: the rerun's first step
+    would collide with the first attempt's and share its rendering state.
+    """
+    seen: list[int] = []
+
+    async def _episode(index: int) -> None:
+        seen.append(index)
+
+    provider = _Scripted(_dead(), _answers("Alice Smith won it."))
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1)])
+
+    await agent._process_message(_req(), session_key="s1", on_episode_start=_episode)
+
+    assert provider.attempts_used == 2, "the rerun ran, so both attempts are in there"
+    assert seen == list(range(len(seen))), f"the rerun restarted the numbering: {seen}"
+
+
+@pytest.mark.asyncio
+async def test_the_rerun_spends_the_turn_s_clock_not_a_fresh_copy(tmp_path, monkeypatch):
+    """Three-second model calls, a ten-second budget, and two dead attempts. Given a
+    clock per attempt the turn runs to eighteen seconds -- nearly two budgets -- because
+    the first attempt stopped just under the limit and the rerun started a new one. The
+    documented overrun is one budget plus at most one iteration, and it is the turn that
+    is bounded, not the attempt.
+
+    The clock reads off the work done rather than off how many times it is read, so the
+    test says what a model call costs and nothing depends on how often the loop looks.
+    """
+    provider = _Scripted(_dead(), _dead())
+    monkeypatch.setattr(turn_path, "monotonic", lambda: 3.0 * provider.calls)
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1, wall_clock_seconds=10.0)])
+
+    await agent._process_message(_req(), session_key="s1")
+
+    assert provider.attempts_used == 2, "the rerun did start, so the clock was under test"
+    # Five calls: the first attempt's three, which reach nine seconds and die there; the
+    # one iteration the rerun was still entitled to begin at nine, which is the overrun
+    # the budget documents; and the wrap-up that overrun produces. Given a clock per
+    # attempt the rerun instead receives ten fresh seconds, spends its own three calls,
+    # and the turn returns at eighteen.
+    assert provider.calls == 5, f"the rerun was handed a fresh budget: the turn ran to {3.0 * provider.calls}s"
 
 
 @pytest.mark.asyncio

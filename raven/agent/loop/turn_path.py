@@ -799,6 +799,7 @@ class TurnPathMixin:
         hook_metadata: dict[str, Any] | None = None,
         session_history: list[dict[str, Any]] | None = None,
         origin: "Origin | None" = None,
+        turn_started_at: float | None = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -818,6 +819,12 @@ class TurnPathMixin:
         ``session_history`` is the filed record of the session this turn
         persists into -- still ending with the previous turn -- stamped once
         onto the iteration hook context. The caller owns which record that is.
+
+        ``turn_started_at`` is when the caller's turn began, on the clock
+        :func:`monotonic` reads. A caller that may run this loop more than once
+        for one user turn passes it, so that the wall-clock budget and the
+        elapsed time recorded at the end both measure the turn rather than the
+        attempt; omitted, the attempt is the turn and the clock starts here.
         """
         messages = initial_messages
         iteration = 0
@@ -919,7 +926,10 @@ class TurnPathMixin:
         # for the same reason the cap is, and defaulting to unbounded, so an agent
         # that writes nothing runs exactly as it did before this existed.
         budgets = turn_budgets(hook_metadata)
-        turn_t0 = monotonic()
+        # The caller's clock when it has one: a turn that may be re-run hands the
+        # same start to every attempt, so one budget covers the turn instead of
+        # each attempt receiving a fresh copy of it.
+        turn_t0 = turn_started_at if turn_started_at is not None else monotonic()
         stopped_by: str | None = None
         # The session's effort rides every model call of the turn as an explicit
         # argument. Omitted, not None, when the policy names none: an explicit
@@ -2466,6 +2476,12 @@ class TurnPathMixin:
         # assistant message once the provider call returns, so a cancel in the
         # middle of one would otherwise lose exactly what streamed.
         streamed: dict[str, str] = {"text": "", "thought": ""}
+        # The turn's episode counter, kept out here rather than taken from the loop.
+        # ``EpisodeStart.index`` is the 0-based step within the TURN, and the loop
+        # numbers from its own iteration count, which restarts whenever the turn is
+        # run again. The TUI keys episode rows and their fold state by this index, so
+        # a second attempt beginning at zero would share both with the first.
+        episodes: dict[str, int] = {"next": 0}
 
         async def _tap_token(delta: str) -> None:
             streamed["text"] += delta
@@ -2477,12 +2493,14 @@ class TurnPathMixin:
             if on_reasoning_delta is not None:
                 await on_reasoning_delta(delta)
 
-        async def _tap_episode(index: int) -> None:
+        async def _tap_episode(_index: int) -> None:
             # A new episode is a new stream: without the reset, a buffer that
             # spans two assistant messages matches neither and would be saved
             # as a duplicate of text the loop already committed.
             streamed["text"] = ""
             streamed["thought"] = ""
+            index = episodes["next"]
+            episodes["next"] = index + 1
             if on_episode_start is not None:
                 await on_episode_start(index)
 
@@ -2506,6 +2524,7 @@ class TurnPathMixin:
                 hook_metadata=turn_hook_meta,
                 session_history=session.messages,
                 origin=req.origin,
+                turn_started_at=turn_t0,
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
@@ -2540,10 +2559,11 @@ class TurnPathMixin:
                         reasons = [r for r in reasons if r.startswith(budgets.dead_end_reasons)]
                     if not reasons:
                         break
-                    # Each attempt gets its own clock, because a failing run is a
-                    # shortcut and duds end early. When the first attempt instead SPENT
-                    # the budget, a retry would hand back a fresh copy of the clock that
-                    # just fired, so the turn stops here with whatever it has.
+                    # Every attempt spends the one turn clock, so a rerun gets what
+                    # the first attempt left rather than a fresh copy of it. Checked
+                    # here as well as inside the loop so a turn whose budget is already
+                    # gone stops with what it has instead of starting an attempt that
+                    # would break on its first iteration.
                     if budgets.wall_clock_seconds and (monotonic() - turn_t0) >= budgets.wall_clock_seconds:
                         logger.info("Dead end ({}); not re-running: the turn's clock is spent", ", ".join(reasons))
                         break
