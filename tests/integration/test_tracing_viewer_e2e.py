@@ -688,6 +688,41 @@ def test_a_background_row_says_so_on_both_readers(tmp_path):
     assert listed["sessions"][0]["sessionId"] == "background:2026-08-02"
 
 
+def test_a_sessionless_trace_across_midnight_has_one_owner(tmp_path):
+    """A trace grouped by day can be held by two rows; the jump needs one.
+
+    Work with no session is grouped by the calendar day of each span, which is
+    the grain that keeps a year of timer ticks from becoming a session each. The
+    edge it leaves is a trace that runs across UTC midnight: its spans land in
+    two rows, and the page follows a subagent run to its parent turn by trace id.
+    Whichever row is reached first is not an answer, it is an accident of
+    iteration order, so the later half is written first here to force it.
+
+    Measured incidence on a real store is zero -- every sessionless trace there
+    carried a single span -- so this pins the resolution rather than reporting a
+    failure anyone has seen. It widens with any background work that outlives a
+    timer tick.
+    """
+    early = _sessionless_span("span-before-midnight", start="2026-08-01T23:50:00+00:00")
+    late = _sessionless_span("span-after-midnight", start="2026-08-02T00:10:00+00:00")
+    for span in (early, late):
+        span["traceId"] = "trace-straddle"
+    late["parentSpanId"] = "span-before-midnight"
+    _write_spans(tmp_path / "logs" / "audit-spans.log", [late, early])
+
+    with _viewer(tmp_path) as port:
+        listed = _get(port, "/api/sessions")
+        owner = _get(port, "/api/trace-owner?traceId=trace-straddle")
+
+    # Both halves are rows -- the split is the known cost of the day grain.
+    assert {row["sessionId"] for row in listed["sessions"]} == {
+        "background:2026-08-01",
+        "background:2026-08-02",
+    }
+    # And the trace has exactly one owner: the half that started it.
+    assert owner["sessionId"] == "background:2026-08-01"
+
+
 def test_a_sidecar_from_the_previous_schema_does_not_hide_background_spans(tmp_path):
     """A sidecar written before background spans were indexed must be rebuilt.
 

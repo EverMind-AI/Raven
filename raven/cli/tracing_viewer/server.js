@@ -987,10 +987,17 @@ function scheduleSnapshotRebuild(res) {
 function findTraceOwner(traceId) {
   if (!traceId) return null;
   const merged = shardIndex.mergedIndex('spans');
+  // Earliest owner, not the first one iteration reaches. A session-bearing trace
+  // has one owner however this picks, but work that belongs to no session is
+  // grouped by the calendar day of each span, so a trace running across midnight
+  // is held by two rows. The jump from a subagent run to its parent turn has to
+  // land somewhere stable, and the half that started it is the one it wants.
+  let owner = null;
   for (const row of merged.sessions.values()) {
-    if (row.visibleTraceIds.has(traceId)) return row.sessionId;
+    if (!row.visibleTraceIds.has(traceId)) continue;
+    if (!owner || (row.startedAt || '') < (owner.startedAt || '')) owner = row;
   }
-  return null;
+  return owner?.sessionId || null;
 }
 
 const API_WINDOWS = { '1h': 3600e3, '24h': 86400e3, '7d': 604800e3 };
