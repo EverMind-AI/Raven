@@ -13,7 +13,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from raven.knowledge import DuplicateBaseNameError
+from raven.knowledge import (
+    DEFAULT_CHUNK_OVERLAP,
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_SEPARATOR,
+    DEFAULT_TOP_K,
+    DuplicateBaseNameError,
+)
 from raven.rpc.errors import ConfigValidationError, InternalError
 
 if TYPE_CHECKING:
@@ -54,10 +60,18 @@ async def knowledge_status(_params: dict[str, Any]) -> dict[str, Any]:
     to say *what* it would embed with, and only the config carries it. No
     credential is reported; a key's presence is the ``configured`` flag.
     """
-    from raven.knowledge import load_embedding_config
+    from raven.knowledge import load_embedding_config, supported_extensions
 
     config = load_embedding_config()
-    return {"configured": config is not None, "model": config.model if config is not None else ""}
+    return {
+        "configured": config is not None,
+        "model": config.model if config is not None else "",
+        # Read off the parsers rather than listed here: which formats can be
+        # indexed moves with the optional extras installed, and a surface that
+        # walks a folder has to filter by today's answer. Not through the
+        # manager: this call must not be the one that builds it.
+        "extensions": supported_extensions(),
+    }
 
 
 async def knowledge_bases_list(_params: dict[str, Any]) -> dict[str, Any]:
@@ -82,6 +96,15 @@ def _base_row(manager: KnowledgeManager, base: Any) -> dict[str, Any]:
         "created_at": base.created_at,
         "updated_at": base.updated_at,
         "documents": len(manager.list_documents(base.id)),
+        # The settings panel's fields, read off the record rather than
+        # defaulted in the page: a base written before they existed answers
+        # with what it actually behaves as.
+        "top_k": int(getattr(base, "top_k", DEFAULT_TOP_K) or DEFAULT_TOP_K),
+        "smart_chunking": bool(getattr(base, "smart_chunking", True)),
+        "separator": str(getattr(base, "separator", DEFAULT_SEPARATOR)),
+        "chunk_size": int(getattr(base, "chunk_size", DEFAULT_CHUNK_SIZE) or DEFAULT_CHUNK_SIZE),
+        "chunk_overlap": int(getattr(base, "chunk_overlap", DEFAULT_CHUNK_OVERLAP) or 0),
+        "file_processing": str(getattr(base, "file_processing", "") or ""),
     }
 
 
@@ -140,6 +163,75 @@ async def knowledge_bases_rename(params: dict[str, Any]) -> dict[str, Any]:
     return {"base": _base_row(manager, base)}
 
 
+#: What Top K is allowed to be. One is a base that answers with its single
+#: nearest chunk; fifty is more context than any turn has room for, and a
+#: slider has to stop somewhere a reader cannot type past.
+TOP_K_MIN, TOP_K_MAX = 1, 50
+#: A chunk has to be big enough to say something and small enough for the
+#: model that embeds it; the overlap has to be smaller than the chunk, or
+#: every chunk contains the one before it.
+CHUNK_MIN, CHUNK_MAX = 64, 8192
+
+
+def _bounded(params: dict[str, Any], key: str, low: int, high: int) -> int | None:
+    """One integer setting, refused rather than clamped when it is out of range.
+
+    Clamping would answer a request the caller did not make and report success,
+    which on a slider is invisible and on a typed number is a lie.
+    """
+    if key not in params or params[key] is None:
+        return None
+    raw = params[key]
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ConfigValidationError(f"{key} must be a whole number")
+    if not low <= raw <= high:
+        raise ConfigValidationError(f"{key} must be between {low} and {high}")
+    return raw
+
+
+async def knowledge_bases_settings(params: dict[str, Any]) -> dict[str, Any]:
+    """Write one base's settings and answer with the base as it now stands.
+
+    Every field is optional, and the ones left out are untouched -- a panel
+    that saves one slider should not have to send the rest back unchanged, and
+    a field this build does not know about yet cannot be blanked by one that
+    does.
+    """
+    base_id = str(params.get("base_id") or "")
+    manager = _base_or_refuse(base_id)
+
+    settings: dict[str, Any] = {}
+    top_k = _bounded(params, "top_k", TOP_K_MIN, TOP_K_MAX)
+    if top_k is not None:
+        settings["top_k"] = top_k
+    chunk_size = _bounded(params, "chunk_size", CHUNK_MIN, CHUNK_MAX)
+    if chunk_size is not None:
+        settings["chunk_size"] = chunk_size
+    overlap = _bounded(params, "chunk_overlap", 0, CHUNK_MAX)
+    if overlap is not None:
+        settings["chunk_overlap"] = overlap
+    if params.get("smart_chunking") is not None:
+        settings["smart_chunking"] = bool(params["smart_chunking"])
+    if params.get("separator") is not None:
+        settings["separator"] = str(params["separator"])
+    if params.get("file_processing") is not None:
+        settings["file_processing"] = str(params["file_processing"])
+
+    # Checked against what the base will hold once this write lands, not
+    # against what was sent: a call that moves only the overlap has to be
+    # judged against the chunk size already recorded.
+    existing = manager.get_base(base_id)
+    size = settings.get("chunk_size", getattr(existing, "chunk_size", DEFAULT_CHUNK_SIZE))
+    lap = settings.get("chunk_overlap", getattr(existing, "chunk_overlap", DEFAULT_CHUNK_OVERLAP))
+    if lap >= size:
+        raise ConfigValidationError("chunk_overlap must be smaller than chunk_size")
+
+    base = manager.configure_base(base_id, **settings)
+    if base is None:
+        raise ConfigValidationError(f"no such base: {base_id}")
+    return {"base": _base_row(manager, base)}
+
+
 async def knowledge_bases_delete(params: dict[str, Any]) -> dict[str, Any]:
     """Drop a base with its documents, their blobs and its collection.
 
@@ -180,6 +272,8 @@ def _doc_row(doc: Any) -> dict[str, Any]:
         "error": doc.error or "",
         "created_at": doc.created_at,
         "updated_at": doc.updated_at,
+        "origin": getattr(doc, "origin", "file"),
+        "origin_ref": getattr(doc, "origin_ref", "") or "",
     }
 
 
@@ -238,6 +332,114 @@ async def knowledge_documents_add(params: dict[str, Any]) -> dict[str, Any]:
     return {"document": _doc_row(doc)}
 
 
+def _base_or_refuse(base_id: str) -> Any:
+    if not base_id:
+        raise ConfigValidationError("base_id is required")
+    manager = knowledge_manager()
+    if manager.get_base(base_id) is None:
+        raise ConfigValidationError(f"no such base: {base_id}")
+    return manager
+
+
+async def knowledge_documents_add_note(params: dict[str, Any]) -> dict[str, Any]:
+    """Take a typed note into a base as the markdown it was written in.
+
+    Markdown rather than plain text because that is what the page's own editor
+    writes and what its preview renders; the chunker also reads headings out of
+    it, so a note with sections chunks along them rather than by length.
+    """
+    from raven.knowledge._sources import note_filename
+
+    base_id = str(params.get("base_id") or "")
+    manager = _base_or_refuse(base_id)
+    text = str(params.get("text") or "")
+    title = str(params.get("title") or "").strip()
+    if not text.strip():
+        raise ConfigValidationError("a note needs some text")
+    try:
+        doc = manager.add_document(
+            base_id,
+            filename=note_filename(title, text),
+            content=text.encode("utf-8"),
+            origin="note",
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise ConfigValidationError(str(exc)) from exc
+    return {"document": _doc_row(doc)}
+
+
+async def knowledge_documents_update_note(params: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite a note in place. Only a note: every other origin is a copy of
+    something the reader holds elsewhere, and editing that here would make this
+    base the only place the change exists."""
+    from raven.knowledge._sources import note_filename
+
+    document_id = str(params.get("document_id") or "")
+    if not document_id:
+        raise ConfigValidationError("document_id is required")
+    text = str(params.get("text") or "")
+    title = str(params.get("title") or "").strip()
+    if not text.strip():
+        raise ConfigValidationError("a note needs some text")
+    manager = knowledge_manager()
+    existing = manager.get_document(document_id)
+    if existing is None:
+        raise ConfigValidationError(f"no such document: {document_id}")
+    if getattr(existing, "origin", "file") != "note":
+        raise ConfigValidationError("only a note can be edited here")
+    doc = await manager.replace_document(
+        document_id,
+        filename=note_filename(title, text),
+        content=text.encode("utf-8"),
+    )
+    if doc is None:
+        raise ConfigValidationError(f"no such document: {document_id}")
+    return {"document": _doc_row(doc)}
+
+
+async def knowledge_documents_add_url(params: dict[str, Any]) -> dict[str, Any]:
+    """Read one web page and take it into a base as markdown.
+
+    The gateway fetches, not the page: a browser cannot read a third-party site
+    on the reader's behalf, and the bytes have to reach this process to be
+    chunked anyway. What the reader sees afterwards is a document like any
+    other, keeping the URL it came from.
+    """
+    from raven.knowledge._sources import SourceFetchError, fetch_page, page_filename
+
+    base_id = str(params.get("base_id") or "")
+    manager = _base_or_refuse(base_id)
+    url = str(params.get("url") or "").strip()
+    if not url:
+        raise ConfigValidationError("url is required")
+    try:
+        page = await fetch_page(url, api_key=_jina_key())
+    except SourceFetchError as exc:
+        raise ConfigValidationError(str(exc)) from exc
+    try:
+        doc = manager.add_document(
+            base_id,
+            filename=page_filename(page.markdown, url, page.title),
+            content=page.markdown.encode("utf-8"),
+            origin="url",
+            origin_ref=url,
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise ConfigValidationError(str(exc)) from exc
+    return {"document": _doc_row(doc)}
+
+
+def _jina_key() -> str:
+    """The configured Jina key, or empty. Reader works without one, at a lower
+    rate limit, so a deployment that has not set one still gets this."""
+    try:
+        from raven.config.update_tools import get_jina_api_key
+
+        return get_jina_api_key(redact=False)
+    except Exception:  # noqa: BLE001 - an unreadable config is not a reason to refuse the fetch
+        return ""
+
+
 async def knowledge_documents_index(params: dict[str, Any]) -> dict[str, Any]:
     """Embed one document's chunks, and answer where that got to.
 
@@ -293,8 +495,10 @@ async def knowledge_search(params: dict[str, Any]) -> dict[str, Any]:
         raise ConfigValidationError("query is required")
     top_k = params.get("top_k")
     try:
-        hits = await knowledge_manager().search(
-            base_ids, query, top_k=int(top_k) if isinstance(top_k, int) and top_k > 0 else 5
+        # None rather than a number when the caller names none: the engine
+        # then answers with what the bases themselves are configured for.
+        found = await knowledge_manager().search(
+            base_ids, query, top_k=int(top_k) if isinstance(top_k, int) and top_k > 0 else None
         )
     except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
         raise InternalError(f"search failed: {exc}") from exc
@@ -304,9 +508,24 @@ async def knowledge_search(params: dict[str, Any]) -> dict[str, Any]:
                 "score": float(hit.score),
                 "document_id": hit.document_id,
                 "text": getattr(hit.chunk, "text", "") or "",
+                # Which piece of its document this was, and of how many. A
+                # retrieved chunk read on its own says nothing about where in
+                # the document it came from, which is the first thing anyone
+                # testing recall asks.
+                "chunk_index": int(getattr(hit.chunk, "chunk_index", 0) or 0),
+                "total_chunks": int(getattr(hit.chunk, "total_chunks", 0) or 0),
+                # The chunk's own record of what it was parsed from. Carried
+                # even though the caller usually holds the document list: a hit
+                # has to be readable on its own, including when the row it came
+                # from was deleted while the search was in flight.
+                "source": str(getattr(hit.chunk, "source", "") or ""),
             }
-            for hit in hits
-        ]
+            for hit in found.hits
+        ],
+        # Rounded here rather than in the surface: this is a measurement, and
+        # microseconds of it are noise either way.
+        "search_ms": round(found.search_ms, 1),
+        "embed_ms": round(found.embed_ms, 1),
     }
 
 
@@ -315,9 +534,13 @@ def register_knowledge_methods(dispatcher: Dispatcher) -> None:
     dispatcher.register("knowledge.bases.list", knowledge_bases_list)
     dispatcher.register("knowledge.bases.create", knowledge_bases_create)
     dispatcher.register("knowledge.bases.rename", knowledge_bases_rename)
+    dispatcher.register("knowledge.bases.settings", knowledge_bases_settings)
     dispatcher.register("knowledge.bases.delete", knowledge_bases_delete)
     dispatcher.register("knowledge.documents.list", knowledge_documents_list)
     dispatcher.register("knowledge.documents.add", knowledge_documents_add)
+    dispatcher.register("knowledge.documents.add_note", knowledge_documents_add_note)
+    dispatcher.register("knowledge.documents.update_note", knowledge_documents_update_note)
+    dispatcher.register("knowledge.documents.add_url", knowledge_documents_add_url)
     dispatcher.register("knowledge.documents.index", knowledge_documents_index)
     dispatcher.register("knowledge.documents.delete", knowledge_documents_delete)
     dispatcher.register("knowledge.search", knowledge_search)
@@ -328,7 +551,11 @@ __all__ = [
     "knowledge_bases_delete",
     "knowledge_bases_list",
     "knowledge_bases_rename",
+    "knowledge_bases_settings",
     "knowledge_documents_add",
+    "knowledge_documents_add_note",
+    "knowledge_documents_add_url",
+    "knowledge_documents_update_note",
     "knowledge_documents_index",
     "knowledge_documents_delete",
     "knowledge_documents_list",
