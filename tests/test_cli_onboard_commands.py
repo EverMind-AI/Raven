@@ -5415,6 +5415,58 @@ def test_a_configured_embedding_reaches_the_service_the_wizard_launches(
     assert env["EVEROS_EMBEDDING__API_KEY"] == "sk-sf"
 
 
+def test_keeping_the_stored_endpoint_still_reaches_the_service(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second run through the wizard answers "Keep current" and configures
+    nothing, then restarts EverOS all the same.
+
+    Binding at the moment the endpoint is written covered only the first run;
+    this answer returns before any writer, so the restart handed the child an
+    environment with no endpoint in it -- from a menu whose whole point was
+    that everything was already set up.
+    """
+    import questionary
+
+    from raven.config.update import set_embedding_endpoint
+    from raven_everos.server import _child_env
+
+    for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS"):
+        monkeypatch.delenv(f"EVEROS_EMBEDDING__{name}", raising=False)
+    set_embedding_endpoint(
+        {
+            "model": "Qwen/Qwen3-Embedding-4B",
+            "baseUrl": "https://api.siliconflow.cn/v1",
+            "apiKey": "sk-sf",
+        }
+    )
+
+    class _FQ:
+        def ask(self) -> str:
+            return "keep"
+
+    asked: list[str] = []
+
+    def _select(message: str, **_kw: object) -> _FQ:
+        asked.append(message)
+        return _FQ()
+
+    monkeypatch.setattr(questionary, "select", _select)
+
+    onboard_everos._config_everos_role(
+        section="embedding",
+        main_model="openrouter/anthropic/claude-sonnet-4-5",
+        non_interactive=False,
+        warnings=[],
+    )
+
+    assert any("Already configured" in m for m in asked), "the stored endpoint must offer Keep current"
+    env = _child_env()
+    assert env["EVEROS_EMBEDDING__MODEL"] == "Qwen/Qwen3-Embedding-4B"
+    assert env["EVEROS_EMBEDDING__BASE_URL"] == "https://api.siliconflow.cn/v1"
+    assert env["EVEROS_EMBEDDING__API_KEY"] == "sk-sf"
+
+
 # --------------------------------------------------------------------------- capability tiers
 
 

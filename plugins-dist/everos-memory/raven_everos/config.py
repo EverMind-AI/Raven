@@ -285,23 +285,56 @@ def configure_embedding_env(embedding: Any) -> bool:
     Must run BEFORE EverOS's cached ``load_settings()``, same as
     :func:`configure_everos_env`.
     """
-    model = str(getattr(embedding, "model", "") or "")
-    base_url = str(getattr(embedding, "base_url", "") or "")
-    api_key = str(getattr(embedding, "api_key", "") or "")
+    env = embedding_env(
+        {
+            "model": getattr(embedding, "model", ""),
+            "base_url": getattr(embedding, "base_url", ""),
+            "api_key": getattr(embedding, "api_key", ""),
+            "dimensions": getattr(embedding, "dimensions", None),
+        }
+    )
+    os.environ.update(env)
+    return bool(env)
+
+
+def embedding_env(values: Any) -> dict[str, str]:
+    """``values`` rendered as EverOS's embedding variables, or ``{}``.
+
+    Split out from :func:`configure_embedding_env` because two consumers need
+    the same answer in different forms: that function binds it into this
+    process, and the child environment a spawn builds fills it in for a launch
+    nobody bound it for. Both go through here so the deference below is decided
+    once.
+
+    Empty when the three values are not all present -- fewer than three is not
+    an endpoint -- and empty when ``everos.toml`` carries an ``[embedding]`` of
+    its own: an operator who wrote one chose that endpoint for memory
+    specifically, and reusing the host's is a convenience they may decline. The
+    shipped template seeds a placeholder ``"<...>"`` model name, which is not a
+    choice anybody made.
+    """
+    model = str(values.get("model") or "")
+    base_url = str(values.get("base_url") or "")
+    api_key = str(values.get("api_key") or "")
     if not (model and base_url and api_key):
-        return False
+        return {}
     own = load_everos_config().get("embedding") or {}
     if own.get("model") and not str(own.get("model", "")).startswith("<"):
-        # EverOS was given an endpoint of its own. The shipped template seeds a
-        # placeholder "<...>" model name, which is not a choice anybody made.
-        return False
-    os.environ["EVEROS_EMBEDDING__MODEL"] = model
-    os.environ["EVEROS_EMBEDDING__BASE_URL"] = base_url
-    os.environ["EVEROS_EMBEDDING__API_KEY"] = api_key
-    dimensions = getattr(embedding, "dimensions", None)
+        return {}
+    env = {
+        "EVEROS_EMBEDDING__MODEL": model,
+        "EVEROS_EMBEDDING__BASE_URL": base_url,
+        "EVEROS_EMBEDDING__API_KEY": api_key,
+    }
+    dimensions = values.get("dimensions")
     if isinstance(dimensions, int) and dimensions > 0:
-        os.environ["EVEROS_EMBEDDING__DIMENSIONS"] = str(dimensions)
-    return True
+        env["EVEROS_EMBEDDING__DIMENSIONS"] = str(dimensions)
+    return env
+
+
+def host_embedding_env() -> dict[str, str]:
+    """The binding raven's own ``embedding`` block earns, or ``{}``."""
+    return embedding_env(host_embedding_section())
 
 
 def ensure_everos_home(root: Path | str | None = None) -> None:

@@ -685,6 +685,17 @@ def _child_env() -> dict[str, str]:
     for key in list(env):
         if key.startswith("EVEROS_API__"):
             del env[key]
+    # The embedding endpoint is raven's, and every spawn needs it in the child
+    # -- not only the ones a started backend bound first. The wizard launches a
+    # server of its own before any session exists, and its "Keep current" answer
+    # reaches that launch without passing a writer at all; filling it in here
+    # rather than at each launch is what makes those two the same case.
+    # ``setdefault`` because a value already in the environment was bound
+    # deliberately, by a backend that knows its own root.
+    from raven_everos.config import host_embedding_env
+
+    for key, value in host_embedding_env().items():
+        env.setdefault(key, value)
     return env
 
 
