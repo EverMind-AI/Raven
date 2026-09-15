@@ -490,6 +490,38 @@ class TestEmbeddingHasTwoHomes:
         assert ue.everos_role_configured("llm") is False
         assert ue.everos_role_configured("rerank") is False
 
+    def test_the_shipped_template_is_not_an_operators_choice(
+        self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fresh managed root is the template, copied verbatim.
+
+        Written from the template itself rather than a hand-built section: the
+        template seeds every role with a real model name and an empty key, and
+        a criterion of "has a model" reads that as a deliberate choice. It did
+        -- a fresh install then bound nothing, and the service the wizard had
+        just started ran keyword-only while the wizard said embedding was
+        configured. A hand-built section with a key in it cannot catch that.
+        """
+        import shutil
+
+        from everos.entrypoints.cli.commands.init_cmd import _EVEROS_TEMPLATE
+
+        everos_home.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_EVEROS_TEMPLATE, everos_home)
+        assert ue.everos_section("embedding").get("model"), "template must still seed a model, or this proves nothing"
+        assert not ue.everos_section("embedding").get("api_key")
+
+        assert ue.everos_has_own_embedding() is False
+
+        self._raven_config(
+            tmp_path,
+            monkeypatch,
+            {"model": "Qwen/Qwen3-Embedding-4B", "baseUrl": "https://api.deepinfra.com/v1/openai", "apiKey": "sk-di"},
+        )
+        env = ue.host_embedding_env()
+        assert env["EVEROS_EMBEDDING__MODEL"] == "Qwen/Qwen3-Embedding-4B"
+        assert env["EVEROS_EMBEDDING__API_KEY"] == "sk-di"
+
     def test_the_toml_keeps_precedence_when_it_has_one(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
