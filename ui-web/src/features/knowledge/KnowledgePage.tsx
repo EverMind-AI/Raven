@@ -196,14 +196,17 @@ function DocRow({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
         </button>
       </div>
       <div className="td">{t('gui.kb.doc_type_file')}</div>
-      <div className={`td st s-${doc.status}`}>{t('gui.kb.doc_' + doc.status)}</div>
+      {/* The reason rides on the status rather than under the row. A red line
+          beneath every failure pushed the rows apart and made a list of files
+          hard to scan; the status is where a reader is already looking when
+          they want to know what went wrong. */}
+      <div className={`td st s-${doc.status}`} title={doc.error || undefined}>
+        {t('gui.kb.doc_' + doc.status)}
+      </div>
       <div className="td">{ago(doc.updated_at)}</div>
       <div className="td">
         <DocMenu doc={doc} busy={busy} />
       </div>
-      {/* Why it failed, under the row it belongs to: a reason a reader has to
-          go to a log for is a reason they will not read. */}
-      {doc.error ? <div className="td err">{doc.error}</div> : null}
     </>
   )
 }

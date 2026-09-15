@@ -5307,12 +5307,8 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 /* Status carries the only colour in the row, because it is the only cell a
    reader scans a list of files for. */
 .kbtable .td.s-ready { color: var(--moss); }
-.kbtable .td.s-failed { color: var(--clay); }
+.kbtable .td.s-failed { color: var(--clay); cursor: help; }
 .kbtable .td.s-indexing, .kbtable .td.s-pending { color: var(--amber); }
-.kbtable .td.err {
-  grid-column: 1 / -1; font-size: 11.5px; color: var(--clay); line-height: 1.6;
-  padding: 0 8px 10px; border-bottom: 1px solid var(--line-soft);
-}
 .kbops { position: relative; display: flex; justify-content: flex-end; }
 .kbops .dots { padding: 2px 8px; font-size: 15px; line-height: 1; }
 .kbmenu {
