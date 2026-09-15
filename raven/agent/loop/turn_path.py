@@ -68,6 +68,7 @@ from raven.agent.loop._shared import (
     json,
     logger,
     loop_break_nudge,
+    monotonic,
     replace,
     resolve_context_window,
     semconv,
@@ -76,10 +77,12 @@ from raven.agent.loop._shared import (
     strip_think_blocks,
     time,
     trace,
+    turn_budgets,
     turn_question,
     uuid4,
     workdir,
 )
+from raven.agent.loop.dead_end import NO_RESPONSE_FALLBACK, dead_reasons
 from raven.agent.loop.first_call import FirstCallGuard
 from raven.agent.loop.recovery import ContinuationGate, DraftGate, cut_reasoning_head, lower_reasoning_effort
 from raven.agent.tools.registry import call_failed
@@ -911,6 +914,13 @@ class TurnPathMixin:
         # Read once, here: a mode switched mid-turn lands on the next turn.
         policy = self.session_policy(session_key or "")
         iteration_cap = policy.max_iterations or self.max_iterations
+        # The other bound on this turn, and the only one a product supplies rather
+        # than the loop: whatever a hook left under ``TURN_BUDGETS_KEY``. Read here
+        # for the same reason the cap is, and defaulting to unbounded, so an agent
+        # that writes nothing runs exactly as it did before this existed.
+        budgets = turn_budgets(hook_metadata)
+        turn_t0 = monotonic()
+        stopped_by: str | None = None
         # The session's effort rides every model call of the turn as an explicit
         # argument. Omitted, not None, when the policy names none: an explicit
         # None would override the provider's sentinel and switch its configured
@@ -1003,6 +1013,19 @@ class TurnPathMixin:
             return True
 
         while iteration < iteration_cap:
+            # Checked here and not mid-generation: cancelling a call in flight
+            # discards a finished generation and leaves no answer, and a deadline
+            # landing between a tool result and the model reading it produces a
+            # trajectory nothing can interpret. The cost is an overrun of at most
+            # one iteration, which the budget's own docstring states.
+            if budgets.wall_clock_seconds is not None and (monotonic() - turn_t0) >= budgets.wall_clock_seconds:
+                stopped_by = "wall_clock"
+                logger.warning(
+                    "Wall-clock budget {}s reached after {} iterations; wrapping up",
+                    budgets.wall_clock_seconds,
+                    iteration,
+                )
+                break
             iteration += 1
             logger.info(
                 "Iteration {}/{} model={}",
@@ -2008,10 +2031,16 @@ class TurnPathMixin:
         if leftover is not None and (lost := leftover.pending_rows()):
             logger.info("question autofill: {} row(s) ended the turn unwritten", len(lost))
 
-        if final_content is None and (stalled_tool is not None or iteration >= iteration_cap):
+        if final_content is None and (
+            stalled_tool is not None or iteration >= iteration_cap or stopped_by == "wall_clock"
+        ):
             if stalled_tool is not None:
+                stopped_by = "stalled_tool"
                 logger.warning("Turn stopped on a repeating `{}`; synthesizing final answer", stalled_tool)
+            elif stopped_by == "wall_clock":
+                logger.warning("Wall-clock budget reached; synthesizing final answer")
             else:
+                stopped_by = "iteration_cap"
                 logger.warning("Max iterations ({}) reached; synthesizing final answer", iteration_cap)
             # Exhaustion is two orthogonal facts, not an either/or:
             #   1. The turn did NOT complete — tag it ``interrupted`` so the
@@ -2060,10 +2089,23 @@ class TurnPathMixin:
         # a provider error, or an exhausted budget whose wrap-up came back
         # empty -- gets one last chance to commit an answer.
         answerless = status == "error" or not (final_content or "").strip()
+        if hook_ctx is not None:
+            # Written for every turn, not only an answerless one. "This turn was cut
+            # short" is not recoverable from ``status``: the iteration cap, a stalled
+            # tool and a spent wall clock all land on ``interrupted``, and the wrap-up
+            # reply they produce reads as an ordinary answer to everything downstream.
+            # Ints and None only -- an observer chain that keeps scalars by type drops a
+            # float without a word.
+            hook_ctx.metadata["turn_end"] = {
+                "status": status,
+                "iterations": iteration,
+                "stopped_by": stopped_by,
+                "wall_clock_budget_s": int(budgets.wall_clock_seconds) if budgets.wall_clock_seconds else None,
+                "turn_elapsed_s": int(monotonic() - turn_t0),
+            }
         if hook_ctx is not None and answerless:
             hook_ctx.messages = messages
             hook_ctx.response = None
-            hook_ctx.metadata["turn_end"] = {"status": status, "iterations": iteration}
             decision = await self.hooks.terminal_answerless(hook_ctx)
             if decision.short_circuit_result is not None:
                 final_content = str(decision.short_circuit_result)
@@ -2446,29 +2488,70 @@ class TurnPathMixin:
 
         from raven.agent.subagent.mode_tiers import turn_tier
 
+        async def _attempt(seed: list[dict]):
+            return await self._run_agent_loop(
+                seed,
+                on_progress=on_progress,
+                session_key=key,
+                model=routed_model,
+                fallback_models=fallback_models,
+                injected_skill_ids=self._collect_injected_skill_ids(selected_skills),
+                on_token_delta=_tap_token if on_token_delta is not None else None,
+                on_reasoning_delta=_tap_reasoning if on_reasoning_delta is not None else None,
+                on_tool_event=on_tool_event,
+                on_episode_start=_tap_episode,
+                on_notice=on_notice,
+                usage_sink=usage_sink,
+                drain=drain,
+                hook_metadata=turn_hook_meta,
+                session_history=session.messages,
+                origin=req.origin,
+            )
+
+        # Taken BEFORE the first attempt, because the loop appends to the list it is
+        # handed: rebuilt afterwards it would carry the failed attempt's research, and
+        # the whole point is to start again from the question.
+        budgets = turn_budgets(turn_hook_meta)
+        retries_left = budgets.dead_end_retries
+        retry_seed = [dict(m) for m in initial_messages] if retries_left else None
+        turn_t0 = monotonic()
+
         try:
             # The tier this turn dispatches sub-agents at, frozen here for the
             # same reason the iteration cap is read once: a switch arriving mid-turn
             # lands on the next turn, not on a sub-agent this one has yet to call.
             with turn_tier(self.session_tier(key)):
-                final_content, _, all_msgs, outcome = await self._run_agent_loop(
-                    initial_messages,
-                    on_progress=on_progress,
-                    session_key=key,
-                    model=routed_model,
-                    fallback_models=fallback_models,
-                    injected_skill_ids=self._collect_injected_skill_ids(selected_skills),
-                    on_token_delta=_tap_token if on_token_delta is not None else None,
-                    on_reasoning_delta=_tap_reasoning if on_reasoning_delta is not None else None,
-                    on_tool_event=on_tool_event,
-                    on_episode_start=_tap_episode,
-                    on_notice=on_notice,
-                    usage_sink=usage_sink,
-                    drain=drain,
-                    hook_metadata=turn_hook_meta,
-                    session_history=session.messages,
-                    origin=req.origin,
-                )
+                final_content, _, all_msgs, outcome = await _attempt(initial_messages)
+                # The conditional rerun. A dead turn has no answer to damage -- "empty
+                # implies wrong" is a scoring rule, so the count of right answers among
+                # dead turns starts at zero and a second attempt can only raise it. It
+                # re-runs from the original question rather than salvaging the failed
+                # attempt, because salvage was measured to turn a detectable zero into a
+                # confident wrong answer and to empty this trigger at the same time.
+                # Unreachable for an agent whose hooks leave no budget, which is every
+                # agent but the one that asked for it.
+                while retries_left > 0:
+                    reasons = dead_reasons(
+                        messages=all_msgs[turn_start_idx:],
+                        final_content=final_content,
+                        status=outcome.status,
+                    )
+                    if budgets.dead_end_reasons:
+                        reasons = [r for r in reasons if r.startswith(budgets.dead_end_reasons)]
+                    if not reasons:
+                        break
+                    # Each attempt gets its own clock, because a failing run is a
+                    # shortcut and duds end early. When the first attempt instead SPENT
+                    # the budget, a retry would hand back a fresh copy of the clock that
+                    # just fired, so the turn stops here with whatever it has.
+                    if budgets.wall_clock_seconds and (monotonic() - turn_t0) >= budgets.wall_clock_seconds:
+                        logger.info("Dead end ({}); not re-running: the turn's clock is spent", ", ".join(reasons))
+                        break
+                    retries_left -= 1
+                    logger.info("Dead end ({}); re-running the turn", ", ".join(reasons))
+                    if on_progress is not None:
+                        await on_progress("The first attempt produced no answer; researching again.")
+                    final_content, _, all_msgs, outcome = await _attempt([dict(m) for m in retry_seed])
         except asyncio.CancelledError:
             # A stop is not a failure, but it is also not amnesia: what already
             # streamed is work the reader saw, so it lands in the session with a
@@ -2498,7 +2581,7 @@ class TurnPathMixin:
         self._stash_recovery(key, outcome)
 
         if final_content is None:
-            final_content = "I've completed processing but have no response to give."
+            final_content = NO_RESPONSE_FALLBACK
 
         # AgentHook ``after_send`` chain — typically a Sentinel
         # NudgeInjector / response_modifier modifying the outbound text. Skip it

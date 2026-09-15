@@ -5,6 +5,7 @@
 in ``_shared``. Callers import ``AgentLoop`` from here.
 """
 
+from raven.agent.loop._shared import TURN_BUDGETS_KEY, TurnBudgets, turn_budgets
 from raven.agent.loop.main import AgentLoop, LoopOutcome
 
-__all__ = ["AgentLoop", "LoopOutcome"]
+__all__ = ["TURN_BUDGETS_KEY", "AgentLoop", "LoopOutcome", "TurnBudgets", "turn_budgets"]
