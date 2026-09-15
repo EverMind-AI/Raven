@@ -26,6 +26,19 @@ from typing import Any, Literal
 from loguru import logger
 
 DocumentStatus = Literal["pending", "indexing", "ready", "failed"]
+#: Which kind of data source a document arrived through. A folder is not
+#: one of these: the browser walks it and sends the files, so what lands
+#: here is a file like any other.
+DocumentOrigin = Literal["file", "note", "url"]
+
+#: What a knowledge base is configured with until somebody changes it. Named
+#: here, beside the record that holds them, because the handlers that read a
+#: base written before these fields existed have to fall back on the same
+#: numbers -- and three copies of a default are three chances to disagree.
+DEFAULT_TOP_K = 6
+DEFAULT_CHUNK_SIZE = 2048
+DEFAULT_CHUNK_OVERLAP = 215
+DEFAULT_SEPARATOR = "\n\n"
 
 
 def _now() -> str:
@@ -53,6 +66,27 @@ class KnowledgeBaseRecord:
     created_at: str
     updated_at: str
     description: str = ""
+    #: The settings a reader can change after the base exists. Every one of
+    #: them is defaulted, so a registry written before they existed loads with
+    #: the behaviour it already had.
+    #:
+    #: At most this many chunks come back from one search of this base. A
+    #: property of the base rather than of each call: how much context this
+    #: material is worth is a fact about the material.
+    top_k: int = DEFAULT_TOP_K
+    #: Split on the structure a parser found -- headings, slides, pages --
+    #: rather than on length alone. What ``HeadingAwareChunker`` does, and the
+    #: default because it is the chunker the manager already builds.
+    smart_chunking: bool = True
+    #: Where a plain split is allowed to cut, when smart chunking is off.
+    separator: str = DEFAULT_SEPARATOR
+    #: The size a chunk is aimed at, and how much of the previous one each
+    #: carries, both in tokens.
+    chunk_size: int = DEFAULT_CHUNK_SIZE
+    chunk_overlap: int = DEFAULT_CHUNK_OVERLAP
+    #: Which pre-processing a file goes through on the way in. Empty is
+    #: "don't use", which is the only setting there is so far.
+    file_processing: str = ""
 
 
 @dataclass(frozen=True)
@@ -69,6 +103,14 @@ class KnowledgeDocumentRecord:
     updated_at: str
     chunk_count: int = 0
     error: str = ""
+    #: Which kind of data source this came in as. Defaulted rather than
+    #: required so a registry written before the field existed still loads --
+    #: every document in one is a file, which is what the default says.
+    origin: DocumentOrigin = "file"
+    #: What the origin points back at: the page's URL for a url document, empty
+    #: for the rest. A note keeps its text in the blob like any other document,
+    #: so it needs nothing here.
+    origin_ref: str = ""
 
 
 class RecordStore:
@@ -181,6 +223,34 @@ class RecordStore:
         self._save()
         return updated
 
+    def configure_base(self, base_id: str, **settings: object) -> KnowledgeBaseRecord | None:
+        """Write the settings a reader can change after the base exists.
+
+        Only the fields named in ``settings`` move. Narrow like
+        ``rename_base``, and for the same reason: the embedding model and its
+        width are what the collection was built to, so they are not settings.
+        An unknown key is a caller mistake, and silently dropping it would
+        leave a surface reporting a value it never stored.
+        """
+        record = self._bases.get(base_id)
+        if record is None:
+            return None
+        allowed = {
+            "top_k",
+            "smart_chunking",
+            "separator",
+            "chunk_size",
+            "chunk_overlap",
+            "file_processing",
+        }
+        unknown = set(settings) - allowed
+        if unknown:
+            raise ValueError(f"not a knowledge base setting: {', '.join(sorted(unknown))}")
+        updated = replace(record, **settings, updated_at=_now())  # type: ignore[arg-type]
+        self._bases[base_id] = updated
+        self._save()
+        return updated
+
     def delete_base(self, base_id: str) -> bool:
         """Drop a base and every document record under it.
 
@@ -206,6 +276,8 @@ class RecordStore:
         source: str,
         media_type: str,
         size: int,
+        origin: DocumentOrigin = "file",
+        origin_ref: str = "",
     ) -> KnowledgeDocumentRecord:
         now = _now()
         record = KnowledgeDocumentRecord(
@@ -217,6 +289,8 @@ class RecordStore:
             status="pending",
             created_at=now,
             updated_at=now,
+            origin=origin,
+            origin_ref=origin_ref,
         )
         self._documents[record.id] = record
         self._save()
@@ -253,6 +327,37 @@ class RecordStore:
             status=status,
             chunk_count=record.chunk_count if chunk_count is None else chunk_count,
             error=error,
+            updated_at=_now(),
+        )
+        self._documents[document_id] = updated
+        self._save()
+        return updated
+
+    def update_document(
+        self,
+        document_id: str,
+        *,
+        source: str,
+        media_type: str,
+        size: int,
+    ) -> KnowledgeDocumentRecord | None:
+        """Rewrite one document's content fields and send it back to the queue.
+
+        Back to ``pending`` with no chunks: the text this record described is
+        gone, and counting chunks that were embedded from it would report a
+        document that no longer exists.
+        """
+        record = self._documents.get(document_id)
+        if record is None:
+            return None
+        updated = replace(
+            record,
+            source=source,
+            media_type=media_type,
+            size=size,
+            status="pending",
+            chunk_count=0,
+            error="",
             updated_at=_now(),
         )
         self._documents[document_id] = updated

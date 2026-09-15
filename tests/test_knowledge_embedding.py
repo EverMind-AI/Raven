@@ -9,9 +9,14 @@ import httpx
 import pytest
 
 from raven.knowledge._embedding import (
+    SILICONFLOW_DEFAULT_MAX_TOKENS,
     EmbeddingClient,
     EmbeddingConfig,
     EmbeddingError,
+    SiliconFlowEmbeddingClient,
+    embedding_client,
+    estimate_tokens,
+    fit_to_tokens,
     load_embedding_config,
 )
 
@@ -278,3 +283,154 @@ def test_the_recorded_root_wins_over_the_environment(tmp_path, monkeypatch) -> N
 
     assert config is not None
     assert config.model == "text-embedding-3-small"
+
+
+# ── SiliconFlow ───────────────────────────────────────────────────
+
+
+def _config(base_url: str = "https://api.siliconflow.cn/v1", model: str = "BAAI/bge-large-zh-v1.5"):
+    return EmbeddingConfig(model=model, base_url=base_url, api_key="k")
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("https://api.siliconflow.cn/v1", SiliconFlowEmbeddingClient),
+        ("https://api.siliconflow.com/v1", SiliconFlowEmbeddingClient),
+        ("https://SiliconFlow.cn/v1", SiliconFlowEmbeddingClient),
+        ("https://api.openai.com/v1", EmbeddingClient),
+        ("http://localhost:11434/v1", EmbeddingClient),
+        # A host that merely ends in the vendor's name is not the vendor. The
+        # subclass cuts inputs, so answering yes here would quietly truncate
+        # against a limit somebody else's endpoint does not have.
+        ("https://siliconflow.cn.example.com/v1", EmbeddingClient),
+        ("https://notsiliconflow.cn/v1", EmbeddingClient),
+    ],
+)
+def test_the_vendor_is_read_off_the_host_not_configured(base_url, expected) -> None:
+    assert type(embedding_client(_config(base_url))) is expected
+
+
+def test_a_cjk_character_costs_a_whole_token_and_a_url_more_than_prose() -> None:
+    """The chunker's own estimate is utf-8 bytes over four, which reads a CJK
+    character as three quarters of a token when it is one. That is what made
+    chunks that looked within budget arrive over it."""
+    assert estimate_tokens("检查结果参考值" * 100) >= 700
+    # Prose is the cheap case and is still counted at two characters a token,
+    # because a knowledge base is mostly markdown, URLs and code, which are not.
+    assert estimate_tokens("word " * 100) == 250
+
+
+def test_text_within_the_budget_is_passed_through_untouched() -> None:
+    text = "a short line of prose"
+    assert fit_to_tokens(text, 512) is text
+
+
+def test_cutting_lands_on_the_longest_prefix_that_fits() -> None:
+    """By bisection rather than a flat characters-per-token multiplication:
+    the cost per character is not uniform, so a paragraph followed by a code
+    block would be cut in the wrong place by a single ratio."""
+    text = "检查结果" * 200 + "and then some english prose that costs far less per character"
+    cut = fit_to_tokens(text, 100)
+
+    assert text.startswith(cut)
+    assert estimate_tokens(cut) <= 100
+    # Longest, not merely short enough: one character more must not fit.
+    assert estimate_tokens(text[: len(cut) + 1]) > 100
+
+
+def test_a_budget_of_nothing_cuts_nothing_rather_than_everything() -> None:
+    """A model whose limit resolved to zero is a table bug, and answering it by
+    embedding empty strings would fill a base with vectors for nothing."""
+    assert fit_to_tokens("some text", 0) == "some text"
+
+
+async def test_every_input_is_cut_to_the_model_limit_before_it_is_sent(mock_transport) -> None:
+    """The whole point: the endpoint refuses the entire request when one input
+    is over the limit, naming neither which one nor why -- so a document of
+    eighteen chunks where two are long used to index none of the other sixteen."""
+    sent: list[list[str]] = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        sent.append(payload["input"])
+        return httpx.Response(
+            200,
+            json={"data": [{"index": i, "embedding": [0.1, 0.2]} for i in range(len(payload["input"]))]},
+        )
+
+    mock_transport(handler)
+    client = embedding_client(_config())
+    long_cjk = "检查结果参考值" * 200
+    vectors = await client.embed(["short one", long_cjk, "short two"])
+
+    assert len(vectors) == 3
+    # One vector per input still, in order: the caller pairs them with its
+    # chunks positionally, so cutting must never change how many come back.
+    assert sent[0][0] == "short one"
+    assert sent[0][2] == "short two"
+    assert len(sent[0][1]) < len(long_cjk)
+    assert estimate_tokens(sent[0][1]) <= SILICONFLOW_DEFAULT_MAX_TOKENS
+
+
+async def test_a_model_with_a_longer_context_is_not_cut_to_the_short_default(mock_transport) -> None:
+    sent: list[list[str]] = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        sent.append(payload["input"])
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1]}]})
+
+    mock_transport(handler)
+    client = embedding_client(_config(model="BAAI/bge-m3"))
+    text = "检查结果参考值" * 200
+
+    await client.embed([text])
+
+    assert client.max_input_tokens == 8192
+    assert sent[0][0] == text
+
+
+def test_an_unknown_model_gets_the_smaller_limit_rather_than_the_larger() -> None:
+    """A model whose real limit is higher loses one input's tail; a model whose
+    real limit is 512 loses the whole document."""
+    client = embedding_client(_config(model="some/model-nobody-listed"))
+
+    assert client.max_input_tokens == SILICONFLOW_DEFAULT_MAX_TOKENS
+
+
+async def test_the_cut_is_kept_under_the_limit_rather_than_at_it(mock_transport) -> None:
+    """The count is an estimate and the endpoint refuses the whole request, so
+    the margin is what a wrong estimate costs instead of a failed document."""
+    sent: list[list[str]] = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        sent.append(payload["input"])
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1]}]})
+
+    mock_transport(handler)
+    client = embedding_client(_config())
+
+    await client.embed(["检查结果" * 400])
+
+    assert estimate_tokens(sent[0][0]) < client.max_input_tokens
+
+
+async def test_a_plain_endpoint_is_left_alone(mock_transport) -> None:
+    """Only the vendor that departs from the shape gets a subclass; everything
+    else keeps sending exactly what it was given."""
+    sent: list[list[str]] = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        sent.append(payload["input"])
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1]}]})
+
+    mock_transport(handler)
+    client = embedding_client(_config(base_url="https://api.openai.com/v1"))
+    text = "检查结果参考值" * 500
+
+    await client.embed([text])
+
+    assert sent[0][0] == text

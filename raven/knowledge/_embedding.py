@@ -16,6 +16,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
@@ -175,3 +176,120 @@ class EmbeddingClient:
         if len(widths) != 1:
             raise EmbeddingError(f"embedding endpoint returned mixed widths: {sorted(widths)}")
         return vectors
+
+
+# ── SiliconFlow ───────────────────────────────────────────────────────
+
+SILICONFLOW_HOSTS = ("siliconflow.cn", "siliconflow.com")
+
+#: Input limits for the embedding models SiliconFlow serves, in tokens, from
+#: each model card. The default is the smaller number rather than the larger:
+#: a model whose real limit is higher only loses some of one input's tail,
+#: while a model whose real limit is 512 loses the whole document.
+SILICONFLOW_MAX_TOKENS: dict[str, int] = {
+    "BAAI/bge-m3": 8192,
+    "Pro/BAAI/bge-m3": 8192,
+}
+SILICONFLOW_DEFAULT_MAX_TOKENS = 512
+
+#: Kept under the model's own limit, because the count below is an estimate and
+#: the endpoint refuses the entire request rather than the one input it objects
+#: to. The margin is what a wrong estimate costs instead of a failed document.
+_TOKEN_HEADROOM = 0.94
+
+#: Non-CJK characters per token. Measured against this endpoint rather than
+#: assumed: binary-searching the longest accepted prefix of real documentation
+#: pages put it at 2.1 to 2.3, where the usual English-prose rule of four would
+#: have said 512 tokens was 2048 characters. Markdown, URLs and code all
+#: tokenize far denser than prose, and a knowledge base is mostly those.
+_CHARS_PER_TOKEN = 2.0
+
+
+def _is_cjk(ch: str) -> bool:
+    """Whether a character is one a CJK tokenizer spends a whole token on."""
+    return "\u3400" <= ch <= "\u9fff" or "\uf900" <= ch <= "\ufaff" or "\uff00" <= ch <= "\uffef"
+
+
+def estimate_tokens(text: str) -> int:
+    """How many tokens ``text`` is likely to cost, erring high.
+
+    Erring high on purpose. The chunker's own estimate is ``utf-8 bytes // 4``,
+    which reads a CJK character as three quarters of a token when it is one,
+    and reads a URL as a quarter of what it costs. Both make a chunk that looks
+    within budget and is not, and the endpoint answers that by refusing the
+    request the chunk arrived in.
+    """
+    cjk = sum(1 for ch in text if _is_cjk(ch))
+    return int(cjk + (len(text) - cjk) / _CHARS_PER_TOKEN)
+
+
+def fit_to_tokens(text: str, budget: int) -> str:
+    """``text`` cut to the longest prefix that fits ``budget`` tokens.
+
+    By bisection on the estimate rather than by a characters-per-token
+    multiplication, because the cost per character is not uniform across a
+    string: a paragraph of prose followed by a code block is cheap then
+    expensive, and cutting at a flat ratio lands in the wrong place on both.
+    """
+    if budget <= 0 or estimate_tokens(text) <= budget:
+        return text
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if estimate_tokens(text[:mid]) <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo]
+
+
+class SiliconFlowEmbeddingClient(EmbeddingClient):
+    """SiliconFlow, where one over-long input refuses the whole request.
+
+    The endpoint answers an input past its model's limit with HTTP 400 and
+    ``{"code":20015,"message":"The parameter is invalid"}`` -- naming neither
+    which input nor what was wrong with it, and failing every other input in
+    the same call. A document of eighteen chunks where two are long indexes
+    none of the other sixteen.
+
+    So each input is cut to fit before it is sent. What that costs is the tail
+    of an over-long chunk: the chunk is still stored and still shown in full
+    when it is retrieved, but its vector speaks for its beginning. That is a
+    poor second to chunking to the model's real limit in the first place --
+    which is where this belongs -- and a good first to indexing nothing.
+    """
+
+    @property
+    def max_input_tokens(self) -> int:
+        """The configured model's input limit, in tokens."""
+        return SILICONFLOW_MAX_TOKENS.get(self._config.model, SILICONFLOW_DEFAULT_MAX_TOKENS)
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        budget = int(self.max_input_tokens * _TOKEN_HEADROOM)
+        fitted = [fit_to_tokens(text, budget) for text in texts]
+        cut = sum(1 for before, after in zip(texts, fitted, strict=True) if before != after)
+        if cut:
+            logger.warning(
+                "knowledge: cut {} of {} inputs to {}'s {}-token limit; their vectors speak for "
+                "the start of the text only",
+                cut,
+                len(texts),
+                self._config.model,
+                self.max_input_tokens,
+            )
+        return await super().embed(fitted)
+
+
+def embedding_client(config: EmbeddingConfig) -> EmbeddingClient:
+    """The client for an endpoint: the plain one, or a vendor's own.
+
+    Chosen by host rather than configured, because which vendor is being
+    spoken to is a fact about the base URL and not a second thing for an
+    operator to get right. Everything else stays on the plain client -- an
+    OpenAI-compatible endpoint is what this package targets, and a vendor
+    subclass exists only where the vendor departs from it.
+    """
+    host = (urlparse(config.base_url).hostname or "").lower()
+    if any(host == name or host.endswith("." + name) for name in SILICONFLOW_HOSTS):
+        return SiliconFlowEmbeddingClient(config)
+    return EmbeddingClient(config)
