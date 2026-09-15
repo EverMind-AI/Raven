@@ -285,7 +285,7 @@ class TestDirectExecutor:
         that had already finished.
         """
         e = DirectExecutor()
-        result = await e.exec("echo early; echo warned >&2; sleep 30", timeout=2)
+        result = await e.exec("echo early; echo warned >&2; sleep 30", timeout=1)
         assert result.exit_code == -1
         assert "Timed out after" in result.stderr
         assert "early" in result.stdout
@@ -309,7 +309,7 @@ class TestDirectExecutor:
         sys.path.insert(0, str(plugin))
         from oncall_flow.flow import _EXEC_CAP_KILL
 
-        result = await DirectExecutor().exec("echo out; echo noisy >&2; sleep 30", timeout=2)
+        result = await DirectExecutor().exec("echo out; echo noisy >&2; sleep 30", timeout=1)
 
         assert result.exit_code == -1
         assert _EXEC_CAP_KILL.search(result.as_text()), (
@@ -325,7 +325,7 @@ class TestDirectExecutor:
         lifetime, however short a timeout the caller asked for.
         """
         started = time.monotonic()
-        result = await DirectExecutor().exec("exec 1>&- 2>&-; sleep 30", timeout=2)
+        result = await DirectExecutor().exec("exec 1>&- 2>&-; sleep 30", timeout=1)
         elapsed = time.monotonic() - started
 
         assert result.exit_code == -1
@@ -450,7 +450,12 @@ class TestDirectExecutor:
         task = asyncio.create_task(DirectExecutor().exec("cmd", timeout=60))
         await asyncio.sleep(0.05)
         task.cancel()
-        await asyncio.sleep(0)
+        # The second cancel must land inside the reap. Issued one tick after the
+        # first it arrives while the task is still unwinding the drain, and two
+        # cancels pending on a task that has not run yet are one CancelledError
+        # -- the reap then really did wait out its 5 s guard.
+        while not killed:
+            await asyncio.sleep(0)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
