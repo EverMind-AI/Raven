@@ -110,6 +110,18 @@ def _dead() -> list[LLMResponse]:
     return [LLMResponse(content="", finish_reason="stop")] * _RECOVERY_BUDGET
 
 
+def _thinks_and_says_nothing() -> list[LLMResponse]:
+    """The same dead attempt, reached through the recovery path that leaves scaffolding.
+
+    A reply that is all reasoning and no body sends recovery down its prefill branch,
+    which feeds the model back its own thinking as an assistant message of the loop's
+    own making. Six is more than the two prefills and three retries recovery will
+    spend, so the attempt ends the way ``_dead`` does -- with one of those synthetic
+    messages sitting at the end of the list.
+    """
+    return [LLMResponse(content="", reasoning_content="Let me weigh it.", finish_reason="stop")] * 6
+
+
 def _answers(text: str) -> list[LLMResponse]:
     return [LLMResponse(content=text, finish_reason="stop")]
 
@@ -542,6 +554,25 @@ async def test_the_last_attempt_keeps_the_salvage_the_clock_denies_it_a_rerun_fo
     assert provider.attempts_used == 1, "the first attempt was meant to spend the clock"
     assert hook.calls == 1, "the turn had no rerun coming and was not salvaged"
     assert out[0] == _Salvages.answer
+
+
+@pytest.mark.asyncio
+async def test_the_dead_end_reading_drops_the_recovery_scaffolding_first(tmp_path):
+    """Where a turn ended is read off the trajectory it leaves behind, and the loop's
+    own recovery messages are not part of that: they are dropped before anything is
+    persisted. The reading used to happen after the drop, because it happened after
+    the attempt returned. It happens inside the attempt now, so it has to do the drop
+    itself -- or a product that re-runs turns ending on the question is told they
+    ended on a prefill the loop wrote, and never re-runs one.
+    """
+    hook = _Budgeted(dead_end_retries=1, dead_end_reasons=("stranded:question",))
+    provider = _Scripted(_thinks_and_says_nothing(), _answers("Alice Smith won it."))
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert provider.attempts_used == 2, "the scaffolding was read as where the turn ended"
+    assert out[0] == "Alice Smith won it."
 
 
 @pytest.mark.asyncio
