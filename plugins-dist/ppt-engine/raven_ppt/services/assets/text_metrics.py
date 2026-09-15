@@ -64,6 +64,12 @@ class FontConfig:
         )
 
 
+# A deck's worth of distinct (bold, font_px, text) keys, with headroom: a
+# 15-slide template's QA gates asked for 1848 widths over 162 distinct keys,
+# so a build asking tens of thousands of times keeps its whole working set.
+_WIDTH_CACHE_MAX = 8192
+
+
 class MeasuredWidth:
     """FreeType Latin, full-em CJK, floored by the export dialect's estimate."""
 
@@ -78,9 +84,22 @@ class MeasuredWidth:
         if self.config.cjk_path and not os.path.isfile(self.config.cjk_path):
             raise FontError(f"cjk measurement font not found at {self.config.cjk_path!r}")
         self._fonts: dict[tuple[str, int], object] = {}
+        self._widths: dict[tuple[bool, int, str], float] = {}
 
     def width(self, text: str, font_px: int, bold: bool = False) -> float:
-        return max(self._freetype(text, font_px, bold), DEFAULT_MEASURER.width(text, font_px, bold))
+        return max(self._cached_freetype(text, font_px, bold), DEFAULT_MEASURER.width(text, font_px, bold))
+
+    def _cached_freetype(self, text: str, font_px: int, bold: bool) -> float:
+        key = (bold, font_px, text)
+        cached = self._widths.get(key)
+        if cached is not None:
+            self._widths[key] = self._widths.pop(key)
+            return cached
+        value = self._freetype(text, font_px, bold)
+        if len(self._widths) >= _WIDTH_CACHE_MAX:
+            self._widths.pop(next(iter(self._widths)))
+        self._widths[key] = value
+        return value
 
     def _font(self, path: str, size: int):
         key = (path, size)
