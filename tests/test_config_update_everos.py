@@ -10,11 +10,13 @@ coverage here.
 from __future__ import annotations
 
 import os
+import shutil
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from everos.entrypoints.cli.commands.init_cmd import _EVEROS_TEMPLATE
 
 from raven_everos import config as ue
 
@@ -628,6 +630,68 @@ class TestEmbeddingHasTwoHomes:
         assert ue.embedding_is_env_managed() is False
         assert ue.everos_has_own_embedding() is False
         assert ue.configure_embedding_env(endpoint) is True, "a second start must still bind"
+
+    def test_provenance_outlives_the_restart_exec(self, tmp_path: Path) -> None:
+        """`raven gateway --restart` re-launches through `os.execv`: the
+        environment survives and every module object is rebuilt.
+
+        A set held in the module was therefore empty in the restarted process
+        while raven's own values were still exported, and the gateway read its
+        own binding as somebody else's for the rest of its life. Run as a real
+        second interpreter handed the first one's environment -- importing the
+        module twice in one process would prove nothing, since the set would
+        simply still be there.
+        """
+        import json
+        import subprocess
+        import sys
+
+        root = tmp_path / "everos"
+        root.mkdir()
+        shutil.copy2(_EVEROS_TEMPLATE, root / "everos.toml")
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps({"embedding": {"model": "ravens/model", "baseUrl": "https://ravens/v1", "apiKey": "sk-raven"}}),
+            encoding="utf-8",
+        )
+        program = (
+            "import json,os,pathlib,sys\n"
+            "import raven.home as rh\n"
+            f"rh.get_config_path = lambda: pathlib.Path({str(cfg)!r})\n"
+            "import raven_everos.config as ue\n"
+            f"ue.everos_root = lambda: pathlib.Path({str(root)!r})\n"
+            f"ue.get_everos_config_path = lambda: pathlib.Path({str(root / 'everos.toml')!r})\n"
+            "from types import SimpleNamespace\n"
+            "ep = SimpleNamespace(model='ravens/model', base_url='https://ravens/v1', api_key='sk-raven')\n"
+            "stage = sys.argv[1]\n"
+            "if stage == 'first':\n"
+            "    bound = ue.configure_embedding_env(ep)\n"
+            "    print(json.dumps({'bound': bound, 'env_managed': ue.embedding_is_env_managed(),\n"
+            "                      'env': {k: v for k, v in os.environ.items() if k.startswith(('EVEROS_EMBEDDING__', 'RAVEN_EVEROS'))}}))\n"
+            "else:\n"
+            "    print(json.dumps({'env_managed': ue.embedding_is_env_managed(),\n"
+            "                      'bound': ue.configure_embedding_env(ep)}))\n"
+        )
+        base = {k: v for k, v in os.environ.items() if not k.startswith(("EVEROS_EMBEDDING__", "RAVEN_EVEROS"))}
+        first = json.loads(
+            subprocess.run(
+                [sys.executable, "-c", program, "first"], capture_output=True, text=True, env=base, check=True
+            ).stdout
+        )
+        assert first["bound"] is True and first["env_managed"] is False
+
+        # Exactly what execv hands the replacement: the first process's environment.
+        after = json.loads(
+            subprocess.run(
+                [sys.executable, "-c", program, "second"],
+                capture_output=True,
+                text=True,
+                env={**base, **first["env"]},
+                check=True,
+            ).stdout
+        )
+        assert after["env_managed"] is False, "the restarted process must not read its own binding as external"
+        assert after["bound"] is True, "and must still bind the host endpoint"
 
     def test_the_toml_keeps_precedence_when_it_has_one(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

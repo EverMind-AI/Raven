@@ -685,6 +685,11 @@ def _child_env() -> dict[str, str]:
     for key in list(env):
         if key.startswith("EVEROS_API__"):
             del env[key]
+    # Bookkeeping raven keeps for itself across its own restart; EverOS has no
+    # use for it, and a child's environment is not the place to leave notes.
+    from raven_everos.config import PROVENANCE_ENV
+
+    env.pop(PROVENANCE_ENV, None)
     # The embedding endpoint is raven's, and every spawn needs it in the child
     # -- not only the ones a started backend bound first. The wizard launches a
     # server of its own before any session exists, and its "Keep current" answer
