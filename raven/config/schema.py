@@ -12,6 +12,11 @@ from raven.config.agent_names import THIRD_PARTY_PRESET_NAMES
 from raven.contracts.path_policy import WORKSPACE_DEFAULT_SENTINEL
 from raven.sandbox.config import SandboxConfig
 
+#: The loop's outer LLM-error retry ladder when the config names none: one wait
+#: per further attempt, 105 s in all. ``RecoveryLimits`` reads the same tuple, so
+#: the fallback the loop uses and the default the config documents cannot drift.
+LLM_ERROR_RETRY_DELAYS_DEFAULT: tuple[float, ...] = (15.0, 30.0, 60.0)
+
 
 class Base(BaseModel):
     """Base model that accepts both camelCase and snake_case keys."""
@@ -247,7 +252,7 @@ class AgentDefaults(Base):
     # retryable error the provider's own short ladder could not clear; one entry per
     # further attempt, per turn. Empty disables it. A long autonomous run wants a
     # longer list than a chat does: set it to minutes for a deck build.
-    llm_error_retry_delays: list[float] = Field(default_factory=lambda: [15.0, 30.0, 60.0])
+    llm_error_retry_delays: list[float] = Field(default_factory=lambda: list(LLM_ERROR_RETRY_DELAYS_DEFAULT))
     # Whether a streamed model call that fails after it has already produced output is
     # asked again (the output is produced twice for whoever watched the stream). Off for
     # a chat; on for an unattended run whose client is a machine, such as a deck build.

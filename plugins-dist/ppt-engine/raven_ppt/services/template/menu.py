@@ -182,6 +182,11 @@ class PageEntry:
 
 
 _MENUS: dict[tuple, tuple[PageEntry, ...]] = {}
+# One bind reads the bound template's menu and then every other bundled
+# template's for the borrow offer, so the working set is the whole bundle plus
+# one. The cap was 8 against ten bundled templates: every bind evicted what the
+# next one needed and re-measured all of them, 3 s of freetype per bind.
+_MENUS_MAX = 32
 
 
 def menu(
@@ -206,10 +211,11 @@ def menu(
     except OSError:
         key = None
     if key is not None and key in _MENUS:
+        _MENUS[key] = _MENUS.pop(key)
         return _MENUS[key]
     entries = _menu(path, unwritable, charts)
     if key is not None:
-        if len(_MENUS) >= 8:
+        if len(_MENUS) >= _MENUS_MAX:
             _MENUS.pop(next(iter(_MENUS)))
         _MENUS[key] = entries
     return entries

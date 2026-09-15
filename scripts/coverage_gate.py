@@ -19,9 +19,11 @@ DEFAULT_TOLERANCE = 0.05
 # slashes and the middle separator then has nothing to match.
 PRODUCTION_PATHSPECS = (
     ":(glob)raven/**/*.py",
-    # Distributables beside the host wheel (the everos memory plugin) are
-    # production code too; without this a change there dodges the diff gate.
-    ":(glob)plugins-dist/**/*.py",
+    # The everos memory plugin beside the host wheel is production code too;
+    # without this a change there dodges the diff gate. Only that plugin: the
+    # gate can judge what coverage measures (--cov=raven --cov=raven_everos), and
+    # a changed file in an unmeasured tree would fail every PR that touches it.
+    ":(glob)plugins-dist/everos-memory/**/*.py",
     # Scaffold templates are copied out by the scaffolder, never imported by
     # the runtime; they are data with a .py spelling, not production code.
     ":(glob,exclude)raven/templates/agents_scaffold/**",
