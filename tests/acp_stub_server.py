@@ -107,6 +107,8 @@ _INITIALIZED = False
 # A real server mints a distinct id per session; the counter keeps the stub from
 # making concurrent sessions collide in a way no real agent would.
 _SESSIONS = 0
+# What each session is currently answering with, so a resumed one can report it.
+_SESSION_MODELS: dict[str, str] = {}
 
 _SESSION_CAPS = {"fork": {}, "list": {}, "resume": {}}
 if MODE != "no_session_delete":
@@ -663,6 +665,7 @@ def main() -> None:
             else:
                 global _SESSIONS
                 _SESSIONS += 1
+                _SESSION_MODELS[f"stub-session-{_SESSIONS}"] = "stub:model-a"
                 ok(
                     request_id,
                     {
@@ -701,7 +704,7 @@ def main() -> None:
                                 "name": "Model",
                                 "category": "model",
                                 "type": "select",
-                                "currentValue": "stub:model-a",
+                                "currentValue": _SESSION_MODELS[f"stub-session-{_SESSIONS}"],
                                 "options": [
                                     {
                                         "group": "stub",
@@ -735,6 +738,7 @@ def main() -> None:
                 # not write is not an internal error.
                 err(request_id, -32011, f"will not switch to {params.get('value')!r}")
             else:
+                _SESSION_MODELS[str(params.get("sessionId"))] = str(params.get("value"))
                 ok(request_id, {"configOptions": []})
         elif method == "session/set_mode":
             if MODE == "no_modes":
@@ -748,7 +752,24 @@ def main() -> None:
             if params.get("sessionId") == "pruned-session":
                 err(request_id, -32001, "Session not found")
             else:
-                ok(request_id, {})
+                # A resumed session reports the model it is actually on, which is
+                # whatever it was last switched to. A host that read this as the
+                # session's original would restore the override it meant to undo.
+                sid = str(params.get("sessionId"))
+                ok(
+                    request_id,
+                    {
+                        "configOptions": [
+                            {
+                                "id": "model",
+                                "category": "model",
+                                "type": "select",
+                                "currentValue": _SESSION_MODELS.get(sid, "stub:model-a"),
+                                "options": [],
+                            }
+                        ]
+                    },
+                )
         elif method == "session/delete":
             if MODE == "delete_fails":
                 err(request_id, -32601, "session/delete is not implemented")

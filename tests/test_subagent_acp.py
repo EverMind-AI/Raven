@@ -3971,6 +3971,62 @@ async def test_no_model_asked_for_sends_no_frame(tmp_path: Path) -> None:
     assert "session/set_config_option" not in connection.client.stderr_tail()
 
 
+async def test_clearing_a_model_puts_the_session_back_on_the_agents_own(tmp_path: Path) -> None:
+    """The option takes a value and has no "unset", so dropping the host's record
+    restores nothing on its own: the session keeps answering on whatever it was
+    last told while every surface reports the agent's own. The way back is to
+    send the session's own baseline again."""
+    cfg = stub_config("clearmodel")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="clearmodel",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("clearmodel", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+
+    # One handle, so the second turn resumes the SAME remote session -- which is
+    # the only shape this bug has. A fresh session is already on the agent's own
+    # model and needs no restoring.
+    await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        session_key="s",
+        instance="h1",
+        session_model="stub:model-b",
+    )
+    # Then the reader picks "the agent's own", which reaches the backend as no
+    # model at all -- the same shape a dispatch that never asked for one has.
+    await backend.run("ping", task_id="t2", workspace=tmp_path, executor=None, session_key="s", instance="h1")
+
+    connection = await get_pool().acquire(
+        name="clearmodel", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "set_config_option" in ln]
+    assert any("model=stub:model-b" in ln for ln in frames), "the switch"
+    # The stub opens every session on model-a, so that is the baseline to restore.
+    assert frames[-1].endswith("model=stub:model-a"), f"the restore, got {frames!r}"
+
+
+async def test_an_untouched_session_is_never_reset(tmp_path: Path) -> None:
+    """Restoring is for undoing this host's own move. A session it never touched
+    is already on the agent's choice, and a frame saying so is a round trip on
+    every dispatch that never asked for anything."""
+    cfg = stub_config("nevertouched")
+    backend = build_third_party_backend(cfg)
+
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    await backend.run("ping", task_id="t2", workspace=tmp_path, executor=None)
+
+    connection = await get_pool().acquire(
+        name="nevertouched", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    assert "session/set_config_option" not in connection.client.stderr_tail()
+
+
 async def test_an_agent_that_serves_no_model_option_still_runs_the_task(tmp_path: Path) -> None:
     """Refusing the option is not a reason to fail a task: running it on the
     agent's own model is a better outcome than not running it at all."""

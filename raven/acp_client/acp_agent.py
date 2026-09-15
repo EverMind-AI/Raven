@@ -36,7 +36,12 @@ from loguru import logger
 
 from raven.acp_client.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
 from raven.acp_client.ask_user import AskUserResponder, clarify_responder
-from raven.acp_client.capabilities import CapabilitySnapshot, relearn_session_modes, steer_offered
+from raven.acp_client.capabilities import (
+    CapabilitySnapshot,
+    read_session_current_model,
+    relearn_session_modes,
+    steer_offered,
+)
 from raven.acp_client.elicitor import Elicitor
 from raven.acp_client.permissions import PERMISSION_METHOD
 from raven.acp_client.pool import get_pool
@@ -695,6 +700,13 @@ class AcpAgentBackend:
         self.timeout = timeout
         self.max_output_chars = max_output_chars
         self._snapshot = snapshot
+        # What each live session's model was before this host touched it, and
+        # what this host last set it to. Both keyed by session id, and both exist
+        # only so that clearing an override can be honoured: the agent takes a
+        # value, never an "unset", so the only way back to its own choice is to
+        # send that choice again -- and nothing else remembers what it was.
+        self._model_baseline: dict[str, str] = {}
+        self._model_pushed: dict[str, str] = {}
         self._registry = registry or get_registry()
         self.mcps = mcps
         self.allow_mcp_secrets = allow_mcp_secrets
@@ -816,6 +828,20 @@ class AcpAgentBackend:
         held makes no difference to what happens.
         """
         self._caps_listener = listener
+
+    def _note_session_model(self, session_id: str | None, result: Any) -> None:
+        """Remember what a session was on before this host moved it.
+
+        Recorded once per session and never overwritten: on a resumed route the
+        reported value already carries whatever this host pushed earlier, so a
+        second reading would adopt that as the baseline and clearing would then
+        restore the override it was meant to undo.
+        """
+        if not session_id or session_id in self._model_baseline:
+            return
+        current = read_session_current_model(result)
+        if current:
+            self._model_baseline[session_id] = current
 
     def _relearn_modes(self, result: Any) -> None:
         """Take the modes a session response advertises over the cached ones.
@@ -1495,6 +1521,7 @@ class AcpAgentBackend:
                             {"sessionId": known, "cwd": cwd, "mcpServers": mcp_servers},
                         )
                     self._relearn_modes(loaded)
+                    self._note_session_model(known, loaded)
                     await self._set_mode(client, known, mode, budget=budget)
                     await self._set_model(client, known, session_model, budget=budget)
                     return known, True
@@ -1522,12 +1549,13 @@ class AcpAgentBackend:
         session_id = (result or {}).get("sessionId") if isinstance(result, dict) else None
         if not isinstance(session_id, str) or not session_id:
             raise AcpEmptyTurnError(f"acp agent {self.name!r}: session/new returned no sessionId")
+        self._note_session_model(session_id, result)
         await self._set_mode(client, session_id, mode, budget=budget)
         await self._set_model(client, session_id, session_model, budget=budget)
         return session_id, False
 
     async def _set_model(self, client: Any, session_id: str, model: str | None, *, budget: float) -> None:
-        """Put this session on ``model`` before the prompt, if one was asked for.
+        """Put this session on ``model``, or back on its own when that is cleared.
 
         On every route into a session, for the reason ``_set_mode`` gives below
         and for the same mechanism: the agent binds the choice to the session id
@@ -1540,18 +1568,45 @@ class AcpAgentBackend:
         ``session/set_model`` is not in the stable schema, and an agent waiting
         for it would never be asked to switch.
 
+        A cleared override is a request too, and that is the half worth spelling
+        out. The option takes a value and has no "unset", so dropping the host's
+        record restores nothing: the session keeps answering on whatever it was
+        last told, while every surface reports the agent's own. The way back is
+        to send the session's own baseline again -- the value it reported before
+        this host first moved it -- and only when this host did move it, so an
+        untouched session still costs no frame at all.
+
         Never fatal, like the mode beside it. An agent that offers no such option
         answers invalid-params and one that will not take the value answers with
         its own code; either way the task still runs on the agent's own model,
         and failing the run would be a worse outcome than running it on a model
         the caller did not pick.
         """
-        if not model:
+        pushed = self._model_pushed.get(session_id)
+        if model:
+            target = model
+        elif pushed is None:
+            # Nothing asked for and nothing of this host's to undo.
             return
+        else:
+            target = self._model_baseline.get(session_id, "")
+            if not target:
+                # Moved, and the agent never said what it was on beforehand. Said
+                # out loud rather than left as a silent no-op, because the reader
+                # has just asked for something this cannot deliver.
+                logger.warning(
+                    "acp agent {!r}: session {} was put on {!r} and reported no earlier model; "
+                    "cannot restore the agent's own",
+                    self.name,
+                    session_id,
+                    pushed,
+                )
+                self._model_pushed.pop(session_id, None)
+                return
         try:
             await client.request(
                 "session/set_config_option",
-                {"sessionId": session_id, "configId": "model", "value": model},
+                {"sessionId": session_id, "configId": "model", "value": target},
                 timeout=budget,
             )
         except AcpRemoteError as exc:
@@ -1570,6 +1625,13 @@ class AcpAgentBackend:
                 session_id,
                 exc,
             )
+            return
+        # Recorded only once the agent has taken it, so a refused switch does not
+        # leave this host believing it moved a session it did not.
+        if model:
+            self._model_pushed[session_id] = target
+        else:
+            self._model_pushed.pop(session_id, None)
 
     async def _set_mode(self, client: Any, session_id: str, mode: str | None, *, budget: float) -> None:
         """Put this session in ``mode`` before the prompt, if one was asked for.

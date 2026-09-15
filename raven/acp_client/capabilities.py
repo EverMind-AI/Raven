@@ -516,6 +516,28 @@ def _read_session_model_choices(result: Any) -> tuple[AcpModelChoice, ...]:
     return tuple(choices(entry.get("options"), ""))
 
 
+def read_session_current_model(result: Any) -> str:
+    """The model a session response says that session is on right now.
+
+    The sibling of :func:`_read_session_model_choices`, reading ``currentValue``
+    off the same ``category: "model"`` entry -- and deliberately NOT stored on a
+    capability snapshot, for the reason the choices reader gives: on a probe it
+    is the state of a throwaway session rather than a fact about the agent.
+
+    It IS a fact about the session that reported it, though, which is what makes
+    it worth reading on a live route in: it is the model that session had before
+    this host touched it, and therefore the only value a clear can restore. Empty
+    when the agent reported none, which a caller must read as "cannot restore"
+    rather than as a model.
+    """
+    options = _dict(result).get("configOptions")
+    if not isinstance(options, list):
+        return ""
+    entry = next((o for o in options if isinstance(o, dict) and o.get("category") == "model"), None)
+    current = _dict(entry).get("currentValue")
+    return current if isinstance(current, str) else ""
+
+
 def _read_session_modes(result: Any) -> tuple[AcpMode, ...]:
     """The operating profiles a ``session/new`` result advertises.
 
