@@ -251,7 +251,10 @@ HTTP request returns.
 
 That costs nothing structural, because `QuestionResponder` is a **structural Protocol** and
 every transport already brings its own broker: the TUI has one, the gateway has one, and
-A2A adds a third. `AskUserTool` is untouched.
+A2A adds a third. `AskUserTool` is untouched. The one asymmetry: when A2A is mounted on a
+running gateway, that shared `AgentLoop`'s `ask_user` already carries the gateway's own
+broker, and the A2A face leaves it in place rather than installing a second one, so a
+question asked mid-turn there still reaches the gateway's own user, not the A2A caller.
 
 A task in a terminal state is not restartable; a message sent against one is an error, per
 the spec.

@@ -18,9 +18,8 @@ where dict-to-protobuf conversion happens, exactly once per method, so
 from __future__ import annotations
 
 import asyncio
-import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable
-from typing import Any
+from collections.abc import AsyncGenerator, Callable
+from typing import Any, Protocol
 
 from a2a.helpers import get_message_text
 from a2a.server.context import ServerCallContext
@@ -43,11 +42,23 @@ from raven.a2a.card import build_agent_card
 from raven.a2a.executor import RavenAgentExecutor
 from raven.a2a.routes_aiohttp import add_a2a_routes
 from raven.config.schema import A2aConfig
+from raven.contracts.asking import QuestionResponder
 from raven.permissions.turn import start_permission_turn
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 
-RunTurn = Callable[[str], Awaitable[str]]
+
+class RunTurn(Protocol):
+    """One inbound A2A prompt run as a raven turn.
+
+    A plain `Callable[[str], Awaitable[str]]` alias cannot express the
+    keyword-only `conversation_id`/`broker` parameters below, so this is a
+    `Protocol` (same idiom as `raven/playbook/agent_profiles.py`'s
+    `AgentProfileSource`) instead of a type alias.
+    """
+
+    async def __call__(self, prompt: str, *, conversation_id: str, broker: QuestionResponder | None) -> str: ...
+
 
 #: JSON-RPC method name -> the protobuf request type ``ParseDict`` should build.
 #: Keyed by the same ``on_*`` names ``routes_aiohttp.METHODS`` maps JSON-RPC
@@ -182,7 +193,9 @@ async def serve_standalone(
         await runner.cleanup()
 
 
-async def _run_one_shot_turn(agent_loop: Any, prompt: str) -> str:
+async def _run_one_shot_turn(
+    agent_loop: Any, prompt: str, *, conversation_id: str, broker: QuestionResponder | None
+) -> str:
     """Run one A2A-inbound turn directly through `AgentLoop.run_turn`, bypassing
     the Scheduler/hub/dispatcher entirely -- mirrors `RpcTurnRunner`'s
     `Origin.CRON` branch in `raven/rpc/spine.py`, the precedent for a
@@ -203,30 +216,41 @@ async def _run_one_shot_turn(agent_loop: Any, prompt: str) -> str:
     `on_heartbeat_execute`). `HEARTBEAT`'s only special case is scheduler lane
     pooling, irrelevant here since this path never reaches the Scheduler.
 
-    A fresh session/conversation id per call: an A2A `SendMessage` carries no
-    conversation of its own (unlike a TUI/gateway turn, which reuses one across
-    a chat), and reusing a fixed key would silently thread unrelated calls onto
-    the same history.
+    `conversation_id` is minted by the caller (`RavenAgentExecutor.execute`), not
+    here: an A2A `SendMessage` carries no conversation of its own (unlike a
+    TUI/gateway turn, which reuses one across a chat), and the executor needs the
+    value before this coroutine ever returns it, to translate a later `answer(task_id, ...)`
+    into the conversation id `broker` actually parks futures under.
+
+    `broker` is installed onto the loop's `ask_user` tool only when given: see
+    `make_run_turn_from_factory` for why the gateway-mounted path always passes
+    `None` here instead of forwarding its caller's broker.
 
     No defensive try/except here: `RavenAgentExecutor.execute` (raven/a2a/executor.py)
     already wraps its call into this function and reports a failed task on any
     exception, so catching again here would only hide the same failure twice.
     """
-    session_key = f"a2a:{uuid.uuid4()}"
     req = TurnRequest(
         origin=Origin.HEARTBEAT,
-        source=Source(channel="a2a", chat_id=session_key, sender_id="a2a", chat_type=ChatType.DM),
+        source=Source(channel="a2a", chat_id=conversation_id, sender_id="a2a", chat_type=ChatType.DM),
         text=prompt,
-        conversation=session_key,
+        conversation=conversation_id,
     )
-    start_permission_turn(None, conversation_id=session_key, turn_id=req.turn_id or "")
+    start_permission_turn(None, conversation_id=conversation_id, turn_id=req.turn_id or "")
 
     # Function-level: raven/rpc/spine.py's RpcTurnRunner.run defers this same
     # import with the same reasoning -- the acp client family is future shelf
     # cargo and must not be named at this module's import time.
     from raven.acp_client.asker import start_ask_turn
 
-    start_ask_turn(None, None, conversation_id=session_key)
+    start_ask_turn(None, None, conversation_id=conversation_id)
+
+    # Same guard raven/rpc/bootstrap.py uses to wire the gateway's own broker:
+    # `broker` is None on the gateway-mounted path, so this loop's `ask_user`
+    # (already wired to the gateway's own broker there) is left untouched.
+    if broker is not None and (ask_tool := agent_loop.tools.get("ask_user")) is not None:
+        if hasattr(ask_tool, "set_broker"):
+            ask_tool.set_broker(broker)
 
     async def emit(*_args: Any, **_kwargs: Any) -> None:
         return None
@@ -244,8 +268,8 @@ def make_run_turn(agent_loop: Any) -> RunTurn:
     what the standalone CLI (`raven a2a serve`) uses, since it owns exactly one
     loop for its whole run."""
 
-    async def run_turn(prompt: str) -> str:
-        return await _run_one_shot_turn(agent_loop, prompt)
+    async def run_turn(prompt: str, *, conversation_id: str, broker: QuestionResponder | None) -> str:
+        return await _run_one_shot_turn(agent_loop, prompt, conversation_id=conversation_id, broker=broker)
 
     return run_turn
 
@@ -260,7 +284,7 @@ def make_run_turn_from_factory(agent_loop_factory: Callable[[], Any | None]) -> 
     failure degrades to "not ready yet" rather than crashing the turn.
     """
 
-    async def run_turn(prompt: str) -> str:
+    async def run_turn(prompt: str, *, conversation_id: str, broker: QuestionResponder | None) -> str:
         try:
             agent_loop = agent_loop_factory()
         except Exception:
@@ -268,6 +292,12 @@ def make_run_turn_from_factory(agent_loop_factory: Callable[[], Any | None]) -> 
             agent_loop = None
         if agent_loop is None:
             raise RuntimeError("agent_loop is not available yet")
-        return await _run_one_shot_turn(agent_loop, prompt)
+        # This loop is the gateway's own, shared with its RPC/TUI turns, whose
+        # `ask_user` already has the gateway's `QuestionBroker` installed
+        # (raven/rpc/bootstrap.py). Installing `broker` on top of it here would
+        # silently redirect every gateway user's question to the A2A caller
+        # instead, so it is dropped: a question mid-turn still goes to the
+        # gateway's own user, per docs/specs/2026-09-13-a2a-protocol-design.md.
+        return await _run_one_shot_turn(agent_loop, prompt, conversation_id=conversation_id, broker=None)
 
     return run_turn
