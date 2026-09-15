@@ -45,12 +45,23 @@ _CLOCKS = pytest.StashKey[tuple[float, float]]()
 _idle_hits: list[tuple[float, float, str]] = []
 
 
+#: Three seconds rather than two, which is where this started. Measured across
+#: the suite: the honest waits cluster at one second (a test that sets a one
+#: second timeout and lets it expire), the highest unmarked one is 1.6 s, and
+#: nothing sits between that and the marked renders. A runner stretches those
+#: to about 2.2 s, so a two second line failed shards over tests that were
+#: waiting the second they meant to. Every production ladder this guards
+#: against is longer than three: the shortest constant the audit found was a
+#: three second grace, and the rest run 5, 15, 30 and 60.
+_DEFAULT_IDLE_CEILING_S = 3.0
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("raven")
     group.addoption(
         "--idle-ceiling",
         type=float,
-        default=2.0,
+        default=_DEFAULT_IDLE_CEILING_S,
         help="seconds an unmarked test may spend waiting (wall clock minus CPU) before it is reported; 0 disables",
     )
     group.addoption(
