@@ -6698,6 +6698,12 @@
             },
             "model": {
               "type": "string"
+            },
+            "extensions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           "required": [
@@ -6748,6 +6754,13 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "name": "embedding",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
         }
       ],
       "result": {
@@ -6794,6 +6807,76 @@
       ],
       "result": {
         "name": "KnowledgeBasesRenameResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "base": {
+              "$ref": "#/components/schemas/KnowledgeBase"
+            }
+          },
+          "required": [
+            "base"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.bases.settings",
+      "summary": "Write one base's settings. Fields left out are untouched.",
+      "params": [
+        {
+          "name": "base_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "top_k",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "smart_chunking",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "separator",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "chunk_size",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "chunk_overlap",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "file_processing",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeBasesSettingsResult",
         "schema": {
           "additionalProperties": false,
           "properties": {
@@ -6904,6 +6987,125 @@
       }
     },
     {
+      "name": "knowledge.documents.add_note",
+      "summary": "Take a typed note into a base as markdown; indexing is a separate call.",
+      "params": [
+        {
+          "name": "base_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "title",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsAddNoteResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "$ref": "#/components/schemas/KnowledgeDocument"
+            }
+          },
+          "required": [
+            "document"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.documents.update_note",
+      "summary": "Rewrite one note and queue it for indexing again. Notes only.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "title",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsUpdateNoteResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "$ref": "#/components/schemas/KnowledgeDocument"
+            }
+          },
+          "required": [
+            "document"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.documents.add_url",
+      "summary": "Read one web page and take it into a base as markdown.",
+      "params": [
+        {
+          "name": "base_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "url",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsAddUrlResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "$ref": "#/components/schemas/KnowledgeDocument"
+            }
+          },
+          "required": [
+            "document"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "knowledge.documents.index",
       "summary": "Embed one document's chunks and answer where that got to.",
       "params": [
@@ -6999,6 +7201,12 @@
                 "$ref": "#/components/schemas/KnowledgeHit"
               },
               "type": "array"
+            },
+            "search_ms": {
+              "type": "number"
+            },
+            "embed_ms": {
+              "type": "number"
             }
           },
           "required": [
@@ -11014,6 +11222,24 @@
           },
           "documents": {
             "type": "integer"
+          },
+          "top_k": {
+            "type": "integer"
+          },
+          "smart_chunking": {
+            "type": "boolean"
+          },
+          "separator": {
+            "type": "string"
+          },
+          "chunk_size": {
+            "type": "integer"
+          },
+          "chunk_overlap": {
+            "type": "integer"
+          },
+          "file_processing": {
+            "type": "string"
           }
         },
         "required": [
@@ -11060,6 +11286,12 @@
           },
           "updated_at": {
             "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "origin_ref": {
+            "type": "string"
           }
         },
         "required": [
@@ -11087,6 +11319,15 @@
             "type": "string"
           },
           "text": {
+            "type": "string"
+          },
+          "chunk_index": {
+            "type": "integer"
+          },
+          "total_chunks": {
+            "type": "integer"
+          },
+          "source": {
             "type": "string"
           }
         },

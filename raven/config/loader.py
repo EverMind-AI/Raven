@@ -85,6 +85,9 @@ EXTENSION_KEYS = (
     # the engine on would fail base Config validation.
     "evalEngine",
     "eval_engine",
+    # Default translation and knowledge-base model pins live outside the base Config.
+    "translate",
+    "knowledge",
 )
 
 # Paths already warned about as malformed in this process; repeated
