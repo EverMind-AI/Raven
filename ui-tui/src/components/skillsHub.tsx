@@ -236,7 +236,9 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
           )
         })}
 
-        {offset + VISIBLE < rows.length && <Text color={t.color.muted}> ↓ {rows.length - offset - VISIBLE} more</Text>}
+        {offset + VISIBLE < rows.length && (
+          <Text color={t.color.muted}> {uiText('gui.panel.more_down', '', { n: rows.length - offset - VISIBLE })}</Text>
+        )}
         <OverlayHint t={t}>{uiText('gui.panel.k_cats')}</OverlayHint>
       </Box>
     )
@@ -275,7 +277,10 @@ export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
         })}
 
         {offset + VISIBLE < skills.length && (
-          <Text color={t.color.muted}> ↓ {skills.length - offset - VISIBLE} more</Text>
+          <Text color={t.color.muted}>
+            {' '}
+            {uiText('gui.panel.more_down', '', { n: skills.length - offset - VISIBLE })}
+          </Text>
         )}
         <OverlayHint t={t}>
           {skills.length

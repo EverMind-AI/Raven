@@ -240,7 +240,9 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
         )
       })}
 
-      {offset + VISIBLE < items.length && <Text color={t.color.muted}> ↓ {items.length - offset - VISIBLE} more</Text>}
+      {offset + VISIBLE < items.length && (
+        <Text color={t.color.muted}> {uiText('gui.panel.more_down', '', { n: items.length - offset - VISIBLE })}</Text>
+      )}
       {err && <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text>}
       {deleting ? (
         <OverlayHint t={t}>{uiText('gui.panel.deleting')}</OverlayHint>
