@@ -242,6 +242,13 @@ TWIN_DRFLOW_PRODUCT_ONLY = {
         "The fork bounded its runs from outside, in the harness that launched them, so it "
         "never needed the knob and its schema would refuse the key"
     ),
+    "deadEndRetry": (
+        "the vendored fork bounds a dud from outside the turn and carries no in-run rerun, "
+        "so its schema would refuse the key. The product runs the rerun inside the turn, "
+        "where the loop that would re-run a dead one already is, and writes the knob out "
+        "rather than inheriting it: the class default is on, and a default that can move "
+        "is not the same as a file that says what ships"
+    ),
     "plainFirst": (
         "medium and high answer settled general knowledge without a research round: "
         "web tools withheld for the first model call, the plain draft judged, anything "
@@ -310,6 +317,30 @@ def test_the_flow_slice_is_the_vendored_twins_drflow_verbatim():
         assert key in fork and key in twin, f"{key} is not written by both twins; drop it from the table"
         assert twin[key] != fork[key], f"{key} agrees again: drop it from TWIN_DRFLOW_DIVERGED ({reason})"
     assert {k: v for k, v in twin.items() if k not in skip} == expected
+
+
+def test_the_shipped_rerun_is_written_out_and_not_inherited():
+    """The file must say what runs, which is the whole reason the knob is in it.
+
+    Writing it changes nothing today: the class default is on with one retry, so the
+    slice with the block and the slice without it resolve to the same config, and that
+    equality is asserted here rather than assumed. What the block buys is the day the
+    class default moves -- the shipped product keeps the value in the file, and this
+    test reddens so the move is a decision rather than a silent change to what ships.
+    """
+    from research_flow.config import FlowConfig
+
+    slice_ = json.loads((RUN_PY.parent / "config.json").read_text())["plugins"]["config"]["research-flow"]
+    assert "deadEndRetry" in slice_, "the shipped config stopped saying whether the rerun runs"
+
+    written = FlowConfig.from_slice(slice_).dead_end_retry
+    inherited = FlowConfig.from_slice({k: v for k, v in slice_.items() if k != "deadEndRetry"}).dead_end_retry
+
+    assert written == inherited, (
+        "the class default moved away from what the shipped config writes; decide whether "
+        f"the product follows it (default {inherited}, shipped {written})"
+    )
+    assert written.enabled and written.max_retries == 1
 
 
 def test_the_products_own_label_still_loads_on_this_build():
