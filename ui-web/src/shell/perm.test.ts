@@ -16,10 +16,12 @@ async function load(stored?: string | null): Promise<typeof import('./perm')> {
 
 /* The same three elements page.html carries, in the same nesting and with the
    same tags: the chip holds the icon slot and the label, the panel holds the
-   list. `.pico` is the svg itself there, not a span around one. */
+   list. `.pico` is the svg itself there, not a span around one. The wrapper is
+   `.dock-in` because that is the composer card in page.html, and the card is
+   what the panel has to clear. */
 function markup(): void {
   document.body.innerHTML = `
-    <div class="card">
+    <div class="dock-in">
       <button class="chip" id="permChip" aria-expanded="false" aria-haspopup="true">
         <svg class="pico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
           <path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z"/>
@@ -119,7 +121,7 @@ describe('the permission panel', () => {
 
   it('reparents the panel to the body so fixed positioning means the viewport', async () => {
     const perm = await load()
-    expect(pop().parentElement!.className).toBe('card')
+    expect(pop().parentElement!.className).toBe('dock-in')
     perm.open()
     /* The composer card animates, which makes it a containing block and quietly
        re-bases position: fixed against it. */
@@ -137,6 +139,29 @@ describe('the permission panel', () => {
        floor: the panel never lands at a negative offset. */
     expect(parseFloat(pop().style.left)).toBeGreaterThanOrEqual(8)
     expect(parseFloat(pop().style.top)).toBeGreaterThanOrEqual(8)
+  })
+
+  it('opens clear of the composer card, not clear of the chip on it', async () => {
+    /* happy-dom measures everything as zero, so the two boxes this turns on are
+       given the rects they have on the running page: the card at 436..562 and
+       the chip on its bottom bar at 518. Raised off the chip -- which is what
+       this did -- the panel's lower edge landed at 512 and its body covered the
+       field, the attachment row and anything staged in them. */
+    const perm = await load()
+    const card = document.querySelector('.dock-in')!
+    const box = (el: Element, top: number, bottom: number, height: number): void => {
+      el.getBoundingClientRect = () =>
+        ({ top, bottom, left: 40, right: 40, width: 0, height, x: 40, y: top } as DOMRect)
+    }
+    box(card, 436, 562, 126)
+    box(chip(), 518, 539, 21)
+    /* The panel's own height, which happy-dom would otherwise report as 0 and
+       leave the assertion true for the wrong reason. */
+    box(pop(), 0, 0, 240)
+    perm.open()
+    /* 436 - 240 - 6. Above the card's top edge, so nothing of the composer is
+       behind it -- and well above the chip's 518, which is the whole point. */
+    expect(parseFloat(pop().style.top)).toBe(190)
   })
 
   it('picks a tier, stores it, repaints the chip and closes', async () => {
