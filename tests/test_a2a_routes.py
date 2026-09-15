@@ -163,3 +163,20 @@ async def test_a_non_serializable_result_is_a_json_rpc_error_not_a_crash():
         assert handler.calls == [{}]
     finally:
         await client.close()
+
+
+@pytest.mark.parametrize("method", [["SendMessage"], {"name": "SendMessage"}, 42, None])
+async def test_a_non_string_method_is_an_error_not_a_bare_500(client_and_handler, method):
+    """`METHODS.get(method)` sits one line above this file's only try block, so an
+    unhashable method used to raise TypeError straight past it and answer
+    text/plain 500. Post-auth, but a caller with a valid token is still a caller.
+    """
+    client, handler = client_and_handler
+
+    resp = await client.post("/a2a", json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {}}, headers=AUTH)
+
+    assert resp.status == 200
+    assert resp.headers["content-type"].startswith("application/json")
+    body = await resp.json()
+    assert body["error"]["code"] == ERROR_CODES["MethodNotFoundError"]
+    assert handler.calls == [], "an unreadable method must not reach the handler"

@@ -127,8 +127,11 @@ def add_a2a_routes(app: web.Application, config: A2aConfig, handler: Any) -> Non
         if not is_authorized(config.server, request.headers.get("Authorization")):
             return web.json_response(error_response("InvalidRequestError", request_id), status=401)
 
+        # `method` is checked for being a string, not just for being a known name:
+        # a JSON array or object here is unhashable, and the dict lookup below
+        # would raise past this function's only try block one line later.
         method = body.get("method", "")
-        method_name = METHODS.get(method)
+        method_name = METHODS.get(method) if isinstance(method, str) else None
         if method_name is None:
             return web.json_response(error_response("MethodNotFoundError", request_id), status=200)
 

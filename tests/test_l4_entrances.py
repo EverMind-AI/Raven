@@ -66,7 +66,16 @@ def _forbidden_surfaces() -> tuple[str, ...]:
     data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
     contracts = data["tool"]["importlinter"]["contracts"]
     inner = next(c for c in contracts if c["name"] == "inner layers know no surface")
-    return tuple(inner["forbidden_modules"])
+    forbidden = tuple(inner["forbidden_modules"])
+    # Reading the roster removed one risk and introduced its mirror: a surface
+    # dropped from the contract would narrow this guard and lint-imports at the
+    # same time, in one line, with every test still green. So the names are
+    # pinned here too. This is a floor, not a copy -- a surface added later is
+    # covered by the read without touching this line, and only a REMOVAL has to
+    # be argued for in a diff.
+    for surface in ("raven.cli", "raven.rpc", "raven.acp", "raven.a2a"):
+        assert surface in forbidden, f"{surface} left the contract; a guard that reads a roster cannot notice that"
+    return forbidden
 
 
 SURFACES = _forbidden_surfaces()
