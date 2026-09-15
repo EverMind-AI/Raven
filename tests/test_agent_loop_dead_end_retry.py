@@ -40,6 +40,19 @@ class _Budgeted(AgentHook):
         return HookDecision()
 
 
+class _Watches(_Budgeted):
+    """A product's hook that also keeps the turn's end record. ``after_send`` is
+    handed the turn's own metadata dict, which is where the loop leaves it."""
+
+    def __init__(self, **budgets) -> None:
+        super().__init__(**budgets)
+        self.turn_end: dict = {}
+
+    async def after_send(self, ctx) -> HookDecision:
+        self.turn_end = dict(ctx.metadata.get("turn_end") or {})
+        return HookDecision()
+
+
 class _Present(AgentHook):
     """Registered and does nothing. The turn's metadata record is written for hooks
     to read, so a loop with none has nobody to write it for."""
@@ -197,8 +210,10 @@ async def test_the_retry_starts_from_the_question_not_from_the_wreckage(tmp_path
     await agent._process_message(_req(), session_key="s1")
 
     first, second = provider.seeds[0], provider.seeds[-1]
-    assert len(second) == len(first)
-    assert [m.get("role") for m in second] == [m.get("role") for m in first]
+    # Whole messages, not a shape: the seed is copied one dict deep, so a first
+    # attempt that reached into one of them would leave the rerun opening on a
+    # transcript that matches this on role and length and not on what it says.
+    assert second == first, "the rerun opened on something other than the question"
     assert not any(m.get("role") == "tool" for m in second)
 
 
@@ -331,6 +346,7 @@ async def test_a_turn_with_no_budget_records_no_stop(tmp_path):
     assert outcome.status == "completed"
     assert meta["turn_end"]["stopped_by"] is None
     assert meta["turn_end"]["wall_clock_budget_s"] is None
+    assert meta["turn_end"]["attempt"] == 1, "the turn ran once, and the record says which run"
 
 
 @pytest.mark.asyncio
@@ -348,6 +364,26 @@ async def test_the_iteration_cap_names_itself(tmp_path):
 
     assert outcome.status == "interrupted"
     assert meta["turn_end"]["stopped_by"] == "iteration_cap"
+
+
+@pytest.mark.asyncio
+async def test_the_turn_end_record_says_which_attempt_it_counted(tmp_path, monkeypatch):
+    """The record holds two scopes at once, deliberately: ``iterations`` is this
+    attempt's, because that is what the loop counts, while ``turn_elapsed_s`` spans
+    the turn, because that is what the budget bounds. ``attempt`` is what lets a
+    reader tell them apart -- one iteration beside twelve seconds otherwise reads as
+    a single very slow call.
+    """
+    provider = _Scripted(_dead(), _answers("Alice Smith won it."))
+    monkeypatch.setattr(turn_path, "monotonic", lambda: 3.0 * provider.calls)
+    hook = _Watches(dead_end_retries=1, wall_clock_seconds=3600)
+    agent = _loop(tmp_path, provider, [hook])
+
+    await agent._process_message(_req(), session_key="s1")
+
+    assert hook.turn_end["attempt"] == 2, "the record is the rerun's"
+    assert hook.turn_end["iterations"] == 1, "which ran one iteration of its own"
+    assert hook.turn_end["turn_elapsed_s"] == 12, "after twelve seconds of turn, dead attempt included"
 
 
 @pytest.mark.asyncio

@@ -800,6 +800,7 @@ class TurnPathMixin:
         session_history: list[dict[str, Any]] | None = None,
         origin: "Origin | None" = None,
         turn_started_at: float | None = None,
+        attempt: int = 1,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -825,6 +826,11 @@ class TurnPathMixin:
         for one user turn passes it, so that the wall-clock budget and the
         elapsed time recorded at the end both measure the turn rather than the
         attempt; omitted, the attempt is the turn and the clock starts here.
+
+        ``attempt`` is which run of the loop this is, counting from 1. It rides
+        the turn's end record so a reader can tell the scope of the count beside
+        it -- the iterations there are this attempt's, while the elapsed time is
+        the turn's. Nothing in the loop branches on it.
         """
         messages = initial_messages
         iteration = 0
@@ -2106,8 +2112,17 @@ class TurnPathMixin:
             # reply they produce reads as an ordinary answer to everything downstream.
             # Ints and None only -- an observer chain that keeps scalars by type drops a
             # float without a word.
+            #
+            # Two scopes sit in here and ``attempt`` is what tells them apart. A turn a
+            # product budgets a rerun for runs this loop more than once, and the count
+            # below is of THIS run, because that is what the loop counts; the elapsed
+            # time is of the whole turn, because that is what the budget bounds. One
+            # iteration beside twelve seconds otherwise reads as a single slow call.
+            # ``salvaged`` joins the record below, after the terminal seam returns, so
+            # the gate reading this record is never the one that sees it.
             hook_ctx.metadata["turn_end"] = {
                 "status": status,
+                "attempt": attempt,
                 "iterations": iteration,
                 "stopped_by": stopped_by,
                 "wall_clock_budget_s": int(budgets.wall_clock_seconds) if budgets.wall_clock_seconds else None,
@@ -2506,7 +2521,7 @@ class TurnPathMixin:
 
         from raven.agent.subagent.mode_tiers import turn_tier
 
-        async def _attempt(seed: list[dict]):
+        async def _attempt(seed: list[dict], attempt: int):
             return await self._run_agent_loop(
                 seed,
                 on_progress=on_progress,
@@ -2525,6 +2540,7 @@ class TurnPathMixin:
                 session_history=session.messages,
                 origin=req.origin,
                 turn_started_at=turn_t0,
+                attempt=attempt,
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
@@ -2532,6 +2548,7 @@ class TurnPathMixin:
         # the whole point is to start again from the question.
         budgets = turn_budgets(turn_hook_meta)
         retries_left = budgets.dead_end_retries
+        attempt_no = 1
         retry_seed = [dict(m) for m in initial_messages] if retries_left else None
         turn_t0 = monotonic()
 
@@ -2540,7 +2557,7 @@ class TurnPathMixin:
             # same reason the iteration cap is read once: a switch arriving mid-turn
             # lands on the next turn, not on a sub-agent this one has yet to call.
             with turn_tier(self.session_tier(key)):
-                final_content, _, all_msgs, outcome = await _attempt(initial_messages)
+                final_content, _, all_msgs, outcome = await _attempt(initial_messages, attempt_no)
                 # The conditional rerun. A dead turn has no answer to damage -- "empty
                 # implies wrong" is a scoring rule, so the count of right answers among
                 # dead turns starts at zero and a second attempt can only raise it. It
@@ -2568,10 +2585,14 @@ class TurnPathMixin:
                         logger.info("Dead end ({}); not re-running: the turn's clock is spent", ", ".join(reasons))
                         break
                     retries_left -= 1
+                    attempt_no += 1
                     logger.info("Dead end ({}); re-running the turn", ", ".join(reasons))
                     if on_progress is not None:
-                        await on_progress("The first attempt produced no answer; researching again.")
-                    final_content, _, all_msgs, outcome = await _attempt([dict(m) for m in retry_seed])
+                        # Neutral about what the turn was doing and about which
+                        # attempt this is: the loop serves every agent, and the
+                        # budget allows more reruns than the one.
+                        await on_progress("That attempt produced no answer; running the turn again.")
+                    final_content, _, all_msgs, outcome = await _attempt([dict(m) for m in retry_seed], attempt_no)
         except asyncio.CancelledError:
             # A stop is not a failure, but it is also not amnesia: what already
             # streamed is work the reader saw, so it lands in the session with a
