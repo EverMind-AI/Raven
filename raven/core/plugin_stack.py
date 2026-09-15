@@ -231,6 +231,13 @@ def maybe_build_memory_backend(
             f"Long-term memory is off: memory.backend={name!r} but no installed plugin provides it "
             f"(installed: {', '.join(registry.memory_backend_names()) or 'none'})."
         )
+        # The shipped default names a backend that ships separately, so the
+        # commonest way to reach this line is an install that simply lacks the
+        # distribution. Saying only which backends are installed leaves that
+        # reader with nothing to do; doctor and the wizard already answer it in
+        # one sentence, and this is the surface a turn actually reaches.
+        if name == "everos" and not everos_plugin_installed():
+            message = f"{message} {everos_plugin_missing_note()}"
         if notify is not None:
             notify(message)
         else:

@@ -127,6 +127,21 @@ class TestMaybeBuildBackend:
         err = capsys.readouterr().err
         assert "memory.backend" in err and "ghost" in err
 
+    def test_the_shipped_default_missing_names_what_to_install(self, tmp_path: Path, capsys) -> None:
+        """The commonest way to reach that line is an install without the plugin.
+
+        Naming only the backends that ARE installed leaves such a reader with
+        nothing to do; doctor and the wizard both answer it in one sentence, and
+        a turn is the surface that actually reaches this code.
+        """
+        from tests._everos_presence import everos_plugin_absent
+
+        with everos_plugin_absent():
+            backend = maybe_build_memory_backend(tmp_path, _config(memory_backend="everos"), registry=PluginRegistry())
+
+        assert backend is None
+        assert "everos-memory" in capsys.readouterr().err
+
 
 # ---------------------------------------------------------------------------
 # Per-plugin config slice resolution

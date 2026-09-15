@@ -277,3 +277,24 @@ async def test_default_permission_mode_is_a_settings_key(cfg):
     assert _read(cfg)["permissions"]["mode"] == "smart"
     with pytest.raises(ConfigValidationError):
         await rpc_console.settings_set({"key": "permissions.mode", "value": "yolo"})
+
+
+async def test_everos_rpcs_name_the_missing_distribution(everos_toml):
+    """Without the plugin, both handlers say what to install.
+
+    The module they import ships with ``everos-memory``, so on an install
+    without it the import used to reach the client as a generic internal error
+    carrying a traceback -- a page cannot act on that, and its own catch turns
+    it into a row that reads "not set", which is what a configured-but-empty
+    section looks like too.
+    """
+    from tests._everos_presence import everos_plugin_absent
+
+    with everos_plugin_absent():
+        for call in (
+            rpc_console.settings_everos({}),
+            rpc_console.settings_everos_set({"section": "llm", "fields": {"model": "m"}}),
+        ):
+            with pytest.raises(ConfigValidationError) as caught:
+                await call
+            assert "everos-memory" in str(caught.value)
