@@ -4193,6 +4193,77 @@ export interface PlaybooksOauthClearParams {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksSetEnabledParams".
+ */
+export interface PlaybooksSetEnabledParams {
+  name: string;
+  /**
+   * The state wanted. true takes the name off the deny list, false puts it on.
+   */
+  enabled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksSetEnabledResult".
+ */
+export interface PlaybooksSetEnabledResult {
+  name?: string;
+  /**
+   * The state now in force.
+   */
+  enabled?: boolean;
+  /**
+   * False when it was already in that state, so a caller can tell 'you did that' from 'it was already so'.
+   */
+  changed?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksValidateParams".
+ */
+export interface PlaybooksValidateParams {
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksValidateResult".
+ */
+export interface PlaybooksValidateResult {
+  name?: string;
+  /**
+   * True when errors is empty.
+   */
+  ok?: boolean;
+  /**
+   * Every finding, in the order the validator reports them. Empty when the playbook is sound.
+   */
+  errors?: string[];
+  /**
+   * The file the findings refer to.
+   */
+  path?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksDeleteParams".
+ */
+export interface PlaybooksDeleteParams {
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksDeleteResult".
+ */
+export interface PlaybooksDeleteResult {
+  name?: string;
+  deleted?: boolean;
+  /**
+   * True when a user playbook was shadowing a builtin of the same name, so the name is still in the library and now resolves to the builtin.
+   */
+  uncovered_builtin?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ApprovalRespondParams".
  */
 export interface ApprovalRespondParams {
