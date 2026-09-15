@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import os
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +22,16 @@ import pytest
 # miss, and they failed on numbers nobody in this repo had touched.
 # `setdefault`, so a developer can still point a run at the live table.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+# matplotlib builds its font list into its config dir the first time a process
+# typesets anything: every system font is opened, and on macOS the list comes
+# from a `system_profiler` call -- 8 to 12 s. The dir defaults to a path under
+# HOME, and `_no_real_raven_home` hands every test a fresh HOME, so the list was
+# rebuilt on every run and thrown away with the temp dir. A git-ignored dir in
+# the checkout keeps it warm across runs; `setdefault` respects a developer's own.
+_MPL_CACHE = Path(__file__).resolve().parent.parent / ".pytest_cache" / "matplotlib"
+_MPL_CACHE.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(_MPL_CACHE))
 
 
 _WALL_CLOCK_EXEMPT_MARKERS = ("slow", "production_timing")
@@ -241,7 +252,7 @@ def _restore_loguru_enabled_state():
 
 
 @pytest.fixture(autouse=True)
-def _no_real_raven_home(tmp_path_factory, monkeypatch):
+def _no_real_raven_home(tmp_path, monkeypatch):
     """Keep the suite out of the config file of whoever is running it.
 
     ``get_config_path()`` answers ``RAVEN_HOME/config.json``, and anything reading
@@ -269,8 +280,12 @@ def _no_real_raven_home(tmp_path_factory, monkeypatch):
     # Outside ``tmp_path`` rather than under it, and fresh per test. Tests use
     # ``tmp_path`` as a workspace root and enumerate it, so a directory this
     # fixture leaves in there shows up in their assertions; and a session-shared
-    # home would let one test read the config another one wrote.
-    home = tmp_path_factory.mktemp("default_home")
+    # home would let one test read the config another one wrote. A sibling of
+    # ``tmp_path`` rather than a second numbered directory: pytest picks the next
+    # number by scanning the whole base temp dir, and with 22k tests that scan
+    # cost 44 s per worker for the numbered dirs this fixture alone created.
+    home = tmp_path.with_name(f"{tmp_path.name}-home")
+    home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     # The suite's baseline permission mode is full access -- the behaviour the
     # whole suite was written against before the gate existed, and what a test
