@@ -1265,16 +1265,33 @@ class TestFindingTheHolderWithoutLsof:
 class TestChildEnv:
     """What the spawned server is handed, which is the only thing it reads."""
 
-    def test_a_deliberate_binding_outranks_the_host_block(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A started backend binds the endpoint for the root it knows. The fill
-        below is for the launches nobody bound, so it must not overwrite one."""
-        monkeypatch.setenv("EVEROS_EMBEDDING__MODEL", "bound-by-the-backend")
+    def test_an_endpoint_everos_already_has_is_left_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Whoever already supplied one -- a started backend, or an operator's
+        own exported variables -- `host_embedding_env` answers empty for, so
+        there is nothing here to overwrite and no guard needed against it."""
+        monkeypatch.setenv("EVEROS_EMBEDDING__MODEL", "already-supplied")
+        monkeypatch.setattr("raven_everos.config.host_embedding_env", dict)
+
+        assert everos_server._child_env()["EVEROS_EMBEDDING__MODEL"] == "already-supplied"
+
+    def test_a_fragment_is_replaced_whole_rather_than_topped_up(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Three variables from two sources is the one outcome worth avoiding:
+        it is neither operator's endpoint and fails in a way that names
+        neither."""
+        monkeypatch.setenv("EVEROS_EMBEDDING__MODEL", "half-an-endpoint")
+        monkeypatch.delenv("EVEROS_EMBEDDING__BASE_URL", raising=False)
         monkeypatch.setattr(
             "raven_everos.config.host_embedding_env",
-            lambda: {"EVEROS_EMBEDDING__MODEL": "from-ravens-block"},
+            lambda: {
+                "EVEROS_EMBEDDING__MODEL": "ravens/model",
+                "EVEROS_EMBEDDING__BASE_URL": "https://ravens/v1",
+                "EVEROS_EMBEDDING__API_KEY": "sk-raven",
+            },
         )
 
-        assert everos_server._child_env()["EVEROS_EMBEDDING__MODEL"] == "bound-by-the-backend"
+        env = everos_server._child_env()
+        assert env["EVEROS_EMBEDDING__MODEL"] == "ravens/model"
+        assert env["EVEROS_EMBEDDING__BASE_URL"] == "https://ravens/v1"
 
     def test_a_port_inherited_from_ravens_own_environment_is_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """EverOS resolves env above the toml, so an inherited EVEROS_API__PORT

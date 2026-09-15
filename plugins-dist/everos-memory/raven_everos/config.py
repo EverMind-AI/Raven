@@ -331,22 +331,31 @@ def embedding_env(values: Any) -> dict[str, str]:
 
 
 def everos_has_own_embedding() -> bool:
-    """Whether ``everos.toml`` carries an ``[embedding]`` an operator chose.
+    """Whether EverOS already has an embedding endpoint of its own.
 
-    The one question that decides which of the endpoint's two homes is in
-    force, asked by everything that reads or writes it -- the binding, the
+    The one question that decides whether the host's endpoint is used at all,
+    asked by everything that reads or writes it -- the binding, the spawn, the
     wizard, and the settings page -- so no surface can show one home while
     another writes the other.
 
-    Model **and** key, which is :func:`role_configured_in`'s criterion and not
-    a second one: the shipped template seeds every section with a real model
-    name and an empty key, so "has a model" is true of a root nobody has
-    configured. Reading it that way made a fresh managed install look like an
-    operator's deliberate choice -- the host's endpoint was never bound, and
-    the service the wizard had just started ran keyword-only while the wizard
-    said embedding was configured.
+    Both of the places EverOS itself reads, since both are an operator saying
+    which endpoint memory should use:
+
+    1. ``everos.toml``, by :func:`role_configured_in`'s criterion -- model
+       **and** key, not a second criterion beside it. The shipped template
+       seeds every section with a real model name and an empty key, so "has a
+       model" is true of a root nobody has configured; reading it that way made
+       a fresh managed install look like a deliberate choice, and the service
+       the wizard had just started ran keyword-only while the wizard said
+       embedding was configured.
+    2. the ``EVEROS_EMBEDDING__*`` variables EverOS documents, which outrank
+       the file in its own resolution order. All three or none: two of them is
+       not an endpoint, and filling the third from the host would hand EverOS a
+       mixture of two operators' intentions rather than either one.
     """
-    return role_configured_in(load_everos_config(), "embedding")
+    if role_configured_in(load_everos_config(), "embedding"):
+        return True
+    return all(os.environ.get(f"EVEROS_EMBEDDING__{k}") for k in ("MODEL", "BASE_URL", "API_KEY"))
 
 
 def host_embedding_env() -> dict[str, str]:

@@ -690,12 +690,16 @@ def _child_env() -> dict[str, str]:
     # server of its own before any session exists, and its "Keep current" answer
     # reaches that launch without passing a writer at all; filling it in here
     # rather than at each launch is what makes those two the same case.
-    # ``setdefault`` because a value already in the environment was bound
-    # deliberately, by a backend that knows its own root.
+    #
+    # Applied whole rather than per missing key, and with no guard against
+    # overwriting: `host_embedding_env` is empty exactly when EverOS already
+    # has an endpoint of its own, and a backend that bound one into this
+    # process left a complete set, which is one of the two ways it can. So
+    # there is nothing here to protect, and a per-key fill would be the one
+    # thing worth avoiding -- three variables from two sources.
     from raven_everos.config import host_embedding_env
 
-    for key, value in host_embedding_env().items():
-        env.setdefault(key, value)
+    env.update(host_embedding_env())
     return env
 
 

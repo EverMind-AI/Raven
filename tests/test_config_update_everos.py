@@ -522,6 +522,60 @@ class TestEmbeddingHasTwoHomes:
         assert env["EVEROS_EMBEDDING__MODEL"] == "Qwen/Qwen3-Embedding-4B"
         assert env["EVEROS_EMBEDDING__API_KEY"] == "sk-di"
 
+    def test_the_documented_env_override_is_an_operators_choice(
+        self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """EVEROS_EMBEDDING__* outranks the file in EverOS's own resolution
+        order, so an operator who exports all three has said which endpoint
+        memory uses just as plainly as one who edits the toml.
+
+        Before this, the host's block replaced all three: the documented
+        override worked until Raven started, and then silently did not.
+        """
+        import shutil
+
+        from everos.entrypoints.cli.commands.init_cmd import _EVEROS_TEMPLATE
+
+        everos_home.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_EVEROS_TEMPLATE, everos_home)
+        for name, value in (
+            ("MODEL", "operators/model"),
+            ("BASE_URL", "https://operator.example/v1"),
+            ("API_KEY", "sk-operator"),
+        ):
+            monkeypatch.setenv(f"EVEROS_EMBEDDING__{name}", value)
+        self._raven_config(
+            tmp_path, monkeypatch, {"model": "ravens/model", "baseUrl": "https://ravens/v1", "apiKey": "sk-raven"}
+        )
+
+        assert ue.everos_has_own_embedding() is True
+        assert ue.host_embedding_env() == {}
+        endpoint = SimpleNamespace(model="ravens/model", base_url="https://ravens/v1", api_key="sk-raven")
+        assert ue.configure_embedding_env(endpoint) is False
+        assert os.environ["EVEROS_EMBEDDING__MODEL"] == "operators/model"
+
+    def test_two_of_the_three_env_values_are_not_an_endpoint(
+        self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fragment is not a choice. Filling the third value from the host
+        would hand EverOS a mixture of two operators' intentions, so the host's
+        complete endpoint replaces the fragment instead."""
+        import shutil
+
+        from everos.entrypoints.cli.commands.init_cmd import _EVEROS_TEMPLATE
+
+        everos_home.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_EVEROS_TEMPLATE, everos_home)
+        monkeypatch.setenv("EVEROS_EMBEDDING__MODEL", "operators/model")
+        monkeypatch.delenv("EVEROS_EMBEDDING__BASE_URL", raising=False)
+        monkeypatch.delenv("EVEROS_EMBEDDING__API_KEY", raising=False)
+        self._raven_config(
+            tmp_path, monkeypatch, {"model": "ravens/model", "baseUrl": "https://ravens/v1", "apiKey": "sk-raven"}
+        )
+
+        assert ue.everos_has_own_embedding() is False
+        assert ue.host_embedding_env()["EVEROS_EMBEDDING__MODEL"] == "ravens/model"
+
     def test_the_toml_keeps_precedence_when_it_has_one(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
