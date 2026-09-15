@@ -54,7 +54,22 @@ def _python_files(name: str) -> list[Path]:
     return [module]
 
 
-SURFACES = ("raven.cli", "raven.rpc", "raven.acp")
+def _forbidden_surfaces() -> tuple[str, ...]:
+    """The surfaces an inner layer may not import, read from the same contract.
+
+    The second copy of a roster, kept by hand. It drifted the way
+    ``_seated_inner``'s copy did before it was made to read: ``a2a`` was added
+    to the contract as a served surface and never added here, so the guard
+    stopped covering the newest surface -- the one most likely to be imported
+    by mistake. Read it too.
+    """
+    data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    contracts = data["tool"]["importlinter"]["contracts"]
+    inner = next(c for c in contracts if c["name"] == "inner layers know no surface")
+    return tuple(inner["forbidden_modules"])
+
+
+SURFACES = _forbidden_surfaces()
 
 
 def test_kernel_and_organs_know_no_surface():
