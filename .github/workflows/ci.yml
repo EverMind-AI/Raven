@@ -118,18 +118,12 @@ jobs:
         with:
           node-version: 22
 
+      # No bytecode precompilation, of site-packages here or of the checkout
+      # before the run: measured over three runs of this workflow, neither paid
+      # for itself. The note stays so the next reader does not spend an
+      # afternoon finding that out again.
       - name: Install dependencies
-        # No UV_COMPILE_BYTECODE here: compiling the twenty thousand files of
-        # site-packages took this step from 3 s to 14 s and bought back 8 s of
-        # collection, measured over two runs of this workflow.
         run: uv sync --locked --all-extras --dev --python ${{ matrix.python }}
-
-      # The four workers each compiled the checkout's 1900 modules on import;
-      # one pass here writes the .pyc once. Measured on a laptop: 25 s of a 40 s
-      # cold collection was compilation, 10 s of it in modules this step covers
-      # (pytest rewrites test files through its own cache, which it does not).
-      - name: Compile the checkout to bytecode
-        run: uv run --frozen --no-sync --python ${{ matrix.python }} python -m compileall -q -j 0 raven tests plugins-dist agents evolver
 
       # Stdlib only. The dedicated gate is the `page` job below; this step
       # keeps the build honest inside the test matrix too, because
