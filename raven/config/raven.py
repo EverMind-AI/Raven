@@ -1315,6 +1315,20 @@ class TracingConfig(_Base):
 # ---------------------------------------------------------------------------
 
 
+class TranslateConfig(_Base):
+    """Model pin used by translation helpers."""
+
+    model: str | None = None
+    provider: str | None = None
+
+
+class KnowledgeConfig(_Base):
+    """Model/provider pair used to embed and search knowledge bases."""
+
+    embedding_model: str | None = None
+    embedding_provider: str | None = None
+
+
 class SessionTitleConfig(_Base):
     """The model call that names a new session.
 
@@ -1486,6 +1500,8 @@ class RavenConfig(_Base):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     tracing: TracingConfig = Field(default_factory=TracingConfig)
     session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
+    translate: TranslateConfig = Field(default_factory=TranslateConfig)
+    knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     subagent_dag: SubagentDagConfig = Field(default_factory=SubagentDagConfig)
     subagent_questions: SubagentQuestionsConfig = Field(default_factory=SubagentQuestionsConfig)
     eval_engine: EvalEngineConfig = Field(default_factory=EvalEngineConfig)
