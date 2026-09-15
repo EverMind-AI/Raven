@@ -10,6 +10,8 @@ import contextlib
 import fnmatch
 import functools
 import os
+import shutil
+import tempfile
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -107,12 +109,31 @@ def _warm_the_heaviest_import() -> None:
     runs import it during collection anyway, from the twenty test modules that
     name a provider at module level, and this is then a no-op.
     """
+    # Under a temporary home for the length of the call. This runs before the
+    # autouse fixtures that redirect the home, and the import publishes the
+    # OAuth token directories, which creates them: warming it as-is put an
+    # `oauth` directory in the developer's own ~/.raven.
+    home = tempfile.mkdtemp(prefix="raven-warmup-")
+    pinned = {
+        "RAVEN_HOME": home,
+        "GITHUB_COPILOT_TOKEN_DIR": os.path.join(home, "oauth", "github_copilot"),
+        "CHATGPT_TOKEN_DIR": os.path.join(home, "oauth", "chatgpt"),
+    }
+    previous = {name: os.environ.get(name) for name in pinned}
+    os.environ.update(pinned)
     try:
         from raven.providers.litellm_setup import import_litellm
 
         import_litellm()
     except Exception as exc:  # noqa: BLE001 -- a missing extra is not this hook's business
         print(f"idle ceiling: litellm did not warm up ({exc}); a first import may be charged to a test")
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def _no_recurse(pattern: str, directory: Path) -> bool:

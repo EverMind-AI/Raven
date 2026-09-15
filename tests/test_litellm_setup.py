@@ -187,3 +187,43 @@ def test_warm_up_in_background_swallows_an_import_failure(monkeypatch, caplog) -
 
     assert not thread.is_alive()
     assert "warm-up failed" in caplog.text
+
+
+def test_a_second_caller_during_the_import_does_not_leave_the_levels_raised(monkeypatch) -> None:
+    """The levels are raised for the duration of the import and put back after.
+
+    That only holds one thread at a time: a caller arriving inside the window
+    reads WARNING as the level to restore and restores it after the first caller
+    has put the real one back, and litellm's DEBUG and INFO stop reaching the
+    file sink until the process restarts. A server warms the import in the
+    background while it serves, so the window is an ordinary one.
+    """
+    from raven.providers import litellm_setup
+
+    loggers = [logging.getLogger(name) for name in _LITELLM_LOGGERS]
+    for logger in loggers:
+        logger.setLevel(logging.INFO)
+
+    inside = threading.Event()
+    finish = threading.Event()
+    register = litellm_setup._register_raven_model_rows
+
+    def hold(module):
+        inside.set()
+        finish.wait(10)
+        register(module)
+
+    monkeypatch.setattr(litellm_setup, "_register_raven_model_rows", hold)
+
+    first = threading.Thread(target=import_litellm, name="first")
+    first.start()
+    assert inside.wait(10), "the first import never reached the seam"
+    second = threading.Thread(target=import_litellm, name="second")
+    second.start()
+    second.join(0.2)  # long enough to read a level, were it allowed to
+    finish.set()
+    first.join(10)
+    second.join(10)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert [logger.level for logger in loggers] == [logging.INFO] * 3
