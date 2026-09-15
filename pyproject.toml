@@ -316,14 +316,27 @@ DEP003 = ["raven_everos", "requests", "cryptography"]
 # what is installed. The Makefile still uses --all-extras so that turning any
 # resolution-sensitive rule back on does not silently change meaning.
 [tool.ty.rules]
-unresolved-attribute = "ignore"    # 725 -- mostly third-party without type information
-invalid-argument-type = "ignore"   # 231 -- needs annotations added, not a call bug
-invalid-method-override = "ignore" #  66 -- real Liskov findings, sized separately
-invalid-return-type = "ignore"     #  39
+# 725: 432 of them are the agent-loop mixins reaching for attributes the host
+# class owns (`Self@<method>` has no attribute ...), and 180 more are attribute
+# access on an optional. Barely any of it is third-party noise -- clearing it
+# means giving the mixins a declared surface, which is a refactor, not a sweep.
+unresolved-attribute = "ignore"    # 725
+# 231: sampled, not enumerated -- loose annotations and unnarrowed unions rather
+# than a single shape.
+invalid-argument-type = "ignore"   # 231
+# 66: the highest-harm family here. The sampled ones are tool subclasses whose
+# `execute` renames a parameter of the base (`path` -> `file_path`); tool
+# arguments arrive as keywords from a model-facing JSON schema, so a rename is
+# reachable, and several already carry `# type: ignore[override]`.
+invalid-method-override = "ignore" #  66
+invalid-return-type = "ignore"     #  39 -- hid a regression introduced while writing this gate
 invalid-assignment = "ignore"      #  33
 not-subscriptable = "ignore"       #  32
 unsupported-operator = "ignore"    #  28
-unresolved-import = "ignore"       #  21 -- missing stubs and real typos, mixed
+# 21: 8 are real (stale module paths in scripts/, and one import naming
+# `SkillForgeRouterConfig` from raven.config.schema, where it does not live);
+# the rest are lxml's stub layout and packages only present inside soffice.
+unresolved-import = "ignore"       #  21
 not-iterable = "ignore"            #  21
 redundant-condition = "ignore"     #   7 (warn by default)
 unsupported-base = "ignore"        #   2 (warn by default)
