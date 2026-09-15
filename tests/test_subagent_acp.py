@@ -3948,9 +3948,7 @@ async def test_a_model_reaches_the_session_before_it_is_prompted(tmp_path: Path)
     cfg = stub_config("modeller")
     backend = build_third_party_backend(cfg)
 
-    reply = await backend.run(
-        "ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-b"
-    )
+    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-b")
 
     connection = await get_pool().acquire(
         name="modeller", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
@@ -3979,9 +3977,7 @@ async def test_an_agent_that_serves_no_model_option_still_runs_the_task(tmp_path
     cfg = stub_config("nomodels", mode="no_models")
     backend = build_third_party_backend(cfg)
 
-    reply = await backend.run(
-        "ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-b"
-    )
+    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-b")
 
     assert reply == "pong"
 
@@ -3993,9 +3989,7 @@ async def test_a_model_the_agent_will_not_write_still_runs_the_task(tmp_path: Pa
     cfg = stub_config("refusemodel")
     backend = build_third_party_backend(cfg)
 
-    reply = await backend.run(
-        "ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-never"
-    )
+    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-never")
 
     assert reply == "pong"
 

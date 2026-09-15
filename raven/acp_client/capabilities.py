@@ -181,9 +181,7 @@ class CapabilitySnapshot:
             "sessionMcp": self.session_mcp,
             "promptModalities": list(self.prompt_modalities),
             "availableModels": list(self.available_models),
-            "modelChoices": [
-                {"value": c.value, "name": c.name, "group": c.group} for c in self.model_choices
-            ],
+            "modelChoices": [{"value": c.value, "name": c.name, "group": c.group} for c in self.model_choices],
             "availableModes": [
                 {"id": m.id, "name": m.name, "description": m.description} for m in self.available_modes
             ],
@@ -221,9 +219,7 @@ class CapabilitySnapshot:
             if not isinstance(value, list):
                 return ()
             return tuple(
-                AcpModelChoice(
-                    value=c["value"], name=str(c.get("name") or ""), group=str(c.get("group") or "")
-                )
+                AcpModelChoice(value=c["value"], name=str(c.get("name") or ""), group=str(c.get("group") or ""))
                 for c in value
                 if isinstance(c, dict) and isinstance(c.get("value"), str) and c["value"]
             )
