@@ -1099,6 +1099,12 @@ def _config_everos_role(
             # Raven's block, not this one's: a knowledge base reads the same
             # endpoint, and writing it into everos.toml left the host's empty,
             # so every other reader fell back and said so on each use.
+            #
+            # Which leaves this screen collecting a value it does not own, for
+            # a consumer it knows nothing about. That asymmetry is recorded as
+            # a debt on the host's own EmbeddingConfig, not a licence to grow
+            # more of it here: a second role that turns out to be raven's
+            # belongs behind another lent handle, never written direct.
             _UI.set_embedding_endpoint(
                 {
                     "model": result.get("model"),

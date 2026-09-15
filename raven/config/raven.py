@@ -1170,6 +1170,16 @@ class EmbeddingConfig(_Base):
     The memory backend is handed these values at ``start()`` rather than
     keeping its own copy, which is the same direction the host already sends
     its data root in.
+
+    Known debt: only where this is *stored* moved. It is still collected in one
+    place alone -- the memory plugin's onboarding screen, through the
+    ``set_embedding_endpoint`` handle the wizard lends it -- so an install with
+    no memory plugin has no interactive way to fill it in, and a knowledge base
+    is left to ``config.json`` by hand or to ``raven doctor --fix`` when an
+    older EverOS config happens to still be on disk. Closing it means the host
+    asking for an endpoint itself, which is another screen in a wizard that is
+    already seven steps long; the two questions have to be reconciled into one
+    before either is worth adding.
     """
 
     model: str = ""
