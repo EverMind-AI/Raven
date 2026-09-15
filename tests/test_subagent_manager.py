@@ -3701,9 +3701,7 @@ def test_an_instance_model_is_refused_unless_the_agent_offered_it(monkeypatch) -
     from raven.acp_client.capabilities import AcpModelChoice
 
     mgr = _make_manager(max_concurrent=1)
-    monkeypatch.setattr(
-        mgr, "agent_model_choices", lambda agent: (AcpModelChoice("real/id", "Real", "g"),)
-    )
+    monkeypatch.setattr(mgr, "agent_model_choices", lambda agent: (AcpModelChoice("real/id", "Real", "g"),))
 
     assert mgr.set_instance_model("s1", "Researcher", "h1", "real/id") == "real/id"
     assert mgr.instance_model("s1", "Researcher", "h1") == "real/id"
@@ -3720,9 +3718,7 @@ def test_clearing_an_instance_model_returns_it_to_the_agent(monkeypatch) -> None
     from raven.acp_client.capabilities import AcpModelChoice
 
     mgr = _make_manager(max_concurrent=1)
-    monkeypatch.setattr(
-        mgr, "agent_model_choices", lambda agent: (AcpModelChoice("real/id", "Real", "g"),)
-    )
+    monkeypatch.setattr(mgr, "agent_model_choices", lambda agent: (AcpModelChoice("real/id", "Real", "g"),))
     mgr.set_instance_model("s1", "Researcher", "h1", "real/id")
 
     assert mgr.set_instance_model("s1", "Researcher", "h1", None) is None

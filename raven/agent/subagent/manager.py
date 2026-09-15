@@ -1276,8 +1276,7 @@ class SubagentManager:
         offered = [c.value for c in self.agent_model_choices(agent)]
         if model not in offered:
             raise ValueError(
-                f"{agent!r} has no model {model!r}"
-                + (f"; it offers {len(offered)}" if offered else "; it offers none")
+                f"{agent!r} has no model {model!r}" + (f"; it offers {len(offered)}" if offered else "; it offers none")
             )
         self._instance_models[key] = model
         logger.info("Instance {}/{} set to model {}", agent, handle, model)
