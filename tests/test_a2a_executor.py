@@ -240,3 +240,39 @@ async def test_a_second_message_on_a_running_task_is_refused():
     release.set()
     await turn
     assert calls == ["do the thing"], "the refusal must not have started a second turn"
+
+
+async def test_a_second_streaming_message_on_a_running_task_is_refused():
+    """The streaming sibling needs the same guard, and its failure is quieter.
+
+    Without it the SDK queues the second `SendStreamingMessage` behind the
+    running task and drains it afterwards, so a full second raven turn starts
+    for one task id with no further action from the caller at all.
+    """
+    from a2a.utils.errors import InvalidRequestError
+
+    from raven.a2a.runtime import build_request_handler
+    from raven.config.schema import A2aConfig
+
+    started, release, calls = asyncio.Event(), asyncio.Event(), []
+
+    async def run_turn(prompt, *, conversation_id, broker):
+        calls.append(prompt)
+        started.set()
+        await release.wait()
+        return "done"
+
+    handler = build_request_handler(A2aConfig(), run_turn)
+    turn = asyncio.create_task(handler._handler.agent_executor.execute(FakeContext(), FakeQueue()))
+    await started.wait()
+
+    stream = handler.on_message_send_stream(
+        {"message": {"role": "ROLE_USER", "parts": [{"text": "again"}], "messageId": "m2", "taskId": "task-1"}},
+        None,
+    )
+    with pytest.raises(InvalidRequestError):
+        await anext(stream)
+
+    release.set()
+    await turn
+    assert calls == ["do the thing"], "the refusal must not have started a second turn"
