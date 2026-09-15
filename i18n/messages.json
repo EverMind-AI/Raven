@@ -7110,6 +7110,26 @@
     "gui.kb.proc_settings": {
       "en": "Go to settings",
       "zh": "前往设置"
+    },
+    "gui.kb.picked_n": {
+      "en": "{n} selected",
+      "zh": "已选择 {n} 项"
+    },
+    "gui.kb.pick_row": {
+      "en": "Select {name}",
+      "zh": "选择 {name}"
+    },
+    "gui.kb.pick_all": {
+      "en": "Select every file",
+      "zh": "全选"
+    },
+    "gui.kb.docs_reindex": {
+      "en": "Reindex",
+      "zh": "重新索引"
+    },
+    "gui.kb.docs_delete_body": {
+      "en": "Delete {count} files? Their chunks and stored copies go with them.",
+      "zh": "确定删除 {count} 个文件？它们的分块与已保存的副本会一并删除。"
     }
   }
 }

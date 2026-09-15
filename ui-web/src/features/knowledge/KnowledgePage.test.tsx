@@ -2030,3 +2030,208 @@ describe('the knowledge base settings', () => {
     expect(screen.getByText('gui.kb.set_newonly')).toBeTruthy()
   })
 })
+
+describe('picking several files at once', () => {
+  const THREE = [
+    doc({ id: 'd1', source: 'deck.pptx', status: 'ready' }),
+    doc({ id: 'd2', source: 'report.docx', status: 'ready' }),
+    doc({ id: 'd3', source: 'notes.md', status: 'failed', error: 'endpoint said 400' }),
+  ]
+
+  const openWith = async (over: Partial<KnowledgeSource> = {}, docs: KbDoc[] = THREE) => {
+    /* `show` drops a toast when the page's standing host is absent, and
+       whether a previous test left one behind is not what these assert. */
+    toastHost()
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => docs,
+      ...over,
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+  }
+
+  const ticks = (): HTMLInputElement[] =>
+    [...document.querySelectorAll('.kbtable .td.kbtick input')] as HTMLInputElement[]
+  const headTick = (): HTMLInputElement =>
+    document.querySelector('.kbtable .th.kbtick input') as HTMLInputElement
+  const tick = async (at: number) => {
+    await act(async () => {
+      fireEvent.click(ticks()[at]!)
+    })
+  }
+  /* The buttons start work they do not await, so a test that asserts on its
+     outcome has to let it finish. */
+  const settle = async () => {
+    await act(async () => {
+      for (let i = 0; i < 20; i += 1) await Promise.resolve()
+    })
+  }
+
+  it('offers the two actions only once something is picked', async () => {
+    /* The row says what the base is until there is a selection to act on;
+       both at once would put two counts and four controls on one line. */
+    await openWith()
+    expect(document.querySelector('.kbpicked')).toBeNull()
+    expect(screen.getByText('+ gui.kb.add_source')).toBeTruthy()
+
+    await tick(0)
+
+    expect(document.querySelector('.kbpicked')!.textContent).toContain('gui.kb.picked_n {"n":1}')
+    expect(screen.getByText('gui.kb.docs_reindex')).toBeTruthy()
+    expect(screen.getByText('gui.kb.delete')).toBeTruthy()
+    /* And adding a source is not what a reader reaches for mid-selection. */
+    expect(screen.queryByText('+ gui.kb.add_source')).toBeNull()
+  })
+
+  it('marks a picked row across its whole width', async () => {
+    /* The table is a grid, so a row is six sibling cells rather than an
+       element that could carry the state; marking only some would stripe it. */
+    await openWith()
+    await tick(1)
+
+    const marked = [...document.querySelectorAll('.kbtable .td.kbsel')]
+    expect(marked.length).toBe(6)
+    expect(marked.map((c) => c.textContent).join('')).toContain('report.docx')
+  })
+
+  it('ticks every row from the header, and clears from it', async () => {
+    await openWith()
+
+    await act(async () => {
+      fireEvent.click(headTick())
+    })
+    expect(ticks().every((t) => t.checked)).toBe(true)
+    expect(headTick().checked).toBe(true)
+
+    /* Pressing it again clears rather than re-picking, which is what every
+       list of checkboxes does. */
+    await act(async () => {
+      fireEvent.click(headTick())
+    })
+    expect(ticks().some((t) => t.checked)).toBe(false)
+    expect(document.querySelector('.kbpicked')).toBeNull()
+  })
+
+  it('leaves the header tick off until every row is on', async () => {
+    await openWith()
+
+    await tick(0)
+    expect(headTick().checked).toBe(false)
+    await tick(1)
+    await tick(2)
+    expect(headTick().checked).toBe(true)
+
+    await tick(1)
+    expect(headTick().checked).toBe(false)
+  })
+
+  it('offers nothing to pick when there is nothing in the base', async () => {
+    /* No table at all rather than a header tick over an empty list, which
+       would offer to act on nothing. */
+    await openWith({}, [])
+
+    expect(document.querySelector('.kbtable')).toBeNull()
+    expect(screen.getByText('gui.kb.no_docs')).toBeTruthy()
+  })
+
+  it('indexes the picked rows one at a time, and reports one that fails', async () => {
+    /* Each embeds its chunks through the configured endpoint, so twenty at
+       once is twenty of those against a rate limit nobody raised. */
+    const order: string[] = []
+    let live = 0
+    let most = 0
+    await openWith({
+      index: async (id: string) => {
+        live += 1
+        most = Math.max(most, live)
+        order.push(id)
+        await Promise.resolve()
+        live -= 1
+        if (id === 'd2') throw new Error('endpoint said 429')
+        return doc({ id, status: 'ready', chunk_count: 2 })
+      },
+    })
+
+    await act(async () => {
+      fireEvent.click(headTick())
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.docs_reindex').closest('button') as HTMLButtonElement).click()
+    })
+    await settle()
+
+    expect(order).toEqual(['d1', 'd2', 'd3'])
+    expect(most).toBe(1)
+    /* One failing does not stop the rest, and the toast names it. */
+    expect(toasts()).toEqual(['endpoint said 429'])
+    const byId = Object.fromEntries(store.getState().docs.map((d) => [d.id, d.status]))
+    /* d3 was failed and is now ready, which is what a reindex is for. d2's
+       row goes back to what it was rather than keeping the optimistic
+       `indexing` this started with -- the same thing one row's retry does,
+       because the call failing says nothing about the document. */
+    expect([byId.d1, byId.d2, byId.d3]).toEqual(['ready', 'ready', 'ready'])
+  })
+
+  it('asks once for the whole selection, naming how many', async () => {
+    /* Twenty confirmations is a dialog a reader clicks through without
+       reading, which is worse than one that names the number. */
+    const removed: string[] = []
+    /* The list answers with what is left, the way the engine would: without
+       that the reload after the delete puts the rows back. */
+    await openWith({
+      documents: async () => THREE.filter((d) => !removed.includes(d.id)),
+      removeDoc: async (id: string) => {
+        removed.push(id)
+      },
+    })
+
+    await tick(0)
+    await tick(1)
+    await act(async () => {
+      ;(screen.getByText('gui.kb.delete').closest('button') as HTMLButtonElement).click()
+    })
+    await settle()
+
+    expect(confirms).toEqual(['gui.kb.docs_delete_body {"count":2}'])
+    expect(removed.sort()).toEqual(['d1', 'd2'])
+    /* Off the list, and un-ticked with them. */
+    expect(store.getState().picked).toEqual([])
+    expect(screen.queryByText('deck.pptx')).toBeNull()
+    expect(screen.getByText('notes.md')).toBeTruthy()
+  })
+
+  it('drops ticks for rows that are no longer in the list', async () => {
+    /* They would keep counting towards the number and towards what the two
+       buttons act on. */
+    let listed = THREE
+    await openWith({
+      documents: async () => listed,
+      removeDoc: async () => {},
+    })
+
+    await act(async () => {
+      fireEvent.click(headTick())
+    })
+    expect(store.getState().picked.length).toBe(3)
+
+    listed = [THREE[2]!]
+    await act(async () => {
+      await store.open_('b1')
+    })
+    expect(store.getState().picked).toEqual([])
+  })
+
+  it('forgets the selection when another base is opened', async () => {
+    await openWith()
+    await tick(0)
+    expect(store.getState().picked).toEqual(['d1'])
+
+    await act(async () => {
+      store.back()
+    })
+    expect(store.getState().picked).toEqual([])
+  })
+})

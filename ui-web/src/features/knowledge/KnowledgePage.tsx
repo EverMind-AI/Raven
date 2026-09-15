@@ -973,10 +973,22 @@ function ago(iso: string): string {
   return t('gui.time.ago_d', { n: Math.round(hours / 24) })
 }
 
-function DocRow({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
+function DocRow({ doc, busy, picked }: { doc: KbDoc; busy: boolean; picked: boolean }): JSX.Element {
+  /* The table is a grid, so a row is six sibling cells rather than an element
+     that could carry the state. Every one of them is marked, or a picked row
+     would be striped. */
+  const td = picked ? 'td kbsel' : 'td'
   return (
     <>
-      <div className="td nm">
+      <div className={`${td} kbtick`}>
+        <input
+          type="checkbox"
+          checked={picked}
+          aria-label={t('gui.kb.pick_row', { name: doc.source })}
+          onChange={() => store.togglePick(doc.id)}
+        />
+      </div>
+      <div className={`${td} nm`}>
         {/* The glyph is inside the button: the whole cell is the way into the
             file, and an icon beside it that did nothing when clicked would be
             the one part of the row that is not. */}
@@ -990,16 +1002,16 @@ function DocRow({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
           <span>{doc.source}</span>
         </button>
       </div>
-      <div className="td">{store.docType(doc)}</div>
+      <div className={td}>{store.docType(doc)}</div>
       {/* The reason rides on the status rather than under the row. A red line
           beneath every failure pushed the rows apart and made a list of files
           hard to scan; the status is where a reader is already looking when
           they want to know what went wrong. */}
-      <div className={`td st s-${doc.status}`} title={doc.error || undefined}>
+      <div className={`${td} st s-${doc.status}`} title={doc.error || undefined}>
         {t('gui.kb.doc_' + doc.status)}
       </div>
-      <div className="td">{ago(doc.updated_at)}</div>
-      <div className="td">
+      <div className={td}>{ago(doc.updated_at)}</div>
+      <div className={td}>
         <DocMenu doc={doc} busy={busy} />
       </div>
     </>
@@ -1096,6 +1108,9 @@ function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getSt
      document is what the reader came to look at, and half a page of it is not
      worth keeping a list they can get back to with one button. */
   if (s.viewing) return <DocViewer doc={s.viewing} />
+  /* Every row, and at least one: an empty list whose header tick reads "on"
+     would offer to act on nothing. */
+  const all = s.docs.length > 0 && s.picked.length === s.docs.length
   return (
     <>
       <div className="kbhd">
@@ -1126,23 +1141,47 @@ function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getSt
           {t('gui.kb.settings')}
         </button>
       </div>
-      <div className="kbsub">
-        <span className="who">
-          {s.adding
-            ? t('gui.kb.adding_n', { done: s.adding.done + 1, total: s.adding.total })
-            : t('gui.kb.updated_when', { when: ago(base.updated_at) })}
-        </span>
-        <SourceMenu busy={s.busy} />
-      </div>
+      {/* One row, two jobs: what the base is, or what is picked out of it.
+          Both at once would put two counts and four controls on one line, and
+          adding a data source is not something a reader reaches for in the
+          middle of choosing which files to be rid of. */}
+      {s.picked.length ? (
+        <div className="kbsub kbpicked">
+          <span className="who">{t('gui.kb.picked_n', { n: s.picked.length })}</span>
+          <button className="mini ghost" disabled={s.busy} onClick={() => void store.reindexPicked()}>
+            {t('gui.kb.docs_reindex')}
+          </button>
+          <button className="mini ghost danger" disabled={s.busy} onClick={() => store.removePicked()}>
+            {t('gui.kb.delete')}
+          </button>
+        </div>
+      ) : (
+        <div className="kbsub">
+          <span className="who">
+            {s.adding
+              ? t('gui.kb.adding_n', { done: s.adding.done + 1, total: s.adding.total })
+              : t('gui.kb.updated_when', { when: ago(base.updated_at) })}
+          </span>
+          <SourceMenu busy={s.busy} />
+        </div>
+      )}
       {s.docs.length ? (
         <div className="kbtable">
+          <div className="th kbtick">
+            <input
+              type="checkbox"
+              checked={all}
+              aria-label={t('gui.kb.pick_all')}
+              onChange={() => store.pickAll(!all)}
+            />
+          </div>
           <div className="th">{t('gui.kb.col_name')}</div>
           <div className="th">{t('gui.kb.col_type')}</div>
           <div className="th">{t('gui.kb.col_status')}</div>
           <div className="th">{t('gui.kb.col_updated')}</div>
           <div className="th" />
           {s.docs.map((d) => (
-            <DocRow key={d.id} doc={d} busy={s.busy} />
+            <DocRow key={d.id} doc={d} busy={s.busy} picked={s.picked.includes(d.id)} />
           ))}
         </div>
       ) : (
