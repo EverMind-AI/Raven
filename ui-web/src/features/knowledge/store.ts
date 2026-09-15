@@ -63,12 +63,29 @@ function source(): KnowledgeSource {
   return ds.knowledge
 }
 
+/* JSON-RPC errors keep the human-readable reason in `data.detail`; `message`
+   is the stable wire code (for example, `internal_error`). Keep the detail in
+   the toast so an endpoint failure can be fixed without opening a log. */
+function errorMessage(error: unknown): string {
+  if (error && typeof error === "object") {
+    const value = error as { data?: unknown; detail?: unknown; message?: unknown }
+    if (value.data && typeof value.data === "object") {
+      const payload = value.data as { detail?: unknown; reason?: unknown }
+      const detail = payload.detail ?? payload.reason
+      if (typeof detail === "string" && detail) return detail
+    }
+    if (typeof value.detail === "string" && value.detail) return value.detail
+    if (typeof value.message === "string" && value.message) return value.message
+  }
+  return String(error)
+}
+
 export async function load(): Promise<void> {
   let src: KnowledgeSource
   try {
     src = source()
   } catch (e) {
-    set({ loaded: true, failed: (e as Error).message })
+    set({ loaded: true, failed: errorMessage(e) })
     return
   }
   try {
@@ -77,7 +94,7 @@ export async function load(): Promise<void> {
     const [status, bases] = await Promise.all([src.status(), src.bases()])
     set({ status, bases, loaded: true, failed: null })
   } catch (e) {
-    set({ loaded: true, failed: (e as Error)?.message || String(e) })
+    set({ loaded: true, failed: errorMessage(e) })
   }
 }
 
@@ -92,7 +109,7 @@ export async function create(name: string, description = ''): Promise<void> {
     /* Creating measures the model's width against the endpoint, so it reaches
        the network and can fail. Said out loud: a base that is not there is not
        something to discover later. */
-    toast((e as Error)?.message || String(e))
+    toast(errorMessage(e))
   } finally {
     set({ busy: false })
   }
@@ -113,7 +130,7 @@ export function remove(base: KbBase): void {
           if (state.openId === base.id) set({ openId: null, docs: [] })
           return load()
         })
-        .catch((e: unknown) => toast((e as Error)?.message || String(e)))
+        .catch((e: unknown) => toast(errorMessage(e)))
         .finally(() => set({ busy: false }))
     },
   )
@@ -130,7 +147,7 @@ export async function open_(id: string): Promise<void> {
        flight; answering into the wrong panel is worse than not answering. */
     if (state.openId === id) set({ docs })
   } catch (e) {
-    if (state.openId === id) toast((e as Error)?.message || String(e))
+    if (state.openId === id) toast(errorMessage(e))
   }
 }
 
@@ -153,7 +170,7 @@ export async function upload(file: File): Promise<void> {
       set({ docs: state.docs.map((d) => (d.id === indexed.id ? indexed : d)) })
     }
   } catch (e) {
-    toast((e as Error)?.message || String(e))
+    toast(errorMessage(e))
   } finally {
     set({ busy: false })
     /* The base's own document count lives on the row behind this panel. */
@@ -188,7 +205,7 @@ async function run(baseId: string, text: string, mine: number): Promise<void> {
     const hits = await source().search([baseId], text)
     if (state.openId === baseId && mine === seq) set({ hits })
   } catch (e) {
-    if (state.openId === baseId && mine === seq) toast((e as Error)?.message || String(e))
+    if (state.openId === baseId && mine === seq) toast(errorMessage(e))
   }
 }
 
@@ -210,7 +227,7 @@ export async function retry(doc: KbDoc): Promise<void> {
       set({ docs: state.docs.map((d) => (d.id === indexed.id ? indexed : d)) })
     }
   } catch (e) {
-    toast((e as Error)?.message || String(e))
+    toast(errorMessage(e))
     /* Put the row back the way it was: the optimistic `indexing` above is a
        promise this call just failed to keep. */
     if (state.openId === baseId) {
@@ -237,7 +254,7 @@ export function removeDoc(doc: KbDoc): void {
       set({ docs: state.docs.filter((d) => d.id !== doc.id) })
       void source()
         .removeDoc(doc.id)
-        .catch((e: unknown) => toast((e as Error)?.message || String(e)))
+        .catch((e: unknown) => toast(errorMessage(e)))
         .finally(() => {
           if (state.openId === baseId) void reopen(baseId)
           void load()

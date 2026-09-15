@@ -389,6 +389,23 @@ describe('the write surface', () => {
     expect(toasts()).toEqual(['connection refused'])
   })
 
+  it('shows the JSON-RPC detail instead of only the internal error code', async () => {
+    source({
+      create: async () => {
+        throw {
+          code: -32603,
+          message: 'internal_error',
+          data: { detail: 'could not create the base: embedding endpoint returned 402' },
+        }
+      },
+    })
+    await mount()
+    await act(async () => {
+      await store.create('handbook')
+    })
+    expect(toasts()).toEqual(['could not create the base: embedding endpoint returned 402'])
+  })
+
   it('ignores a blank name and a second click while one is in flight', async () => {
     let calls = 0
     let release: (b: KbBase) => void = () => {}

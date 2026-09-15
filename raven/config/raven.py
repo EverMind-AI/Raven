@@ -1315,6 +1315,45 @@ class TracingConfig(_Base):
 # ---------------------------------------------------------------------------
 
 
+class TranslateConfig(_Base):
+    """The model translation runs on, as a pair.
+
+    A pin with no caller yet: the scenario it serves is still being built, and
+    the setting ships ahead of it so the choice is already recorded when it
+    lands. Unset means the conversation's model, the same as every other pin,
+    so an unconfigured install behaves exactly as it did before this existed.
+    """
+
+    model: str | None = None
+    """Model for the translation call. None inherits the session's own model."""
+
+    provider: str | None = None
+    """Which configured provider serves ``model``. Both halves, for the reason
+    stated on every pin: an id alone does not name a credential."""
+
+
+class KnowledgeConfig(_Base):
+    """What a knowledge base embeds with.
+
+    Set here, this pair is what the knowledge base uses; left unset, the
+    endpoint EverOS already recorded is used instead, which is what every
+    install had before this block existed. See ``knowledge/_embedding.py``.
+
+    Changing it is not a setting change like the others. Collection width is
+    fixed at creation from the model's own width, so a base built under one
+    model cannot be searched with another -- the manager refuses rather than
+    returning neighbours that mean nothing. A surface offering this has to say
+    so and offer the rebuild.
+    """
+
+    embedding_model: str | None = None
+    """Model the knowledge base embeds and searches with."""
+
+    embedding_provider: str | None = None
+    """Which configured provider serves ``embedding_model``. Its address and
+    key are what the embedding call is made against."""
+
+
 class SessionTitleConfig(_Base):
     """The model call that names a new session.
 
@@ -1335,6 +1374,15 @@ class SessionTitleConfig(_Base):
     """Model for the naming call. None inherits the session's own model. Set a
     cheaper tier here: the task is one short line of output and does not need
     the model answering the conversation."""
+
+    provider: str | None = None
+    """Which configured provider serves ``model``.
+
+    The other half of the pin, for the reason every subsystem pin states both:
+    an id alone is ambiguous the moment a gateway is configured, and a bare id
+    sent on the conversation's key is the mis-pairing the pin exists to avoid.
+    Unset lets a configured gateway take the id, and only without one is the
+    vendor guessed from it."""
 
     timeout_seconds: float = 8.0
     """Wall clock for the call. Past this the fallback title stands. Chosen
@@ -1486,6 +1534,8 @@ class RavenConfig(_Base):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     tracing: TracingConfig = Field(default_factory=TracingConfig)
     session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
+    translate: TranslateConfig = Field(default_factory=TranslateConfig)
+    knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     subagent_dag: SubagentDagConfig = Field(default_factory=SubagentDagConfig)
     subagent_questions: SubagentQuestionsConfig = Field(default_factory=SubagentQuestionsConfig)
     eval_engine: EvalEngineConfig = Field(default_factory=EvalEngineConfig)

@@ -4111,6 +4111,58 @@
       "zh": "单条命令的秒数上限（5–3600）",
       "en": "Per-command limit in seconds (5-3600)"
     },
+    "gui.set.dm.agent": {
+      "en": "Agent model",
+      "zh": "智能体模型"
+    },
+    "gui.set.dm.agent_note": {
+      "en": "What a conversation runs on when it has not chosen its own.",
+      "zh": "会话未单独选择时使用的模型。"
+    },
+    "gui.set.dm.embed": {
+      "en": "Embedding model",
+      "zh": "嵌入模型"
+    },
+    "gui.set.dm.embed_note": {
+      "en": "What knowledge bases are embedded and searched with.",
+      "zh": "知识库建立索引与检索时使用的模型。"
+    },
+    "gui.set.dm.embed_warn": {
+      "en": "A base already built keeps the model it was built with: widths are fixed at creation, so changing this needs a rebuild before those bases can be searched again.",
+      "zh": "已建立的知识库仍沿用其创建时的模型：向量维度在创建时固定，更改后需重建才能继续检索。"
+    },
+    "gui.set.dm.inherit": {
+      "en": "Follows the agent model",
+      "zh": "跟随智能体模型"
+    },
+    "gui.set.dm.no_provider": {
+      "en": "Add a provider first",
+      "zh": "请先添加模型服务商"
+    },
+    "gui.set.dm.paint": {
+      "en": "Painting model",
+      "zh": "绘画模型"
+    },
+    "gui.set.dm.paint_note": {
+      "en": "What the image tool draws with. Reached through its own key rather than a provider account.",
+      "zh": "图像工具生成图片所用的模型。通过其自有密钥调用，而非提供商账户。"
+    },
+    "gui.set.dm.quick": {
+      "en": "Quick model",
+      "zh": "快捷模型"
+    },
+    "gui.set.dm.quick_note": {
+      "en": "Short errands beside the conversation, starting with naming a new session. A cheaper tier is the point.",
+      "zh": "会话之外的简短任务，目前用于为新会话命名。选择更低成本的模型即可。"
+    },
+    "gui.set.dm.translate": {
+      "en": "Translate model",
+      "zh": "翻译模型"
+    },
+    "gui.set.dm.translate_note": {
+      "en": "Reserved for translation. Nothing calls it yet, so setting it changes nothing today.",
+      "zh": "为翻译预留。目前尚无调用方，设置后暂不生效。"
+    },
     "gui.set.grp.agent": {
       "en": "Agent",
       "zh": "智能体"
@@ -4523,6 +4575,10 @@
       "en": "Shortcuts",
       "zh": "快捷键"
     },
+    "gui.set.pg.defaults": {
+      "en": "Default models",
+      "zh": "默认模型"
+    },
     "gui.set.pg.look": {
       "en": "Appearance",
       "zh": "外观"
@@ -4532,8 +4588,8 @@
       "zh": "记忆与个性化"
     },
     "gui.set.pg.model": {
-      "en": "Models",
-      "zh": "模型"
+      "en": "Model providers",
+      "zh": "模型服务商"
     },
     "gui.set.pg.notify": {
       "en": "Notifications",
