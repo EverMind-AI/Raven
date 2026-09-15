@@ -2583,6 +2583,10 @@
       "en": "No models yet. Add one by id below.",
       "zh": "还没有模型，可在下方按 id 添加。"
     },
+    "gui.model.select_platform": {
+      "en": "Select the platform",
+      "zh": "选择平台"
+    },
     "gui.model.soon": {
       "en": "Not wired up yet",
       "zh": "功能尚未接入"
@@ -2834,6 +2838,30 @@
     "gui.model.not_connected": {
       "en": "not connected",
       "zh": "未连接"
+    },
+    "gui.model.prov_filter.all": {
+      "en": "All providers",
+      "zh": "全部服务商"
+    },
+    "gui.model.prov_filter.off": {
+      "en": "Disabled only",
+      "zh": "仅未启用"
+    },
+    "gui.model.prov_filter.on": {
+      "en": "Enabled only",
+      "zh": "仅已启用"
+    },
+    "gui.model.prov_filter_tip": {
+      "en": "Filter providers",
+      "zh": "筛选服务商"
+    },
+    "gui.model.prov_no_match": {
+      "en": "No provider matches that.",
+      "zh": "没有匹配的服务商。"
+    },
+    "gui.model.prov_search_ph": {
+      "en": "Search providers...",
+      "zh": "搜索服务商..."
     },
     "gui.model.oauth_hint": {
       "en": "{name} uses OAuth, so no key goes here. Run this in a terminal, then come back:",

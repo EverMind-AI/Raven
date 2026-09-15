@@ -575,6 +575,7 @@ class ProvidersConfig(Base):
         default_factory=ProviderConfig,
         validation_alias=AliasChoices("zai", "zhipu"),
     )
+    bigmodel: ProviderConfig = Field(default_factory=ProviderConfig)  # Zhipu's CN platform
     dashscope: ProviderConfig = Field(default_factory=ProviderConfig)  # Alibaba Cloud Tongyi Qianwen
     # LiteLLM's own names for these two, so a model id and a config section are
     # spelled the same. Configs written before the rename keep loading.
@@ -600,6 +601,50 @@ class ProvidersConfig(Base):
     )
     siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow
     volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine
+    xai: ProviderConfig = Field(default_factory=ProviderConfig)  # xAI Grok
+    mistral: ProviderConfig = Field(default_factory=ProviderConfig)
+    # LiteLLM's names for these two, so a model id and a config section are
+    # spelled the same. The hyphenated spelling a picker offers also loads.
+    together_ai: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("together_ai", "togetherAi", "together-ai", "togetherai"),
+    )
+    fireworks_ai: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("fireworks_ai", "fireworksAi", "fireworks-ai", "fireworks"),
+    )
+    perplexity: ProviderConfig = Field(default_factory=ProviderConfig)
+    huggingface: ProviderConfig = Field(default_factory=ProviderConfig)  # HF Inference Providers
+    poe: ProviderConfig = Field(default_factory=ProviderConfig)
+    xiaomi_mimo: ProviderConfig = Field(default_factory=ProviderConfig)
+    baichuan: ProviderConfig = Field(default_factory=ProviderConfig)
+    baidu_cloud: ProviderConfig = Field(default_factory=ProviderConfig)  # Qianfan
+    stepfun: ProviderConfig = Field(default_factory=ProviderConfig)
+    longcat: ProviderConfig = Field(default_factory=ProviderConfig)
+    modelscope: ProviderConfig = Field(default_factory=ProviderConfig)
+    qiniu: ProviderConfig = Field(default_factory=ProviderConfig)
+    # Resale gateways. `ai302` rather than `302ai`: a field name cannot start
+    # with a digit, and the vendor's own spelling still loads as an alias.
+    ai302: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("ai302", "302ai"),
+    )
+    dmxapi: ProviderConfig = Field(default_factory=ProviderConfig)
+    burncloud: ProviderConfig = Field(default_factory=ProviderConfig)
+    ocoolai: ProviderConfig = Field(default_factory=ProviderConfig)
+    ppio: ProviderConfig = Field(default_factory=ProviderConfig)
+    lanyun: ProviderConfig = Field(default_factory=ProviderConfig)
+    alayanew: ProviderConfig = Field(default_factory=ProviderConfig)
+    sophnet: ProviderConfig = Field(default_factory=ProviderConfig)
+    tokenhub: ProviderConfig = Field(default_factory=ProviderConfig)
+    xirang: ProviderConfig = Field(default_factory=ProviderConfig)
+    ph8: ProviderConfig = Field(default_factory=ProviderConfig)
+    aionly: ProviderConfig = Field(default_factory=ProviderConfig)
+    radeon_cloud: ProviderConfig = Field(default_factory=ProviderConfig)
+    # Self-hosted servers, reached by address like the three above.
+    gpustack: ProviderConfig = Field(default_factory=ProviderConfig)
+    ovms: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenVINO Model Server
+    cerebras: ProviderConfig = Field(default_factory=ProviderConfig)
     openai_codex: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenAI Codex (OAuth)
     github_copilot: ProviderConfig = Field(default_factory=ProviderConfig)  # Github Copilot (OAuth)
 

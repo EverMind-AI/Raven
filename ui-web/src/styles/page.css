@@ -709,13 +709,35 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    selector still says which state it is. */
 .provider-status.on { width: 7px; height: 7px; border-radius: 50%; background: var(--moss); flex: none;
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--moss) 16%, transparent); }
-:root[data-theme="dark"] img.provider-icon { filter: invert(1); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) img.provider-icon { filter: invert(1); }
+/* The marks are the vendors' own colours now, so the blanket invert that used
+   to sit here is gone -- it would take every brand somewhere it does not go.
+   Two narrower answers replace it, both keyed to facts the mark carries.
+
+   A mark that ships the vendor's dark drawing renders both and shows one. The
+   pair is in the markup because which theme is on is a CSS question here:
+   nothing publishes it to React, and `system` follows the OS with no one told.
+
+   A mark drawn in black with no dark drawing of its own still needs lifting,
+   which is what `data-tone` says; `hybrid` rotates the hue back for the part of
+   the mark that is a real colour. Only two marks still take this path. */
+.mark-dark { display: none; }
+/* The white rendering of a wordmark: legible on the dark ground as published,
+   so it is the light theme that lifts this one. The mirror of `mono`, and the
+   reason the rule is keyed to a tone rather than to the theme alone. */
+:root[data-theme="light"] img.provider-icon[data-tone="mono-white"] { filter: invert(1); }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) img.provider-icon[data-tone="mono-white"] { filter: invert(1); }
 }
-/* Every mark in the bundle is monochrome, so every one of them inverts. The
-   exception that used to sit here was for NVIDIA's green drawing; the black one
-   that replaced it wants the same inversion as the rest. */
+:root[data-theme="dark"] img.provider-icon[data-tone="mono"] { filter: invert(1); }
+:root[data-theme="dark"] img.provider-icon[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
+:root[data-theme="dark"] .mark-light { display: none; }
+:root[data-theme="dark"] .mark-dark { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) img.provider-icon[data-tone="mono"] { filter: invert(1); }
+  :root:not([data-theme="light"]) img.provider-icon[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
+  :root:not([data-theme="light"]) .mark-light { display: none; }
+  :root:not([data-theme="light"]) .mark-dark { display: inline-block; }
+}
 
 /* Context is a quantity, so it gets a quantity's shape: a ring that fills --
    and only the ring. The fill and its colour already answer "is this fine?"
@@ -4066,11 +4088,30 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
   height: min(56vh, 520px); margin-top: 14px;
   border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px;
 }
-/* 10px of right padding, not 4: the overlay thumb is drawn 8px in from the
-   scroller's right edge, and a narrower gutter put it on top of the divider
-   that separates the rail from the pane. */
+/* The search box holds still while the rail scrolls under it: a filter you
+   have to scroll back up to reach is a filter you stop using. So the divider
+   moves out here, onto the column, and `.mrail` keeps the scrolling. */
+.mrailwrap { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px;
+  min-height: 0; border-right: 1px solid var(--line-soft); }
+/* 10px of right padding, not 4, and on each child rather than on the column:
+   the overlay thumb is drawn 8px in from the SCROLLER's right edge and takes no
+   width of its own, so a gutter outside the scroller leaves the thumb sitting
+   on the row content -- which is where it covered the connection dots. Inside
+   it, the rows end clear of the thumb; the header repeats the figure so the
+   search box still lines up with them. */
+.mrhead { display: flex; align-items: center; gap: 6px; padding-right: 10px; }
+.mrsearch { flex: 1; min-width: 0; }
+.mrfilter { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px;
+  padding: 0; border: 1px solid var(--line-soft); border-radius: 8px; background: none;
+  color: var(--muted); cursor: pointer; }
+.mrfilter:hover { color: var(--text); background: color-mix(in oklab, var(--text) 6%, transparent); }
+.mrfilter svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round; }
+/* A narrowed rail says so on the control that narrowed it -- otherwise the
+   list is short for a reason nothing on screen explains. */
+.mrfilter[data-narrowed="true"] { color: var(--amber); border-color: currentColor; }
 .mrail { overflow-y: auto; display: grid; gap: 2px; align-content: start;
-  padding-right: 10px; border-right: 1px solid var(--line-soft); }
+  min-height: 0; padding-right: 10px; }
 .mrow {
   display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
   padding: 8px 9px; border: 0; border-radius: 8px; background: none; cursor: pointer;
@@ -4188,6 +4229,17 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
    set up, and the rows below it are real either way. */
 .mnote { font-size: 11.5px; line-height: 1.55; color: var(--muted);
   background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px; padding: 8px 10px; }
+/* The platform choice, where a provider sells the same models from several
+   storefronts. A radio each rather than a select: there are three, the labels
+   carry the currency and the tier, and each needs its own signup beside it --
+   a collapsed control would hide both the comparison and the links. */
+.mplat { display: grid; gap: 2px; }
+.mplatrow { display: flex; align-items: center; gap: 9px; padding: 6px 4px;
+  border-radius: 8px; cursor: pointer; font-size: 13px; }
+.mplatrow:hover { background: color-mix(in oklab, var(--text) 6%, transparent); }
+.mplatrow input { flex: none; margin: 0; accent-color: var(--moss); cursor: pointer; }
+.mplatrow .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mplatrow .mdocs { margin-left: auto; flex: none; }
 .mkinds { display: flex; flex-wrap: wrap; gap: 6px; }
 .mkind {
   display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 7px;

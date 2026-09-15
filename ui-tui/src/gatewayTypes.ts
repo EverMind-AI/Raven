@@ -388,6 +388,15 @@ export interface ModelOptionProvider {
   models?: string[]
   name: string
   needs_api_base?: boolean
+  /* Addresses to pick between, empty for the providers that have only one. A
+     row that states these is drawn with the list in place of a host field, and
+     `signup_url` is per platform because the accounts are: a key from one
+     storefront does not work against another. */
+  platforms?: {
+    api_base: string
+    label: string
+    signup_url: string
+  }[]
   protocol_overrides?: Record<string, string>
   protocols?: Record<string, string>
   slug: string

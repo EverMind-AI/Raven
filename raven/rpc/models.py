@@ -1424,6 +1424,19 @@ class ModelLabel(_Strict):
     context_window: int | None = None
 
 
+class ModelOptionPlatform(_Strict):
+    """One address a provider serves from, offered as a choice rather than typed.
+
+    ``signup_url`` is per platform because the accounts are: a key from the CNY
+    storefront does not work against the international one, so a single "get a
+    key" link beside the field would send half the readers to the wrong signup.
+    """
+
+    label: str
+    api_base: str
+    signup_url: str
+
+
 class ModelOptionProvider(_Strict):
     """One provider row in the ``/model`` picker."""
 
@@ -1456,6 +1469,9 @@ class ModelOptionProvider(_Strict):
     model_labels: dict[str, ModelLabel] | None = None
     total_models: int
     needs_api_base: bool
+    #: Addresses to pick between, empty for the providers that have only one.
+    #: A row that states these is drawn with the list in place of a host field.
+    platforms: list[ModelOptionPlatform] = Field(default_factory=list)
     warning: str
 
 

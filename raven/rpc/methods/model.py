@@ -391,6 +391,11 @@ def _build_provider_entry(
         # demand what the gate does not.
         "needs_api_base": kind == SHAPE_LOCAL
         or (kind == SHAPE_ENDPOINT and not (spec and spec.usable_default_api_base)),
+        # Offered as a list, so the pane asks instead of leaving a host to type.
+        "platforms": [
+            {"label": label, "api_base": base, "signup_url": signup}
+            for label, base, signup in (spec.platforms if spec else ())
+        ],
         # Whether to draw a key field. Answered here so the settings pane and
         # the wizard cannot disagree about it.
         "accepts_api_key": _accepts_api_key(slug, kind),
@@ -655,6 +660,7 @@ async def model_fetch_models(params: dict) -> dict:
     from raven.config.update_providers import test_provider
     from raven.providers.catalog import describe
     from raven.providers.rates import resolve_context_window
+    from raven.providers.registry import find_by_name
     from raven.providers.registry_data import catalogue_for, kind_of
     from raven.providers.wire import merge_key
 
@@ -680,8 +686,14 @@ async def model_fetch_models(params: dict) -> dict:
     # evidence than its name: nothing in "voyageai/voyage-code-4" says
     # embedding, and being served from `/embeddings/models` says it outright.
     implied = probe.get("implied_capabilities") or {}
+    # A gateway that renames what it resells is the exception to unioning the
+    # bundled catalogue in: those rows are the maker's spelling, which such a
+    # gateway does not answer to, so offering them is offering ids that fail on
+    # first use. It says what it serves or nothing does.
+    spec = find_by_name(slug)
+    bundled = () if (spec is not None and spec.renames_models) else catalogue_for(slug)
     rows: dict[str, dict[str, Any]] = {}
-    for raw in [*live, *catalogue_for(slug)]:
+    for raw in [*live, *bundled]:
         stored = _stored_spelling(slug, raw)
         # Keyed by identity: the vendor's spelling and the registry's are the
         # same model, and listing it twice is how a person adds it twice.

@@ -18,12 +18,37 @@
     "zz-probe-1": "zz-probe-1"
   },
   "litellm_resolve_model": {
+    "ai302": {
+      "302ai-probe": "openai/302ai-probe",
+      "302ai/zz-probe-1": "openai/zz-probe-1",
+      "ai302/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "ai302/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
     "aihubmix": {
       "aihubmix-probe": "openai/aihubmix-probe",
       "aihubmix/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
       "aihubmix/zz-probe-1": "openai/zz-probe-1",
       "openai/zz-probe-1": "openai/zz-probe-1",
       "vendorx/zz-probe-1": "openai/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
+    "aionly": {
+      "aionly-probe": "openai/aionly-probe",
+      "aionly/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "aionly/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
+    "alayanew": {
+      "alayanew-probe": "openai/alayanew-probe",
+      "alayanew/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "alayanew/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
       "zz-probe-1": "openai/zz-probe-1"
     },
     "anthropic": {
@@ -39,6 +64,51 @@
       "azure-probe": "azure-probe",
       "azure_openai/vendorx/zz-probe-1": "azure_openai/vendorx/zz-probe-1",
       "azure_openai/zz-probe-1": "azure_openai/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
+    "baichuan": {
+      "baichuan-probe": "openai/baichuan-probe",
+      "baichuan/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "baichuan/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
+    "baidu_cloud": {
+      "baidu-cloud/ernie-5.1": "openai/ernie-5.1",
+      "baidu-cloud/zz-probe-1": "openai/zz-probe-1",
+      "baidu_cloud/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "baidu_cloud/zz-probe-1": "openai/zz-probe-1",
+      "ernie-probe": "openai/ernie-probe",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
+    "bigmodel": {
+      "bigmodel-probe": "zai/bigmodel-probe",
+      "bigmodel/glm-4.6": "zai/glm-4.6",
+      "bigmodel/vendorx/zz-probe-1": "zai/vendorx/zz-probe-1",
+      "bigmodel/zz-probe-1": "zai/zz-probe-1",
+      "openrouter/zz-probe-1": "openrouter/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zai/zz-probe-1": "zai/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
+    "burncloud": {
+      "burncloud-probe": "openai/burncloud-probe",
+      "burncloud/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "burncloud/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
+    "cerebras": {
+      "cerebras-probe": "cerebras/cerebras-probe",
+      "cerebras/gpt-oss-120b": "cerebras/gpt-oss-120b",
+      "cerebras/vendorx/zz-probe-1": "cerebras/vendorx/zz-probe-1",
+      "cerebras/zz-probe-1": "cerebras/zz-probe-1",
+      "openrouter/zz-probe-1": "openrouter/zz-probe-1",
       "vendorx/zz-probe-1": "vendorx/zz-probe-1",
       "zz-probe-1": "zz-probe-1"
     },
@@ -66,6 +136,24 @@
       "vendorx/zz-probe-1": "vendorx/zz-probe-1",
       "zz-probe-1": "zz-probe-1"
     },
+    "dmxapi": {
+      "dmxapi-probe": "openai/dmxapi-probe",
+      "dmxapi/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "dmxapi/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
+    "fireworks_ai": {
+      "fireworks-ai/accounts/fireworks/models/kimi-k2-instruct": "fireworks_ai/accounts/fireworks/models/kimi-k2-instruct",
+      "fireworks-ai/zz-probe-1": "fireworks_ai/zz-probe-1",
+      "fireworks-probe": "fireworks_ai/fireworks-probe",
+      "fireworks_ai/vendorx/zz-probe-1": "fireworks_ai/vendorx/zz-probe-1",
+      "fireworks_ai/zz-probe-1": "fireworks_ai/zz-probe-1",
+      "openrouter/zz-probe-1": "openrouter/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
     "gemini": {
       "gemini-probe": "gemini/gemini-probe",
       "gemini/gemini-2.5-flash": "gemini/gemini-2.5-flash",
@@ -82,6 +170,14 @@
       "github_copilot/zz-probe-1": "github_copilot/zz-probe-1",
       "vendorx/zz-probe-1": "vendorx/zz-probe-1",
       "zz-probe-1": "zz-probe-1"
+    },
+    "gpustack": {
+      "gpustack-probe": "openai/gpustack-probe",
+      "gpustack/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "gpustack/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
     },
     "groq": {
       "groq-probe": "groq/groq-probe",
@@ -100,6 +196,23 @@
       "vllm/zz-probe-1": "hosted_vllm/zz-probe-1",
       "zz-probe-1": "hosted_vllm/zz-probe-1"
     },
+    "huggingface": {
+      "huggingface-probe": "huggingface/huggingface-probe",
+      "huggingface/deepseek-ai/DeepSeek-V4-Pro": "huggingface/deepseek-ai/DeepSeek-V4-Pro",
+      "huggingface/vendorx/zz-probe-1": "huggingface/vendorx/zz-probe-1",
+      "huggingface/zz-probe-1": "huggingface/zz-probe-1",
+      "openrouter/zz-probe-1": "openrouter/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
+    "lanyun": {
+      "lanyun-probe": "openai/lanyun-probe",
+      "lanyun/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "lanyun/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
     "lm_studio": {
       "lm-studio/zz-probe-1": "lm_studio/zz-probe-1",
       "lm_studio/vendorx/zz-probe-1": "lm_studio/vendorx/zz-probe-1",
@@ -108,6 +221,15 @@
       "lmstudio/zz-probe-1": "lm_studio/zz-probe-1",
       "vendorx/zz-probe-1": "lm_studio/vendorx/zz-probe-1",
       "zz-probe-1": "lm_studio/zz-probe-1"
+    },
+    "longcat": {
+      "longcat-probe": "openai/longcat-probe",
+      "longcat/longcat-2.0": "openai/longcat-2.0",
+      "longcat/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "longcat/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
     },
     "minimax": {
       "minimax-probe": "minimax/minimax-probe",
@@ -148,6 +270,24 @@
       "vendorx/zz-probe-1": "vendorx/zz-probe-1",
       "zz-probe-1": "zz-probe-1"
     },
+    "mistral": {
+      "mistral-probe": "mistral/mistral-probe",
+      "mistral/mistral-large-latest": "mistral/mistral-large-latest",
+      "mistral/vendorx/zz-probe-1": "mistral/vendorx/zz-probe-1",
+      "mistral/zz-probe-1": "mistral/zz-probe-1",
+      "openrouter/zz-probe-1": "openrouter/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
+    "modelscope": {
+      "modelscope-probe": "openai/modelscope-probe",
+      "modelscope/Qwen/Qwen3-235B-A22B-Instruct-2507": "openai/Qwen/Qwen3-235B-A22B-Instruct-2507",
+      "modelscope/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "modelscope/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
     "moonshot": {
       "moonshot-probe": "moonshot/moonshot-probe",
       "moonshot/vendorx/zz-probe-1": "moonshot/vendorx/zz-probe-1",
@@ -164,6 +304,14 @@
       "nvidia_nim/zz-probe-1": "nvidia_nim/zz-probe-1",
       "vendorx/zz-probe-1": "vendorx/zz-probe-1",
       "zz-probe-1": "zz-probe-1"
+    },
+    "ocoolai": {
+      "ocoolai-probe": "openai/ocoolai-probe",
+      "ocoolai/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "ocoolai/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
     },
     "ollama_chat": {
       "ollama-chat/zz-probe-1": "ollama_chat/zz-probe-1",
@@ -198,11 +346,104 @@
       "vendorx/zz-probe-1": "openrouter/vendorx/zz-probe-1",
       "zz-probe-1": "openrouter/zz-probe-1"
     },
+    "ovms": {
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "ovms-probe": "openai/ovms-probe",
+      "ovms/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "ovms/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
+    "perplexity": {
+      "openrouter/zz-probe-1": "openrouter/zz-probe-1",
+      "perplexity-probe": "perplexity/perplexity-probe",
+      "perplexity/sonar-pro": "perplexity/sonar-pro",
+      "perplexity/vendorx/zz-probe-1": "perplexity/vendorx/zz-probe-1",
+      "perplexity/zz-probe-1": "perplexity/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
+    "ph8": {
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "ph8-probe": "openai/ph8-probe",
+      "ph8/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "ph8/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
+    "poe": {
+      "poe-probe": "poe/poe-probe",
+      "poe/vendorx/zz-probe-1": "poe/vendorx/zz-probe-1",
+      "poe/zz-probe-1": "poe/zz-probe-1",
+      "vendorx/zz-probe-1": "poe/vendorx/zz-probe-1",
+      "zz-probe-1": "poe/zz-probe-1"
+    },
+    "ppio": {
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "ppio-probe": "openai/ppio-probe",
+      "ppio/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "ppio/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
+    "qiniu": {
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "qiniu-probe": "openai/qiniu-probe",
+      "qiniu/deepseek-v3": "openai/deepseek-v3",
+      "qiniu/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "qiniu/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
+    "radeon_cloud": {
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "radeon-cloud/zz-probe-1": "openai/zz-probe-1",
+      "radeon-probe": "openai/radeon-probe",
+      "radeon_cloud/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "radeon_cloud/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
     "siliconflow": {
       "openai/zz-probe-1": "openai/zz-probe-1",
       "siliconflow-probe": "openai/siliconflow-probe",
       "siliconflow/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
       "siliconflow/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
+    "sophnet": {
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "sophnet-probe": "openai/sophnet-probe",
+      "sophnet/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "sophnet/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
+    "stepfun": {
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "stepfun-probe": "openai/stepfun-probe",
+      "stepfun/step-3.7-flash": "openai/step-3.7-flash",
+      "stepfun/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "stepfun/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
+    "together_ai": {
+      "openrouter/zz-probe-1": "openrouter/zz-probe-1",
+      "together-ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "together-ai/zz-probe-1": "together_ai/zz-probe-1",
+      "together-probe": "together_ai/together-probe",
+      "together_ai/vendorx/zz-probe-1": "together_ai/vendorx/zz-probe-1",
+      "together_ai/zz-probe-1": "together_ai/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
+    "tokenhub": {
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "tokenhub-probe": "openai/tokenhub-probe",
+      "tokenhub/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "tokenhub/zz-probe-1": "openai/zz-probe-1",
       "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
       "zz-probe-1": "openai/zz-probe-1"
     },
@@ -212,6 +453,33 @@
       "volcengine/vendorx/zz-probe-1": "volcengine/vendorx/zz-probe-1",
       "volcengine/zz-probe-1": "volcengine/zz-probe-1",
       "zz-probe-1": "volcengine/zz-probe-1"
+    },
+    "xai": {
+      "openrouter/zz-probe-1": "openrouter/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "xai-probe": "xai/xai-probe",
+      "xai/grok-4.6": "xai/grok-4.6",
+      "xai/vendorx/zz-probe-1": "xai/vendorx/zz-probe-1",
+      "xai/zz-probe-1": "xai/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
+    "xiaomi_mimo": {
+      "mimo-probe": "xiaomi_mimo/mimo-probe",
+      "openrouter/zz-probe-1": "openrouter/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "xiaomi-mimo/mimo-v2.5": "xiaomi_mimo/mimo-v2.5",
+      "xiaomi-mimo/zz-probe-1": "xiaomi_mimo/zz-probe-1",
+      "xiaomi_mimo/vendorx/zz-probe-1": "xiaomi_mimo/vendorx/zz-probe-1",
+      "xiaomi_mimo/zz-probe-1": "xiaomi_mimo/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
+    "xirang": {
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "xirang-probe": "openai/xirang-probe",
+      "xirang/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "xirang/zz-probe-1": "openai/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
     },
     "zai": {
       "hosted_vllm/zz-probe-1": "hosted_vllm/zz-probe-1",
