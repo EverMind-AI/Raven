@@ -602,6 +602,23 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         },
     }
 
+    @staticmethod
+    def _uses_minimax(config: "MediaToolConfig | None") -> bool:
+        from raven.config.schema import is_minimax_image_base
+
+        return is_minimax_image_base(getattr(config, "api_base", ""))
+
+    @staticmethod
+    def _resolve_key(config: "MediaToolConfig | None") -> str:
+        if ImageGenerateTool._uses_minimax(config):
+            return getattr(config, "api_key", "") or os.environ.get("MINIMAX_API_KEY", "")
+        return _OpenRouterMediaTool._resolve_key(config)
+
+    def _no_key_error(self) -> str:
+        if self._uses_minimax(self._config):
+            return json.dumps({"error": "Set tools.media.image.apiKey or MINIMAX_API_KEY for MiniMax images."})
+        return super()._no_key_error()
+
     def _image_part(self, ref: str) -> ImagePart:
         """Build an OpenAI-style image_url content part from a path/URL/data URI."""
         if ref.startswith(("http://", "https://", "data:")):
@@ -744,7 +761,11 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         from raven.config.schema import media_provider
 
         config = self._config
-        model_id = getattr(config, "model", "") or model or self.default_model
+        model_id = (
+            getattr(config, "model", "") or model or ("image-01" if self._uses_minimax(config) else self.default_model)
+        )
+        if self._uses_minimax(config):
+            return await self._via_minimax(model_id, prompt, images, aspect_ratio, output_dir, stem)
         openrouter = httpx.URL(self.api_base).host == "openrouter.ai"
         runs_on = media_provider(config)
         if openrouter:
@@ -865,6 +886,71 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             raise _PictureUnfetchableError(url, f"HTTP {fetched.status_code} {fetched.text[:400]}".rstrip())
         mime = fetched.headers.get("content-type", "image/png").split(";", 1)[0].strip()
         return mime, fetched.content
+
+    async def _via_minimax(
+        self,
+        model_id: str,
+        prompt: str,
+        images: list[str] | None,
+        aspect_ratio: str | None,
+        output_dir: str | None,
+        stem: str,
+    ) -> str:
+        """Generate an image with optional MiniMax character references."""
+        try:
+            body: dict[str, Any] = {"model": model_id, "prompt": prompt, "response_format": "base64", "n": 1}
+            if aspect_ratio:
+                body["aspect_ratio"] = aspect_ratio
+            if images:
+                body["subject_reference"] = [
+                    {"type": "character", "image_file": self._image_part(ref)["image_url"]["url"]} for ref in images
+                ]
+            async with httpx.AsyncClient(proxy=self._proxy, timeout=300.0) as client:
+                response = await client.post(
+                    f"{self.api_base}/image_generation",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json=body,
+                )
+                response.raise_for_status()
+                data = response.json()
+                status = data.get("base_resp") or {}
+                if status.get("status_code", 0) != 0:
+                    return json.dumps(
+                        {
+                            "error": status.get("status_msg") or "MiniMax image generation failed",
+                            "status_code": status["status_code"],
+                            "model": model_id,
+                        }
+                    )
+                output = data.get("data") or {}
+                paths: list[str] = []
+                for encoded in output.get("image_base64") or []:
+                    content = base64.b64decode(encoded, validate=True)
+                    path = self._output_path("png", output_dir, stem)
+                    path.write_bytes(content)
+                    paths.append(str(path))
+                for url in output.get("image_urls") or []:
+                    fetched = await guarded_fetch(client, url, what="generated image")
+                    if fetched is None:
+                        return json.dumps({"error": "MiniMax image URL is not a fetchable public target"})
+                    fetched.raise_for_status()
+                    path = self._output_path("png", output_dir, stem)
+                    path.write_bytes(fetched.content)
+                    paths.append(str(path))
+        except httpx.HTTPStatusError as e:
+            return self._format_http_error(e)
+        except Exception as e:
+            return json.dumps({"error": str(e)}, ensure_ascii=False)
+        if not paths:
+            return json.dumps({"error": "no image returned", "model": model_id})
+        return json.dumps(
+            {
+                "success": True,
+                "model": model_id,
+                "paths": paths,
+                "metadata": data.get("metadata") or {},
+            }
+        )
 
     async def _via_images_api(
         self,
