@@ -18,7 +18,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from raven_ppt.backends.script.blocks import level_that_separates_pages, page_blocks, page_sources
+from raven_ppt.backends.script.blocks import level_that_separates_pages, page_blocks, page_sources, repeated_banners
 from raven_ppt.backends.script.submission import carries_a_program, submission_refusal
 from raven_ppt.backends.script.workspace import (
     SCRIPT_ENCODING,
@@ -459,10 +459,23 @@ async def run_script(
         pptx_path=target,
         pages=_count_slides(target),
         stdout=stdout,
-        stderr=stderr,
+        stderr=_banner_note(source) + stderr,
         note=note,
         sources=sources,
         source_digest=digest,
+    )
+
+
+def _banner_note(source: Path) -> str:
+    """One line per `# SLIDE n` banner that heads two blocks, for the build's warnings."""
+    try:
+        lines = source.read_text(encoding=SCRIPT_ENCODING).splitlines(keepends=True)
+    except OSError:
+        return ""
+    return "".join(
+        f"# SLIDE {number} heads {len(starts)} blocks (lines {', '.join(str(one) for one in starts)}), and each "
+        "block draws a page: the deck has a page its plan does not until one of them goes\n"
+        for number, starts in sorted(repeated_banners(lines).items())
     )
 
 

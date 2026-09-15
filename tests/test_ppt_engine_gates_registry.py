@@ -981,7 +981,6 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
         "crowded_panel",
         "orphan_line",
         "unseparated_blocks",
-        "excessive_whitespace",
         "title_row",
         "wrapped_label",
         "overset_copy",
@@ -1359,3 +1358,34 @@ def test_a_borrowed_prototype_is_not_the_bound_template_s_furniture(tmp_path: Pa
     )
 
     assert _structural(plan, tmp_path / "bound.pptx") == [1]
+
+
+def test_house_pages_are_the_templates_role_pages_and_nothing_cloned_from_a_content_page(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The whitespace exemption is for the template's cover, index, divider and closing,
+    read from the template's roles -- not for every page with a prototype, which on one
+    deck was all twenty and switched the check off."""
+    from raven_ppt.contracts import Outline, PagePlan
+    from raven_ppt.services.gates import registry
+    from raven_ppt.services.template import menu as menu_module
+
+    template = tmp_path / "template.pptx"
+    template.write_bytes(b"not read: menu and roles are stubbed")
+    monkeypatch.setattr(menu_module, "menu", lambda path: ("stubbed",))
+    monkeypatch.setattr(menu_module, "roles", lambda entries: {"cover": 1, "agenda": 2, "section": 3, "closing": 15})
+    outline = Outline(
+        takeaway="t",
+        pages=[
+            PagePlan(page=1, claim="cover", prototype=1),
+            PagePlan(page=2, claim="divider", prototype=3),
+            PagePlan(page=3, claim="three seals", prototype=4),
+            PagePlan(page=4, claim="borrowed divider look", prototype=3, borrowed="mint_memphis_thesis_defense"),
+            PagePlan(page=5, claim="composed"),
+        ],
+    )
+
+    assert registry._house(outline, template) == [1, 2]
+    assert registry._cloned(outline) == [1, 2, 3, 4]
+    assert registry._borrowed(outline) == [4]
+    assert registry._house(outline, None) == []

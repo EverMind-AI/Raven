@@ -344,7 +344,9 @@ def _pdf_beside(project: Project, built: Path, delivered: Path, *, dropped: Sequ
 
 # What a draft is not held to: the length the brief agreed, and the pages the
 # outline mapped. Both are statements about a finished deck, and a draft is not one.
-_DRAFT_EXEMPT = frozenset({"page_budget", "page_mapping", "unseen_page"})
+# `evidence` too: "6 of 8 content pages show anything" on a 20-page plan counts the
+# pages not written yet, and every draft of one run carried it.
+_DRAFT_EXEMPT = frozenset({"page_budget", "page_mapping", "unseen_page", "evidence"})
 
 
 def _changed(project: Project, outcome: BuildOutcome, draft: bool) -> str:

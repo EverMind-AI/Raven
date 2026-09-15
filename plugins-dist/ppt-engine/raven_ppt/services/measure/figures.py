@@ -64,6 +64,11 @@ DISTORTION_LIMIT = 1.20
 # reader saw was a strip of sky. Half is generous -- a 3:2 photograph in a 16:9 frame
 # keeps 84% -- so a frame under this is one asking for a picture of another shape.
 CROP_LIMIT = 0.5
+# Under this many square inches a picture frame is a mark -- the corner seals and
+# icon slots the bundled templates carry on their own pages -- and what its source
+# shows is not a figure a page cites. A template's 0.9x0.8in corner ornament, shipped
+# cover-fitted to 6% of its bitmap, was reported on every clone of its page.
+MARK_AREA_IN2 = 1.0
 
 # The three roles a picture can take, graded by the share of the content band it
 # occupies. A hero carries the page's argument; a mark is a badge, an icon, an avatar
@@ -343,10 +348,12 @@ def cropped_figures(figures: list[Figure]) -> list[Finding]:
     for figure in figures:
         if figure.pixels is None or figure.tiled:
             continue
+        frame = figure.box
+        if frame.width * frame.height < MARK_AREA_IN2:
+            continue
         shown = figure.shown_share
         if shown >= CROP_LIMIT or shown <= 0:
             continue
-        frame = figure.box
         found.append(
             Finding(
                 kind="figure_crop",

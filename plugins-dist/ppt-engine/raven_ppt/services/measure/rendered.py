@@ -116,6 +116,21 @@ EMPTY_GAP_PT = 0.95 * 72
 # page they complained about -- and the 0.60in between the body's floor and the trim is
 # on top of whatever this allows, so the field a reader sees is larger than the number.
 EMPTY_TRAILING_PT = 0.75 * 72
+# A rectangle at least this share of the page wide and this share of the page tall
+# that runs off the bottom edge is the page's ground under a title band. It still
+# says where the body starts and still separates groups, but it does not finish the
+# page: a page cloned from a three-seal panel prototype shipped with its lower third
+# empty, and the panel -- full width, 83% of the page, to the bottom -- counted as
+# body content reaching the boundary, so no trailing field was ever read there.
+# Rectangles only and this tall only, measured over the ten bundled templates: the
+# strips they finish pages with -- a gradient band, a wave, none over 40% of the
+# page -- and a ramp-shaped arrow are the content they look like, and read as
+# ground they put a trailing field on seven designer pages.
+GROUND_PANEL_WIDTH_SHARE = 0.9
+GROUND_PANEL_HEIGHT_SHARE = 0.6
+# A body whose empty field above is about as deep as the one below is centred on
+# purpose -- a quotation page -- and neither field is a run that ran out.
+CENTRED_FIELDS_RATIO = 0.75
 # And how much may be left above the first thing on it. The same number, because the
 # question is the same one asked at the other end -- and it has to be asked, or a run
 # centred in the body hides half of what the trailing reading would have reported. That
@@ -559,8 +574,24 @@ def excessive_whitespace(
     words: Sequence[WordBox],
     structural: Sequence[int] = (),
     per_page: int = 2,
+    cloned: Sequence[int] = (),
+    borrowed: Sequence[int] = (),
 ) -> list[Finding]:
-    """Large rendered gaps that leave a content page visibly unfinished."""
+    """Large rendered gaps that leave a content page visibly unfinished.
+
+    `cloned` names the pages built on a template prototype. Their header rows sit
+    where the template's designer put them, so the header reading is skipped there;
+    the body readings are not. The first version left cloned pages out altogether,
+    on a deck where 43 of 107 findings were this check on cloned pages -- and the
+    next deck gave every one of its twenty pages a prototype, the check went silent,
+    and a page cloned from a three-seal panel shipped with its lower third empty
+    while the author told the reader the proportions were the template's. The
+    template's own page fills that panel; whether the clone does is exactly the
+    question. `borrowed` names the pages laid out as a reference deck's page, whose
+    gap between groups -- a timeline's chevrons over its cards -- is that layout's
+    own, so `between_groups` is not read there either. A page whose prototype is the
+    template's cover, index, divider or closing belongs in `structural`.
+    """
     presentation = open_deck(pptx_path)
     page_width = presentation.slide_width / EMU_PER_POINT
     page_height = presentation.slide_height / EMU_PER_POINT
@@ -568,6 +599,8 @@ def excessive_whitespace(
     body_bottom = min(BODY_BOTTOM_PT, page_height * 0.94)
     painted = by_page(words)
     skipped = set(structural)
+    header_is_the_templates = set(cloned)
+    gap_is_the_layouts = set(borrowed)
     # Two lists, two questions. `panels` is what the page draws, which counts as body
     # content wherever it sits; `fillable` drops what is not a rectangle, because how
     # much of itself a shape's copy fills is the one question a bounding box cannot
@@ -595,7 +628,7 @@ def excessive_whitespace(
             for first, second in zip(header, header[1:])
             if second[0] > first[1]
         ]
-        if header_gaps:
+        if header_gaps and number not in header_is_the_templates:
             start, end, gap = max(header_gaps, key=lambda item: item[2])
             if gap >= LOOSE_HEADER_GAP_PT:
                 findings.append(
@@ -632,14 +665,18 @@ def excessive_whitespace(
         # background does not swallow the page. Unfiltered by shape: a disc holding a
         # label is content whatever its geometry, which is the opposite of what the
         # fill-share reading needs.
+        ground = [box for box in fillable.get(number, ()) if _is_ground(box, page_width, page_height)]
+        content_ends = max((end for _, end in intervals), default=None)
         for box in panels.get(number, ()):
             if box.y1 > body_top and box.y0 < body_bottom:
                 intervals.append((max(body_top, box.y0), min(body_bottom, box.y1)))
+                if not any(box == g for g in ground):
+                    content_ends = max(content_ends or 0.0, min(body_bottom, box.y1))
 
         bands = _vertical_bands(intervals)
         if bands:
             gaps = [(left[1], right[0], right[0] - left[1]) for left, right in zip(bands, bands[1:])]
-            if gaps:
+            if gaps and number not in gap_is_the_layouts:
                 start, end, gap = max(gaps, key=lambda item: item[2])
                 if gap >= EMPTY_GAP_PT:
                     findings.append(
@@ -658,6 +695,14 @@ def excessive_whitespace(
                     )
                     reported += 1
             leading = bands[0][0] - body_top
+            trailing = body_bottom - (bands[-1][1] if not ground or content_ends is None else content_ends)
+            centred = (
+                leading >= EMPTY_LEADING_PT
+                and trailing >= EMPTY_TRAILING_PT
+                and min(leading, trailing) >= CENTRED_FIELDS_RATIO * max(leading, trailing)
+            )
+            if centred:
+                leading = trailing = 0.0
             if reported < per_page and leading >= EMPTY_LEADING_PT:
                 findings.append(
                     _empty_finding(
@@ -677,7 +722,6 @@ def excessive_whitespace(
                     )
                 )
                 reported += 1
-            trailing = body_bottom - bands[-1][1]
             if reported < per_page and trailing >= EMPTY_TRAILING_PT:
                 findings.append(
                     _empty_finding(
@@ -737,6 +781,15 @@ def excessive_whitespace(
     return findings
 
 
+def _is_ground(box: Rect, page_width: float, page_height: float) -> bool:
+    """A page-sized rectangle that runs off the page's bottom edge: ground, which finishes nothing."""
+    return (
+        box.width >= page_width * GROUND_PANEL_WIDTH_SHARE
+        and box.height >= page_height * GROUND_PANEL_HEIGHT_SHARE
+        and box.y1 >= page_height - 4
+    )
+
+
 def _vertical_bands(intervals: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
     merged: list[tuple[float, float]] = []
     for start, end in sorted(intervals):
@@ -782,6 +835,9 @@ ORPHAN_LINES = 2
 # puts a line's words on one baseline, and a superscript or a CJK glyph in a mixed
 # line moves a box by a point or two.
 SAME_LINE_PT = 4.0
+# Or, for a word set at another size on the same baseline, this much of the shorter
+# word's height inside the other's: the next line down overlaps the one above by nothing.
+SAME_LINE_SHARE = 0.5
 
 
 def orphan_lines(pptx_path: Path, words: Sequence[WordBox], per_page: int = OVERFLOWS_PER_PAGE) -> list[Finding]:
@@ -925,14 +981,30 @@ def _panel_padding(cards_by_page: Mapping[int, Sequence[Rect]], painted: Mapping
 
 
 def _lines(words: Sequence[WordBox]) -> list[list[WordBox]]:
-    """The words grouped into the lines the renderer set them on."""
+    """The words grouped into the lines the renderer set them on.
+
+    Two words share a line when their tops sit within `SAME_LINE_PT`, or when one
+    sits mostly inside the other's height: a 20pt figure and the 13pt unit after it
+    share a baseline but not a top, and read by tops alone the unit was a second
+    line of its own -- eight `orphan_line` findings on one delivered deck, every
+    one a metric card whose "万人" the render had set right beside its number.
+    """
     lines: list[list[WordBox]] = []
     for word in sorted(words, key=lambda word: (word.y0, word.x0)):
-        if lines and abs(word.y0 - lines[-1][0].y0) <= SAME_LINE_PT:
+        if lines and _same_line(word, lines[-1]):
             lines[-1].append(word)
         else:
             lines.append([word])
     return lines
+
+
+def _same_line(word: WordBox, line: Sequence[WordBox]) -> bool:
+    first = line[0]
+    if abs(word.y0 - first.y0) <= SAME_LINE_PT:
+        return True
+    top, bottom = max(word.y0, first.y0), min(word.y1, first.y1)
+    shorter = min(word.y1 - word.y0, first.y1 - first.y0)
+    return shorter > 0 and (bottom - top) >= SAME_LINE_SHARE * shorter
 
 
 def _pitch(lines: Sequence[Sequence[WordBox]]) -> float | None:

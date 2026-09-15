@@ -35,8 +35,8 @@ from raven.utils.images import image_block, text_block
 from raven_ppt.backends.script import deck_path, page_failures
 from raven_ppt.contracts import Project, brief_path, load_brief, load_outline, outline_path
 from raven_ppt.services import review_ledger
+from raven_ppt.services import state as deck_state
 from raven_ppt.services.render.pdf import words_by_page
-from raven_ppt.services.review_ledger import REFUSED_FIGURE_REASON
 from raven_ppt.stages.build import BATCH_VIEWS
 from raven_ppt.tools import _return
 from raven_ppt.tools._args import ArgumentError, as_ints
@@ -112,7 +112,8 @@ REQUIREMENTS_NAME = "design-requirements.md"
 BRIEF = """One page of a finished deck, in {language}. You did not build it. Say what is
 wrong with how it looks, so the author can fix it.
 
-Judge it yourself — you can see the page. Below is only what is easy to get backwards.
+Judge it yourself — you can see the page. The strip under the picture reading `page N` is
+this tool's label, not part of the page. Below is only what is easy to get backwards.
 
 {requirements}
 
@@ -247,7 +248,7 @@ class PptReviewTool(Tool):
                     "every dismissal needs a reason: what you saw on the page that answers the entry",
                     hint='dismiss=[{"id": "p14-a1b2c3", "reason": "the illustration is the template design"}]',
                 )
-            closed, unknown, refused = review_ledger.dismiss(deck, verdicts)
+            closed, unknown, refused = review_ledger.dismiss(deck, verdicts, house_pages=_house_pages(deck))
             if pages is None:
                 # A verdict call, not a reading: the author looked and answered, and
                 # what it wants back is the list as it stands now.
@@ -257,7 +258,9 @@ class PptReviewTool(Tool):
                     asks.insert(0, f"{len(unknown)} id(s) are not open findings and were left alone: {unknown}")
                 if refused:
                     asks.insert(
-                        0, f"{len(refused)} dismissal(s) refused and left open ({refused}): {REFUSED_FIGURE_REASON}"
+                        0,
+                        f"{len(refused)} dismissal(s) refused and left open ({refused}): "
+                        f"{review_ledger.refusal_reasons(deck, refused)}",
                     )
                 return _return.done(
                     asks=asks,
@@ -427,6 +430,7 @@ class PptReviewTool(Tool):
         if words is not None and planned and len(words) != len(planned):
             planned = {}
         asked = BRIEF.format(language=language, requirements=requirements())
+        house = _house_pages(deck)
 
         reading = asyncio.Semaphore(READERS)
         seconds: dict[int, float] = {}
@@ -440,7 +444,7 @@ class PptReviewTool(Tool):
                         self.composer.ask(
                             asked,
                             [
-                                text_block(_said(number, planned.get(number), ruled_out)),
+                                text_block(_said(number, planned.get(number), ruled_out, house=number in house)),
                                 image_block(self.views.data_uri(renders[number], label=f"page {number}")),
                             ],
                             max_tokens=REPLY_TOKENS,
@@ -736,7 +740,33 @@ def _record(deck: Project, payload: dict[str, Any]) -> None:
         pass
 
 
-def _said(number: int, plan: Any, ruled_out: tuple[str, ...] = ()) -> str:
+def _house_pages(deck: Project) -> set[int]:
+    """The deck's pages built on the template's own cover, index, divider or closing.
+
+    Their artwork is the house frame -- on the bundled templates a single page-size
+    bitmap holding border, ground and illustration -- so neither the reader nor the
+    dismissal rule treats it as a placeholder.
+    """
+    outline = load_outline(outline_path(deck))
+    if outline is None:
+        return set()
+    try:
+        state = deck_state.read(deck)
+    except Exception:  # noqa: BLE001 -- a page note is not worth failing a review over
+        return set()
+    if state.template is None:
+        return set()
+    from raven_ppt.services.template.menu import menu, roles
+
+    furniture = set(roles(menu(state.template.source)).values())
+    return {
+        int(page.page)
+        for page in outline.pages
+        if page.prototype is not None and not page.borrowed and int(page.prototype) in furniture
+    }
+
+
+def _said(number: int, plan: Any, ruled_out: tuple[str, ...] = (), house: bool = False) -> str:
     """What the reviewer is told about the page besides the picture.
 
     And what the user ruled out, when the brief records any: a reader that does not
@@ -766,11 +796,21 @@ def _said(number: int, plan: Any, ruled_out: tuple[str, ...] = ()) -> str:
     # is about its layouts and colours, not about its stock illustrations, which are
     # placeholders. A live run kept a whiteboard-meeting illustration on eight of
     # fifteen pages of an elderly-care deck and dismissed every entry about it as
-    # "the template's own".
-    said.append(
-        "The template's own illustrations and stock pictures are placeholders. One that does not depict "
-        "what this page is about is a `figure` problem, however well it matches the template's style."
-    )
+    # "the template's own". The exception is the template's own cover, index and
+    # closing: their artwork is the frame the deck was asked to keep, and on the
+    # bundled templates one bitmap the size of the page, which no call can replace
+    # in part -- a reader told otherwise asked twice for a carriage to leave a cover.
+    if house:
+        said.append(
+            "This is one of the template's own pages -- cover, index, divider or closing -- and its artwork, "
+            "page-size or not, is the house frame this deck was asked to keep. Judge its words and where they "
+            "sit, not whether the picture belongs."
+        )
+    else:
+        said.append(
+            "The template's own illustrations and stock pictures are placeholders. One that does not depict "
+            "what this page is about is a `figure` problem, however well it matches the template's style."
+        )
     if ruled_out:
         said.append(
             "The user ruled these out for the whole deck, so a fix that needs one of them is not a fix: "
@@ -782,10 +822,19 @@ def _said(number: int, plan: Any, ruled_out: tuple[str, ...] = ()) -> str:
         return "\n".join(said)
     said.append(
         "This page was cloned from the template's own structure: its badges, marks and their "
-        "styling are the template's."
+        "styling are the template's, and its picture frames sit where the template put them, "
+        "page edges included."
         if getattr(plan, "prototype", None)
         else "This page was composed from scratch: every mark and every measurement on it is the author's own."
     )
+    if getattr(plan, "figures", None):
+        # Without this the reader asked, on a page whose photographs the author had
+        # fetched for it, whether the template's illustrations depicted the subject.
+        said.append(
+            "Its pictures are the deck's own evidence, placed by the author ("
+            + ", ".join(str(figure) for figure in plan.figures)
+            + "); judge how they sit on the page, not whether they belong."
+        )
     said.append(f"Its planned claim: {plan.claim}")
     if plan.carries:
         said.append(f"What it was planned to carry: {plan.carries}")
