@@ -426,6 +426,141 @@ async def test_the_turn_end_record_carries_only_scalars_a_reader_keeps(tmp_path)
 
 
 # --------------------------------------------------------------------------- #
+# The terminal seam: what an attempt with a rerun coming does not pay for      #
+# --------------------------------------------------------------------------- #
+
+
+class _Salvages(_Budgeted):
+    """A product's terminal gate, which manufactures an answer for a turn that ended
+    with none. The research chain's does exactly this and may spend minutes on it, so
+    ``costs`` is what one call takes off the turn's clock.
+    """
+
+    answer = "Here is what I managed to gather."
+
+    def __init__(self, clock: dict | None = None, costs: float = 0.0, **budgets) -> None:
+        super().__init__(**budgets)
+        self._clock = clock
+        self._costs = costs
+        self.calls = 0
+
+    async def terminal_answerless(self, ctx) -> HookDecision:
+        self.calls += 1
+        if self._clock is not None:
+            self._clock["now"] += self._costs
+        return HookDecision(short_circuit_result=self.answer)
+
+
+class _Timed(_Scripted):
+    """A scripted provider whose calls cost the turn's clock. It lets a test say what
+    the research took and what the gate took as two separate numbers, which is the
+    whole question when one of them is paid for work about to be discarded.
+    """
+
+    def __init__(self, clock: dict, costs: float, *attempts: list[LLMResponse]) -> None:
+        super().__init__(*attempts)
+        self._clock = clock
+        self._costs = costs
+
+    async def chat(self, *args, **kwargs):
+        self._clock["now"] += self._costs
+        return await super().chat(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_the_attempt_with_a_rerun_coming_is_not_salvaged_first(tmp_path):
+    """Two dead attempts and one gate. The gate is for the turn, not for an attempt
+    the turn is about to abandon, so it is offered the second and not the first.
+    """
+    hook = _Salvages(dead_end_retries=1)
+    provider = _Scripted(_dead(), _dead())
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert provider.attempts_used == 2, "the rerun ran, so there were two seams to offer"
+    assert hook.calls == 1, f"the seam fired on both attempts, or on neither: {hook.calls}"
+    assert out[0] == _Salvages.answer, "and the attempt with nothing after it kept its salvage"
+
+
+@pytest.mark.asyncio
+async def test_a_salvaged_answer_cannot_empty_the_rerun_s_own_trigger(tmp_path):
+    """The stranded test asks whether the trajectory ended on the model's own prose,
+    and a salvage ends it on exactly that. Run first, it answers the question the
+    rerun is about to ask, and the turn ships the manufactured answer instead of the
+    researched one -- salvage winning by suppressing the thing measured to beat it.
+    """
+    hook = _Salvages(dead_end_retries=1, dead_end_reasons=("stranded",))
+    provider = _Scripted(_dead(), _answers("Alice Smith won it."))
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert provider.attempts_used == 2, "the salvage answered the rerun's question for it"
+    assert out[0] == "Alice Smith won it."
+    assert hook.calls == 0, "and no seam fired: the rerun's own answer is not answerless"
+
+
+@pytest.mark.asyncio
+async def test_the_salvage_a_rerun_would_discard_does_not_spend_the_turn_s_clock(tmp_path, monkeypatch):
+    """A hundred-second turn, ten seconds a model call, and a gate that takes the two
+    hundred and forty the shipped one is allowed. Paid before the rerun decision, that
+    single call overruns the turn on its own, and the rerun it was going to be thrown
+    away for never starts.
+    """
+    clock = {"now": 0.0}
+    monkeypatch.setattr(turn_path, "monotonic", lambda: clock["now"])
+    hook = _Salvages(clock=clock, costs=240.0, dead_end_retries=1, wall_clock_seconds=100.0)
+    provider = _Timed(clock, 10.0, _dead(), _answers("Alice Smith won it."))
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert hook.calls == 0, "the turn bought an answer it was about to throw away"
+    assert out[0] == "Alice Smith won it."
+    assert clock["now"] < 100.0, f"the turn overran its budget on salvage: {clock['now']}s"
+
+
+@pytest.mark.asyncio
+async def test_the_last_attempt_keeps_the_salvage_the_clock_denies_it_a_rerun_for(tmp_path, monkeypatch):
+    """The other side of that branch. A spent clock is a no to the rerun, so it has to
+    be a yes to the seam: skipping both is the one outcome that leaves a dead turn
+    with nothing at all.
+
+    Ten seconds a call against a twenty-five second turn, and the third call -- the
+    last one empty-response recovery has -- both ends the attempt with no answer and
+    carries the clock past the budget, which is the only way the two conditions meet.
+    """
+    clock = {"now": 0.0}
+    monkeypatch.setattr(turn_path, "monotonic", lambda: clock["now"])
+    hook = _Salvages(dead_end_retries=1, wall_clock_seconds=25.0)
+    provider = _Timed(clock, 10.0, _dead(), _answers("Alice Smith won it."))
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert provider.attempts_used == 1, "the first attempt was meant to spend the clock"
+    assert hook.calls == 1, "the turn had no rerun coming and was not salvaged"
+    assert out[0] == _Salvages.answer
+
+
+@pytest.mark.asyncio
+async def test_an_agent_that_budgets_no_rerun_is_salvaged_exactly_as_before(tmp_path):
+    """Every other agent on this loop. Nothing decides against the seam, so it fires
+    on the one dead attempt there is.
+    """
+    hook = _Salvages()
+    provider = _Scripted(_dead())
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert provider.attempts_used == 1
+    assert hook.calls == 1
+    assert out[0] == _Salvages.answer
+
+
+# --------------------------------------------------------------------------- #
 # The budget reader: a loop reading a dict a plugin wrote must not break on it  #
 # --------------------------------------------------------------------------- #
 

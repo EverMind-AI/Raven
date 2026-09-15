@@ -126,6 +126,13 @@ def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, An
 _SAID_LOG_MAX_CHARS = 2000
 
 
+# The scaffolding a turn raises and does not keep: empty-response recovery marks
+# its nudges and prefills, and an attached image rides its own key. They are
+# dropped before persistence, so a reader asking what the turn ended on has to
+# drop them too, or it answers about a message nobody is going to keep.
+_TURN_TRANSIENT_KEYS = ("_recovery_synthetic", _ATTACHED_IMAGE_KEY)
+
+
 def _log_what_the_model_said(response: Any) -> None:
     """Record the assistant's own words and how much it thought.
 
@@ -801,6 +808,7 @@ class TurnPathMixin:
         origin: "Origin | None" = None,
         turn_started_at: float | None = None,
         attempt: int = 1,
+        rerun_pending: "Callable[[str | None, list[dict], str], bool] | None" = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -831,6 +839,14 @@ class TurnPathMixin:
         the turn's end record so a reader can tell the scope of the count beside
         it -- the iterations there are this attempt's, while the elapsed time is
         the turn's. Nothing in the loop branches on it.
+
+        ``rerun_pending`` lets a caller that budgets reruns say this attempt is
+        about to be run again, given ``(final_content, messages, status)``. It is
+        asked only when the turn ended with nothing to show, and a yes means the
+        terminal seam is skipped: the answer a gate would manufacture there is
+        one the rerun discards, and the minutes spent making it come out of the
+        turn's own clock. Omitted, the seam fires for every answerless turn,
+        which is what every agent that budgets no rerun sees.
         """
         messages = initial_messages
         iteration = 0
@@ -2128,7 +2144,20 @@ class TurnPathMixin:
                 "wall_clock_budget_s": int(budgets.wall_clock_seconds) if budgets.wall_clock_seconds else None,
                 "turn_elapsed_s": int(monotonic() - turn_t0),
             }
-        if hook_ctx is not None and answerless:
+        # An attempt the caller is about to run again is not salvaged first. The gate
+        # behind this seam can spend minutes manufacturing an answer, and both ends
+        # that answer can meet are wrong: the rerun discards it, having charged the
+        # turn's own clock for it, or -- when the turn ended answerless without
+        # erroring -- it fills the emptiness the rerun reads and the rerun never
+        # happens, so salvage wins by suppressing the thing measured to beat it.
+        #
+        # Asked for every turn rather than only an answerless one, and asked once:
+        # the caller decides the rerun on this same answer, and a question put twice
+        # can come back differently the second time -- the checkpoint and the persist
+        # between here and there are seconds a clock can cross. A loop nobody
+        # budgeted a rerun for asks no one and salvages as it always did.
+        rerun_coming = rerun_pending is not None and rerun_pending(final_content, messages, status)
+        if hook_ctx is not None and answerless and not rerun_coming:
             hook_ctx.messages = messages
             hook_ctx.response = None
             decision = await self.hooks.terminal_answerless(hook_ctx)
@@ -2137,9 +2166,8 @@ class TurnPathMixin:
                 messages = self.context.add_assistant_message(messages, final_content)
                 hook_ctx.metadata["turn_end"]["salvaged"] = True
 
-        _transient = ("_recovery_synthetic", _ATTACHED_IMAGE_KEY)
-        if any(any(m.get(k) for k in _transient) for m in messages):
-            messages = [m for m in messages if not any(m.get(k) for k in _transient)]
+        if any(any(m.get(k) for k in _TURN_TRANSIENT_KEYS) for m in messages):
+            messages = [m for m in messages if not any(m.get(k) for k in _TURN_TRANSIENT_KEYS)]
 
         # Extraction belongs to the caller's after-turn pipeline
         # (``context_engine.after_turn`` + ``backend.store`` + ``backend.feedback``
@@ -2522,6 +2550,7 @@ class TurnPathMixin:
         from raven.agent.subagent.mode_tiers import turn_tier
 
         async def _attempt(seed: list[dict], attempt: int):
+            pending.update(rerun=False, reasons=[])
             return await self._run_agent_loop(
                 seed,
                 on_progress=on_progress,
@@ -2541,6 +2570,7 @@ class TurnPathMixin:
                 origin=req.origin,
                 turn_started_at=turn_t0,
                 attempt=attempt,
+                rerun_pending=_rerun_pending,
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
@@ -2551,6 +2581,34 @@ class TurnPathMixin:
         attempt_no = 1
         retry_seed = [dict(m) for m in initial_messages] if retries_left else None
         turn_t0 = monotonic()
+        pending: dict[str, Any] = {"rerun": False, "reasons": []}
+
+        def _dead_reasons(final_content: str | None, msgs: list[dict], status: str) -> list[str]:
+            turn = [m for m in msgs[turn_start_idx:] if not any(m.get(k) for k in _TURN_TRANSIENT_KEYS)]
+            reasons = dead_reasons(messages=turn, final_content=final_content, status=status)
+            if budgets.dead_end_reasons:
+                reasons = [r for r in reasons if r.startswith(budgets.dead_end_reasons)]
+            return reasons
+
+        def _clock_spent() -> bool:
+            return bool(budgets.wall_clock_seconds) and (monotonic() - turn_t0) >= budgets.wall_clock_seconds
+
+        def _rerun_pending(final_content: str | None, msgs: list[dict], status: str) -> bool:
+            # The turn's one rerun decision, made where the attempt ends. The loop
+            # below reads the answer rather than working it out again, so the seam
+            # that skipped a salvage on a yes here cannot then meet a no there and
+            # leave the turn with neither.
+            reasons = _dead_reasons(final_content, msgs, status)
+            # Every attempt spends the one turn clock, so a rerun gets what the
+            # attempts before it left rather than a fresh copy. A turn whose budget
+            # is already gone stops with what it has rather than starting an attempt
+            # that would break on its first iteration -- and, saying so here, keeps
+            # the salvage it would otherwise have skipped for a rerun it cannot run.
+            spent = bool(reasons) and _clock_spent()
+            if spent:
+                logger.info("Dead end ({}); not re-running: the turn's clock is spent", ", ".join(reasons))
+            pending.update(rerun=bool(retries_left) and bool(reasons) and not spent, reasons=reasons)
+            return pending["rerun"]
 
         try:
             # The tier this turn dispatches sub-agents at, frozen here for the
@@ -2566,27 +2624,14 @@ class TurnPathMixin:
                 # confident wrong answer and to empty this trigger at the same time.
                 # Unreachable for an agent whose hooks leave no budget, which is every
                 # agent but the one that asked for it.
-                while retries_left > 0:
-                    reasons = dead_reasons(
-                        messages=all_msgs[turn_start_idx:],
-                        final_content=final_content,
-                        status=outcome.status,
-                    )
-                    if budgets.dead_end_reasons:
-                        reasons = [r for r in reasons if r.startswith(budgets.dead_end_reasons)]
-                    if not reasons:
-                        break
-                    # Every attempt spends the one turn clock, so a rerun gets what
-                    # the first attempt left rather than a fresh copy of it. Checked
-                    # here as well as inside the loop so a turn whose budget is already
-                    # gone stops with what it has instead of starting an attempt that
-                    # would break on its first iteration.
-                    if budgets.wall_clock_seconds and (monotonic() - turn_t0) >= budgets.wall_clock_seconds:
-                        logger.info("Dead end ({}); not re-running: the turn's clock is spent", ", ".join(reasons))
-                        break
+                #
+                # The condition is the answer the attempt that just ended gave, and
+                # the next attempt's answer is what ends the loop: a budget of one
+                # leaves ``retries_left`` at zero by then, which its seam reads as no.
+                while pending["rerun"]:
                     retries_left -= 1
                     attempt_no += 1
-                    logger.info("Dead end ({}); re-running the turn", ", ".join(reasons))
+                    logger.info("Dead end ({}); re-running the turn", ", ".join(pending["reasons"]))
                     if on_progress is not None:
                         # Neutral about what the turn was doing and about which
                         # attempt this is: the loop serves every agent, and the
