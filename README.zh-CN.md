@@ -306,6 +306,8 @@ docs/                  # 安装、开发与设计文档
 
 | 包或模块 | 职责 |
 |---|---|
+| `a2a` | A2A 服务端接口：通过 Agent2Agent 协议向对等 Agent 提供宿主 Agent |
+| `a2a_client` | A2A 客户端：调用配置中的远端 Agent，并守住出站同源边界 |
 | `acp` | ACP 服务端接口：向外部 Agent 宿主提供 Raven |
 | `acp_client` | ACP 客户端、能力协商和第三方 Agent 事件适配 |
 | `agent` | Agent Loop、Harness 模块、工具执行与子 Agent 编排 |
