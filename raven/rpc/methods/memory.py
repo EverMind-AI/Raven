@@ -205,70 +205,67 @@ async def memory_list(params: dict) -> dict:
         raise InternalError(f"everos unreachable: {e}") from e
 
 
-def _esc(value: str) -> str:
-    return value.replace("'", "''")
+def _memory_backend(agent_loop_factory):
+    """The backend this deployment is running, for a call that is not a turn.
+
+    The live loop's own instance when the gateway has one, so a delete goes
+    through the object that has the service running; otherwise one built the
+    way ``raven doctor`` builds it, since the browser answers in processes
+    that never assembled a loop.
+    """
+    from raven.config.raven import load_raven_config
+
+    loop = agent_loop_factory() if agent_loop_factory is not None else None
+    backend = getattr(loop, "backend", None) if loop is not None else None
+    if backend is not None:
+        return backend
+
+    from raven.config import load_config
+    from raven.core.plugin_stack import maybe_build_memory_backend
+
+    return maybe_build_memory_backend(load_config().workspace_path, load_raven_config())
 
 
-async def _delete_in_process(kind: str, mem_id: str) -> int:
-    """Delete one row via EverOS's own repository layer (see module doc)."""
-    from raven_everos.config import configure_everos_env, ensure_everos_home
+async def memory_delete(params: dict, *, agent_loop_factory=None) -> dict:
+    """Remove one memory through the backend that owns it.
 
-    configure_everos_env()
-    ensure_everos_home()
-    from everos.infra.persistence.lancedb import (
-        agent_case_repo,
-        agent_skill_repo,
-        atomic_fact_repo,
-        episode_repo,
-        foresight_repo,
-        user_profile_repo,
-    )
-
-    repo = {
-        "episode": episode_repo,
-        "profile": user_profile_repo,
-        "agent_case": agent_case_repo,
-        "agent_skill": agent_skill_repo,
-    }[kind]
-
-    removed = 1
-    if kind == "episode":
-        # One store → one memcell → episode / facts / foresight family.
-        # Removing the episode alone would leave orphaned derived rows that
-        # recall can still surface, so the family goes together.
-        row = await repo.get_by_id(mem_id)
-        parent_id = getattr(row, "parent_id", None) if row else None
-        await repo.delete(f"id = '{_esc(mem_id)}'")
-        if parent_id:
-            for child in (atomic_fact_repo, foresight_repo):
-                try:
-                    await child.delete(f"parent_id = '{_esc(parent_id)}'")
-                except Exception as e:  # noqa: BLE001 — family cleanup is best-effort
-                    logger.warning("memory.delete: cascade on {} failed: {}", child, e)
-    else:
-        await repo.delete(f"id = '{_esc(mem_id)}'")
-    return removed
-
-
-async def memory_delete(params: dict) -> dict:
+    ``kind`` travels to the backend as the opaque string the listing handed
+    out. The host does not know how any backend stores a memory, and the one
+    time it acted as though it did -- deleting the row out of EverOS's index
+    while its markdown, the source of truth, kept the text -- the memory came
+    back on the next rebuild of that file, after the user had been told it was
+    gone.
+    """
     kind = str(params.get("kind") or "")
     mem_id = str(params.get("id") or "")
     if kind not in _KINDS:
         raise ConfigValidationError(f"unknown memory kind: {kind!r}")
     if not mem_id:
         raise ConfigValidationError("id is required")
+
+    backend = _memory_backend(agent_loop_factory)
+    if backend is None:
+        raise InternalError(
+            everos_plugin_missing_note() if not everos_plugin_installed() else "no memory backend is configured"
+        )
     try:
-        removed = await _delete_in_process(kind, mem_id)
-    except Exception as e:  # noqa: BLE001 — surface as a typed RPC error
+        removed = await backend.delete(mem_id, kind=kind)
+    except Exception as e:  # noqa: BLE001 - surface as a typed RPC error
         raise InternalError(f"delete failed: {e}") from e
+    if not removed:
+        raise InternalError(f"this backend cannot delete a {kind} memory")
     logger.info("memory.delete: removed {} {}", kind, mem_id)
-    return {"ok": True, "removed": removed}
+    return {"ok": True, "removed": 1}
 
 
-def register_memory_methods(dispatcher: "Dispatcher") -> None:
+def register_memory_methods(dispatcher: "Dispatcher", *, agent_loop_factory=None) -> None:
     dispatcher.register("memory.stats", memory_stats)
     dispatcher.register("memory.list", memory_list)
-    dispatcher.register("memory.delete", memory_delete)
+
+    async def _delete(params: dict) -> dict:
+        return await memory_delete(params, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("memory.delete", _delete)
 
 
 __all__ = [

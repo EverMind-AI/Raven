@@ -69,6 +69,11 @@ class _CompleteBackend:
     async def health(self):
         return None
 
+    async def delete(self, memory_id: str, *, kind: str | None = None) -> bool:
+        # Present because the Protocol lists it; a backend that cannot
+        # delete answers ``False`` rather than omitting the method.
+        return False
+
 
 class _IncompleteBackend:
     """Missing ``feedback`` — should NOT satisfy the Protocol."""

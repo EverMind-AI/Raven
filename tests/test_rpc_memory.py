@@ -9,7 +9,6 @@ receives (including the episode family cascade).
 
 from __future__ import annotations
 
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -152,70 +151,59 @@ async def test_list_wraps_transport_errors(monkeypatch):
 # ── memory.delete ────────────────────────────────────────────────────────
 
 
-class _FakeRepo:
-    def __init__(self, row=None):
-        self.row = row
-        self.deleted: list[str] = []
+class _RecordingBackend:
+    """A backend that records the delete it was asked for and answers it.
 
-    async def get_by_id(self, id_value):
-        return self.row
+    The host has no business knowing how a memory is stored, so these tests
+    assert what crosses the seam -- the id and the backend's own kind string --
+    and nothing about storage. The tests they replace asserted LanceDB
+    predicates, which is how the host came to delete an index row while the
+    markdown behind it, EverOS's source of truth, kept the text: the memory
+    reappeared on the next rebuild of that file after the user was told it was
+    gone.
+    """
 
-    async def delete(self, predicate):
-        self.deleted.append(predicate)
+    def __init__(self, answer: bool = True) -> None:
+        self.answer = answer
+        self.calls: list[tuple[str, str | None]] = []
+
+    async def delete(self, memory_id: str, *, kind: str | None = None) -> bool:
+        self.calls.append((memory_id, kind))
+        return self.answer
 
 
-def _install_fake_everos(monkeypatch, repos):
-    mod = SimpleNamespace(**repos)
-    monkeypatch.setitem(sys.modules, "everos.infra.persistence.lancedb", mod)
-
-
-@pytest.fixture
-def fake_everos_env(monkeypatch):
-    monkeypatch.setattr("raven_everos.config.configure_everos_env", lambda: None)
-    monkeypatch.setattr("raven_everos.config.ensure_everos_home", lambda: None)
+def _loop_with(backend):
+    return lambda: SimpleNamespace(backend=backend)
 
 
 @pytest.mark.asyncio
-async def test_delete_episode_cascades_family(monkeypatch, fake_everos_env):
-    ep = _FakeRepo(row=SimpleNamespace(parent_id="mc-1"))
-    facts, foresight = _FakeRepo(), _FakeRepo()
-    _install_fake_everos(
-        monkeypatch,
-        {
-            "episode_repo": ep,
-            "atomic_fact_repo": facts,
-            "foresight_repo": foresight,
-            "agent_case_repo": _FakeRepo(),
-            "agent_skill_repo": _FakeRepo(),
-            "user_profile_repo": _FakeRepo(),
-        },
-    )
-    out = await memory.memory_delete({"kind": "episode", "id": "e'1"})
+async def test_delete_goes_through_the_backend_that_owns_the_memory():
+    backend = _RecordingBackend()
+
+    out = await memory.memory_delete({"kind": "episode", "id": "ep-1"}, agent_loop_factory=_loop_with(backend))
+
     assert out == {"ok": True, "removed": 1}
-    assert ep.deleted == ["id = 'e''1'"]
-    assert facts.deleted == ["parent_id = 'mc-1'"]
-    assert foresight.deleted == ["parent_id = 'mc-1'"]
+    assert backend.calls == [("ep-1", "episode")]
 
 
 @pytest.mark.asyncio
-async def test_delete_skill_no_cascade(monkeypatch, fake_everos_env):
-    skill = _FakeRepo()
-    facts = _FakeRepo()
-    _install_fake_everos(
-        monkeypatch,
-        {
-            "episode_repo": _FakeRepo(),
-            "atomic_fact_repo": facts,
-            "foresight_repo": _FakeRepo(),
-            "agent_case_repo": _FakeRepo(),
-            "agent_skill_repo": skill,
-            "user_profile_repo": _FakeRepo(),
-        },
-    )
-    out = await memory.memory_delete({"kind": "agent_skill", "id": "sk1"})
-    assert out["ok"] is True
-    assert skill.deleted == ["id = 'sk1'"]
-    assert facts.deleted == []
+async def test_the_kind_reaches_the_backend_verbatim():
+    """It is the backend's own vocabulary, echoed back from its listing."""
+    backend = _RecordingBackend()
+
+    await memory.memory_delete({"kind": "agent_skill", "id": "sk1"}, agent_loop_factory=_loop_with(backend))
+
+    assert backend.calls == [("sk1", "agent_skill")]
+
+
+@pytest.mark.asyncio
+async def test_a_backend_that_will_not_delete_is_reported_not_claimed():
+    """``False`` is a real answer -- this kind cannot be removed here. Reporting
+    success would repeat the bug this path was rewritten for."""
+    backend = _RecordingBackend(answer=False)
+
+    with pytest.raises(InternalError):
+        await memory.memory_delete({"kind": "profile", "id": "p1"}, agent_loop_factory=_loop_with(backend))
 
 
 @pytest.mark.asyncio

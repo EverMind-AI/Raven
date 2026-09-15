@@ -2479,3 +2479,90 @@ class TestTheHostOwnsTheEmbeddingEndpoint:
 
         assert configure_embedding_env(block) is True
         assert "EVEROS_EMBEDDING__DIMENSIONS" not in os.environ
+
+
+@pytest.mark.asyncio
+class TestDeleteChangesTheSourceOfTruth:
+    """Markdown is EverOS's source of truth; ``.index/`` is derived from it.
+
+    A delete that only removed the index row un-deleted itself: cascade
+    re-embeds every entry the file still carries on the next append, so the
+    memory came back after the user had been told it was gone. These run
+    against real files under a temporary root, with no writer mocked -- a fake
+    writer would happily record a call this bug also made.
+    """
+
+    @staticmethod
+    def _root(tmp_path, monkeypatch):
+        monkeypatch.setenv("EVEROS_ROOT", str(tmp_path))
+        return tmp_path
+
+    @staticmethod
+    def _episode_log(root):
+        directory = root / "default_app" / "default_project" / "users" / "u1" / "episodes"
+        directory.mkdir(parents=True)
+        path = directory / "episode-2026-09-15.md"
+        path.write_text(
+            "---\n"
+            "id: episode_log_u1_2026-09-15\n"
+            "type: episode_daily\n"
+            "file_type: episode_daily\n"
+            "schema_version: 1\n"
+            "user_id: u1\n"
+            "track: user\n"
+            "date: '2026-09-15'\n"
+            "entry_count: 2\n"
+            "---\n"
+            "<!-- entry:ep_keep -->\n## ep_keep\nkeep me\n<!-- /entry:ep_keep -->\n"
+            "<!-- entry:ep_drop -->\n## ep_drop\ndrop me\n<!-- /entry:ep_drop -->\n",
+            encoding="utf-8",
+        )
+        return path
+
+    async def test_an_episode_is_retired_in_the_file_that_owns_it(self, tmp_path, monkeypatch) -> None:
+        root = self._root(tmp_path, monkeypatch)
+        path = self._episode_log(root)
+        backend = _backend(SimpleNamespace())
+        row = SimpleNamespace(
+            md_path="default_app/default_project/users/u1/episodes/episode-2026-09-15.md",
+            entry_id="ep_drop",
+        )
+        monkeypatch.setattr(
+            "everos.infra.persistence.lancedb.episode_repo.get_by_id",
+            AsyncMock(return_value=row),
+        )
+
+        assert await backend.delete("u1_ep_drop", kind="episode") is True
+
+        body = path.read_text(encoding="utf-8")
+        assert "deprecated_entries" in body and "ep_drop" in body
+        # Search filters `deprecated_by IS NULL`, and cascade re-applies the map
+        # on every sync -- so the entry stays gone across rebuilds without the
+        # adapter rewriting a file format EverOS owns.
+        assert "keep me" in body and "drop me" in body
+
+    async def test_an_id_nothing_matches_changes_no_file(self, tmp_path, monkeypatch) -> None:
+        root = self._root(tmp_path, monkeypatch)
+        path = self._episode_log(root)
+        before = path.read_text(encoding="utf-8")
+        backend = _backend(SimpleNamespace())
+        monkeypatch.setattr(
+            "everos.infra.persistence.lancedb.episode_repo.get_by_id",
+            AsyncMock(return_value=None),
+        )
+
+        assert await backend.delete("no-such-id", kind="episode") is False
+        assert path.read_text(encoding="utf-8") == before
+
+    async def test_a_kind_everos_cannot_remove_says_so_and_touches_nothing(self, tmp_path, monkeypatch) -> None:
+        """EverOS has no entry-level writer for a case log and no deletion at
+        all for a profile. Inventing one here would put this adapter back in
+        the business of owning a file format EverOS does not expose."""
+        root = self._root(tmp_path, monkeypatch)
+        path = self._episode_log(root)
+        before = path.read_text(encoding="utf-8")
+        backend = _backend(SimpleNamespace())
+
+        assert await backend.delete("p1", kind="profile") is False
+        assert await backend.delete("c1", kind="agent_case") is False
+        assert path.read_text(encoding="utf-8") == before

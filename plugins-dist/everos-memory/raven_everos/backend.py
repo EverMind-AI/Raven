@@ -140,6 +140,12 @@ _STORE_TIMEOUT_S: float = 10.0
 # into a multi-minute hang across N sessions.
 _SHUTDOWN_FLUSH_BUDGET_S: float = 5.0
 
+# What a deletion writes into an episode's ``deprecated_entries`` map. EverOS
+# puts the replacement entry's id there when Reflection merges episodes; a
+# person's delete has no replacement, and the map's value is free text that
+# only this adapter and a human reader ever look at.
+_DELETED_BY: str = "deleted-by-user"
+
 
 class ServiceState(Enum):
     """Whether the memory service is usable, and what would change that.
@@ -1157,6 +1163,76 @@ class EverosBackend:
         if is_final:
             self._unflushed.discard(session_id)
         return True
+
+    async def delete(self, memory_id: str, *, kind: str | None = None) -> bool:
+        """Remove one memory the way EverOS itself removes one.
+
+        Markdown is EverOS's source of truth and LanceDB under ``.index/`` is
+        derived from it -- cascade rebuilds a row from the file whenever the
+        file changes. Deleting the row alone therefore un-deletes itself: the
+        next append to that day's log re-embeds every entry the file still
+        carries, including the one a person asked to forget, and the text was
+        never gone from disk in the first place.
+
+        So only actions EverOS already performs are used here, and only the
+        kinds it performs them for:
+
+        ``episode``     the frontmatter's ``deprecated_entries`` map, which is
+                        how Reflection retires a merged episode. Search filters
+                        ``deprecated_by IS NULL``, and cascade re-applies the
+                        map on every sync, so the entry stays gone across
+                        rebuilds.
+        ``agent_skill`` ``AgentSkillWriter.delete_skill``, the one destructive
+                        operation that writer has.
+
+        ``profile`` and ``agent_case`` return ``False``: EverOS has no
+        entry-level writer for a case log and no deletion at all for a
+        profile. Inventing one here would mean this adapter owning a file
+        format EverOS does not expose, which is how the derived-index bug
+        above was written in the first place.
+        """
+        if not memory_id:
+            return False
+        try:
+            if kind == "episode":
+                return await self._deprecate_episode(memory_id)
+            if kind == "agent_skill":
+                return await self._delete_agent_skill(memory_id)
+        except Exception as e:  # noqa: BLE001 - a failed delete is reported, not raised at a button
+            self._logger.warning("EverosBackend.delete(%s, kind=%s) failed: %s", memory_id, kind, e)
+            return False
+        return False
+
+    async def _deprecate_episode(self, memory_id: str) -> bool:
+        """Mark one episode entry deprecated in the md file that owns it."""
+        from everos.core.persistence import MemoryRoot
+        from everos.infra.persistence.lancedb import episode_repo
+        from everos.infra.persistence.markdown import EpisodeWriter
+
+        row = await episode_repo.get_by_id(memory_id)
+        md_path = getattr(row, "md_path", None) if row else None
+        entry_id = getattr(row, "entry_id", None) if row else None
+        if not (md_path and entry_id):
+            return False
+        root = MemoryRoot.resolve()
+        await EpisodeWriter(root).patch_frontmatter(
+            root.root / md_path,
+            {"deprecated_entries": {entry_id: _DELETED_BY}},
+        )
+        return True
+
+    async def _delete_agent_skill(self, memory_id: str) -> bool:
+        """Remove the skill directory the row names."""
+        from everos.core.persistence import MemoryRoot
+        from everos.infra.persistence.lancedb import agent_skill_repo
+        from everos.infra.persistence.markdown import AgentSkillWriter
+
+        row = await agent_skill_repo.get_by_id(memory_id)
+        owner_id = getattr(row, "owner_id", None) if row else None
+        name = getattr(row, "name", None) if row else None
+        if not (owner_id and name):
+            return False
+        return bool(await AgentSkillWriter(MemoryRoot.resolve()).delete_skill(owner_id, name))
 
     async def feedback(self, signals: dict[str, Any]) -> None:
         """Deliberate no-op pending an upstream everos feedback sink.
