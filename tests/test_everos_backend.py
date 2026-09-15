@@ -2496,6 +2496,47 @@ class TestTheHostOwnsTheEmbeddingEndpoint:
         assert os.environ["EVEROS_EMBEDDING__API_KEY"] == "sk-1"
         assert os.environ["EVEROS_EMBEDDING__DIMENSIONS"] == "1024"
 
+    async def test_everos_keeps_an_endpoint_of_its_own(self, monkeypatch, tmp_path) -> None:
+        """The host's block is a default to fall back on, not a takeover.
+
+        An operator who wrote ``[embedding]`` into everos.toml chose that
+        endpoint for memory specifically; reusing the host's is a convenience
+        they are entitled to decline. Env beats the file in EverOS's own source
+        order, so deferring has to happen here or the choice is unreachable.
+        """
+        import os
+
+        self._env_keys(monkeypatch)
+        own_toml = tmp_path / "everos.toml"
+        own_toml.write_text(
+            '[embedding]\nmodel = "its-own"\nbase_url = "https://own.test/v1"\napi_key = "sk-own"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("raven_everos.config.get_everos_config_path", lambda: own_toml)
+        from raven_everos.config import configure_embedding_env
+
+        block = SimpleNamespace(model="host", base_url="https://host.test/v1", api_key="sk-host", dimensions=None)
+
+        assert configure_embedding_env(block) is False
+        assert "EVEROS_EMBEDDING__MODEL" not in os.environ
+
+    async def test_a_template_placeholder_is_not_a_choice(self, monkeypatch, tmp_path) -> None:
+        """The shipped template seeds a ``<...>`` model name. Treating that as
+        "EverOS has its own" would leave a fresh install with no endpoint while
+        the host had one to give."""
+        import os
+
+        self._env_keys(monkeypatch)
+        own_toml = tmp_path / "everos.toml"
+        own_toml.write_text('[embedding]\nmodel = "<pick-a-model>"\n', encoding="utf-8")
+        monkeypatch.setattr("raven_everos.config.get_everos_config_path", lambda: own_toml)
+        from raven_everos.config import configure_embedding_env
+
+        block = SimpleNamespace(model="host", base_url="https://host.test/v1", api_key="sk-host", dimensions=None)
+
+        assert configure_embedding_env(block) is True
+        assert os.environ["EVEROS_EMBEDDING__MODEL"] == "host"
+
     async def test_a_half_filled_block_sets_nothing(self, monkeypatch) -> None:
         """All three strings or none: a model with no key cannot embed, and a
         partial override would shadow a working everos.toml with a broken one."""
@@ -2592,6 +2633,42 @@ class TestDeleteChangesTheSourceOfTruth:
         # on every sync -- so the entry stays gone across rebuilds without the
         # adapter rewriting a file format EverOS owns.
         assert "keep me" in body and "drop me" in body
+
+    async def test_a_skill_is_removed_from_disk(self, tmp_path, monkeypatch) -> None:
+        """The one destructive operation EverOS's skill writer has, used as it
+        is. A skill is a directory, not an entry in a log, so retiring it the
+        way an episode is retired would leave it on disk and recallable."""
+        from everos.core.persistence import MemoryRoot
+        from everos.infra.persistence.markdown.mds import AgentSkillFrontmatter
+
+        self._root(tmp_path, monkeypatch)
+        root = MemoryRoot.resolve()
+        skill_dir = (
+            root.agents_dir("default", "default")
+            / "a1"
+            / AgentSkillFrontmatter.SKILLS_CONTAINER_NAME
+            / AgentSkillFrontmatter.skill_dir_name("tokenizer edge cases")
+        )
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("body", encoding="utf-8")
+        backend = _backend(SimpleNamespace())
+        monkeypatch.setattr(
+            "everos.infra.persistence.lancedb.agent_skill_repo.get_by_id",
+            AsyncMock(return_value=SimpleNamespace(owner_id="a1", name="tokenizer edge cases")),
+        )
+
+        assert await backend.delete("a1_tokenizer", kind="agent_skill") is True
+        assert not skill_dir.exists()
+
+    async def test_a_skill_row_that_names_nothing_removes_nothing(self, tmp_path, monkeypatch) -> None:
+        self._root(tmp_path, monkeypatch)
+        backend = _backend(SimpleNamespace())
+        monkeypatch.setattr(
+            "everos.infra.persistence.lancedb.agent_skill_repo.get_by_id",
+            AsyncMock(return_value=None),
+        )
+
+        assert await backend.delete("nope", kind="agent_skill") is False
 
     async def test_an_id_nothing_matches_changes_no_file(self, tmp_path, monkeypatch) -> None:
         root = self._root(tmp_path, monkeypatch)
@@ -2720,6 +2797,37 @@ class TestStoreConventions:
         await backend.store("s", [{"role": "user", "content": "x"}], metadata={"flush": True})
 
         assert adapter.memorize.await_args.kwargs["is_final"] is True
+
+    async def test_the_owners_a_real_config_produces_are_honoured(self) -> None:
+        """The block reaches store as an agent wrote it in raven's config, and
+        raven's config spells its keys in camelCase.
+
+        Reading only the contract's snake_case made the override silently never
+        fire for a real config: every sub-agent's memories went under the
+        host's own identity, where recall for that agent never looks. A
+        hand-built metadata dict hid it, which is why this one is built the way
+        the product builds it.
+        """
+        from raven.agent.subagent_memory import scope_from_config
+        from raven.config.schema import SubagentMemoryConfig
+
+        scope = scope_from_config(
+            SubagentMemoryConfig.model_validate({"userId": "liv", "agentId": "coder", "source": "trace"})
+        )
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        backend = self._ready(adapter)
+        captured: dict = {}
+        backend._convert_messages = lambda messages, *, agent_id, user_id: (
+            captured.update(  # type: ignore[method-assign]
+                agent_id=agent_id, user_id=user_id
+            )
+            or [{"role": "user", "content": "x"}]
+        )
+
+        await backend.store("s", [{"role": "user", "content": "x"}], metadata={"flush": True, **scope.block})
+
+        assert captured == {"user_id": "liv", "agent_id": "coder"}
 
     async def test_per_call_owners_do_not_change_the_backends_identity(self) -> None:
         """The content is a sub-agent's; filing it under the host would put it

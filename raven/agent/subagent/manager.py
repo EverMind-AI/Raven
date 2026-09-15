@@ -44,6 +44,7 @@ from raven.agent.subagent_memory import (
     prime_from_turn,
     record_memories,
     scope_from_config,
+    started_backend,
     trace_session_id,
 )
 from raven.config.paths import get_sandbox_dir
@@ -525,11 +526,12 @@ class SubagentManager:
         return scope_from_config(getattr(row.config, "memory", None))
 
     def _memory_backend(self):
-        """The configured memory backend, or ``None`` when there is not one.
+        """A fresh, unstarted memory backend, or ``None`` when there is not one.
 
         Built here rather than held: this runs off the dispatch path, after a
         call has already answered, and a record nobody is waiting on must not
-        keep a backend alive for the life of the manager.
+        keep a backend alive for the life of the manager. Its caller owns the
+        ``start`` / ``stop`` pair around the one record (``started_backend``).
         """
         from raven.config import load_config
         from raven.config.raven import load_raven_config
@@ -569,44 +571,45 @@ class SubagentManager:
         scope = self.memory_scope(agent)
         if scope is None:
             return
-        backend = self._memory_backend()
-        if backend is None:
-            return
 
-        if scope.source == "trace":
-            # The host owns both the write and the read here, so it mints the
-            # join key instead of resolving one the sub-agent committed.
-            session_id = trace_session_id(agent or "", task_id)
-            rows = turn or []
+        async def _run() -> None:
+            async with started_backend(self._memory_backend(), label="Sub-agent memory record") as backend:
+                if backend is None:
+                    return
+                if scope.source == "trace":
+                    # The host owns both the write and the read here, so it mints
+                    # the join key instead of resolving one the sub-agent committed.
+                    session_id = trace_session_id(agent or "", task_id)
+                    rows = turn or []
 
-            async def _resolve() -> str | None:
-                return session_id
+                    async def _resolve() -> str | None:
+                        return session_id
 
-            async def _prime(sid: str) -> bool:
-                return await prime_from_turn(backend=backend, scope=scope, session_id=sid, turn=rows)
+                    async def _prime(sid: str) -> bool:
+                        return await prime_from_turn(backend=backend, scope=scope, session_id=sid, turn=rows)
 
-            prime, budget = _prime, TRACE_BUDGET_S
-        else:
+                    prime, budget = _prime, TRACE_BUDGET_S
+                else:
 
-            async def _resolve() -> str | None:
-                agent_id = await get_registry().lookup(session_key or "default", agent or "", handle)
-                return f"{scope.session_prefix}{agent_id}" if agent_id else None
+                    async def _resolve() -> str | None:
+                        agent_id = await get_registry().lookup(session_key or "default", agent or "", handle)
+                        return f"{scope.session_prefix}{agent_id}" if agent_id else None
 
-            prime, budget = None, None
+                    prime, budget = None, None
 
-        task = asyncio.create_task(
-            write_memory_record_for(
-                directory=directory,
-                filename=filename,
-                agent=agent or "",
-                backend=backend,
-                scope=scope,
-                resolve_session_id=_resolve,
-                instance=instance,
-                budget_s=budget,
-                prime=prime,
-            )
-        )
+                await write_memory_record_for(
+                    directory=directory,
+                    filename=filename,
+                    agent=agent or "",
+                    backend=backend,
+                    scope=scope,
+                    resolve_session_id=_resolve,
+                    instance=instance,
+                    budget_s=budget,
+                    prime=prime,
+                )
+
+        task = asyncio.create_task(_run())
         self._track_record(task, session_key)
 
     def _track_record(self, task: asyncio.Task, session_key: str | None) -> None:

@@ -133,7 +133,48 @@ def _pinned_embedding_config() -> EmbeddingConfig | None:
     return EmbeddingConfig(model=wire_model, base_url=base_url, api_key=api_key, dimensions=None)
 
 
-def _read_legacy_embedding() -> "EmbeddingConfig | None":
+def adopt_legacy_endpoint(raw: dict) -> bool:
+    """Copy the memory backend's endpoint into raven's own block, in ``raw``.
+
+    Mutates the caller's already-loaded config dict rather than writing a file:
+    ``raven doctor --fix`` applies several corrections in one atomic write, and
+    a second writer here would race it.
+
+    The rendering lives with the reader that owns the shape -- which three
+    values matter and how they are spelled on disk -- so a caller states the
+    intent and nothing else.
+    """
+    legacy = read_legacy_embedding()
+    if legacy is None:
+        return False
+    block = raw.setdefault("embedding", {})
+    block["model"] = legacy.model
+    block["baseUrl"] = legacy.base_url
+    block["apiKey"] = legacy.api_key
+    if legacy.dimensions:
+        block["dimensions"] = legacy.dimensions
+    return True
+
+
+def endpoint_is_ravens_own() -> bool:
+    """Whether raven's own config already carries a complete endpoint.
+
+    Asked by ``raven doctor`` so it can offer to move one that is still only in
+    the memory backend's file. A question rather than a field read: which three
+    values make an endpoint usable is this module's rule, and a second copy of
+    it elsewhere is how two surfaces come to disagree about the same config.
+    """
+    from raven.config.raven import load_raven_config
+
+    try:
+        section = load_raven_config().embedding
+    except Exception as exc:  # noqa: BLE001 - an unreadable config is not this module's to report
+        logger.warning("knowledge: cannot read raven config: {}", exc)
+        return False
+    return bool(section.model and section.base_url and section.api_key)
+
+
+def read_legacy_embedding() -> "EmbeddingConfig | None":
     """The ``[embedding]`` section of the EverOS config, or ``None``."""
     path = _legacy_everos_config_path()
     if path is None or not path.is_file():
@@ -186,7 +227,7 @@ def load_embedding_config() -> EmbeddingConfig | None:
             dimensions=section.dimensions if section.dimensions and section.dimensions > 0 else None,
         )
 
-    legacy = _read_legacy_embedding()
+    legacy = read_legacy_embedding()
     if legacy is not None:
         logger.warning(
             "knowledge: embedding endpoint read from the EverOS config; "

@@ -45,6 +45,14 @@ class OnboardUI:
     style: Any
     lend_provider_credentials: Callable[[str], dict[str, str]]
     resolve_main_model: Callable[[str], dict[str, Any]]
+    set_embedding_endpoint: Callable[[dict[str, Any]], None]
+    """Record an embedding endpoint in the host's own config.
+
+    Lent because the endpoint is not the backend's to keep: a knowledge base
+    reads the same block, and a screen that wrote it into its own file left the
+    host's empty -- so the operator configured it here and every other reader
+    still had to fall back. A backend that wants an endpoint of its own writes
+    that where it keeps its own settings; this is the shared one."""
 
 
 class OnboardStep(Protocol):

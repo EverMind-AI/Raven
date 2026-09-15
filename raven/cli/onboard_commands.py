@@ -1857,6 +1857,7 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
 def _onboard_ui() -> "OnboardUI":
     """The wizard shell a plugin's screen borrows for the length of one run."""
     from raven.cli._styles import RAVEN_STYLE
+    from raven.config.update import set_embedding_endpoint
     from raven.config.update_providers import lend_provider_credentials, resolve_main_model
     from raven.plugins import OnboardUI
 
@@ -1873,6 +1874,7 @@ def _onboard_ui() -> "OnboardUI":
         style=RAVEN_STYLE,
         lend_provider_credentials=lend_provider_credentials,
         resolve_main_model=resolve_main_model,
+        set_embedding_endpoint=lambda fields: set_embedding_endpoint(fields),
     )
 
 

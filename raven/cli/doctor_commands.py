@@ -342,12 +342,34 @@ def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
         )
         health.findings.append("  raven provider list  # the names this accepts")
 
+    # The endpoint a knowledge base embeds with is raven's, but an install
+    # configured before it moved still has it only in EverOS's file -- where a
+    # knowledge base can still read it, once, with a warning on every use. The
+    # copy is three strings and changes nothing about what the file says, so it
+    # is offered rather than done silently.
+    move_embedding = False
+    from raven.knowledge._embedding import endpoint_is_ravens_own, read_legacy_embedding
+
+    if not endpoint_is_ravens_own():
+        if read_legacy_embedding() is not None:
+            health.findings.append(
+                "The embedding endpoint is recorded in EverOS's config, not raven's. A knowledge "
+                "base reads it there for now, but it stops working the moment the memory plugin "
+                "is not the configured backend -- which has nothing to do with indexing documents."
+            )
+            health.fixes.append("copy the embedding endpoint into raven's own embedding block")
+            move_embedding = True
+
     if fix and health.fixes:
         path = get_config_path()
         try:
             raw = read_raw_or_raise(path)
             raw.get("agents", {}).get("defaults", {}).pop("contextWindowTokens", None)
             raw.get("agents", {}).get("defaults", {}).pop("context_window_tokens", None)
+            if move_embedding:
+                from raven.knowledge._embedding import adopt_legacy_endpoint
+
+                adopt_legacy_endpoint(raw)
             _write_config_preserving_mode(path, raw)
         except Exception as exc:  # noqa: BLE001 -- reported, never fatal
             health.findings.append(f"could not write the fix: {exc}")

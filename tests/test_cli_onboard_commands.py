@@ -1731,9 +1731,15 @@ def test_memory_enable_writes_everos_sections(
     assert everos["llm"]["model"] == "mem-llm"
     assert everos["llm"]["api_key"] == "k-llm"
     assert everos["llm"]["base_url"] == "https://llm/v1"
-    assert everos["embedding"]["model"] == "mem-embed"
-    assert everos["embedding"]["api_key"] == "k-embed"
-    assert everos["embedding"]["base_url"] == "https://llm/v1"
+    # The embedding endpoint lands in raven's own block, not this file: a
+    # knowledge base reads the same endpoint and never speaks to the memory
+    # service, so writing it here left every other reader falling back.
+    assert everos["embedding"]["model"] != "mem-embed", "the wizard should not write this file's embedding"
+    assert data["embedding"] == {
+        "model": "mem-embed",
+        "baseUrl": "https://llm/v1",
+        "apiKey": "k-embed",
+    }
     # Skipped roles keep whatever the shipped template holds, which is a model
     # name with no credentials -- so they must read as unconfigured rather than
     # be absent outright.
@@ -5317,7 +5323,6 @@ def test_picking_another_configured_provider_does_not_ask_for_its_key(
 ) -> None:
     """End to end: the memory LLM is on OpenRouter, embedding moves to
     SiliconFlow, and raven already holds a SiliconFlow key."""
-    import tomllib
 
     import questionary
 
@@ -5353,11 +5358,14 @@ def test_picking_another_configured_provider_does_not_ask_for_its_key(
         warnings=[],
     )
 
-    with everos_isolated.open("rb") as f:
-        everos = tomllib.load(f)
-    assert everos["embedding"]["api_key"] == "sk-sf"
-    assert everos["embedding"]["base_url"] == "https://api.siliconflow.cn/v1"
-    assert everos["embedding"]["model"] == "Qwen/Qwen3-Embedding-4B"
+    # Recorded in raven's own block: the endpoint is shared with the knowledge
+    # base, which never speaks to the memory service.
+    import json
+
+    block = json.loads(tmp_env.read_text(encoding="utf-8"))["embedding"]
+    assert block["apiKey"] == "sk-sf"
+    assert block["baseUrl"] == "https://api.siliconflow.cn/v1"
+    assert block["model"] == "Qwen/Qwen3-Embedding-4B"
 
 
 # --------------------------------------------------------------------------- capability tiers
@@ -7741,3 +7749,34 @@ def test_step5_role_flags_select_the_vendor_and_file_its_key(tmp_env: Path) -> N
     assert web["providers"]["jina"]["apiKey"] == "jina-flag", "no --fetch-provider, so the configured reader (jina)"
     body = (Path.home() / ".raven" / "env").read_text(encoding="utf-8")
     assert "export EXA_API_KEY=exa-flag" in body and "export JINA_API_KEY=jina-flag" in body
+
+
+def test_the_lent_writer_records_the_endpoint_in_ravens_own_config(tmp_env: Path) -> None:
+    """The wizard's embedding role writes raven's block, not the backend's.
+
+    It used to write everos.toml, which left the host's block empty: an
+    operator configured the endpoint in the wizard and every other reader --
+    the knowledge base above all -- still fell back to the old file and said so
+    on each use.
+    """
+    import json
+
+    ui = onboard_commands._onboard_ui()
+
+    ui.set_embedding_endpoint({"model": "m-1", "baseUrl": "https://e.test/v1", "apiKey": "sk-1"})
+
+    block = json.loads(tmp_env.read_text(encoding="utf-8"))["embedding"]
+    assert block == {"model": "m-1", "baseUrl": "https://e.test/v1", "apiKey": "sk-1"}
+
+
+def test_the_lent_writer_merges_rather_than_replaces(tmp_env: Path) -> None:
+    """A run that configures only the model keeps the key already recorded."""
+    import json
+
+    ui = onboard_commands._onboard_ui()
+    ui.set_embedding_endpoint({"model": "m-1", "baseUrl": "https://e.test/v1", "apiKey": "sk-1"})
+
+    ui.set_embedding_endpoint({"model": "m-2"})
+
+    block = json.loads(tmp_env.read_text(encoding="utf-8"))["embedding"]
+    assert block["model"] == "m-2" and block["apiKey"] == "sk-1"
