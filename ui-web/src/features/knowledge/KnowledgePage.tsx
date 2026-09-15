@@ -74,7 +74,7 @@ function CreateDialog({ model, onClose }: { model: string; onClose: () => void }
         </select>
         {!embed && <div className="hint">{t('gui.kb.embed_off_note')}</div>}
 
-        <div className="acts">
+        <div className="kbacts">
           <button className="mini ghost" onClick={onClose}>
             {t('gui.kb.cancel')}
           </button>
@@ -183,8 +183,12 @@ function ago(iso: string): string {
 function DocRow({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
   return (
     <>
-      <div className="td nm" title={doc.source}>
-        {doc.source}
+      <div className="td nm">
+        {/* The name is the way in, which is where a reader reaches for it --
+            the menu's Preview Source is the same action under a label. */}
+        <button className="kbopen" title={doc.source} onClick={() => store.openDoc(doc)}>
+          {doc.source}
+        </button>
       </div>
       <div className="td">{t('gui.kb.doc_type_file')}</div>
       <div className={`td st s-${doc.status}`}>{t('gui.kb.doc_' + doc.status)}</div>
@@ -199,7 +203,49 @@ function DocRow({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
   )
 }
 
+/* The original file, framed.
+
+   One iframe for every kind the browser can draw, and the gateway converts the
+   office formats to PDF before it gets here -- so the page needs no viewer
+   library of its own, which matters more than it sounds: this bundle is
+   inlined into a single HTML file, and a PDF renderer alone would be megabytes
+   of it.
+
+   The frame carries no `sandbox` attribute on purpose. Every response already
+   arrives under a CSP sandbox, which is what gives it an opaque origin; the
+   attribute as well would stop the browser's own PDF viewer, which is
+   script-driven, from drawing anything at all. */
+function DocViewer({ doc }: { doc: KbDoc }): JSX.Element {
+  const kind = store.previewKind(doc)
+  return (
+    <>
+      <div className="kbvhd">
+        <button className="kbback" aria-label={t('gui.kb.back')} onClick={() => store.closeDoc()}>
+          &#8592;
+        </button>
+        <b title={doc.source}>{doc.source}</b>
+      </div>
+      {kind === 'none' ? (
+        <div className="empty-note">
+          <div className="ttl">{t('gui.kb.no_preview')}</div>
+          {/* A download rather than a wall of bytes: the file is still theirs
+              to open, in whatever does know the format. */}
+          <a className="mini" href={store.previewUrl(doc)} download={doc.source}>
+            {t('gui.kb.download')}
+          </a>
+        </div>
+      ) : (
+        <iframe className="kbframe" src={store.previewUrl(doc)} title={doc.source} />
+      )}
+    </>
+  )
+}
+
 function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getState> }): JSX.Element {
+  /* The file takes the whole panel rather than opening beside the table: a
+     document is what the reader came to look at, and half a page of it is not
+     worth keeping a list they can get back to with one button. */
+  if (s.viewing) return <DocViewer doc={s.viewing} />
   return (
     <>
       <div className="kbhd">

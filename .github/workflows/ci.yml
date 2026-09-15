@@ -303,6 +303,7 @@ jobs:
           node ui-web/scripts/check-page.mjs
           node ui-web/scripts/count-shared-globals.mjs
           node ui-web/scripts/check-css.mjs
+          node ui-web/scripts/check-class-namespace.mjs
 
   bridge:
     name: bridge checks
