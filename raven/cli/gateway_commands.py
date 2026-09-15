@@ -477,7 +477,10 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
 
             with suppress(NotImplementedError, RuntimeError, ValueError):
                 asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, _on_term)
-            warm_up_in_background()
+            # No test runs this closure -- it serves until it is killed -- so
+            # what it schedules is pinned by source in
+            # tests/test_cli_gateway_commands.py instead.
+            warm_up_in_background()  # pragma: no cover
             health_server = None
             gw_teardown = None
             gw_scheduler = None
