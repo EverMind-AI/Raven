@@ -2830,7 +2830,7 @@ def borrow_media_credentials(tool: MediaToolConfig, providers: Any) -> None:
         tool.api_key = api_key if api_base else ""
         tool.extra_headers = headers if api_base else {}
         return
-    if runs_on and not tool.api_key:
+    if runs_on and not tool.api_key and not tool.model.startswith(("MiniMax-H", "I2V-")):
         openrouter = providers.get(_OPENROUTER)
         if openrouter and openrouter.api_key:
             tool.api_key = openrouter.api_key
