@@ -328,6 +328,7 @@ def test_the_shipped_rerun_is_written_out_and_not_inherited():
     class default moves -- the shipped product keeps the value in the file, and this
     test reddens so the move is a decision rather than a silent change to what ships.
     """
+    sys.path.insert(0, str(RUN_PY.parent / "plugins" / "research-flow"))
     from research_flow.config import FlowConfig
 
     slice_ = json.loads((RUN_PY.parent / "config.json").read_text())["plugins"]["config"]["research-flow"]
