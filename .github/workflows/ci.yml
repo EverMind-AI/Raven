@@ -74,8 +74,13 @@ jobs:
       - name: Dependency hygiene (no direct import of a transitive dep)
         run: make lint-deps
 
+  # Four runners, each collecting and running a quarter of the test files
+  # (`--shard`, dealt round-robin in tests/conftest.py), each writing coverage
+  # data and no report; the `coverage` job below combines the four and runs
+  # the gates once. Measured before the split: 12 minutes on one runner, of
+  # which two were the four xdist workers importing every test module.
   unit:
-    name: unit (py${{ matrix.python }} / ${{ matrix.os }})
+    name: unit (py${{ matrix.python }} / ${{ matrix.os }} / ${{ matrix.shard }} of ${{ strategy.job-total }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -85,6 +90,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         python: ["3.12"]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -125,11 +131,57 @@ jobs:
           python3 ui-web/build.py
           test -f ui-web/dist/index.html
 
-      - name: Unit tests with line and branch coverage
+      - name: Unit tests, this shard, with line and branch coverage data
         # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
         # set, and the highlighter then splits option names with escape codes, so
         # `"--flag" in result.stdout` assertions fail only on CI.
-        run: make coverage
+        run: make coverage-shard COVERAGE_SHARD=${{ matrix.shard }}/${{ strategy.job-total }}
+
+      - name: Name the data file after the shard
+        run: mv .coverage .coverage.shard-${{ matrix.shard }}
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-py${{ matrix.python }}-${{ matrix.os }}-${{ matrix.shard }}
+          path: .coverage.shard-*
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  coverage:
+    name: coverage gates
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHON_VERSION: "3.12"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: make install-deps
+
+      - name: Download the shards' coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-data-py3.12-ubuntu-latest-*
+          path: coverage-data
+          merge-multiple: true
+
+      - name: Combine the shards into one report
+        run: make coverage-combine
 
       - name: Coverage summary and lowest-covered files
         if: ${{ !cancelled() && hashFiles('coverage.json') != '' }}
@@ -163,11 +215,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: python-coverage-py${{ matrix.python }}-${{ matrix.os }}
+          name: python-coverage-py3.12-ubuntu-latest
           path: |
             coverage.xml
             coverage.json
-            htmlcov/
             coverage-baseline-candidate.json
           if-no-files-found: warn
           retention-days: 30

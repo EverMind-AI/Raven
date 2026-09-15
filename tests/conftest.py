@@ -7,6 +7,7 @@ declaration.
 from __future__ import annotations
 
 import contextlib
+import functools
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -53,11 +54,52 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         help="fail an otherwise green session when any unmarked test is over the ceiling",
     )
+    group.addoption(
+        "--shard",
+        default=None,
+        metavar="K/N",
+        help="collect only the K-th of N slices of the test files (1-based); files are dealt round-robin in sorted order",
+    )
+
+
+_SHARD: tuple[int, int] | None = None
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    global _WALL_CLOCK_CEILING_S
+    global _WALL_CLOCK_CEILING_S, _SHARD
     _WALL_CLOCK_CEILING_S = float(config.getoption("--wall-clock-ceiling"))
+    spec = config.getoption("--shard")
+    if spec is not None:
+        try:
+            k, n = (int(part) for part in spec.split("/"))
+        except ValueError:
+            raise pytest.UsageError(f"--shard wants K/N, got {spec!r}") from None
+        if not 1 <= k <= n:
+            raise pytest.UsageError(f"--shard {spec}: K must be between 1 and N")
+        _SHARD = (k, n)
+
+
+@functools.cache
+def _test_file_index(tests_root: Path) -> dict[Path, int]:
+    files = sorted(p for p in tests_root.rglob("test_*.py") if "__pycache__" not in p.parts)
+    return {path: index for index, path in enumerate(files)}
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
+    """Under ``--shard K/N``, leave the test files of the other shards alone.
+
+    Decided here, before the file is imported, so a shard pays collection for
+    its own modules only: importing all of them is two minutes of a CI runner.
+    Round-robin over the sorted list, so a slow family whose files sort together
+    (the ppt engine's) is spread over the shards rather than handed to one.
+    """
+    if _SHARD is None or collection_path.suffix != ".py" or not collection_path.name.startswith("test_"):
+        return None
+    index = _test_file_index(config.rootpath / "tests").get(collection_path)
+    if index is None:
+        return None
+    k, n = _SHARD
+    return index % n != k - 1
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
