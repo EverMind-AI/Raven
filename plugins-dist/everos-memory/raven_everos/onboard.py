@@ -956,7 +956,7 @@ def _config_everos_role(
     _UI.console.print("\n".join(lines), highlight=False)
 
     while True:  # role-menu loop — a back-out of the source picker returns here
-        current = _everos_section(section).get("model") if _everos_role_configured(section) else None
+        current = _configured_model(section)
         if current:
             choices = [
                 questionary.Choice(_UI.t("Keep current: {current}", current=current), value="keep"),
@@ -1106,10 +1106,54 @@ def _config_everos_role(
                     "apiKey": result.get("api_key"),
                 }
             )
+            _bind_embedding_for_launch(result)
         else:
             set_everos_section(section, result)
         _UI.console.print(_UI.t("  [green]✓ {label} configured.[/green]", label=label))
         return
+
+
+def _configured_model(section: str) -> str | None:
+    """The model this role will actually run with, or ``None``.
+
+    Embedding's endpoint lives in raven's block now, so reading the toml alone
+    answered ``None`` for a role the wizard had configured a moment earlier --
+    and the menu then offered "Configure it?" instead of "Keep current".
+    """
+    from raven_everos.config import host_embedding_section
+
+    if not _everos_role_configured(section):
+        return None
+    return _everos_section(section).get("model") or host_embedding_section().get("model")
+
+
+def _bind_embedding_for_launch(result: dict) -> None:
+    """Put the endpoint just chosen where the managed launch will find it.
+
+    The wizard starts EverOS itself, further down this same run, and the child
+    inherits this process's environment. The binding that normally does this --
+    ``EverosBackend.start`` -- belongs to a session that has not begun yet, and
+    it would come too late anyway: ``ensure_everos_server`` returns without
+    restarting a service that is already answering. Without this the wizard
+    launches a server that booted from the template's placeholder and has no
+    embedding endpoint, while the block it just wrote to raven's config says
+    the opposite.
+
+    Goes through ``configure_embedding_env`` rather than setting the variables
+    here so the deference to an ``[embedding]`` the operator wrote themselves
+    is decided in one place.
+    """
+    from types import SimpleNamespace
+
+    from raven_everos.config import configure_embedding_env
+
+    configure_embedding_env(
+        SimpleNamespace(
+            model=result.get("model"),
+            base_url=result.get("base_url"),
+            api_key=result.get("api_key"),
+        )
+    )
 
 
 def _lock_holder(root: Path | str):

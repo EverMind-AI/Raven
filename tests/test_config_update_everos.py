@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -427,3 +428,86 @@ def test_a_section_nobody_wrote_reads_as_empty(everos_home: Path) -> None:
 
     assert ue.everos_section("embedding") == {}
     assert ue.everos_section("llm") != {}
+
+
+class TestEmbeddingHasTwoHomes:
+    """The embedding endpoint became raven's, and the toml kept its claim.
+
+    Every reader of "is embedding configured" -- doctor's `configured:` line,
+    the wizard's keep/reconfigure menu and its recap, the warning that recall
+    has fallen back to keyword matching -- asks one predicate, so that
+    predicate has to know both places or all four go quiet at once.
+    """
+
+    @staticmethod
+    def _raven_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, block: dict | None) -> None:
+        import json
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"embedding": block} if block else {}), encoding="utf-8")
+        monkeypatch.setattr("raven.home.get_config_path", lambda: path)
+
+    def test_an_endpoint_only_raven_holds_still_counts_as_configured(
+        self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ue.set_everos_section("llm", {"model": "gpt-5", "api_key": "k"})
+        self._raven_config(
+            tmp_path,
+            monkeypatch,
+            {"model": "Qwen/Qwen3-Embedding-4B", "baseUrl": "https://api.siliconflow.cn/v1", "apiKey": "sk-sf"},
+        )
+
+        assert ue.everos_role_configured("embedding") is True
+
+    def test_a_half_written_block_is_not_an_endpoint(
+        self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Three values or nothing: the same bar configure_embedding_env sets
+        # before it binds. Two of them would report configured and then serve
+        # a request that cannot be made.
+        self._raven_config(tmp_path, monkeypatch, {"model": "Qwen/Qwen3-Embedding-4B", "apiKey": "sk-sf"})
+
+        assert ue.everos_role_configured("embedding") is False
+        assert ue.host_embedding_section() == {}
+
+    def test_no_block_anywhere_is_not_configured(
+        self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._raven_config(tmp_path, monkeypatch, None)
+
+        assert ue.everos_role_configured("embedding") is False
+
+    def test_the_second_home_is_embeddings_alone(
+        self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No other role moved, so none of them may start reading raven's block."""
+        self._raven_config(
+            tmp_path,
+            monkeypatch,
+            {"model": "m", "baseUrl": "https://e.test/v1", "apiKey": "k"},
+        )
+
+        assert ue.everos_role_configured("llm") is False
+        assert ue.everos_role_configured("rerank") is False
+
+    def test_the_toml_keeps_precedence_when_it_has_one(
+        self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An operator who wrote [embedding] chose that endpoint for memory;
+        raven's block fills a gap rather than taking over."""
+        ue.set_everos_section("embedding", {"model": "bge-m3", "api_key": "k-own"})
+        self._raven_config(
+            tmp_path,
+            monkeypatch,
+            {"model": "Qwen/Qwen3-Embedding-4B", "baseUrl": "https://api.siliconflow.cn/v1", "apiKey": "sk-sf"},
+        )
+
+        assert ue.everos_role_configured("embedding") is True
+        assert ue.everos_section("embedding")["model"] == "bge-m3"
+        for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS"):
+            monkeypatch.delenv(f"EVEROS_EMBEDDING__{name}", raising=False)
+        endpoint = SimpleNamespace(
+            model="Qwen/Qwen3-Embedding-4B", base_url="https://api.siliconflow.cn/v1", api_key="sk-sf"
+        )
+        assert ue.configure_embedding_env(endpoint) is False, "the toml's own endpoint must not be overridden"
+        assert "EVEROS_EMBEDDING__MODEL" not in os.environ

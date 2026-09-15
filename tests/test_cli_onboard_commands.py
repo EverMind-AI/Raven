@@ -5368,6 +5368,53 @@ def test_picking_another_configured_provider_does_not_ask_for_its_key(
     assert block["model"] == "Qwen/Qwen3-Embedding-4B"
 
 
+def test_a_configured_embedding_reaches_the_service_the_wizard_launches(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wizard starts EverOS itself, and the child inherits this process's
+    environment.
+
+    Asserting on the file alone passed while the server the wizard had just
+    launched held no embedding endpoint at all: the binding lives in
+    `EverosBackend.start`, which belongs to a session that has not begun, and
+    `ensure_everos_server` does not restart a service that already answers. So
+    this reads the environment the spawn actually hands the child.
+    """
+    import questionary
+
+    from raven.config.update_providers import set_provider_fields
+    from raven_everos.server import _child_env
+
+    for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS"):
+        monkeypatch.delenv(f"EVEROS_EMBEDDING__{name}", raising=False)
+    set_provider_fields("siliconflow", {"api_key": "sk-sf"})
+
+    class _FQ:
+        def __init__(self, a: object) -> None:
+            self._a = a
+
+        def ask(self) -> object:
+            return self._a
+
+    siliconflow = next(p for p in onboard_everos._EVEROS_PROVIDERS if p["name"] == "siliconflow")
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(("provider", siliconflow)))
+    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("Qwen/Qwen3-Embedding-4B"))
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_everos, "_verify_embedding_dim", lambda **kw: True)
+
+    onboard_everos._config_everos_role(
+        section="embedding",
+        main_model="openrouter/anthropic/claude-sonnet-4-5",
+        non_interactive=False,
+        warnings=[],
+    )
+
+    env = _child_env()
+    assert env["EVEROS_EMBEDDING__MODEL"] == "Qwen/Qwen3-Embedding-4B"
+    assert env["EVEROS_EMBEDDING__BASE_URL"] == "https://api.siliconflow.cn/v1"
+    assert env["EVEROS_EMBEDDING__API_KEY"] == "sk-sf"
+
+
 # --------------------------------------------------------------------------- capability tiers
 
 
