@@ -933,3 +933,164 @@ def test_images_endpoint_accepts_openrouter_chat_style_usage(prompt, completion)
     assert usage["cost_usd"] == 0.04
     assert usage["cache_read_tokens"] is None
     assert usage["cache_write_tokens"] is None
+
+
+@pytest.mark.parametrize("api_base", ["https://api.minimax.io/v1", "https://api.minimaxi.com/v1/"])
+@pytest.mark.parametrize("model", ["image-01", "image-01-live"])
+async def test_minimax_character_references(monkeypatch, tmp_path, api_base, model) -> None:
+    source = tmp_path / "portrait.png"
+    source.write_bytes(_PNG)
+    references = [str(source), "https://example.test/portrait.png", f"data:image/png;base64,{_B64}"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == api_base.rstrip("/") + "/image_generation"
+        assert request.headers["Authorization"] == "Bearer k"
+        assert json.loads(request.content) == {
+            "model": model,
+            "prompt": "a portrait in a garden",
+            "response_format": "base64",
+            "n": 1,
+            "aspect_ratio": "3:4",
+            "subject_reference": [
+                {"type": "character", "image_file": f"data:image/png;base64,{_B64}"},
+                {"type": "character", "image_file": references[1]},
+                {"type": "character", "image_file": references[2]},
+            ],
+        }
+        return httpx.Response(
+            200,
+            json={
+                "base_resp": {"status_code": 0},
+                "data": {"image_base64": [_B64]},
+                "metadata": {"success_count": 1, "failed_count": 0},
+            },
+        )
+
+    tool = _image_tool(monkeypatch, handler, model=model, api_base=api_base, workspace=tmp_path)
+    result = json.loads(
+        await tool.execute("a portrait in a garden", images=references, aspect_ratio="3:4", filename="portrait-result")
+    )
+    assert result["success"] is True
+    assert Path(result["paths"][0]).name == "portrait-result.png"
+    assert Path(result["paths"][0]).read_bytes() == _PNG
+    assert result["metadata"] == {"success_count": 1, "failed_count": 0}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"base_resp": {"status_code": 2013, "status_msg": "invalid reference"}},
+        {"base_resp": {"status_code": 0}, "data": {}},
+    ],
+)
+async def test_minimax_image_errors(monkeypatch, tmp_path, payload) -> None:
+    tool = _image_tool(
+        monkeypatch,
+        lambda request: httpx.Response(200, json=payload),
+        model="image-01",
+        api_base="https://api.minimax.io/v1",
+        workspace=tmp_path,
+    )
+    result = json.loads(await tool.execute("portrait", images=["https://example.test/portrait.png"]))
+    assert "error" in result
+    assert not result.get("success")
+
+
+async def test_minimax_rejects_reference_outside_workspace(monkeypatch, tmp_path) -> None:
+    def handler(request):
+        pytest.fail("an invalid reference must not reach the API")
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="image-01",
+        api_base="https://api.minimax.io/v1",
+        workspace=tmp_path / "workspace",
+    )
+    tool._restrict_to_workspace = True
+    result = json.loads(await tool.execute("portrait", images=[str(tmp_path / "outside.png")]))
+    assert "outside the workspace" in result["error"]
+
+
+async def test_minimax_batch_keeps_references_per_picture(monkeypatch, tmp_path) -> None:
+    seen = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        return httpx.Response(200, json={"data": {"image_base64": [_B64]}, "base_resp": {"status_code": 0}})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="image-01",
+        api_base="https://api.minimax.io/v1",
+        workspace=tmp_path,
+    )
+    result = json.loads(
+        await tool.execute(
+            prompts=[
+                {"prompt": "first portrait", "images": ["https://example.test/first.png"]},
+                {"prompt": "second portrait", "images": ["https://example.test/second.png"]},
+            ]
+        )
+    )
+    assert len(result["paths"]) == 2
+    assert [item["subject_reference"][0]["image_file"] for item in seen] == [
+        "https://example.test/first.png",
+        "https://example.test/second.png",
+    ]
+
+
+def test_minimax_image_credentials_are_explicit(monkeypatch) -> None:
+    from raven.config.schema import MediaToolConfig, borrow_openrouter_key, live_media_tool_config
+
+    config = MediaToolConfig(api_base="https://api.minimax.io/v1", model="image-01")
+    borrow_openrouter_key(config, "unrelated-key")
+    assert config.api_key == ""
+    live = live_media_tool_config(config.model_dump(), {"apiKey": "unrelated-key"})
+    assert live.api_key == ""
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    assert ImageGenerateTool._resolve_key(live) == ""
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+    assert ImageGenerateTool._resolve_key(live) == "minimax-key"
+    live.api_key = "configured-key"
+    assert ImageGenerateTool._resolve_key(live) == "configured-key"
+
+
+@pytest.mark.parametrize(
+    "image_url,allowed", [("https://8.8.8.8/image.png", True), ("http://127.0.0.1/image.png", False)]
+)
+async def test_minimax_download_checks_target_and_withholds_credentials(
+    monkeypatch, tmp_path, image_url, allowed
+) -> None:
+    downloads = []
+
+    def handler(request):
+        if request.method == "POST":
+            assert json.loads(request.content)["model"] == "image-01"
+            return httpx.Response(
+                200,
+                json={
+                    "base_resp": {"status_code": 0},
+                    "data": {"image_urls": [image_url]},
+                },
+            )
+        assert "Authorization" not in request.headers
+        downloads.append(str(request.url))
+        return httpx.Response(200, content=_PNG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="",
+        api_base="https://api.minimax.io/v1",
+        workspace=tmp_path,
+    )
+    result = json.loads(await tool.execute("portrait", images=["https://example.test/portrait.png"]))
+    if allowed:
+        assert Path(result["paths"][0]).read_bytes() == _PNG
+        assert downloads == [image_url]
+    else:
+        assert "not a fetchable public target" in result["error"]
+        assert downloads == []
