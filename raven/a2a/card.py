@@ -16,6 +16,7 @@ from a2a.types import (
     SecurityScheme,
 )
 
+from raven import __version__
 from raven.config.schema import A2aConfig
 
 CARD_PATH = "/.well-known/agent-card.json"
@@ -31,7 +32,9 @@ def build_agent_card(config: A2aConfig, *, base_url: str) -> AgentCard:
             "A general-purpose assistant that can research, write, and run tasks on its host, "
             "and orchestrate its own sub-agents to do so."
         ),
-        version="1.0",
+        # This agent's own version, not the protocol's -- they are adjacent fields
+        # here and a literal "1.0" in both read as one repeated value.
+        version=__version__,
         supported_interfaces=[
             AgentInterface(
                 url=base_url,
