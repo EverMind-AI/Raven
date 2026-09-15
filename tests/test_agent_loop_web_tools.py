@@ -21,7 +21,7 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 from raven.agent.tools.registry import ToolRegistry
-from raven.agent.tools.web import WebSearchTool
+from raven.agent.tools.web import ImageSearchTool, WebSearchTool
 from raven.contracts.tool import Tool
 from raven.providers.base import LLMProvider, LLMResponse
 from tests._wiring import wire
@@ -390,3 +390,172 @@ def test_design_image_offer_and_execution_follow_host_selection(tmp_path, initia
     host.write_text(json.dumps({"tools": {}}))
     assert "image_generate" in loop._unconfigured_tool_names()
     assert not tool._config.api_key
+
+
+def test_image_search_is_withheld_without_a_serper_key_and_offered_with_one(workspace) -> None:
+    """The Design lane was told to call Serper's image endpoint from `exec` with a key in
+    a file nothing named; a live run found no key and generated every picture. A tool,
+    gated like web_search, is what the lane -- and the host -- reach for instead."""
+    bare = _loop(workspace)
+    assert bare.tools.has("image_search") and not bare.tools.offers_by_name("image_search")
+
+    keyed = _loop(workspace, search_api_key="sk-serper")
+    assert keyed.tools.offers_by_name("image_search")
+
+
+def test_image_search_follows_a_selected_vendor_that_has_an_image_surface(workspace) -> None:
+    loop = _loop(workspace, web_search_provider="tavily", web_provider_keys={"tavily": "tv-key"})
+    assert loop.tools.offers_by_name("web_search") and loop.tools.offers_by_name("image_search")
+    assert loop.tools.get("image_search").provider == "tavily"
+
+
+def test_image_search_falls_back_to_serper_when_the_selected_vendor_searches_pages_only(workspace) -> None:
+    on_exa = _loop(workspace, web_search_provider="exa", web_provider_keys={"exa": "exa-key"})
+    assert on_exa.tools.offers_by_name("web_search"), "Exa searches pages"
+    assert not on_exa.tools.offers_by_name("image_search"), "Exa has no image surface and Serper holds no key"
+    assert on_exa.tools.get("image_search").provider == "serper"
+
+    with_serper = _loop(workspace, web_search_provider="exa", web_provider_keys={"exa": "exa-key", "serper": "sk"})
+    assert with_serper.tools.offers_by_name("image_search"), "Serper's key opens pictures beside Exa's pages"
+
+    unkeyed_tavily = _loop(workspace, web_search_provider="tavily", search_api_key="sk-serper")
+    assert unkeyed_tavily.tools.get("image_search").provider == "serper", "a selected vendor without a key gives way"
+    assert unkeyed_tavily.tools.offers_by_name("image_search")
+
+
+class _ImageResponse:
+    def __init__(self, hits):
+        self._hits = hits
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self):
+        return {"images": self._hits}
+
+
+class _ImageClient:
+    asked: list[str] = []
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        return None
+
+    async def post(self, url, json=None, headers=None, timeout=None):
+        type(self).asked.append(json["q"])
+        return _ImageResponse(
+            [
+                {
+                    "title": f"{json['q']} wide",
+                    "imageUrl": f"https://pics.example/{json['q']}.png",
+                    "imageWidth": 1600,
+                    "imageHeight": 900,
+                    "domain": "example.com",
+                    "link": f"https://example.com/{json['q']}",
+                },
+                {
+                    "title": "thumbnail",
+                    "imageUrl": "https://pics.example/small.png",
+                    "imageWidth": 200,
+                    "imageHeight": 150,
+                    "domain": "example.com",
+                },
+            ]
+        )
+
+
+@pytest.mark.asyncio
+async def test_image_search_returns_url_size_and_source_and_drops_what_a_screen_cannot_use(monkeypatch) -> None:
+    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", _ImageClient)
+    _ImageClient.asked = []
+    tool = ImageSearchTool(api_key="k")
+
+    said = await tool.execute(queries=["gugong", "tiantan"])
+
+    assert _ImageClient.asked == ["gugong", "tiantan"]
+    assert "Image results for: gugong" in said and "Image results for: tiantan" in said
+    assert "https://pics.example/gugong.png" in said and "1600x900px - example.com" in said
+    assert "from: https://example.com/gugong" in said
+    assert "small.png" not in said, "200px wide is a thumbnail, not a picture"
+    assert "Error" in await tool.execute(), "neither form is a search"
+    assert "API key not configured" in await ImageSearchTool(api_key=None).execute(query="x")
+
+
+@pytest.mark.parametrize(
+    ("vendor", "payload"),
+    [
+        (
+            "serpapi",
+            {
+                "images_results": [
+                    {
+                        "title": "gate",
+                        "original": "https://p.example/g.jpg",
+                        "original_width": 1600,
+                        "original_height": 900,
+                        "source": "example.com",
+                        "link": "https://example.com/gate",
+                    }
+                ]
+            },
+        ),
+        (
+            "brave",
+            {
+                "results": [
+                    {
+                        "title": "gate",
+                        "url": "https://example.com/gate",
+                        "source": "example.com",
+                        "properties": {"url": "https://p.example/g.jpg", "width": 1600, "height": 900},
+                    }
+                ]
+            },
+        ),
+        (
+            "firecrawl",
+            {
+                "data": {
+                    "images": [
+                        {
+                            "title": "gate",
+                            "imageUrl": "https://p.example/g.jpg",
+                            "imageWidth": 1600,
+                            "imageHeight": 900,
+                            "url": "https://example.com/gate",
+                            "position": 1,
+                        }
+                    ]
+                }
+            },
+        ),
+    ],
+)
+def test_every_vendor_with_an_image_surface_is_read_into_the_same_hit(vendor, payload) -> None:
+    hit = ImageSearchTool(api_key="k", provider=vendor).normalise_hits(payload)[0]
+    assert (hit.title, hit.image_url, hit.width, hit.height) == ("gate", "https://p.example/g.jpg", 1600, 900)
+    assert hit.source == "example.com" and hit.page == "https://example.com/gate"
+
+
+def test_tavily_hits_come_without_a_size_and_are_offered_as_such() -> None:
+    tool = ImageSearchTool(api_key="k", provider="tavily")
+    hits = tool.normalise_hits(
+        {
+            "images": [
+                {"url": "https://cdn.example/a.jpg", "description": "the gate at dusk"},
+                "https://cdn.example/b.jpg",
+            ]
+        }
+    )
+    assert [h.image_url for h in hits] == ["https://cdn.example/a.jpg", "https://cdn.example/b.jpg"]
+    assert hits[0].title == "the gate at dusk" and hits[0].width is None and hits[0].source == "cdn.example"
+
+
+def test_a_vendor_without_an_image_surface_is_refused_at_construction() -> None:
+    with pytest.raises(ValueError):
+        ImageSearchTool(api_key="k", provider="exa")

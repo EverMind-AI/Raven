@@ -153,6 +153,9 @@ TRUNK_HELD_OUT = {
     "deliver_files",
     "find_skill",
     "hub",
+    # The host's picture search; this lane searches through `ppt_image_search`,
+    # which feeds the figure catalogue, and two doors to one vendor is one too many.
+    "image_search",
     "load_playbook",
     "plugin",
     "read_skill",

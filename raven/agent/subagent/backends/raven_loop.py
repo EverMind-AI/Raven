@@ -29,7 +29,7 @@ from raven.agent.subagent.mcp_grant import (
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry, call_failed
 from raven.agent.tools.shell import ExecTool
-from raven.agent.tools.web import WebFetchTool, WebSearchTool, resolve_vendor_key
+from raven.agent.tools.web import ImageSearchTool, WebFetchTool, WebSearchTool, image_search_vendor, resolve_vendor_key
 from raven.config.live import LiveConfig, exec_extra_deny_patterns
 from raven.config.schema import ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
@@ -351,6 +351,13 @@ class RavenLoopBackend:
             )
             if web_search.api_key:
                 tools.register(web_search)
+        if allowed("image_search"):
+            picture_vendor = image_search_vendor(self.web_search_provider, self._web_key)
+            image_search = ImageSearchTool(
+                api_key=self._web_key(picture_vendor), proxy=self.web_proxy, provider=picture_vendor
+            )
+            if image_search.api_key:
+                tools.register(image_search)
         if allowed("web_fetch"):
             fetch_provider = WebFetchTool.effective_provider(
                 self.web_fetch_provider, self._web_key(self.web_fetch_provider)
