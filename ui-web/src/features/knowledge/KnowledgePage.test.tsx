@@ -486,7 +486,7 @@ describe('the write surface', () => {
     expect(screen.getByText('gui.kb.col_updated')).toBeTruthy()
   })
 
-  it('carries a failed document reason on its own row', async () => {
+  it('carries a failed document reason on its status', async () => {
     /* A failure that does not say why sends the reader to a log they may not
        have. */
     source({
@@ -510,7 +510,12 @@ describe('the write surface', () => {
     await act(async () => {
       await store.open_('b1')
     })
-    expect(screen.getByText('no parser for application/pdf')).toBeTruthy()
+    /* On the status rather than under the row: a red line beneath every
+       failure pushed the rows apart and made a list of files hard to scan, and
+       the status is where a reader is already looking. */
+    const status = document.querySelector('.kbtable .td.s-failed') as HTMLElement
+    expect(status.getAttribute('title')).toBe('no parser for application/pdf')
+    expect(document.querySelector('.kbtable .td.err')).toBeNull()
   })
 
   it('does not answer into a panel the reader has left', async () => {
@@ -629,7 +634,9 @@ describe('documents and search', () => {
     await openRowMenu('done.md')
     expect(screen.getByText('gui.kb.doc_reindex')).toBeTruthy()
     expect(screen.getByText('gui.kb.delete')).toBeTruthy()
-    expect(screen.getByText('endpoint said 400')).toBeTruthy()
+    expect(
+      (document.querySelector('.kbtable .td.s-failed') as HTMLElement).getAttribute('title'),
+    ).toBe('endpoint said 400')
   })
 
   it('indexes a stuck row again, and shows the answer', async () => {
