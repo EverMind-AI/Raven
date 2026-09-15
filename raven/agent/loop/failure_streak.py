@@ -40,10 +40,10 @@ def _envelope_error(text: str) -> str | None:
     if not text.lstrip().startswith("{"):
         return None
     try:
+        # No non-dict case to guard: JSON has one shape that opens with a brace, so a
+        # payload that both starts with "{" and parses is an object.
         payload = json.loads(text)
     except (TypeError, ValueError):
-        return None
-    if not isinstance(payload, dict):
         return None
     error = payload.get("error")
     return error.strip() if isinstance(error, str) and error.strip() else None
