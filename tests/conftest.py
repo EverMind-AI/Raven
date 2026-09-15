@@ -10,6 +10,7 @@ import contextlib
 import fnmatch
 import functools
 import os
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -36,24 +37,26 @@ if os.environ.setdefault("MPLCONFIGDIR", str(_MPL_CACHE)) == str(_MPL_CACHE):
     _MPL_CACHE.mkdir(parents=True, exist_ok=True)
 
 
-_WALL_CLOCK_EXEMPT_MARKERS = ("slow", "production_timing")
-_WALL_CLOCK_CEILING_S = 0.0
-_wall_clock_seconds: dict[str, float] = {}
-_wall_clock_hits: list[tuple[float, str]] = []
+_IDLE_EXEMPT_MARKERS = ("slow", "production_timing")
+_IDLE_CEILING_S = 0.0
+_IDLE_PROPERTY = "raven_idle_s"
+_WALL_PROPERTY = "raven_wall_s"
+_CLOCKS = pytest.StashKey[tuple[float, float]]()
+_idle_hits: list[tuple[float, float, str]] = []
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("raven")
     group.addoption(
-        "--wall-clock-ceiling",
+        "--idle-ceiling",
         type=float,
         default=2.0,
-        help="seconds an unmarked test may spend in setup plus call before it is reported; 0 disables",
+        help="seconds an unmarked test may spend waiting (wall clock minus CPU) before it is reported; 0 disables",
     )
     group.addoption(
-        "--wall-clock-ceiling-strict",
+        "--idle-ceiling-strict",
         action="store_true",
-        help="fail an otherwise green session when any unmarked test is over the ceiling",
+        help="fail an otherwise green session when any unmarked test is over the idle ceiling",
     )
     group.addoption(
         "--shard",
@@ -67,10 +70,9 @@ _SHARD: tuple[int, int] | None = None
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    global _WALL_CLOCK_CEILING_S, _SHARD
-    _WALL_CLOCK_CEILING_S = float(config.getoption("--wall-clock-ceiling"))
-    _wall_clock_seconds.clear()
-    _wall_clock_hits.clear()
+    global _IDLE_CEILING_S, _SHARD
+    _IDLE_CEILING_S = float(config.getoption("--idle-ceiling"))
+    _idle_hits.clear()
     _SHARD = None
     spec = config.getoption("--shard")
     if spec is not None:
@@ -140,42 +142,66 @@ def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool 
     return True if index % n != k - 1 else None
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
+    item.stash[_CLOCKS] = (time.perf_counter(), time.process_time())
+    yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
+    """Write the test's idle time onto its teardown report.
+
+    Idle is wall clock minus this process's CPU time over setup, call and
+    teardown. It is what the ceiling judges, rather than wall clock, because
+    the class it guards against is a test waiting out a production sleep or a
+    subprocess it did not need: that shows the same seconds on every machine,
+    where a test that computes for two seconds on a laptop computes for seven
+    on the CI runner and is not the problem. The report carries the number so
+    the xdist controller, which sees only reports, can judge it.
+    """
+    outcome = yield
+    if call.when != "teardown":
+        return
+    started = item.stash.get(_CLOCKS, None)
+    if started is None:
+        return
+    wall = time.perf_counter() - started[0]
+    idle = wall - (time.process_time() - started[1])
+    report = outcome.get_result()
+    report.user_properties.append((_IDLE_PROPERTY, idle))
+    report.user_properties.append((_WALL_PROPERTY, wall))
+
+
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
-    """Hold every unmarked test to the wall-clock ceiling.
+    """Hold every unmarked test to the idle ceiling.
 
     The suite's slow tail was production backoff waited out by tests with error
-    stubs, and nothing failed when one more was added. Setup and call are added
-    up per test and judged at teardown, when both are in. Teardown itself is
-    left out: it runs the finalizers of every fixture the test shared, which
-    belong to no one test. Setup cuts the other way, a session fixture's build
-    lands on whichever test first asked for it, so a name on the list may be
-    paying for a fixture rather than for itself. A test that is slow for a
+    stubs, and nothing failed when one more was added. A test that waits for a
     reason it can name carries ``slow`` or ``production_timing``.
     """
-    if _WALL_CLOCK_CEILING_S <= 0:
+    if _IDLE_CEILING_S <= 0 or report.when != "teardown":
         return
-    if report.when in ("setup", "call"):
-        _wall_clock_seconds[report.nodeid] = _wall_clock_seconds.get(report.nodeid, 0.0) + report.duration
+    clocks = dict(report.user_properties)
+    idle = clocks.get(_IDLE_PROPERTY)
+    if idle is None or idle <= _IDLE_CEILING_S:
         return
-    total = _wall_clock_seconds.pop(report.nodeid, 0.0)
-    if total <= _WALL_CLOCK_CEILING_S:
+    if any(marker in report.keywords for marker in _IDLE_EXEMPT_MARKERS):
         return
-    if any(marker in report.keywords for marker in _WALL_CLOCK_EXEMPT_MARKERS):
-        return
-    _wall_clock_hits.append((total, report.nodeid))
+    _idle_hits.append((float(idle), float(clocks[_WALL_PROPERTY]), report.nodeid))
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Config) -> None:
-    if not _wall_clock_hits:
+    if not _idle_hits:
         return
-    strict = config.getoption("--wall-clock-ceiling-strict")
-    verdict = "failing the session" if strict else "warning only; --wall-clock-ceiling-strict fails it"
+    strict = config.getoption("--idle-ceiling-strict")
+    verdict = "failing the session" if strict else "warning only; --idle-ceiling-strict fails it"
     terminalreporter.write_sep(
         "=",
-        f"{len(_wall_clock_hits)} unmarked test(s) over the {_WALL_CLOCK_CEILING_S:g}s wall-clock ceiling ({verdict})",
+        f"{len(_idle_hits)} unmarked test(s) waited more than {_IDLE_CEILING_S:g}s (wall clock minus CPU) ({verdict})",
     )
-    for seconds, nodeid in sorted(_wall_clock_hits, reverse=True)[:50]:
-        terminalreporter.write_line(f"{seconds:7.2f}s  {nodeid}")
+    for idle, wall, nodeid in sorted(_idle_hits, reverse=True)[:50]:
+        terminalreporter.write_line(f"{idle:7.2f}s idle of {wall:6.2f}s  {nodeid}")
     terminalreporter.write_line("mark it slow or production_timing with the reason, or take the wait out of the test")
 
 
@@ -204,13 +230,13 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Stash the real exit status so pytest_unconfigure can preserve it.
 
-    The wall-clock verdict is applied here, on the controller only: an xdist
+    The idle verdict is applied here, on the controller only: an xdist
     worker's exit status is not the run's, and the hits it saw were forwarded.
     """
     if (
-        _wall_clock_hits
+        _idle_hits
         and exitstatus == 0
-        and session.config.getoption("--wall-clock-ceiling-strict")
+        and session.config.getoption("--idle-ceiling-strict")
         and not hasattr(session.config, "workerinput")
     ):
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
@@ -393,8 +419,9 @@ def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
     A stub that answers every call with an error drives the code under test
     into its backoff, and the backoff is tuned for a real outage: the loop's
     LLM-error ladder is 105 s, the provider's 7 s per model, a memory store
-    retries for 52 s, a subagent steer waits 3 s for a hook. One checkpoint
-    test slept 133 s that way and proved nothing by it.
+    retries for 52 s, a subagent steer waits 3 s for a hook, an ACP cancel is
+    given 5 s to settle, the gateway holds delivery 2 s at teardown. One
+    checkpoint test slept 133 s that way and proved nothing by it.
 
     The lengths stay. ``len(ladder)`` is how both retry ladders count their
     attempts, so an empty tuple would change behaviour rather than speed; the
@@ -408,8 +435,10 @@ def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
     """
     if request.node.get_closest_marker("production_timing"):
         return
+    from raven.acp_client import client as acp_client
     from raven.agent.subagent import manager
     from raven.config import schema
+    from raven.gateway import spine
     from raven.memory_engine import store_pipeline
     from raven.providers.base import LLMProvider
 
@@ -420,6 +449,8 @@ def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
     monkeypatch.setattr(schema, "LLM_ERROR_RETRY_DELAYS_DEFAULT", shortened(schema.LLM_ERROR_RETRY_DELAYS_DEFAULT))
     monkeypatch.setattr(store_pipeline, "BACKOFF_S", shortened(store_pipeline.BACKOFF_S))
     monkeypatch.setattr(manager, "_STEER_HOOK_GRACE_S", 0.05)
+    monkeypatch.setattr(acp_client, "_CANCEL_SETTLE_S", 0.05)
+    monkeypatch.setattr(spine, "_DELIVERY_GRACE", 0.05)
 
 
 @pytest.fixture(autouse=True)
