@@ -20,6 +20,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from raven.agent.harness import current_harness
+from raven.agent.harness.conducts import compose_advice, compose_intake, compose_review, compose_salvage
 from raven.contracts.agent_conduct import AgentConduct, ConductFactory, StepView
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 
@@ -137,10 +139,38 @@ class ConductHook(AgentHook):
             return HookDecision(short_circuit_result=verdict.reply, notes=notes)
         return HookDecision(notes=notes)
 
+    async def _intake(self, text: str, step: StepView, conduct: AgentConduct):
+        """What this turn reads in, decided by the Memory role when one is bound."""
+        harness = current_harness()
+        if harness is None:
+            return await compose_intake(text, step, [conduct])
+        return await harness.memory.intake(text, step, [conduct])
+
+    async def _advise(self, step: StepView, conduct: AgentConduct) -> str | None:
+        """The turn guidance, decided by the Planning role when one is bound."""
+        harness = current_harness()
+        if harness is None:
+            return await compose_advice(step, [conduct])
+        return await harness.planning.advise(step, [conduct])
+
+    async def _review(self, step: StepView, conduct: AgentConduct):
+        """The verdict on this step, decided by the Action role when one is bound."""
+        harness = current_harness()
+        if harness is None:
+            return await compose_review(step, [conduct])
+        return await harness.action.review(step, [conduct])
+
+    async def _salvage(self, step: StepView, conduct: AgentConduct):
+        """What a turn with no answer sends, decided by the Action role when bound."""
+        harness = current_harness()
+        if harness is None:
+            return await compose_salvage(step, [conduct])
+        return await harness.action.salvage(step, [conduct])
+
     async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx, fresh=True)
         text = getattr(ctx, "inbound_content", None) or ""
-        intake = await seat.conduct.intake(text, self._step(ctx))
+        intake = await self._intake(text, self._step(ctx), seat.conduct)
         if intake is None:
             return self._with_trail(seat, HookDecision())
         notes = [intake.note] if intake.note else []
@@ -160,7 +190,7 @@ class ConductHook(AgentHook):
         step = self._step(ctx)
         offered = getattr(ctx, "tools", None)
         narrowed = await conduct.select_tools(list(offered or []), step) if offered is not None else None
-        note = await conduct.advise(step)
+        note = await self._advise(step, conduct)
         addendum = await conduct.system_addendum(step)
         if addendum is not None and addendum.reply is not None:
             return self._with_trail(
@@ -217,7 +247,7 @@ class ConductHook(AgentHook):
 
     async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)
-        return self._with_trail(seat, self._decide(await seat.conduct.review(self._step(ctx))))
+        return self._with_trail(seat, self._decide(await self._review(self._step(ctx), seat.conduct)))
 
     async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)
@@ -230,8 +260,8 @@ class ConductHook(AgentHook):
         # handed still follows the chain: a decision that ends or resamples
         # carries no appended note, because the composite drops the notes it
         # accumulated the moment a hook answers with one of those.
-        note = await conduct.advise(step)
-        verdict = await conduct.review(step)
+        note = await self._advise(step, conduct)
+        verdict = await self._review(step, conduct)
         await conduct.observe(step)
         decision = self._decide(verdict)
         if not verdict.accepted:
@@ -240,7 +270,7 @@ class ConductHook(AgentHook):
 
     async def terminal_answerless(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)
-        salvaged = await seat.conduct.salvage(self._step(ctx))
+        salvaged = await self._salvage(self._step(ctx), seat.conduct)
         answer = HookDecision() if salvaged is None else HookDecision(short_circuit_result=salvaged)
         return self._with_trail(seat, answer)
 

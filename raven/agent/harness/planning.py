@@ -13,10 +13,17 @@ again per iteration, once history exists. That seam is the hook chain's
 research flow's sufficiency and spin-breaker gates ride it). So this module
 stays a pass-through, and a replacement that wants to plan is expected to
 change the messages a turn runs on, not to intercept ahead of it.
+
+``advise`` is that per-iteration seat, made a verb: what the conducts of this
+agent want said to the model before its next call, composed here.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+from raven.agent.harness.conducts import compose_advice
+from raven.contracts.agent_conduct import AgentConduct, StepView
 from raven.contracts.harness import PlanningRequest, PlanningResult
 
 
@@ -25,6 +32,9 @@ class DefaultPlanning:
 
     async def prepare(self, request: PlanningRequest) -> PlanningResult:
         return PlanningResult(messages=request.messages)
+
+    async def advise(self, step: StepView, conducts: Sequence[AgentConduct]) -> str | None:
+        return await compose_advice(step, conducts)
 
 
 __all__ = ["DefaultPlanning"]

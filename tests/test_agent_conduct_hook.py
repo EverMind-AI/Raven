@@ -213,3 +213,46 @@ async def test_salvage_and_the_outgoing_reply_land_where_the_loop_reads_them():
     assert hook.conduct.archived == ["done"], "archive is asked after the reply, with the reply as sent"
     hook = ConductHook("probe", lambda: _Recording())
     assert (await hook.after_send(SimpleNamespace(outbound_content="done"))).modified_content is None
+
+
+@pytest.mark.asyncio
+async def test_a_bound_harness_decides_what_a_conducts_verdict_does():
+    """The seat asks the turn's modules, not the conduct: with a harness bound
+    whose Action lets every step stand, the conduct's resample is not applied;
+    with none bound, the default composition renders it as it always did."""
+    from raven.agent.harness import bind_harness
+    from raven.contracts.agent_conduct import Accept
+
+    resample = Resample("thin", inject=[{"role": "user", "content": "more"}])
+    hook = ConductHook("probe", lambda: _Recording(verdict=resample))
+    ctx = _ctx(iteration=1, response=SimpleNamespace(content="draft", tool_calls=None))
+    assert (await hook.after_iteration(ctx)).rollback is True, "unbound: the conduct's own verdict"
+
+    class Lenient:
+        async def review(self, step, conducts):
+            assert len(conducts) == 1, "the seat hands the module this turn's conducts"
+            return Accept(note="action: overruled")
+
+        async def salvage(self, step, conducts):
+            return "the module's own salvage"
+
+    class Louder:
+        async def advise(self, step, conducts):
+            assert len(conducts) == 1
+            return "planning: the module's own advice"
+
+    class Rewriting:
+        async def intake(self, text, step, conducts):
+            assert len(conducts) == 1
+            return Intake(text=f"{text} (as the module reads it)")
+
+    harness = SimpleNamespace(action=Lenient(), planning=Louder(), memory=Rewriting())
+    with bind_harness(harness):
+        decision = await hook.after_iteration(
+            _ctx(iteration=1, response=SimpleNamespace(content="draft", tool_calls=None))
+        )
+        assert decision.rollback is False and decision.notes == ["action: overruled"]
+        assert decision.append_note == "planning: the module's own advice", "Planning answers for the advice"
+        assert (await hook.terminal_answerless(_ctx())).short_circuit_result == "the module's own salvage"
+        inbound = await hook.before_user_inbound(_ctx(inbound_content="q"))
+        assert inbound.modified_content == "q (as the module reads it)", "Memory answers for the intake"

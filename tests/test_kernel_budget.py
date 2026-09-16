@@ -154,6 +154,15 @@ Factory-loop tier, so the contract-tier digest and ``CONTRACTS_VERSION`` do
 not move with it.
 
 Measured at 3,379, thirty-one over the count, for the reason given above.
+
+3,410 -> 3,440 (2026-09-18), when the conducts were seated on the roles:
+``MemoryModule.intake``, ``PlanningModule.advise`` and ``ActionModule.review``
+/ ``salvage`` -- the four verbs a conduct answers that belong to a role rather
+than to the seat, each taking this turn's conducts so a replaced role decides
+what a plugin's judgement does. 28 lines of protocol and prose; the
+composition rules themselves live in the harness, not here.
+
+Measured at 3,406, thirty-four over the count, for the reason given above.
 """
 
 from __future__ import annotations
@@ -164,7 +173,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_410
+CONTRACTS_LINE_CEILING = 3_440
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

@@ -16,6 +16,8 @@ would answer for the retired one.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.harness.action import DefaultAction
@@ -61,7 +63,28 @@ def default_harness_modules(
     )
 
 
+_BOUND: ContextVar["HarnessModules | None"] = ContextVar("raven_harness", default=None)
+
+
+@contextmanager
+def bind_harness(modules: HarnessModules):
+    """The modules a turn runs on, for the seats that ask them from inside the
+    hook chain. Turn-scoped like the model binding: a swap that lands mid-turn
+    is not visible to the turn that already started."""
+    token = _BOUND.set(modules)
+    try:
+        yield modules
+    finally:
+        _BOUND.reset(token)
+
+
+def current_harness() -> "HarnessModules | None":
+    return _BOUND.get()
+
+
 __all__ = [
+    "bind_harness",
+    "current_harness",
     "DefaultAction",
     "DefaultCapability",
     "DefaultMemory",
