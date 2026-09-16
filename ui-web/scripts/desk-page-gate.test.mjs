@@ -22,7 +22,7 @@ function hidingSelector() {
 }
 
 /* `showPage` writes `data-page` on `.app` and `data-open` on the page element
-   (ui-web/src/demo/120-capabilities.js), so both shapes are built here. */
+   (ui-web/src/legacy/demo/120-capabilities.js), so both shapes are built here. */
 function page(open) {
   document.body.innerHTML =
     `<div class="app" data-page="${open ? 'on' : 'off'}">` +

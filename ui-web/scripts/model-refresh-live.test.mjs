@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const src = readFileSync(new URL('../src/live/120-settings.js', import.meta.url), 'utf8')
+const src = readFileSync(new URL('../src/legacy/live/120-settings.js', import.meta.url), 'utf8')
 const match = src.match(/async function loadProviders[\s\S]*?\n}/)
 if (!match) throw new Error('loadProviders is absent from the live layer')
 const loadProvidersSrc = match[0]
@@ -370,7 +370,7 @@ describe('the follows-default repaint under navigation', () => {
   })
 })
 
-const stagedSrc = readFileSync(new URL('../src/live/080-overrides.js', import.meta.url), 'utf8')
+const stagedSrc = readFileSync(new URL('../src/legacy/live/080-overrides.js', import.meta.url), 'utf8')
   .match(/async function applyStagedModel[\s\S]*?\n}/)
 if (!stagedSrc) throw new Error('applyStagedModel is absent from the live layer')
 

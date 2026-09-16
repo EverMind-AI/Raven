@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const src = readFileSync(new URL('../src/live/020-rpc.js', import.meta.url), 'utf8')
+const src = readFileSync(new URL('../src/legacy/live/020-rpc.js', import.meta.url), 'utf8')
 
 /* Enough of a socket to be opened, closed and written to. `readyState` starts
    CONNECTING, which is the state the page's own first loads meet. */

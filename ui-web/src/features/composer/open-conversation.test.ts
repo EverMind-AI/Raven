@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it, vi } from 'vitest'
 
-const source = readFileSync('src/live/080-overrides.js', 'utf8') as string
+const source = readFileSync('src/legacy/live/080-overrides.js', 'utf8') as string
 
 /* Just the one function, not the file: the rest of this layer reaches for
    dozens of globals that have nothing to do with the promotion. */

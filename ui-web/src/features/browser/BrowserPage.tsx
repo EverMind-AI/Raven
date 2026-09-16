@@ -10,7 +10,7 @@ import type { BrowserTabRow, LinksSource, UrlRow } from './types'
 import type { CSSProperties, JSX, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 
 /* Mirrors the glyph paths the legacy renderer drew with (ICO in
-   ui-web/src/demo/100-workspace.js plus the inline ones in the old live part). */
+   ui-web/src/legacy/demo/100-workspace.js plus the inline ones in the old live part). */
 const ICO = {
   web: 'M4.5 12h15M12 4.5c-4.5 4.5-4.5 10.5 0 15M12 4.5c4.5 4.5 4.5 10.5 0 15',
   ext: 'M10 6H6.5A2.5 2.5 0 0 0 4 8.5v9A2.5 2.5 0 0 0 6.5 20h9a2.5 2.5 0 0 0 2.5-2.5V14M14 4h6v6M20 4l-9 9',

@@ -1,4 +1,4 @@
-/* One row per entry of the channel catalogue (ui-web/src/demo/030-fixtures.js).
+/* One row per entry of the channel catalogue (ui-web/src/legacy/demo/030-fixtures.js).
    Both sources answer with those same objects, mutated in place: the fixture
    so demo edits stick across a redraw, the rpc source so the merged status
    lands on the rows the list is already drawn from. */

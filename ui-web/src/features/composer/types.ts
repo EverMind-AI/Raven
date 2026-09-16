@@ -33,7 +33,7 @@ export interface UploadRes {
 }
 
 /* DS.composer: what the dock reads of the page it sits in. The demo shell
- * registers the fixture half (ui-web/src/demo/090-composer.js) and the live layer
+ * registers the fixture half (ui-web/src/legacy/demo/090-composer.js) and the live layer
  * installs over the parts only it can answer -- the meter's wording and the
  * upload transport. Turn phase and queue state belong to the composer store.
  */

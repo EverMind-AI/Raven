@@ -40,7 +40,7 @@ export type BinaryHandler = (buf: ArrayBuffer) => void
  * - `FixtureTransport` answering from recorded responses, no backend at all.
  *
  * The page's best idea -- a UI that runs without its engine (the demo layer
- * in ui-web/src/demo/) -- kept, with the checks turned on: today ui-web/src/live/
+ * in ui-web/src/legacy/demo/) -- kept, with the checks turned on: today ui-web/src/legacy/live/
  * assigns over demo globals by name at runtime and DS entries are untyped,
  * so a rename in one layer breaks the other silently. An interface both
  * sides compile against is the same capability made checkable, and it is
