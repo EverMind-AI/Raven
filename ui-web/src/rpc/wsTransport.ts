@@ -15,7 +15,7 @@ import { RpcError } from './transport'
 /* The live end of the DataSource seam: JSON-RPC 2.0 over one WebSocket to
    /rpc, with the rejoin policy the page runs today. Every behaviour here is
    ported from the rpc client that used to live in
-   ui-web/src/legacy/live/020-rpc.js, which now keeps only what paints.
+   ui-web/src/legacy/live/020-rpc.js; what paints is src/state/connection.ts.
 
    What paints stays out of it: the reconnect status line, the upgrade shade,
    the auth banner and the desktop shell's reauth handshake all belong to the

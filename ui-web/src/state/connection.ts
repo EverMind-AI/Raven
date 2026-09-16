@@ -1,27 +1,45 @@
-/* ---- what a connection looks like to the reader --------------------
-   The transport is src/rpc/wsTransport.ts now: the socket, the pending calls,
-   the rejoin and its backoff all live there, and main.tsx installs it as the
-   page's gateway before this layer is. What stayed here is everything that
-   paints -- the reconnect status line, the upgrade shade, the auth banner and
-   the desktop shell's reauth handshake -- driven off the transport's own
-   connection state. */
+/* The gateway connection as the reader sees it, and the two handshakes this
+ * page has with whatever is hosting it.
+ *
+ * The socket, the pending calls, the rejoin and its backoff all live in the
+ * transport (src/rpc/wsTransport.ts), and main.tsx installs it as the page's
+ * gateway before anything asks for one. What is here is everything that
+ * PAINTS -- the reconnect status line, the upgrade shade, the auth banner --
+ * driven off the transport's own connection state, plus the desktop shell's
+ * `ready` and `reauth` messages, because the shell is the other end of both
+ * the splash and the credential this page cannot mint.
+ */
 
-import { islands } from '../../islands'
-import { gateway } from '../../state/gateway'
-import { T } from '../demo/010-kernel.js'
-import { failureBar, upShade } from '../demo/040-state.js'
-import { showStatus } from '../demo/070-transcript.js'
-import { hideSplash } from '../demo/160-boot.js'
-import { shellReady } from './010-boot-guard.js'
-import { distMoved, upKind, upMarkClear } from './210-update-notice.js'
+import { islands } from '../islands'
+import { show as failureBar } from '../shell/failure'
+import { open as upShade } from '../shell/upgrade'
+import { gateway } from './gateway'
+import { distMoved, upgradeKind, upMarkClear } from './updates'
+import { T } from '../legacy/demo/010-kernel.js'
+import { showStatus } from '../legacy/demo/070-transcript.js'
+import { hideSplash } from '../legacy/demo/160-boot.js'
 
-let SHELL;
+import type { ConnectionState, StateInfo } from '../rpc/transport'
+import type { UpgradeShade } from '../shell/upgrade'
+
+/* Whether this page is the desktop shell's own window. Read on demand rather
+   than latched at boot: the user agent cannot change under a loaded page, and
+   a module-scope read would fire in every test that so much as imports this. */
+const isShell = (): boolean => /RavenShell/.test(navigator.userAgent)
 
 /* What this connection calls itself in system.hello, so a trace can tell the
    GUI shell from the browser page on one gateway. Identity only -- both still
-   share the tui session pool. Derived in install() beside SHELL, because that
-   is where the user agent is read. */
-let SURFACE = 'page';
+   share the tui session pool. */
+export const surface = (): 'shell' | 'page' => (isShell() ? 'shell' : 'page')
+
+/* Tells the shell the page has real pixels worth revealing. A no-op in a
+   plain browser tab, where the page-level splash handles the same moment. */
+export function shellReady(): void {
+  try {
+    (window as unknown as { webkit: { messageHandlers: { raven: { postMessage(m: unknown): void } } } })
+      .webkit.messageHandlers.raven.postMessage({ type: 'ready' })
+  } catch { /* not the shell */ }
+}
 
 /* Only for a socket that never opened: the cookie no longer matches the running
    gateway's token (a serve restarted without RAVEN_SERVE_TOKEN mints a fresh
@@ -36,29 +54,31 @@ let SURFACE = 'page';
 
    Capped at two tries because the shell reloads the page on success, which
    resets this counter -- the shell throttles its own side as well. */
-let reauthTries = 0;
-function askShellReauth() {
-  if (!SHELL || reauthTries >= 2) return false;
+let reauthTries = 0
+export function askShellReauth(): boolean {
+  if (!isShell() || reauthTries >= 2) return false
   try {
-    window.webkit.messageHandlers.raven.postMessage({ type: 'reauth' });
+    (window as unknown as { webkit: { messageHandlers: { raven: { postMessage(m: unknown): void } } } })
+      .webkit.messageHandlers.raven.postMessage({ type: 'reauth' })
   } catch {
-    return false;
+    return false
   }
-  reauthTries++;
-  return true;
+  reauthTries++
+  return true
 }
-function authFail() {
+
+export function authFail(): void {
   // The banner paints under the splash (z 99 < 120); a splash that stays up
   // would turn a readable failure into an endless loading screen. Same for
   // the shell's native overlay -- the failure must be readable there too.
-  hideSplash(0);
-  shellReady();
+  hideSplash(0)
+  shellReady()
   if (askShellReauth()) {
-    failureBar(T('gui.auth.retry'));
-    return;
+    failureBar(T('gui.auth.retry'))
+    return
   }
-  const bar = failureBar(T(SHELL ? 'gui.auth.dead_app' : 'gui.auth.checking'));
-  if (SHELL) return;
+  const bar = failureBar(T(isShell() ? 'gui.auth.dead_app' : 'gui.auth.checking'))
+  if (isShell()) return
   /* "Not authenticated OR the service stopped" made the reader guess between
      two causes with opposite fixes -- and a restarted `serve` mints a fresh
      cookie, so the common case is a live service that no longer knows this
@@ -66,33 +86,34 @@ function authFail() {
      replies to a browser holding a cookie the gateway has already forgotten. */
   fetch('/health', { cache: 'no-store' })
     .then((r) => r.ok && r.json())
-    .then((j) => { bar.say(T(j && j.service ? 'gui.auth.stale' : 'gui.auth.dead')); })
-    .catch(() => { bar.say(T('gui.auth.dead')); });
+    .then((j: { service?: unknown } | false) => { bar.say(T(j && j.service ? 'gui.auth.stale' : 'gui.auth.dead')) })
+    .catch(() => { bar.say(T('gui.auth.dead')) })
 }
 
 /* Anything that breaks after the socket is up is NOT an auth failure. Blaming
    auth for it sends the reader to restart a service that is running fine while
    the real cause (a config the loader rejects, an engine that failed to build)
    stays invisible. */
-function bootFail(e) {
-  hideSplash(0);
-  shellReady();
-  const detail = (e && e.data && (e.data.detail || e.data.reason)) || '';
-  const msg = [(e && e.message) || String(e), detail].filter(Boolean).join(' - ');
-  failureBar(T('gui.boot_fail', { where: 'live boot', err: msg }));
+export function bootFail(e: unknown): void {
+  hideSplash(0)
+  shellReady()
+  const err = e as { data?: { detail?: string; reason?: string }; message?: string } | null
+  const detail = (err && err.data && (err.data.detail || err.data.reason)) || ''
+  const msg = [(err && err.message) || String(e), detail].filter(Boolean).join(' - ')
+  failureBar(T('gui.boot_fail', { where: 'live boot', err: msg }))
   // A dead boot must not leave the rail shimmering forever under the banner.
-  islands.rail.release();
-  if (window.console) console.error('[live boot]', e);
+  islands.rail.release()
+  if (window.console) console.error('[live boot]', e)
 }
 
 /* What has to happen again once a dropped connection is back. A registry
    rather than one slot, because the transport reports a reconnect to whoever
-   is listening and this layer is what decides the order things are refetched
-   in; live/080-overrides.js is the one registrar today. */
-const reconnectHandlers = new Set();
-function onReconnect(fn) {
-  reconnectHandlers.add(fn);
-  return () => reconnectHandlers.delete(fn);
+   is listening and this module is what decides the order things are refetched
+   in; the page's wiring (state/install.ts) is the one registrar today. */
+export const reconnectHandlers = new Set<() => void>()
+export function onReconnect(fn: () => void): () => void {
+  reconnectHandlers.add(fn)
+  return () => reconnectHandlers.delete(fn)
 }
 
 /* The upgrade card this reconnect raised, and only this one.
@@ -102,21 +123,21 @@ function onReconnect(fn) {
    affordance unless something calls fail() on it, and nothing here does. A
    shade left behind is therefore the same dead end this function exists to
    remove, with a blur over the rest of the window. */
-let shade = null;
-const dropShade = () => { if (shade) { shade.close(); shade = null; } };
+let shade: UpgradeShade | null = null
+const dropShade = (): void => { if (shade) { shade.close(); shade = null } }
 
 /* The reconnect as the reader sees it. The transport says what it is doing;
    every line below is what the old rejoin loop painted while it did.
 
    `attempt` is how many tries have already failed, so 0 is the moment of the
    drop itself and anything above it is a retry that came back empty. */
-async function onConnectionState(state, info) {
-  const attempt = (info && info.attempt) || 0;
+export async function onConnectionState(state: ConnectionState, info?: StateInfo): Promise<void> {
+  const attempt = (info && info.attempt) || 0
   if (state === 'reconnecting' && attempt === 0) {
     // In the DOM, not a toast: a silent drop mid-turn reads as the model
     // hanging forever, which is exactly the bug report this line answers.
-    try { showStatus(T('gui.reconnecting')); } catch { /* pre-boot */ }
-    return;
+    try { showStatus(T('gui.reconnecting')) } catch { /* pre-boot */ }
+    return
   }
   if (state === 'reconnecting') {
     /* Still absent, and the page was already told a newer version exists --
@@ -138,12 +159,11 @@ async function onConnectionState(state, info) {
        exactly the paths that had one. Every page-initiated upgrade reaches
        here: serve exits about a second after `system.upgrade` replies, and
        the close drives the socket into this rejoin. */
-    if (!shade && !document.querySelector('.upshade')
-        && typeof upKind !== 'undefined' && upKind === 'ver') {
-      shade = upShade();
-      shade.say(T('gui.upg.working'));
+    if (!shade && !document.querySelector('.upshade') && upgradeKind() === 'ver') {
+      shade = upShade()
+      shade.say(T('gui.upg.working'))
     }
-    return;
+    return
   }
   if (state === 'reconnected') {
     /* The gateway that came back may be serving a different build than the
@@ -156,31 +176,26 @@ async function onConnectionState(state, info) {
          back up, read a marker that is still live, and drop the upgrade card
          over a page that is already healthy on the new build -- then reload a
          second time to clear it. */
-      upMarkClear();
-      window.location.reload();
-      return;
+      upMarkClear()
+      window.location.reload()
+      return
     }
     /* Same build after all -- the gateway just restarted. Take the card back
        down, since there is nothing left to wait for and no reload coming to
        remove it. */
-    dropShade();
-    for (const fn of reconnectHandlers) fn();
-    return;
+    dropShade()
+    for (const fn of reconnectHandlers) fn()
+    return
   }
   if (state === 'auth-failed') {
     /* The socket refused while HTTP answers, or twenty minutes went by: the
        transport has stopped trying and only the reader can move this on. */
-    dropShade();
-    authFail();
+    dropShade()
+    authFail()
   }
 }
 
-/* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. */
-export function install() {
-  SHELL = /RavenShell/.test(navigator.userAgent);
-  SURFACE = SHELL ? 'shell' : 'page';
-  gateway().onState(onConnectionState);
+/** The one registration this module needs on the page's transport. */
+export function installConnectionUI(): void {
+  gateway().onState(onConnectionState)
 }
-
-export { SHELL, SURFACE, reauthTries, askShellReauth, authFail, bootFail, reconnectHandlers, onReconnect, onConnectionState }

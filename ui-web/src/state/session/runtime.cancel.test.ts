@@ -85,7 +85,8 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
         goState: () => log.push(['goState']),
         ta: { focus: () => {} },
       },
-      'demo/100-workspace.js': { setWs: () => {}, wsOnHistory: () => {}, wsReset: () => {} },
+      'demo/100-workspace.js': { setWs: () => {}, wsReset: () => {} },
+      'src/features/workspace/record': { wsOnHistory: () => {} },
       'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
       'demo/152-skills.js': { drawCaps: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: () => {} },
@@ -114,9 +115,9 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
     return Promise.resolve({})
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-  const part = await import('../../legacy/live/080-overrides.js')
-  part.install()
+  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  const part = await import('../install')
+  part.installActions()
   /* A turn is running on the open conversation, which is what a send records:
      the phase reducer is only reached for the conversation the page shows. */
   registry.adopt('s1')

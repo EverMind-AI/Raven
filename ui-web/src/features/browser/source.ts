@@ -51,7 +51,10 @@ export function onFrameBytes(buf: ArrayBuffer): void {
   if (browserSource.onFrame) browserSource.onFrame(head, new Blob([u8.subarray(8 + hl)], { type: 'image/jpeg' }))
 }
 
-/* Old servers still notify frames as base64 JSON; same hook after decode. */
-export function onFrameJson(p: BrowserFramePushParams): void {
+/* Old servers still notify frames as base64 JSON; same hook after decode.
+   Takes the raw frame, like every other push handler: the transport hands
+   every notification over as `unknown` and the name is what says the shape. */
+export function onFrameJson(frame: unknown): void {
+  const p = frame as BrowserFramePushParams
   if (browserSource.onFrame) browserSource.onFrame(p as FrameHead, p.jpeg ? b64Blob(p.jpeg) : null)
 }

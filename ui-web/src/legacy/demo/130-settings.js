@@ -15,6 +15,7 @@ import { sessionDraw } from './050-rail.js'
 // Filled in from system.version once the socket is up, and unknown until then:
 // the running install is the only thing that knows its version. The rail foot
 // and the About card both render this as "--" rather than as a guess.
+/** @type {string | null} */
 let APP_VERSION = null;
 function appVersionSet(v) { APP_VERSION = v; }
 

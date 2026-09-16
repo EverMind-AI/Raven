@@ -31,6 +31,7 @@ import * as scrollbars from './shell/scrollbars'
 import * as session from './shell/session'
 import { plugHost, skillsHost, skillsSkeletonHost } from './islands'
 import { installLegacy } from './legacy/index.js'
+import { boot } from './state/boot'
 import { setGateway } from './state/gateway'
 import { chooseTransport } from './state/transport'
 
@@ -122,8 +123,12 @@ if (setHost) createRoot(setHost).render(<SettingsApp />)
    same contract (state/transport.ts). */
 setGateway(chooseTransport())
 
-/* The legacy page script, which used to be a third inline <script> after this
-   bundle. Last on purpose and for the same reason it was last then: its
+/* The legacy chrome, which used to be a third inline <script> after this
+   bundle. Before the boot and for the same reason it was last then: its
    install() steps reach for the chrome this file has just wired and for the
-   island roots mounted above. */
+   island roots mounted above, and the boot below reaches for them. */
 installLegacy()
+
+/* The page's own boot: the seam, the pushes, the actions, then everything a
+   first frame needs from the gateway (state/boot.ts). */
+boot()

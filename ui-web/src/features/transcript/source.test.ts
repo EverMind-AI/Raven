@@ -14,15 +14,15 @@ import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.
 
 import type { Sources } from '../../state/sources'
 
-/* `sources.transcript.openDagRun` is installed by live/050-turn.js onto the source
-   object live/040-history.js built, so the seam is where it is read back. */
+/* `sources.transcript.openDagRun` is one of the verbs the page's wiring puts
+   onto the transcript source it builds, so the seam is where it is read back. */
 async function opener(calls: unknown[][], run: unknown) {
   /* This feature's source is imported first and the part that wires it after,
      which is the order that keeps one module graph: the fakes are installed
      around the module under test. */
-  const part = await loadPart(async () => {
+  const wiring = await loadPart(async () => {
     await import('./source')
-    return import('../../legacy/live/050-turn.js')
+    return import('../../state/install')
   }, {
     fakes: {
       'src/shell/session': { current: () => 'a' },
@@ -37,8 +37,8 @@ async function opener(calls: unknown[][], run: unknown) {
   })
   const { setSources, sources } = await import('../../state/sources')
   setSources({ transcript: {}, composer: {}, sessions: {} } as unknown as Partial<Sources>)
-  part.install()
-  if (!sources.transcript!.openDagRun) throw new Error('openDagRun is absent from the live layer')
+  wiring.installSources()
+  if (!sources.transcript!.openDagRun) throw new Error('openDagRun is absent from the page wiring')
   return sources.transcript!.openDagRun
 }
 
@@ -66,9 +66,9 @@ interface SpawnRow { kind: string; agent: string; label: string }
 
 async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc' }] as SpawnRow[] } = {}) {
   const calls: unknown[][] = []
-  const part = await loadPart(async () => {
+  const wiring = await loadPart(async () => {
     await import('./source')
-    return import('../../legacy/live/240-external-agents.js')
+    return import('../../state/install')
   }, {
     fakes: {
       'src/shell/session': { current: () => 's1' },
@@ -79,9 +79,6 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
         wsPick: (tab: string) => calls.push(['wsPick', tab]),
         drawWs: () => calls.push(['drawWs']),
       },
-      /* The last part of the live manifest queues the first paint; nothing
-         here is that paint. */
-      'demo/160-boot.js': { bootPage: () => {} },
     },
     islands: {
       subagents: {
@@ -95,9 +92,10 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
   })
   await fakeGateway(() => Promise.resolve({}))
   const { setSources, sources } = await import('../../state/sources')
-  setSources({ transcript: {} } as unknown as Partial<Sources>)
-  part.install()
-  return { part, sources, calls }
+  setSources({ transcript: {}, composer: {} } as unknown as Partial<Sources>)
+  wiring.installSources()
+  const { dagOpenNode } = await import('../dag/open')
+  return { dagOpenNode, sources, calls }
 }
 
 afterEach(() => {
@@ -105,12 +103,12 @@ afterEach(() => {
   deskReady(false)
 })
 
-describe('opening a graph node from the live layer', () => {
+describe('opening a graph node from the transcript source', () => {
   it('raises the node window alone while the floating desk is up', async () => {
     deskReady(true)
-    const { part, calls } = await nodeHarness()
+    const { dagOpenNode, calls } = await nodeHarness()
 
-    part.dagOpenNode('r1', { id: 'brief' })
+    dagOpenNode('r1', { id: 'brief' })
 
     expect(calls).toEqual([['openDagNode', 'r1', 'brief']])
     /* Named explicitly, because these are what popped the palette: either one
@@ -122,9 +120,9 @@ describe('opening a graph node from the live layer', () => {
     /* The pre-desk panel, where picking the agents view was how the instance
        got on screen at all. */
     deskReady(false)
-    const { part, calls } = await nodeHarness()
+    const { dagOpenNode, calls } = await nodeHarness()
 
-    part.dagOpenNode('r1', { id: 'brief' })
+    dagOpenNode('r1', { id: 'brief' })
 
     expect(calls).toEqual([
       ['openDagNode', 'r1', 'brief'],

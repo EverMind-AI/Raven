@@ -1,7 +1,7 @@
 /* ══ boot ═════════════════════════════════════════════════════════
-   Declared here but queued after the whole assembled script: in live mode
-   every synchronous source installer must run before the first data-driven
-   paint.
+   Declared here but queued by the page's own boot (src/state/boot.ts), after
+   every synchronous source installer: the first data-driven paint must not
+   observe a half-wired seam.
    Each step is isolated so one failure stays visible and the rest still
    renders. */
 
@@ -62,10 +62,12 @@ function hideSplash(minMs) {
   }, wait);
 }
 
-let showOnboard;
+/* The first-run flow, through the bag because the bag is what the onboarding
+   island is reached by. */
+const showOnboard = () => islands.onboard.open();
 
-/* Whether the live layer has taken the splash and the onboarding moment off
-   this part's hands. A setter rather than a field the live half writes: the
+/* Whether the page's own boot has taken the splash and the onboarding moment
+   off this part's hands. A setter rather than a field the live half writes: the
    writer is in the other layer, and a container one layer declares and the
    other fills is the coupling `scripts/count-shared-globals.mjs` counts.
    Was window.__liveBoot. */
@@ -76,11 +78,10 @@ function claimBoot() { liveClaimed = true; }
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  /* The live guard runs later in this same script task and claims boot before
-   microtasks drain. Its final part queues bootPage after every source install. */
+  /* The page's own boot runs later in this same task and claims this moment
+   before microtasks drain; its last step queues bootPage itself. */
   queueMicrotask(() => { if (!liveClaimed) bootPage(); });
   _spT0 = Date.now();
-  ({ open: showOnboard } = islands.onboard);
 
   addEventListener('load', () => {
     if (/[?&]onboard=demo/.test(location.search)) showOnboard();

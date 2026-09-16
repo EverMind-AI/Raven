@@ -124,7 +124,7 @@ export function approvalRequest(frame: unknown): void {
       description: p.description || '',
       suggestedPattern: p.suggested_pattern || '',
     },
-    (choice: string, feedback: string, pattern: string) => {
+    (choice: string, feedback: string, pattern?: string) => {
       notify(owner, { type: 'resume' })
       gateway().call('approval.respond', {
         approval_id: p.approval_id, choice, session_id: owner,

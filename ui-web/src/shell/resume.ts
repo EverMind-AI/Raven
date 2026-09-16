@@ -14,7 +14,7 @@
  *
  * Called when a conversation is opened rather than at boot, which is a decision
  * and not a convenience. The page boots to the new-task screen on purpose
- * (live/200-boot.js), so at startup there is no conversation for a restored
+ * (state/boot.ts), so at startup there is no conversation for a restored
  * sheet to belong to; the rack is session-scoped for the same reason, filing a
  * sheet under the conversation that raised it and mounting it only while that
  * one is open. A reload that gives nothing back until the reader returns to the

@@ -16,7 +16,7 @@ interface PluginsSource {
   rows(): Array<{ name: string }>
 }
 
-/* The three domains the parts install, as this test drives them. `skills` is
+/* The three domains the wiring installs, as this test drives them. `skills` is
    narrower than SkillsSource: the only verb the capabilities page reads off it
    is the installed list, and naming the whole interface would mean faking
    every other verb to say anything about that one. */
@@ -153,7 +153,7 @@ describe('the live extension source', () => {
       plugins: [{ id: 'python', display_name: 'Python', version: '1', enabled: true }],
       mcp: [{ name: 'remote', transport: 'http', enabled: true, state: 'connected', tool_count: 2 }],
     }
-    const extPart = await loadPart(() => import('../../legacy/live/090-extensions.js'), {
+    const wiring = await loadPart(() => import('../../state/install'), {
       fakes: {
         'src/shell/banner': { setFault: vi.fn() },
         'src/shell/toast': { show: vi.fn() },
@@ -185,11 +185,12 @@ describe('the live extension source', () => {
       return ext
     })
     await fakeGateway(call)
-    const skillsPart = await import('../../legacy/live/140-skills.js')
-    const pluginsPart = await import('../../legacy/live/150-plugins.js')
-    extPart.install()
-    skillsPart.install()
-    pluginsPart.install()
+    /* The two objects the wiring adds to rather than replaces belong to the
+       chrome, which this case does not install. */
+    const { setSources } = await import('../../state/sources')
+    setSources({ composer: {}, transcript: {} } as never)
+    wiring.installSources()
+    wiring.installPushes()
 
     const { capabilities, skills, plugins } = await seam()
 

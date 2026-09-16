@@ -26,12 +26,12 @@ import { partNames } from './legacy-part.mjs'
 import { RPC_METHODS } from '../src/rpc/generated'
 
 /* The two undeclared names, and the only two allowed. Both are the manual
-   plugin-add path in live/150-plugins.js. */
+   plugin-add path in features/plugins/source.ts. */
 const UNCHECKED = ['raven.mcp.list', 'raven.mcp.set']
 
-/* Both legacy layers, plus every feature's source module: the calls moved
-   there as each domain left the layer, and the two sets together are the
-   page's whole traffic. Paths are from src/. */
+/* Both legacy layers, every feature's source module, and the page's own wiring
+   and boot: the calls moved there as each domain left the layer, and the three
+   sets together are the page's whole traffic. Paths are from src/. */
 const sourceModules = () => readdirSync(resolve(process.cwd(), 'src/features'), { withFileTypes: true })
   .filter((e) => e.isDirectory())
   .map((e) => `features/${e.name}/source.ts`)
@@ -42,6 +42,10 @@ const sourceModules = () => readdirSync(resolve(process.cwd(), 'src/features'), 
 const FILES = [
   ...['demo', 'live'].flatMap((layer) => partNames(layer).map((name) => `legacy/${layer}/${name}`)),
   ...sourceModules(),
+  'state/boot.ts',
+  'state/connection.ts',
+  'state/install.ts',
+  'state/updates.ts',
 ]
 
 /* A `gateway().call(...)` or `gateway().binary(...)`: the callee is a property

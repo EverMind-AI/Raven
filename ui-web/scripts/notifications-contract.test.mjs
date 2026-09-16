@@ -44,12 +44,14 @@ function sideChannelMethods() {
   return [...text.slice(open, close).matchAll(/"([^"]+)"/g)].map((m) => m[1])
 }
 
-/* Where a push handler can be installed: the two legacy layers, and the
-   session pipeline, which took the subscription envelope and the five requests
-   that block a turn. */
+/* Where a push handler can be installed: the page's own wiring, which registers
+   the seven that are not a turn's, the session pipeline, which took the
+   subscription envelope and the five requests that block a turn, and what is
+   left of the two legacy layers. */
 const SITES = [
-  ...['demo', 'live'].flatMap((layer) => partNames(layer).map((name) => `legacy/${layer}/${name}`)),
+  'state/install.ts',
   'state/session/pipeline.ts',
+  ...['demo', 'live'].flatMap((layer) => partNames(layer).map((name) => `legacy/${layer}/${name}`)),
 ]
 
 /** Every [file:line, name] the page registers a push handler for. */
@@ -107,10 +109,10 @@ describe('the notification table', () => {
   })
 })
 
-describe('the names the legacy layer registers', () => {
+describe('the names the page registers', () => {
   const sites = registered()
 
-  it('reaches the layer at all', () => {
+  it('reaches the registration sites at all', () => {
     expect(sites.length).toBeGreaterThanOrEqual(11)
   })
 

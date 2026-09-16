@@ -91,7 +91,7 @@ async function harness({
       },
       'demo/090-composer.js': { drawMeter: () => log.push(['drawMeter']), goState: () => log.push(['goState']) },
       'demo/100-workspace.js': { setWs: () => {} },
-      'demo/110-subagents.js': {
+      'src/features/workspace/record': {
         wsOnTool: (name: string, args: unknown, replay: boolean) => log.push(['wsOnTool', name, args, replay]),
         wsOnToolDone: (...a: unknown[]) => log.push(['wsOnToolDone', ...a]),
       },

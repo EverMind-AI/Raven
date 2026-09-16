@@ -45,8 +45,7 @@ export function install() {
   /* The palette's half of sources.composer, which is the half no transport
    answers: which commands the dock offers and what each is called. The rest is
    installed over it -- the meter's wording, the two actions, the upload -- by
-   the parts that own those (live/050-turn.js, the session runtime,
-   live/180-attachments.js). */
+   the page's wiring (src/state/install.ts) and the session runtime. */
   sources.composer = {
     slash: SLASH,
     slashName: (id) => slashName(id),
