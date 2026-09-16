@@ -266,3 +266,50 @@ async def test_a_non_streaming_send_message_parses_as_the_protocols_own_response
     assert "result" in reply, reply
     envelope = ParseDict(reply["result"], SendMessageResponse())
     assert envelope.WhichOneof("payload") in {"task", "message"}
+
+
+async def test_both_cards_keep_the_scheme_the_caller_arrived_on(peer_with_roster: TestServer) -> None:
+    """A TLS-terminating proxy is the ordinary way this face is exposed.
+
+    The gateway listens on plain loopback, so the socket scheme is always http
+    and the caller's https is only visible in the forwarding headers. Dropping
+    it advertises `http://` to a caller who used `https://`, and raven's own
+    same-origin guard then refuses the host's own card.
+    """
+    origin = _origin(peer_with_roster)
+    public = "https://agents.example.com"
+    headers = {
+        "Host": "agents.example.com",
+        "X-Forwarded-Proto": "https",
+        "Forwarded": "proto=https;host=agents.example.com",
+    }
+    async with httpx.AsyncClient() as http:
+        card = (await http.get(f"{origin}/.well-known/agent-card.json", headers=headers)).json()
+        extended = (
+            await http.post(
+                f"{origin}/a2a",
+                headers={
+                    **headers,
+                    "Content-Type": "application/json",
+                    "A2A-Version": "1.0",
+                    "Authorization": f"Bearer {TOKEN}",
+                },
+                json={"jsonrpc": "2.0", "id": 1, "method": "GetExtendedAgentCard", "params": {}},
+            )
+        ).json()["result"]
+
+    card_url = f"{public}/.well-known/agent-card.json"
+    for name, doc in (("public", card), ("extended", extended)):
+        advertised = doc["supportedInterfaces"][0]["url"]
+        assert advertised == f"{public}/a2a", name
+        assert same_origin(card_url, advertised), name
+
+
+async def test_a_plain_http_caller_is_not_given_an_https_card(peer: TestServer) -> None:
+    """The mirror of the case above: with no forwarding header the socket scheme
+    is the truth, and inventing https would break the caller that used http."""
+    origin = _origin(peer)
+    async with httpx.AsyncClient() as http:
+        card = (await http.get(f"{origin}/.well-known/agent-card.json")).json()
+
+    assert card["supportedInterfaces"][0]["url"] == f"{origin}/a2a"
