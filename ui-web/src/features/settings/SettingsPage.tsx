@@ -2521,7 +2521,7 @@ interface WebVendorPick {
 const WEB_VENDOR: Record<string, WebVendorPick> = {
   web_search: {
     path: 'tools.web.search.provider',
-    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl'],
+    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl', 'serply'],
     fallback: 'serper',
   },
   web_fetch: {
@@ -2539,6 +2539,7 @@ const WEB_VENDOR_LABEL: Record<string, string> = {
   exa: 'Exa',
   brave: 'Brave Search',
   firecrawl: 'Firecrawl',
+  serply: 'Serply',
 }
 function webVendor(id: string, raw: Record<string, unknown>): string {
   const pick = WEB_VENDOR[id]!
