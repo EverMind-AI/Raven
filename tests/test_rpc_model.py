@@ -608,6 +608,7 @@ def test_catalogue_offers_only_chat_models() -> None:
     assert not [m for m in offered if "embedding" in m or "speech" in m], sorted(offered)
 
 
+@pytest.mark.slow
 def test_the_catalogue_is_not_read_until_the_picker_is_opened() -> None:
     """Reading it imports LiteLLM, which is two seconds Raven must not spend at
     startup. Importing the module that offers it must stay free."""
@@ -701,8 +702,9 @@ async def test_save_key_refuses_a_key_for_an_address_only_deployment(fake_home: 
     assert "api_key" in str(excinfo.value)
 
 
-async def test_save_key_accepts_optional_lm_studio_key(fake_home: Path) -> None:
+async def test_save_key_accepts_optional_lm_studio_key(fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """LM Studio's server can be put behind a token, and a remote one usually is."""
+    monkeypatch.setattr("raven.config.update_providers.test_provider", lambda *a, **k: {"ok": True, "model_ids": []})
     result = await model_save_key(
         {"slug": "lm_studio", "api_key": "lms-token", "api_base": "http://remote-lms:1234/v1"}
     )

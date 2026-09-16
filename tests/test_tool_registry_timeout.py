@@ -13,6 +13,7 @@ without its own timeout can't wedge the agent loop. Covers:
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -138,13 +139,23 @@ class _HeartbeatLog:
 
     def __init__(self) -> None:
         self.lines: list[str] = []
+        self.gaps: list[float] = []
         self._sink: int | None = None
+        self._last = 0.0
 
     def __enter__(self) -> "_HeartbeatLog":
         from loguru import logger
 
-        self._sink = logger.add(lambda m: self.lines.append(m.record["message"]), level="INFO")
+        self._last = time.monotonic()
+        self._sink = logger.add(self._record, level="INFO")
         return self
+
+    def _record(self, message) -> None:
+        now = time.monotonic()
+        self.lines.append(message.record["message"])
+        if "still running" in message.record["message"]:
+            self.gaps.append(now - self._last)
+            self._last = now
 
     def __exit__(self, *exc: object) -> None:
         from loguru import logger
@@ -244,7 +255,10 @@ async def test_the_first_beat_is_late_and_the_rest_are_not(monkeypatch):
     with _HeartbeatLog() as log:
         await reg.execute("sleeper", {})
 
-    # ~0.30s of silence, then ~15 beats. Held to a fraction of that so a loaded
-    # box cannot fail it, while one beat -- what a single interval would give --
-    # still cannot pass.
-    assert len(log.beats) >= 5, log.beats
+    # The two gaps, not the number of beats: a loaded box delivers however many
+    # it can get round to -- four workers on a small runner once turned the
+    # fifteen this should produce into three -- but it cannot make the wait
+    # before the first beat short or the wait after it long.
+    assert len(log.gaps) >= 2, log.beats
+    assert log.gaps[0] >= 0.25, f"the first beat did not wait out HEARTBEAT_FIRST_S: {log.gaps}"
+    assert log.gaps[1] < log.gaps[0] / 2, f"the beats after the first are on the same interval: {log.gaps}"
