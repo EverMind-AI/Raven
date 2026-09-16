@@ -35,10 +35,10 @@ const url = (p) => new URL(`../${p}`, import.meta.url)
 const FILES = ['demo', 'live'].flatMap((layer) =>
   partNames(layer).map((name) => `${layer}/${name}`),
 )
-/* What the codemod allows a top-level initialiser to read. Not trusted here:
-   the gate derives the real condition from the import graph and checks that
-   every one of these is outside every cycle. */
-const CODEMOD_LEAVES = new Set(['demo/010-kernel.js', 'demo/020-prose.js', 'demo/030-fixtures.js'])
+/* What the conversion to modules let a top-level initialiser read. Not trusted
+   here: the gate derives the real condition from the import graph and checks
+   that every one of these is outside every cycle. */
+const CONVERSION_LEAVES = new Set(['demo/010-kernel.js', 'demo/020-prose.js', 'demo/030-fixtures.js'])
 
 const texts = new Map(FILES.map((rel) => [rel, readFileSync(url(`src/legacy/${rel}`), 'utf8')]))
 const trees = new Map(
@@ -164,12 +164,12 @@ describe('no top-level initialiser reads a binding from a cycle-mate', () => {
   }
 })
 
-describe('the codemod leaf list', () => {
-  /* The codemod moves an initialiser into install() unless every part it
-     reads is on its leaf list, which is only sound while no leaf sits in a
-     cycle. If one ever does, the list is what has to change. */
+describe('the conversion leaf list', () => {
+  /* An initialiser was left at the top level only when every part it reads is
+     on this list, which is only sound while no leaf sits in a cycle. If one
+     ever does, the list is what has to change. */
   it('names no part that is inside a cycle', () => {
-    const inside = [...CODEMOD_LEAVES].filter((rel) => sccOf.get(rel).length > 1)
+    const inside = [...CONVERSION_LEAVES].filter((rel) => sccOf.get(rel).length > 1)
     expect(inside).toEqual([])
   })
 
