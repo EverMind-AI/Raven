@@ -15,11 +15,14 @@ SDK client, the JSON-RPC framing, the SSE stream and the routes are all real.
 
 import json
 from collections.abc import AsyncIterator
+from uuid import uuid4
 
 import httpx
 import pytest
+from a2a.types import SendMessageResponse
 from aiohttp import web
 from aiohttp.test_utils import TestServer
+from google.protobuf.json_format import ParseDict
 
 from raven.a2a.card import SUBAGENT_EXTENSION_URI
 from raven.a2a.routes_aiohttp import add_a2a_routes
@@ -124,6 +127,32 @@ async def _rpc(origin: str, method: str, *, token: str | None) -> dict:
     return {"status": reply.status_code, "body": reply.json()}
 
 
+async def _rpc_send(origin: str, text: str) -> dict:
+    """One non-streaming `SendMessage`, returning the JSON-RPC body."""
+    async with httpx.AsyncClient() as http:
+        reply = await http.post(
+            f"{origin}/a2a",
+            headers={
+                "Content-Type": "application/json",
+                "A2A-Version": "1.0",
+                "Authorization": f"Bearer {TOKEN}",
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "SendMessage",
+                "params": {
+                    "message": {
+                        "messageId": uuid4().hex,
+                        "role": "ROLE_USER",
+                        "parts": [{"text": text}],
+                    }
+                },
+            },
+        )
+    return reply.json()
+
+
 async def test_the_unauthenticated_card_hides_the_sub_agents_the_extended_one_names(
     peer_with_roster: TestServer,
 ) -> None:
@@ -217,3 +246,23 @@ async def test_the_extended_cards_interface_passes_ravens_own_same_origin_guard(
 
     for interface in extended["body"]["result"]["supportedInterfaces"]:
         assert same_origin(card_url, interface["url"])
+
+
+async def test_a_non_streaming_send_message_parses_as_the_protocols_own_response(peer: TestServer) -> None:
+    """The JSON-RPC binding carries `SendMessageResponse`, not the bare result.
+
+    `RequestHandler.on_message_send` answers with a `Task` or a `Message`, and
+    the binding wraps that in the envelope whose oneof names which arrived --
+    exactly as the streaming sibling wraps its event in `StreamResponse`. A bare
+    object makes a successful turn unparseable to any conformant client: the
+    SDK's own transport parses `result` as this type and rejects an `id` field
+    it has no room for.
+
+    Parsed with the consumer's own type rather than asserted field by field, so
+    the test fails for the same reason a real client would.
+    """
+    reply = await _rpc_send(_origin(peer), "one turn please")
+
+    assert "result" in reply, reply
+    envelope = ParseDict(reply["result"], SendMessageResponse())
+    assert envelope.WhichOneof("payload") in {"task", "message"}

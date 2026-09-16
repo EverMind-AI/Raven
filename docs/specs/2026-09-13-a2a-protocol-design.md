@@ -157,6 +157,16 @@ aiohttp routes (ours)        ->  RequestHandler, 11 methods (SDK)
                                  one raven turn
 ```
 
+The binding owns one thing the handler does not: the shape each result is carried in. A
+`RequestHandler` answers with domain types, and the JSON-RPC binding wraps some of them.
+`SendMessage` carries `SendMessageResponse`, whose oneof names whether a `Task` or a
+`Message` arrived, and the streaming methods carry `StreamResponse`, whose oneof names
+which of four events did. `GetTask` and `CancelTask` carry a bare `Task`, and `ListTasks`
+returns its own response type already. Which is which was measured against the SDK
+transport's own parser rather than inferred: a conformant client parses `result` as the
+type it expects, so an unwrapped reply is not a lenient reply but an unreadable one, and
+the failure lands on a successful turn rather than on an error path.
+
 `routes_aiohttp.py` is written to be deleted. The SDK ships
 `add_a2a_routes_to_fastapi()`, `create_jsonrpc_routes()` and `create_agent_card_routes()`;
 if the gateway ever moves to starlette/fastapi, the A2A migration is dropping that file and
