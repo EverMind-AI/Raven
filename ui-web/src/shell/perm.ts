@@ -21,6 +21,7 @@
  */
 
 import { t } from './bridge'
+import { clearance } from './popover'
 
 interface Tier {
   id: string
@@ -119,23 +120,25 @@ export function open(): void {
     box.appendChild(row(p))
   })
 
-  /* Off the CHIP itself, not off the composer card: the card's static anchor
-     left the panel hanging the field's whole height above the button it came
-     from. Fixed coordinates measured from the chip put its bottom edge right on
-     the control, wherever the composer happens to sit -- and the pop has to
-     leave the card's DOM for that, because the card's entrance animation makes
-     it a containing block that quietly re-bases position: fixed. */
+  /* Fixed coordinates measured from the chip, which is what lets the panel
+     follow the composer wherever it sits -- and the pop has to leave the card's
+     DOM for that, because the card's entrance animation makes it a containing
+     block that quietly re-bases position: fixed.
+     The chip decides the side, `clearance` decides the height: the chip is on
+     the card's bottom bar, so a panel raised off the chip alone sat over the
+     line the reader types on. */
   if (pop.parentElement !== document.body) document.body.appendChild(pop)
   pop.dataset.open = 'true'
   /* clientWidth/Height, not innerWidth/Height: a backgrounded tab reports the
      window as 0x0, and a panel placed from that lands in a corner. */
   const vw = document.documentElement.clientWidth
   const at = chip.getBoundingClientRect()
+  const over = clearance(chip)
   const r = pop.getBoundingClientRect()
   pop.style.position = 'fixed'
   pop.style.left = `${Math.max(8, Math.min(vw - r.width - 8, at.left - 8))}px`
   pop.style.right = 'auto'
-  pop.style.top = `${Math.max(8, at.top - r.height - 6)}px`
+  pop.style.top = `${Math.max(8, over.top - r.height - 6)}px`
   pop.style.bottom = 'auto'
   /* Above the dock and everything mounted on it: a mode picker the user just
      opened loses to nothing that was already on screen. */

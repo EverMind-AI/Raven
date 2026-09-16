@@ -97,14 +97,20 @@ def describe(provider: str, model: str, *, overlay: "ModelOverlay | None" = None
     ref = stored_model_id(provider, model)
     vendor_id = _vendor_id(provider, model)
     entry = row_for(provider, vendor_id)
-    if entry is None:
+    if entry is None or not entry.name:
         # The same model under whoever else lists it. Upstream files models per
         # provider and its coverage is uneven -- SiliconFlow gets twelve rows
         # and none of them are the image models it actually serves, though
         # those models are described in full elsewhere. Display facts only: the
         # price on a borrowed row is the other provider's, which is why
         # `model_cost` below does not take this path.
-        entry = row_by_name(vendor_id)
+        #
+        # A nameless row is asked the same question as an absent one, because it
+        # answers no better: a curated shortlist entry for a vendor upstream
+        # carries no rows for is a rank and nothing else, and ranking a model
+        # says nothing about what it is. Kept as the fallback when nobody else
+        # describes it either, so a rank-only row still lists.
+        entry = row_by_name(vendor_id) or entry
 
     if entry is not None:
         row = ModelRow(

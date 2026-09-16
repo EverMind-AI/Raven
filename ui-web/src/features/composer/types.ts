@@ -54,4 +54,11 @@ export interface ComposerSource {
      reached back INTO this island for the attachment tray. */
   send(text: string): void
   stop(): void
+  /* A conversation to work in, made if the page is still on a draft, and the
+     open one otherwise. The composer creates one on its first send and this is
+     that same promotion by name -- for a caller that needs the conversation and
+     has no message to start it with (the sub-agent roster's new-instance
+     button). Optional like `upload`: the demo canvas has no server to mint one,
+     and nothing there offers the actions that would ask. */
+  startConversation?(): Promise<string>
 }

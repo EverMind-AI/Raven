@@ -921,25 +921,170 @@ async def test_options_reports_a_passthrough_vendor_from_the_id_it_stored(fake_h
     from raven.providers.registry import find_by_model
     from raven.rpc.methods.model import model_options
 
-    assert find_by_model("mistral/mistral-large-latest") is None, "fixture must be a vendor we have no spec for"
+    assert find_by_model("deepinfra/Gryphe/MythoMax-L2-13b") is None, "fixture must be a vendor we have no spec for"
 
     _write_config(
         fake_home,
         {
             "agents": {"defaults": {"model": "anthropic/claude-opus-4-5", "provider": "anthropic"}},
-            "providers": {"anthropic": {"apiKey": "sk-a"}, "mistral": {"apiKey": "sk-m"}},
+            "providers": {"anthropic": {"apiKey": "sk-a"}, "deepinfra": {"apiKey": "sk-d"}},
         },
     )
     loop = SimpleNamespace(
         has_session_binding=lambda key: key == "tui:a",
-        session_model=lambda key: "mistral/mistral-large-latest",
+        session_model=lambda key: "deepinfra/Gryphe/MythoMax-L2-13b",
     )
 
     result = await model_options({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
 
-    assert result["model"] == "mistral/mistral-large-latest"
-    assert result["provider"] == "mistral"
-    assert [p["slug"] for p in result["providers"] if p.get("is_current")] == ["mistral"]
+    assert result["model"] == "deepinfra/Gryphe/MythoMax-L2-13b"
+    assert result["provider"] == "deepinfra"
+    assert [p["slug"] for p in result["providers"] if p.get("is_current")] == ["deepinfra"]
+
+
+#: The vendors added alongside the ones Raven shipped with, and the shortlist
+#: entry each has to reach a picker with. Written out rather than derived from
+#: the registry: the point is that a settings page can offer these without the
+#: user typing an id, and a spec whose curated rows went missing still satisfies
+#: every assertion made off the registry alone.
+ADDED_VENDORS = {
+    "xai": "xai/grok-4.6",
+    "mistral": "mistral/mistral-large-latest",
+    "together_ai": "together-ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "fireworks_ai": "fireworks-ai/accounts/fireworks/models/kimi-k2-instruct",
+    "perplexity": "perplexity/sonar-pro",
+    "cerebras": "cerebras/gpt-oss-120b",
+    "huggingface": "huggingface/deepseek-ai/DeepSeek-V4-Pro",
+    "bigmodel": "bigmodel/glm-4.6",
+    "xiaomi_mimo": "xiaomi-mimo/mimo-v2.5",
+    "baidu_cloud": "baidu-cloud/ernie-5.1",
+    "stepfun": "stepfun/step-3.7-flash",
+    "longcat": "longcat/longcat-2.0",
+    "modelscope": "modelscope/Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "qiniu": "qiniu/deepseek-v3",
+}
+
+#: Deliberately absent from the table above. Nothing Raven bundles carries a
+#: catalogue row for any of them -- Baichuan publishes its own models and the
+#: rest resell other people's under their own spelling -- so a shortlist here
+#: would be ids nobody can check. Each reaches the page as a key field and an
+#: empty list, and its own /v1/models fills that in once a key is entered.
+#: Poe is here for the sharpest form of it: it serves the same models under bot
+#: names of its own, and only the outer "poe/" comes off on the way out, so a
+#: maker-spelled id reaches Poe as a model it does not have.
+NO_SHORTLIST_VENDORS = [
+    "baichuan",
+    "poe",
+    "ai302",
+    "dmxapi",
+    "burncloud",
+    "ocoolai",
+    "ppio",
+    "lanyun",
+    "alayanew",
+    "sophnet",
+    "tokenhub",
+    "xirang",
+    "ph8",
+    "aionly",
+    "radeon_cloud",
+]
+
+
+#: Self-hosted servers added alongside vLLM, LM Studio and Ollama. Reached by
+#: address, and each also takes a key -- a server on somebody else's machine
+#: usually sits behind one.
+ADDED_LOCAL_RUNTIMES = ["gpustack", "ovms"]
+
+
+@pytest.mark.parametrize("slug", ADDED_LOCAL_RUNTIMES)
+async def test_an_added_local_runtime_asks_for_an_address_and_takes_a_key(fake_home: Path, slug: str) -> None:
+    """The row a self-hosted deployment needs, which is not the key-only row.
+
+    A key alone must not read as configured: both borrow OpenAI's driver, whose
+    own default is api.openai.com, so a section holding a key and no address
+    would describe a provider that is ready and send its traffic to OpenAI.
+    """
+    from raven.providers.registry import SHAPE_LOCAL
+    from raven.rpc.methods.model import model_options
+
+    _write_config(fake_home, {"providers": {slug: {"apiKey": "sk-probe"}}})
+    row = next((p for p in (await model_options({}))["providers"] if p["slug"] == slug), None)
+
+    assert row is not None, f"{slug} is absent from the picker"
+    assert row["auth_type"] == SHAPE_LOCAL, f"{slug}: offered as {row['auth_type']}, not by address"
+    assert row["accepts_api_key"], f"{slug}: no key field, so a server behind a token cannot be reached"
+    assert not row["authenticated"], f"{slug}: a key with no address read as configured"
+
+    _write_config(fake_home, {"providers": {slug: {"apiKey": "sk-probe", "apiBase": "http://10.0.0.5:8080/v1"}}})
+    row = next((p for p in (await model_options({}))["providers"] if p["slug"] == slug), None)
+    assert row is not None and row["authenticated"], f"{slug}: an address did not complete the setup"
+
+
+@pytest.mark.parametrize("slug", NO_SHORTLIST_VENDORS)
+async def test_a_vendor_with_no_catalogue_still_reaches_the_page(fake_home: Path, slug: str) -> None:
+    """An empty model list is not a broken row.
+
+    The alternative to shipping nothing is shipping guesses, and a picker that
+    offers a model the vendor does not serve is worse than one that offers none
+    and asks. What must hold is the rest of the row: a key field, no address
+    prompt, and a section that reads back as configured once written.
+    """
+    from raven.providers.registry import SHAPE_KEY, find_by_name
+    from raven.rpc.methods.model import model_options
+
+    _write_config(fake_home, {"providers": {slug: {"apiKey": "sk-probe"}}})
+
+    result = await model_options({})
+    row = next((p for p in result["providers"] if p["slug"] == slug), None)
+
+    assert row is not None, f"{slug} is absent from the picker"
+    assert row["auth_type"] == SHAPE_KEY
+    assert not row["needs_api_base"]
+    assert row["authenticated"]
+    # And it states no default, so the wizard cannot write an unverifiable id.
+    spec = find_by_name(slug)
+    assert spec is not None and not spec.default_model
+
+
+@pytest.mark.parametrize(("slug", "shortlisted"), sorted(ADDED_VENDORS.items()))
+async def test_options_offers_an_added_vendor_as_a_key_and_a_shortlist(
+    fake_home: Path, slug: str, shortlisted: str
+) -> None:
+    """What "configurable from the settings page" actually requires of a spec.
+
+    The registry sweeps assert resolution, which a provider satisfies while
+    still being unreachable from a UI: the row has to arrive with a key field
+    rather than an address prompt, and with models to pick, or the only way in
+    is to type an id by hand.
+    """
+    from raven.providers.registry import SHAPE_KEY
+    from raven.rpc.methods.model import model_options
+
+    _write_config(fake_home, {"providers": {slug: {"apiKey": "sk-probe"}}})
+
+    result = await model_options({})
+    row = next((p for p in result["providers"] if p["slug"] == slug), None)
+
+    assert row is not None, f"{slug} is absent from the picker"
+    assert row["auth_type"] == SHAPE_KEY, f"{slug}: reached by {row['auth_type']}, not a key alone"
+    assert not row["needs_api_base"], f"{slug}: demands an address the vendor already publishes"
+    assert row["authenticated"], f"{slug}: a stored key did not read back as configured"
+    assert shortlisted in row["models"], f"{slug}: {shortlisted} is not offered; models={row['models'][:5]}"
+
+
+async def test_the_added_vendors_carry_a_default_the_wizard_can_write(fake_home: Path) -> None:
+    """The wizard writes ``default_model`` when a probe returns nothing, and the
+    id it writes has to name the provider it was picked for -- an id that
+    resolves elsewhere sends the first request to whoever the keyword names.
+    """
+    from raven.providers.registry import find_by_model, find_by_name
+
+    for slug in ADDED_VENDORS:
+        spec = find_by_name(slug)
+        assert spec is not None and spec.default_model, f"{slug}: no default for the wizard to write"
+        resolved = find_by_model(spec.default_model)
+        assert resolved is spec, f"{slug}: default {spec.default_model!r} resolves to {resolved and resolved.name}"
 
 
 async def test_options_stars_nothing_rather_than_the_wrong_row_for_an_unknown_head(fake_home: Path) -> None:
@@ -1289,6 +1434,40 @@ async def test_direct_provider_without_native_base_is_flagged_without_protocol_f
     assert "Explicit API base required for responses" in entry["warning"]
     with pytest.raises(MissingCredentialsError, match="requires an explicit API base"):
         make_provider(load_config())
+
+
+async def test_a_gateway_that_renames_models_offers_only_what_it_answered(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Poe serves other vendors' models under bot names of its own.
+
+    The bundled registry files 137 models under Poe in the maker's spelling,
+    and unioning those into the answer put ids Poe does not accept in front of
+    the reader as things to add -- selectable, and a wrong-model error on the
+    first message. Removing the default and the shortlist closed two doors to
+    the same room; this is the third, and the one an ordinary Get model list
+    walks through.
+    """
+    from raven.providers.registry_data import catalogue_for
+
+    # The premise: the bundled rows exist and are the maker's spelling, so the
+    # assertion below is about suppressing them rather than about an empty file.
+    bundled = catalogue_for("poe")
+    assert len(bundled) > 100, "expected the bundled Poe catalogue this test exists to withhold"
+    assert any(row.startswith("anthropic/") for row in bundled)
+
+    _write_config(fake_home, {"providers": {"poe": {"apiKey": "k"}}})
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *a, **k: {"ok": True, "status": "valid", "model_ids": ["Claude-Sonnet-4.6", "GPT-5.4"]},
+    )
+
+    out = await model_fetch_models({"slug": "poe"})
+
+    assert out["status"] == "ok"
+    assert [row["source"] for row in out["models"]] == ["live", "live"]
+    assert {row["id"] for row in out["models"]} == {"poe/Claude-Sonnet-4.6", "poe/GPT-5.4"}
 
 
 async def test_fetching_a_catalogue_dresses_what_the_vendor_answered(
