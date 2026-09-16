@@ -3626,7 +3626,11 @@ def _render_tex(tex, size, colour):
 
     figure = Figure(figsize=(0.1, 0.1))
     FigureCanvasAgg(figure)
-    figure.text(0, 0, f"${tex}$", fontsize=size, color=colour)
+    # A formula on its own line is display mathematics: mathtext sets an inline
+    # fraction's halves at script size, which turned \\frac{\\lambda}{2} into two
+    # specks around a bar on a delivered page.
+    shown = tex.replace("\\\\frac{", "\\\\dfrac{")
+    figure.text(0, 0, f"${shown}$", fontsize=size, color=colour)
     buffer = io.BytesIO()
     try:
         figure.savefig(buffer, dpi=_TEX_DPI, transparent=True, bbox_inches="tight", pad_inches=0.02, format="png")
