@@ -32,7 +32,9 @@ from raven_zep.backend import ZepBackend
 BACKENDS: dict[str, type[HttpMemoryBackend]] = {"mem0": Mem0Backend, "zep": ZepBackend, "memos": MemosBackend}
 KEYS = {name: os.environ.get(cls.ENV_KEY, "") for name, cls in BACKENDS.items()}
 
-INGEST_CEILING_S = 120.0
+# Zep's ingestion was measured at 46-62s in two runs and over 120s in a third
+# (2026-09-16); Mem0 takes about 9s, MemOS about 2s.
+INGEST_CEILING_S = 180.0
 FORGET_CEILING_S = 60.0
 POLL_S = 5.0
 
