@@ -158,3 +158,136 @@ describe('a markdown link target', () => {
     expect(liveLinkTargetOf('/repo/notes.md')).toEqual({ p: '/repo/notes.md', dir: false })
   })
 })
+
+/* ---- what the panel records, and how it counts turns -------------------- */
+/* Both still live in the page layer (src/legacy/demo/100-workspace.js) and
+   neither was driven before. Characterisation ahead of the rewrite that moves
+   the bookkeeping into this feature. */
+
+interface Shared {
+  changes: Array<Record<string, unknown>>
+  urls: Array<Record<string, unknown>>
+  file: string | null
+  turn: number
+  unseen: number
+}
+
+async function panel() {
+  const { loadPart, looseQuery } = await import('../../../scripts/legacy-part.mjs')
+  const calls: unknown[][] = []
+  const shared: Shared = { changes: [], urls: [], file: null, turn: 0, unseen: 0 }
+  const part = await loadPart(() => import('../../legacy/demo/100-workspace.js'), {
+    fakes: {
+      'demo/010-kernel.js': {
+        $: looseQuery(),
+        T: (key: string) => key,
+        HOST_PLATFORM: 'mac',
+      },
+      'demo/110-subagents.js': {
+        wsOnTool: (name: string, args: unknown, replay: boolean) => calls.push(['tool', name, args, replay]),
+        wsOnToolDone: (name: string, _args: unknown, _ok: boolean, _preview: string, _took: unknown, diff: string) =>
+          calls.push(['done', name, diff]),
+      },
+      'src/shell/toast': { show: () => {} },
+    },
+    islands: {
+      workspace: {
+        shared: () => shared,
+        hunkFromEdit: () => ({ add: 1, del: 0, rows: [] }),
+        hunkFromWrite: () => ({ add: 1, del: 0, rows: [] }),
+        hunkFromUnified: () => ({ add: 1, del: 0, rows: [] }),
+        notifyDesk: () => {},
+        reset: () => {},
+      },
+      subagents: { reset: () => {} },
+    },
+  })
+  part.install()
+  return { part, shared, calls }
+}
+
+describe('rebuilding the panel from a stored conversation', () => {
+  it('counts a turn per delegated result and per user message with text, and nothing else', async () => {
+    /* A live client advances on turn.started; without the same step on replay a
+       reloaded session files the delegated reaction's files under its parent's
+       turn. An origin-only entry (cron, sentinel) opens no turn either way. */
+    const { part, shared } = await panel()
+
+    part.wsOnHistory([
+      { role: 'user', text: 'first ask' },
+      { role: 'user', delegated: { label: 'qc' } },
+      { role: 'user', text: '   ' },
+      { role: 'user' },
+      { role: 'assistant', text: 'an answer' },
+    ])
+
+    expect(shared.turn).toBe(2)
+  })
+
+  it('replays each stored call with its arguments, and swaps in the stored diff', async () => {
+    const { part, calls } = await panel()
+
+    part.wsOnHistory([
+      { role: 'assistant', tool_calls: [
+        { id: 'c1', name: 'edit_file', arguments: '{"path":"a.py"}' },
+        { id: 'c2', name: 'exec', arguments: 'not json' },
+      ] },
+      { role: 'tool', tool_call_id: 'c1', diff: '@@ -1 +1 @@' },
+    ])
+
+    expect(calls).toEqual([
+      ['tool', 'edit_file', { path: 'a.py' }, true],
+      ['done', 'edit_file', '@@ -1 +1 @@'],
+    ])
+  })
+
+  it('marks everything it restored as already read', async () => {
+    /* Nothing counts as unread: none of it arrived while the reader was away. */
+    const { part, shared } = await panel()
+    shared.changes.push({ key: 'a.py', seen: false, turn: 0 })
+    shared.urls.push({ url: 'https://example.com', at: 'just now' })
+
+    part.wsOnHistory([])
+
+    expect(shared.changes[0]!.seen).toBe(true)
+    expect(shared.urls[0]!.at).toBe('gui.ws.turn_earlier')
+    expect(shared.unseen).toBe(0)
+  })
+})
+
+describe('recording a change', () => {
+  it('keeps one row per path per turn, adding up its hunks', async () => {
+    /* Five edits to one file is one changed file with five hunks, which is how
+       a person thinks about it. */
+    const { part, shared } = await panel()
+
+    part.wsRecordChange('/w/a.py', 'edit', { add: 2, del: 1 })
+    part.wsRecordChange('/w/a.py', 'write', { add: 3, del: 0 })
+
+    expect(shared.changes).toHaveLength(1)
+    const row = shared.changes[0] as { add: number; del: number; hunks: unknown[]; kind: string; name: string }
+    expect(row.add).toBe(5)
+    expect(row.del).toBe(1)
+    expect(row.hunks).toHaveLength(2)
+    /* A write anywhere in the row wins the kind. */
+    expect(row.kind).toBe('write')
+    expect(row.name).toBe('a.py')
+  })
+
+  it('folds the row it opened for itself when the next one arrives', async () => {
+    /* The newest change is the one you came here to read, so it arrives
+       expanded -- and `auto` marks it as opened by us, so the next arrival
+       folds it back without touching a row the reader opened on purpose. */
+    const { part, shared } = await panel()
+
+    part.wsRecordChange('/w/a.py', 'edit', { add: 1, del: 0 })
+    const first = shared.changes[0] as { open: boolean; auto: boolean }
+    expect(first).toMatchObject({ open: true, auto: true })
+
+    part.wsRecordChange('/w/b.py', 'edit', { add: 1, del: 0 })
+
+    expect(shared.changes.map((c) => c.key)).toEqual(['/w/b.py', '/w/a.py'])
+    expect(first).toMatchObject({ open: false, auto: false })
+    expect(shared.changes[0]).toMatchObject({ open: true, auto: true })
+  })
+})
