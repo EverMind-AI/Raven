@@ -828,17 +828,25 @@ async def test_options_lists_lm_studio_models_from_the_local_server(
     assert calls == [("lm_studio", 2)]
 
 
-async def test_the_live_model_cache_is_asked_again_once_it_has_expired(
+def test_the_live_model_cache_is_asked_again_once_it_has_expired(
     fake_home: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The other half of the cache, on a clock this test owns.
 
-    The entry is meant to go stale so a server that has since loaded a model
-    is not reported from a reading taken minutes ago. That was only ever
-    exercised by accident -- by the test above outrunning its own five-second
-    window on a slow machine, which read as a caching bug rather than as this.
+    The entry is meant to go stale so a server that has since loaded a model is
+    not reported from a reading taken minutes ago. That was only ever exercised
+    by accident -- by the test above outrunning its own five-second window on a
+    slow machine, which read as a caching bug rather than as this.
+
+    Through `_provider_models` rather than `model_options`, which is the whole
+    picker and walks every provider in the catalogue: three of those is six
+    seconds of doing something this test is not about, and the suite's idle-time
+    ceiling is right to refuse it. The cache lives on this call, so this is also
+    the narrower subject.
     """
+    from raven.rpc.methods.model import _provider_models
+
     _write_config(
         fake_home,
         {
@@ -867,13 +875,13 @@ async def test_the_live_model_cache_is_asked_again_once_it_has_expired(
     monkeypatch.setattr(model_module, "time", clock)
     model_module._LIVE_MODEL_CACHE.clear()
 
-    await model_options({})
+    assert _provider_models("lm_studio", configured=True) == ["lm-studio/qwen3-8b"]
     clock.now += model_module._LIVE_MODEL_CACHE_TTL_SECONDS - 0.1
-    await model_options({})
+    assert _provider_models("lm_studio", configured=True) == ["lm-studio/qwen3-8b"]
     assert calls == [("lm_studio", 2)], "an entry inside its lifetime is still the answer"
 
     clock.now += 0.2
-    await model_options({})
+    assert _provider_models("lm_studio", configured=True) == ["lm-studio/qwen3-8b"]
 
     assert calls == [("lm_studio", 2), ("lm_studio", 2)]
 
