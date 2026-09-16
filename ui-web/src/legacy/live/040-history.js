@@ -20,14 +20,13 @@ function renderHistory(messages) {
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-DS.transcript = {
-  ...DS.transcript,
-  clean: (text) => cleanPreview(text),
-  okOf: (name, preview) => okOf(name, preview),
-};
+  DS.transcript = {
+    ...DS.transcript,
+    clean: (text) => cleanPreview(text),
+    okOf: (name, preview) => okOf(name, preview),
+  };
 }
 
 export { renderHistory }

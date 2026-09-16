@@ -88,17 +88,16 @@ function transitionTurn(owner, event) {
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-/* A parked node is detached but not finished with: the transcript island
+  /* A parked node is detached but not finished with: the transcript island
    releases a lane host once it leaves the page, and the only copy of a turn
    still streaming lives in one of these arrays until restoreTurn puts it
    back. */
-DS.transcript.parked = (node) => {
-  for (const pk of parkedTurns.values()) if (pk.nodes.includes(node)) return true;
-  return false;
-};
+  DS.transcript.parked = (node) => {
+    for (const pk of parkedTurns.values()) if (pk.nodes.includes(node)) return true;
+    return false;
+  };
 }
 
 export { parkedTurns, subBySession, subSession, PARK_EVENT_CAP, park, parkTurn, restoreTurn, transitionTurn }

@@ -56,177 +56,176 @@ function drawPlugTab() {
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-pmInstBtn = (() => {
-  const b = mk('button', 'pminstbtn');
-  b.onclick = () => { RavenIslands.plugins.toggleView(); };
-  $('.cbar').appendChild(b);
-  return { el: b, sync() {
-    b.hidden = extTab !== 'plugin' || RavenIslands.plugins.view() === 'installed';
-    const n = RavenIslands.plugins.installedCount();
-    const attn = attnCount();
-    b.innerHTML = '';
-    b.append(mk('span', null, T('gui.plug.installed_n', { n })));
-    if (attn) b.appendChild(mk('span', 'pmbdg', String(attn)));
-  } };
-})();
+  pmInstBtn = (() => {
+    const b = mk('button', 'pminstbtn');
+    b.onclick = () => { RavenIslands.plugins.toggleView(); };
+    $('.cbar').appendChild(b);
+    return { el: b, sync() {
+      b.hidden = extTab !== 'plugin' || RavenIslands.plugins.view() === 'installed';
+      const n = RavenIslands.plugins.installedCount();
+      const attn = attnCount();
+      b.innerHTML = '';
+      b.append(mk('span', null, T('gui.plug.installed_n', { n })));
+      if (attn) b.appendChild(mk('span', 'pmbdg', String(attn)));
+    } };
+  })();
 
-{
-  /* The hero sits above the search bar, so it lives outside #capsBody --
+  {
+    /* The hero sits above the search bar, so it lives outside #capsBody --
      one node, repopulated on every draw for whichever view is up. It
      covers both tabs, which is why it rides on this outermost wrapper:
      skView is the mirror demo/152-skills.js maintains. */
-  const pageHero = () => {
-    let h = $('#pageHero');
-    if (!h) {
-      h = mk('div', 'pmhero');
-      h.id = 'pageHero';
-      const bar = document.querySelector('#capsPage .cbar');
-      bar.parentNode.insertBefore(h, bar);
-    }
-    return h;
-  };
-  /* Title only — no tagline under it; that copy read as marketing, not UI. */
-  const syncHero = () => {
-    const h = pageHero();
-    h.innerHTML = '';
-    let title = '';
-    if (extTab === 'plugin' && RavenIslands.plugins.view() === 'market') title = T('gui.plug.hero');
-    else if (extTab === 'skill' && skView === 'market') title = T('gui.hub.hero');
-    h.hidden = !title;
-    if (title) h.appendChild(mk('h3', null, title));
-  };
+    const pageHero = () => {
+      let h = $('#pageHero');
+      if (!h) {
+        h = mk('div', 'pmhero');
+        h.id = 'pageHero';
+        const bar = document.querySelector('#capsPage .cbar');
+        bar.parentNode.insertBefore(h, bar);
+      }
+      return h;
+    };
+    /* Title only — no tagline under it; that copy read as marketing, not UI. */
+    const syncHero = () => {
+      const h = pageHero();
+      h.innerHTML = '';
+      let title = '';
+      if (extTab === 'plugin' && RavenIslands.plugins.view() === 'market') title = T('gui.plug.hero');
+      else if (extTab === 'skill' && skView === 'market') title = T('gui.hub.hero');
+      h.hidden = !title;
+      if (title) h.appendChild(mk('h3', null, title));
+    };
 
-  decorateDrawCaps((prev) => () => {
-    if (extTab === 'plugin') {
-      skInstBtn.sync();  // the skills "installed" button must not linger on this tab
-      drawPlugTab();
+    decorateDrawCaps((prev) => () => {
+      if (extTab === 'plugin') {
+        skInstBtn.sync();  // the skills "installed" button must not linger on this tab
+        drawPlugTab();
+        syncHero();
+        return;
+      }
+      // Undo this tab's chrome before handing back: the plugin view hid the
+      // status pills, and the skill view re-hides them for itself.
+      $('#cKind').hidden = false;
+      $('.cbar').style.display = '';
+      prev();
+      pmInstBtn.sync();
       syncHero();
-      return;
-    }
-    // Undo this tab's chrome before handing back: the plugin view hid the
-    // status pills, and the skill view re-hides them for itself.
-    $('#cKind').hidden = false;
-    $('.cbar').style.display = '';
-    prev();
-    pmInstBtn.sync();
-    syncHero();
-  });
+    });
 
-  decorateExtSet((prev) => (tab) => {
-    const was = extTab;
-    prev(tab);
-    if (extTab !== was) { RavenIslands.plugins.reset(); $('.cbar').style.display = ''; }
-  });
+    decorateExtSet((prev) => (tab) => {
+      const was = extTab;
+      prev(tab);
+      if (extTab !== was) { RavenIslands.plugins.reset(); $('.cbar').style.display = ''; }
+    });
 
-  decorateShowPage((prev) => (id) => {
-    prev(id);
-    if (id !== 'capsPage') { RavenIslands.plugins.drawerClosed(); $('.cbar').style.display = ''; }
-  });
+    decorateShowPage((prev) => (id) => {
+      prev(id);
+      if (id !== 'capsPage') { RavenIslands.plugins.drawerClosed(); $('.cbar').style.display = ''; }
+    });
 
-  decorateCloseDetail((prev) => () => { RavenIslands.plugins.drawerClosed(); prev(); });
-  $('#dClose').onclick = () => closeDetail();
+    decorateCloseDetail((prev) => () => { RavenIslands.plugins.drawerClosed(); prev(); });
+    $('#dClose').onclick = () => closeDetail();
 
-  const prevInput = $('#cq').oninput;
-  $('#cq').oninput = () => {
-    if (extTab === 'plugin') { RavenIslands.plugins.setQuery($('#cq').value.trim()); return; }
-    if (prevInput) prevInput();
-  };
-}
+    const prevInput = $('#cq').oninput;
+    $('#cq').oninput = () => {
+      if (extTab === 'plugin') { RavenIslands.plugins.setQuery($('#cq').value.trim()); return; }
+      if (prevInput) prevInput();
+    };
+  }
 
-/* The fixture source: a canned catalog behind the same interface the rpc
+  /* The fixture source: a canned catalog behind the same interface the rpc
    source implements. Registered, not declared-for-override -- live mode
    installs its own DS.plugins and this object is never consulted. */
-DS.plugins ??= (() => {
-  const CATS = ['developer', 'productivity', 'data'];
-  const MARKET = [
-    { id: 'github-mcp', name: 'GitHub', publisher: 'github.com', verified: true,
-      summary: '读 issue 与 PR，提交评论', category: 'developer',
-      tool_preview_count: 3, risk_tier: 1, installed: false,
-      version: '1.4.0', homepage: 'https://github.com/mcp',
-      description: '连上 GitHub 的官方 MCP 服务，读写 issue、PR 与评论。',
-      contributes: [{ kind: 'mcp',
-        connection: { type: 'http', url: 'https://api.githubcopilot.com/mcp' },
-        auth: { mode: 'oauth' },
-        tools_preview: ['list_issues', 'get_pr', 'create_comment'] }] },
-    { id: 'websearch', name: '网页搜索', publisher: 'serper.dev', verified: true,
-      summary: '让 Raven 查得到网上的实时信息', category: 'data',
-      tool_preview_count: 2, risk_tier: 1, installed: false,
-      version: '0.9.2', homepage: 'https://serper.dev',
-      description: '接入 serper.dev 的搜索接口，Raven 可以自己找资料。',
-      contributes: [{ kind: 'mcp',
-        connection: { type: 'http', url: 'https://mcp.serper.dev' },
-        auth: { mode: 'apikey', fields: [{ key: 'api_key', label: 'API Key', secret: true, help_url: 'https://serper.dev' }] },
-        tools_preview: ['web_search', 'web_news'] }] },
-    { id: 'sqlite', name: 'SQLite', publisher: 'raven-tools', verified: false,
-      summary: '在本机查询与修改 SQLite 数据库', category: 'data',
-      tool_preview_count: 2, skill_count: 1, risk_tier: 2, installed: false,
-      version: '0.3.1', homepage: '',
-      description: '本地运行的 stdio 服务，直接读写你机器上的数据库文件。',
-      contributes: [
-        { kind: 'mcp', connection: { command: 'npx', args: ['-y', '@raven/sqlite-mcp'] },
-          auth: { mode: 'none' }, tools_preview: ['query', 'execute'] },
-        { kind: 'skill', name: 'sql-review', skillhub_id: 'sql-review' },
-      ] },
-    { id: 'notion', name: 'Notion', publisher: 'notion.so', verified: true,
-      summary: '把结果写进你的 Notion 库', category: 'productivity',
-      tool_preview_count: 3, risk_tier: 1, installed: false,
-      version: '2.1.0', homepage: 'https://notion.so/mcp',
-      description: '开启后 Raven 可以直接建页面，建议先确认目标库。',
-      contributes: [{ kind: 'mcp',
-        connection: { type: 'http', url: 'https://mcp.notion.com' },
-        auth: { mode: 'oauth' },
-        tools_preview: ['search_pages', 'create_page', 'update_page'] }] },
-  ];
-  const find = (id) => MARKET.find((x) => x.id === id);
-  const entryOf = (it) => ({ id: it.id, name: it.name, version: it.version,
-    summary: it.summary, description: it.description, homepage: it.homepage,
-    publisher: { name: it.publisher, verified: it.verified },
-    contributes: it.contributes });
-  // The demo's installed shelf: the canned plugin rows plus whatever the
-  // reader installs from the canned market during the session.
-  const pyRows = PLUGINS.filter((p) => p.state === 'on' || p.state === 'off')
-    .map((p) => ({ id: p.id, name: p.name, src: p.src, ver: p.ver, state: p.state }));
-  const mcpRows = [];
-  return {
-    search: async (q, category) => ({
-      items: MARKET.filter((x) => (!category || x.category === category)
-        && (!q || (x.name + (x.summary || '')).toLowerCase().includes(q.toLowerCase()))),
-      categories: CATS,
-    }),
-    detail: async (id) => ({ entry: entryOf(find(id)), installed: !!find(id).installed }),
-    install: async (id) => {
-      const it = find(id);
-      it.installed = true;
-      const mcp = { name: id, enabled: true, state: 'connected', transport: 'http',
-        tool_count: (it.contributes[0].tools_preview || []).length };
-      mcpRows.push({ id: 'mcp:' + id, name: it.name, m: mcp });
-      return { mcp };
-    },
-    remove: async (name) => {
-      const it = find(name);
-      if (it) it.installed = false;
-      const i = mcpRows.findIndex((r) => r.m.name === name);
-      if (i >= 0) mcpRows.splice(i, 1);
-    },
-    toggle: async (name, enabled) => {
-      const r = mcpRows.find((x) => x.m.name === name);
-      if (r) r.m.enabled = enabled;
-      return r ? r.m : null;
-    },
-    togglePy: async (row, on) => { row.state = on ? 'on' : 'off'; },
-    auth: async () => null,
-    manual: async (name, address) => {
-      const transport = /^https?:\/\//.test(address) ? 'http' : 'stdio';
-      const m = { name, enabled: true, state: 'connected', transport, tool_count: 0 };
-      mcpRows.push({ id: 'mcp:' + name, name, src: address, m });
-    },
-    rows: () => pyRows.concat(mcpRows),
-    reload: async () => {},
-  };
-})();
+  DS.plugins ??= (() => {
+    const CATS = ['developer', 'productivity', 'data'];
+    const MARKET = [
+      { id: 'github-mcp', name: 'GitHub', publisher: 'github.com', verified: true,
+        summary: '读 issue 与 PR，提交评论', category: 'developer',
+        tool_preview_count: 3, risk_tier: 1, installed: false,
+        version: '1.4.0', homepage: 'https://github.com/mcp',
+        description: '连上 GitHub 的官方 MCP 服务，读写 issue、PR 与评论。',
+        contributes: [{ kind: 'mcp',
+          connection: { type: 'http', url: 'https://api.githubcopilot.com/mcp' },
+          auth: { mode: 'oauth' },
+          tools_preview: ['list_issues', 'get_pr', 'create_comment'] }] },
+      { id: 'websearch', name: '网页搜索', publisher: 'serper.dev', verified: true,
+        summary: '让 Raven 查得到网上的实时信息', category: 'data',
+        tool_preview_count: 2, risk_tier: 1, installed: false,
+        version: '0.9.2', homepage: 'https://serper.dev',
+        description: '接入 serper.dev 的搜索接口，Raven 可以自己找资料。',
+        contributes: [{ kind: 'mcp',
+          connection: { type: 'http', url: 'https://mcp.serper.dev' },
+          auth: { mode: 'apikey', fields: [{ key: 'api_key', label: 'API Key', secret: true, help_url: 'https://serper.dev' }] },
+          tools_preview: ['web_search', 'web_news'] }] },
+      { id: 'sqlite', name: 'SQLite', publisher: 'raven-tools', verified: false,
+        summary: '在本机查询与修改 SQLite 数据库', category: 'data',
+        tool_preview_count: 2, skill_count: 1, risk_tier: 2, installed: false,
+        version: '0.3.1', homepage: '',
+        description: '本地运行的 stdio 服务，直接读写你机器上的数据库文件。',
+        contributes: [
+          { kind: 'mcp', connection: { command: 'npx', args: ['-y', '@raven/sqlite-mcp'] },
+            auth: { mode: 'none' }, tools_preview: ['query', 'execute'] },
+          { kind: 'skill', name: 'sql-review', skillhub_id: 'sql-review' },
+        ] },
+      { id: 'notion', name: 'Notion', publisher: 'notion.so', verified: true,
+        summary: '把结果写进你的 Notion 库', category: 'productivity',
+        tool_preview_count: 3, risk_tier: 1, installed: false,
+        version: '2.1.0', homepage: 'https://notion.so/mcp',
+        description: '开启后 Raven 可以直接建页面，建议先确认目标库。',
+        contributes: [{ kind: 'mcp',
+          connection: { type: 'http', url: 'https://mcp.notion.com' },
+          auth: { mode: 'oauth' },
+          tools_preview: ['search_pages', 'create_page', 'update_page'] }] },
+    ];
+    const find = (id) => MARKET.find((x) => x.id === id);
+    const entryOf = (it) => ({ id: it.id, name: it.name, version: it.version,
+      summary: it.summary, description: it.description, homepage: it.homepage,
+      publisher: { name: it.publisher, verified: it.verified },
+      contributes: it.contributes });
+    // The demo's installed shelf: the canned plugin rows plus whatever the
+    // reader installs from the canned market during the session.
+    const pyRows = PLUGINS.filter((p) => p.state === 'on' || p.state === 'off')
+      .map((p) => ({ id: p.id, name: p.name, src: p.src, ver: p.ver, state: p.state }));
+    const mcpRows = [];
+    return {
+      search: async (q, category) => ({
+        items: MARKET.filter((x) => (!category || x.category === category)
+          && (!q || (x.name + (x.summary || '')).toLowerCase().includes(q.toLowerCase()))),
+        categories: CATS,
+      }),
+      detail: async (id) => ({ entry: entryOf(find(id)), installed: !!find(id).installed }),
+      install: async (id) => {
+        const it = find(id);
+        it.installed = true;
+        const mcp = { name: id, enabled: true, state: 'connected', transport: 'http',
+          tool_count: (it.contributes[0].tools_preview || []).length };
+        mcpRows.push({ id: 'mcp:' + id, name: it.name, m: mcp });
+        return { mcp };
+      },
+      remove: async (name) => {
+        const it = find(name);
+        if (it) it.installed = false;
+        const i = mcpRows.findIndex((r) => r.m.name === name);
+        if (i >= 0) mcpRows.splice(i, 1);
+      },
+      toggle: async (name, enabled) => {
+        const r = mcpRows.find((x) => x.m.name === name);
+        if (r) r.m.enabled = enabled;
+        return r ? r.m : null;
+      },
+      togglePy: async (row, on) => { row.state = on ? 'on' : 'off'; },
+      auth: async () => null,
+      manual: async (name, address) => {
+        const transport = /^https?:\/\//.test(address) ? 'http' : 'stdio';
+        const m = { name, enabled: true, state: 'connected', transport, tool_count: 0 };
+        mcpRows.push({ id: 'mcp:' + name, name, src: address, m });
+      },
+      rows: () => pyRows.concat(mcpRows),
+      reload: async () => {},
+    };
+  })();
 }
 
 export { pmTile, pmToggle, pmInstBtn, drawPlugTab }

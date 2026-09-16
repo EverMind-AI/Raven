@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /* The fixture library answers the same shape the handlers do.
  *
  * The island is one piece of code in both modes, so a field the contract
@@ -9,13 +10,14 @@
  */
 
 import { readFileSync } from 'node:fs'
-
-import { sandboxSource } from './legacy-source.mjs'
+/* Off cwd, not off `import.meta.url`: under happy-dom that is an http URL. */
+import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-const demo = sandboxSource(new URL('../src/legacy/demo/154-playbooks.js', import.meta.url))
-const contract = JSON.parse(readFileSync(new URL('../../rpc-schema/openrpc.json', import.meta.url), 'utf8'))
+import { loadPart } from './legacy-part.mjs'
+
+const contract = JSON.parse(readFileSync(resolve(process.cwd(), '../rpc-schema/openrpc.json'), 'utf8'))
 
 function required(schema) {
   const found = contract.components.schemas[schema]
@@ -23,18 +25,21 @@ function required(schema) {
   return found.required
 }
 
-function fixtures() {
-  const DS = {}
-  /* `RavenIslands` is the shell face the rail calls; the fixture source is what
-     this gate is after, and the part's install() is what registers it. */
-  Function('DS', 'RavenIslands', `${demo}\ninstall();`)(DS, { playbooks: { open() {}, close() {} } })
+/* The fixture source is what this gate is after, and the part's install() is
+   what registers it -- onto the seam, which is where the rail reads it. */
+async function fixtures() {
+  const part = await loadPart(() => import('../src/legacy/demo/154-playbooks.js'), {
+    globals: { RavenIslands: { playbooks: { open() {}, close() {} } } },
+  })
+  const { DS } = await import('../src/legacy/seam/000-datasource.js')
+  part.install()
   if (!DS.playbooks) throw new Error('DS.playbooks is absent from the demo layer')
   return DS.playbooks
 }
 
 describe('the demo playbook fixtures', () => {
   it('answer every field the contract makes required', async () => {
-    const source = fixtures()
+    const source = await fixtures()
     const rows = await source.list()
     expect(rows.length).toBeGreaterThan(0)
 
@@ -51,7 +56,7 @@ describe('the demo playbook fixtures', () => {
   })
 
   it('answer every field a param is required to carry', async () => {
-    const source = fixtures()
+    const source = await fixtures()
     const paramKeys = required('PlaybookParam')
     for (const row of await source.list()) {
       const detail = await source.get(row.name)

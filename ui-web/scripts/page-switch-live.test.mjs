@@ -1,5 +1,6 @@
-/* The assembled live layer's session switch: what a round trip is allowed to
- * paint once the reader has moved on, and when the new-task screen comes down.
+// @vitest-environment happy-dom
+/* The live layer's session switch: what a round trip is allowed to paint once
+ * the reader has moved on, and when the new-task screen comes down.
  *
  * Driven through the real openLiveSession / startDraft / subscribe rather than
  * through assertions about their source, because the defect this pins is a
@@ -7,161 +8,150 @@
  * either function says which of them wins.
  */
 
-import { readFileSync } from 'node:fs'
-
-import { Window } from 'happy-dom'
 import { describe, expect, it } from 'vitest'
 
-const build = readFileSync(new URL('../build.py', import.meta.url), 'utf8')
-const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
-if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
-const parts = [...manifest[1].matchAll(/"([^"]+\.js)"/g)].map((m) => m[1])
-const live = parts
-  .map((name) => readFileSync(new URL(`../src/legacy/live/${name}`, import.meta.url), 'utf8'))
-  .join('')
+import { fakeRpc, loadPart } from './legacy-part.mjs'
 
-/* From `mark` through the closing brace of the function `tail` names. */
-function span(mark, tail) {
-  const start = live.indexOf(mark)
-  if (start < 0) throw new Error(`${mark} is absent from the assembled live layer`)
-  const head = live.indexOf(tail, start)
-  if (head < 0) throw new Error(`${tail} is absent from the assembled live layer`)
-  const brace = live.indexOf('{', head)
-  let depth = 0
-  for (let i = brace; i < live.length; i += 1) {
-    if (live[i] === '{') depth += 1
-    else if (live[i] === '}') {
-      depth -= 1
-      if (depth === 0) return live.slice(start, i + 1)
-    }
-  }
-  throw new Error(`${tail} has no closing brace in the assembled live layer`)
-}
-
-const NAMES = [
-  'rpc', 'live', 'subBySession', 'subSession', 'toast', 'sessionCurrent', 'parkTurn',
-  'parkDraft', 'loadDraft', 'sessionSet', 'sessionDraw', '$', 'T', 'pitch', 'unpitch',
-  'ta', 'stop_', 'turn', 'queueClear', 'resetTurnState', 'wsReset', 'setWs', 'drawMeter',
-  'goState', 'drawBanner', 'sess', 'markNewCurrent', 'plainTitle', 'parkedTurns',
-  'restoreTurn', 'wsSetRoot', 'setCtx', 'renderHistory', 'wsOnHistory', 'RavenIslands',
-  'loadProviders',
-  /* rpc.onReconnect's own collaborators. */
-  'SURFACE', 'killStatus', 'showStatus', 'loadExt', 'drawCapsBadge', 'drawCaps', 'sessionRows',
-  'loadTier',
-  'loadPermMode',
-]
-
-function harness({ rows, deferSubscribe } = {}) {
-  const document = new Window().document
+async function harness({ rows, deferSubscribe } = {}) {
   const calls = []
+  document.body.innerHTML = '<h1 id="title"></h1><div id="stage"></div><div id="flash"></div>'
   const boxes = {}
-  for (const id of ['#title', '#stage', '#flash']) {
-    const el = document.createElement('div')
-    el.id = id.slice(1)
-    boxes[id] = el
-  }
-  let current = null
-  const state = { fresh: '1' }
+  for (const id of ['#title', '#stage', '#flash']) boxes[id] = document.getElementById(id.slice(1))
   /* The top-bar editor stands IN PLACE OF h1#title, so while it is open that id
      resolves to nothing; committing puts the heading back and writes the typed
      name onto the row the editor captured when it opened. */
   const editor = { commit: () => {} }
+  const spare = new Map()
+  const $ = (selector) => {
+    if (selector in boxes || selector === '#title') return boxes[selector] || null
+    /* Everything install() wires that this file is not about. */
+    if (!spare.has(selector)) spare.set(selector, document.createElement('div'))
+    return spare.get(selector)
+  }
+  let current = null
+  const state = { fresh: '1' }
   const pending = []
   const subs = []
-  const env = {
-    rpc: {
-      call: (method, params) => {
-        calls.push(['rpc', method, params && (params.session_id || params.session_key)])
-        if (method === 'session.resume') {
-          return new Promise((res, rej) => pending.push({ id: params.session_id, res, rej }))
-        }
-        const answer = { subscription_id: `sub:${params.session_key}` }
-        if (!deferSubscribe) return Promise.resolve(answer)
-        return new Promise((res) => subs.push({ id: params.session_key, res: () => res(answer) }))
-      },
-    },
-    live: { subId: null },
-    subBySession: {},
-    subSession: {},
-    toast: (text) => calls.push(['toast', text]),
-    sessionCurrent: () => current,
-    parkTurn: () => calls.push(['parkTurn']),
-    parkDraft: () => {},
-    loadDraft: (id) => calls.push(['loadDraft', id]),
-    sessionSet: (id) => { current = id; calls.push(['sessionSet', id]) },
-    sessionDraw: () => calls.push(['sessionDraw']),
-    $: (sel) => boxes[sel] || null,
-    T: (key) => key,
-    pitch: () => { state.fresh = '1'; calls.push(['pitch']) },
-    unpitch: () => { state.fresh = null; calls.push(['unpitch']) },
-    ta: { focus: () => {} },
-    stop_: () => {},
-    turn: { dispatch: () => {}, busy: () => false, snapshot: () => ({}), restore: () => {}, reduce: (p) => p },
-    queueClear: () => {},
-    resetTurnState: () => {},
-    wsReset: () => {},
-    setWs: () => {},
-    drawMeter: () => {},
-    goState: () => {},
-    drawBanner: () => {},
-    sess: (id) => (rows || []).find((r) => r.id === id),
-    markNewCurrent: () => {},
-    loadProviders: (sid, gen) => calls.push(['loadProviders', sid, gen]),
-    loadTier: () => calls.push(['loadTier']),
-    loadPermMode: (sid) => calls.push(['loadPermMode', sid]),
-    plainTitle: (s) => String(s),
-    parkedTurns: new Map(),
-    restoreTurn: () => calls.push(['restoreTurn']),
-    wsSetRoot: (root) => calls.push(['wsSetRoot', root]),
-    setCtx: (used) => calls.push(['setCtx', used]),
-    renderHistory: (messages) => { state.fresh = null; calls.push(['renderHistory', messages[0]]) },
-    wsOnHistory: () => {},
-    SURFACE: 'web',
-    sessionRows: () => rows || [],
-    killStatus: () => {},
-    showStatus: (text) => calls.push(['showStatus', text]),
-    loadExt: () => Promise.resolve(),
-    drawCapsBadge: () => {},
-    drawCaps: () => {},
-    RavenIslands: {
-      workspace: { loadDeliveries: (id) => calls.push(['loadDeliveries', id]) },
-      view: {
-        resume: (id) => calls.push(['viewResume', id]),
-        refreshDag: (id) => calls.push(['viewRefreshDag', id]),
-      },
-      /* What the heading held when the editor was ended, so the order is
-         assertable: ending it has to come before anything reads or writes
-         h1#title, and while one is open that id resolves to nothing. */
-      rail: {
-        endRename: () => {
-          calls.push(['endRename', boxes['#title'] ? boxes['#title'].textContent : null])
-          editor.commit()
+  /* The seam the live layer reaches openLiveSession through: sessionOpen is
+     DS.sessions.open, which the boot guard installs as openLiveSession. Bound
+     through this holder rather than stubbed, so the reconnect drives the real
+     function. */
+  const api = {}
+  const part = await loadPart(() => import('../src/legacy/live/080-overrides.js'), {
+    fakes: {
+      'demo/010-kernel.js': { $, T: (key) => key },
+      'demo/040-state.js': {
+        loadDraft: (id) => calls.push(['loadDraft', id]),
+        parkDraft: () => {},
+        queueClear: () => {},
+        queueRestore: () => {},
+        sess: (id) => (rows || []).find((r) => r.id === id),
+        stop_: () => {},
+        turn: {
+          dispatch: () => {}, busy: () => false, snapshot: () => ({}),
+          restore: () => {}, reduce: (phase) => phase,
         },
       },
+      'demo/050-rail.js': {
+        markNewCurrent: () => {},
+        sessionDraw: () => calls.push(['sessionDraw']),
+        sessionOpen: (s) => api.openLiveSession(s),
+        sessionReplace: () => {},
+        sessionRows: () => rows || [],
+      },
+      'demo/060-conversation.js': {
+        pitch: () => { state.fresh = '1'; calls.push(['pitch']) },
+        unpitch: () => { state.fresh = null; calls.push(['unpitch']) },
+      },
+      'demo/070-transcript.js': {
+        killStatus: () => {},
+        showStatus: (text) => calls.push(['showStatus', text]),
+      },
+      'demo/090-composer.js': { drawMeter: () => {}, goState: () => {}, ta: { focus: () => {} } },
+      'demo/100-workspace.js': { setWs: () => {}, wsOnHistory: () => {}, wsReset: () => {} },
+      'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
+      'demo/152-skills.js': { drawCaps: () => {} },
+      'live/040-history.js': {
+        renderHistory: (messages) => { state.fresh = null; calls.push(['renderHistory', messages[0]]) },
+      },
+      'live/060-parked.js': {
+        parkTurn: () => calls.push(['parkTurn']),
+        restoreTurn: () => calls.push(['restoreTurn']),
+      },
+      'live/170-workspace.js': { wsSetRoot: (root) => calls.push(['wsSetRoot', root]) },
     },
+    globals: {
+      RavenIslands: {
+        /* The streaming buffer the turn state resets through. */
+        transcript: { nudge: () => {}, stopStream: () => {} },
+        workspace: { loadDeliveries: (id) => calls.push(['loadDeliveries', id]) },
+        view: {
+          resume: (id) => calls.push(['viewResume', id]),
+          refreshDag: (id) => calls.push(['viewRefreshDag', id]),
+        },
+        /* What the heading held when the editor was ended, so the order is
+           assertable: ending it has to come before anything reads or writes
+           h1#title, and while one is open that id resolves to nothing. */
+        rail: {
+          endRename: () => {
+            calls.push(['endRename', boxes['#title'] ? boxes['#title'].textContent : null])
+            editor.commit()
+          },
+        },
+      },
+      sessionCurrent: () => current,
+      sessionSet: (id) => { current = id; calls.push(['sessionSet', id]) },
+      plainTitle: (s) => String(s),
+      toast: (text) => calls.push(['toast', text]),
+      setCtx: (used) => calls.push(['setCtx', used]),
+      drawBanner: () => {},
+      loadTier: () => calls.push(['loadTier']),
+      setPermMode: () => {},
+    },
+  })
+  Object.assign(api, part)
+  await fakeRpc((method, params) => {
+    calls.push(['rpc', method, params || {}])
+    if (method === 'session.resume') {
+      return new Promise((res, rej) => pending.push({ id: params.session_id, res, rej }))
+    }
+    if (method === 'turn.subscribe') {
+      const answer = { subscription_id: `sub:${params.session_key}` }
+      if (!deferSubscribe) return Promise.resolve(answer)
+      return new Promise((res) => subs.push({ id: params.session_key, res: () => res(answer) }))
+    }
+    /* The model and permission refreshes a switch starts are the real ones
+       here, and an empty envelope is a valid answer to both. */
+    return Promise.resolve({})
+  })
+  const parked = await import('../src/legacy/live/060-parked.js')
+  const turnState = await import('../src/legacy/live/050-turn.js')
+  const { DS } = await import('../src/legacy/seam/000-datasource.js')
+  DS.composer = {}
+  DS.sessions = {}
+  DS.transcript = {}
+  const rpc = await import('../src/legacy/live/020-rpc.js')
+  part.install()
+  const env = {
+    live: turnState.live,
+    subBySession: parked.subBySession,
+    subSession: parked.subSession,
+    parkedTurns: parked.parkedTurns,
+    staged: part.staged,
+    sessionCurrent: () => current,
+    sessionSet: (id) => { current = id; calls.push(['sessionSet', id]) },
+    sess: (id) => (rows || []).find((r) => r.id === id),
   }
-  const install = Function(
-    'env',
-    `const { ${NAMES.join(', ')} } = env;
-     ${span('async function subscribe(sessionKey) {', 'function claimStream')}
-     ${span('let draft = false;', 'async function openLiveSession')}
-     /* The seam the live layer reaches openLiveSession through: sessionOpen is
-        DS.sessions.open, which the boot guard installs as openLiveSession. Bound
-        here rather than stubbed, so the reconnect drives the real function. */
-     const sessionOpen = (s) => openLiveSession(s);
-     ${span('rpc.onReconnect = async () => {', 'rpc.onReconnect')}
-     return { subscribe, startDraft, openLiveSession, onReconnect: rpc.onReconnect,
-       /* Test-only reach into the staged tier: it is written from the tier
-          source in 120, which this harness does not compile. */
-       stageTier: (m) => { staged.tier = m }, stagedTier: () => staged.tier,
-       stagePerm: (m) => { staged.perm = m }, stagedPerm: () => staged.perm };`,
-  )
-  const api = install(env)
+  const asked = (method) => calls.filter((c) => c[0] === 'rpc' && c[1] === method).map((c) => c[2])
   return {
-    ...api,
+    subscribe: part.subscribe,
+    startDraft: part.startDraft,
+    openLiveSession: part.openLiveSession,
+    onReconnect: rpc.rpc.onReconnect,
     calls,
     env,
     state,
+    asked,
     title: () => (boxes['#title'] ? boxes['#title'].textContent : null),
     openEditor: (typed) => {
       const heading = boxes['#title']
@@ -199,15 +189,15 @@ function harness({ rows, deferSubscribe } = {}) {
        for the conversation (features/rail/RailPage.tsx). Every switch a reader
        makes has this shape, and the pointer moving first is what lets a late
        answer tell that it is no longer the page. */
-    click: (row) => { env.sessionSet(row.id); return api.openLiveSession(row) },
+    click: (row) => { env.sessionSet(row.id); return part.openLiveSession(row) },
   }
 }
 
 const painted = (calls) => calls.filter((c) => c[0] === 'renderHistory').map((c) => c[1] && c[1].text)
 
-describe('the assembled live session switch', () => {
+describe('the live session switch', () => {
   it('paints one conversation when one is opened', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
 
     h.openLiveSession({ id: 'a', title: 'Alpha' })
     await h.settle('a')
@@ -220,7 +210,7 @@ describe('the assembled live session switch', () => {
   })
 
   it('drops the answer to an open the reader has already left', async () => {
-    const h = harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
 
     h.click({ id: 'a', title: 'Alpha' })
     h.click({ id: 'b', title: 'Bravo' })
@@ -249,7 +239,7 @@ describe('the assembled live session switch', () => {
      the moment it was ended: the name being left behind, never the one being
      written. */
   it('ends an open title editor before either path reaches the heading', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
 
     h.openLiveSession({ id: 'a', title: 'Alpha' })
     await h.settle('a')
@@ -268,11 +258,11 @@ describe('the assembled live session switch', () => {
      captured -- which is what happened, because the teardown lives inside
      openLiveSession and ran after the lookup here.
 
-     Driven through the real rpc.onReconnect rather than openLiveSession: the
+     Driven through the real reconnect handler rather than openLiveSession: the
      ordering is between the two, so a test that calls the inner one cannot see
      it. */
   it('paints the title the editor committed, not the one it read first', async () => {
-    const h = harness({ rows: [{ id: 'a', title: 'Alpha' }] })
+    const h = await harness({ rows: [{ id: 'a', title: 'Alpha' }] })
     h.openLiveSession({ id: 'a', title: 'Alpha' })
     await h.settle('a')
     expect(h.title()).toBe('Alpha')
@@ -293,7 +283,7 @@ describe('the assembled live session switch', () => {
   })
 
   it('drops the answer to an open the reader left for a new task', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
 
     h.click({ id: 'a', title: 'Alpha' })
     h.startDraft()
@@ -306,7 +296,7 @@ describe('the assembled live session switch', () => {
   })
 
   it('stays quiet when an open the reader left is the one that fails', async () => {
-    const h = harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
 
     h.click({ id: 'a', title: 'Alpha' })
     h.click({ id: 'b', title: 'Bravo' })
@@ -319,7 +309,7 @@ describe('the assembled live session switch', () => {
   })
 
   it('still reports a failure on the open the reader is waiting for', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
 
     h.openLiveSession({ id: 'a', title: 'Alpha' })
     await h.fail('a')
@@ -329,7 +319,7 @@ describe('the assembled live session switch', () => {
   })
 
   it('leaves the new-task screen when the switch starts, not when it lands', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
 
     h.openLiveSession({ id: 'a', title: 'Alpha' })
 
@@ -341,8 +331,8 @@ describe('the assembled live session switch', () => {
     expect(h.state.fresh).toBe(null)
   })
 
-  it('gives the new-task screen back when the reader asks for one', () => {
-    const h = harness({ rows: [{ id: 'a' }] })
+  it('gives the new-task screen back when the reader asks for one', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
 
     h.startDraft()
 
@@ -350,7 +340,7 @@ describe('the assembled live session switch', () => {
   })
 
   it('takes the visible stream back with a parked turn, without a round trip', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
     h.env.subBySession.a = 'sub:a'
     h.env.parkedTurns.set('a', { nodes: [] })
 
@@ -364,7 +354,7 @@ describe('the assembled live session switch', () => {
        subscribing again. */
     expect(h.calls).toContainEqual(['restoreTurn'])
     expect(h.env.live.subId).toBe('sub:a')
-    expect(h.calls.filter((c) => c[1] === 'turn.subscribe')).toEqual([])
+    expect(h.asked('turn.subscribe')).toEqual([])
     expect(h.inFlight()).toEqual([])
     /* The graph half of the replay and not the desk half. A parked turn buffers
        the events it misses only while it is busy, and a graph outlives the turn
@@ -376,7 +366,7 @@ describe('the assembled live session switch', () => {
   })
 
   it('does not put a left conversation\'s windows back when its subscription lands late', async () => {
-    const h = harness({ rows: [{ id: 'a' }, { id: 'b' }], deferSubscribe: true })
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }], deferSubscribe: true })
 
     h.click({ id: 'a', title: 'Alpha' })
     await h.settle('a')
@@ -392,14 +382,14 @@ describe('the assembled live session switch', () => {
   })
 
   it('leaves the visible stream alone when a subscription lands too late', async () => {
-    const h = harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
     h.env.sessionSet('b')
     h.env.live.subId = 'sub:b'
 
     await h.subscribe('a')
 
     /* The id is recorded so the parked buffer can still find A's events
-       (rpc.notify.event reads subSession), but the visible routing stays with
+       (the event handler reads subSession), but the visible routing stays with
        the conversation on screen. */
     expect(h.env.subBySession.a).toBe('sub:a')
     expect(h.env.subSession['sub:a']).toBe('a')
@@ -407,7 +397,7 @@ describe('the assembled live session switch', () => {
   })
 
   it('takes the visible stream for the conversation that is on screen', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
     h.env.sessionSet('a')
 
     await h.subscribe('a')
@@ -416,7 +406,7 @@ describe('the assembled live session switch', () => {
   })
 
   it('reuses a subscription the session already has', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
     h.env.sessionSet('a')
     await h.subscribe('a')
     h.env.live.subId = null
@@ -424,7 +414,7 @@ describe('the assembled live session switch', () => {
     await h.subscribe('a')
 
     expect(h.env.live.subId).toBe('sub:a')
-    expect(h.calls.filter((c) => c[1] === 'turn.subscribe')).toHaveLength(1)
+    expect(h.asked('turn.subscribe')).toHaveLength(1)
   })
 
   it('reads the default back when a conversation is left for a new task', async () => {
@@ -432,15 +422,13 @@ describe('the assembled live session switch', () => {
        startDraft has to re-read it or the chip keeps the model of the
        conversation just left. A null session omits the field, which is how the
        default answers. */
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
 
     h.openLiveSession({ id: 'a', title: 'Alpha' })
     await h.settle('a')
     h.startDraft()
 
-    const refreshed = h.calls.filter((c) => c[0] === 'loadProviders')
-    expect(refreshed.map((c) => c[1])).toEqual(['a', null])
-    expect(refreshed.at(-1)[2]).toBeTypeOf('number')
+    expect(h.asked('model.options')).toEqual([{ session_id: 'a' }, {}])
   })
 
   it('drops a tier staged for a draft that was abandoned', async () => {
@@ -448,16 +436,16 @@ describe('the assembled live session switch', () => {
        without sending. Kept, it is spent by whichever conversation is sent next
        -- an invisible choice crossing from one conversation to another. Reset on
        both paths out of a draft, exactly where `pendingModel` is. */
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
 
-    h.stageTier('max')
+    h.env.staged.tier = 'max'
     h.openLiveSession({ id: 'a', title: 'Alpha' })
     await h.settle('a')
-    expect(h.stagedTier()).toBeNull()
+    expect(h.env.staged.tier).toBeNull()
 
-    h.stageTier('max')
+    h.env.staged.tier = 'max'
     h.startDraft()
-    expect(h.stagedTier()).toBeNull()
+    expect(h.env.staged.tier).toBeNull()
   })
 
   it('re-reads the tier when the same conversation is reopened', async () => {
@@ -466,7 +454,7 @@ describe('the assembled live session switch', () => {
        has not changed. The loop holds session policies in memory with no
        persistence, so a gateway restart puts every session back on the
        catalogue default while the chip went on naming the tier from before. */
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
 
     h.openLiveSession({ id: 'a', title: 'Alpha' })
     await h.settle('a')
@@ -477,7 +465,7 @@ describe('the assembled live session switch', () => {
   })
 
   it('reads the tier back when a conversation is left for a new task', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
 
     h.openLiveSession({ id: 'a', title: 'Alpha' })
     await h.settle('a')
@@ -487,18 +475,18 @@ describe('the assembled live session switch', () => {
   })
 
   it('holds a staged permission mode to the tier\'s rules: reset on both paths, re-read per open', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
+    const h = await harness({ rows: [{ id: 'a' }] })
 
-    h.stagePerm('full')
+    h.env.staged.perm = 'full'
     h.openLiveSession({ id: 'a', title: 'Alpha' })
     await h.settle('a')
-    expect(h.stagedPerm()).toBeNull()
-    h.stagePerm('full')
+    expect(h.env.staged.perm).toBeNull()
+    h.env.staged.perm = 'full'
     h.startDraft()
-    expect(h.stagedPerm()).toBeNull()
+    expect(h.env.staged.perm).toBeNull()
 
     /* Keyed to the opened id, then to no id at all: a draft runs the default. */
-    expect(h.calls.filter((c) => c[0] === 'loadPermMode').map((c) => c[1])).toEqual(['a', null])
+    expect(h.asked('config.get').map((p) => p.session_id ?? null)).toEqual(['a', null])
   })
 
   it('refreshes the model for the conversation being opened, not the one left behind', async () => {
@@ -506,14 +494,13 @@ describe('the assembled live session switch', () => {
        binding, or the chip keeps claiming A's model over a conversation that
        runs its own. Keyed to the opened id, so it holds even before the session
        pointer moves over. */
-    const h = harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
 
     h.openLiveSession({ id: 'a', title: 'Alpha' })
     await h.settle('a')
     h.openLiveSession({ id: 'b', title: 'Beta' })
     await h.settle('b')
 
-    const refreshed = h.calls.filter((c) => c[0] === 'loadProviders').map((c) => c[1])
-    expect(refreshed).toEqual(['a', 'b'])
+    expect(h.asked('model.options').map((p) => p.session_id)).toEqual(['a', 'b'])
   })
 })

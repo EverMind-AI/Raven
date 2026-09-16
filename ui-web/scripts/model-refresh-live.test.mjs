@@ -1,110 +1,134 @@
-/* The per-conversation model refresh, extracted from the live layer and driven
- * with deferred responses. model.options does its catalogue work off-thread, so
- * a refresh for a conversation the reader has left can land after the one they
- * moved to; the viewGen guard is what keeps the late answer from repainting the
- * page. A synchronous stub cannot exercise that, so this runs the real function.
+// @vitest-environment happy-dom
+/* The per-conversation model refresh, driven with deferred responses.
+ * model.options does its catalogue work off-thread, so a refresh for a
+ * conversation the reader has left can land after the one they moved to; the
+ * viewGen guard is what keeps the late answer from repainting the page. A
+ * synchronous stub cannot exercise that, so this runs the real functions.
  */
-
-import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const src = readFileSync(new URL('../src/legacy/live/120-settings.js', import.meta.url), 'utf8')
-const match = src.match(/async function loadProviders[\s\S]*?\n}/)
-if (!match) throw new Error('loadProviders is absent from the live layer')
-const loadProvidersSrc = match[0]
-const permMatch = src.match(/async function loadPermMode[\s\S]*?\n}/)
-if (!permMatch) throw new Error('loadPermMode is absent from the live layer')
-const loadPermModeSrc = permMatch[0]
-const providerGuardSrc = src.match(/function openModelsForMissingProvider\(\) \{[\s\S]*?\n\}/)
-if (!providerGuardSrc) throw new Error('openModelsForMissingProvider is absent from the live layer')
-const hiddenSrc = src.match(/const HIDDEN_PROVIDERS = new Set\(\[[^\]]*\]\);/)
-if (!hiddenSrc) throw new Error('HIDDEN_PROVIDERS is absent from the live layer')
+import { fakeRpc, loadPart, looseQuery } from './legacy-part.mjs'
 
-function providerGuardHarness({ configured = null, providers = [] } = {}) {
-  let opened = 0
-  const build = Function(
-    'deps',
-    `const setupState = { providerConfigured: deps.configured };
-     let providersLive = deps.providers;
-     const RavenIslands = { settings: { openModels: () => { deps.opened() } } };
-     ${providerGuardSrc[0]}
-     return { openModelsForMissingProvider };`,
-  )
-  const api = build({ configured, providers, opened: () => { opened += 1 } })
-  return { ...api, opened: () => opened }
-}
-
-describe('the first-run provider guard', () => {
-  it('opens Models when setup reports no configured provider', () => {
-    const h = providerGuardHarness({ configured: false })
-    expect(h.openModelsForMissingProvider()).toBe(true)
-    expect(h.opened()).toBe(1)
-  })
-
-  it('stops redirecting as soon as a provider refresh authenticates one', () => {
-    const h = providerGuardHarness({ configured: false, providers: [{ on: true }] })
-    expect(h.openModelsForMissingProvider()).toBe(false)
-    expect(h.opened()).toBe(0)
-  })
-
-  it('does not redirect while first-run status is still unknown', () => {
-    const h = providerGuardHarness()
-    expect(h.openModelsForMissingProvider()).toBe(false)
-    expect(h.opened()).toBe(0)
-  })
-})
-
-function harness() {
+/* The settings part and the override part in one fresh graph: `viewGen` and
+ * `staged` live in the second one and the first reads both.
+ *
+ * `answers` resolves a call at once; without it every call is held in
+ * `pending` for the test to settle in whatever order the race needs.
+ */
+async function live({ session = null, answers = null } = {}) {
   const calls = []
   const pending = []
-  const build = Function(
-    'deps',
-    `let viewGen = 0;
-     let providersLive = [], curProvider = '';
-     const { rpc, sessionCurrent, modelSet, setModelLabel } = deps;
-     ${loadProvidersSrc}
-     return {
-       loadProviders,
-       bump: () => { viewGen += 1; return viewGen; },
-       curProvider: () => curProvider,
-     };`,
-  )
-  const api = build({
-    rpc: { call: (method, params) => new Promise((res) => pending.push({ params, res })) },
-    sessionCurrent: () => null,
-    modelSet: (m) => calls.push(['modelSet', m]),
-    setModelLabel: () => {},
-  })
-  return {
-    ...api,
-    calls,
-    param: (i) => pending[i].params,
-    settle: (i, answer) => {
-      pending[i].res(answer)
-      return new Promise((r) => setTimeout(r, 0))
+  /* A view switch re-reads the default model and the permission mode, and
+     those two reads are the switch's own -- no case here settles them. Held
+     apart so the indices below stay the indices of the calls under test. */
+  let switching = false
+  const settings = await loadPart(() => import('../src/legacy/live/120-settings.js'), {
+    fakes: {
+      'demo/010-kernel.js': { $: looseQuery() },
+      'demo/040-state.js': {
+        modelCurrent: () => '',
+        modelSet: (m) => calls.push(['modelSet', m]),
+        loadDraft: () => {},
+        parkDraft: () => {},
+        queueClear: () => {},
+        stop_: () => {},
+        turn: { dispatch: () => {}, busy: () => false },
+      },
+      'demo/050-rail.js': { sessionDraw: () => {} },
+      'demo/060-conversation.js': { pitch: () => {}, unpitch: () => {} },
+      'demo/090-composer.js': { drawMeter: () => {}, goState: () => {}, ta: { focus: () => {} } },
+      'demo/100-workspace.js': { setWs: () => {}, wsReset: () => {} },
+      'live/050-turn.js': { resetTurnState: () => {} },
     },
+    globals: {
+      RavenIslands: {
+        settings: { openModels: () => calls.push(['openModels']) },
+        rail: { endRename: () => {} },
+      },
+      sessionCurrent: () => session,
+      sessionSet: () => {},
+      drawBanner: () => {},
+      toast: (t) => calls.push(['toast', t]),
+      loadTier: () => {},
+    },
+  })
+  await fakeRpc((method, params) => {
+    if (switching) return new Promise(() => {})
+    calls.push([method, params])
+    /* `?? {}` so a call the case did not name -- the refresh a write kicks
+       off behind `void` -- answers an empty envelope rather than crashing
+       in a promise nobody is holding. */
+    if (answers) return Promise.resolve(answers[method] ?? {})
+    return new Promise((res, rej) => pending.push({ method, params, res, rej }))
+  })
+  const overrides = await import('../src/legacy/live/080-overrides.js')
+  window.setPermMode = (m) => calls.push(['setPermMode', m])
+  const tick = () => new Promise((r) => setTimeout(r, 0))
+  return {
+    settings,
+    overrides,
+    calls,
+    /* A switch to the new-task screen, which is one of the two paths that
+       spends a generation ticket -- the part's own counter, not a stand-in. */
+    bump: () => {
+      switching = true
+      try { overrides.startDraft() } finally { switching = false }
+      return overrides.viewGen
+    },
+    gen: () => overrides.viewGen,
+    inFlight: () => pending.map((p) => p.method),
+    param: (i) => pending[i].params,
+    settle: (i, answer) => { pending[i].res(answer); return tick() },
+    fail: (i, error) => { pending[i].rej(error); return tick() },
+    modelsSet: () => calls.filter((c) => c[0] === 'modelSet').map((c) => c[1]),
   }
 }
 
+describe('the first-run provider guard', () => {
+  it('opens Models when setup reports no configured provider', async () => {
+    const h = await live()
+    h.settings.setupState.providerConfigured = false
+    expect(h.settings.openModelsForMissingProvider()).toBe(true)
+    expect(h.calls.filter((c) => c[0] === 'openModels')).toHaveLength(1)
+  })
+
+  it('stops redirecting as soon as a provider refresh authenticates one', async () => {
+    const h = await live({ session: 'sess-1' })
+    h.settings.setupState.providerConfigured = false
+    const read = h.settings.loadProviders()
+    await h.settle(0, { providers: [{ slug: 'anthropic', name: 'Anthropic', authenticated: true, models: [] }] })
+    await read
+
+    expect(h.settings.openModelsForMissingProvider()).toBe(false)
+    expect(h.calls.filter((c) => c[0] === 'openModels')).toEqual([])
+  })
+
+  it('does not redirect while first-run status is still unknown', async () => {
+    const h = await live()
+    expect(h.settings.openModelsForMissingProvider()).toBe(false)
+    expect(h.calls.filter((c) => c[0] === 'openModels')).toEqual([])
+  })
+})
+
 describe('the live model refresh', () => {
   it('drops a superseded refresh even when its response lands last', async () => {
-    const h = harness()
-    const gA = h.bump()
-    h.loadProviders('a', gA)
-    const gB = h.bump()
-    h.loadProviders('b', gB)
+    const h = await live()
+    h.bump()
+    h.settings.loadProviders('a', h.gen())
+    h.bump()
+    h.settings.loadProviders('b', h.gen())
 
     await h.settle(1, { model: 'model-b', providers: [] })
     await h.settle(0, { model: 'model-a', providers: [] })
 
-    expect(h.calls.filter((c) => c[0] === 'modelSet').map((c) => c[1])).toEqual(['model-b'])
+    expect(h.modelsSet()).toEqual(['model-b'])
   })
 
   it('commits a refresh whose generation is still current', async () => {
-    const h = harness()
-    const g = h.bump()
-    h.loadProviders('a', g)
+    const h = await live()
+    h.bump()
+    h.settings.loadProviders('a', h.gen())
     await h.settle(0, { model: 'model-a', providers: [] })
     expect(h.calls).toContainEqual(['modelSet', 'model-a'])
   })
@@ -113,230 +137,136 @@ describe('the live model refresh', () => {
     /* Three call sites do not pass a generation (the settings load, the
        provider-op refresh, and any future one). Capturing at entry is what
        makes them safe by construction instead of by each caller remembering. */
-    const h = harness()
-    h.loadProviders('a')
+    const h = await live()
+    h.settings.loadProviders('a')
     h.bump()
     await h.settle(0, { model: 'model-a', providers: [] })
-    expect(h.calls.filter((c) => c[0] === 'modelSet')).toEqual([])
+    expect(h.modelsSet()).toEqual([])
   })
 
   it('commits a ticketless refresh when nothing moved under it', async () => {
-    const h = harness()
-    h.loadProviders('a')
+    const h = await live()
+    h.settings.loadProviders('a')
     await h.settle(0, { model: 'model-a', providers: [] })
     expect(h.calls).toContainEqual(['modelSet', 'model-a'])
   })
 
   it('omits session_id when there is no session, rather than serializing null', async () => {
-    const h = harness()
-    h.loadProviders(null)
+    const h = await live()
+    h.settings.loadProviders(null)
     expect(h.param(0)).toEqual({})
-    h.loadProviders('a')
+    h.settings.loadProviders('a')
     expect(h.param(1)).toEqual({ session_id: 'a' })
   })
 })
 
-const persistSrc = src.match(/async function persistModel[\s\S]*?\n}/)
-if (!persistSrc) throw new Error('persistModel is absent from the live layer')
-
-function persistHarness({ session = 'sess-1', answer = {}, reject = null } = {}) {
-  const calls = []
-  const build = Function(
-    'deps',
-    `let defaultModelLive = '', defaultProviderLive = '', viewGen = 0;
-     const staged = { model: null, tier: null, perm: null };
-     const { rpc, sessionCurrent, loadProviders, modelSet, setModelLabel } = deps;
-     ${persistSrc[0]}
-     return {
-       persistModel,
-       defaults: () => ({ model: defaultModelLive, provider: defaultProviderLive }),
-       pending: () => staged.model,
-       stage: (v) => { staged.model = v; },
-     };`,
-  )
-  const api = build({
-    rpc: { call: (method, params) => {
-      calls.push([method, params])
-      return reject ? Promise.reject(reject) : Promise.resolve(answer)
-    } },
-    sessionCurrent: () => session,
-    loadProviders: (sid, gen) => calls.push(['loadProviders', sid, gen]),
-    modelSet: (m) => calls.push(['modelSet', m]),
-    setModelLabel: () => {},
-  })
-  return { ...api, calls }
-}
-
 describe('the live model persist', () => {
   it('a default write carries the visible session and repaints a chip that follows the default', async () => {
-    const h = persistHarness({ answer: { applied: true, applies_to_session: true } })
-    await h.persistModel('m2', 'minimax', 'default')
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, applies_to_session: true } } })
+    await h.settings.persistModel('m2', 'minimax', 'default')
     expect(h.calls[0]).toEqual(['config.set', { key: 'model', value: 'm2', provider: 'minimax', scope: 'default', session_id: 'sess-1' }])
-    expect(h.calls).toContainEqual(['loadProviders', 'sess-1', 0])
-    expect(h.defaults()).toEqual({ model: 'm2', provider: 'minimax' })
+    expect(h.calls).toContainEqual(['model.options', { session_id: 'sess-1' }])
+    expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['m2', 'minimax'])
   })
 
   it('a default write moves a visible draft chip, which follows the default like an unswitched session', async () => {
-    const h = persistHarness({ session: null, answer: { applied: true } })
-    await h.persistModel('m2', 'minimax', 'default')
+    const h = await live({ answers: { 'config.set': { applied: true } } })
+    await h.settings.persistModel('m2', 'minimax', 'default')
     expect(h.calls).toContainEqual(['modelSet', 'm2'])
   })
 
   it('a default write leaves a draft that staged its own pick alone', async () => {
-    const h = persistHarness({ session: null, answer: { applied: true } })
-    h.stage({ model: 'other', provider: 'anthropic' })
-    await h.persistModel('m2', 'minimax', 'default')
-    expect(h.calls.filter((c) => c[0] === 'modelSet')).toEqual([])
+    const h = await live({ answers: { 'config.set': { applied: true } } })
+    h.overrides.staged.model = { model: 'other', provider: 'anthropic' }
+    await h.settings.persistModel('m2', 'minimax', 'default')
+    expect(h.modelsSet()).toEqual([])
   })
 
   it('a default write leaves a session with its own binding alone', async () => {
-    const h = persistHarness({ answer: { applied: true, applies_to_session: false } })
-    await h.persistModel('m2', 'minimax', 'default')
-    expect(h.calls.filter((c) => c[0] === 'loadProviders')).toEqual([])
-    expect(h.defaults()).toEqual({ model: 'm2', provider: 'minimax' })
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, applies_to_session: false } } })
+    await h.settings.persistModel('m2', 'minimax', 'default')
+    expect(h.calls.filter((c) => c[0] === 'model.options')).toEqual([])
+    expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['m2', 'minimax'])
   })
 
   it('a refused default write moves neither half of the stored default pair', async () => {
-    const h = persistHarness({ reject: new Error('boom') })
-    await expect(h.persistModel('m2', 'minimax', 'default')).rejects.toThrow('boom')
-    expect(h.defaults()).toEqual({ model: '', provider: '' })
+    const h = await live({ session: 'sess-1' })
+    /* Caught as it is made, not after the refusal: a rejection left unheld
+       while the test drives the clock is an unhandled rejection. */
+    const write = h.settings.persistModel('m2', 'minimax', 'default')
+      .then(() => null, (e) => e)
+    await h.fail(0, new Error('boom'))
+    expect((await write)?.message).toBe('boom')
+    expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['', ''])
   })
 
   it('a session pick with no session stages and says so', async () => {
-    const h = persistHarness({ session: null })
-    const out = await h.persistModel('m2', 'minimax', 'session')
+    const h = await live()
+    const out = await h.settings.persistModel('m2', 'minimax', 'session')
     expect(out).toBe('staged')
-    expect(h.pending()).toEqual({ model: 'm2', provider: 'minimax' })
+    expect(h.overrides.staged.model).toEqual({ model: 'm2', provider: 'minimax' })
     expect(h.calls).toEqual([])
   })
 })
 
-const settingsSrc = src.match(/async function loadSettings[\s\S]*?\n}/)
-const snapshotSrc = src.match(/const settingsSnapshot = \(\) => \(\{[\s\S]*?\}\);/)
-if (!settingsSrc || !snapshotSrc) throw new Error('loadSettings/settingsSnapshot are absent from the live layer')
-
-function settingsHarness() {
-  const build = Function(
-    'deps',
-    `let RAW = {}, configPathLive = '', everosLive = null, toolsLive = [], viewGen = 0;
-     let providersLive = [], defaultModelLive = '', defaultProviderLive = '';
-     const TOOL_GROUPS = [];
-     const { rpc, sessionCurrent, modelSet, setModelLabel, drawBanner } = deps;
-     ${loadProvidersSrc}
-     ${settingsSrc[0]}
-     ${snapshotSrc[0]}
-     return { loadSettings, settingsSnapshot };`,
-  )
-  return build({
-    rpc: { call: (method) => Promise.resolve(
-      method === 'settings.get'
-        ? { settings: { agents: { defaults: { model: 'default-b', provider: 'openrouter' } } } }
-        : { model: 'session-a', provider: 'anthropic', providers: [] },
-    ) },
-    sessionCurrent: () => 'sess-1',
-    modelSet: () => {},
-    setModelLabel: () => {},
-    drawBanner: () => {},
-  })
-}
-
 describe('the live settings snapshot', () => {
   it('pairs the default model with the default provider, not the visible session', async () => {
-    const h = settingsHarness()
-    await h.loadSettings()
-    const snap = h.settingsSnapshot()
+    const h = await live({
+      session: 'sess-1',
+      answers: {
+        'settings.get': { settings: { agents: { defaults: { model: 'default-b', provider: 'openrouter' } } } },
+        'model.options': { model: 'session-a', provider: 'anthropic', providers: [] },
+      },
+    })
+    await h.settings.loadSettings()
+    const snap = h.settings.settingsSnapshot()
     expect(snap.model).toBe('default-b')
     expect(snap.curProvider).toBe('openrouter')
   })
 })
 
-/* `loadProviders` names HIDDEN_PROVIDERS but does not declare it, and every
-   other harness here answers with an empty provider list -- `[].filter` never
-   runs its callback, so the reference is never resolved. A harness that hands
-   it real rows has to supply the declaration, which is also what lets this
-   assert against the page's own list rather than a copy of it. */
-function hiddenHarness(providers) {
-  const build = Function(
-    'deps',
-    `let viewGen = 0, providersLive = [], defaultModelLive = '', defaultProviderLive = '';
-     const { rpc, sessionCurrent, modelSet, setModelLabel } = deps;
-     ${hiddenSrc[0]}
-     ${loadProvidersSrc}
-     return { loadProviders, rows: () => providersLive, hidden: [...HIDDEN_PROVIDERS] };`,
-  )
-  return build({
-    rpc: { call: () => Promise.resolve({ model: '', provider: '', providers }) },
-    sessionCurrent: () => 'sess-1',
-    modelSet: () => {},
-    setModelLabel: () => {},
-  })
-}
-
 describe('providers the page does not offer', () => {
   const row = (slug) => ({ slug, name: slug, authenticated: false, models: [] })
 
-  it('keeps the generic endpoint rows out of the rail and every other row in', async () => {
-    const h = hiddenHarness([row('anthropic'), row('custom'), row('hosted_vllm'), row('ollama_chat')])
-    await h.loadProviders()
+  async function listed(providers) {
+    const h = await live({ session: 'sess-1', answers: { 'model.options': { model: '', provider: '', providers } } })
+    await h.settings.loadProviders()
+    return h.settings.providersLive
+  }
 
-    expect(h.rows().map((p) => p.id)).toEqual(['anthropic', 'ollama_chat'])
+  it('keeps the generic endpoint rows out of the rail and every other row in', async () => {
+    const rows = await listed([row('anthropic'), row('custom'), row('hosted_vllm'), row('ollama_chat')])
+
+    expect(rows.map((p) => p.id)).toEqual(['anthropic', 'ollama_chat'])
   })
 
   it('hides exactly the two it declares, so the list cannot drift from the page', async () => {
-    /* Read off the source rather than restated: a copy here would agree with
+    /* Read off the part rather than restated: a copy here would agree with
        itself while the page shipped something else. */
-    expect(hiddenHarness([]).hidden).toEqual(['hosted_vllm', 'custom'])
+    const h = await live()
+    expect([...h.settings.HIDDEN_PROVIDERS]).toEqual(['hosted_vllm', 'custom'])
   })
 
   it('leaves a hidden provider configured and routable, only unlisted', async () => {
     /* The row goes; the section does not. `model.options` still reports it --
        which is what keeps an existing `custom` deployment serving -- and the
        page simply does not draw it. */
-    const h = hiddenHarness([{ ...row('custom'), authenticated: true, models: ['custom/local-7b'] }])
-    await h.loadProviders()
+    const rows = await listed([{ ...row('custom'), authenticated: true, models: ['custom/local-7b'] }])
 
-    expect(h.rows()).toEqual([])
+    expect(rows).toEqual([])
   })
 })
 
-function combinedHarness({ session = 'a' } = {}) {
-  /* The real persistModel driving the real loadProviders, one shared viewGen,
-   * every response deferred: the shapes a synchronous recorder cannot fail on. */
-  const calls = []
-  const pending = []
-  const build = Function(
-    'deps',
-    `let viewGen = 0, providersLive = [], defaultModelLive = '', defaultProviderLive = '';
-     const staged = { model: null, tier: null, perm: null };
-     const { rpc, sessionCurrent, modelSet, setModelLabel } = deps;
-     ${loadProvidersSrc}
-     ${persistSrc[0]}
-     return { persistModel, bump: () => { viewGen += 1; } };`,
-  )
-  const api = build({
-    rpc: { call: (method, params) => new Promise((res) => pending.push({ method, params, res })) },
-    sessionCurrent: () => session,
-    modelSet: (m) => calls.push(['modelSet', m]),
-    setModelLabel: () => {},
-  })
-  return {
-    ...api,
-    calls,
-    inFlight: () => pending.map((p) => p.method),
-    settle: (i, answer) => { pending[i].res(answer); return new Promise((r) => setTimeout(r, 0)) },
-  }
-}
-
 describe('the follows-default repaint under navigation', () => {
   it('drops the repaint when the reader left during the write', async () => {
-    const h = combinedHarness()
-    const write = h.persistModel('m2', 'minimax', 'default')
+    const h = await live({ session: 'a' })
+    const write = h.settings.persistModel('m2', 'minimax', 'default')
     h.bump()
     await h.settle(0, { applied: true, applies_to_session: true })
     await write
     expect(h.inFlight()).toEqual(['config.set', 'model.options'])
     await h.settle(1, { model: 'model-a', providers: [] })
-    expect(h.calls.filter((c) => c[0] === 'modelSet')).toEqual([])
+    expect(h.modelsSet()).toEqual([])
   })
 
   it('drops a draft repaint when the reader opened a conversation during the write', async () => {
@@ -344,25 +274,25 @@ describe('the follows-default repaint under navigation', () => {
        the picker has closed, nothing locks the write, and opening a conversation
        advances the generation. Without the check the resolved draft write
        repaints a chip that has since been loaded for that conversation. */
-    const h = combinedHarness({ session: null })
-    const write = h.persistModel('m2', 'minimax', 'default')
+    const h = await live()
+    const write = h.settings.persistModel('m2', 'minimax', 'default')
     h.bump()
     await h.settle(0, { applied: true })
     await write
-    expect(h.calls.filter((c) => c[0] === 'modelSet')).toEqual([])
+    expect(h.modelsSet()).toEqual([])
   })
 
   it('commits a draft repaint when the reader stayed on the draft', async () => {
-    const h = combinedHarness({ session: null })
-    const write = h.persistModel('m2', 'minimax', 'default')
+    const h = await live()
+    const write = h.settings.persistModel('m2', 'minimax', 'default')
     await h.settle(0, { applied: true })
     await write
     expect(h.calls).toContainEqual(['modelSet', 'm2'])
   })
 
   it('commits the repaint when the reader stayed', async () => {
-    const h = combinedHarness()
-    const write = h.persistModel('m2', 'minimax', 'default')
+    const h = await live({ session: 'a' })
+    const write = h.settings.persistModel('m2', 'minimax', 'default')
     await h.settle(0, { applied: true, applies_to_session: true })
     await write
     await h.settle(1, { model: 'm2', providers: [] })
@@ -370,62 +300,35 @@ describe('the follows-default repaint under navigation', () => {
   })
 })
 
-const stagedSrc = readFileSync(new URL('../src/legacy/live/080-overrides.js', import.meta.url), 'utf8')
-  .match(/async function applyStagedModel[\s\S]*?\n}/)
-if (!stagedSrc) throw new Error('applyStagedModel is absent from the live layer')
-
-function stagedHarness({ reject = null } = {}) {
+describe('the staged draft-write recovery', () => {
   /* The real applyStagedModel driving the real loadProviders over one shared
    * viewGen, with the config.set response deferred: the recovery refresh reports
    * on the session the send began under, so leaving it must drop the answer. */
-  const calls = []
-  const pending = []
-  const build = Function(
-    'deps',
-    'T',
-    `let viewGen = 0, providersLive = [];
-     const staged = { model: { model: 'm2', provider: 'minimax' }, tier: null, perm: null };
-     const { rpc, sessionCurrent, modelSet, setModelLabel, toast } = deps;
-     ${loadProvidersSrc}
-     ${stagedSrc[0]}
-     return { applyStagedModel, bump: () => { viewGen += 1 } };`,
-  )
-  const api = build({
-    rpc: { call: (method, params) => new Promise((res, rej) => pending.push({ method, params, res, rej })) },
-    sessionCurrent: () => 'a',
-    modelSet: (m) => calls.push(['modelSet', m]),
-    setModelLabel: () => {},
-    toast: (t) => calls.push(['toast', t]),
-  }, (key) => key)
-  return {
-    ...api,
-    calls,
-    inFlight: () => pending.map((p) => p.method),
-    settle: (i, answer) => { pending[i].res(answer); return new Promise((r) => setTimeout(r, 0)) },
-    fail: (i, err) => { pending[i].rej(err); return new Promise((r) => setTimeout(r, 0)) },
+  async function staged() {
+    const h = await live({ session: 'a' })
+    h.overrides.staged.model = { model: 'm2', provider: 'minimax' }
+    return h
   }
-}
 
-describe('the staged draft-write recovery', () => {
   it('drops its refusal refresh when the reader opened another conversation', async () => {
     /* Order is the whole point: the reader leaves while `config.set` is still
        pending, so by the time the refusal fires the generation has ALREADY
        moved. A ticket taken when the refresh starts would read as current and
        repaint B; only the generation captured when the send began is right. */
-    const h = stagedHarness()
-    const applied = h.applyStagedModel('a', 0)
+    const h = await staged()
+    const applied = h.overrides.applyStagedModel('a', h.gen())
     h.bump()
     await h.fail(0, { data: { detail: 'credential gone' } })
     await applied
     expect(h.inFlight()).toEqual(['config.set', 'model.options'])
     await h.settle(1, { model: 'model-a', providers: [] })
-    expect(h.calls.filter((c) => c[0] === 'modelSet')).toEqual([])
+    expect(h.modelsSet()).toEqual([])
     expect(h.calls.some((c) => c[0] === 'toast')).toBe(true)
   })
 
   it('reconciles the chip when the reader stayed on that conversation', async () => {
-    const h = stagedHarness()
-    const applied = h.applyStagedModel('a', 0)
+    const h = await staged()
+    const applied = h.overrides.applyStagedModel('a', h.gen())
     await h.fail(0, { data: { detail: 'credential gone' } })
     await applied
     await h.settle(1, { model: 'model-a', providers: [] })
@@ -433,11 +336,11 @@ describe('the staged draft-write recovery', () => {
   })
 
   it('says nothing and refreshes nothing when the write lands', async () => {
-    const h = stagedHarness()
-    const applied = h.applyStagedModel('a', 0)
+    const h = await staged()
+    const applied = h.overrides.applyStagedModel('a', h.gen())
     await h.settle(0, { applied: true })
     await applied
-    expect(h.calls).toEqual([])
+    expect(h.calls.filter((c) => c[0] === 'toast' || c[0] === 'modelSet')).toEqual([])
     expect(h.inFlight()).toEqual(['config.set'])
   })
 })
@@ -445,50 +348,27 @@ describe('the staged draft-write recovery', () => {
 /* The permission chip's refresh runs the same race as the model's: two opens in
    a row, the first answer landing last. Same ticket, same outcome -- the chip
    shows the conversation the reader is in, which is the one the gate runs. */
-function permHarness() {
-  const calls = []
-  const pending = []
-  const build = Function(
-    'deps',
-    `let viewGen = 0;
-     const { rpc, window } = deps;
-     ${loadPermModeSrc}
-     return { loadPermMode, bump: () => { viewGen += 1; return viewGen; } };`,
-  )
-  const api = build({
-    rpc: { call: (method, params) => new Promise((res) => pending.push({ params, res })) },
-    window: { setPermMode: (m) => calls.push(m) },
-  })
-  return {
-    ...api,
-    calls,
-    param: (i) => pending[i].params,
-    settle: (i, answer) => {
-      pending[i].res(answer)
-      return new Promise((r) => setTimeout(r, 0))
-    },
-  }
-}
-
 describe('the live permission-mode refresh', () => {
   it('drops a superseded refresh even when its response lands last', async () => {
-    const h = permHarness()
-    h.loadPermMode('a', h.bump())
-    h.loadPermMode('b', h.bump())
+    const h = await live()
+    h.bump()
+    h.settings.loadPermMode('a', h.gen())
+    h.bump()
+    h.settings.loadPermMode('b', h.gen())
 
     await h.settle(1, { config: { 'permissions.mode': 'full' } })
     await h.settle(0, { config: { 'permissions.mode': 'ask' } })
 
-    expect(h.calls).toEqual(['full'])
+    expect(h.calls.filter((c) => c[0] === 'setPermMode').map((c) => c[1])).toEqual(['full'])
     expect(h.param(0)).toEqual({ keys: ['permissions.mode'], session_id: 'a' })
   })
 
   it('reads the default for a draft and takes its own ticket when the caller brought none', async () => {
-    const h = permHarness()
+    const h = await live()
     h.bump()
-    h.loadPermMode(null)
+    h.settings.loadPermMode(null)
     expect(h.param(0)).toEqual({ keys: ['permissions.mode'] })
     await h.settle(0, { config: {} })
-    expect(h.calls).toEqual(['ask'])
+    expect(h.calls.filter((c) => c[0] === 'setPermMode').map((c) => c[1])).toEqual(['ask'])
   })
 })

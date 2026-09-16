@@ -140,77 +140,76 @@ let XA_FIXTURE;
 function drawCapsBadge() {}
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-DS.capabilities ??= { loaded: () => true, load: async () => false };
-XA_FIXTURE = [
-  /* `vendored` is not decoration: it is what tells the page that connecting this
+  DS.capabilities ??= { loaded: () => true, load: async () => false };
+  XA_FIXTURE = [
+    /* `vendored` is not decoration: it is what tells the page that connecting this
      row means running the product's installer, not writing a config entry from a
      preset it does not have. A fixture missing it read as a preset nobody could
      add. */
-  { name: 'Raven-Research', preset: null, kind: 'cli', configured: false, builtin: false, vendored: true, enabled: true,
-    probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
-    last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
-    description: 'A product row, discovered under agents/ rather than written into config.' },
-  { name: 'Raven-PPT', preset: null, kind: 'cli', configured: false, builtin: false, vendored: true, enabled: false,
-    probe_status: 'missing', probe_detail: 'the ppt-engine engine wheel is not installed', has_api_key: false, test_running: false,
-    last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
-    description: 'A product row whose engine wheel is missing, so it is listed and disabled.' },
-  { name: 'raven', preset: null, kind: 'builtin', configured: false, builtin: true, enabled: true,
-    probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
-    last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
-    description: 'General-purpose sub-agent with no capability bias.' },
-  { name: 'claude_code', preset: 'claude_code', kind: 'cli', configured: true, enabled: true,
-    probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
-    last_test_ok: true, last_test_at_ms: Date.now() - 3600e3, last_test_detail: '',
-    upgrade_to: null, description: 'Claude Code CLI - strong general coding / agent tasks.' },
-  { name: 'codex', preset: 'codex', kind: 'cli', configured: false, enabled: false,
-    probe_status: 'missing', probe_detail: 'codex: command not found', has_api_key: false,
-    test_running: false, last_test_ok: null, last_test_at_ms: null, last_test_detail: '',
-    description: 'OpenAI Codex CLI - coding tasks.' },
-  { name: 'hermes', preset: 'hermes', kind: 'cli', configured: false, enabled: false,
-    probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
-    last_test_ok: null, last_test_at_ms: null, last_test_detail: '',
-    description: 'Hermes Agent CLI - general assistant with tool calling.' },
-  { name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: false, enabled: false,
-    probe_status: 'unknown', probe_detail: '', has_api_key: false, test_running: false,
-    last_test_ok: null, last_test_at_ms: null, last_test_detail: '',
-    description: 'MiroMind deep-research (OpenAI-compatible HTTP).' },
-];
+    { name: 'Raven-Research', preset: null, kind: 'cli', configured: false, builtin: false, vendored: true, enabled: true,
+      probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
+      last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
+      description: 'A product row, discovered under agents/ rather than written into config.' },
+    { name: 'Raven-PPT', preset: null, kind: 'cli', configured: false, builtin: false, vendored: true, enabled: false,
+      probe_status: 'missing', probe_detail: 'the ppt-engine engine wheel is not installed', has_api_key: false, test_running: false,
+      last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
+      description: 'A product row whose engine wheel is missing, so it is listed and disabled.' },
+    { name: 'raven', preset: null, kind: 'builtin', configured: false, builtin: true, enabled: true,
+      probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
+      last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
+      description: 'General-purpose sub-agent with no capability bias.' },
+    { name: 'claude_code', preset: 'claude_code', kind: 'cli', configured: true, enabled: true,
+      probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
+      last_test_ok: true, last_test_at_ms: Date.now() - 3600e3, last_test_detail: '',
+      upgrade_to: null, description: 'Claude Code CLI - strong general coding / agent tasks.' },
+    { name: 'codex', preset: 'codex', kind: 'cli', configured: false, enabled: false,
+      probe_status: 'missing', probe_detail: 'codex: command not found', has_api_key: false,
+      test_running: false, last_test_ok: null, last_test_at_ms: null, last_test_detail: '',
+      description: 'OpenAI Codex CLI - coding tasks.' },
+    { name: 'hermes', preset: 'hermes', kind: 'cli', configured: false, enabled: false,
+      probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
+      last_test_ok: null, last_test_at_ms: null, last_test_detail: '',
+      description: 'Hermes Agent CLI - general assistant with tool calling.' },
+    { name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: false, enabled: false,
+      probe_status: 'unknown', probe_detail: '', has_api_key: false, test_running: false,
+      last_test_ok: null, last_test_at_ms: null, last_test_detail: '',
+      description: 'MiroMind deep-research (OpenAI-compatible HTTP).' },
+  ];
 
-/* The fixture source: mutate the row in place so the page is still explorable
+  /* The fixture source: mutate the row in place so the page is still explorable
    with no gateway behind it, and answer with the same array every time, which
    is what makes those edits stick across a redraw. */
-DS.xa ??= {
-  load: async () => XA_FIXTURE,
-  act: async (op, row, args) => {
-    const a = args || {};
-    if (op === 'connect') {
-      row.configured = true;
-      row.enabled = row.kind !== 'openai' || row.has_api_key;
-      if (a.api_key) { row.has_api_key = true; row.enabled = true; }
-    }
-    /* One switch for every kind of row, including the discovered ones: the
+  DS.xa ??= {
+    load: async () => XA_FIXTURE,
+    act: async (op, row, args) => {
+      const a = args || {};
+      if (op === 'connect') {
+        row.configured = true;
+        row.enabled = row.kind !== 'openai' || row.has_api_key;
+        if (a.api_key) { row.has_api_key = true; row.enabled = true; }
+      }
+      /* One switch for every kind of row, including the discovered ones: the
        server materializes a registry entry for those and puts the flag on it. */
-    if (op === 'toggle') row.enabled = !!a.enabled;
-    if (op === 'update' && a.api_key) { row.has_api_key = true; row.enabled = true; }
-    /* Instant here, minutes in life: the real call returns as soon as the
+      if (op === 'toggle') row.enabled = !!a.enabled;
+      if (op === 'update' && a.api_key) { row.has_api_key = true; row.enabled = true; }
+      /* Instant here, minutes in life: the real call returns as soon as the
        download starts and the row carries `building` until it lands. The fixture
        shows the outcome rather than a spinner nothing would ever clear -- the
        demo source has no second answer to poll for. */
-    if (op === 'build') { row.building = false; row.probe_status = 'ready'; row.probe_detail = ''; row.enabled = true; }
-    /* A preset that moved transport: removed and added back, which is what
+      if (op === 'build') { row.building = false; row.probe_status = 'ready'; row.probe_detail = ''; row.enabled = true; }
+      /* A preset that moved transport: removed and added back, which is what
        clears `upgrade_to`. Switching `enabled` never did. */
-    if (op === 'migrate') { row.kind = row.upgrade_to || row.kind; row.upgrade_to = ''; row.enabled = true; }
-    /* Instant here too, and it passes: with no gateway there is no agent to
+      if (op === 'migrate') { row.kind = row.upgrade_to || row.kind; row.upgrade_to = ''; row.enabled = true; }
+      /* Instant here too, and it passes: with no gateway there is no agent to
        dispatch, so the fixture answers the shape of a verdict rather than
        inventing a failure the reader would go looking for the cause of. */
-    if (op === 'test') { row.last_test_ok = true; row.last_test_at_ms = Date.now(); row.last_test_detail = ''; }
-    if (op === 'test_cancel') { row.test_running = false; }
-    return XA_FIXTURE;
-  },
-};
+      if (op === 'test') { row.last_test_ok = true; row.last_test_at_ms = Date.now(); row.last_test_detail = ''; }
+      if (op === 'test_cancel') { row.test_running = false; }
+      return XA_FIXTURE;
+    },
+  };
 }
 
 export { extTab, capFilter, NAV_OF, showPageDecorators, showPage, decorateShowPage, showPageBase, extSetDecorators, extSet, decorateExtSet, extSetBase, openCaps, openSkills, openPlugins, closeCaps, setIsOpen, openSet, closeSet, closeDetailDecorators, closeDetail, decorateCloseDetail, closeDetailBase, closeXa, drawXa, XA_FIXTURE, drawCapsBadge }

@@ -128,13 +128,12 @@ async function loadExt() {
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-DS.capabilities = {
-  loaded: () => extLoaded,
-  load: async () => { await loadExt(); return true; },
-};
+  DS.capabilities = {
+    loaded: () => extLoaded,
+    load: async () => { await loadExt(); return true; },
+  };
 }
 
 export { fmt2, fmtStamp, fmtEvery, toolLabel, TOOL_GROUP_OF, TOOL_DANGER, disabledToolsLive, pluginsDisabledLive, toolsLive, skillsLive, pluginsLive, extLoaded, persistDisabledTools, mkToolRow, mkSkillRow, mkPluginRow, MCP_LEGACY, mkMcpRow, loadExt }

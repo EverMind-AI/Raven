@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /* An approval that closed because nobody answered says so.
 
    The frame always carried `reason`; the handler dropped it, so a sheet that
@@ -5,81 +6,68 @@
    then saw was the run reporting a system error about an approval that had
    merely lapsed.
 
-   Driven through the assembled live layer rather than a copy of the handler:
-   `live/*.js` are fragments of one IIFE and cannot be imported, and a copy
-   would go on passing after the shipped one changed. */
-
-import { readFileSync } from 'node:fs'
+   Driven through the part's own handler rather than a copy of it: a copy would
+   go on passing after the shipped one changed. */
 
 import { describe, expect, it } from 'vitest'
 
-const build = readFileSync(new URL('../build.py', import.meta.url), 'utf8')
-const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
-if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
-const parts = [...manifest[1].matchAll(/"([^"]+\.js)"/g)].map((m) => m[1])
-const live = parts
-  .map((name) => readFileSync(new URL(`../src/legacy/live/${name}`, import.meta.url), 'utf8'))
-  .join('')
+import { fakeRpc, loadPart } from './legacy-part.mjs'
 
-function handlerSource() {
-  const mark = "rpc.notify['approval.closed'] = (p) => {"
-  const start = live.indexOf(mark)
-  if (start < 0) throw new Error("approval.closed is absent from the assembled live layer")
-  const brace = live.indexOf('{', start + mark.length - 1)
-  let depth = 0
-  for (let index = brace; index < live.length; index += 1) {
-    if (live[index] === '{') depth += 1
-    else if (live[index] === '}') {
-      depth -= 1
-      if (depth === 0) return live.slice(start, index + 1)
-    }
-  }
-  throw new Error('approval.closed has no closing brace in the assembled live layer')
-}
-
-function run(reason) {
+async function run(reason) {
   const seen = { toasts: [], closed: [], turns: [] }
-  const rpc = { notify: {} }
-  const install = Function(
-    'rpc', 'notifyTurn', 'sessionCurrent', 'approvalClose', 'toast', 'T',
-    `${handlerSource()}\nreturn rpc.notify['approval.closed'];`,
-  )
-  const handler = install(
-    rpc,
-    (owner, event) => seen.turns.push([owner, event.type]),
-    () => 'tui:open',
-    (id) => seen.closed.push(id),
-    (text) => seen.toasts.push(text),
-    (key) => key,
-  )
-  handler({ approval_id: 'a1', conversation_id: 'tui:one', reason })
+  const part = await loadPart(() => import('../src/legacy/live/070-notify.js'), {
+    fakes: {
+      'demo/010-kernel.js': { T: (key) => key },
+      'demo/040-state.js': {
+        approvalClose: (id) => seen.closed.push(id),
+        approvalSheet: () => {},
+        approveSheet: () => {},
+        clarifyClose: () => {},
+        clarifySheet: () => {},
+        sess: () => null,
+      },
+      /* `notifyTurn` hands the event to the parked-turn reducer, which is what
+         the harness used to watch it for. */
+      'live/060-parked.js': {
+        transitionTurn: (owner, event) => seen.turns.push([owner, event.type]),
+      },
+      'live/050-turn.js': { refreshList: () => {} },
+    },
+    globals: {
+      sessionCurrent: () => 'tui:open',
+      toast: (text) => seen.toasts.push(text),
+    },
+  })
+  const rpc = await fakeRpc(() => Promise.resolve({}))
+  part.install()
+  rpc.notify['approval.closed']({ approval_id: 'a1', conversation_id: 'tui:one', reason })
   return seen
 }
 
 describe('an approval sheet closing', () => {
-  it('says so when the request expired unanswered', () => {
-    const seen = run('timeout')
+  it('says so when the request expired unanswered', async () => {
+    const seen = await run('timeout')
 
     expect(seen.toasts).toEqual(['gui.confirm.lapsed'])
   })
 
-  it('says so when the transport failed, which is the other nobody-answered', () => {
-    expect(run('error').toasts).toEqual(['gui.confirm.lapsed'])
+  it('says so when the transport failed, which is the other nobody-answered', async () => {
+    expect((await run('error')).toasts).toEqual(['gui.confirm.lapsed'])
   })
 
-  it('stays quiet for a close the reader caused', () => {
+  it('stays quiet for a close the reader caused', async () => {
     /* Three of the four reasons are a person: the frame carries the choice
        itself. Telling someone what they just did is noise. */
     for (const reason of ['allow', 'deny', 'deny_stop', 'cancelled']) {
-      expect(run(reason).toasts, reason).toEqual([])
+      expect((await run(reason)).toasts, reason).toEqual([])
     }
   })
 
-  it('still closes the sheet and releases the turn, whatever the reason', () => {
+  it('still closes the sheet and releases the turn, whatever the reason', async () => {
     /* The notice is added beside the old behaviour, not in place of it: a sheet
        left open over the composer is worse than an unexplained one. */
     for (const reason of ['timeout', 'allow']) {
-      const seen = run(reason)
+      const seen = await run(reason)
       expect(seen.closed, reason).toEqual(['a1'])
       expect(seen.turns, reason).toEqual([['tui:one', 'resume']])
     }

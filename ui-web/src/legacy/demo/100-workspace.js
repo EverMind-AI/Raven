@@ -218,24 +218,23 @@ function drawWs() {
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-WS = RavenIslands.workspace.shared();
-({ hunkFromEdit, hunkFromWrite, hunkFromUnified } = RavenIslands.workspace);
+  WS = RavenIslands.workspace.shared();
+  ({ hunkFromEdit, hunkFromWrite, hunkFromUnified } = RavenIslands.workspace);
 
-/* The fixture source: what the workspace island may ask of demo mode. No
+  /* The fixture source: what the workspace island may ask of demo mode. No
    list/reveal and no canBrowse -- the file tab keeps its demo empty note, and
    opening a change stays the honest toast. Registered, not
    declared-for-override: live mode installs its own DS.workspace and this
    object is never consulted. */
-DS.workspace ??= {
-  shortPath: (p) => String(p),
-  hostPlatform: () => HOST_PLATFORM,
-  openPath: (p) => toast(`demo：正式版会用系统默认程序打开 ${p}`),
-};
+  DS.workspace ??= {
+    shortPath: (p) => String(p),
+    hostPlatform: () => HOST_PLATFORM,
+    openPath: (p) => toast(`demo：正式版会用系统默认程序打开 ${p}`),
+  };
 
-/* ── the turn's products ───────────────────────────────────────────────
+  /* ── the turn's products ───────────────────────────────────────────────
    The record's own rows for one turn, unfiltered. Which of them counts as a
    product, and what a tile can draw of it, are the transcript island's to
    decide -- see artifactsOf in features/transcript/store.ts.
@@ -243,9 +242,9 @@ DS.workspace ??= {
    The turn number is the one WS.changes files rows under: bumped per turn by
    the live layer, and per user message with text by wsOnHistory. The
    transcript counts it the same way over the same payload. */
-DS.artifacts ??= {
-  changes: (turn) => WS.changes.filter((c) => c.turn === turn),
-};
+  DS.artifacts ??= {
+    changes: (turn) => WS.changes.filter((c) => c.turn === turn),
+  };
 }
 
 export { wsTab, wsOpen, wsWide, wsPicked, WS, wsReset, wsOnHistory, hunkFromEdit, hunkFromWrite, hunkFromUnified, wsArgs, wsShortPath, wsRecordChange, setWs, setWsFull, bumpWs, wsPick, wsView, wsRestore, wsEpoch, wsStale, wsShowsTurn, drawWs }

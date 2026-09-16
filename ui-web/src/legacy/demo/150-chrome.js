@@ -54,126 +54,125 @@ function drawMoreFly() {
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-/* Code blocks come and go with every answer, so the click is caught once here
+  /* Code blocks come and go with every answer, so the click is caught once here
    rather than bound per block. The text comes from the DOM the reader sees. */
-document.addEventListener('click', (e) => {
-  const b = e.target.closest && e.target.closest('.cbcp');
-  if (!b) return;
-  const blk = b.closest('.cblk');
-  const pre = blk && blk.querySelector('pre');
-  if (!pre) return;
-  if (navigator.clipboard) navigator.clipboard.writeText(pre.textContent);
-  b.classList.add('ok');
-  b.title = T('gui.code.copied');
-  b.setAttribute('aria-label', T('gui.code.copied'));
-  setTimeout(() => {
-    b.classList.remove('ok');
-    b.title = T('gui.code.copy');
-    b.setAttribute('aria-label', T('gui.code.copy'));
-  }, 1500);
-});
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest && e.target.closest('.cbcp');
+    if (!b) return;
+    const blk = b.closest('.cblk');
+    const pre = blk && blk.querySelector('pre');
+    if (!pre) return;
+    if (navigator.clipboard) navigator.clipboard.writeText(pre.textContent);
+    b.classList.add('ok');
+    b.title = T('gui.code.copied');
+    b.setAttribute('aria-label', T('gui.code.copied'));
+    setTimeout(() => {
+      b.classList.remove('ok');
+      b.title = T('gui.code.copy');
+      b.setAttribute('aria-label', T('gui.code.copy'));
+    }, 1500);
+  });
 
-document.addEventListener('keydown', (e) => {
-  /* Escape ends an open composition; it must not also close a panel or halt the
+  document.addEventListener('keydown', (e) => {
+    /* Escape ends an open composition; it must not also close a panel or halt the
      running turn behind the reader's back. */
-  if (composing(e)) return;
-  const inField = /INPUT|TEXTAREA/.test(document.activeElement.tagName);
-  if (e.key === 'Escape') {
-    if (document.querySelector('.lightbox')) return closeImage();
-    if ($('#veil').dataset.open === 'true') return $('#cfNo').click();
-    /* After the confirm veil, before the page: a dialog raised over the entry
+    if (composing(e)) return;
+    const inField = /INPUT|TEXTAREA/.test(document.activeElement.tagName);
+    if (e.key === 'Escape') {
+      if (document.querySelector('.lightbox')) return closeImage();
+      if ($('#veil').dataset.open === 'true') return $('#cfNo').click();
+      /* After the confirm veil, before the page: a dialog raised over the entry
        list is what Escape should take back first. */
-    if ($('#connVeil').dataset.open === 'true') return connCloseDialog();
-    if ($('#detail').dataset.open === 'true') return closeDetail();
-    if ($('#jobVeil').dataset.open === 'true') return $('#jobNo').click();
-    if ($('#cronPage').dataset.open === 'true') return closeCron();
-    if ($('#memPage').dataset.open === 'true') return closeMem();
-    if ($('#pbPage').dataset.open === 'true') return closePb();
-    if ($('#kbPage').dataset.open === 'true') return closeKb();
-    if ($('#capsPage').dataset.open === 'true') return closeCaps();
-    if ($('#xaPage').dataset.open === 'true') return closeXa();
-    if ($('#connPage').dataset.open === 'true') return closeConn();
-    if (setIsOpen()) return closeSet();
-    if (turn.busy()) return DS.composer.stop();
-  }
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
-    e.preventDefault(); setRail(true); toggleFind(true);
-  }
-  if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
-    e.preventDefault(); setRail(document.querySelector('.app').dataset.rail === 'off');
-  }
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n' && !inField) { e.preventDefault(); $('#newBtn').click(); }
-});
+      if ($('#connVeil').dataset.open === 'true') return connCloseDialog();
+      if ($('#detail').dataset.open === 'true') return closeDetail();
+      if ($('#jobVeil').dataset.open === 'true') return $('#jobNo').click();
+      if ($('#cronPage').dataset.open === 'true') return closeCron();
+      if ($('#memPage').dataset.open === 'true') return closeMem();
+      if ($('#pbPage').dataset.open === 'true') return closePb();
+      if ($('#kbPage').dataset.open === 'true') return closeKb();
+      if ($('#capsPage').dataset.open === 'true') return closeCaps();
+      if ($('#xaPage').dataset.open === 'true') return closeXa();
+      if ($('#connPage').dataset.open === 'true') return closeConn();
+      if (setIsOpen()) return closeSet();
+      if (turn.busy()) return DS.composer.stop();
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault(); setRail(true); toggleFind(true);
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+      e.preventDefault(); setRail(document.querySelector('.app').dataset.rail === 'off');
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n' && !inField) { e.preventDefault(); $('#newBtn').click(); }
+  });
 
-$('#newBtn').onclick = () => {
-  showPage(null);
-  const s = { id: 'n' + Date.now(), title: '新任务', last: '还没开始', when: '刚刚', run: null };
-  sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s); ta.focus();
-};
-$('#renameBtn').onclick = () => renameTitle();
-// Collapsing the rail is the user's call, never the window's: it holds the
-// session list, and having it vanish on resize loses your place.
-$('#railBtn').onclick = () => setRail(false);
-$('#railShow').onclick = () => setRail(true);
-tooNarrowToSplit = matchMedia('(max-width: 1040px)');
-tooNarrowToSplit.addEventListener('change', (e) => { if (e.matches && wsOpen) setWs(false); });
+  $('#newBtn').onclick = () => {
+    showPage(null);
+    const s = { id: 'n' + Date.now(), title: '新任务', last: '还没开始', when: '刚刚', run: null };
+    sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s); ta.focus();
+  };
+  $('#renameBtn').onclick = () => renameTitle();
+  // Collapsing the rail is the user's call, never the window's: it holds the
+  // session list, and having it vanish on resize loses your place.
+  $('#railBtn').onclick = () => setRail(false);
+  $('#railShow').onclick = () => setRail(true);
+  tooNarrowToSplit = matchMedia('(max-width: 1040px)');
+  tooNarrowToSplit.addEventListener('change', (e) => { if (e.matches && wsOpen) setWs(false); });
 
-$('#meBtn').onclick = () => openSettings();
+  $('#meBtn').onclick = () => openSettings();
 
-$('#modelChip').onclick = () => {
-  const r = $('#modelChip').getBoundingClientRect();
-  const items = [];
-  PROVIDERS.filter((p) => p.on).forEach((p) => p.models.forEach((m) => items.push({
-    label: m === modelCurrent() ? `${m} ✓` : m,
-    // No toast: the chip right there already shows the new model.
-    fn: () => { modelSet(m); $('#modelName').textContent = m; }
-  })));
-  items.push('-', { label: T('gui.slash.manage_models'), fn: () => { window.sTab = 'model'; drawSettings(); openSet(); } });
-  menuAt(r.left, r.bottom + 6, items);
-};
+  $('#modelChip').onclick = () => {
+    const r = $('#modelChip').getBoundingClientRect();
+    const items = [];
+    PROVIDERS.filter((p) => p.on).forEach((p) => p.models.forEach((m) => items.push({
+      label: m === modelCurrent() ? `${m} ✓` : m,
+      // No toast: the chip right there already shows the new model.
+      fn: () => { modelSet(m); $('#modelName').textContent = m; }
+    })));
+    items.push('-', { label: T('gui.slash.manage_models'), fn: () => { window.sTab = 'model'; drawSettings(); openSet(); } });
+    menuAt(r.left, r.bottom + 6, items);
+  };
 
-$('#permChip').onclick = () => togglePerm();
-$('#tierChip').onclick = () => toggleTier();
+  $('#permChip').onclick = () => togglePerm();
+  $('#tierChip').onclick = () => toggleTier();
 
-/* Arrows, not references: live.js swaps openCaps for one that loads real data
+  /* Arrows, not references: live.js swaps openCaps for one that loads real data
    first, and a stored reference would keep calling the demo. */
-$('#skillBtn').onclick = () => openSkills();
-$('#plugBtn').onclick = () => openPlugins();
-/* wrapper, not the reference: live.js replaces openMem with the RPC loader */
-$('#memBtn').onclick = () => openMem();
-$('#pbBtn').onclick = () => openPb();
-$('#kbBtn').onclick = () => openKb();
-/* The platform's own shortcut, same door as the foot row. */
-document.addEventListener('keydown', (e) => {
-  if (e.key !== ',' || !(isMac() ? e.metaKey : e.ctrlKey)) return;
-  e.preventDefault();
-  if (setIsOpen()) return closeSet();
-  openSettings();
-});
-$('#setClose').onclick = () => closeSet();
-$('#setVeil').onclick = (e) => { if (e.target === $('#setVeil')) closeSet(); };
-$('#dClose').onclick = closeDetail;
-/* The scrim closes the sheet; calls through the name so later decorators win. */
-$('#detail').addEventListener('click', (e) => { if (e.target === $('#detail')) closeDetail(); });
+  $('#skillBtn').onclick = () => openSkills();
+  $('#plugBtn').onclick = () => openPlugins();
+  /* wrapper, not the reference: live.js replaces openMem with the RPC loader */
+  $('#memBtn').onclick = () => openMem();
+  $('#pbBtn').onclick = () => openPb();
+  $('#kbBtn').onclick = () => openKb();
+  /* The platform's own shortcut, same door as the foot row. */
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== ',' || !(isMac() ? e.metaKey : e.ctrlKey)) return;
+    e.preventDefault();
+    if (setIsOpen()) return closeSet();
+    openSettings();
+  });
+  $('#setClose').onclick = () => closeSet();
+  $('#setVeil').onclick = (e) => { if (e.target === $('#setVeil')) closeSet(); };
+  $('#dClose').onclick = closeDetail;
+  /* The scrim closes the sheet; calls through the name so later decorators win. */
+  $('#detail').addEventListener('click', (e) => { if (e.target === $('#detail')) closeDetail(); });
 
-$('#cq').oninput = () => { capFilter.query = $('#cq').value.trim().toLowerCase(); drawCaps(); };
-$('#cKind').onclick = (e) => {
-  const b = e.target.closest('button'); if (!b) return;
-  capFilter.kind = b.dataset.k;
-  [...$('#cKind').children].forEach((c) => c.setAttribute('aria-pressed', String(c === b)));
-  drawCaps();
-};
-$('#mAdd').onclick = async () => {
-  const n = $('#mName').value.trim(), a = $('#mAddr').value.trim();
-  if (!n || !a) { toast(T('gui.adv.need_fields')); return; }
-  try { await DS.plugins.manual(n, a); }
-  catch (e) { toast(T('gui.plug.op_failed', { err: e.message || e })); return; }
-  $('#mName').value = ''; $('#mAddr').value = '';
-  drawCaps(); drawCapsBadge(); toast(T('gui.adv.added_x', { name: n }));
-};
+  $('#cq').oninput = () => { capFilter.query = $('#cq').value.trim().toLowerCase(); drawCaps(); };
+  $('#cKind').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    capFilter.kind = b.dataset.k;
+    [...$('#cKind').children].forEach((c) => c.setAttribute('aria-pressed', String(c === b)));
+    drawCaps();
+  };
+  $('#mAdd').onclick = async () => {
+    const n = $('#mName').value.trim(), a = $('#mAddr').value.trim();
+    if (!n || !a) { toast(T('gui.adv.need_fields')); return; }
+    try { await DS.plugins.manual(n, a); }
+    catch (e) { toast(T('gui.plug.op_failed', { err: e.message || e })); return; }
+    $('#mName').value = ''; $('#mAddr').value = '';
+    drawCaps(); drawCapsBadge(); toast(T('gui.adv.added_x', { name: n }));
+  };
 }
 
 export { composing, setRail, tooNarrowToSplit, openSettings, drawMoreFly }

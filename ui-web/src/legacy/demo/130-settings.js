@@ -106,47 +106,46 @@ const tierMenuDemo = () => ['medium', 'high', 'max'].map((id) => ({
 }));
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-/* The open tab. A window property, not a script binding: the chrome writes
+  /* The open tab. A window property, not a script binding: the chrome writes
    `sTab = 'model'` before opening the dialog, and the island (a separate
    script that cannot see this script's scope) reads and writes the slot. */
-window.sTab = 'usage';
+  window.sTab = 'usage';
 
-/* Wiping the list is a session operation, so it goes on the session source
+  /* Wiping the list is a session operation, so it goes on the session source
    rather than staying a name the live layer overwrites. It has to live in this
    layer either way: the list and the current session are page bindings, and an
    island cannot reassign one. */
-DS.sessions.deleteAll = () => {
-  sessionReplace([]); sessionSet(null); sessionDraw(); $('#stage').innerHTML = '';
-  $('#title').textContent = T('gui.new_task'); pitch();
-};
+  DS.sessions.deleteAll = () => {
+    sessionReplace([]); sessionSet(null); sessionDraw(); $('#stage').innerHTML = '';
+    $('#title').textContent = T('gui.new_task'); pitch();
+  };
 
-/* The fixture source: canned config behind the same interface the rpc source
+  /* The fixture source: canned config behind the same interface the rpc source
    implements. Writes refuse with the tag the island renders as the in-row
    not-live message; usage answers null, which the island draws as the demo's
    no-data note. Registered, not declared-for-override -- live mode installs
    its own DS.settings and this object is never consulted. */
-DS.settings ??= {
-  load: async () => ({
-    raw: {}, configPath: '~/.raven/config.json', everos: null,
-    providers: PROVIDERS, curProvider: '', model: modelCurrent(),
-    toolGroups: TOOL_GROUPS, tools: TOOLS,
-  }),
-  set: async () => { throw { notLive: true }; },
-  everosSet: async () => { throw { notLive: true }; },
-  usage: async () => null,
-  provider: async () => { throw { notLive: true }; },
-  model: () => modelCurrent(),
-  version: () => APP_VERSION,
-  checkUpdate: () => notLive(),
-  setLang: (v) => langPickDemo(v),
-};
-DS.tier ??= {
-  read: async () => ({ mode: tierDemo, availableModes: tierMenuDemo() }),
-  set: async (mode) => { tierDemo = mode; return { mode: tierDemo, availableModes: tierMenuDemo() }; },
-};
+  DS.settings ??= {
+    load: async () => ({
+      raw: {}, configPath: '~/.raven/config.json', everos: null,
+      providers: PROVIDERS, curProvider: '', model: modelCurrent(),
+      toolGroups: TOOL_GROUPS, tools: TOOLS,
+    }),
+    set: async () => { throw { notLive: true }; },
+    everosSet: async () => { throw { notLive: true }; },
+    usage: async () => null,
+    provider: async () => { throw { notLive: true }; },
+    model: () => modelCurrent(),
+    version: () => APP_VERSION,
+    checkUpdate: () => notLive(),
+    setLang: (v) => langPickDemo(v),
+  };
+  DS.tier ??= {
+    read: async () => ({ mode: tierDemo, availableModes: tierMenuDemo() }),
+    set: async (mode) => { tierDemo = mode; return { mode: tierDemo, availableModes: tierMenuDemo() }; },
+  };
 }
 
 export { PROVIDERS, APP_VERSION, appVersionSet, nlSay, notLive, langPickDemo, isMac, modKey, drawSettings, setRuntime, tierDemo, TIER_SUB, tierMenuDemo }

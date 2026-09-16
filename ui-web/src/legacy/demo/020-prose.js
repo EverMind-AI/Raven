@@ -35,16 +35,15 @@ const demoLinkTargetOf = (u) => {
 };
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-DS.prose ??= {
-  pathOf: demoPathOf,
-  linkTargetOf: demoLinkTargetOf,
-  /* Nothing to show but the file view itself: the demo has no filesystem, so
+  DS.prose ??= {
+    pathOf: demoPathOf,
+    linkTargetOf: demoLinkTargetOf,
+    /* Nothing to show but the file view itself: the demo has no filesystem, so
      both a file and a folder land on the same canned pane. */
-  open: () => setWs(true, 'file'),
-};
+    open: () => setWs(true, 'file'),
+  };
 }
 
 export { demoPathOf, demoLinkTargetOf }

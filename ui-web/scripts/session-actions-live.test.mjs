@@ -1,5 +1,6 @@
-/* The assembled live layer's session actions: what /clear and /compress are
- * allowed to write once their round trip answers.
+// @vitest-environment happy-dom
+/* The live layer's session actions: what /clear and /compress are allowed to
+ * write once their round trip answers.
  *
  * Both are fire-and-answer over a conversation the reader can leave, and both
  * used to ask for the session pointer again in the reply -- which by then can
@@ -8,86 +9,66 @@
  * on and nothing about the text of either function says that.
  */
 
-import { readFileSync } from 'node:fs'
-
-import { Window } from 'happy-dom'
 import { describe, expect, it } from 'vitest'
 
-const build = readFileSync(new URL('../build.py', import.meta.url), 'utf8')
-const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
-if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
-const live = [...manifest[1].matchAll(/"([^"]+\.js)"/g)]
-  .map((m) => readFileSync(new URL(`../src/legacy/live/${m[1]}`, import.meta.url), 'utf8'))
-  .join('')
+import { fakeRpc, loadPart, looseQuery } from './legacy-part.mjs'
 
-/* From `mark` through the brace that closes it, plus any `)` and `;` that
-   immediately follow -- the slash installer is an argument to forEach. */
-function block(mark) {
-  const start = live.indexOf(mark)
-  if (start < 0) throw new Error(`${mark} is absent from the assembled live layer`)
-  const brace = live.indexOf('{', start)
-  let depth = 0
-  for (let i = brace; i < live.length; i += 1) {
-    if (live[i] === '{') depth += 1
-    else if (live[i] === '}') {
-      depth -= 1
-      if (depth !== 0) continue
-      let end = i + 1
-      while (live[end] === ')' || live[end] === ';') end += 1
-      return live.slice(start, end)
-    }
-  }
-  throw new Error(`${mark} has no closing brace in the assembled live layer`)
-}
-
-const NAMES = ['DS', 'confirmAsk', 'T', 'rpc', 'sessionCurrent', 'sess', 'sessionDraw',
-  '$', 'pitch', 'drawMeter', 'noteRow', 'noteSay', 'fmtTok', 'down', 'draft', 'toast',
-  'plainTitle']
-
-function harness({ rows }) {
-  const document = new Window().document
+async function harness({ rows }) {
   const calls = []
-  const stage = document.createElement('div')
-  stage.id = 'stage'
-  stage.innerHTML = '<p>a conversation</p>'
+  document.body.innerHTML = '<div id="stage"><p>a conversation</p></div>'
+  const stage = document.getElementById('stage')
   let current = 'a'
   let settle = null
   const slash = [{ id: 'gui.clear' }, { id: 'gui.compress' }]
-  const env = {
-    DS: { composer: { slash } },
-    /* The dialog is not what is under test: say yes at once. */
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    /* Enough of the real thing to see WHICH conversation a message names. */
-    T: (key, vars) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
-    rpc: {
-      call: (method, params) => {
-        calls.push(['rpc', method, params && params.session_id])
-        return new Promise((res, rej) => { settle = { res, rej } })
+  const part = await loadPart(() => import('../src/legacy/live/190-session-actions.js'), {
+    fakes: {
+      'demo/010-kernel.js': {
+        $: looseQuery(),
+        /* Enough of the real thing to see WHICH conversation a message names. */
+        T: (key, vars) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
       },
+      'demo/040-state.js': {
+        /* The dialog is not what is under test: say yes at once. */
+        confirmAsk: (_t, _b, _l, fn) => fn(),
+        down: () => calls.push(['down']),
+        sess: (id) => rows.find((r) => r.id === id),
+      },
+      'demo/050-rail.js': {
+        sessionDraw: () => calls.push(['sessionDraw']),
+        sessionOpen: () => {},
+        sessionRows: () => rows,
+      },
+      'demo/060-conversation.js': {
+        noteRow: (label) => {
+          calls.push(['noteRow', label])
+          return { set: () => {}, remove: () => calls.push(['lineRemove']) }
+        },
+        noteSay: (_line, text) => calls.push(['noteSay', text]),
+        pitch: () => calls.push(['pitch']),
+      },
+      'demo/090-composer.js': { drawMeter: () => calls.push(['drawMeter']) },
+      'live/050-turn.js': { fmtTok: (n) => String(n) },
+      'live/080-overrides.js': { draft: false },
+      'live/210-update-notice.js': { showUpNote: () => {} },
     },
-    sessionCurrent: () => current,
-    sess: (id) => rows.find((r) => r.id === id),
-    sessionDraw: () => calls.push(['sessionDraw']),
-    $: (sel) => (sel === '#stage' ? stage : null),
-    pitch: () => calls.push(['pitch']),
-    drawMeter: () => calls.push(['drawMeter']),
-    noteRow: (label) => { calls.push(['noteRow', label]); return { set: () => {}, remove: () => calls.push(['lineRemove']) } },
-    noteSay: (_line, text) => calls.push(['noteSay', text]),
-    fmtTok: (n) => String(n),
-    down: () => calls.push(['down']),
-    draft: false,
-    toast: (text) => calls.push(['toast', text]),
-    plainTitle: (t) => String(t),
-  }
-  const install = Function('env', `const { ${NAMES.join(', ')} } = env;
-    ${block('DS.composer.slash.forEach((x) => {')}
-    ${block('async function compressNow()')}
-    return { compressNow };`)
-  const api = install(env)
+    globals: {
+      sessionCurrent: () => current,
+      plainTitle: (t) => String(t),
+      toast: (text) => calls.push(['toast', text]),
+    },
+  })
+  await fakeRpc((method, params) => {
+    calls.push(['rpc', method, params && params.session_id])
+    return new Promise((res, rej) => { settle = { res, rej } })
+  })
+  const { DS } = await import('../src/legacy/seam/000-datasource.js')
+  DS.composer = { slash }
+  DS.transcript = {}
+  part.install()
   const tick = () => new Promise((r) => setTimeout(r, 0))
   return {
     clear: () => slash.find((x) => x.id === 'gui.clear').fn(),
-    compress: () => api.compressNow(),
+    compress: () => part.compressNow(),
     leaveFor: (id) => { current = id },
     ok: (payload) => { settle.res(payload || {}); return tick() },
     fail: (e) => { settle.rej(e || Object.assign(new Error('nope'), { data: { detail: 'nope' } })); return tick() },
@@ -99,10 +80,10 @@ function harness({ rows }) {
 
 const ROWS = () => [{ id: 'a', last: 'A last line' }, { id: 'b', last: 'B last line' }]
 
-describe('the assembled live session actions', () => {
+describe('the live session actions', () => {
   it('empties the stage of the conversation it cleared', async () => {
     const rows = ROWS()
-    const h = harness({ rows })
+    const h = await harness({ rows })
 
     h.clear()
     await h.ok()
@@ -115,7 +96,7 @@ describe('the assembled live session actions', () => {
 
   it('leaves another conversation\'s stage alone when the reader has moved on', async () => {
     const rows = ROWS()
-    const h = harness({ rows })
+    const h = await harness({ rows })
 
     h.clear()
     h.leaveFor('b')
@@ -132,7 +113,7 @@ describe('the assembled live session actions', () => {
   })
 
   it('reports a clear that failed for the conversation being read', async () => {
-    const h = harness({ rows: ROWS() })
+    const h = await harness({ rows: ROWS() })
 
     h.clear()
     await h.fail()
@@ -143,7 +124,7 @@ describe('the assembled live session actions', () => {
   it('tells the reader a clear failed, under the name of the session it was for', async () => {
     const rows = ROWS()
     rows[0].title = 'Alpha'
-    const h = harness({ rows })
+    const h = await harness({ rows })
 
     h.clear()
     h.leaveFor('b')
@@ -160,7 +141,7 @@ describe('the assembled live session actions', () => {
   })
 
   it('reports a compaction that failed for the conversation being read', async () => {
-    const h = harness({ rows: ROWS() })
+    const h = await harness({ rows: ROWS() })
 
     const done = h.compress()
     await h.fail()
@@ -174,7 +155,7 @@ describe('the assembled live session actions', () => {
   it('tells the reader a compaction failed, under the name of the session it was for', async () => {
     const rows = ROWS()
     rows[0].title = 'Alpha'
-    const h = harness({ rows })
+    const h = await harness({ rows })
 
     const done = h.compress()
     h.leaveFor('b')
@@ -193,7 +174,7 @@ describe('the assembled live session actions', () => {
   })
 
   it('does not scroll another conversation after a compaction the reader left', async () => {
-    const h = harness({ rows: ROWS() })
+    const h = await harness({ rows: ROWS() })
 
     const done = h.compress()
     h.leaveFor('b')
@@ -207,7 +188,7 @@ describe('the assembled live session actions', () => {
   })
 
   it('still writes a finished compaction onto its own conversation', async () => {
-    const h = harness({ rows: ROWS() })
+    const h = await harness({ rows: ROWS() })
 
     const done = h.compress()
     await h.ok({ removed: 3, before_tokens: 100, after_tokens: 40 })

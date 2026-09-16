@@ -117,13 +117,12 @@ function tipFlash(b, word) {
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-// If the script runs at all, this marker goes; if you still see it, it did not.
-(() => { const n = document.getElementById('noJs'); if (n) n.remove(); })();
-HOST_PLATFORM = /Mac/.test(navigator.platform) ? 'mac'
-  : /Win/.test(navigator.platform) ? 'windows' : 'linux';
+  // If the script runs at all, this marker goes; if you still see it, it did not.
+  (() => { const n = document.getElementById('noJs'); if (n) n.remove(); })();
+  HOST_PLATFORM = /Mac/.test(navigator.platform) ? 'mac'
+    : /Win/.test(navigator.platform) ? 'windows' : 'linux';
 }
 
 export { $, mk, esc, I18N, LANG, langSet, HOST_PLATFORM, hostPlatformSet, applyDecorators, fillVars, T, slashText, slashName, slashHelp, applyI18n, MCP_RE, rawVerb, ACP_TITLE_RE, callParts, verb, verbIng, dur, COPY_ICO, tipFlash }
