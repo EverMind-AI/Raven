@@ -265,6 +265,14 @@ function SkillInstalled(): JSX.Element {
               role="button"
               onClick={() => store.openDetail('inst', c.id)}
               onKeyDown={(e) => {
+                /* Only when the card itself has focus. A keypress on a button
+                   inside it reaches here first -- keydown bubbles, and the
+                   button's own click, which stops propagation, is synthesised
+                   after -- so without this the drawer opened before the button
+                   could act. The removal is two presses, and the first one
+                   navigating away meant it could never be finished from the
+                   keyboard at all. */
+                if (e.target !== e.currentTarget) return
                 if (e.key === 'Enter') store.openDetail('inst', c.id)
               }}
             >

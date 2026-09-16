@@ -224,6 +224,34 @@ describe('skills island', () => {
     expect(calls).toContain('remove')
   })
 
+  it('lets the keyboard finish the two-press removal without opening the drawer', async () => {
+    /* Enter on the button reaches the card's own handler first: keydown bubbles,
+       and the click that stops propagation is synthesised after it. Unguarded,
+       the first press navigated to the drawer, so the second press had nothing
+       to confirm and removal was unreachable from the keyboard. */
+    const { calls } = install([], {}, [
+      { id: 'sk1', name: 'house-style', one: 'the house voice', src: 'skillhub', hub: true, hubId: 'sh-hs' },
+    ])
+    await mount()
+    await act(async () => {
+      store.toggleView()
+    })
+
+    const arm = screen.getByText('gui.plug.uninstall')
+    await act(async () => {
+      arm.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(calls).not.toContain('openDetail')
+
+    await act(async () => {
+      screen.getByText('gui.plug.uninstall').click()
+    })
+    await act(async () => {
+      screen.getByText('gui.plug.confirm_remove').click()
+    })
+    expect(calls).toContain('remove')
+  })
+
   it('offers no removal for a builtin, which has no bundle to delete', async () => {
     install([], {}, [{ id: 'sk2', name: 'weather', one: 'the forecast', src: 'builtin' }])
     await mount()
