@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeRpc, loadPart } from './legacy-part.mjs'
+import { fakeGateway, loadPart } from './legacy-part.mjs'
 
 async function harness({ rows, deferSubscribe } = {}) {
   const calls = []
@@ -110,7 +110,7 @@ async function harness({ rows, deferSubscribe } = {}) {
     },
   })
   Object.assign(api, part)
-  await fakeRpc((method, params) => {
+  await fakeGateway((method, params) => {
     calls.push(['rpc', method, params || {}])
     if (method === 'session.resume') {
       return new Promise((res, rej) => pending.push({ id: params.session_id, res, rej }))
@@ -130,7 +130,7 @@ async function harness({ rows, deferSubscribe } = {}) {
   DS.composer = {}
   DS.sessions = {}
   DS.transcript = {}
-  const rpc = await import('../src/legacy/live/020-rpc.js')
+  const rpcUi = await import('../src/legacy/live/020-rpc.js')
   part.install()
   const env = {
     live: turnState.live,
@@ -147,7 +147,9 @@ async function harness({ rows, deferSubscribe } = {}) {
     subscribe: part.subscribe,
     startDraft: part.startDraft,
     openLiveSession: part.openLiveSession,
-    onReconnect: rpc.rpc.onReconnect,
+    /* The handler live/020-rpc.js's reconnect UI runs once the transport says
+       the socket is back. Registered by install(), one registrar today. */
+    onReconnect: [...rpcUi.reconnectHandlers][0],
     calls,
     env,
     state,

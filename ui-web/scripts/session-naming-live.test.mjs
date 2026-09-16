@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { fakeRpc, loadPart, looseQuery, partTexts } from './legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery, partTexts } from './legacy-part.mjs'
 
 /* The four naming functions driven together: they only make sense that way,
    and each one on its own would only assert that it exists. */
@@ -23,7 +23,7 @@ async function harness({ rows, current, titleCall }) {
       plainTitle: (s) => String(s),
     },
   })
-  await fakeRpc(titleCall)
+  await fakeGateway(titleCall)
   return { ...part, heading, draws }
 }
 

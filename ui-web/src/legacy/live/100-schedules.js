@@ -3,12 +3,12 @@
    this file only knows how to speak cron.* over /rpc. Installing onto the
    seam replaces the fixture source before the first paint. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
 import { T } from '../demo/010-kernel.js'
 import { sess } from '../demo/040-state.js'
 import { sessionDraw, sessionOpen, sessionRows } from '../demo/050-rail.js'
 import { closeCron } from '../demo/140-schedule.js'
-import { rpc } from './020-rpc.js'
 import { fmtEvery, fmtStamp } from './090-extensions.js'
 
 function cronToRow(j) {
@@ -65,14 +65,14 @@ function jobToSave(j) {
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
   DS.cron = {
-    rows: () => rpc.call('cron.list', {}).then((r) => r.jobs.map(cronToRow)),
-    toggle: (j) => rpc.call('cron.set_enabled', { id: j.id, enabled: !j.on })
+    rows: () => gateway().call('cron.list', {}).then((r) => r.jobs.map(cronToRow)),
+    toggle: (j) => gateway().call('cron.set_enabled', { id: j.id, enabled: !j.on })
       .then(() => toast(T(!j.on ? 'gui.cron.resumed_x' : 'gui.cron.paused_x', { name: j.name })))
       .catch((e) => toast(T('gui.op.action_failed', { detail: e.message || e }))),
     /* Toasted here, and still rejected: the caller's success branch closes the
      job's page, so resolving after a failed delete would bounce the reader
      back to a list where the row they just deleted is still there. */
-    remove: (j) => rpc.call('cron.delete', { id: j.id })
+    remove: (j) => gateway().call('cron.delete', { id: j.id })
       .then(() => toast(T('gui.cron.deleted_x', { name: j.name })))
       .catch((err) => {
         toast(T('gui.op.delete_failed', { detail: err.message || err }));
@@ -86,16 +86,16 @@ export function install() {
      the existing catch already handles. */
     save: async (draft) => {
       const payload = jobToSave(draft);
-      return rpc.call('cron.save', payload).then((r) => cronToRow(r.job)).catch((e) => {
+      return gateway().call('cron.save', payload).then((r) => cronToRow(r.job)).catch((e) => {
         toast(T('gui.op.save_failed', { detail: (e.data && e.data.detail) || e.message || e }));
         throw { handled: true };
       });
     },
-    runs: (j) => rpc.call('cron.runs', { id: j.id })
+    runs: (j) => gateway().call('cron.runs', { id: j.id })
       .then((r) => (r.runs || []).map((x) => ({
         at: x.at_ms ? fmtStamp(x.at_ms) : '—', ok: !!x.ok, note: x.preview || '',
       }))),
-    runNow: (j) => rpc.call('cron.run_now', { id: j.id })
+    runNow: (j) => gateway().call('cron.run_now', { id: j.id })
       .then(() => toast(T('gui.cron.triggered_x', { name: j.name })))
       .catch((e) => toast(T('gui.op.trigger_failed', { detail: e.message || e }))),
     openRun: async (j) => {

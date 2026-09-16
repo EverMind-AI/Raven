@@ -4,15 +4,16 @@
    conversation -- and the island only offers it on the main lane, so a
    delegated run's pane never claims to fork a session it does not have. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
 import { $, T } from '../demo/010-kernel.js'
 import { confirmAsk, down, sess } from '../demo/040-state.js'
 import { sessionDraw, sessionOpen, sessionRows } from '../demo/050-rail.js'
 import { noteRow, noteSay, pitch } from '../demo/060-conversation.js'
 import { drawMeter } from '../demo/090-composer.js'
-import { rpc } from './020-rpc.js'
 import { fmtTok } from './050-turn.js'
 import { draft } from './080-overrides.js'
+import { onClarifyRequest } from './070-notify.js'
 import { showUpNote } from './210-update-notice.js'
 
 /* Manual compaction. The runtime already compacts when a prompt outgrows the
@@ -23,7 +24,7 @@ async function compressNow() {
   if (!key || draft) return;
   const line = noteRow(T('gui.compress.running'), '', { quiet: true, host: $('#stage') });
   try {
-    const r = await rpc.call('session.compress', { session_id: key });
+    const r = await gateway().call('session.compress', { session_id: key });
     noteSay(line, r.removed
       ? T('gui.compress.done', { n: r.removed, before: fmtTok(r.before_tokens), after: fmtTok(r.after_tokens) })
       : T('gui.compress.noop'), '');
@@ -51,7 +52,7 @@ async function compressNow() {
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
   DS.transcript.branch = () => {
-    rpc.call('session.branch', { session_id: sessionCurrent() })
+    gateway().call('session.branch', { session_id: sessionCurrent() })
       .then((r) => {
         if (!r.session_id) { toast(T('gui.sess.branch_empty')); return; }
         const s = { id: r.session_id, title: r.title || T('gui.sess.branch_title'),
@@ -71,7 +72,7 @@ export function install() {
          clicking B mid-flight wiped B's stage, gave B the new-task layout, and
          stamped B's row "cleared" while B's transcript sat untouched on disk. */
         const key = sessionCurrent();
-        rpc.call('session.clear', { session_id: key })
+        gateway().call('session.clear', { session_id: key })
           .then(() => {
             /* The row belongs to the conversation that was cleared, wherever the
              reader is now -- it really is empty, and a list that says otherwise
@@ -109,7 +110,7 @@ export function install() {
 
   // Dev-only hook: lets a design pass preview the clarify sheet without
   // spending a model turn (window.__clarify({question, choices})).
-  window.__clarify = (p) => rpc.notify['clarify.request'](p || { request_id: 'dev', question: '预览', choices: ['A', 'B'] });
+  window.__clarify = (p) => onClarifyRequest(p || { request_id: 'dev', question: '预览', choices: ['A', 'B'] });
 
   // Same reason: the update row's version state only appears when a release is
   // actually newer, which never happens on a dev checkout

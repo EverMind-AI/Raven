@@ -45,17 +45,20 @@ export async function loadPart(importPart, { fakes = {}, globals = {} } = {}) {
   return importPart()
 }
 
-/* The rpc client of the freshly loaded graph, with `call` answering from
-   `handler` -- the object itself, not a module fake. live/020-rpc.js sits
-   inside the live layer's import cycle, so replacing the module would evaluate
-   a second copy of every part that reaches it and the part under test would be
-   speaking to the wrong one. The object is what the parts share, and what the
-   sandbox harnesses used to be handed. */
-export async function fakeRpc(handler) {
-  const { rpc } = await import('../src/legacy/live/020-rpc.js')
-  rpc.call = handler
-  rpc.notify = {}
-  return rpc
+/* The transport the freshly loaded graph will speak through, with both call
+   paths answering from `handler`. A FixtureTransport because it already is the
+   push side -- `emit`, `emitBinary` and `setState` drive a notification, a
+   binary frame and a connection-state change into the page -- and answering
+   from a handler rather than from recorded fixtures is what lets a harness
+   defer a call and settle it in whatever order the race under test needs. */
+export async function fakeGateway(handler) {
+  const { FixtureTransport } = await import('../src/rpc/fixtureTransport')
+  const { setGateway } = await import('../src/state/gateway')
+  const transport = new FixtureTransport({})
+  transport.call = handler
+  transport.callUnchecked = handler
+  setGateway(transport)
+  return transport
 }
 
 /* The parts of one layer ('seam' / 'demo' / 'live') in the order

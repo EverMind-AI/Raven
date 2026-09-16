@@ -4,10 +4,10 @@
    an answer makes clickable. Installing onto the seam replaces the fixture
    source before the first paint. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
 import { HOST_PLATFORM } from '../demo/010-kernel.js'
 import { wsShortPath } from '../demo/100-workspace.js'
-import { rpc } from './020-rpc.js'
 
 function relToWorkspace(p) {
   const s = String(p || '');
@@ -84,23 +84,23 @@ export function install() {
      and only while that host is this desktop. Everywhere else `linkTargetOf`
      stops calling a directory a link at all (see the dir check there). */
     open: ({ p, dir }) => (dir
-      ? rpc.call('fs.reveal', { path: p, session: sessionCurrent() || '' }).catch(() => {})
+      ? gateway().call('fs.reveal', { path: p, session: sessionCurrent() || '' }).catch(() => {})
       : RavenIslands.workspace.showFile(p)),
   };
 
   DS.workspace = {
     hostPlatform: () => HOST_PLATFORM,
     canBrowse: true,
-    reveal: (p) => rpc.call('fs.reveal', { path: p, session: sessionCurrent() || '' }),
+    reveal: (p) => gateway().call('fs.reveal', { path: p, session: sessionCurrent() || '' }),
     /* The gateway's own registry of what this conversation handed over. The
      shelf is built from the manifests on turn events while a client watches;
      this is what it is built from when nobody was watching. */
-    deliverables: (key) => rpc.call('deliverables.list', { session_key: key }).then((r) => (r && r.files) || []),
+    deliverables: (key) => gateway().call('deliverables.list', { session_key: key }).then((r) => (r && r.files) || []),
     /* The other half of the viewer: a kind the page cannot render goes to the
      host's own application for it. `app` is a name the reader picked, or
      absent for the host default. Only offered while the gateway IS this
      desktop -- see hostIsLocal above. */
-    openIn: (p, app) => rpc.call('fs.open', { path: p, session: sessionCurrent() || '', ...(app ? { app } : {}) }),
+    openIn: (p, app) => gateway().call('fs.open', { path: p, session: sessionCurrent() || '', ...(app ? { app } : {}) }),
     hostIsLocal,
     shortPath: (p) => relToWsRoot(p) || relToWorkspace(p) || String(p).replace(/^\/Users\/[^/]+\//, '~/'),
   };

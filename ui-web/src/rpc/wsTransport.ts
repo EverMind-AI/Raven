@@ -12,7 +12,8 @@ import { RpcError } from './transport'
 
 /* The live end of the DataSource seam: JSON-RPC 2.0 over one WebSocket to
    /rpc, with the rejoin policy the page runs today. Every behaviour here is
-   ported from ui-web/src/live/020-rpc.js.
+   ported from the rpc client that used to live in
+   ui-web/src/legacy/live/020-rpc.js, which now keeps only what paints.
 
    What paints stays out of it: the reconnect status line, the upgrade shade,
    the auth banner and the desktop shell's reauth handshake all belong to the
@@ -91,7 +92,7 @@ const defaultSocket = (url: string): WebSocketLike =>
    session": /health is unauthenticated precisely so it can answer a page whose
    cookie the gateway has already forgotten, so an answer means the process is
    back and a socket closing anyway is a real auth refusal. No answer means
-   keep waiting. (020-rpc.js probed '/' with HEAD; the two are equivalent, and
+   keep waiting. (The old client probed '/' with HEAD; the two are equivalent, and
    the dev server owns '/'.) */
 const probeHealth = async (): Promise<boolean> => {
   try {

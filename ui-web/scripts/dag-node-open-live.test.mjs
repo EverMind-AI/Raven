@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { fakeRpc, loadPart } from './legacy-part.mjs'
+import { fakeGateway, loadPart } from './legacy-part.mjs'
 
 /* The class the shell sets while the floating desk owns the workspace. */
 function deskReady(on) {
@@ -45,7 +45,7 @@ async function harness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc' }]
       plainTitle: (s) => String(s),
     },
   })
-  await fakeRpc(() => Promise.resolve({}))
+  await fakeGateway(() => Promise.resolve({}))
   const { DS } = await import('../src/legacy/seam/000-datasource.js')
   DS.transcript = {}
   part.install()

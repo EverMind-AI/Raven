@@ -8,8 +8,9 @@
    paths: every file tool is already workspace-scoped, so a path is all it
    needs. Bytes never ride inside the message. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
-import { rpc, uploadRefusal } from './020-rpc.js'
+import { uploadRefusal } from './020-rpc.js'
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
@@ -19,7 +20,7 @@ export function install() {
     /* Rejected, not returned: the tray already renders a rejection as the chip's
      failure note, and a refusal is one -- the file is not attached either way. */
     if (refusal) return Promise.reject(new Error(refusal));
-    return rpc.call('fs.upload', {
+    return gateway().call('fs.upload', {
       name: p.name,
       content_b64: p.content_b64,
       /* Read per call, not captured: a file can be staged in a draft that becomes
