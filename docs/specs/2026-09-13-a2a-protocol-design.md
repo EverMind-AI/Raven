@@ -285,13 +285,34 @@ caller polls `GetTask` through turns that routinely run for minutes.
 
 ### Mounting
 
-Opt-in and off by default, in two hostings:
+Two hostings:
 
-- a config flag mounts it on the running gateway, sharing that port and lifecycle;
-- `raven a2a serve` runs it standalone for a headless deployment.
+- the gateway mounts it when `a2a.server.enabled` is set, sharing that port and lifecycle;
+- `raven a2a serve` runs it standalone for a headless deployment, where running the command
+  is itself the opt-in and the config flag is not consulted.
 
-Default-off is a security position, not caution. Running `raven web` must not silently open
-a second, differently-authenticated network face.
+Onboarding switches the gateway face on, minting `a2a.server.token` in the same write. The
+switch stays a real one -- a config nobody onboarded, and any `A2aConfig()` assembled
+in-process, is inert -- but a finished install serves A2A rather than shipping a capability
+whose first use is an edit to a JSON file.
+
+What that opens is narrower than "a network face". The gateway binds loopback and the bind
+is not configurable, so this is a local face, not an internet-facing one; every request is
+checked against a freshly minted 256-bit bearer token. An empty token refuses everyone,
+which is why enabling and minting are one write rather than two: an enabled face with no
+credential would advertise a capability that answers nobody.
+
+The token makes `config.json` secret-bearing in a way the switch alone would not. Nothing
+narrows that file on its own and it is created under the process umask, so the minting
+write fixes it to owner-only from the temp file's first byte rather than chmod-ing after
+the bytes are down. It already held provider API keys; the obligation predates A2A and is
+merely discharged here.
+
+The cost lands at mount, once, not per request: a gateway that serves A2A imports
+`a2a-sdk`, measured at roughly 570 ms and 391 modules on top of the gateway's own stack,
+sqlalchemy and the OpenTelemetry api among them. Building the handler behind the enabled
+check still keeps that off the module import path, so an operator who switches the face off
+pays none of it.
 
 ## Outbound
 
@@ -391,6 +412,9 @@ second message against that task id resumes the same turn.
 - a 0.3 compatibility layer;
 - per-caller credentials or any enrolment flow: one configured bearer token;
 - migrating `raven serve` to starlette/fastapi;
+- deferring the `a2a-sdk` import to the first inbound request. It is paid at mount today,
+  so every onboarded gateway pays it at boot whether or not a peer ever calls; moving it
+  behind the first request would return that to the operator who never uses the face;
 - advertising peer skills into the turn, so the model can pick a peer unprompted;
 - bounding the task store. `InMemoryTaskStore` has no TTL, no count cap and no reclaim
   path, and the caller is the one who decides how many tasks exist, so an authenticated

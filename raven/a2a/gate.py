@@ -68,8 +68,14 @@ def mount_gateway_face(
 
     The handler is bound to a factory that re-resolves the loop per call rather than to a
     loop: at gateway-boot time the loop may not exist yet, and a later hot-reload swaps it
-    in place. Building it behind `may_mount` is also what makes the default-OFF face cost
-    nothing -- a2a-sdk is never imported in a gateway that does not serve A2A.
+    in place. Building it behind `may_mount` keeps a2a-sdk off the module import path, so a
+    gateway whose operator switched the face off never pays for it at all.
+
+    An onboarded install does serve A2A, and that import is not free: measured at roughly
+    570 ms and 391 modules on top of the gateway's own stack, sqlalchemy and the
+    OpenTelemetry api among them. It is paid once at mount, not per request. Moving it to
+    the first request instead is the way to take it back, and is recorded as deferred in
+    the design note rather than done here.
     """
     if not may_mount(config):
         return None

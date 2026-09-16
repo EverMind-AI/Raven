@@ -938,8 +938,13 @@ class A2aPeerConfig(Base):
 
 
 class A2aServerConfig(Base):
-    """The inbound A2A face. Off by default: it is a network surface for other
-    people's agents, so running the gateway must not open it as a side effect."""
+    """The inbound A2A face.
+
+    Declared off, with an empty token that refuses every caller: a config nobody
+    onboarded, or one assembled in-process, serves nothing by accident. Turning
+    it on is the onboarding wizard's job, which mints the token in the same
+    write -- so a real install does serve A2A, on the gateway's loopback bind and
+    behind that token, while a bare ``A2aConfig()`` stays inert."""
 
     enabled: bool = False
     token: str = ""
