@@ -1,4 +1,4 @@
-"""The hosted backends' onboarding screen: one key, one probe, one slice.
+"""The hosted backends' shared onboarding screen: one key, one probe, one slice.
 
 The wizard shell is a recording fake of ``OnboardUI``; the probe talks to the
 fake service over ``MockTransport``; the slice lands in a temporary
@@ -16,11 +16,14 @@ from typing import Any
 import pytest
 
 from raven.config.loader import set_config_path
+from raven.memory_engine.api_key_onboard import ApiKeyOnboardStep
 from raven.plugins import OnboardUI, PluginContext, ServiceLocator, StepOutcome
-from raven_cloud_memory.mem0 import Mem0Backend
-from raven_cloud_memory.onboard import CloudOnboardStep, make_mem0_step, make_memos_step, make_zep_step
-from raven_cloud_memory.zep import ZepBackend
-from tests._cloud_memory_fakes import FakeMem0, FakeZep, client_for
+from raven_mem0.backend import Mem0Backend
+from raven_mem0.onboard import make_onboard_step as make_mem0_step
+from raven_memos.onboard import make_onboard_step as make_memos_step
+from raven_zep.backend import ZepBackend
+from raven_zep.onboard import make_onboard_step as make_zep_step
+from tests._hosted_memory_fakes import FakeMem0, FakeZep, client_for
 
 _BACK = object()
 
@@ -84,16 +87,16 @@ def _slices(cfg: Path) -> dict[str, Any]:
     return json.loads(cfg.read_text(encoding="utf-8"))["plugins"]["config"]
 
 
-def _step(tmp_path: Path, fake, backend_cls=Mem0Backend, config: dict | None = None) -> CloudOnboardStep:
+def _step(tmp_path: Path, fake, backend_cls=Mem0Backend, config: dict | None = None) -> ApiKeyOnboardStep:
     ctx = PluginContext(
         config=dict(config or {}),
         services=ServiceLocator(workspace=tmp_path, user_id="alice", agent_id="a"),
         logger=logging.getLogger("test.onboard"),
     )
-    return CloudOnboardStep(ctx, backend_cls, client_factory=lambda: client_for(fake))
+    return ApiKeyOnboardStep(ctx, backend_cls, client_factory=lambda: client_for(fake))
 
 
-def _run(step: CloudOnboardStep, ui: _UI, **kw: Any) -> StepOutcome:
+def _run(step: ApiKeyOnboardStep, ui: _UI, **kw: Any) -> StepOutcome:
     args = {"step_no": 4, "non_interactive": False, "main_model": None, "warnings": [], "skip_test": False}
     args.update(kw)
     return step.run(ui.build(), **args)
@@ -220,7 +223,7 @@ def test_configuring_a_second_service_keeps_the_first_key(tmp_path: Path, _isola
     assert set(slices) == {"mem0", "zep"}
     assert slices["mem0"]["api_key"] == mem0.KEY
     assert slices["zep"]["api_key"] == zep.KEY
-    assert "cloud-memory" not in slices
+    assert not any(k.endswith("-memory") for k in slices)
 
 
 def test_the_step_never_touches_memory_backend(tmp_path: Path, _isolated_config: Path) -> None:

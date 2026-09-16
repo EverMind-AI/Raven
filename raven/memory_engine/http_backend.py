@@ -1,11 +1,12 @@
-"""The one shape the three hosted backends share.
+"""A memory backend over a hosted HTTP service, for plugin authors.
 
 A hosted memory service, seen from :class:`raven.contracts.memory.MemoryBackend`,
 is a base URL, an API key and five REST calls: search, add, delete, read one
 conversation back, and something cheap to prove the key works. Everything the
 contract says about failure -- a raise costs the host one call, so prefer a
-quiet ``[]`` / ``False`` -- is handled once here; a subclass only says what
-its service's requests and responses look like.
+quiet ``[]`` / ``False`` -- is handled once here; a plugin's subclass only says
+what its service's requests and responses look like. The shipped Mem0, Zep and
+MemOS plugins are three such subclasses, each in its own distribution.
 
 Two decisions every subclass inherits:
 
@@ -98,8 +99,8 @@ def iso_timestamp(value: Any) -> str | None:
     return None
 
 
-class CloudBackend:
-    """Base of the three hosted backends; not a backend by itself."""
+class HttpMemoryBackend:
+    """Base of a hosted-service backend; not a backend by itself."""
 
     NAME: ClassVar[str]
     DEFAULT_BASE_URL: ClassVar[str]
@@ -328,7 +329,7 @@ __all__ = [
     "STORE_TIMEOUT_S",
     "UNREACHABLE",
     "Call",
-    "CloudBackend",
+    "HttpMemoryBackend",
     "Reply",
     "clamp_score",
     "flatten_content",

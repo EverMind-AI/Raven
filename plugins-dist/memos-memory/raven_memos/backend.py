@@ -20,8 +20,8 @@ from __future__ import annotations
 from typing import Any
 
 from raven.contracts.memory import Memory
+from raven.memory_engine.http_backend import Call, HttpMemoryBackend, Reply, clamp_score
 from raven.plugins import PluginContext
-from raven_cloud_memory._base import Call, CloudBackend, Reply, clamp_score
 
 RATE_LIMITED_CODE = 40309
 
@@ -32,7 +32,7 @@ def _body_code(body: Any) -> int | None:
     return None
 
 
-class MemosBackend(CloudBackend):
+class MemosBackend(HttpMemoryBackend):
     NAME = "memos"
     DEFAULT_BASE_URL = "https://memos.memtensor.cn/api/openmem/v1"
     ENV_KEY = "MEMOS_API_KEY"

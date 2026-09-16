@@ -16,13 +16,13 @@ from __future__ import annotations
 from typing import Any
 
 from raven.contracts.memory import Memory
+from raven.memory_engine.http_backend import Call, HttpMemoryBackend, clamp_score
 from raven.plugins import PluginContext
-from raven_cloud_memory._base import Call, CloudBackend, clamp_score
 
 SEARCH_THRESHOLD = 0.1
 
 
-class Mem0Backend(CloudBackend):
+class Mem0Backend(HttpMemoryBackend):
     NAME = "mem0"
     DEFAULT_BASE_URL = "https://api.mem0.ai"
     ENV_KEY = "MEM0_API_KEY"

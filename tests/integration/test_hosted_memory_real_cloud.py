@@ -1,6 +1,6 @@
 """The three hosted backends against their real services.
 
-Runs by hand, never in CI: ``uv run pytest tests/integration/test_cloud_memory_real_cloud.py``
+Runs by hand, never in CI: ``uv run pytest tests/integration/test_hosted_memory_real_cloud.py``
 with ``MEM0_API_KEY`` / ``ZEP_API_KEY`` / ``MEMOS_API_KEY`` exported. A missing
 key fails the run and says which -- a skipped integration test reads as green
 to anyone counting.
@@ -23,13 +23,13 @@ from pathlib import Path
 import pytest
 
 from raven.contracts.memory import Memory
+from raven.memory_engine.http_backend import Call, HttpMemoryBackend
 from raven.plugins import PluginContext, ServiceLocator
-from raven_cloud_memory._base import Call, CloudBackend
-from raven_cloud_memory.mem0 import Mem0Backend
-from raven_cloud_memory.memos import MemosBackend
-from raven_cloud_memory.zep import ZepBackend
+from raven_mem0.backend import Mem0Backend
+from raven_memos.backend import MemosBackend
+from raven_zep.backend import ZepBackend
 
-BACKENDS: dict[str, type[CloudBackend]] = {"mem0": Mem0Backend, "zep": ZepBackend, "memos": MemosBackend}
+BACKENDS: dict[str, type[HttpMemoryBackend]] = {"mem0": Mem0Backend, "zep": ZepBackend, "memos": MemosBackend}
 KEYS = {name: os.environ.get(cls.ENV_KEY, "") for name, cls in BACKENDS.items()}
 
 INGEST_CEILING_S = 120.0
@@ -48,16 +48,16 @@ def _keys_present_and_out_of_the_environment(monkeypatch: pytest.MonkeyPatch) ->
         monkeypatch.delenv(cls.ENV_KEY, raising=False)
 
 
-def _backend(name: str, tmp_path: Path, *, api_key: str | None = None, user_id: str) -> CloudBackend:
+def _backend(name: str, tmp_path: Path, *, api_key: str | None = None, user_id: str) -> HttpMemoryBackend:
     ctx = PluginContext(
         config={"api_key": KEYS[name] if api_key is None else api_key},
         services=ServiceLocator(workspace=tmp_path, user_id=user_id, agent_id="raven-it-agent"),
-        logger=logging.getLogger("raven.plugins.cloud-memory"),
+        logger=logging.getLogger("raven.plugins.hosted-memory"),
     )
     return BACKENDS[name](ctx)
 
 
-async def _purge(name: str, backend: CloudBackend, user_id: str) -> None:
+async def _purge(name: str, backend: HttpMemoryBackend, user_id: str) -> None:
     if name == "mem0":
         await backend._send(Call("DELETE", "/v1/memories/", params={"user_id": user_id}), timeout=30)
     elif name == "zep":

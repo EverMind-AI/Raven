@@ -15,10 +15,10 @@ import pytest
 
 from raven.memory_engine import LifecycleContractTests, MemoryBackendContractTests
 from raven.plugins import PluginContext, ServiceLocator
-from raven_cloud_memory.mem0 import Mem0Backend
-from raven_cloud_memory.memos import MemosBackend
-from raven_cloud_memory.zep import ZepBackend
-from tests._cloud_memory_fakes import FakeCloud, FakeMem0, FakeMemos, FakeZep, client_for
+from raven_mem0.backend import Mem0Backend
+from raven_memos.backend import MemosBackend
+from raven_zep.backend import ZepBackend
+from tests._hosted_memory_fakes import FakeCloud, FakeMem0, FakeMemos, FakeZep, client_for
 
 CONTRACT_USER = "contract-test"
 

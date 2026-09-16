@@ -1,6 +1,6 @@
 """The unit cases every hosted backend answers the same way.
 
-``tests/test_cloud_memory_<service>.py`` mixes :class:`CloudBackendCases` in
+``tests/test_<service>_memory_backend.py`` mixes :class:`HostedBackendCases` in
 with the service's fake and a few extractor hooks, then adds what only that
 service does. Assertions land where the fact lives: what the fake received for
 request shape, the returned ``Memory`` for mapping, the wall clock for the
@@ -19,9 +19,9 @@ import httpx
 import pytest
 
 from raven.contracts.memory import BackendHealth, Memory
+from raven.memory_engine.http_backend import RECALL_TIMEOUT_S, HttpMemoryBackend
 from raven.plugins import PluginContext, ServiceLocator
-from raven_cloud_memory._base import RECALL_TIMEOUT_S, CloudBackend
-from tests._cloud_memory_fakes import FakeCloud, client_for
+from tests._hosted_memory_fakes import FakeCloud, client_for
 
 USER = "alice"
 AGENT = "raven-agent"
@@ -32,13 +32,13 @@ def make_ctx(tmp_path: Path, config: dict[str, Any] | None, *, user_id: str = US
     return PluginContext(
         config=dict(config or {}),
         services=ServiceLocator(workspace=tmp_path, user_id=user_id, agent_id=AGENT),
-        logger=logging.getLogger("raven.plugins.cloud-memory"),
+        logger=logging.getLogger("raven.plugins.hosted-memory"),
     )
 
 
-class CloudBackendCases:
+class HostedBackendCases:
     fake_cls: type[FakeCloud]
-    backend_cls: type[CloudBackend]
+    backend_cls: type[HttpMemoryBackend]
 
     # ── hooks a service file fills in ─────────────────────────────────
 
@@ -88,7 +88,7 @@ class CloudBackendCases:
         yield b
         await b.stop()
 
-    def build(self, fake: FakeCloud, config: dict[str, Any] | None = None, **kw: Any) -> CloudBackend:
+    def build(self, fake: FakeCloud, config: dict[str, Any] | None = None, **kw: Any) -> HttpMemoryBackend:
         cfg = {"api_key": fake.KEY} if config is None else config
         return self.backend_cls(make_ctx(self.tmp_path, cfg, **kw), client=client_for(fake))
 

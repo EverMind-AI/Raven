@@ -1,9 +1,8 @@
-"""The cloud-memory plugin joins the host through the plugin seam alone.
+"""The three hosted-memory plugins join the host through the plugin seam alone.
 
-Discovery finds it by entry point, the registry builds whichever of its three
-backends ``memory.backend`` names, and each backend reads only the slice keyed
-by its own name -- so the three keys never share a slot and the plugin id
-never becomes a fourth, shared one.
+Discovery finds each by entry point, the registry builds whichever backend
+``memory.backend`` names, and each backend reads only the slice keyed by its
+own name -- so the three keys never share a slot.
 """
 
 from __future__ import annotations
@@ -19,10 +18,10 @@ from raven.config.raven import MemoryConfig, PluginsConfig, RavenConfig
 from raven.config.schema import Config
 from raven.core.plugin_stack import build_plugin_registry, maybe_build_memory_backend
 from raven.plugins import PluginContext, ServiceLocator
-from raven_cloud_memory.mem0 import Mem0Backend
-from raven_cloud_memory.memos import MemosBackend
-from raven_cloud_memory.zep import ZepBackend
 from raven_everos.backend import EverosBackend
+from raven_mem0.backend import Mem0Backend
+from raven_memos.backend import MemosBackend
+from raven_zep.backend import ZepBackend
 
 BACKENDS = {"mem0": Mem0Backend, "zep": ZepBackend, "memos": MemosBackend}
 
@@ -41,17 +40,18 @@ def _no_env_keys(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
 
 
-def test_manifest_contributes_three_backends_and_three_screens() -> None:
+def test_each_plugin_contributes_its_backend_and_its_screen() -> None:
     registry = build_plugin_registry(_config("mem0"))
     assert set(BACKENDS) <= set(registry.memory_backend_names())
     assert set(BACKENDS) <= set(registry.onboard_names())
-    assert {registry.onboard_plugin_id(n) for n in BACKENDS} == {"cloud-memory"}
+    assert {n: registry.onboard_plugin_id(n) for n in BACKENDS} == {n: f"{n}-memory" for n in BACKENDS}
 
 
-def test_installed_by_entry_point_with_its_manifest_as_package_data() -> None:
+@pytest.mark.parametrize("name", sorted(BACKENDS))
+def test_installed_by_entry_point_with_its_manifest_as_package_data(name: str) -> None:
     names = {ep.name: ep.value for ep in md.entry_points(group="raven.plugins")}
-    assert names["cloud-memory"] == "raven_cloud_memory"
-    assert (resources.files("raven_cloud_memory") / "raven-plugin.toml").is_file()
+    assert names[f"{name}-memory"] == f"raven_{name}"
+    assert (resources.files(f"raven_{name}") / "raven-plugin.toml").is_file()
 
 
 @pytest.mark.parametrize("name", sorted(BACKENDS))
@@ -63,15 +63,13 @@ def test_each_backend_reads_only_its_own_slice(tmp_path: Path, name: str) -> Non
     assert backend._base_url == f"https://{name}.test"
 
 
-def test_the_plugin_id_is_never_a_shared_slice(tmp_path: Path) -> None:
-    """A slice under the plugin id would be handed to all three backends;
-    nothing writes one, and a backend built without its own slice has no key."""
-    backend = maybe_build_memory_backend(tmp_path, _config("zep", {"cloud-memory": {"api_key": "shared-key-123"}}))
-    assert isinstance(backend, ZepBackend)
-    # ``_resolve_plugin_config_slice`` prefers the plugin id when present:
-    # this is the trap, and the manifest comment is the only fence. Pin the
-    # current behaviour so a change here is a deliberate one.
-    assert backend._api_key == "shared-key-123"
+def test_a_plugin_id_slice_reaches_only_its_own_backend(tmp_path: Path) -> None:
+    """The host prefers a slice under the plugin id; with one plugin per
+    backend that slice can only ever reach the backend it belongs to."""
+    slices = {"zep-memory": {"api_key": "zep-by-plugin-id-12345"}, "mem0": {"api_key": "mem0-by-name-12345"}}
+    assert maybe_build_memory_backend(tmp_path, _config("zep", slices))._api_key == "zep-by-plugin-id-12345"
+    assert maybe_build_memory_backend(tmp_path, _config("mem0", slices))._api_key == "mem0-by-name-12345"
+    assert maybe_build_memory_backend(tmp_path, _config("memos", slices))._api_key == ""
 
 
 def test_missing_slice_still_builds_and_reports_missing(tmp_path: Path) -> None:
@@ -107,7 +105,9 @@ def test_everos_is_untouched_by_the_second_plugin(tmp_path: Path) -> None:
 
 def test_factories_are_sync_and_read_only(tmp_path: Path) -> None:
     """``raven doctor`` constructs without starting: no request, no file."""
-    from raven_cloud_memory import mem0, memos, zep
+    from raven_mem0 import backend as mem0
+    from raven_memos import backend as memos
+    from raven_zep import backend as zep
 
     ctx = PluginContext(
         config={"api_key": "k-12345678"},

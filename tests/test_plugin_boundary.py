@@ -2,7 +2,7 @@
 
 The host may know a plugin only through the plugin contract
 (``raven.contracts.memory`` and ``raven.plugins``); it must not import the
-``raven_everos`` or ``raven_cloud_memory`` packages. The plugin may use the host's public helpers --
+``raven_everos`` / ``raven_mem0`` / ``raven_zep`` / ``raven_memos`` packages. The plugin may use the host's public helpers --
 ``raven.config.update`` included, since the ``plugins.config`` slice it writes
 there is its own data -- but must not reach into host modules that exist for
 the plugin's sake. The list below holds the violations still standing; a task
@@ -19,10 +19,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 HOST_DIR = REPO_ROOT / "raven"
 PLUGIN_DIRS = (
     REPO_ROOT / "plugins-dist" / "everos-memory" / "raven_everos",
-    REPO_ROOT / "plugins-dist" / "cloud-memory" / "raven_cloud_memory",
+    REPO_ROOT / "plugins-dist" / "mem0-memory" / "raven_mem0",
+    REPO_ROOT / "plugins-dist" / "zep-memory" / "raven_zep",
+    REPO_ROOT / "plugins-dist" / "memos-memory" / "raven_memos",
 )
 
-_PLUGIN_IMPORT = re.compile(r"^\s*(from|import)\s+raven_(everos|cloud_memory)\b", re.M)
+_PLUGIN_IMPORT = re.compile(r"^\s*(from|import)\s+raven_(everos|mem0|zep|memos)\b", re.M)
 _HOST_PRIVATE = re.compile(
     r"^\s*(?:from\s+raven\.(cli|config\.loader|config\.raven)\b|import\s+raven\.(cli|config\.loader|config\.raven)\b)",
     re.M,

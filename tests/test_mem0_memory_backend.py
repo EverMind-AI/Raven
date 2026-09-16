@@ -6,12 +6,12 @@ from typing import Any
 
 import httpx
 
-from raven_cloud_memory.mem0 import SEARCH_THRESHOLD, Mem0Backend
-from tests._cloud_memory_cases import USER, CloudBackendCases
-from tests._cloud_memory_fakes import FakeMem0
+from raven_mem0.backend import SEARCH_THRESHOLD, Mem0Backend
+from tests._hosted_memory_cases import USER, HostedBackendCases
+from tests._hosted_memory_fakes import FakeMem0
 
 
-class TestMem0(CloudBackendCases):
+class TestMem0(HostedBackendCases):
     fake_cls = FakeMem0
     backend_cls = Mem0Backend
     RECALL_PATH = "/v3/memories/search/"

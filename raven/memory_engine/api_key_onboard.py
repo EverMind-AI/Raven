@@ -1,6 +1,6 @@
 """The ``raven onboard`` screen of a hosted backend: one key, one probe.
 
-One class serves all three services; the factory names which. The screen
+One class serves any :class:`HttpMemoryBackend`; a plugin's factory names which. The screen
 asks for the key unless the shell already exports it, proves it with the
 backend's own ``health()``, and records the slice under the backend's name
 through ``set_plugin_config_fields`` -- a merge, so configuring one service
@@ -17,20 +17,17 @@ from typing import Any
 
 import httpx
 
+from raven.memory_engine.http_backend import HttpMemoryBackend
 from raven.plugins import OnboardUI, PluginContext, StepOutcome
-from raven_cloud_memory._base import CloudBackend
-from raven_cloud_memory.mem0 import Mem0Backend
-from raven_cloud_memory.memos import MemosBackend
-from raven_cloud_memory.zep import ZepBackend
 
 
-class CloudOnboardStep:
+class ApiKeyOnboardStep:
     """The ``onboard`` contribution for one hosted backend."""
 
     def __init__(
         self,
         ctx: PluginContext,
-        backend_cls: type[CloudBackend],
+        backend_cls: type[HttpMemoryBackend],
         *,
         client_factory: Callable[[], httpx.AsyncClient] | None = None,
     ) -> None:
@@ -95,7 +92,7 @@ class CloudOnboardStep:
             return None
 
     @staticmethod
-    async def _health_then_stop(backend: CloudBackend):
+    async def _health_then_stop(backend: HttpMemoryBackend):
         try:
             return await backend.health()
         finally:
@@ -110,16 +107,4 @@ class CloudOnboardStep:
         set_plugin_config_fields(self._cls.NAME, fields)
 
 
-def make_mem0_step(ctx: PluginContext) -> CloudOnboardStep:
-    return CloudOnboardStep(ctx, Mem0Backend)
-
-
-def make_zep_step(ctx: PluginContext) -> CloudOnboardStep:
-    return CloudOnboardStep(ctx, ZepBackend)
-
-
-def make_memos_step(ctx: PluginContext) -> CloudOnboardStep:
-    return CloudOnboardStep(ctx, MemosBackend)
-
-
-__all__ = ["CloudOnboardStep", "make_mem0_step", "make_memos_step", "make_zep_step"]
+__all__ = ["ApiKeyOnboardStep"]

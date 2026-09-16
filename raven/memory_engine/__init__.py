@@ -28,6 +28,7 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from raven.memory_engine.api_key_onboard import ApiKeyOnboardStep
     from raven.memory_engine.consolidate.attention import (
         DAILY_FIRE_PLAN_HEADER,
         parse_attention,
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
         LifecycleContractTests,
         MemoryBackendContractTests,
     )
+    from raven.memory_engine.http_backend import Call, HttpMemoryBackend, Reply
     from raven.memory_engine.skill_forge import (
         BackendSkillSource,
         HubSkillSource,
@@ -98,6 +100,10 @@ __all__ = [
     "upsert_section",
     "LifecycleContractTests",
     "MemoryBackendContractTests",
+    "ApiKeyOnboardStep",
+    "Call",
+    "HttpMemoryBackend",
+    "Reply",
 ]
 
 _FACE: dict[str, str] = {
@@ -128,6 +134,10 @@ _FACE: dict[str, str] = {
     "upsert_section": "raven.memory_engine.consolidate.attention",
     "LifecycleContractTests": "raven.memory_engine.contract_test",
     "MemoryBackendContractTests": "raven.memory_engine.contract_test",
+    "ApiKeyOnboardStep": "raven.memory_engine.api_key_onboard",
+    "Call": "raven.memory_engine.http_backend",
+    "HttpMemoryBackend": "raven.memory_engine.http_backend",
+    "Reply": "raven.memory_engine.http_backend",
 }
 
 

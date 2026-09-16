@@ -244,41 +244,42 @@ importing it ahead of selection.
 | user drop-in | `~/.raven/plugins/<id>/` | copy the dir | user must provide deps |
 | project drop-in | `./.raven/plugins/<id>/` | checked into project | user must provide deps |
 
-### Example: the shipped hosted-memory plugin
+### Example: the shipped hosted-memory plugins
 
-`plugins-dist/cloud-memory/` is the reference second plugin: Mem0 Platform,
-Zep Cloud and MemOS Cloud as three `memory_backends` contributions of one
-manifest, each an HTTP client over the `httpx` the host already carries.
+`plugins-dist/mem0-memory`, `zep-memory` and `memos-memory` are the reference
+second plugins: Mem0 Platform, Zep Cloud and MemOS Cloud, one distribution
+each, every one a thin HTTP client over the `httpx` the host already carries.
 
 ```
-plugins-dist/cloud-memory/
-  pyproject.toml                    # [project.entry-points."raven.plugins"] cloud-memory = "raven_cloud_memory"
-  raven_cloud_memory/
-    raven-plugin.toml               # id="cloud-memory"; backends + onboard screens mem0 / zep / memos
-    _base.py                        # CloudBackend: the contract once, over Call/Reply
-    mem0.py  zep.py  memos.py       # each service's requests and response shapes
-    onboard.py                      # one screen class, three factories
+plugins-dist/mem0-memory/
+  pyproject.toml                  # [project.entry-points."raven.plugins"] mem0-memory = "raven_mem0"
+  raven_mem0/
+    raven-plugin.toml             # id="mem0-memory"; memory_backends name="mem0" + its onboard screen
+    backend.py                    # Mem0Backend(HttpMemoryBackend): the service's requests and response shapes
+    onboard.py                    # make_onboard_step -> ApiKeyOnboardStep(ctx, Mem0Backend)
 ```
 
-A backend fills in its service's requests and how to read the answers; the
-base class owns the contract's failure semantics (a fault costs one call,
-never the turn), the turn-path budget (recall gives up before the host's 5s
-does) and the write semantics (`store` returns `True` on acceptance --
-all three services extract asynchronously, and nothing polls on the turn
-path).
+What they share lives in the host, next to the contract tests, for any author
+of a hosted backend: `raven.memory_engine.HttpMemoryBackend` owns the
+contract's failure semantics (a fault costs one call, never the turn), the
+turn-path budget (recall gives up before the host's 5s does) and the write
+semantics (`store` returns `True` on acceptance -- hosted services extract
+asynchronously, and nothing polls on the turn path); a subclass fills in its
+service's calls and how to read the answers. `raven.memory_engine.ApiKeyOnboardStep`
+is the matching wizard screen: one key, one `health()` probe, one slice.
 
-Install + activate (the wheel ships with each release; `install.sh` does not
-pull it yet):
+Install + activate (each wheel ships with the release; `install.sh` does not
+pull them yet):
 
 ```bash
-uv tool install --with cloud-memory@<wheel-url> "raven[channels] @ <raven-wheel-url>"
+uv tool install --with mem0-memory@<wheel-url> "raven[channels] @ <raven-wheel-url>"
 ```
 ```json
 "memory":  { "backend": "mem0", "userId": "user-raven", "memoryTopK": 5 },
 "plugins": { "config": { "mem0": { "api_key": "...", "base_url": "https://api.mem0.ai" } } }
 ```
 
-Each backend reads the slice keyed by its **own contribution name** (`mem0`,
+Each backend reads the slice keyed by its **contribution name** (`mem0`,
 `zep`, `memos`), so three keys never share a slot and switching
 `memory.backend` leaves the others' slices in place. `<NAME>_API_KEY` in the
 environment beats the slice. Identity is never in a slice: `user_id` reaches

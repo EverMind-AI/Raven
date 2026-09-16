@@ -153,7 +153,7 @@ def _no_everos_io(monkeypatch: pytest.MonkeyPatch):
 def _everos_screen_only(monkeypatch: pytest.MonkeyPatch) -> None:
     """Narrow the wizard's memory screens to EverOS's.
 
-    The dev environment installs the cloud-memory plugin too, and with more
+    The dev environment installs the hosted-memory plugins too, and with more
     than one screen step 4 opens with a chooser. The tests in this file script
     the EverOS screen's own prompts; the chooser is tested on its own, with
     stand-in steps. A test that stubs ``_memory_steps`` itself overrides this.

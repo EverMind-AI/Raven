@@ -18,13 +18,13 @@ from __future__ import annotations
 from typing import Any
 
 from raven.contracts.memory import BackendHealth, HealthCheck, Memory
+from raven.memory_engine.http_backend import STORE_TIMEOUT_S, Call, HttpMemoryBackend, Reply, clamp_score
 from raven.plugins import PluginContext
-from raven_cloud_memory._base import STORE_TIMEOUT_S, Call, CloudBackend, Reply, clamp_score
 
 _EXISTS = (409,)
 
 
-class ZepBackend(CloudBackend):
+class ZepBackend(HttpMemoryBackend):
     NAME = "zep"
     DEFAULT_BASE_URL = "https://api.getzep.com"
     ENV_KEY = "ZEP_API_KEY"

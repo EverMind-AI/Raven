@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import httpx
 
-from raven_cloud_memory.zep import ZepBackend
-from tests._cloud_memory_cases import USER, CloudBackendCases
-from tests._cloud_memory_fakes import FakeCloud, FakeZep
+from raven_zep.backend import ZepBackend
+from tests._hosted_memory_cases import USER, HostedBackendCases
+from tests._hosted_memory_fakes import FakeCloud, FakeZep
 
 
-class TestZep(CloudBackendCases):
+class TestZep(HostedBackendCases):
     fake_cls = FakeZep
     backend_cls = ZepBackend
     RECALL_PATH = "/api/v2/graph/search"

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import httpx
 
-from raven_cloud_memory._base import Reply
-from raven_cloud_memory.memos import MemosBackend
-from tests._cloud_memory_cases import USER, CloudBackendCases
-from tests._cloud_memory_fakes import FakeMemos
+from raven.memory_engine.http_backend import Reply
+from raven_memos.backend import MemosBackend
+from tests._hosted_memory_cases import USER, HostedBackendCases
+from tests._hosted_memory_fakes import FakeMemos
 
 
-class TestMemos(CloudBackendCases):
+class TestMemos(HostedBackendCases):
     fake_cls = FakeMemos
     backend_cls = MemosBackend
     RECALL_PATH = "/search/memory"
