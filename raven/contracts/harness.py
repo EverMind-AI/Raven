@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -32,6 +33,70 @@ if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider, LLMResponse
 
 __tier__ = "factory_loop"
+
+
+class WindowPressure(str, Enum):
+    """Why the window is being asked to get smaller: the shell's side of the seam.
+
+    The two ``before`` pressures are asked every iteration; the three
+    ``refused`` ones only when the endpoint answered a call with the matching
+    classification, and a ``changed`` answer to one of those is the shell's
+    cue to retry the iteration.
+    """
+
+    PROACTIVE = "proactive"
+    """Before a call: the last billed context size crossed the trigger line."""
+    STANDING = "standing"
+    """Before a call: the picture window and its byte budget, applied in place."""
+    OVERFLOW = "overflow"
+    """After a call: the endpoint refused the request as too long."""
+    TOOL_IMAGES_REFUSED = "tool_images_refused"
+    """After a call: this endpoint takes no picture inside a tool result."""
+    IMAGES_TOO_LARGE = "images_too_large"
+    """After a call: the request's pictures were refused for their size."""
+
+
+@dataclass
+class WindowState:
+    """One turn's window bookkeeping: the readings and retry budgets every
+    shrink draws on.
+
+    Mutable, and held by the shell rather than the role: the counts move every
+    iteration and belong to the turn, while Memory is a generation's role and
+    outlives it. The shell creates one per turn and hands the same object to
+    every ``shrink`` call; Memory reads and advances it and never keeps it.
+
+    ``image_window`` has no default on purpose: 0 is a real value meaning "no
+    picture stays", so a state built without saying how many image-bearing
+    messages keep theirs would silently withdraw them all.
+    """
+
+    image_window: int
+    """Image-bearing messages that keep their pictures; a refusal closes it a notch."""
+    last_context_used: int = 0
+    """Billed size of the last successful call; 0 until the first usage report
+    and after any compaction, so the proactive trigger fires on fresh data only."""
+    compress_retries: int = 0
+    """Elisions and head summaries paid for this turn, against one shared cap."""
+    head_summary_failures: int = 0
+    """Summaries paid for that freed nothing; read only to say why the elisions
+    that follow are all the turn has left."""
+    reactive_summary_tried: bool = False
+    """The overflow-path summary is a last resort, once per turn."""
+    image_budget: int | None = None
+    """Bytes the standing pictures may occupy on the wire, or None for no standing pass."""
+    image_demote_retries: int = 0
+    image_strip_retries: int = 0
+
+
+@dataclass(frozen=True)
+class ShrinkResult:
+    """What Memory hands back from one ``shrink``: the list to go on with, and
+    whether it is smaller. ``changed`` false means the role had no move left
+    for this pressure, and ``messages`` is then the list it was given."""
+
+    messages: list[dict[str, Any]]
+    changed: bool
 
 
 @runtime_checkable
@@ -77,6 +142,26 @@ class MemoryModule(Protocol):
         turn: "TurnContext",
     ) -> "AssembledContext":
         """Build the exact message list this turn's first model call receives."""
+        ...
+
+    async def shrink(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        pressure: "WindowPressure",
+        state: "WindowState",
+        model: str | None,
+    ) -> "ShrinkResult":
+        """Make the window smaller under ``pressure``, if this role has a move
+        left for it; otherwise hand the list back unchanged.
+
+        The window's mid-turn decisions, in one seat: what to give up when the
+        transcript nears the line, when a summary is worth paying for, which
+        pictures stay. The shell keeps the mechanism -- it re-enters the
+        iteration on a ``changed`` reactive answer, so the hooks and the standing
+        passes see a retry exactly as they saw the attempt -- and this role keeps
+        the policy, which is the half a generation may replace.
+        """
         ...
 
     async def after_turn(self, session_key: str, outcome: dict[str, Any]) -> None:
@@ -223,4 +308,7 @@ __all__ = [
     "PlanningModule",
     "PlanningRequest",
     "PlanningResult",
+    "ShrinkResult",
+    "WindowPressure",
+    "WindowState",
 ]

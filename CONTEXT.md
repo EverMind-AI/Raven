@@ -90,8 +90,9 @@ The four generation-scoped strategy roles the Agent Loop delegates to without gi
 Turn state machine: **Memory** assembles the window the model sees, **Planning** may prepare
 turn guidance, **Capability** picks the tool definitions one Iteration exposes, and **Action**
 produces one model response. The default set preserves what the loop did inline: Memory wraps
-this generation's Context Engine and adds the two turn decisions that were the shell's (which
-history slice is a candidate, and how much window the prompt may occupy), Planning passes
+this generation's Context Engine and adds the turn decisions that were the shell's (which
+history slice is a candidate, how much window the prompt may occupy, and how a transcript is
+made to fit again mid-turn), Planning passes
 messages through, Capability reports `ToolRegistry.get_definitions`, and Action dispatches the
 one streaming-or-retrying call.
 Frozen per Generation: the tool array is the prompt-cache prefix, so the set a turn runs on
@@ -938,7 +939,8 @@ losslessly to disk, Consolidation distills across turns into memory notes, Compa
 
 **Compaction** (`agents.defaults.compaction`, `config/schema.py:CompactionConfig`):
 In-turn transcript compaction for long agentic turns, off by default: without it the
-loop's in-turn shrinks are the standing image window (`_window_images`, which retires
+loop's in-turn shrinks are the standing image window (`Memory.shrink` under
+`WindowPressure.STANDING`, which retires
 pictures the model has already looked at before every call, bounded by
 `agents.defaults.imageWindowBudgetBytes`) and the reactive, deterministic elision it has
 always run on a provider's overflow error. Enabled, two layers join them on the same usage

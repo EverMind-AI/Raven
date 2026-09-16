@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent import workdir
+from raven.agent.window import shrink
 from raven.contracts.loop_hooks import AgentHookContext
 from raven.plugins.context import PluginContext, ServiceLocator
 from raven_ppt.contracts import Project
@@ -48,7 +49,7 @@ HISTORY = [
 
 
 def test_the_marker_is_the_hosts_own_spelling() -> None:
-    from raven.agent.loop.compaction import SUMMARY_MARKER
+    from raven.agent.window.compaction import SUMMARY_MARKER
 
     assert ledger.SUMMARY_MARKER == SUMMARY_MARKER
 
@@ -58,9 +59,9 @@ def test_the_loop_authored_keys_are_the_trunks_own() -> None:
     import inspect
 
     from raven.agent.loop import turn_path
-    from raven.agent.loop._shared import _ATTACHED_IMAGE_KEY
+    from raven.agent.window.images import ATTACHED_IMAGE_KEY
 
-    assert _ATTACHED_IMAGE_KEY in ledger.LOOP_AUTHORED_KEYS
+    assert ATTACHED_IMAGE_KEY in ledger.LOOP_AUTHORED_KEYS
     # The recovery mark has no module constant to import; it is written as a
     # literal where the scaffolding is built and where the trunk strips it.
     assert '"_recovery_synthetic"' in inspect.getsource(turn_path)
@@ -69,10 +70,9 @@ def test_the_loop_authored_keys_are_the_trunks_own() -> None:
 
 def test_the_elided_tool_body_is_the_trunks_own() -> None:
     """The prune's placeholder, taken from the prune rather than transcribed."""
-    from raven.agent.loop.main import AgentLoop
 
     messages = [{"role": "tool", "tool_call_id": f"c{i}", "content": "body " * 50} for i in range(8)]
-    shrunk, elided = AgentLoop._emergency_shrink(messages)
+    shrunk, elided = shrink.emergency_shrink(messages)
 
     assert elided > 0
     assert shrunk[0]["content"] == ledger.ELIDED_TOOL_BODY
@@ -200,7 +200,7 @@ def test_the_running_turns_words_reach_the_ledger_before_the_record_has_them(tmp
     in the head the summary replaces."""
     from types import SimpleNamespace
 
-    from raven.agent.loop.compaction import build_compacted
+    from raven.agent.window.compaction import build_compacted
 
     root = _deck(tmp_path)
     hook = _hook(tmp_path)
@@ -324,7 +324,7 @@ def test_each_summary_gets_its_own_ledger_even_when_the_last_one_is_retained_in_
     appended earlier can sit after the new summary. The marker names the summary it
     answers, so the new summary is still recognised as unanswered, and the summary
     already answered is not answered twice."""
-    from raven.agent.loop.compaction import build_compacted
+    from raven.agent.window.compaction import build_compacted
 
     root = _deck(tmp_path)
     hook = _hook(tmp_path)

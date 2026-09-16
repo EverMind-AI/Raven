@@ -85,51 +85,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
 
     _TOOL_RESULT_MAX_CHARS = 16_000
 
-    # Max emergency context shrinks per turn before a context overflow is fatal.
-    _MAX_COMPRESS_RETRIES = 2
-
-    # Max image demotions per turn. One is enough: a refusal is deterministic for
-    # the model, and the first retry also caches the verdict, so a second attempt
-    # would mean the failure was never about images.
-    _MAX_IMAGE_DEMOTE_RETRIES = 1
-
-    # Max times a request refused for the size of its pictures is asked again with
-    # the image window closed a notch. Two: from a window of two, the second notch
-    # reaches zero, past which no picture is sent and a refusal cannot be about one.
-    _MAX_IMAGE_STRIP_RETRIES = 2
-
-    # The image window. Pictures a tool showed stay in the request while all of
-    # them together fit the configured budget (``agents.defaults.imageWindowBudgetBytes``,
-    # base64 bytes as they travel, carried on ``RecoveryLimits``); when they do not,
-    # every image-bearing message but the newest ``_IMAGE_WINDOW_RECENT_MESSAGES``
-    # loses its pictures at once, each replaced by a note saying what it showed and
-    # how to see it again. Pictures stay for as long as a turn runs otherwise, and
-    # one deck build reached 75 of them in a single request (26.6 MB decoded, 35.5 MB
-    # encoded) before OpenRouter refused it with 413, four times across two runs; the
-    # refusals were measured to start at about 26.3 MB decoded, i.e. 35.1 MB on the
-    # wire. Counting decoded was the bug: 11.24 MB of pictures passed this 12 MB
-    # budget on a request that put 16.8 MB on the wire, and the gateway answered it
-    # with an empty 200 and zero usage. So the same 12 MB now bounds the encoded side,
-    # which is 9 MB decoded -- tighter by a third, and affordable because a deck's page
-    # renders are JPEG rather than PNG by the time they are encoded. 0 turns the
-    # standing pass off and leaves the refusal ladder.
-    # A collapse rather than a per-batch slide because every withdrawal
-    # breaks the prefix an upstream cache can match: sliding cost 16 breaks in 60
-    # calls and 20 points of cache hit rate on one measured deck, collapsing costs
-    # one to four per deck on the same sequences. Two kept so the render an edit
-    # was made against stays beside the render that came back from it.
-    _IMAGE_WINDOW_RECENT_MESSAGES = 2
-
-    # Most recent tool results kept intact when emergency-shrinking; older ones
-    # are elided (their bodies are the bulk of mid-turn context growth).
-    _SHRINK_KEEP_RECENT_TOOL_RESULTS = 3
-
-    # Image-bearing messages kept intact when emergency-shrinking. Tighter than
-    # the tool-result count because one image can cost 1568 tokens: the picture
-    # the model is currently reasoning about is worth keeping, older ones are the
-    # cheapest thing to give up.
-    _SHRINK_KEEP_RECENT_IMAGES = 1
-
     # Reconnects allowed for a streamed call that failed before its first delta
     # (after one, the caller has output that a retry would duplicate).
     _MAX_STREAM_RECONNECTS = 1
@@ -506,6 +461,11 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             model=lambda: self.model,
             context_window_tokens=lambda: self.context_window_tokens,
             system_prompt=lambda skills: self.context.build_system_prompt(skills),
+            # The window's mid-turn moves read these two live for the reason the
+            # rest are callables: a hot config apply replaces the compaction
+            # settings, and the ceiling follows the model a request goes out under.
+            compaction=lambda: self._compaction,
+            output_ceiling=self._wire_output_ceiling,
         )
 
         # Checkpointing is configured under ``runtime.checkpoint``;

@@ -87,6 +87,7 @@ LEDGER = {
         "Memory",
         "MemoryBackend",
         "ProviderHTTPError",
+        "REASONING_EFFORT_LADDER",
         "QuestionResponder",
         "RAW_ARGUMENTS_KEY",
         "RunMeta",
@@ -164,6 +165,9 @@ LEDGER = {
         "CapabilitySelection",
         "PlanningRequest",
         "PlanningResult",
+        "ShrinkResult",
+        "WindowPressure",
+        "WindowState",
     },
 }
 
@@ -267,7 +271,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("27", "c5b14e4e02931ad8c4be2e65efcad319d34f5b89ce0177163b7a234c148cbca6")
+PINNED_CONTRACT_SURFACE = ("28", "12e9be4ff4dcc4903cbe7c8fb77e21c29879444346eb01ff5bd35763fc813701")
 
 
 def _render(node) -> str:

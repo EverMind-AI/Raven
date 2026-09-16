@@ -38,6 +38,8 @@ def default_harness_modules(
     model: Callable[[], str],
     context_window_tokens: Callable[[], int],
     system_prompt: Callable[[list[Any] | None], str],
+    compaction: Callable[[], Any],
+    output_ceiling: Callable[[str | None], int],
 ) -> HarnessModules:
     """Assemble the default four around this generation's own organs."""
     memory = DefaultMemory(
@@ -47,6 +49,8 @@ def default_harness_modules(
         context_window_tokens=context_window_tokens,
         tool_definitions=lambda: registry_provider().get_definitions(),
         system_prompt=system_prompt,
+        compaction=compaction,
+        output_ceiling=output_ceiling,
     )
     return HarnessModules(
         memory=bind_memory(memory),

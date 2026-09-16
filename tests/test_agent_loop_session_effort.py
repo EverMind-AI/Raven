@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import pytest
 
-from raven.agent.loop import AgentLoop, compaction
+from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
+from raven.agent.window import compaction
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.config.schema import CompactionConfig
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest

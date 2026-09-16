@@ -122,6 +122,22 @@ not see it. Memory fills the two strings now and the segment renders them.
 Measured at 3,072, and the twenty-eight above it is the headroom this
 docstring has argued for since the first bump: a ceiling the next field trips
 is a ceiling somebody edits on the way past.
+
+3,100 -> 3,200 (2026-09-17), and this is that review. The Memory role gains
+its mid-turn seat: ``shrink``, with ``WindowPressure`` (the five reasons a
+window is asked to get smaller), ``WindowState`` (one turn's readings and
+retry budgets, held by the shell because the role outlives the turn) and
+``ShrinkResult``, 84 lines of which the prose is most. The five recoveries the
+loop ran inline -- proactive compaction, the standing image window, overflow,
+a picture refused in a tool result, pictures refused for size -- now go
+through this one method, so the policy half moved onto the role while the
+retry mechanism stayed in the shell; the six ``continue`` statements did not
+move. ``REASONING_EFFORT_LADDER`` (11 lines with its prose) also lands in
+``llm_provider.py``: the loop's empty-response descent and the window's head
+summary both read it, and neither package may import the other.
+
+Measured at 3,170, thirty over the count rather than one, for the reason the
+first bump gave.
 """
 
 from __future__ import annotations
@@ -132,7 +148,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_100
+CONTRACTS_LINE_CEILING = 3_200
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

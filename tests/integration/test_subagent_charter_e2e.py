@@ -241,6 +241,8 @@ async def test_the_brief_only_reaches_the_identity_through_memory(workspace) -> 
         context_window_tokens=lambda: 8000,
         tool_definitions=lambda: [],
         system_prompt=lambda skills: "",
+        compaction=lambda: None,
+        output_ceiling=lambda model=None: 1000,
     )
     budget = TokenBudget(
         context_length=8000, reserved_output=1000, reserved_tools=0, reserved_system=0, available_history=7000
