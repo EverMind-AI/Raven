@@ -11,10 +11,11 @@
  *     existed (demo/150-chrome.js's `sTab = 'model'`) and is now spelled
  *     window.sTab.
  *
- * So every free identifier in the layers has to be one of: declared in the
- * part, imported by it, a browser global, or a name the page hangs on window
- * (main.tsx publishes 28 plus RavenIslands; the legacy layers publish eight of
- * their own). A free WRITE is never allowed, whatever the name.
+ * So every free identifier in the layers has to be declared in the part,
+ * imported by it, or a browser global. Nothing is published on window for the
+ * layers to read any more, so the list below is browser globals and the two
+ * names the page itself hangs there: the desktop shell's bridge and the asset
+ * digest. A free WRITE is never allowed, whatever the name.
  *
  * eslint is not a dependency of this package and this does not add one: the
  * TypeScript compiler is already here, and a scope walk is what no-undef is.
@@ -38,18 +39,6 @@ const trees = new Map(
   [...texts].map(([rel, text]) => [rel, ts.createSourceFile(rel, text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS)]),
 )
 
-/* Read from the sources rather than listed here: a name published by main.tsx
-   or by a legacy part is a page global whichever file hangs it, and a list
-   kept by hand would go stale on the first republish. */
-const PUBLISHED = new Set(
-  [...readFileSync(url('src/main.tsx'), 'utf8').matchAll(/^window\.([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]),
-)
-PUBLISHED.add('RavenIslands')
-PUBLISHED.add('RavenShell')
-for (const text of texts.values()) {
-  for (const m of text.matchAll(/^\s*window\.([A-Za-z_$][\w$]*)\s*=/gm)) PUBLISHED.add(m[1])
-}
-
 const BROWSER = new Set([
   'window', 'document', 'console', 'Math', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Date',
   'Promise', 'Set', 'Map', 'WeakMap', 'WeakSet', 'Error', 'TypeError', 'RangeError', 'Symbol', 'RegExp', 'Intl',
@@ -67,6 +56,10 @@ const BROWSER = new Set([
   'innerWidth', 'innerHeight', 'scrollX', 'scrollY', 'parent', 'postMessage', 'IntersectionObserverEntry',
   'CSSStyleSheet', 'ClipboardItem', 'ImageData', 'Text', 'Range', 'Selection', 'NodeFilter', 'XPathResult',
   'MediaQueryList',
+  /* The desktop shell's bridge and the asset digest page.html stamps on. The
+     only two names the page hangs on window; both are read as properties of
+     `window`, never bare, so neither should ever reach this list. */
+  'webkit', '__ASSETV',
 ])
 
 const bind = (nm, out) => {
@@ -165,11 +158,11 @@ function freeIdentifiers(rel) {
   return out
 }
 
-describe('every free identifier in a legacy module is imported, a browser global, or published on window', () => {
+describe('every free identifier in a legacy module is declared, imported, or a browser global', () => {
   for (const rel of FILES) {
     it(rel, () => {
       const undef = freeIdentifiers(rel)
-        .filter((r) => !BROWSER.has(r.name) && !PUBLISHED.has(r.name))
+        .filter((r) => !BROWSER.has(r.name))
         .map((r) => `${rel}:${r.line} ${r.name}`)
       expect([...new Set(undef)]).toEqual([])
     })
@@ -177,8 +170,8 @@ describe('every free identifier in a legacy module is imported, a browser global
 })
 
 describe('no legacy module writes a name it does not declare', () => {
-  /* Separate from the rule above because being on window does not save it: a
-     module is strict, so `sTab = x` throws even though window.sTab exists. */
+  /* Separate from the rule above because a browser global does not save it
+     either: a module is strict, so a bare `name = x` throws. */
   for (const rel of FILES) {
     it(rel, () => {
       const writes = freeIdentifiers(rel)

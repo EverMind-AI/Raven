@@ -16,6 +16,7 @@ import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { setShell, shell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { ProseTarget } from '../../shell/prose'
@@ -26,7 +27,7 @@ import type { ArtifactsSource, HistoryMessage, SpawnListRow, TranscriptSource } 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 /* The island runs against the same two seams production wires: a fake shell
-   on window.RavenShell (T returns its key, prefixed by the current language
+   handed in through setShell (T returns its key, prefixed by the current language
    so a flip is observable) and a source on sources.transcript. */
 let lang = 'en'
 
@@ -48,7 +49,7 @@ function wire(over: Partial<TranscriptSource> = {}): void {
     showPage: () => {},
     attNotes: () => ['[attachments]'],
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   const source: TranscriptSource = {
     clean: (t) => String(t == null ? '' : t).trim(),
     okOf: (_n, p) => !/^\s*(error|traceback|failed)\b/i.test(p),
@@ -2153,7 +2154,7 @@ describe('transcript island, the delegation verbs', () => {
   it('sends a spawn row to the agents panel when nothing else will take it', () => {
     const went: string[] = []
     wire()
-    window.RavenShell!.showWorkspace = (tab) => went.push(tab)
+    shell().showWorkspace = (tab) => went.push(tab)
     store.openSpawn('researcher', 'read the docs')
     expect(went).toEqual(['agents'])
   })

@@ -6,6 +6,9 @@
    buffers the events that arrive while it is away; returning reattaches the
    DOM and replays the buffer, so nothing is lost. */
 
+import { islands } from '../../islands'
+import { draw as drawBanner } from '../../shell/banner'
+import { current as sessionCurrent } from '../../shell/session'
 import { sources } from '../../state/sources'
 import { $ } from '../demo/010-kernel.js'
 import { down, queueRestore, queueSnapshot, sess, turn } from '../demo/040-state.js'
@@ -44,8 +47,8 @@ function parkTurn() {
        away session's idle turn-live paint zeroes it -- without carrying it
        here, a turn ten minutes in read "2s" after a round trip through
        another session. */
-    liveT0: RavenIslands.composer.liveAnchor(),
-    ws: RavenIslands.workspace.snapshot(),
+    liveT0: islands.composer.liveAnchor(),
+    ws: islands.workspace.snapshot(),
     /* Asked for, not read off the panel's own bindings: this layer parks the
        pane state, it does not own it. */
     pane: wsView(),
@@ -62,8 +65,8 @@ function restoreTurn(pk) {
   turn.restore(pk.phase); queueRestore(pk.queue);
   /* Before drawMeter below: its turn-live paint keeps a non-zero anchor, so the
      clock resumes from the turn's real start rather than from the switch. */
-  RavenIslands.composer.setLiveAnchor(pk.liveT0 || 0);
-  RavenIslands.workspace.restore(pk.ws);
+  islands.composer.setLiveAnchor(pk.liveT0 || 0);
+  islands.workspace.restore(pk.ws);
   wsRestore(pk.pane.tab, pk.pane.picked);
   const s = sess(sessionCurrent());
   if (s && s.status === 'run') s.status = null;

@@ -6,10 +6,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { _resetForTests as sheetReset } from '../features/composer/sheets'
 import { run as dagOpen, start as dagStart, _resetForTests as dagReset } from '../features/dag/mount'
 import { openDeskAgent, openDeskAgentRecord, openDeskFile, openDeskTab, getState as deskState, reset as deskLeave, saved as deskSaved, setActive, toggleSolo, updateSplits, _resetForTests as deskReset } from '../features/workspace/deskStore'
+/* The wiring main.tsx gets from this import: the subagents panel's pane
+   openers are handed to it here, so replaying an open lands in a real pane. */
+import '../islands'
 import { landing, refreshDag, resume, watch } from './resume'
 import { _resetForTests as sessionReset, setCurrent } from './session'
 import { reset as agentsLeave, _resetForTests as agentsReset, getState as agentsState } from '../features/subagents/store'
 import { resetSources, setSources } from '../state/sources'
+import { resetShell, setShell } from './bridge'
 
 import type { Shell } from './bridge'
 import type { DagRun } from '../features/dag/types'
@@ -53,7 +57,7 @@ let dagRun: (runId: string) => Promise<unknown> = () => Promise.resolve(runWire)
 
 function wire(): void {
   const shell: Shell = { T: (key) => key, confirmAsk: () => {}, showPage: () => {} }
-  window.RavenShell = shell
+  setShell(shell)
   setSources({
     transcript: {
       dagRun: (runId: string) => {
@@ -73,9 +77,6 @@ function wire(): void {
       },
     },
   })
-  /* The same wiring main.tsx does: the panel's open verbs reach the desk
-     through this bag, so replaying an open lands in a real pane. */
-  window.RavenIslands = { workspace: { openAgent: openDeskAgent, openAgentRecord: openDeskAgentRecord } }
   document.body.innerHTML = '<div id="split" data-open="false"></div>'
     + '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div></div></div>'
 }
@@ -122,9 +123,8 @@ afterEach(() => {
   agentsReset()
   sheetReset()
   sessionReset()
-  window.RavenShell = undefined
+  resetShell()
   resetSources()
-  window.RavenIslands = undefined
   document.body.innerHTML = ''
   sessionStorage.clear()
   localStorage.clear()

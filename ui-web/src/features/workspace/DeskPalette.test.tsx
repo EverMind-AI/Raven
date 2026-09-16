@@ -14,7 +14,11 @@ import * as seen from './seen'
 import * as workspace from './store'
 
 import { setCurrent } from '../../shell/session'
+/* The wiring main.tsx gets from this import: the desk's file opener is handed
+   to the workspace store here, and `openDelivery` reaches the desk through it. */
+import '../../islands'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { AgentsSource, InstanceRow } from '../subagents/types'
@@ -64,7 +68,7 @@ function wire(): void {
   /* The agents store files its lists under the open conversation and drops an
      answer for any other, so the harness has to be in one. */
   setCurrent('s1')
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   setSources({
     workspace: source,
     /* The agents tab counts the instances this session started, so the harness
@@ -74,10 +78,6 @@ function wire(): void {
       instances: async (key: string) => { asked.push(key); return agentRows },
     },
   })
-  /* The island bag, as main.tsx installs it: `openDelivery` reaches the desk
-     through it, and a harness without it would exercise the legacy panel
-     path instead of the one production takes. */
-  window.RavenIslands = { workspace: { openFile: desk.openDeskFile } }
   localStorage.clear()
   document.body.innerHTML = '<div id="split" data-open="true"></div>'
   desk._resetForTests()
@@ -106,9 +106,8 @@ afterEach(() => {
     deliveries.restore([])
     workspace.restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
   })
-  window.RavenShell = undefined
+  resetShell()
   resetSources()
-  window.RavenIslands = undefined
   setCurrent(null)
   agents.reset()
   localStorage.clear()

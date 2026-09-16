@@ -13,6 +13,7 @@ import { advance, forget, resume, run, settle, start, sync, touch, _resetForTest
 import { fold as storeFold } from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 import { resetSources, setSources } from '../../state/sources'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { AgentsSource } from '../subagents/types'
@@ -29,7 +30,7 @@ function wire(): void {
     confirmAsk: () => {},
     showPage: () => {},
   }
-  window.RavenShell = shell
+  setShell(shell)
   setSources({
     transcript: { openDagNode: (runId: string, nodeId: string) => opened.push([runId, nodeId]) } as unknown as TranscriptSource,
     agents: {} as unknown as AgentsSource,
@@ -71,7 +72,7 @@ beforeEach(() => {
 
 afterEach(() => {
   sessionReset()
-  delete window.RavenShell
+  resetShell()
   resetSources()
   document.body.innerHTML = ''
   vi.useRealTimers()

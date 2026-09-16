@@ -14,6 +14,9 @@ import { loadPart, looseQuery } from './legacy-part.mjs'
 async function turnPart(stamps, stubs = {}) {
   const part = await loadPart(() => import('../src/legacy/live/050-turn.js'), {
     fakes: {
+      'src/shell/session': { current: () => 's1' },
+      'src/shell/ctxchip': { set: () => {} },
+      'src/shell/notifications': { show: () => {} },
       'demo/010-kernel.js': { $: looseQuery(), dur: (ms) => `${ms}ms`, T: (k) => k },
       'demo/040-state.js': {
         down: () => {},
@@ -28,14 +31,9 @@ async function turnPart(stamps, stubs = {}) {
       'live/030-sessions.js': { touchSession: () => {} },
       'live/080-overrides.js': { liveSend: () => {} },
     },
-    globals: {
-      RavenIslands: {
-        transcript: { nudge: () => {}, stopStream: () => {}, ...stubs.transcript },
-        workspace: { currentTurn: () => 1 },
-      },
-      sessionCurrent: () => 's1',
-      setCtx: () => {},
-      ntfPush: () => {},
+    islands: {
+      transcript: { nudge: () => {}, stopStream: () => {}, ...stubs.transcript },
+      workspace: { currentTurn: () => 1 },
     },
   })
   Object.assign(part.live, stamps)

@@ -1,5 +1,12 @@
 /* ---- overrides ----------------------------------------------------- */
 
+import { plainTitle } from '../../features/rail/title'
+import { islands } from '../../islands'
+import { draw as drawBanner } from '../../shell/banner'
+import { set as setCtx } from '../../shell/ctxchip'
+import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell/session'
+import { load as loadTier } from '../../shell/tier'
+import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { $, T } from '../demo/010-kernel.js'
@@ -149,7 +156,7 @@ function startDraft() {
      away for the life of the tab. Ending it commits, which is where a name
      typed there belongs: the conversation it was typed over, not the one
      being opened. */
-  RavenIslands.rail.endRename();
+  islands.rail.endRename();
   viewGen += 1;
   const gen = viewGen;
   parkTurn();
@@ -175,7 +182,7 @@ function startDraft() {
 }
 
 async function openLiveSession(s) {
-  RavenIslands.rail.endRename();
+  islands.rail.endRename();
   viewGen += 1;
   const gen = viewGen;
   parkTurn();
@@ -231,7 +238,7 @@ async function openLiveSession(s) {
        whole of `view.resume`: its desk half replays the reader's opens through
        the same verbs a click goes through, and every window they had would come
        back twice. Not awaited, for the reason the resume below is not. */
-    RavenIslands.view.refreshDag(s.id);
+    islands.view.refreshDag(s.id);
     return;
   }
   try {
@@ -274,7 +281,7 @@ async function openLiveSession(s) {
        adds is everything the replay cannot carry -- a turn still in flight when
        the socket dropped, and one whose messages a compaction has since
        archived. Not awaited: the shelf fills when it answers. */
-    RavenIslands.workspace.loadDeliveries(s.id);
+    islands.workspace.loadDeliveries(s.id);
     await subscribe(s.id);
     /* Checked again on this side of the subscribe: the round trip is one more
        place a reader can leave from, and a replayed file window opens on
@@ -290,7 +297,7 @@ async function openLiveSession(s) {
        that path calls `refreshDag` rather than returning outright.
        Not awaited: it reads the run and the panes back from the gateway, and
        the transcript is already up. */
-    RavenIslands.view.resume(s.id, dagRuns);
+    islands.view.resume(s.id, dagRuns);
   } catch (e) {
     /* Same for the failure: a session the reader has already left must not
        empty their stage, and must not raise a toast about a page nobody is on. */
@@ -480,14 +487,14 @@ function liveSend(text) {
    "done", under a note saying the output was kept. */
 function softStop(keepCancelling) {
   killStatus();
-  RavenIslands.transcript.finishTurn(live.st, live.steps, turnDur());
+  islands.transcript.finishTurn(live.st, live.steps, turnDur());
   stop_();
   if (!keepCancelling) turn.dispatch({ type: 'idle' });
   /* Only promise the output was kept when there is output above to keep. */
-  noteRow(T(RavenIslands.transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
+  noteRow(T(islands.transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
     { quiet: true, host: $('#stage') });
   /* A stopped turn still produced what it produced. */
-  RavenIslands.transcript.artifacts(RavenIslands.workspace.currentTurn());
+  islands.transcript.artifacts(islands.workspace.currentTurn());
   resetTurnState();
   drawMeter(); goState(); sessionDraw();
 }
@@ -517,8 +524,8 @@ async function leaveDeletedSession(sessionId) {
   parkedTurns.delete(sessionId);
   forgetSubscription(sessionId);
   sheetsForget(sessionId);
-  RavenIslands.dag.forget(sessionId);
-  const transition = RavenIslands.rail.removeRow(sessionRows(), sessionCurrent(), sessionId);
+  islands.dag.forget(sessionId);
+  const transition = islands.rail.removeRow(sessionRows(), sessionCurrent(), sessionId);
   sessionReplace(transition.rows);
   if (transition.kind === 'unchanged') { sessionDraw(); return; }
   if (transition.kind === 'open') {
@@ -531,7 +538,7 @@ async function leaveDeletedSession(sessionId) {
 }
 
 async function leaveArchivedSession(sessionId) {
-  const transition = RavenIslands.rail.removeRow(sessionRows(), sessionCurrent(), sessionId);
+  const transition = islands.rail.removeRow(sessionRows(), sessionCurrent(), sessionId);
   sessionReplace(transition.rows);
   if (transition.kind === 'unchanged') { sessionDraw(); return; }
   if (transition.kind === 'open') {
@@ -582,7 +589,7 @@ export function install() {
        leading icon stripped, and it holds nothing at all while a name is being
        generated. It stays as the last resort for the one thing the row cannot
        answer -- a current conversation that is not in the list. */
-      RavenIslands.rail.endRename();
+      islands.rail.endRename();
       const open = sess(current);
       const heading = $('#title');
       const title = (open && open.title) || (heading && heading.textContent) || '';

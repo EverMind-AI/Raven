@@ -9,6 +9,7 @@ import * as notifications from '../../shell/notifications'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { setShell, shell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { RailSource } from '../rail/types'
@@ -70,7 +71,7 @@ function type(field: HTMLInputElement, value: string): void {
 }
 
 /* The island runs against the same two seams production wires up: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
+   shell handed in through setShell (T returns its key, so tests assert catalogue
    keys, not translations) and a fixture source on sources.settings. */
 function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> = {}) {
   const calls: Array<[string, unknown]> = []
@@ -109,7 +110,7 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
     openSet: () => shellCalls.push(['openSet', null]),
     closeSet: () => shellCalls.push(['closeSet', null]),
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   /* The danger card's button is a SESSION operation offered from this page, so
      it goes out through DS.sessions rather than this page's own source. */
   const wiped: Array<null> = []
@@ -232,7 +233,7 @@ describe('settings island', () => {
         return null
       },
     })
-    const sh = window.RavenShell!
+    const sh = shell()
     sh.setIsOpen = () => up
     /* Mounting the root is what a page load does, Settings untouched. */
     render(<SettingsApp />, { container: document.getElementById('spanels')! })

@@ -7,6 +7,7 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { CronJob, CronSource } from './types'
@@ -31,7 +32,7 @@ function job(over: Partial<CronJob> = {}): CronJob {
 }
 
 /* The island runs against the same two seams production wires up: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
+   shell handed in through setShell (T returns its key, so tests assert catalogue
    keys, not translations) and a fixture source on sources.cron. */
 function install(rows: CronJob[], over: Partial<CronSource> = {}) {
   const calls: string[] = []
@@ -52,7 +53,7 @@ function install(rows: CronJob[], over: Partial<CronSource> = {}) {
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: (id) => shellCalls.push(['showPage', id]),
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   setSources({ cron: source })
   document.body.innerHTML =
     '<section id="cronPage"><div id="cronBody"></div></section>' +

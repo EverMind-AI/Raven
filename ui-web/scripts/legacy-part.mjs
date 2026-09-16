@@ -4,8 +4,7 @@
  * could only reach a function by slicing its text out of the assembled layer
  * and evaluating it with its collaborators passed in as parameters. They are
  * modules now: a collaborator is an import, which `fakes` replaces by part and
- * export name, and the names the page hangs on window are what `globals`
- * stands in for.
+ * export name, and the island bag is an object, which `islands` assigns over.
  *
  * Every load starts from module state as fresh as a reload's, because a part
  * holds real state -- `viewGen`, `parkedTurns`, the naming timers -- and a
@@ -24,16 +23,20 @@ const mocked = new Set()
  *   `() => import('../src/legacy/live/050-turn.js')`. A thunk rather than a
  *   path so the specifier stays static and Vite can resolve it.
  * @param fakes exports to replace, keyed by part path under src/legacy/
- *   (`'demo/050-rail.js'`). What is not named keeps the real implementation.
- * @param globals names to publish on the global object, standing in for what
- *   main.tsx puts on window.
+ *   (`'demo/050-rail.js'`) or, for a module outside the layers, by its path
+ *   from ui-web (`'src/shell/toast'`). What is not named keeps the real
+ *   implementation.
+ * @param islands members of the island bag (src/islands.ts) to stand in for,
+ *   assigned over the real ones. Assigned rather than mocked, and taken from
+ *   the module the reset above just gave the part: a binding a harness held
+ *   from an earlier load belongs to that load.
  */
-export async function loadPart(importPart, { fakes = {}, globals = {} } = {}) {
+export async function loadPart(importPart, { fakes = {}, islands = {} } = {}) {
   for (const path of mocked) vi.doUnmock(path)
   mocked.clear()
   vi.resetModules()
   for (const [part, exports] of Object.entries(fakes)) {
-    const path = `../src/legacy/${part}`
+    const path = part.startsWith('src/') ? `../${part}` : `../src/legacy/${part}`
     mocked.add(path)
     /* Descriptors, not a spread: a fake for a binding the part reassigns --
        `viewGen` -- has to be a getter, and spreading one would freeze it at
@@ -41,8 +44,11 @@ export async function loadPart(importPart, { fakes = {}, globals = {} } = {}) {
     vi.doMock(path, async (original) =>
       Object.defineProperties({ ...(await original()) }, Object.getOwnPropertyDescriptors(exports)))
   }
-  Object.assign(globalThis, globals)
-  return importPart()
+  const part = await importPart()
+  if (Object.keys(islands).length) {
+    Object.assign((await import('../src/islands')).islands, islands)
+  }
+  return part
 }
 
 /* The transport the freshly loaded graph will speak through, with both call

@@ -9,6 +9,7 @@ import * as desk from './deskStore'
 import * as workspace from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { InstanceRow } from '../subagents/types'
@@ -34,7 +35,7 @@ function wire(): void {
     showPage: () => {},
     workspaceSetOpen: (open) => { panelCalls.push(open) },
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   localStorage.clear()
   sessionStorage.clear()
   sessionReset()
@@ -67,7 +68,7 @@ afterEach(() => {
   sessionReset()
   agents.reset()
   resetSources()
-  window.RavenShell = undefined
+  resetShell()
   localStorage.clear()
   sessionStorage.clear()
 })

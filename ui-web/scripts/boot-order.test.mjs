@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 /* Off cwd, not off `import.meta.url`: under happy-dom that is an http URL. */
 import { resolve } from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { loadPart, partNames, partTexts } from './legacy-part.mjs'
 
@@ -29,6 +29,12 @@ async function harness(rows = []) {
   const step = (name) => (...args) => calls.push([name, ...args])
   const part = await loadPart(() => import('../src/legacy/demo/160-boot.js'), {
     fakes: {
+      'src/shell/look': { load: step('lookLoad') },
+      'src/shell/panes': { load: step('paneLoad') },
+      'src/shell/perm': { draw: step('drawPerm') },
+      'src/shell/tier': { load: step('loadTier') },
+      'src/shell/ctxchip': { draw: step('drawCtx') },
+      'src/shell/foot': { draw: step('drawFoot') },
       'demo/040-state.js': {
         bootError: (where, error) => { throw new Error(`${where}: ${error}`) },
       },
@@ -44,15 +50,7 @@ async function harness(rows = []) {
       'demo/150-chrome.js': { setRail: step('setRail') },
       'demo/152-skills.js': { drawCaps: step('drawCaps') },
     },
-    globals: {
-      RavenIslands: { onboard: { open: () => {} } },
-      lookLoad: step('lookLoad'),
-      paneLoad: step('paneLoad'),
-      drawPerm: step('drawPerm'),
-      loadTier: step('loadTier'),
-      drawCtx: step('drawCtx'),
-      drawFoot: step('drawFoot'),
-    },
+    islands: { onboard: { open: () => {} } },
   })
   /* Held rather than let run: the whole claim is that the queued boot happens
      after the install pass, so the test has to be the one that releases it. */
@@ -61,10 +59,6 @@ async function harness(rows = []) {
   try { part.install() } finally { globalThis.queueMicrotask = real }
   return { part, calls, queued }
 }
-
-afterEach(() => {
-  delete window.__liveBoot
-})
 
 describe('the page boot order', () => {
   it('boots fixture mode after the install pass', async () => {
@@ -81,7 +75,9 @@ describe('the page boot order', () => {
 
   it('lets live claim the first paint and tolerates its empty session source', async () => {
     const { part, calls, queued } = await harness()
-    window.__liveBoot = 1
+    /* What live/010-boot-guard.js does on its way in: the demo boot backs off
+       and the live half decides when the splash lifts. */
+    part.claimBoot()
     queued.shift()()
     expect(calls).toEqual([])
 
@@ -140,7 +136,7 @@ describe('the live boot guard', () => {
 
   it('starts the view watch, and only after it has cleared the pointer', () => {
     const clear = guard.indexOf('sessionSet(null)')
-    const watch = guard.indexOf('RavenIslands.view.watch()')
+    const watch = guard.indexOf('islands.view.watch()')
     expect(clear).toBeGreaterThan(-1)
     expect(watch).toBeGreaterThan(clear)
   })

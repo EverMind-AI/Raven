@@ -9,29 +9,32 @@
 /* One step of a turn: the handle keeps the legacy widget surface
    (hasThink/hasSay/failed setters, tool().done(), seal()). */
 
+import { islands } from '../../islands'
+import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell/session'
+import { show as toast } from '../../shell/toast'
 import { sources } from '../../state/sources'
 import { sess } from './040-state.js'
 import { sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
 
 function newStep() {
   /* Draws into the transcript lane inside #stage. */
-  return RavenIslands.transcript.step();
+  return islands.transcript.step();
 }
 
-function collapseTurn(time) { RavenIslands.transcript.collapse(time); }
-function foldSilentRuns(steps) { RavenIslands.transcript.foldRuns(steps); }
-function dagFlowFeed(type, p) { RavenIslands.transcript.dagFeed(type, p); }
+function collapseTurn(time) { islands.transcript.collapse(time); }
+function foldSilentRuns(steps) { islands.transcript.foldRuns(steps); }
+function dagFlowFeed(type, p) { islands.transcript.dagFeed(type, p); }
 
 /* An ask_user round trip is part of the work, not a message the reader
    typed: question and answer share one row. */
 function askEcho(question, answer, opts) {
-  RavenIslands.transcript.qa(question, answer, opts);
+  islands.transcript.qa(question, answer, opts);
 }
 
 /* The turn is never silent: a breathing dot fills the dead air between
    pressing send and the first event. Any content kills it. */
-function showStatus(text) { RavenIslands.transcript.status(text); }
-function killStatus() { RavenIslands.transcript.killStatus(); }
+function showStatus(text) { islands.transcript.status(text); }
+function killStatus() { islands.transcript.killStatus(); }
 
 /* Line icons the rest of the shell still borrows (the queue's edit pen, the
    capabilities tick); the island carries its own copy of this table. */

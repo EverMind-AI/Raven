@@ -1,5 +1,9 @@
 /* ══ module 1b: the conversation ══════════════════════════════════ */
 
+import { plainTitle } from '../../features/rail/title'
+import { islands } from '../../islands'
+import { draw as drawBanner } from '../../shell/banner'
+import { set as setCtx } from '../../shell/ctxchip'
 import { sources } from '../../state/sources'
 import { $, I18N } from './010-kernel.js'
 import { RUNS, cap } from './030-fixtures.js'
@@ -74,9 +78,9 @@ function splitAtts(text) {
 
 function ask(text, when) {
   unpitch();
-  RavenIslands.transcript.setStuck(true);
+  islands.transcript.setStuck(true);
   /* The bubble, its attachment chips and its footer are the island's. */
-  RavenIslands.transcript.ask(text, when);
+  islands.transcript.ask(text, when);
 }
 
 /* Writes what the row shows and what it can give back, together; `row` is
@@ -97,7 +101,7 @@ function noteRow(label, detail, opts) {
      shell still uses on it (noteSay's set, compressNow's remove). `host`
      needs no forwarding: the island's main lane IS the #stage transcript,
      and a delegated pane draws its own notes from its own record. */
-  return RavenIslands.transcript.note(label, detail,
+  return islands.transcript.note(label, detail,
     { quiet: !!o.quiet, retry: typeof o.retry === 'function' ? o.retry : null });
 }
 

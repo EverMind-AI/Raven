@@ -20,6 +20,8 @@ async function harness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc' }]
   const calls = []
   const part = await loadPart(() => import('../src/legacy/live/240-external-agents.js'), {
     fakes: {
+      'src/shell/session': { current: () => 's1' },
+      'src/features/rail/title': { plainTitle: (s) => String(s) },
       'demo/100-workspace.js': {
         wsOpen: false,
         setWs: (open, tab) => calls.push(['setWs', open, tab ?? null]),
@@ -31,18 +33,14 @@ async function harness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc' }]
       'demo/160-boot.js': { bootPage: () => {} },
       'live/050-turn.js': { onEvent: () => {} },
     },
-    globals: {
-      RavenIslands: {
-        subagents: {
-          openDagNode: (run, node) => calls.push(['openDagNode', run, node.id]),
-          rows: () => rows,
-          openRow: (row) => calls.push(['openRow', row.label]),
-          refresh: () => calls.push(['refresh']),
-        },
-        workspace: { openDeskTab: (tab) => calls.push(['openDeskTab', tab]) },
+    islands: {
+      subagents: {
+        openDagNode: (run, node) => calls.push(['openDagNode', run, node.id]),
+        rows: () => rows,
+        openRow: (row) => calls.push(['openRow', row.label]),
+        refresh: () => calls.push(['refresh']),
       },
-      sessionCurrent: () => 's1',
-      plainTitle: (s) => String(s),
+      workspace: { openDeskTab: (tab) => calls.push(['openDeskTab', tab]) },
     },
   })
   await fakeGateway(() => Promise.resolve({}))

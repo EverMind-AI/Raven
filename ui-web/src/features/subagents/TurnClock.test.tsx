@@ -3,6 +3,7 @@ import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { TurnClock } from './TurnClock'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { InstanceRow } from './types'
@@ -13,7 +14,7 @@ function wire(): void {
     confirmAsk: () => {},
     showPage: () => {},
   }
-  window.RavenShell = shell
+  setShell(shell)
 }
 
 const row = (over: Partial<InstanceRow> = {}): InstanceRow =>
@@ -23,7 +24,7 @@ const shown = (): string | null => document.querySelector('.pane-turnms')?.textC
 
 afterEach(() => {
   cleanup()
-  delete window.RavenShell
+  resetShell()
   vi.useRealTimers()
 })
 

@@ -17,6 +17,8 @@ async function run(reason) {
   const seen = { toasts: [], closed: [], turns: [] }
   const part = await loadPart(() => import('../src/legacy/live/070-notify.js'), {
     fakes: {
+      'src/shell/session': { current: () => 'tui:open' },
+      'src/shell/toast': { show: (text) => seen.toasts.push(text) },
       'demo/010-kernel.js': { T: (key) => key },
       'demo/040-state.js': {
         approvalClose: (id) => seen.closed.push(id),
@@ -32,10 +34,6 @@ async function run(reason) {
         transitionTurn: (owner, event) => seen.turns.push([owner, event.type]),
       },
       'live/050-turn.js': { refreshList: () => {} },
-    },
-    globals: {
-      sessionCurrent: () => 'tui:open',
-      toast: (text) => seen.toasts.push(text),
     },
   })
   const transport = await fakeGateway(() => Promise.resolve({}))

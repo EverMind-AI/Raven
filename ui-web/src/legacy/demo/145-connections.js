@@ -9,18 +9,19 @@
    flyout opens the page by importing the island (shell/navfly.ts); it does
    not come through here. */
 
+import { islands } from '../../islands'
 import { sources } from '../../state/sources'
 import { CHANNELS } from './030-fixtures.js'
 import { nlSay } from './130-settings.js'
 
-function closeConn() { RavenIslands.connections.close(); }
+function closeConn() { islands.connections.close(); }
 function drawConn() {
   /* A language flip re-renders #connBody with the new catalogue. */
-  RavenIslands.connections.redraw();
+  islands.connections.redraw();
 }
 /* Esc and the veil both land here; unmounting the dialog is also what stops
    the island's scan poll, so no close path can leave a timer running. */
-function connCloseDialog() { RavenIslands.connections.closeDialog(); }
+function connCloseDialog() { islands.connections.closeDialog(); }
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */

@@ -14,13 +14,11 @@ async function harness({ rows, current, titleCall }) {
   const draws = []
   const part = await loadPart(() => import('../src/legacy/live/050-turn.js'), {
     fakes: {
+      'src/shell/session': { current: () => current },
+      'src/features/rail/title': { plainTitle: (s) => String(s) },
       'demo/010-kernel.js': { $: looseQuery(), T: (key) => key },
       'demo/040-state.js': { sess: (id) => rows.find((r) => r.id === id) },
       'demo/050-rail.js': { sessionDraw: () => draws.push('draw') },
-    },
-    globals: {
-      sessionCurrent: () => current,
-      plainTitle: (s) => String(s),
     },
   })
   await fakeGateway(titleCall)

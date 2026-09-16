@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as tier from '../../shell/tier'
 import { InstanceMode } from './InstanceMode'
 import { resetSources, setSources } from '../../state/sources'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { AgentsSource, InstanceModeReply, InstanceRow } from './types'
@@ -34,11 +35,11 @@ let answer: (mode: string | null | undefined) => Promise<InstanceModeReply>
 
 function wire(over: Partial<AgentsSource> = {}): void {
   asked = []
-  window.RavenShell = {
+  setShell({
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
     confirmAsk: () => {},
     showPage: () => {},
-  } as Shell
+  } as Shell)
   const source: AgentsSource = {
     list: async () => [],
     instanceMode: async (agent, handle) => { asked.push(['read', agent, handle]); return answer(undefined) },
@@ -60,7 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
-  delete window.RavenShell
+  resetShell()
   document.body.innerHTML = ''
   resetSources()
 })

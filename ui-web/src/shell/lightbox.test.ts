@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { close, isOpen, open } from './lightbox'
+import { resetShell, setShell } from './bridge'
 
 import type { Shell } from './bridge'
 
@@ -11,7 +12,7 @@ function wire(): void {
     confirmAsk: () => {},
     showPage: () => {},
   }
-  window.RavenShell = shell
+  setShell(shell)
   document.body.innerHTML = ''
 }
 
@@ -19,7 +20,7 @@ const overlay = (): HTMLElement | null => document.querySelector('.lightbox')
 
 afterEach(() => {
   close()
-  delete window.RavenShell
+  resetShell()
   document.body.innerHTML = ''
 })
 

@@ -1,5 +1,8 @@
 /* ---- boot ---------------------------------------------------------- */
 
+import { islands } from '../../islands'
+import { draw as drawFoot } from '../../shell/foot'
+import { load as loadTier } from '../../shell/tier'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { hostPlatformSet } from '../demo/010-kernel.js'
@@ -68,7 +71,7 @@ export function install() {
         .then((fresh) => { if (fresh && fresh.update_available) showUpNote('ver', fresh.latest_version); })
         .catch(() => {});
       await loadSessions();
-      RavenIslands.rail.release();
+      islands.rail.release();
       /* Home is the new-task screen, never the last session: opening straight
        into someone else's half-finished transcript is a worse first frame than
        an empty composer, and the rail is one click away. A draft writes nothing
@@ -81,7 +84,7 @@ export function install() {
        (shell/resume.ts). Asked of the list rather than opened blind: a
        conversation deleted since is a note for something that is not there any
        more, and the new-task screen is the right answer for it. */
-      const back = RavenIslands.view.landing(sessionRows().map((s) => s.id));
+      const back = islands.view.landing(sessionRows().map((s) => s.id));
       if (back) await openLiveSession(sess(back));
       else startDraft();
       /* Remember whether task actions need to send the reader to Models. The

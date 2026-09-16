@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { draw, setFault } from './banner'
 import { resetSources, setSources } from '../state/sources'
+import { resetShell, setShell } from './bridge'
 
 import type { BannerSource } from './banner'
 import type { Shell } from './bridge'
@@ -21,7 +22,7 @@ function wire(needsWebsearch = false, withSource = true): Wired {
       w.opened += 1
     },
   }
-  window.RavenShell = shell
+  setShell(shell)
   const source: BannerSource = { websearchNeeds: () => needsWebsearch }
   setSources(withSource ? { banner: source } : {})
   document.body.innerHTML = '<div id="bannerHost"></div>'
@@ -37,7 +38,7 @@ afterEach(() => {
      source installed even after a case that deliberately ran without one. */
   setSources({ banner: { websearchNeeds: () => false } satisfies BannerSource })
   setFault(null)
-  delete window.RavenShell
+  resetShell()
   resetSources()
   document.body.innerHTML = ''
 })

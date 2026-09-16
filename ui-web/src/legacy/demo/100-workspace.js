@@ -13,6 +13,8 @@
    the fixture hooks feed, the panel chrome outside #wsBody, and the fixture
    workspace source. */
 
+import { islands } from '../../islands'
+import { show as toast } from '../../shell/toast'
 import { sources } from '../../state/sources'
 import { $, HOST_PLATFORM, T } from './010-kernel.js'
 import { wsOnTool, wsOnToolDone } from './110-subagents.js'
@@ -25,13 +27,13 @@ function wsReset() {
   wsTab = 'diff'; wsPicked = false;
   /* A different session is a different workspace state: the island clears the
      record and drops the file tree listings it read before the switch. */
-  RavenIslands.workspace.reset();
+  islands.workspace.reset();
   /* Subagents belong to the session that spawned them, so they leave with it
      -- carrying the list into the next conversation would attribute one
      conversation's background work to another. The open dag node goes for the
      same reason, and because `dag.node` is addressed by session: left set, the
      panel would ask the newly opened conversation for a run it never made. */
-  RavenIslands.subagents.reset();
+  islands.subagents.reset();
 }
 
 /* ── resumed sessions ──────────────────────────────────────────────────
@@ -125,7 +127,7 @@ function wsRecordChange(path, kind, hunk) {
 
 function setWs(open, tab) {
   if (open && tab && document.documentElement.classList.contains('desk-ready')) {
-    const desk = RavenIslands.workspace && RavenIslands.workspace.openDeskTab;
+    const desk = islands.workspace && islands.workspace.openDeskTab;
     if (desk && tab !== 'browser') { desk(tab); return; }
   }
   wsOpen = open;
@@ -168,14 +170,14 @@ function bumpWs() {
   chip.hidden = n === 0;
   const u = $('#wsUnseen');
   if (u) { u.textContent = n ? `+${n}` : ''; u.hidden = n === 0; }
-  RavenIslands.workspace.notifyDesk?.();
+  islands.workspace.notifyDesk?.();
 }
 
 /* Picking a view is a commitment: from then on that view shows its own empty
    note rather than being replaced by the launcher. */
 function wsPick(tab) {
   if (document.documentElement.classList.contains('desk-ready')) {
-    const desk = RavenIslands.workspace && RavenIslands.workspace.openDeskTab;
+    const desk = islands.workspace && islands.workspace.openDeskTab;
     if (desk && tab !== 'browser') { desk(tab); return; }
   }
   wsTab = tab; wsPicked = true;
@@ -214,14 +216,14 @@ function drawWs() {
      through their own islands, dispatched by the workspace island's draw. */
   wsEpoch += 1;
   [...$('#wsTabs').children].forEach((b) => b.setAttribute('aria-selected', String(b.dataset.w === wsTab)));
-  RavenIslands.workspace.draw();
+  islands.workspace.draw();
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  WS = RavenIslands.workspace.shared();
-  ({ hunkFromEdit, hunkFromWrite, hunkFromUnified } = RavenIslands.workspace);
+  WS = islands.workspace.shared();
+  ({ hunkFromEdit, hunkFromWrite, hunkFromUnified } = islands.workspace);
 
   /* The fixture source: what the workspace island may ask of demo mode. No
    list/reveal and no canBrowse -- the file tab keeps its demo empty note, and

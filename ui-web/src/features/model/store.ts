@@ -50,7 +50,7 @@ export const source = (): ModelSource => ds<ModelSource>('model')
 
 /* Installed by the live layer only. The offline demo's chip opens a plain menu
    of its own (demo/150-chrome.js), so the opener below has to be callable and
-   do nothing there rather than throw at a name the page publishes. */
+   do nothing there rather than throw at the name the chrome imports. */
 const installed = (): boolean => !!sources.model
 
 export function subscribe(fn: () => void): () => void {

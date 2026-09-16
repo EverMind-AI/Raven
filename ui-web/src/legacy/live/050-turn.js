@@ -3,6 +3,12 @@
    what is genuinely live-side: which step is open, which calls are in
    flight, the say buffer the session row's preview reads, and the clocks. */
 
+import { plainTitle } from '../../features/rail/title'
+import { islands } from '../../islands'
+import { set as setCtx } from '../../shell/ctxchip'
+import { show as ntfPush } from '../../shell/notifications'
+import { current as sessionCurrent } from '../../shell/session'
+import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { $, T, dur } from '../demo/010-kernel.js'
@@ -35,8 +41,8 @@ function ensureStep() {
 
 /* Token deltas land in the island's per-step buffer and paint once per
    frame there; these two names survive for the parked-turn machinery. */
-function paintSay() { RavenIslands.transcript.nudge(); }
-function stopSayPaint() { RavenIslands.transcript.stopStream(); }
+function paintSay() { islands.transcript.nudge(); }
+function stopSayPaint() { islands.transcript.stopStream(); }
 
 function flushSay() {
   /* The step keeps its streamed narration; only the local buffer resets. */
@@ -78,7 +84,7 @@ function onEvent(ev) {
      instance's words get typed into the conversation as if raven had said them.
      These belong on the instance's own page, which reads them back through
      `subagents.instance.history`. */
-  if (p.target) { RavenIslands.subagents.directEvent(p.target, ev.type, p); return; }
+  if (p.target) { islands.subagents.directEvent(p.target, ev.type, p); return; }
   if (ev.type === 'message.start') {
     /* Read BEFORE the phase is set: the window that sent this turn has already
        drawn the question; a window that is only watching has not. */
@@ -86,7 +92,7 @@ function onEvent(ev) {
     if (p.content) touchSession(sessionCurrent(), p.content);
     park.turnOwner = sessionCurrent();
     turn.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter();
-    RavenIslands.workspace.advanceTurn();
+    islands.workspace.advanceTurn();
   } else if (ev.type === 'turn.started') {
     /* A turn the RUNTIME opened (a delegated result re-entering) has begun.
        The spine suppresses message.start for these, so this event is the whole
@@ -97,11 +103,11 @@ function onEvent(ev) {
        the lane. `delegated` carries the identity AND the injected text, the
        same identity a stored entry carries on replay, so the two views draw
        the same row at the same place. */
-    RavenIslands.workspace.advanceTurn();
+    islands.workspace.advanceTurn();
     if (p.delegated) {
       const d = p.delegated;
       const isDag = d.kind === 'dag';
-      RavenIslands.transcript.delivered({
+      islands.transcript.delivered({
         label: d.label || '',
         isDag,
         status: d.status,
@@ -169,7 +175,7 @@ function onEvent(ev) {
        display string: edit_file's old_text/new_text is the diff. */
     if (typeof wsOnTool === 'function') wsOnTool(p.name, p.arguments, false);
   } else if (ev.type === 'tool.complete') {
-    if (p.metadata) RavenIslands.transcript.delivery(RavenIslands.workspace.currentTurn(), p.metadata, p.tool_call_id);
+    if (p.metadata) islands.transcript.delivery(islands.workspace.currentTurn(), p.metadata, p.tool_call_id);
     const o = live.open.get(p.tool_call_id);
     if (!o) return;
     live.open.delete(p.tool_call_id);
@@ -216,7 +222,7 @@ function onEvent(ev) {
        from `running`, the record id its stream is read by. Through the island
        for the same reason the dag events go through it: what a frame means to a
        card is one definition, next to the model it moves. */
-    RavenIslands.transcript.spawnFeed(p);
+    islands.transcript.spawnFeed(p);
   } else if (ev.type === 'subagent.delivered') {
     /* A result was submitted, not yet visible: the turn it opens is still
        queued behind its parent, so the row does NOT belong here. It arrives
@@ -255,9 +261,9 @@ function onEvent(ev) {
        features/dag/nodes.ts): the payload was being unpacked field by field here
        as well, so "what a node is" had two definitions that only happened to
        agree. */
-    const started = RavenIslands.dag.fromStarted(p);
+    const started = islands.dag.fromStarted(p);
     const key = sheetSession();
-    RavenIslands.dag.start(key, {
+    islands.dag.start(key, {
       run_id: p.run_id,
       session: key,
       order: started.map((n) => n.id),
@@ -270,10 +276,10 @@ function onEvent(ev) {
     /* Through the island rather than into the run's node map from here: what a
        report means to a node is one definition, next to the model it moves, and
        the copy that lived here had drifted into inventing a clock. */
-    RavenIslands.dag.advance(sheetSession(), p);
+    islands.dag.advance(sheetSession(), p);
   } else if (ev.type === 'dag.run_completed') {
     dagFlowFeed(ev.type, p);
-    RavenIslands.dag.settle(sheetSession(), p);
+    islands.dag.settle(sheetSession(), p);
   } else if (ev.type === 'dag.run_replanned') {
     /* The trail card alone: the sheet shows one run at a time by design, so a
        replanned run's sheet just keeps showing the old graph until the new
@@ -289,11 +295,11 @@ function finishTurn(p) {
   killStatus();
   /* The island promotes the streamed prose into the answer block where the
      prose stood, merges the silent stretches and folds the turn. */
-  RavenIslands.transcript.finishTurn(live.st, live.steps, turnDur(p.duration_ms));
+  islands.transcript.finishTurn(live.st, live.steps, turnDur(p.duration_ms));
   /* The turn's products close it, after the answer and after any note: the
      bar is the last line of a turn, and it is only drawn once the turn is
      over -- nothing grows it mid-flight. */
-  RavenIslands.transcript.artifacts(RavenIslands.workspace.currentTurn());
+  islands.transcript.artifacts(islands.workspace.currentTurn());
   turn.dispatch({ type: 'idle' });
   const inTok = usage.input_tokens || usage.prompt_tokens || 0;
   /* The window fill is the turn's prompt, not the running total. */
@@ -449,7 +455,7 @@ async function refreshList() {
     // Pins and persisted fields come from the server. Only the running/done
     // marker is client state; a not-yet-saved current row also survives until
     // the first list response that contains it.
-    const reconciled = RavenIslands.rail.reconcile(sessionRows(), rows, sessionCurrent());
+    const reconciled = islands.rail.reconcile(sessionRows(), rows, sessionCurrent());
     const currentMissing = reconciled.currentMissing;
     sessionReplace(reconciled.rows);
     if (currentMissing) await leaveDeletedSession(sessionCurrent());
@@ -471,7 +477,7 @@ export function install() {
   sources.transcript.openDagRun = function (runId) {
     const id = String(runId || '');
     if (id) {
-      const d = RavenIslands.dag.run(sheetSession());
+      const d = islands.dag.run(sheetSession());
       const last = d && d.run_id === id ? d.order[d.order.length - 1] : null;
       if (last) {
         /* With what the node is FOR, not only its id. The run holds every node's

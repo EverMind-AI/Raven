@@ -2,21 +2,23 @@
    The renderer is the rail island (ui-web/src/features/rail/). The fixture source
    owns its rows; live mode replaces the whole source with live-owned storage. */
 
+import { islands } from '../../islands'
+import { current as sessionCurrent } from '../../shell/session'
 import { sources } from '../../state/sources'
 import { SESSION_FIXTURES } from './030-fixtures.js'
 import { turn } from './040-state.js'
 import { openDemoSession } from './060-conversation.js'
 
-function markNewCurrent() { RavenIslands.rail.markNew(); }
+function markNewCurrent() { islands.rail.markNew(); }
 /* inline rename in the top bar, from the title bar's own button; the list
    follows. Kept as a local name because #renameBtn's handler still calls it --
    the live layer no longer replaces it, which is the part that mattered. */
-function renameTitle() { RavenIslands.rail.rename(); }
+function renameTitle() { islands.rail.rename(); }
 
 const sessionSource = () => sources.sessions;
 const sessionRows = () => sessionSource().snapshot().rows;
 const sessionReplace = (rows) => sessionSource().replace(rows);
-const sessionDraw = () => RavenIslands.rail.draw();
+const sessionDraw = () => islands.rail.draw();
 const sessionOpen = (s) => sessionSource().open(s);
 
 /* Everything this part used to do while the concatenated page script ran, in

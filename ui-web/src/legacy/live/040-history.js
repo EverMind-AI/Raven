@@ -6,6 +6,7 @@
    on the seam; the three delegation verbs are added later, by live/240, once
    the dag reader they close over exists. */
 
+import { islands } from '../../islands'
 import { sources } from '../../state/sources'
 import { unpitch } from '../demo/060-conversation.js'
 import { cleanPreview, okOf } from './030-sessions.js'
@@ -16,7 +17,7 @@ function renderHistory(messages) {
      resetView; still needed for the reconnect replay, which repaints a
      conversation without leaving it. */
   unpitch();
-  RavenIslands.transcript.history(messages);
+  islands.transcript.history(messages);
 }
 
 /* Everything this part used to do while the concatenated page script ran, in

@@ -39,6 +39,13 @@ async function harness({ rows, deferSubscribe } = {}) {
   const api = {}
   const part = await loadPart(() => import('../src/legacy/live/080-overrides.js'), {
     fakes: {
+      'src/shell/session': { current: () => current, setCurrent: (id) => { current = id; calls.push(['sessionSet', id]) } },
+      'src/features/rail/title': { plainTitle: (s) => String(s) },
+      'src/shell/toast': { show: (text) => calls.push(['toast', text]) },
+      'src/shell/ctxchip': { set: (used) => calls.push(['setCtx', used]) },
+      'src/shell/banner': { draw: () => {} },
+      'src/shell/tier': { load: () => calls.push(['loadTier']) },
+      'src/shell/perm': { setFromConfig: () => {} },
       'demo/010-kernel.js': { $, T: (key) => key },
       'demo/040-state.js': {
         loadDraft: (id) => calls.push(['loadDraft', id]),
@@ -80,33 +87,23 @@ async function harness({ rows, deferSubscribe } = {}) {
       },
       'live/170-workspace.js': { wsSetRoot: (root) => calls.push(['wsSetRoot', root]) },
     },
-    globals: {
-      RavenIslands: {
-        /* The streaming buffer the turn state resets through. */
-        transcript: { nudge: () => {}, stopStream: () => {} },
-        workspace: { loadDeliveries: (id) => calls.push(['loadDeliveries', id]) },
-        view: {
-          resume: (id) => calls.push(['viewResume', id]),
-          refreshDag: (id) => calls.push(['viewRefreshDag', id]),
-        },
-        /* What the heading held when the editor was ended, so the order is
-           assertable: ending it has to come before anything reads or writes
-           h1#title, and while one is open that id resolves to nothing. */
-        rail: {
-          endRename: () => {
-            calls.push(['endRename', boxes['#title'] ? boxes['#title'].textContent : null])
-            editor.commit()
-          },
+    islands: {
+      /* The streaming buffer the turn state resets through. */
+      transcript: { nudge: () => {}, stopStream: () => {} },
+      workspace: { loadDeliveries: (id) => calls.push(['loadDeliveries', id]) },
+      view: {
+        resume: (id) => calls.push(['viewResume', id]),
+        refreshDag: (id) => calls.push(['viewRefreshDag', id]),
+      },
+      /* What the heading held when the editor was ended, so the order is
+         assertable: ending it has to come before anything reads or writes
+         h1#title, and while one is open that id resolves to nothing. */
+      rail: {
+        endRename: () => {
+          calls.push(['endRename', boxes['#title'] ? boxes['#title'].textContent : null])
+          editor.commit()
         },
       },
-      sessionCurrent: () => current,
-      sessionSet: (id) => { current = id; calls.push(['sessionSet', id]) },
-      plainTitle: (s) => String(s),
-      toast: (text) => calls.push(['toast', text]),
-      setCtx: (used) => calls.push(['setCtx', used]),
-      drawBanner: () => {},
-      loadTier: () => calls.push(['loadTier']),
-      setPermMode: () => {},
     },
   })
   Object.assign(api, part)

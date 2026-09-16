@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { md } from './prose'
 import { resetSources, setSources } from '../state/sources'
+import { resetShell, setShell } from './bridge'
 
 import type { Shell } from './bridge'
 import type { ProseSource } from './prose'
@@ -27,13 +28,13 @@ function wire(over: Partial<ProseSource> = {}): { asked: string[] } {
     confirmAsk: () => {},
     showPage: () => {},
   }
-  window.RavenShell = shell
+  setShell(shell)
   setSources({ prose: source })
   return { asked }
 }
 
 afterEach(() => {
-  delete window.RavenShell
+  resetShell()
   resetSources()
 })
 

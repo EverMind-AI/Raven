@@ -5,6 +5,13 @@
    Each step is isolated so one failure stays visible and the rest still
    renders. */
 
+import { islands } from '../../islands'
+import { draw as drawCtx } from '../../shell/ctxchip'
+import { draw as drawFoot } from '../../shell/foot'
+import { load as lookLoad } from '../../shell/look'
+import { load as paneLoad } from '../../shell/panes'
+import { draw as drawPerm } from '../../shell/perm'
+import { load as loadTier } from '../../shell/tier'
 import { sources } from '../../state/sources'
 import { bootError } from './040-state.js'
 import { sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
@@ -98,14 +105,23 @@ function demoOnbBackend() {
   };
 }
 
+/* Whether the live layer has taken the splash and the onboarding moment off
+   this part's hands. A setter rather than a field the live half writes: the
+   writer is in the other layer, and a container one layer declares and the
+   other fills is the coupling `scripts/count-shared-globals.mjs` counts.
+   Was window.__liveBoot. */
+let liveClaimed = false;
+
+function claimBoot() { liveClaimed = true; }
+
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
   /* The live guard runs later in this same script task and claims boot before
    microtasks drain. Its final part queues bootPage after every source install. */
-  queueMicrotask(() => { if (!window.__liveBoot) bootPage(); });
+  queueMicrotask(() => { if (!liveClaimed) bootPage(); });
   _spT0 = Date.now();
-  ({ open: showOnboard } = RavenIslands.onboard);
+  ({ open: showOnboard } = islands.onboard);
 
   /* Demo boot: two independent moments, and only one of them backs off for live
    mode. Ordered rather than nested, because the preview needs the splash lifted
@@ -132,9 +148,9 @@ export function install() {
 
   addEventListener('load', () => {
     if (/[?&]onboard=demo/.test(location.search)) showOnboard();
-    if (window.__liveBoot) return;
+    if (liveClaimed) return;
     hideSplash(250);
   });
 }
 
-export { bootPage, _spT0, hideSplash, showOnboard, demoOnbBackend }
+export { bootPage, _spT0, hideSplash, showOnboard, demoOnbBackend, liveClaimed, claimBoot }
