@@ -45,10 +45,11 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
   let minted = 0
   let bumpOnCreate: (() => void) | null = null
 
-  /* The part is loaded first and the seams imported after it, which is the
-     order that keeps one module graph: a mock consulted from inside another
-     mock's factory would hand a cycle-mate the unmocked module. */
-  const part = await loadPart(() => import('../../legacy/live/080-overrides.js'), {
+  /* The runtime is imported first and the part that wires it after, which is
+     the order that keeps one module graph: the fakes are installed around the
+     modules the first import reaches, and one it did not is loaded afterwards
+     without them. */
+  await loadPart(async () => { await import('./runtime'); return import('../../legacy/live/080-overrides.js') }, {
     fakes: {
       'src/shell/banner': { draw: () => {} },
       'src/shell/tier': { load: () => {} },
@@ -80,33 +81,18 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
       'demo/100-workspace.js': { setWs: () => {}, wsOnHistory: () => {}, wsReset: () => {} },
       'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
       'demo/152-skills.js': { drawCaps: () => {} },
-      'live/030-sessions.js': { rowPreview: (t: string) => t, touchSession: (id: string) => log.push(`touch:${id}`) },
-      'live/050-turn.js': {
-        beginNaming: () => log.push('naming'),
-        live: { subId: null },
-        namingDeclined: () => log.push('namingDeclined'),
-        resetTurnState: () => {},
-        turnDur: () => 0,
-      },
-      'live/060-parked.js': {
-        park: { turnOwner: null, lastAsk: '' },
-        parkTurn: () => {},
-        parkedTurns: {},
-        restoreTurn: () => {},
-        subBySession: {},
-        subSession: {},
-        transitionTurn: () => {},
-      },
+      'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: (id: string) => log.push(`touch:${id}`) },
+      'src/state/session/residency': { park: () => {}, resume: () => {} },
       'src/features/model/source': {
         /* The re-read a refused model write ends with, which is the only place
            the generation the promotion began on becomes visible. */
         loadProviders: (id: string | null, gen: number) => { reReads.push([id, gen]) },
         openModelsForMissingProvider: () => false,
-        stagedTier: () => (part.staged as Staged).tier,
+        stagedTier: () => staging().tier,
       },
       'src/features/settings/source': {
         loadPermMode: () => {},
-        stagedPerm: () => (part.staged as Staged).perm,
+        stagedPerm: () => staging().perm,
       },
       'src/features/workspace/source': { wsSetRoot: (root: string) => log.push(`wsRoot:${root}`) },
     },
@@ -117,6 +103,7 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
   /* The view ticket is its own module now; taken from the instance loadPart's
      reset just produced, not from a binding held across it. */
   const { generation } = await import('./generation')
+  const { staging } = await import('./staging')
 
   await fakeGateway(async (method: string, params: { key?: string } = {}) => {
     log.push(traffic(method, params))
@@ -139,7 +126,7 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
   /* Staged picks belong to the draft, so they go on after it: startDraft
      clears all three. */
   const stage = (over: Partial<Staged> = {}): void => {
-    Object.assign(part.staged, { model: { model: 'm', provider: 'p' }, tier: 'high', perm: 'ask', ...over })
+    Object.assign(staging(), { model: { model: 'm', provider: 'p' }, tier: 'high', perm: 'ask', ...over })
   }
 
   return {

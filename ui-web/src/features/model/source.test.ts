@@ -70,7 +70,7 @@ async function live({ session = null, answers = null }: Options = {}) {
       'demo/060-conversation.js': { pitch: () => {}, unpitch: () => {} },
       'demo/090-composer.js': { drawMeter: () => {}, goState: () => {}, ta: { focus: () => {} } },
       'demo/100-workspace.js': { setWs: () => {}, wsReset: () => {} },
-      'live/050-turn.js': { resetTurnState: () => {} },
+      'src/state/session/residency': { park: () => {} },
     },
     islands: {
       settings: { openModels: () => calls.push(['openModels']) },
@@ -90,14 +90,18 @@ async function live({ session = null, answers = null }: Options = {}) {
   const model = await import('../model/source')
   const settingsModule = await import('../settings/source')
   const { generation } = await import('../../state/session/generation')
-  const overrides = await import('../../legacy/live/080-overrides.js') as unknown as {
-    staged: { model: { model: string; provider: string } | null; tier: string | null; perm: string | null }
-    startDraft(): void
-    applyStagedModel(sessionId: string, gen: number): Promise<void>
+  const registry = await import('../../state/session/registry')
+  const runtime = await import('../../state/session/runtime')
+  const { staging } = await import('../../state/session/staging')
+  /* The staged picks are the conversation's own now: the draft holds them and
+     a switch to another draft drops them with it, so the object the sources
+     read is whichever one is on screen. */
+  const overrides = {
+    get staged() { return staging() },
+    startDraft: () => registry.switchToDraft(),
+    applyStagedModel: (sessionId: string, gen: number) =>
+      runtime.applyStagedModel(registry.viewRuntime(), sessionId, gen),
   }
-  /* The part publishes the staged object the sources read, which install()
-     does in the page. Called here rather than running the whole install. */
-  ;(await import('../../state/session/staging')).setStaging(overrides.staged)
   /* Everything the two sources read off the page. `modelSet` is the island's
      verb, faked above; the chip painter is the page's. */
   model.setChipPainter(() => {})

@@ -14,15 +14,21 @@ import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.
 
 import type { Sources } from '../../state/sources'
 
-type Sessions = typeof import('../../legacy/live/030-sessions.js')
 
 interface Row { id: string; title?: string; at?: number; last?: string; when?: string }
 
 const label = (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key)
 
+/* The shaping and the row clock moved to this feature's own source module, and
+   the tool-preview pair to the transcript's, which is where wire knowledge
+   about a result belongs. `part` is the two together, so the names the cases
+   read are unchanged. */
 async function harness({ rows = [] as Row[], cur = null as string | null } = {}) {
   const log: unknown[][] = []
-  const part = (await loadPart(() => import('../../legacy/live/030-sessions.js'), {
+  /* The registry is imported first and the seams after it, which is the order
+     that keeps one module graph: a mock consulted from inside another mock's
+     factory would hand a cycle-mate the unmocked module. */
+  await loadPart(() => import('../../state/session/registry'), {
     fakes: {
       'demo/010-kernel.js': { $: looseQuery(), T: label },
       'demo/040-state.js': { sess: (id: string) => rows.find((r) => r.id === id) },
@@ -32,7 +38,18 @@ async function harness({ rows = [] as Row[], cur = null as string | null } = {})
         sessionRows: () => rows,
       },
     },
-  })) as Sessions
+  })
+  const rail = await import('./source')
+  const transcript = await import('../transcript/source')
+  const part = {
+    whenLabel: rail.whenLabel,
+    rowFrom: rail.rowFrom,
+    rowPreview: rail.rowPreview,
+    loadCronNames: rail.loadCronNames,
+    touchSession: rail.touchSession,
+    cleanPreview: transcript.cleanPreview,
+    okOf: transcript.okOf,
+  }
   return { part, log, rows, cur }
 }
 
@@ -177,7 +194,7 @@ async function refreshHarness({
   reconciled = null as { rows: Row[]; currentMissing: boolean } | null,
 }) {
   const log: unknown[][] = []
-  await loadPart(() => import('../../legacy/live/050-turn.js'), {
+  await loadPart(() => import('../../state/session/registry'), {
     fakes: {
       'src/shell/session': { current: () => cur },
       'demo/010-kernel.js': { $: looseQuery(), T: label },
@@ -187,7 +204,7 @@ async function refreshHarness({
         sessionReplace: (next: Row[]) => log.push(['sessionReplace', next.map((r) => r.id)]),
         sessionRows: () => rows,
       },
-      'live/080-overrides.js': {
+      'src/features/rail/leave': {
         leaveDeletedSession: (id: string) => { log.push(['leaveDeleted', id]); return Promise.resolve() },
       },
     },

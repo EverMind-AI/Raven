@@ -27,10 +27,14 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
   const asked: Array<[string, unknown]> = []
   let settleCancel: { res: () => void; rej: (e: unknown) => void } | null = null
   document.body.innerHTML = '<h1 id="title"></h1><div id="stage"></div><div id="flash"></div>'
-  /* The part is loaded first and the seams imported after it, which is the
-     order that keeps one module graph: a mock consulted from inside another
-     mock's factory would hand a cycle-mate the unmocked module. */
-  await loadPart(() => import('../../legacy/live/080-overrides.js'), {
+  /* The modules under test are imported deepest first, which is the order that
+     keeps one module graph: the fakes are installed around the modules the
+     first import reaches, and one it did not is loaded afterwards without
+     them. */
+  await loadPart(async () => {
+    await import('./runtime'); await import('./stages')
+    return import('./pipeline')
+  }, {
     fakes: {
       'src/shell/session': { current: () => 's1', setCurrent: (id: string | null) => log.push(['pointer', id]) },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
@@ -84,8 +88,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
       'demo/100-workspace.js': { setWs: () => {}, wsOnHistory: () => {}, wsReset: () => {} },
       'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
       'demo/152-skills.js': { drawCaps: () => {} },
-      'live/030-sessions.js': { rowPreview: (t: string) => t, touchSession: () => {} },
-      'live/060-parked.js': { parkTurn: () => {} },
+      'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: () => {} },
     },
     islands: {
       transcript: {
@@ -113,11 +116,10 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
   const { setSources } = await import('../sources')
   setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
   const part = await import('../../legacy/live/080-overrides.js')
-  const parked = await import('../../legacy/live/060-parked.js')
   part.install()
   /* A turn is running on the open conversation, which is what a send records:
-     the phase reducer is only reached for the conversation that owns it. */
-  ;(parked.park as { turnOwner: string | null }).turnOwner = 's1'
+     the phase reducer is only reached for the conversation the page shows. */
+  registry.adopt('s1')
   const tick = () => new Promise((r) => setTimeout(r, 0))
   return {
     runtime,

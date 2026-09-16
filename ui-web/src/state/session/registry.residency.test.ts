@@ -15,14 +15,20 @@ import * as turn from '../../features/composer/turn'
 import type { Sources } from '../sources'
 
 type Registry = typeof import('./registry')
-type ParkedPart = typeof import('../../legacy/live/060-parked.js')
+type SessionRuntime = import('./runtime').SessionRuntime
 
+/* What a conversation is holding, which is the runtime itself. */
 interface Parked {
   phase: unknown
   queue: unknown
   ws: unknown
   events: unknown[]
-  nodes: ChildNode[]
+}
+
+/* The map the parked turns used to live in, over the conversations that hold
+   them now. */
+interface ParkedPart {
+  parkedTurns: { get(key: string): Parked | undefined; has(key: string): boolean }
 }
 
 async function harness(): Promise<{
@@ -44,10 +50,11 @@ async function harness(): Promise<{
   const drainQueue = vi.fn()
   const workspace = { changes: [], urls: [], file: null, turn: 1, unseen: 0 }
   const workspaceRestore = vi.fn((next: typeof workspace) => Object.assign(workspace, next))
-  /* The part is loaded first and the seam imported after it, which is the
-     order that keeps one module graph: a mock consulted from inside another
-     mock's factory would hand a cycle-mate the unmocked module. */
-  const part = (await loadPart(() => import('../../legacy/live/060-parked.js'), {
+  /* The modules under test are imported deepest first, which is the order that
+     keeps one module graph: the fakes are installed around the modules the
+     first import reaches, and one it did not is loaded afterwards without
+     them. */
+  await loadPart(() => import('./registry'), {
     fakes: {
       'src/shell/session': { current: () => current },
       'src/shell/banner': { draw: vi.fn() },
@@ -68,26 +75,29 @@ async function harness(): Promise<{
         wsRestore: vi.fn(),
         wsView: () => ({ tab: 'files', picked: null }),
       },
-      'live/050-turn.js': {
-        live: {
-          st: null, steps: [], say: '', open: new Map(), sawEpisode: false,
-          startedAt: 1, answerAt: 0,
-        },
-        onEvent: (ev: { type?: string }) => {
+      /* What a buffered frame means, which is the pipeline's and not the
+         residency rule's. */
+      'src/state/session/runtime': { drain: drainQueue },
+      'src/state/session/stages': {
+        dispatch: (ev: { type?: string }) => {
           log.push(`onEvent:${ev && ev.type}`)
           if (ev && ev.type === 'bad') throw new Error('a bad frame')
         },
-        paintSay: vi.fn(),
-        stopSayPaint: vi.fn(),
       },
-      'live/080-overrides.js': { drainQueue },
     },
     islands: {
       composer: { liveAnchor: () => 42, setLiveAnchor: () => log.push('setLiveAnchor') },
       workspace: { snapshot: () => ({ ...workspace }), restore: workspaceRestore },
+      transcript: { nudge: vi.fn(), stopStream: vi.fn() },
     },
-  })) as ParkedPart
+  })
   const registry = (await import('./registry')) as Registry
+  const part: ParkedPart = {
+    parkedTurns: {
+      get: (key) => registry.parked(key) as unknown as Parked | undefined,
+      has: (key) => registry.isResident(key),
+    },
+  }
   return {
     registry,
     part,
@@ -96,9 +106,10 @@ async function harness(): Promise<{
     drainQueue,
     log,
     rows,
-    /* `park.turnOwner` is inferred null from its initialiser; the part
-       writes a session key into it. */
-    setOwner: (owner) => { (part.park as { turnOwner: string | null }).turnOwner = owner },
+    /* Which conversation the page is showing, which is what a leave files the
+       turn under -- never the session pointer, which a rail click has already
+       moved to the conversation being opened. */
+    setOwner: (owner) => { registry.adopt(owner) },
     setCurrent: (value) => { current = value },
   }
 }
@@ -119,7 +130,7 @@ describe('the legacy parked-turn adapter', () => {
     expect(parked.ws).toEqual({ changes: [], urls: [], file: null, turn: 1, unseen: 0 })
 
     turn.dispatch({ type: 'idle' })
-    registry.resume(parked)
+    registry.resume(parked as unknown as SessionRuntime)
     expect(turn.snapshot()).toEqual({ phase: 'streaming', cancellable: false, resume: null })
     expect(queueRestore).toHaveBeenCalledWith(['queued'])
     expect(workspaceRestore).toHaveBeenCalledWith(parked.ws)
@@ -143,7 +154,7 @@ describe('the legacy parked-turn adapter', () => {
     registry.dispatchTo('a', { type: 'idle' })
 
     setCurrent('a')
-    registry.resume(parkedTurns.get('a'))
+    registry.resume(parkedTurns.get('a') as unknown as SessionRuntime)
     expect(turn.phase()).toBe('idle')
     expect(drainQueue).toHaveBeenCalledOnce()
   })
@@ -194,7 +205,7 @@ describe('coming back to a parked turn', () => {
     registry.park()
     log.length = 0
 
-    registry.resume(part.parkedTurns.get('a'))
+    registry.resume(part.parkedTurns.get('a') as unknown as SessionRuntime)
 
     expect(log.indexOf('setLiveAnchor')).toBeGreaterThan(-1)
     expect(log.indexOf('setLiveAnchor')).toBeLessThan(log.indexOf('drawMeter'))
@@ -211,7 +222,7 @@ describe('coming back to a parked turn', () => {
     parked.events.push({ type: 'first' }, { type: 'bad' }, { type: 'last' })
     log.length = 0
 
-    registry.resume(parked)
+    registry.resume(parked as unknown as SessionRuntime)
 
     expect(log.filter((l) => l.startsWith('onEvent')))
       .toEqual(['onEvent:first', 'onEvent:bad', 'onEvent:last'])
@@ -241,7 +252,7 @@ describe('a phase event for a conversation that is neither', () => {
 describe('forgetting a conversation subscription', () => {
   it('drops both books, releases the visible stream and unsubscribes', async () => {
     const asked: Array<[string, unknown]> = []
-    await loadPart(() => import('../../legacy/live/080-overrides.js'), {
+    await loadPart(async () => { await import('./runtime'); return import('./registry') }, {
       fakes: {
         'src/shell/session': { current: () => 'a' },
         'demo/010-kernel.js': { $: looseQuery(), T: (key: string) => key },
@@ -254,11 +265,16 @@ describe('forgetting a conversation subscription', () => {
     })
     const { setSources } = await import('../sources')
     setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-    const parked = await import('../../legacy/live/060-parked.js')
-    const turnState = await import('../../legacy/live/050-turn.js')
-    ;(parked.subBySession as Record<string, string>).a = 'sub:a'
-    ;(parked.subSession as Record<string, string>)['sub:a'] = 'a'
-    ;(turnState.live as { subId: string | null }).subId = 'sub:a'
+    /* The two books the subscription used to be kept in, and the one field that
+       said which stream painted the stage: all three are the conversation's own
+       `subscriptionId` now, so they are read back off it. */
+    const sub = () => registry.get('a')?.subscriptionId ?? null
+    const parked = {
+      get subBySession() { return sub() ? { a: sub() } : {} },
+      get subSession() { return sub() ? { [sub() as string]: 'a' } : {} },
+    }
+    const turnState = { live: { get subId() { return sub() } } }
+    registry.record('a', 'sub:a')
 
     registry.forget('a')
 
@@ -270,7 +286,7 @@ describe('forgetting a conversation subscription', () => {
 
   it('does nothing for a conversation that never had one', async () => {
     const asked: Array<[string, unknown]> = []
-    await loadPart(() => import('../../legacy/live/080-overrides.js'), {
+    await loadPart(async () => { await import('./runtime'); return import('./registry') }, {
       fakes: {
         'src/shell/session': { current: () => 'a' },
         'demo/010-kernel.js': { $: looseQuery(), T: (key: string) => key },

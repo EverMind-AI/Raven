@@ -19,8 +19,8 @@ import { cronWarm } from '../demo/140-schedule.js'
 import { hideSplash, showOnboard } from '../demo/160-boot.js'
 import { shellReady } from './010-boot-guard.js'
 import { SURFACE, authFail, bootFail } from './020-rpc.js'
-import { loadSessions } from './030-sessions.js'
-import { openLiveSession, startDraft } from './080-overrides.js'
+import { loadSessions } from '../../features/rail/source'
+import { switchTo, switchToDraft } from '../../state/session/registry'
 import { langRestore, loadLang } from './120-settings.js'
 import { resumeUpgrade, showUpNote, watchForUpdates } from './210-update-notice.js'
 
@@ -77,8 +77,8 @@ export function install() {
        conversation deleted since is a note for something that is not there any
        more, and the new-task screen is the right answer for it. */
       const back = islands.view.landing(sessionRows().map((s) => s.id));
-      if (back) await openLiveSession(sess(back));
-      else startDraft();
+      if (back) await switchTo(sess(back));
+      else switchToDraft();
       /* Remember whether task actions need to send the reader to Models. The
        page itself stays available on first run; ?onboard=1 retains the
        standalone onboarding flow for an explicit design or support pass. */

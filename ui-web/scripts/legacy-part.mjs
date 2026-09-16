@@ -83,6 +83,14 @@ export function partNames(layer) {
   return installed
 }
 
+/* One module's source, by its path under src/. A few rules are about the shape
+   of the source rather than about a behaviour a harness can drive -- which call
+   sites carry a branch, which stage re-anchors the clock -- and reading the
+   file from here keeps node's own imports out of the type-checked tests. */
+export function moduleText(rel) {
+  return readFileSync(resolve(process.cwd(), 'src', rel), 'utf8')
+}
+
 /** One layer's parts as [name, text] pairs, in install order. */
 export function partTexts(layer) {
   return partNames(layer).map((name) => [

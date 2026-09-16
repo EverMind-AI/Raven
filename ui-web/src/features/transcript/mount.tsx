@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 
 import { AgentStageView, StageView } from './TranscriptPage'
 import * as store from './store'
+import { holdsHost } from '../../state/session/hosts'
 
 import type { AgentCtxLike } from './store'
 import type { AnswerData, HistoryMessage, Lane, NoteHandle, StepHandle } from './types'
@@ -13,12 +14,12 @@ import type { Root } from 'react-dom/client'
  * #stage for the conversation, a stage box for an agent pane -- instead of
  * the container itself. The container is shared ground the legacy layers
  * still write to (the .turnlive glyph, `innerHTML = ''` session wipes, the
- * parked-turn machinery that moves #stage's children wholesale), and a React
- * root cannot share a container with foreign writers. The host is one
+ * session switch that takes a held host off the stage), and a React root
+ * cannot share a container with foreign writers. The host is one
  * `display: contents` element, so layout, selectors on the segment classes
  * and the scroll math all read exactly as before; a wipe detaches the host
  * and the next segment simply starts a fresh lane (the epoch remount), while
- * a parked host carries its lane with it and resumes on reattach.
+ * a held host carries its lane with it and resumes on reattach.
  */
 
 interface Mounted {
@@ -36,17 +37,16 @@ let seq = 0
 /* A host the page threw away takes its lane and its React root with it --
    otherwise the lane stays in the store's set and every redraw() renders a
    transcript nobody can see, once more per session switch, unbounded.
-   Detached is NOT the whole test: leaving a session mid-turn PARKS the
-   transcript, and live/060-parked.js parks it by keeping #stage's children in
-   a detached array that restoreTurn appends back, so a disconnected host may
-   still be the only copy of a streaming turn. Ask the source before dropping
-   one; a canvas with no parking answers no. Called when a fresh host is
-   built, which is the moment after a wipe. */
+   Detached is NOT the whole test: leaving a conversation mid-turn takes its
+   host off the stage and files it on that conversation, so a disconnected host
+   may still be the only copy of a streaming turn. Ask the session layer's
+   residency rule before dropping one; on a page with no conversations held it
+   answers no. Called when a fresh host is built, which is the moment after a
+   wipe. */
 function release(): void {
-  const parked = store.source().parked
   for (let i = MOUNTED.length - 1; i >= 0; i -= 1) {
     const m = MOUNTED[i]!
-    if (m.host.isConnected || parked?.(m.host)) continue
+    if (m.host.isConnected || holdsHost(m.host)) continue
     MOUNTED.splice(i, 1)
     HOSTS.delete(m.host)
     store.dropLane(m.lane)

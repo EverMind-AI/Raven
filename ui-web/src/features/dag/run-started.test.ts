@@ -16,10 +16,13 @@ type Pipeline = typeof import('../../state/session/pipeline')
    out as text: a field that is present but wired to the wrong thing fails too. */
 async function startedRun(payload: Record<string, unknown>) {
   const started: Array<{ key: string; run: Record<string, unknown> }> = []
-  /* The part is loaded first and the seam imported after it, which is the
-     order that keeps one module graph: a mock consulted from inside another
-     mock's factory would hand a cycle-mate the unmocked module. */
-  await loadPart(() => import('../../legacy/live/050-turn.js'), {
+  /* The modules under test are imported deepest first, which is the order that
+     keeps one module graph: the fakes are installed around the modules the
+     first import reaches. */
+  await loadPart(async () => {
+    await import('../../state/session/runtime'); await import('../../state/session/stages')
+    return import('../../state/session/pipeline')
+  }, {
     fakes: {
       'src/shell/session': { current: () => 'sess-1' },
       'demo/010-kernel.js': { $: looseQuery() },

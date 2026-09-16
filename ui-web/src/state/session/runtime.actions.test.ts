@@ -31,10 +31,14 @@ async function harness({ rows }: { rows: Row[] }) {
   let current: string | null = 'a'
   let settle: { res: (v: unknown) => void; rej: (e: unknown) => void } | null = null
   const slash = [{ id: 'gui.clear' }, { id: 'gui.compress' }]
-  /* The part is loaded first and the seam imported after it, which is the
-     order that keeps one module graph: a mock consulted from inside another
-     mock's factory would hand a cycle-mate the unmocked module. */
-  await loadPart(() => import('../../legacy/live/190-session-actions.js'), {
+  /* The runtime is imported first and the part that wires it after, which is
+     the order that keeps one module graph: the fakes are installed around the
+     modules the first import reaches, and one it did not is loaded afterwards
+     without them. */
+  await loadPart(async () => {
+    await import('./runtime')
+    return import('../../legacy/live/190-session-actions.js')
+  }, {
     fakes: {
       'src/shell/session': {
         current: () => current,
@@ -67,8 +71,6 @@ async function harness({ rows }: { rows: Row[] }) {
         pitch: () => calls.push(['pitch']),
       },
       'demo/090-composer.js': { drawMeter: () => calls.push(['drawMeter']) },
-      'live/050-turn.js': { fmtTok: (n: number) => String(n) },
-      'live/080-overrides.js': { draft: false },
       'live/210-update-notice.js': { showUpNote: () => {} },
     },
   })
@@ -277,7 +279,10 @@ async function railHarness(
   /* `remove` does not return the confirm callback's promise, so the harness
      holds it: without it the assertions run before the toast is written. */
   let settled: Promise<void> = Promise.resolve()
-  await loadPart(() => import('../../legacy/live/080-overrides.js'), {
+  await loadPart(async () => {
+    await import('./runtime')
+    return import('../../legacy/live/080-overrides.js')
+  }, {
     fakes: {
       'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id } },
       'demo/010-kernel.js': { $: looseQuery(), T: label },
@@ -455,7 +460,10 @@ describe('a refused pin or rename', () => {
    can read which rows it decided were gone. */
 async function bulkHarness(answers: Record<string, Answer | Error>) {
   let live = Object.keys(answers).map((id) => ({ id, title: id }))
-  await loadPart(() => import('../../legacy/live/130-writes.js'), {
+  await loadPart(async () => {
+    await import('../../features/rail/leave')
+    return import('../../legacy/live/130-writes.js')
+  }, {
     fakes: {
       'demo/010-kernel.js': { $: looseQuery(), T: label },
       'demo/040-state.js': { dropDraft: () => {} },
@@ -464,7 +472,7 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
         sessionRows: () => live,
       },
       'demo/130-settings.js': { drawSettings: () => {} },
-      'live/080-overrides.js': { startDraft: () => {} },
+      'src/state/session/registry': { switchToDraft: () => {} },
       'src/shell/session': { current: () => null, setCurrent: () => {} },
       'src/shell/toast': { show: () => {} },
     },
