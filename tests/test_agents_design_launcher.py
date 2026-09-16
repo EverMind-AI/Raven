@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import stat
 import sys
 from pathlib import Path
@@ -590,7 +591,7 @@ def test_the_build_interpreter_is_a_shim_on_the_exec_path(grounded, tmp_path):
     assert data["tools"]["exec"]["timeout"] == 600
 
     shim = bin_dir / grounded.INTERPRETER_SHIM
-    assert shim.read_text().splitlines() == ["#!/bin/sh", f'exec "{sys.executable}" "$@"']
+    assert shim.read_text().splitlines() == ["#!/bin/sh", f'exec {shlex.quote(sys.executable)} "$@"']
     assert shim.stat().st_mode & stat.S_IXUSR
     probe = subprocess.run([str(shim), "-c", "import sys; print(sys.executable)"], capture_output=True, text=True)
     assert probe.returncode == 0 and probe.stdout.strip() == sys.executable

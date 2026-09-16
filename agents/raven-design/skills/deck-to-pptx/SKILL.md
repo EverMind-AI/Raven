@@ -17,7 +17,8 @@ outline. Name its absolute path in the reply.
 | A picture that does not exist yet | `image_generate` | reference pictures go in `images`, up to six |
 | An icon | `raven_ppt.services.assets.icons` | 1304 outline icons, see `references/assets.md` |
 | A figure or table from a paper | PyMuPDF on `raven-python` | from the PDF you were given, else one you downloaded; crop the region or pull the embedded image; see `references/assets.md` |
-| A formula | matplotlib mathtext on `raven-python` | a transparent PNG, never typed as text; see `references/assets.md` |
+| A formula | `add_formula` from `raven_ppt.services.assets.formulas`, on `raven-python` | one line of TeX in, a picture in the deck's ink at true size out; see `references/assets.md` |
+| Symbols inside a sentence | `math_runs` from the same module | `_A`, `^2`, `θ*` become real sub- and superscript runs; see `references/assets.md` |
 | Render a page to look at it | `soffice --headless --convert-to pdf`, then `pdftoppm` | |
 
 With no image key configured, `image_generate` says so. Say which pages would have had a
@@ -28,6 +29,9 @@ picture and carry them on type, grid, rule and colour.
 Language, audience, length, and whether the deck runs light or dark. They are the user's to
 decide, every page is measured against them, and a deck built on a guess is measured
 against a brief nobody agreed to.
+
+**Light is the default ground.** Recommend light when you ask; take light when nobody
+answers. Dark only when the request names it or the brand's own material is dark.
 
 Ask with `ask_user`, in one call, before any other work. Where there is no user to ask --
 the request arrived from another agent -- read all four out of the request and say in the
@@ -82,15 +86,19 @@ reply which you took and where from. Do not default any of them silently.
 
 ## Technical decks
 
-A paper walk-through, a method or an architecture talk runs on the paper's own pictures.
-Crop each figure and table out of the PDF (`references/assets.md`). With no PDF in hand,
-get one first: `web_search` the title, download the PDF the publisher or arXiv serves, and
-crop from that; `image_search` for the published figure is the last resort, when no PDF can
-be had. Redraw only what the paper has no picture of, and say so in the caption. A formula is rendered, not typed: mathtext to a transparent
-PNG, one formula per picture, its main line about the size of the body text beside it. Caption
-both with the paper's own figure and equation numbers. After placing either, render the page
-and look at it: a crop that took the neighbouring column, a fraction bar sitting on a card
-edge, a figure shrunk under half the page width -- the reading is what catches them.
+- A paper walk-through, a method or an architecture talk uses the paper's own figures and
+  tables. Crop them from the PDF (`references/assets.md`). Given no PDF: `web_search` the
+  title, download the PDF from the publisher or arXiv, crop from that. `image_search` for the
+  published figure only when no PDF can be had.
+- Redraw only what the paper has no picture of, and say so in the caption.
+- A formula that stacks (fraction, root, sum with limits): `add_formula(slide, tex, left_in,
+  top_in, size_pt=...)`, one formula per call, `size_pt` = the body size beside it.
+- A sentence carrying symbols (`p(θ | D_A)`, `F_i`, `θ*`): `math_runs(paragraph, text,
+  size_pt=...)`.
+- A lone Greek letter or plain `λ`: typed.
+- Never leave `_A` or `^2` as characters in a text box.
+- Caption figures and formulas with the paper's own figure and equation numbers.
+- After placing a figure or a formula, render the page and look at it.
 
 ## The numbers a page is measured against
 
@@ -120,12 +128,9 @@ If it does not fit at these sizes, split the page or cut it -- never shrink the 
   the row height from that, then place the rule. Set every element in a row from one
   baseline, and put every ground down before any word, or the fill covers the copy.
 
-- **`python3` on the path is not the interpreter that has `python-pptx`.** `raven-python`
-  is: a shim on this session's PATH that runs raven's own interpreter, where `pptx` and
-  `raven_ppt` (the icons) both import. Check with `raven-python -c "import pptx, raven_ppt"`
-  and run the build script as `raven-python build.py`. Do not hunt for a `.venv`, build a
-  venv of your own or install python-pptx: a build whose first line is
-  `from pptx import Presentation` dies on line one under `python3`, and nowhere else.
+- **Run the build script with `raven-python`**, the interpreter on PATH that has `pptx` and
+  `raven_ppt`; `python3` does not. Check with `raven-python -c "import pptx, raven_ppt"`. Do
+  not look for a `.venv`, build a venv, or install python-pptx.
 - `spAutoFit` with `word_wrap=False` makes LibreOffice re-centre the text. Remove
   `a:spAutoFit` and `a:normAutofit` from `bodyPr` when alignment has to hold.
 - `shape.shadow.inherit = False` on every drawn shape, or the theme stamps a drop shadow.

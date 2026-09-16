@@ -20,7 +20,7 @@ paper -- and the furniture no material ever links: the logos and the marks.
 `web_search` returns pages. For pictures call `image_search`, with every picture the deck
 needs as `queries=[...]` in one call; the results come back grouped by query. Each hit
 carries the direct image URL, its pixel size, the domain and the page it came from, and
-anything under 640px wide is already dropped -- below that it is soft at half-page width.
+anything under 640px wide or 360px tall is already dropped.
 Keep the page link beside what you took: it is what the page's source note credits. When
 `image_search` is not in your tool list, this deployment has no image search: say so, and
 generate or go without.
@@ -33,14 +33,14 @@ nothing behind it. The worst thing to do with a cut-out is to box it in a white 
 
 ## A paper's figures and formulas
 
-Both run on `raven-python`; the imports are not on the machine's `python3`.
+Both run on `raven-python`.
 
 ```python
 import pymupdf
 
 doc = pymupdf.open("paper.pdf")
 
-# Find the figure by its caption -- the colon keeps in-text mentions out -- whichever page carries it.
+# Find the figure by its caption (with the colon), whichever page carries it.
 page, caption = next((p, hit) for p in doc for hit in p.search_for("Figure 2:"))
 
 # A raster figure is embedded as an image and comes out at its own resolution.
@@ -50,35 +50,38 @@ for i, info in enumerate(page.get_images(full=True)):
         pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
     pix.save(f"assets/p{page.number + 1}_img{i}.png")
 
-# A vector figure or a table has no embedded image: crop the page region above the
-# caption instead, then look at the crop and move the rectangle until the whole figure
-# and nothing else is inside it.
+# A vector figure or a table has no embedded image: crop the region above the caption,
+# look at the crop, move the rectangle until the whole figure and nothing else is inside.
 region = pymupdf.Rect(page.rect.x0 + 40, caption.y0 - 300, page.rect.x1 - 40, caption.y0 - 4)
 page.get_pixmap(clip=region, dpi=220).save("assets/fig2.png")
 ```
 
 ```python
-import matplotlib
+from raven_ppt.services.assets.formulas import add_formula
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
-
-def formula_png(tex, path, size_pt=28, rgb="1F2A44"):
-    """mathtext: LaTeX math without the packages -- \\mathrm, \\frac, \\sqrt, sub/superscripts,
-    Greek; no \\text{}, no align environments."""
-    fig = plt.figure(figsize=(0.01, 0.01))
-    fig.text(0, 0, f"${tex}$", fontsize=size_pt, color=f"#{rgb}")
-    fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.04, transparent=True)
-    plt.close(fig)
-
-
-formula_png(r"\mathrm{Attention}(Q,K,V)=\mathrm{softmax}\left(\frac{QK^{T}}{\sqrt{d_k}}\right)V", "assets/eq1.png")
+shape = add_formula(
+    slide,
+    r"L(\theta)=L_{\mathrm{new}}(\theta)+\frac{\lambda}{2}\sum_i F_i\,(\theta_i-\theta^{*}_{i})^{2}",
+    left_in=0.8, top_in=2.6, size_pt=18, colour="1F2A44", serif=False,
+)
 ```
 
-Place the PNG with `add_picture` by width only, so the aspect holds; at 300 dpi a 28pt
-formula is about 0.4in tall on its main line, which is body-text size on a 13.333in page.
-Rendered black-on-transparent, it sits on a light ground or a card without a box behind it.
+`size_pt` = the body size beside it. `serif=True` for a deck set in a serif face. `colour` =
+the deck's ink. `max_width_in` scales a long expression down to a column. `\mathrm{}` sets a
+word upright. No `\text{}`, no `align`, no matrix; prose stays outside the expression. The
+returned shape carries the `width` and `height` to make room for.
+
+Symbols inside a sentence are text, set as runs with real scripts rather than a picture:
+
+```python
+from raven_ppt.services.assets.formulas import math_runs
+
+paragraph = box.text_frame.paragraphs[0]
+math_runs(paragraph, "旧后验 p(θ | D_A) 由 F_i 和 θ* 决定", size_pt=16, colour="1F2A44")
+```
+
+`_A` and `_{new}` subscript; `^2` and `^{T}` superscript; `θ*` is θ with a raised star. A
+plain Greek letter or a word needs neither call.
 
 ## Generating one
 

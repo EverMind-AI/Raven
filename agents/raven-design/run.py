@@ -11,6 +11,7 @@ import argparse
 import importlib.util
 import json
 import os
+import shlex
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -73,8 +74,10 @@ def write_interpreter_shim(root: Path) -> Path:
     bin_dir = root / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     shim = bin_dir / INTERPRETER_SHIM
-    shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
-    shim.chmod(0o755)
+    staged = bin_dir / f".{INTERPRETER_SHIM}.{os.getpid()}"
+    staged.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n', encoding="utf-8")
+    staged.chmod(0o755)
+    os.replace(staged, shim)
     return bin_dir
 
 
