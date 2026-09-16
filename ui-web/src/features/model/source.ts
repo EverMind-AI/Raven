@@ -35,7 +35,7 @@ let defaultModelLive = ''
 let defaultProviderLive = ''
 
 /* Whether first-run setup reported a configured provider. On an object because
-   the boot in src/legacy/live/200-boot.js is what learns the answer. */
+   the boot in src/state/boot.ts is what learns the answer. */
 export const setupState: { providerConfigured: boolean | null } = { providerConfigured: null }
 
 export const providers = (): Provider[] => providersLive

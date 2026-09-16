@@ -1,11 +1,18 @@
 /* ══ app state ════════════════════════════════════════════════════ */
 
 import { islands } from '../../islands'
+import { closeApproval as approvalClose, open as approveSheet, openApproval as approvalSheet } from '../../features/composer/approve'
+import { close as clarifyClose, open as clarifySheet } from '../../features/composer/clarify'
+import { drawQueue as queueDraw, dropDraft, loadDraft, parkDraft, queueClear, queuePush, queueRestore, queueShift, queueSnapshot, turn } from '../../features/composer/mount'
+import { add as sheetAdd, dropClass as sheetDropClass, forget as sheetsForget, remove as sheetRemove, session as sheetSession, sync as sheetsSync } from '../../features/composer/sheets'
+import { current as modelCurrent, setCurrent as modelSet } from '../../features/model/store'
+import { bootError, show as failureBar } from '../../shell/failure'
 import { show as menuAt } from '../../shell/menu'
 import { close as closePermPop } from '../../shell/perm'
 import { setCurrent as sessionSet } from '../../shell/session'
 import { close as closeTierPop } from '../../shell/tier'
 import { show as toast } from '../../shell/toast'
+import { open as upShade } from '../../shell/upgrade'
 import { $, T, mk } from './010-kernel.js'
 import { sessionRows } from './050-rail.js'
 
@@ -40,14 +47,16 @@ function confirmAsk(title, body, label, fn) {
    question sitting over the field. See ui-web/src/features/composer/sheets.ts for
    what that scoping is for and what it does not fix.
 
-   One destructure, at this layer's top level so both layers see it: the live
-   parts are an IIFE nested in this script, and the four of them that raise or
-   retire a sheet keep calling these by name. */
-let sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget, approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose, queueDraw, queuePush, queueShift, queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft, claimDraft, turn;
-let modelCurrent, modelSet;
-/* Bound at the shared top level because the live parts run in the IIFE nested
-   below it. The writers themselves stay in the modern bundle. */
-let failureBar, bootError, upShade;
+   What this part re-exports are the island's own verbs under the names every
+   caller has used all along. They were bound by one destructure of the island
+   bag in this part's install(), which is why nothing could be typed and nothing
+   could be read before the layer had installed; a plain import is the same
+   binding without either limit. The bag still carries them for stage C. */
+
+/* The one exception, and it is not the island's own verb: a draft that becomes
+   a session has to be claimed in two stores at once, and the bag is where that
+   pair is spelled (see islands.ts). */
+const claimDraft = (id) => islands.composer.claimDraft(id);
 
 /* ══ context menu ═════════════════════════════════════════════════
    One rule for right-click everywhere in the window, because the old answer was
@@ -146,14 +155,6 @@ export function install() {
   $('#cfNo').onclick = () => { $('#veil').dataset.open = 'false'; cfFn = null; };
   $('#cfYes').onclick = () => { $('#veil').dataset.open = 'false'; if (cfFn) cfFn(); cfFn = null; };
   $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); };
-  ({ sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
-    approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose,
-    drawQueue: queueDraw, queuePush, queueShift,
-    queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft,
-    claimDraft, turn } = islands.composer);
-  ({ current: modelCurrent, setCurrent: modelSet } = islands.model);
-  ({ failureBar, bootError, upShade } = islands.chrome);
-
   /* Dev-only hook, beside __clarify, __upnote and __dag in the live layer and
    for the same reason: the approval sheet only appears when an engine asks for
    one, which is too long a loop to design a sheet in. On window because a

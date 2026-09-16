@@ -9,15 +9,14 @@
    fact appears, so collapsing it can't lose information.
 
    The renderer and shared state are owned by the workspace island
-   (ui-web/src/features/workspace/); what stays here is the tool-event bookkeeping
-   the fixture hooks feed, the panel chrome outside #wsBody, and the fixture
-   workspace source. */
+   (ui-web/src/features/workspace/), and what the panel is a record of -- the
+   changed-file rows, the pages read, the turn each belongs to -- is that
+   feature's own module (features/workspace/record.ts). What stays here is the
+   panel chrome outside #wsBody. */
 
 import { islands } from '../../islands'
-import { show as toast } from '../../shell/toast'
 import { sources } from '../../state/sources'
-import { $, HOST_PLATFORM, T } from './010-kernel.js'
-import { wsOnTool, wsOnToolDone } from './110-subagents.js'
+import { $, T } from './010-kernel.js'
 
 let wsTab = 'diff', wsOpen = false, wsWide = false, wsPicked = false;
 
@@ -36,94 +35,9 @@ function wsReset() {
   islands.subagents.reset();
 }
 
-/* ── resumed sessions ──────────────────────────────────────────────────
-   The panel is rebuilt from the stored calls rather than starting empty after a
-   reload: session.resume carries every assistant tool_call WITH its arguments,
-   which is the same input the live hooks are fed, so replaying them yields the
-   same rows, the same diffs and the same turn grouping. */
-function wsOnHistory(messages) {
-  /* The stored tool entries carry the real unified diff when the tool reported
-     one; keyed here so each replayed call can swap its argument-guessed hunk
-     for the numbered rows, exactly as the live completion event does. */
-  const diffs = new Map();
-  (messages || []).forEach((m) => {
-    if (m && m.role === 'tool' && m.tool_call_id && m.diff) diffs.set(String(m.tool_call_id), m.diff);
-  });
-  (messages || []).forEach((m) => {
-    if (!m) return;
-    if (m.role === 'user' && m.delegated) {
-      /* A delegated result re-entering counts as one turn here too -- a live
-         client advances on turn.started, and without the same step on replay
-         a reloaded session files the delegated reaction's files under its
-         parent's turn. Mirrors the rule in features/transcript/store.ts. An
-         origin-only entry (cron, sentinel) does NOT: it opens no workspace
-         turn there either. */
-      WS.turn += 1; return;
-    }
-    if (m.role === 'user' && m.text && m.text.trim()) { WS.turn += 1; return; }
-    if (m.role !== 'assistant' || !Array.isArray(m.tool_calls)) return;
-    m.tool_calls.forEach((c) => {
-      let args = null;
-      try { args = JSON.parse(c.arguments || '{}'); } catch (e) { return; }
-      if (!args || typeof args !== 'object') return;
-      const name = String(c.name || '');
-      wsOnTool(name, args, true);
-      const diff = diffs.get(String(c.id || ''));
-      if (diff) wsOnToolDone(name, args, true, '', null, diff);
-    });
-  });
-  /* Restored rows have no completion event coming, and nothing counts as
-     unread because none of it arrived while the reader was away. */
-  WS.urls.forEach((u) => { u.at = T('gui.ws.turn_earlier'); });
-  WS.changes.forEach((c) => { c.seen = true; });
-  WS.unseen = 0;
-  bumpWs();
-}
-
-/* ── diff from the edit arguments ───────────────────────────────────────
-   edit_file carries old_text and new_text, which IS the ground truth of the
-   change, so the diff needs no backend support at all. Long runs of
-   unchanged context are folded to one clickable row. */
-let hunkFromEdit, hunkFromWrite, hunkFromUnified;
-
-/* The two front ends hand over different shapes -- the live RPC gives the
-   whole argument object, the demo replay gives the one string it displays.
-   Normalising here keeps every caller downstream simple. */
-function wsArgs(name, args) {
-  if (args && typeof args === 'object') return args;
-  const s = String(args == null ? '' : args);
-  if (name === 'exec') return { command: s };
-  if (name === 'web_fetch') return { url: s };
-  if (name === 'web_search') return { query: s };
-  if (name === 'spawn') return { label: s };
-  return { path: s };
-}
-
 /* Tools report absolute paths; the workspace root is the same on every row and
-   carries no information. The live layer's source knows the real root. */
+   carries no information. The workspace source knows the real root. */
 function wsShortPath(p) { return sources.workspace.shortPath(p); }
-
-/* One row per path, not per call: five edits to the same file is one changed
-   file with five hunks, which is how a person thinks about it. */
-function wsRecordChange(path, kind, hunk) {
-  const key = String(path);
-  let c = WS.changes.find((x) => x.key === key && x.turn === WS.turn);
-  if (!c) {
-    const shown = wsShortPath(key);
-    const cut = shown.lastIndexOf('/');
-    /* The newest change is the one you came here to read, so it arrives
-       expanded. `auto` marks it as opened by us, so the next arrival folds it
-       back without touching a row the reader opened on purpose. */
-    WS.changes.forEach((x) => { if (x.auto) { x.open = false; x.auto = false; } });
-    c = { key, dir: cut < 0 ? '' : shown.slice(0, cut + 1), name: cut < 0 ? shown : shown.slice(cut + 1),
-      kind, add: 0, del: 0, hunks: [], turn: WS.turn, open: true, auto: true, seen: false };
-    WS.changes.unshift(c);
-  }
-  if (kind === 'write') c.kind = 'write';
-  c.add += hunk.add; c.del += hunk.del;
-  c.hunks.push(hunk);
-  return c;
-}
 
 function setWs(open, tab) {
   if (open && tab && document.documentElement.classList.contains('desk-ready')) {
@@ -184,11 +98,12 @@ function wsPick(tab) {
   drawWs(); bumpWs();
 }
 
-/* The pane's state, out and back. The live layer's parked-turn machinery is the
-   caller: it saves this when the reader leaves a session mid-turn and hands it
-   back on return. Two functions rather than two bindings for that layer to read
-   and write -- which view is up and whether the reader chose it belong to the
-   panel, and only the panel knows a restore is not a fresh pick. */
+/* The pane's state, out and back. The residency rule is the caller
+   (src/state/session/residency.ts): it saves this when the reader leaves a
+   session mid-turn and hands it back on return. Two functions rather than two
+   bindings for it to read and write -- which view is up and whether the reader
+   chose it belong to the panel, and only the panel knows a restore is not a
+   fresh pick. */
 function wsView() {
   return { tab: wsTab, open: wsOpen, picked: wsPicked };
 }
@@ -223,7 +138,6 @@ function drawWs() {
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
   WS = islands.workspace.shared();
-  ({ hunkFromEdit, hunkFromWrite, hunkFromUnified } = islands.workspace);
 
   /* ── the turn's products ───────────────────────────────────────────────
    The record's own rows for one turn, unfiltered. Which of them counts as a
@@ -231,11 +145,12 @@ export function install() {
    decide -- see artifactsOf in features/transcript/store.ts.
 
    The turn number is the one WS.changes files rows under: bumped per turn by
-   the live layer, and per user message with text by wsOnHistory. The
-   transcript counts it the same way over the same payload. */
+   the pipeline, and per user message with text by the replay
+   (features/workspace/record.ts). The transcript counts it the same way over
+   the same payload. */
   sources.artifacts = {
     changes: (turn) => WS.changes.filter((c) => c.turn === turn),
   };
 }
 
-export { wsTab, wsOpen, wsWide, wsPicked, WS, wsReset, wsOnHistory, hunkFromEdit, hunkFromWrite, hunkFromUnified, wsArgs, wsShortPath, wsRecordChange, setWs, setWsFull, bumpWs, wsPick, wsView, wsRestore, wsEpoch, wsStale, wsShowsTurn, drawWs }
+export { wsTab, wsOpen, wsWide, wsPicked, WS, wsReset, wsShortPath, setWs, setWsFull, bumpWs, wsPick, wsView, wsRestore, wsEpoch, wsStale, wsShowsTurn, drawWs }

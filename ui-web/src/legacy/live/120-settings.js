@@ -1,14 +1,16 @@
 /* -- settings and the language flip: the seam -------------------------
-   The sources are ui-web/src/features/settings/source.ts (the dialog's data,
-   the permission chip's refresh) and features/model/source.ts (the provider
-   list, the two writes, the tier). What stays here is the page chrome none of
-   them own yet: the composer's model chip, the language flip's whole-page
-   redraw, the boot-time language restore, and the update check that drives the
-   notice row and the upgrade prompt.
+   The last part of the live layer, and the reason it is still one: what stays
+   here is page chrome none of the sources own yet -- the composer's model chip,
+   the language flip's whole-page redraw, the boot-time language restore, and
+   the settings page's update check. The sources themselves are
+   ui-web/src/features/settings/source.ts (the dialog's data, the permission
+   chip's refresh) and features/model/source.ts (the provider list, the two
+   writes, the tier).
 
    `redrawAll` is also what tests/test_ui_language_repaint.py reads, by source
    text, to prove every module page repaints on a flip -- so it stays a
-   top-level declaration in this layer until stage C removes both. */
+   top-level declaration in this layer, with this file name and this manifest
+   entry, until stage C removes the test and the chrome in one change. */
 
 import { modelSource, openModelsForMissingProvider, setChipPainter, tierSource } from '../../features/model/source'
 import { open as openModelPicker } from '../../features/model/store'
@@ -34,7 +36,7 @@ import { drawMoreFly } from '../demo/150-chrome.js'
 import { drawCaps } from '../demo/152-skills.js'
 import { drawPb } from '../demo/154-playbooks.js'
 import { isDraft } from '../../state/session/registry'
-import { askUpgrade, showUpNote } from './210-update-notice.js'
+import { askUpgrade, showUpNote } from '../../state/updates'
 
 /* -- language ---------------------------------------------------------
    One key, both front ends: config.language also drives the TUI (which

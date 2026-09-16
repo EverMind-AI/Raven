@@ -126,15 +126,15 @@ export const hasStillOnDisk = (answer: unknown): boolean => field(answer, 'still
  * A `system.version` answer says a newer build exists. Absent until the
  * gateway carries the field, and the notice row simply stays hidden -- an
  * older gateway degrades to no notice rather than to a broken one. Sites: the
- * boot check and its unawaited re-check in src/legacy/live/200-boot.js, and
- * the settings page's own check button in src/legacy/live/120-settings.js.
+ * boot check and its unawaited re-check in src/state/boot.ts, and the
+ * settings page's own check button in src/legacy/live/120-settings.js.
  */
 export const hasUpdateFlag = (version: unknown): boolean => !!field(version, 'update_available')
 
 /**
  * The gateway has the `browser.frame` surface.
  *
- * Site: src/legacy/live/220-browser.js registers BOTH frame paths -- the
+ * Site: src/state/install.ts registers BOTH frame paths -- the
  * binary `RVF1` sink and the base64 `browser.frame` notify an older gateway
  * pushes instead -- because a page cannot know which one it will be sent until
  * a frame arrives. So the registration is unconditional today and nothing
@@ -146,7 +146,7 @@ export const hasBinaryFrames = (): boolean => has('browser.frame')
  * A `subagents.list` row carries `building`. Always false from a current
  * gateway (the fork-era venv build is gone); carried for an older one, where
  * the row was the only place the page learned a build was in flight. Site:
- * `xaRowOf` in src/legacy/live/240-external-agents.js.
+ * `xaRowOf` in src/features/xa/source.ts.
  */
 export const hasBuildFlag = (row: unknown): boolean => !!field(row, 'building')
 
@@ -161,7 +161,7 @@ export function hasInstanceTurns<T>(turns: T[] | null | undefined): turns is T[]
 
 /**
  * The gateway speaks `channels.*`. Site: the QR read in
- * src/legacy/live/110-connections.js, which answers null when it does not, and
+ * src/features/connections/source.ts, which answers null when it does not, and
  * the island shows the same waiting frame the old panel kept.
  */
 export const servesChannels = (): boolean => has('channels')

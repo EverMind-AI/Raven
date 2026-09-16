@@ -28,6 +28,7 @@ function langSet(v) { LANG = v; applyI18n(); }
    case; system.hello corrects it. The live layer calls the setter rather than
    assigning, the way it does for LANG: an imported binding is read-only, and a
    field the other layer writes is a strand count-shared-globals.mjs counts. */
+/** @type {string} */
 let HOST_PLATFORM;
 function hostPlatformSet(v) { HOST_PLATFORM = v; }
 

@@ -28,7 +28,7 @@ import { sessionDraw } from '../../legacy/demo/050-rail.js'
 import { ask, noteRow } from '../../legacy/demo/060-conversation.js'
 import { dagFlowFeed, killStatus, newStep, showStatus } from '../../legacy/demo/070-transcript.js'
 import { drawMeter, goState } from '../../legacy/demo/090-composer.js'
-import { wsOnTool, wsOnToolDone } from '../../legacy/demo/110-subagents.js'
+import { wsOnTool, wsOnToolDone } from '../../features/workspace/record'
 import { touchSession } from '../../features/rail/source'
 import { viewRuntime } from './registry'
 import {

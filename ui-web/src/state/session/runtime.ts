@@ -745,4 +745,3 @@ export function installSlashActions(): void {
     if (x.id === 'gui.compress') x.fn = compressNow
   })
 }
-

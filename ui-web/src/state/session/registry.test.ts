@@ -15,7 +15,7 @@ import { fakeGateway, loadPart } from '../../../scripts/legacy-part.mjs'
 import type { SessRow } from '../../features/rail/types'
 
 type Registry = typeof import('./registry')
-type Overrides = typeof import('../../legacy/live/080-overrides.js')
+type Wiring = typeof import('../install')
 
 interface Row { id: string; title?: string; status?: string | null }
 interface Staged { model: unknown; tier: string | null; perm: string | null }
@@ -41,15 +41,15 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
   const pending: Array<{ id: string; res: (v: unknown) => void; rej: (e: unknown) => void }> = []
   const subs: Array<{ id: string; res: () => void }> = []
   /* The seam the registry reaches its own switch through: sessionOpen is
-     sources.sessions.open, which the boot guard installs as the switch. Bound
+     sources.sessions.open, which the boot installs as the switch. Bound
      through this holder rather than stubbed, so the reconnect drives the real
      function. */
   const api: { switchTo?: Registry['switchTo'] } = {}
-  /* The registry is imported first and the part that wires it after, which is
-     the order that keeps one module graph: the fakes are installed around the
-     modules the first import reaches, and one it did not is loaded afterwards
-     without them. */
-  await loadPart(async () => { await import('./registry'); return import('../../legacy/live/080-overrides.js') }, {
+  /* The registry is imported first and the module that wires it after, which
+     is the order that keeps one module graph: the fakes are installed around
+     the modules the first import reaches, and one it did not is loaded
+     afterwards without them. */
+  await loadPart(async () => { await import('./registry'); return import('../install') }, {
     fakes: {
       'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) } },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
@@ -88,7 +88,8 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
         showStatus: (text: string) => calls.push(['showStatus', text]),
       },
       'demo/090-composer.js': { drawMeter: () => {}, goState: () => {}, ta: { focus: () => {} } },
-      'demo/100-workspace.js': { setWs: () => {}, wsOnHistory: () => {}, wsReset: () => {} },
+      'demo/100-workspace.js': { setWs: () => {}, wsReset: () => {} },
+      'src/features/workspace/record': { wsOnHistory: () => {} },
       'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
       'demo/152-skills.js': { drawCaps: () => {} },
       'src/features/transcript/source': {
@@ -135,12 +136,12 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
        here, and an empty envelope is a valid answer to both. */
     return Promise.resolve({})
   })
-  const overrides = (await import('../../legacy/live/080-overrides.js')) as Overrides
+  const wiring = (await import('../install')) as Wiring
   const { setSources } = await import('../sources')
-  setSources({ composer: {}, sessions: {}, transcript: {} } as never)
+  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as never)
   const { staging } = await import('./staging')
-  const rpcUi = await import('../../legacy/live/020-rpc.js')
-  overrides.install()
+  const connection = await import('../connection')
+  wiring.installActions()
   /* The four page-level names the switch used to keep, as the conversations
      that keep them now: the subscription whose frames paint the stage is the
      one on the conversation being shown, the two books are that same field
@@ -169,9 +170,9 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
     subscribe: registry.subscribe,
     startDraft: registry.switchToDraft,
     openLiveSession: (row: Row) => registry.switchTo(row as SessRow),
-    /* The handler live/020-rpc.js's reconnect UI runs once the transport says
-       the socket is back. Registered by install(), one registrar today. */
-    onReconnect: [...(rpcUi.reconnectHandlers as Set<() => Promise<void>>)][0]!,
+    /* The handler state/connection.ts runs once the transport says the socket
+       is back. Registered by installActions(), one registrar today. */
+    onReconnect: [...(connection.reconnectHandlers as Set<() => Promise<void>>)][0]!,
     calls,
     env,
     state,
