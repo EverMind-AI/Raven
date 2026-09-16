@@ -29,6 +29,10 @@ export interface ProviderRow {
   acceptsKey?: boolean
   apiBase?: string
   defaultApiBase?: string
+  /* Addresses this provider serves the same account model from, each with the
+     signup that issues a key for it. Present only where the choice is the
+     reader's; everywhere else the pane offers a host field instead. */
+  platforms?: Array<{ label: string; api_base: string; signup_url: string }>
   env?: string
   warn?: string
   key?: string

@@ -389,6 +389,31 @@ describe('the write surface', () => {
     expect(toasts()).toEqual(['connection refused'])
   })
 
+  it('reports what the engine said, not the name of the error code', async () => {
+    /* The transport rejects with the JSON-RPC error frame itself rather than an
+       `Error`, so `.message` is the code's name and the sentence a reader needs
+       is in `data.detail`. The test above throws a real `Error`, whose message
+       is useful either way -- which is how reading only `.message` survived:
+       the shape it fails on is the only shape production actually produces.
+
+       What that cost: an embedding endpoint answering "your account balance is
+       insufficient" reached the reader as the word "internal_error". */
+    source({
+      create: async () => {
+        throw {
+          code: -32603,
+          message: 'internal_error',
+          data: { detail: 'could not create the base: embedding endpoint returned 402' },
+        }
+      },
+    })
+    await mount()
+    await act(async () => {
+      await store.create('handbook')
+    })
+    expect(toasts()).toEqual(['could not create the base: embedding endpoint returned 402'])
+  })
+
   it('ignores a blank name and a second click while one is in flight', async () => {
     let calls = 0
     let release: (b: KbBase) => void = () => {}

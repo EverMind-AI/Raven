@@ -9158,6 +9158,28 @@
           "needs_api_base": {
             "type": "boolean"
           },
+          "platforms": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "api_base": {
+                  "type": "string"
+                },
+                "signup_url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "api_base",
+                "label",
+                "signup_url"
+              ]
+            }
+          },
           "warning": {
             "type": "string"
           },

@@ -747,6 +747,11 @@ export interface ModelOptionProvider {
   };
   total_models: number;
   needs_api_base: boolean;
+  platforms?: {
+    label: string;
+    api_base: string;
+    signup_url: string;
+  }[];
   warning: string;
   /**
    * Keyed by the model id as it appears in `models`.
