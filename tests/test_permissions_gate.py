@@ -1114,8 +1114,9 @@ def test_a_brief_is_named_on_the_prompt_rather_than_pasted_into_it():
 
     assert "intro-deck" in line, "the node id decides the call and has to survive"
     assert "Raven-PPT" in line, "so does which agent runs"
-    assert f"<{len(brief)} chars>" in line, "the brief is named by its size"
-    assert "Make a deck" not in line, "and never quoted"
+    assert f"({len(brief)} chars)" in line, "the brief is counted, so its weight is known"
+    assert "..." in line, "and only its ends survive, not the brief"
+    assert len(line) < 200, "which is what stops it crowding out the fields above"
 
 
 def test_the_prompt_stays_short_enough_to_read_to_the_end():
@@ -1167,8 +1168,8 @@ def test_a_graph_shows_its_steps_and_not_their_briefs():
     line = action_line("run_subagent_dag", {"task_summary": "weekly digest", "nodes": nodes})
 
     assert "pull" in line and "data-raven" in line, "the step and its agent are the action"
-    assert "<800 chars>" in line, "its brief is named"
-    assert "xxx" not in line, "and never quoted"
+    assert "(800 chars)" in line, "its brief is counted rather than carried"
+    assert len(line) < 200, "and cannot crowd out the three fields above"
 
 
 def test_a_container_too_wide_to_open_still_says_what_it_holds():
@@ -1179,3 +1180,51 @@ def test_a_container_too_wide_to_open_still_says_what_it_holds():
     assert "/var/log/app-0.log" in line
     assert "more" in line
     assert len(line) < 200
+
+
+def test_a_long_target_stays_identifiable_instead_of_becoming_a_count():
+    """Length alone cannot tell a target from prose.
+
+    A deeply nested workspace path is as long as a paragraph and is the opposite
+    kind of thing: it says which file is about to be overwritten. Replacing it
+    with a character count asks for an authorisation nobody can give. Both ends
+    survive because both ends identify -- the root says where, the tail says
+    which.
+    """
+    path = "/Users/admin/workspace/projects/raven/ui-web/src/features/subagents/deeply/nested/report.md"
+    line = action_line("write_file", {"path": path, "content": "replacement"})
+
+    assert "/Users/admin" in line, "the root says where this is"
+    assert "report.md" in line, "and the tail says which file"
+    assert f"({len(path)} chars)" in line
+
+
+def test_a_long_identifier_nested_in_a_container_is_identifiable_too():
+    """The scalar rule has to hold wherever the scalar sits."""
+    path = "/Users/admin/workspace/projects/raven/ui-web/src/features/subagents/deeply/nested/report.md"
+    line = action_line("delete_files", {"paths": [path]})
+
+    assert "/Users/admin" in line
+    assert "report.md" in line
+
+
+def test_a_container_whose_members_do_not_fit_still_names_one():
+    """A count alone is the one answer that says nothing about what is touched.
+
+    When no member fits whole the first is cut to the room available, which
+    still names the kind of thing this call reaches; the rest are counted.
+    """
+    nodes = [
+        {"id": "pull", "subagent": "data-raven", "node_summary": "pull the feedback", "prompt_template": "x" * 800},
+        {"id": "write", "subagent": "Raven", "node_summary": "write the report", "prompt_template": "y" * 900},
+    ]
+    line = action_line("run_subagent_dag", {"task_summary": "weekly digest", "nodes": nodes})
+
+    assert "pull" in line and "data-raven" in line
+    assert "items>" not in line, "never a bare count"
+
+
+def test_a_flag_is_not_dressed_up_as_a_string():
+    """`append=False` and a string reading "False" are different answers."""
+    line = action_line("write_file", {"path": "/tmp/x", "append": False})
+    assert "append=False" in line
