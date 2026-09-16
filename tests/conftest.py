@@ -611,6 +611,28 @@ def _no_openrouter_network(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_huggingface_lookup(monkeypatch):
+    """Keep LiteLLM's context-window lookup off huggingface.co.
+
+    `rates._try_litellm_context_window` asks `litellm.get_model_info`, and for a
+    model whose row carries no window LiteLLM fetches
+    `huggingface.co/<model>/raw/main/config.json` to read `max_position_embeddings`.
+    It is one request per process, cached afterwards, which is why it lands on
+    whichever test in a worker happens to ask first -- a different name on every
+    run, each charged one to four seconds of waiting it did not cause.
+
+    The sibling above keeps raven's own catalogue fetch off the wire for the same
+    reason; this one was missed because the request is made inside LiteLLM rather
+    than here. `None` is the answer that function already gives when the fetch
+    fails, so nothing downstream sees a shape it does not handle.
+    """
+    from litellm import utils as litellm_utils
+
+    monkeypatch.setattr(litellm_utils, "_get_max_position_embeddings", lambda model_name: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_real_acp_journal(tmp_path, monkeypatch):
     """Keep ACP wire journals out of the real home.
 
