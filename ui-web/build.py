@@ -45,7 +45,7 @@ ASSETV_MARK = "__ASSETV__"
 # Install order is semantics: each part's install() does what the part used to
 # do while the concatenated script ran, and several of them read what an earlier
 # one wrote. src/legacy/index.js calls them in exactly this order -- regenerate
-# it (scripts/codemod/a3-index.mjs) after renaming, adding or removing a part.
+# it (scripts/legacy-index.mjs) after renaming, adding or removing a part.
 _DEMO_PARTS = [
     "010-kernel.js",
     "020-prose.js",
@@ -139,6 +139,16 @@ def _assets_stamp() -> str:
     return digest.hexdigest()[:10]
 
 
+#: The two load modes, each with its own golden. Stub mode is the demo shell on
+#: its fixtures; live mode is the page a reader gets when the gateway is not
+#: there, which settles into a different tree and would otherwise be unguarded
+#: -- a live-only boot break passes the stub snapshot untouched.
+_BOOT_SNAPSHOTS = (
+    ("http://127.0.0.1:18792/?stub=1", "boot-stub.txt"),
+    ("http://127.0.0.1:18792/", "boot-live-noserver.txt"),
+)
+
+
 def main() -> None:
     page = (ROOT / "src" / "page.html").read_text(encoding="utf-8")
     style = (ROOT / "src" / "styles" / "page.css").read_text(encoding="utf-8")
@@ -162,11 +172,9 @@ def main() -> None:
     out = page.replace(ASSETV_MARK, _assets_stamp(), 1)
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
-    # newline="" so the bytes are the string: the default translates every \n
-    # to os.linesep, which on Windows emits a CRLF page whose script payloads
-    # check-page.mjs can no longer extract (its `<script>\n` anchor needs the
-    # LF to be the next byte). The artifact ships in the wheel, so it must not
-    # depend on which platform assembled it either.
+    # newline="" so the bytes are the same on every platform: the default
+    # translates "\n" to "\r\n" on Windows, which would hand a checkout there a
+    # differently-hashed page than the one CI and the wheel carry.
     (dist / "index.html").write_text(out, encoding="utf-8", newline="")
     print(f"built dist/index.html ({len(out):,} bytes)", flush=True)
 
@@ -182,14 +190,26 @@ def main() -> None:
         shutil.copy2(ROOT / "icon" / "raven.svg", out_assets / "raven.svg")
         total = sum(p.stat().st_size for p in out_assets.rglob("*") if p.is_file())
         print(f"copied dist/assets ({total:,} bytes)", flush=True)
-    _check_boot_snapshot(dist / "index.html")
+    for url, golden in _BOOT_SNAPSHOTS:
+        _check_boot_snapshot(dist / "index.html", url, golden)
 
 
-def _check_boot_snapshot(index: Path) -> None:
+def _check_boot_snapshot(index: Path, url: str, golden: str) -> None:
     """Refuse a page whose booted DOM shape moved; see scripts/boot-snapshot.mjs."""
-    result = subprocess.run(["node", str(ROOT / "scripts" / "boot-snapshot.mjs"), str(index)], check=False)
+    result = subprocess.run(
+        [
+            "node",
+            str(ROOT / "scripts" / "boot-snapshot.mjs"),
+            str(index),
+            "--url",
+            url,
+            "--golden",
+            str(ROOT / "scripts" / "__golden__" / golden),
+        ],
+        check=False,
+    )
     if result.returncode != 0:
-        raise SystemExit("ui-web/build.py: booted DOM shape differs from scripts/__golden__/boot-stub.txt")
+        raise SystemExit(f"ui-web/build.py: booted DOM shape differs from scripts/__golden__/{golden}")
 
 
 if __name__ == "__main__":
