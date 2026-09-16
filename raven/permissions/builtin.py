@@ -133,16 +133,69 @@ def _bound_workdir() -> str:
     return str(current_workdir() or "")
 
 
+#: How long an argument may be before it is named instead of shown. Past this a
+#: value is prose -- a brief, a file body, a message -- and prose is the thing an
+#: approval prompt must not paste: it pushes out what the reader needs, arrives
+#: cut mid-word, and puts content on a screen that is often the one thing visible
+#: while someone is presenting. The reader is told the argument is there and how
+#: much of it there is, which is what they need to judge the call.
+_INLINE_ARG_LIMIT = 60
+
+#: The whole line, after which the remaining arguments are counted rather than
+#: listed. A question a person cannot read to the end is one they answer out of
+#: habit.
+_ACTION_LINE_LIMIT = 160
+
+
+def _argument_summary(value: Any) -> str:
+    """One argument, as short as it can be without becoming a lie.
+
+    A value small enough to read is shown; anything larger is named by its size
+    or its shape. The distinction is what the reader is being asked about: an
+    id, a path or an agent's name decides the call, and a paragraph of prose is
+    the material the call carries rather than the call itself.
+    """
+    if isinstance(value, str):
+        if len(value) <= _INLINE_ARG_LIMIT:
+            return repr(value)
+        return f"<{len(value)} chars>"
+    if isinstance(value, (list, tuple)):
+        return f"<{len(value)} items>"
+    if isinstance(value, dict):
+        return f"<{len(value)} keys>"
+    text = str(value)
+    return text if len(text) <= _INLINE_ARG_LIMIT else f"<{len(text)} chars>"
+
+
 def action_line(tool_name: str, params: dict[str, Any]) -> str:
-    """The action as a human should read it in an approval prompt."""
+    """The action as a human should read it in an approval prompt.
+
+    A summary, not the payload. This used to serialise the arguments and cut the
+    JSON at a fixed width, which read as a log line rather than a question: for a
+    tool whose brief is one of its arguments -- a sub-agent dispatch is the plain
+    case -- the prompt asking whether to allow the call was mostly the prompt
+    being sent, truncated mid-sentence, and the fields that actually decide it
+    were past the cut.
+
+    ``exec`` keeps its own rendering, which was always this: the command is the
+    action, and there is nothing to summarise.
+    """
     if tool_name == "exec" and isinstance(params.get("command"), str):
         if machine := _exec_machine(params):
             return f"{params['command']} (on {machine})"
         return params["command"]
-    compact = json.dumps(params, sort_keys=True, ensure_ascii=False, default=str)
-    if len(compact) > 200:
-        compact = compact[:200] + "..."
-    return f"{tool_name} {compact}"
+    shown: list[str] = []
+    room = _ACTION_LINE_LIMIT - len(tool_name)
+    for key in sorted(params):
+        piece = f"{key}={_argument_summary(params[key])}"
+        if room - len(piece) - 1 < 0:
+            break
+        shown.append(piece)
+        room -= len(piece) + 1
+    hidden = len(params) - len(shown)
+    if hidden > 0:
+        shown.append(f"(+{hidden} more)")
+    return " ".join([tool_name, *shown]) if shown else tool_name
 
 
 class BuiltinRulings:

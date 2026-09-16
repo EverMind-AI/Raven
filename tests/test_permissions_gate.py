@@ -1098,3 +1098,43 @@ async def test_a_refused_config_write_is_not_reported_as_persisted(no_grants, mo
     persisted = [a for a in recorded if "permission.persisted" in a]
     assert persisted and persisted[-1]["permission.persisted"] is False
     assert "not a table" in persisted[-1]["permission.persist.refused"]
+
+
+def test_a_brief_is_named_on_the_prompt_rather_than_pasted_into_it():
+    """The prompt asks about the call, not with the call's own material.
+
+    A dispatch carries its brief as an argument, so serialising the arguments
+    put most of the outgoing prompt into the question about whether to send it --
+    cut mid-sentence, with the fields that decide the call past the cut. The
+    reader needs to know a brief is there and how much of it; the text itself is
+    not what they are judging.
+    """
+    brief = "Make a deck introducing the assistant. " * 40
+    line = action_line("spawn", {"node_id": "intro-deck", "agent": "Raven-PPT", "prompt_template": brief})
+
+    assert "intro-deck" in line, "the node id decides the call and has to survive"
+    assert "Raven-PPT" in line, "so does which agent runs"
+    assert f"<{len(brief)} chars>" in line, "the brief is named by its size"
+    assert "Make a deck" not in line, "and never quoted"
+
+
+def test_the_prompt_stays_short_enough_to_read_to_the_end():
+    """A question a person cannot finish reading is answered out of habit."""
+    wide = {f"field_{i}": f"value-{i}" for i in range(40)}
+    line = action_line("some_tool", wide)
+
+    assert len(line) < 200
+    assert "more)" in line, "the arguments that did not fit are counted, not dropped silently"
+
+
+def test_a_short_argument_is_still_shown_in_full():
+    """Summarising is for prose. An id, a path or a flag is the decision."""
+    line = action_line("write_file", {"path": "/etc/hosts", "append": False})
+
+    assert "/etc/hosts" in line
+    assert "append=False" in line
+
+
+def test_the_command_is_the_action_for_a_shell_call():
+    """Unchanged, and covered here so the rewrite above cannot quietly take it."""
+    assert action_line("exec", {"command": "ls -la"}) == "ls -la"
