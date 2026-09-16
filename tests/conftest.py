@@ -611,6 +611,33 @@ def _no_openrouter_network(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_provider_probe(monkeypatch):
+    """Keep the credential probe off the network.
+
+    `model.options` asks every configured provider for `/v1/models` to learn
+    what it serves, and a test that writes an address gets a real connection
+    attempt to it. On a developer's machine an unroutable address is refused in
+    milliseconds; on a CI runner the packets go nowhere and it waits out the
+    two-second timeout instead -- twice per call of the picker, which is how
+    `[ovms]`, whose address is `10.0.0.5:8080`, came to wait nearly four
+    seconds for something it was never going to reach.
+
+    Answering "not reachable" is what those tests already expect: a row is
+    configured by holding an address, not by a probe that answered. The two
+    files that assert on a live answer patch this themselves, and their patch
+    lands after this one.
+    """
+    from raven.config import update_providers
+
+    monkeypatch.setattr(
+        update_providers,
+        "test_provider",
+        lambda name, **kwargs: {"ok": False, "error": "no probe in tests"},
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_huggingface_lookup(monkeypatch):
     """Keep LiteLLM's context-window lookup off huggingface.co.
 
