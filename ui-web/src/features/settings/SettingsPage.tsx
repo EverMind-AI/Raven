@@ -14,6 +14,7 @@ import type { ModelTagFacts } from '../../shell/model-tags'
 import { ModelIcon, ProviderIcon, ProviderLink, ProviderStatus } from '../../shell/provider-mark'
 import { hint as reachHint, text as reachText } from '../../shell/reach'
 import { show as toast } from '../../shell/toast'
+import { subscribe as langSubscribe, tag as langTag } from '../../state/lang'
 import { open as openConn } from '../connections/nav'
 import * as store from './store'
 import { ImageModelPicker } from './ImageModelPicker'
@@ -618,9 +619,12 @@ function Shot({ kind }: { kind: string }): JSX.Element {
 }
 
 function LookPage(): JSX.Element {
+  /* The radio's current value is the page's language declaration, which the
+     lang store owns; subscribing is what moves the dot when the flip lands. */
+  const declared = useSyncExternalStore(langSubscribe, langTag)
   const look = {
     ...lookStore.get(),
-    lang: document.documentElement.lang.toLowerCase().startsWith('zh') ? 'zh' : 'en',
+    lang: declared.toLowerCase().startsWith('zh') ? 'zh' : 'en',
   }
   const setLook = (patch: Partial<lookStore.LookState>): void => {
     lookStore.set(patch)

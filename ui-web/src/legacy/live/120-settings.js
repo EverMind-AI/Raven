@@ -15,6 +15,7 @@
 import { modelSource, openModelsForMissingProvider, setChipPainter, tierSource } from '../../features/model/source'
 import { open as openModelPicker } from '../../features/model/store'
 import { bannerSource, settingsSource, setSettingsChrome } from '../../features/settings/source'
+import { code as LANG } from '../../i18n/t'
 import { islands } from '../../islands'
 import { hasUpdateFlag } from '../../rpc/capabilities'
 import { draw as drawCtx } from '../../shell/ctxchip'
@@ -23,9 +24,10 @@ import { draw as drawPerm, setPermPersister } from '../../shell/perm'
 import { current as sessionCurrent } from '../../shell/session'
 import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
+import * as lang from '../../state/lang'
 import { staging } from '../../state/session/staging'
 import { sources } from '../../state/sources'
-import { $, LANG, T, langSet } from '../demo/010-kernel.js'
+import { $, T } from '../demo/010-kernel.js'
 import { modelCurrent, queueDraw, sess, turn } from '../demo/040-state.js'
 import { sessionDraw, sessionOpen } from '../demo/050-rail.js'
 import { closeDetail, drawCapsBadge, drawXa } from '../demo/120-capabilities.js'
@@ -43,13 +45,16 @@ import { askUpgrade, showUpNote } from '../../state/updates'
    polls it) and the language the agent replies in. */
 /* Named, and a local rather than a binding the demo layer declares for this
    layer to fill: the pick reaches it through sources.settings.setLang below.
-   langSet moves the language and the catalogue together; what is added here is
-   the persist and the redraw of everything drawn from JavaScript. */
+   `lang.set` moves the language and the catalogue together and notifies its
+   subscribers, of which `redrawAll` below is one; what is added here is the
+   persist. The comparison is against the catalogue's column rather than against
+   the store's `applied`, which is null until the first pick: a page nobody has
+   picked for renders English text over Chinese markup, and asking for English
+   on it has never been a flip. */
 async function langPickLive(next, { persist } = {}) {
   if (next === LANG) return;
   const prev = LANG;
-  langSet(next);
-  redrawAll();
+  lang.set(next);
   if (!persist) return;
   try {
     await gateway().call('config.set', { key: 'language', value: next });
@@ -57,14 +62,15 @@ async function langPickLive(next, { persist } = {}) {
   } catch (e) {
     /* Put it back rather than leaving the page in a language the gateway does
        not agree with -- the same key drives the TUI and the agent's replies. */
-    langSet(prev);
-    redrawAll();
+    lang.set(prev);
     toast(T('gui.op.lang_failed', { detail: (e.data && e.data.detail) || e.message || e }));
   }
 }
 
 /* Everything the catalogue reaches that is drawn rather than written in
-   the markup. Cheap enough to run wholesale on a language flip. */
+   the markup. Cheap enough to run wholesale on a language flip, which is what
+   it is: install() subscribes it to the lang store, so every applied pick runs
+   it exactly once and no call site repeats it. */
 function redrawAll() {
   sessionDraw();
   drawFoot();
@@ -116,11 +122,14 @@ function langRemember(v) {
 }
 
 /* Applied before the socket is up. Whatever `loadLang` resolves afterwards
-   wins, so a language changed elsewhere still lands on this boot. */
+   wins, so a language changed elsewhere still lands on this boot. The quiet
+   setter because this runs ahead of the first data-driven paint: there is
+   nothing drawn from JavaScript to redraw yet, and this is the one language
+   call site that has never asked for one. */
 function langRestore() {
   try {
     const v = localStorage.getItem(LANG_KEY);
-    if (v === 'en' || v === 'zh') langSet(v);
+    if (v === 'en' || v === 'zh') lang.setQuiet(v);
   } catch { /* private mode */ }
 }
 
@@ -128,7 +137,7 @@ async function loadLang() {
   try {
     const r = await gateway().call('config.get', { keys: ['language'] });
     const v = r && r.config && r.config.language;
-    if (v === 'en' || v === 'zh') { langSet(v); langRemember(v); redrawAll(); }
+    if (v === 'en' || v === 'zh') { lang.set(v); langRemember(v); }
   } catch { /* stay on the built-in default */ }
 }
 
@@ -174,6 +183,12 @@ async function checkUpdate(btn) {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
+  /* The whole-page redraw, on every applied pick. One subscriber rather than a
+     call beside each `lang.set`: the rollback path below would otherwise have
+     to remember to redraw a second time, and a pick that fails to persist has
+     to leave the page in exactly the state the pick before it did. */
+  lang.subscribe(redrawAll);
+
   /* The chip the provider refresh and the settings default both move. */
   setChipPainter(setModelLabel);
   setSettingsChrome({
