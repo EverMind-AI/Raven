@@ -148,6 +148,7 @@ class RavenLoopBackend:
         web_search_provider: str = "serper",
         web_fetch_provider: str = "jina",
         web_provider_keys: dict[str, str] | None = None,
+        image_search: bool = False,
         tools_allow: Collection[str] | None = None,
         skills_allow: Collection[str] | None = None,
         mcp_allow: Collection[str] | None = None,
@@ -166,6 +167,7 @@ class RavenLoopBackend:
         self.web_search_provider = web_search_provider
         self.web_fetch_provider = web_fetch_provider
         self.web_provider_keys = web_provider_keys
+        self.image_search = image_search
         # Per-role capability whitelists (playbook roles build one backend per
         # role). None = current full set; [] = none; a list = only those.
         # skills_allow additionally stacks with the tool-based skill filter.
@@ -351,7 +353,7 @@ class RavenLoopBackend:
             )
             if web_search.api_key:
                 tools.register(web_search)
-        if allowed("image_search"):
+        if self.image_search and allowed("image_search"):
             picture_vendor = image_search_vendor(self.web_search_provider, self._web_key)
             image_search = ImageSearchTool(
                 api_key=self._web_key(picture_vendor), proxy=self.web_proxy, provider=picture_vendor

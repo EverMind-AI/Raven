@@ -396,29 +396,36 @@ def test_image_search_is_withheld_without_a_serper_key_and_offered_with_one(work
     """The Design lane was told to call Serper's image endpoint from `exec` with a key in
     a file nothing named; a live run found no key and generated every picture. A tool,
     gated like web_search, is what the lane -- and the host -- reach for instead."""
-    bare = _loop(workspace)
+    unasked = _loop(workspace, search_api_key="sk-serper")
+    assert not unasked.tools.has("image_search"), (
+        "a loop that did not ask for pictures has no picture tool, keyed or not"
+    )
+
+    bare = _loop(workspace, image_search=True)
     assert bare.tools.has("image_search") and not bare.tools.offers_by_name("image_search")
 
-    keyed = _loop(workspace, search_api_key="sk-serper")
+    keyed = _loop(workspace, search_api_key="sk-serper", image_search=True)
     assert keyed.tools.offers_by_name("image_search")
 
 
 def test_image_search_follows_a_selected_vendor_that_has_an_image_surface(workspace) -> None:
-    loop = _loop(workspace, web_search_provider="tavily", web_provider_keys={"tavily": "tv-key"})
+    loop = _loop(workspace, web_search_provider="tavily", web_provider_keys={"tavily": "tv-key"}, image_search=True)
     assert loop.tools.offers_by_name("web_search") and loop.tools.offers_by_name("image_search")
     assert loop.tools.get("image_search").provider == "tavily"
 
 
 def test_image_search_falls_back_to_serper_when_the_selected_vendor_searches_pages_only(workspace) -> None:
-    on_exa = _loop(workspace, web_search_provider="exa", web_provider_keys={"exa": "exa-key"})
+    on_exa = _loop(workspace, web_search_provider="exa", web_provider_keys={"exa": "exa-key"}, image_search=True)
     assert on_exa.tools.offers_by_name("web_search"), "Exa searches pages"
     assert not on_exa.tools.offers_by_name("image_search"), "Exa has no image surface and Serper holds no key"
     assert on_exa.tools.get("image_search").provider == "serper"
 
-    with_serper = _loop(workspace, web_search_provider="exa", web_provider_keys={"exa": "exa-key", "serper": "sk"})
+    with_serper = _loop(
+        workspace, web_search_provider="exa", web_provider_keys={"exa": "exa-key", "serper": "sk"}, image_search=True
+    )
     assert with_serper.tools.offers_by_name("image_search"), "Serper's key opens pictures beside Exa's pages"
 
-    unkeyed_tavily = _loop(workspace, web_search_provider="tavily", search_api_key="sk-serper")
+    unkeyed_tavily = _loop(workspace, web_search_provider="tavily", search_api_key="sk-serper", image_search=True)
     assert unkeyed_tavily.tools.get("image_search").provider == "serper", "a selected vendor without a key gives way"
     assert unkeyed_tavily.tools.offers_by_name("image_search")
 

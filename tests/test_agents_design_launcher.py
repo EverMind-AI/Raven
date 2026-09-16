@@ -358,6 +358,10 @@ def test_optional_keys_fall_back_per_slot_to_the_host_config(grounded, tmp_path)
     )
     data = _render(grounded)
     assert data["tools"]["web"]["search"]["apiKey"] == "host-serper"
+    # The host's slot arrives whole, and this lane alone switches the picture
+    # search on: `tools.web.search.images` is off by default so the lanes that
+    # read pages keep their tool face.
+    assert data["tools"]["web"]["search"]["images"] is True
 
 
 def test_own_image_key_is_ignored(grounded, monkeypatch):

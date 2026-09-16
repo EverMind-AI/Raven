@@ -824,13 +824,16 @@ class WiringMixin:
         self.tools.register(web_search)
         self._config_gated_tools[web_search.name] = web_search
         # Pictures: the selected vendor's image surface where it has one, Serper's
-        # otherwise, on that vendor's key, gated and withheld the same way.
-        picture_vendor = image_search_vendor(self.web_search_provider, self._web_key)
-        image_search = ImageSearchTool(
-            api_key=lambda: self._live_vendor_key(picture_vendor), proxy=self.web_proxy, provider=picture_vendor
-        )
-        self.tools.register(image_search)
-        self._config_gated_tools[image_search.name] = image_search
+        # otherwise, on that vendor's key, gated and withheld the same way -- and
+        # only where `tools.web.search.images` asks for the tool at all, so a lane
+        # that never places a picture keeps the tool face it had.
+        if self.image_search:
+            picture_vendor = image_search_vendor(self.web_search_provider, self._web_key)
+            image_search = ImageSearchTool(
+                api_key=lambda: self._live_vendor_key(picture_vendor), proxy=self.web_proxy, provider=picture_vendor
+            )
+            self.tools.register(image_search)
+            self._config_gated_tools[image_search.name] = image_search
         # web_fetch registers the same way and is never withheld: Jina needs no
         # key, so a keyed backend selected without one is replaced by Jina
         # rather than left to fail.

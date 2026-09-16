@@ -152,7 +152,11 @@ def render_config(source: Path) -> Path:
     config = json.loads(source.read_text(encoding="utf-8"))
     host = render.host_config()
 
-    config.setdefault("tools", {})["web"] = deepcopy((host.get("tools") or {}).get("web") or {})
+    web = deepcopy((host.get("tools") or {}).get("web") or {})
+    # The picture search is off unless a product asks for it; this one places
+    # pictures, so it asks, on top of whatever vendor and key the host holds.
+    web.setdefault("search", {})["images"] = True
+    config.setdefault("tools", {})["web"] = web
     configure_image_generation(config, host)
     inherit_everos_address(config, host)
 
