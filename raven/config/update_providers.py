@@ -1787,7 +1787,7 @@ def _probe_codex_catalog(*, timeout_s: float) -> dict[str, Any]:
 def lend_provider_credentials(provider: str) -> dict[str, str]:
     """The api_key and base_url of a provider raven is already connected to.
 
-    Only a group an everos section can hold whole: see the header check below.
+    Only a group this can hand over whole: see the header check below.
 
     Read through ``provider_endpoints``, which is the one place that knows the
     precedence a section can be written in -- ``endpoints`` first, then
@@ -1811,7 +1811,7 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
 
     Raises:
         KeyError: no such provider is configured.
-        ValueError: it is configured but has nothing an everos section can hold
+        ValueError: it is configured but has nothing that can be handed over
             whole -- no key to lend, or a group that authenticates with headers.
     """
     from raven.config import load_config
@@ -1831,16 +1831,16 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
     lent = next((e for e in provider_endpoints(section) if e.api_key), None)
     if lent is None:
         raise ValueError(f"{provider} has no api key to lend")
-    # A url/key/header group is reachable only whole. The everos sections hold a
-    # model, an api_key and a base_url and nothing else -- EverOS's own
-    # LLMSettings has no header field to bind -- so a group whose requests only
-    # authenticate with a header cannot be expressed here. Lending the pair
-    # without it hands over a credential that will be refused at the far end and
-    # reports a provider serving traffic every day as unreachable.
+    # A url/key/header group is reachable only whole. A borrowing section holds a
+    # model, an api_key and a base_url and nothing else, so a group whose
+    # requests only authenticate with a header cannot be expressed here.
+    # Lending the pair without it hands over a credential that will be refused
+    # at the far end and reports a provider serving traffic every day as
+    # unreachable.
     if lent.extra_headers:
         raise ValueError(
             f"{provider} authenticates with headers ({', '.join(sorted(lent.extra_headers))}), "
-            "which an everos section cannot carry"
+            "and this lends an address and a key only"
         )
 
     spec = find_by_name(provider)

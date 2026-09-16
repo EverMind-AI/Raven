@@ -534,6 +534,10 @@ def embedding_model_change(previous: dict[str, Any], fields: dict[str, Any]) -> 
     with the new one lands somewhere unrelated in the same space. The stores
     each notice on their own -- a knowledge base refuses, the memory index
     degrades -- so this only has to say it once, where the change is made.
+
+    Names no backend and no command of one. Which memory backend is installed
+    is not this module's business, and the host printing a particular one's
+    command is the coupling the seam exists to remove.
     """
     was = str(previous.get("model") or "")
     now = str(fields.get("model") or "")
@@ -541,8 +545,8 @@ def embedding_model_change(previous: dict[str, Any], fields: dict[str, Any]) -> 
         return ""
     return (
         f"Embedding model changed from {was} to {now}. Anything already indexed was built with the "
-        "old one and cannot be searched with the new one: rebuild each knowledge base, and run "
-        "`everos cascade backfill` if long-term memory is in use."
+        "old one and cannot be searched with the new one: rebuild each knowledge base, and "
+        "re-index whatever the memory backend has stored."
     )
 
 

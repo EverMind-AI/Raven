@@ -656,6 +656,11 @@ class TestTheEmbeddingPinHasOneWayIn:
         assert "text-embedding-3-small" in moved["warning"]
         assert "text-embedding-3-large" in moved["warning"]
         assert "rebuild" in moved["warning"]
+        # Says what has to happen, not which product does it. Whose memory
+        # backend is installed is not the host's business to assume, and a host
+        # message printing one backend's command is the coupling the seam
+        # exists to remove.
+        assert "everos" not in moved["warning"].casefold()
 
 
 class TestAWriteFollowsTheSpellingTheConfigAlreadyUses:

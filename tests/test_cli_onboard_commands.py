@@ -1685,6 +1685,9 @@ def test_the_wizard_says_what_moving_the_embedding_model_costs(
 
     assert "the-old-one" in cost and "the-new-one" in cost
     assert "rebuild" in cost
+    # The host wording names no backend: which one is installed is the
+    # plugin's fact, and this sentence is shown whatever it is.
+    assert "everos" not in cost.casefold()
     # And nothing to say when the pin is re-written unchanged, or the screen
     # would cry wolf at everyone who picks "Keep current".
     assert ui.set_embedding_endpoint({"model": "the-new-one", "provider": openrouter["name"]}) == ""
