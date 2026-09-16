@@ -256,6 +256,35 @@ def product_image_key(row_name: str, root: Path | None = None) -> str:
     return key if _folder_addresses_openrouter(folder) else ""
 
 
+def product_picture_vendor(row_name: str, root: Path | None = None) -> str:
+    """The web vendor a product's own picture search speaks, or ``""`` for the host's.
+
+    A product that holds the host ``image_search`` out of its tool set searches
+    pictures through its own plugin, and that plugin spends the key of the
+    folder's own search vendor: ``tools.web.search.provider`` in the folder's
+    ``config.json``, Serper when it names none, which is what the shipped deck
+    engine speaks. A product that keeps the host tool follows the host's vendor
+    rule instead, and ``""`` is that answer.
+
+    Here beside :func:`product_secret` for the same reason: a route asking
+    whether a lane can search pictures has to read the lane's contract, not the
+    host's selection -- a Tavily host opened the deck engine on Tavily's key
+    once, and the engine's picture search never spoke Tavily.
+    """
+    folder = product_folder(row_name, root)
+    if folder is None:
+        return ""
+    try:
+        declared = json.loads((folder / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    tools = declared.get("tools") or {}
+    if "image_search" not in (tools.get("disabledTools") or []):
+        return ""
+    search = (tools.get("web") or {}).get("search") or {}
+    return str(search.get("provider") or "serper")
+
+
 def _folder_addresses_openrouter(folder: Path) -> bool:
     """Whether a folder's own provider blocks reach OpenRouter with no base set.
 

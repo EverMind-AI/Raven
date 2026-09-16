@@ -144,6 +144,37 @@ def test_a_host_on_a_vendor_with_an_image_surface_opens_the_lane_on_that_vendors
     assert host._routed_target_ready(LANE, ("image_search",)) is True
 
 
+def test_a_lane_that_searches_through_its_own_plugin_is_read_on_that_plugins_vendor(lane, tmp_path: Path) -> None:
+    """The deck engine holds the host ``image_search`` out and searches pictures
+    with its own plugin, which speaks Serper whatever the host selected. A Tavily
+    host on Tavily's key therefore does not open it, and a Serper key does."""
+    lane(IMAGE_API_KEY="sk-lane-image")
+    folder = tmp_path / "agents" / FOLDER
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "tools": {"disabledTools": ["image_search"], "web": {"search": {"provider": "serper"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    tavily_only = _host(
+        web_search_provider="tavily",
+        web_provider_keys={"tavily": "tv-host"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+    assert tavily_only._routed_target_ready(LANE, ("image_search",)) is False
+
+    with_serper = _host(
+        web_search_provider="tavily",
+        web_provider_keys={"tavily": "tv-host"},
+        search_api_key="sk-host-serper",
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+    assert with_serper._routed_target_ready(LANE, ("image_search",)) is True
+
+
 def test_a_serper_key_the_host_did_not_select_is_still_the_lanes_to_spend(lane) -> None:
     """The other half of reading the vendor rather than the selection: a host
     running Tavily without Tavily's key may still hold a Serper key, and Serper is

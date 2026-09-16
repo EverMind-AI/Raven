@@ -30,6 +30,7 @@ PRODUCT = "raven-design"
 # launcher runs on, and a symlink to a venv's python loses the venv (CPython
 # resolves it back to the base interpreter), so the shim is a shell wrapper.
 INTERPRETER_SHIM = "raven-python"
+INTERPRETER_SHIM_CMD = "raven-python.cmd"
 
 MODES_DIR = HERE / "modes"
 MODE_LABELS = {
@@ -66,18 +67,24 @@ def state_root() -> Path:
 
 
 def write_interpreter_shim(root: Path) -> Path:
-    """Write ``<root>/bin/raven-python`` running this interpreter; return the bin dir.
+    """Write ``<root>/bin/raven-python`` and ``raven-python.cmd`` running this interpreter; return the bin dir.
 
     Rewritten on every launch: a reinstall moves the interpreter, and a shim
     pointing at the old one would fail exactly the way `python3` does.
     """
     bin_dir = root / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
-    shim = bin_dir / INTERPRETER_SHIM
-    staged = bin_dir / f".{INTERPRETER_SHIM}.{os.getpid()}"
-    staged.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n', encoding="utf-8")
-    staged.chmod(0o755)
-    os.replace(staged, shim)
+    # Two files for one command: the POSIX shell resolves `raven-python` to the
+    # extensionless script, and cmd.exe resolves it to `raven-python.cmd` through
+    # PATHEXT -- a shell script is not executable there at all.
+    for name, text in (
+        (INTERPRETER_SHIM, f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n'),
+        (INTERPRETER_SHIM_CMD, f'@echo off\r\n"{sys.executable}" %*\r\n'),
+    ):
+        staged = bin_dir / f".{name}.{os.getpid()}"
+        staged.write_text(text, encoding="utf-8", newline="")
+        staged.chmod(0o755)
+        os.replace(staged, bin_dir / name)
     return bin_dir
 
 

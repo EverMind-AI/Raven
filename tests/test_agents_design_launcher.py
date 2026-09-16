@@ -610,6 +610,10 @@ def test_the_build_interpreter_is_a_shim_on_the_exec_path(grounded, tmp_path):
     assert shim.stat().st_mode & stat.S_IXUSR
     probe = subprocess.run([str(shim), "-c", "import sys; print(sys.executable)"], capture_output=True, text=True)
     assert probe.returncode == 0 and probe.stdout.strip() == sys.executable
+    # cmd.exe cannot run a shell script, so the same command resolves to a .cmd
+    # twin there through PATHEXT; it quotes the interpreter and passes the arguments on.
+    twin = bin_dir / grounded.INTERPRETER_SHIM_CMD
+    assert twin.read_bytes() == f'@echo off\r\n"{sys.executable}" %*\r\n'.encode()
 
 
 def test_an_operators_own_path_append_stays_ahead_of_the_shim(grounded, tmp_path):

@@ -317,8 +317,10 @@ class WiringMixin:
     def _lane_searches_images(self, target: str) -> bool:
         """Whether ``target`` can search for pictures: its vendor's key, its own or the host's.
 
-        The vendor is the one ``image_search`` itself speaks to -- the selected
-        search vendor where that vendor has an image surface, Serper otherwise
+        The vendor is the target's own where the target holds the host tool out
+        and searches through its own plugin (:func:`product_picture_vendor`), else
+        the one ``image_search`` itself speaks to -- the selected search vendor
+        where that vendor has an image surface, Serper otherwise
         (:func:`raven.agent.tools.web.image_search_vendor`) -- and the key is
         resolved the way the lane resolves it: the product folder's own
         ``<PRODUCT>_<VENDOR>_API_KEY`` first, then the host's slot for that vendor
@@ -329,7 +331,7 @@ class WiringMixin:
         """
         import os
 
-        from raven.agent.subagent.vendored_agents import product_secret
+        from raven.agent.subagent.vendored_agents import product_picture_vendor, product_secret
 
         def key_for(vendor: str) -> str:
             return (
@@ -338,7 +340,8 @@ class WiringMixin:
                 or os.environ.get(SEARCH_PROVIDERS[vendor].env_var, "")
             )
 
-        return bool(key_for(image_search_vendor(self.web_search_provider, key_for)))
+        vendor = product_picture_vendor(target) or image_search_vendor(self.web_search_provider, key_for)
+        return bool(key_for(vendor))
 
     def _live_vendor_key(self, vendor: str) -> str:
         """One named web vendor's key the file holds now, whatever the host selected.
