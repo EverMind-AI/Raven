@@ -70,6 +70,36 @@ Reference, like everything above.
 | Hero image | full bleed, title 28-36pt over a scrim, subtitle 14-16pt |
 | Closing | headline 28-36pt, one line under it, where to go next |
 
+## Compositions the packaged templates use
+
+Read off the 54 pages the deck engine keeps as reference layouts (ten templates under
+`raven_ppt/assets/templates`), rendered and measured. Shares are of the canvas width `w` and
+height `h`; the title row sits in the top 0.16-0.20 on every one of them. Each is a shape to
+take when the page's content has that structure, not a page to reproduce.
+
+| Composition | The shape, with its numbers | Template pages |
+| --- | --- | --- |
+| P1 photo panel, numbered list beside | one photograph **0.40-0.55w**, cut to a circle or a rounded panel, on one side; 2-4 numbered items with a bold label and one line each on the other, each item **0.10-0.12h** apart, a hairline under each | amber 8, amber 13, teal 13 |
+| P2 photo band, cards under | a photograph the full text width, **0.26-0.36h**, at **0.16-0.19h**; three or four cards under it in one row, each **0.21-0.27w**, label and two lines | amber 10, beige 17, warm 14, warm 6 |
+| P3 photo mosaic with a number | a 3-column strip: two photographs **0.25w** each, one cut in half rows, and a tinted column **0.35w** carrying one number at 54pt and 2-3 lines | amber 9 |
+| P4 photo on a slanted plane | the photograph fills one side **0.45-0.55w** full height, its inner edge cut on a diagonal; 3 numbered points stacked on the other side, numerals in the accent | warm 9, gold 7 |
+| P5 photo right, pills left | 4 numbered pills **0.26w** stacked at **0.10h** pitch on the left, each with one line of copy to its right; a photograph **0.36w x 0.43h** on the right under a two-line heading | green 8 |
+| P6 object in a ring, labels radiating | one object (photograph, render or icon disc) **0.28-0.32w** centred, in a ring; 4-6 labels around it at two heights each side, each label a pill with one line under it | amber 17, gold 6, gold 15, black 10, black 11, black 13, black 15 |
+| P7 photo strips staggered | three portrait photographs **0.16w x 0.59h**, the middle one dropped **0.14h**, on the right **0.55w**; heading and 3 short paragraphs on the left | black 14 |
+| P8 numbers in a row | four numbers at 60pt in tinted boxes **0.16w x 0.24h** on one baseline, a bold label and two lines under each | amber 6 |
+| P9 rings in a row | three or four icon rings **0.10-0.18w**, a label under each and two lines of copy under that; the rings on one baseline at **0.45-0.50h** | beige 19, teal 5, gold 5 |
+| P10 chevron process | five chevrons **0.17w x 0.05h** in one row at **0.40-0.47h**, numbered; a bold label and two lines under each, dropped from the chevron by a thin stem | mint 6, green 9, blue 7 |
+| P11 staircase | 3-4 pills stepping up a diagonal from bottom-left to top-right, each **0.16w**, one step **0.08-0.10h** and **0.2w** on from the last; the label and one line beside each step; the last step may carry a large arrow | mint 9, green 10 |
+| P12 labels along a curve | one curved spine (an S or a rising arc) across the page; 4-6 labels sit on it as pills, alternating above and below, each with one or two lines; the spine is the only line on the page | gold 4, gold 13 |
+| P13 tree | one root pill centred at **0.30h**, two children at **0.50h**, four grandchildren at **0.72h**, joined by elbow connectors; every node a pill **0.14w** with one line under it | green 6 |
+| P14 two chart panels | two white panels **0.43w x 0.40h** side by side at **0.20h**, a titled bar or line chart in each; under them one row of 3-4 columns of caption at 12-14pt, or 3 tinted cards | amber 4, gold 12, gold 20 |
+| P15 hexagon or angled cards | five dark cards **0.17w x 0.41h** in one row, tops cut to a hexagon or a chamfer, an icon at the top of each and a label and two lines below | black 5 |
+| P16 half-discs on the floor | five half-discs **0.17w** standing on the bottom edge with an icon in each, the labels and copy above them in five columns | green 14 |
+| P17 arrow block with a list | one large arrow shape **0.40w x 0.55h** on the left carrying the page's claim in 24-28pt; on the right 4 rows, each an icon disc, a bold label and two lines | amber 12 |
+| P18 circles and a 2x2 | two big circles **0.13w** stacked on the left with a label each; four cards **0.27w x 0.26h** in a 2x2 on the right, a pill heading on each | gold 9 |
+| P19 stagger over a band | a tinted band **0.15h** across the middle; five cards **0.18w x 0.20h** alternating above and below it, each with a pill heading | warm 8 |
+| P20 gear or hub with spokes | one gear or disc **0.25w** on the left, five pills **0.30w** stacked on the right joined to it by short spokes | black 11, amber 17 |
+
 The first and last pages are statements, not information: a picture and few words, aiming
 for a feeling rather than a summary. On a page with no picture, let the type carry it --
 oversized, asymmetric, off the grid if that is what the sentence wants. Unusual is allowed;

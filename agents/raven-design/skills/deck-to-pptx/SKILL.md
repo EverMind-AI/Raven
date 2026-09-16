@@ -15,7 +15,7 @@ outline. Name its absolute path in the reply.
 | Facts the material does not carry | `web_search`, then `web_fetch` the page | there is no other search |
 | A real logo, product shot, published chart | `image_search` | direct image URL, pixel size and source page per hit; see `references/assets.md` |
 | A picture that does not exist yet | `image_generate` | reference pictures go in `images`, up to six |
-| Page furniture: grid, heading, text, points, card, plane, rule, footer, table, picture, formula | the engine's helper modules, written beside the script | `ppt_layout`; see `references/assets.md` |
+| Page furniture: grid, heading, text, points, card, plane, rule, footer, table, picture placement, formula | the engine's helper modules, written beside the script | `ppt_layout`; see `references/assets.md` |
 | An icon | `add_icon`, `find_icons` from `ppt_icons` | 1304 outline icons, see `references/assets.md` |
 | A connector, a timeline, a chart | `connect`, `timeline` from `ppt_shapes`; `ppt_charts` | see `references/assets.md` |
 | A figure or table from a paper | PyMuPDF on `raven-python` | from the PDF you were given, else one you downloaded; crop the region or pull the embedded image; see `references/assets.md` |
@@ -26,17 +26,21 @@ outline. Name its absolute path in the reply.
 With no image key configured, `image_generate` says so. Say which pages would have had a
 picture and carry them on type, grid, rule and colour.
 
-## Helpers are packaged
+## Furniture from the modules, the rest by hand
 
 - Before the build script, write the engine's helper modules beside it, once
   (`references/assets.md` has the command). Import from `ppt_layout`, `ppt_theme`, `ppt_icons`,
   `ppt_shapes` and `ppt_charts`.
-- Do not write a text-box, rectangle, rule, icon, header, footer or source-note helper of your
-  own. Draw directly with python-pptx only a gradient, a free-form polygon or a full-bleed
-  photograph.
+- Page furniture comes from them and is not rewritten: text, points, cards, rules, heading,
+  footer, source note, table, icon, chart, formula, and the grid a region divides itself into
+  (`grid`, `split_left`, `stack`; measure with `fits`, `text_size`, `table_size` first).
+- Everything that makes a page its own is drawn by hand with python-pptx: a diagram, a
+  polygon, a map, a custom arrow, a gradient, a hero number, a cover or section composition.
+  Compose it from `plane`, `rule`, `connect` and `preset` where they fit and draw the rest.
+- A placed picture is finished by hand: a hairline or a frame, a shadow, a scrim under type
+  laid over it, a crop to the shape the page wants, a full-bleed background under a plane of
+  ink. `picture_fit` places and captions; it does not treat.
 - The theme is a copy of a packaged one with the deck's own colours and faces changed.
-- Coordinates are inches in a `Box`; a region divides itself (`grid`, `split_left`, `stack`).
-  Measure with `fits`, `text_size`, `table_size` before drawing.
 - On this route there is no ANTI-SLOP-CHECK.md, no contract and no Task State. Do not
   initialize or update one.
 
@@ -64,50 +68,44 @@ which of the four were defaults.
    figure: **fetch it, never generate it.** A generated stand-in for something that exists
    is a fabrication the page presents as evidence. Generate only what has no original:
    illustration, backdrop, atmosphere.
-3. Before the build, every page is named with the picture it carries: a photograph the search
-   found, a paper's own figure, a published chart, or a diagram drawn on the page. Pages with
-   only type and cards are at most a third of the deck. A page about a model, a method, a
-   dataset or a milestone carries that thing's own figure or an official example image,
-   whatever the audience. The first search list covers every page; a page left without its
-   picture gets a second search. `count` is 8 per query.
-4. Anything the deck names that has a face of its own -- a company, a product, a repository,
+3. Anything the deck names that has a face of its own -- a company, a product, a repository,
    a place -- has a picture somewhere. Search the whole deck's list in one pass before
    drawing anything: what the material names, and the ordinary furniture it never links --
    the logos, the marks, the product shots. Keep each picture's page URL beside it for the
    source note. A page about five products with no mark of any of them is a page that did
    not look.
-5. Decide the deck's visual direction once, before the first picture, and say what it is:
+4. Decide the deck's visual direction once, before the first picture, and say what it is:
    ground, two or three colours, and whether pictures are photographs or drawings. **A
    brand's website is a starting point, not the verdict** -- a dark web hero does not make
    a dark deck, and a printed handout and a projected keynote want opposite grounds.
    Chaining every background off the first one gives a deck one look and no decision.
-6. [layouts.md](references/layouts.md) holds reference shapes with their proportions and
-   the type ramp. Read it to widen the list you choose from, not to pick from a menu: what
+5. [layouts.md](references/layouts.md) holds reference shapes with their proportions, the
+   type ramp, and twenty compositions measured off the packaged templates. Read it to widen the list you choose from, not to pick from a menu: what
    a page has to say decides its shape. No one shape on more than 60% of the deck.
-7. Repeating units -- a card, a row, a step -- take an icon from the packaged set. Search it
+6. Repeating units -- a card, a row, a step -- take an icon from the packaged set. Search it
    by what the unit is about, not by a filename: 1304 of them ship beside this agent, and
    `references/assets.md` says how.
    An icon is a mark and not an illustration: about 0.7in, one weight and one colour across
    the deck, and no filled disc behind it.
-8. The cover, the contents page, the closing page and every section opener get a generated
+7. The cover, the contents page, the closing page and every section opener get a generated
    background. Not a flat colour block, not a body page's photograph, not nothing.
    **Two or three backgrounds cover a deck.** Section openers share one; the cover and the
    closing page can be the same picture at different crops. A distinct generation per
    section is 8 serial calls where 3 would do, and a deck whose openers all look different
    has no house. Each call takes over a minute and they do not overlap, so settle the whole
    short list before building rather than asking for one more while drawing each page.
-9. Before generating a picture for a page, render that page and look at it. Ask for what the
+8. Before generating a picture for a page, render that page and look at it. Ask for what the
    page lacks.
-10. Give `image_generate` the brand material in `images`. Do not describe it in words.
+9. Give `image_generate` the brand material in `images`. Do not describe it in words.
    **Crop the reference to the mark first.** A reference outranks the prompt: hand it a
    web hero, an og image or a screenshot and it will reproduce that page -- the wordmark,
    the headline, the buttons -- however firmly the prompt says no text. Say what to take
    from the reference (its palette, its texture, its light) and that its layout, its type
    and its furniture are not to be reproduced.
-11. Every prompt names the region the type needs -- which side, what share -- and ends with
+10. Every prompt names the region the type needs -- which side, what share -- and ends with
    `no text, no letters, no numbers`. All words on a page are set by the typography.
-12. After generating, rebuild the page and look at the render. Only the composed page counts.
-13. Read the deck's own render before delivering. Every page, at 90 dpi or more; fix what it
+11. After generating, rebuild the page and look at the render. Only the composed page counts.
+12. Read the deck's own render before delivering. Every page, at 90 dpi or more; fix what it
     showed and render again.
 
 ## Technical decks
@@ -170,8 +168,8 @@ For what is drawn with python-pptx directly; the helper modules handle these the
 ## Load when you need it
 
 - [layouts.md](references/layouts.md) -- eleven reference page shapes with the proportions
-  they measured, seventeen cover/section/KPI/process compositions, and when a table is the
-  wrong page. A registry to widen the list you choose from; the numbers above hold without
+  they measured, seventeen cover/section/KPI/process compositions, twenty compositions
+  measured off the packaged templates, and when a table is the wrong page. A registry to widen the list you choose from; the numbers above hold without
   it.
 - [gates.md](references/gates.md) -- what refuses a deck and what only reports, with the
   number each check compares against. Read before the first build.
