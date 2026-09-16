@@ -12,7 +12,7 @@ import type { RailSource } from '../features/rail/types'
 /* The three openers are direct imports now, so the pages they open are observed
    by standing in for those modules rather than for a shell verb. */
 const opens = vi.hoisted(() => ({ list: [] as string[] }))
-vi.mock('../features/connections/store', () => ({ open: () => opens.list.push('connPage') }))
+vi.mock('../features/connections/nav', () => ({ open: () => opens.list.push('connPage') }))
 vi.mock('../features/cron/store', () => ({ open: () => opens.list.push('cronPage') }))
 vi.mock('../features/xa/store', () => ({ open: () => opens.list.push('xaPage') }))
 

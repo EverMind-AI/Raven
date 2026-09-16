@@ -52,12 +52,6 @@ export async function refresh(initial = false): Promise<void> {
   }
 }
 
-export function open(): void {
-  set({ dialogId: null })
-  shell().showPage('connPage')
-  void refresh(true)
-}
-
 export function close(): void {
   shell().showPage(null)
 }

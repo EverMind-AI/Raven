@@ -9,9 +9,9 @@
    flyout opens the page by importing the island (shell/navfly.ts); it does
    not come through here. */
 
+import { CHANNELS } from '../../features/connections/catalogue'
 import { islands } from '../../islands'
 import { sources } from '../../state/sources'
-import { CHANNELS } from './030-fixtures.js'
 import { nlSay } from './130-settings.js'
 
 function closeConn() { islands.connections.close(); }

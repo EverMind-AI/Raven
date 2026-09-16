@@ -9,9 +9,9 @@
    needs. Bytes never ride inside the message. */
 
 import { current as sessionCurrent } from '../../shell/session'
+import { refusal as uploadRefusal } from '../../shell/upload'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
-import { uploadRefusal } from './020-rpc.js'
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */

@@ -1,5 +1,6 @@
 /* ---- overrides ----------------------------------------------------- */
 
+import { loadExt } from '../../features/plugins/source'
 import { plainTitle } from '../../features/rail/title'
 import { islands } from '../../islands'
 import { hasNamingFlag, hasStillOnDisk } from '../../rpc/capabilities'
@@ -24,7 +25,6 @@ import { rowPreview, touchSession } from './030-sessions.js'
 import { renderHistory } from './040-history.js'
 import { beginNaming, live, namingDeclined, resetTurnState, turnDur } from './050-turn.js'
 import { park, parkTurn, parkedTurns, restoreTurn, subBySession, subSession, transitionTurn } from './060-parked.js'
-import { loadExt } from './090-extensions.js'
 import { loadPermMode, loadProviders, openModelsForMissingProvider, stagedPerm, stagedTier } from './120-settings.js'
 import { wsSetRoot } from './170-workspace.js'
 

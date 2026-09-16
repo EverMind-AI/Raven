@@ -19,6 +19,7 @@ import * as clarify from './features/composer/clarify'
 import * as composer from './features/composer/mount'
 import * as sheets from './features/composer/sheets'
 import * as connections from './features/connections/store'
+import { open as openConnections } from './features/connections/nav'
 import * as browser from './features/browser/mount'
 import * as cron from './features/cron/store'
 import * as dagSheet from './features/dag/mount'
@@ -86,7 +87,7 @@ export const islands = {
     subscribe: skills.subscribe,
   },
   connections: {
-    open: connections.open,
+    open: openConnections,
     close: connections.close,
     redraw: connections.redraw,
     closeDialog: connections.closeDialog,
