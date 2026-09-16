@@ -86,6 +86,17 @@ def test_every_ecosystem_pins_the_prefix_instead_of_letting_dependabot_guess() -
         assert commit_message.get("prefix") in types, f"{where} pins a type the commit lint rejects"
 
 
+def test_the_ecosystems_agree_on_one_prefix() -> None:
+    # Pinning each ecosystem separately still leaves the log split if they are
+    # pinned to different types, which is the state this replaced: the merged
+    # bumps say chore(deps), the open ones say build(deps).
+    # Whether an entry is pinned at all is the test above; this one only asks
+    # whether the pinned ones agree, so a missing block fails in one place.
+    prefixes = {block["prefix"] for entry in _updates() if (block := entry.get("commit-message"))}
+
+    assert len(prefixes) == 1, f"dependency bumps land under more than one type: {sorted(prefixes)}"
+
+
 def test_every_scope_dependabot_emits_is_legal() -> None:
     scopes = _commitlint_rule("scope-enum")
 
@@ -98,6 +109,21 @@ def test_the_enum_still_rejects_scopes_nobody_declared() -> None:
 
     for bogus in ("deps-devv", "dependencies", "nonsense-scope"):
         assert bogus not in scopes, f"the scope enum accepts {bogus!r}, so it is not gating anything"
+
+
+def test_the_workflows_tree_has_an_ecosystem_too() -> None:
+    workflows = subprocess.run(
+        ["git", "ls-files", ".github/workflows"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert workflows, "git ls-files found no workflows at all"
+
+    configured = {(entry["package-ecosystem"], entry["directory"]) for entry in _updates()}
+
+    assert ("github-actions", "/") in configured, "the workflows get action bumps that nothing here configures"
 
 
 def test_every_dependency_manifest_in_the_tree_is_configured() -> None:
