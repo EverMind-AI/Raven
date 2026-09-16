@@ -10,7 +10,7 @@ async function loadChannels() {
     const s = byName[c.id];
     if (!s) return;
     /* No prose state line: the LED and the switch say on/off, and a missing
-       credential says 未配置 through c.missing. `who` is reserved for a real
+       credential says "not configured" through c.missing. `who` is reserved for a real
        identity (the account the channel signs in as), which no backend
        supplies yet -- so live rows keep their sub line empty. */
     c.who = '';
@@ -39,10 +39,10 @@ DS.conn = {
     try {
       await loadChannels();
     } catch (e) {
-      if (initial) toast(`加载失败：${e.message || e}`);
+      if (initial) toast(T('gui.op.load_failed', { detail: e.message || e }));
     }
     if (initial && !gatewayRunningLive && CHANNELS.some((c) => c.on)) {
-      toast('已启用的入口还没在收消息 — 打开 Raven App 就会启动');
+      toast(T('gui.conn.not_receiving'));
     }
     return CHANNELS;
   },
@@ -67,7 +67,7 @@ DS.conn = {
       .then(() => toast(T('gui.conn.toggled', { name: chanName(c), state: T(on ? 'gui.conn.enabled' : 'gui.conn.disabled') })))
       .catch((e) => {
         c.on = !on;
-        toast(`保存失败：${e.message || e}`);
+        toast(T('gui.op.save_failed', { detail: e.message || e }));
         throw { handled: true };
       });
   },
@@ -81,7 +81,7 @@ DS.conn = {
       if (Object.keys(fields).length) toast(T('gui.conn.saved_x', { name: chanName(c) }));
       await loadChannels();
     } catch (e) {
-      toast(`保存失败：${(e.data && e.data.detail) || e.message || e}`);
+      toast(T('gui.op.save_failed', { detail: (e.data && e.data.detail) || e.message || e }));
     }
   },
   /* One scan-code read; the island polls this while the dialog is open. Null
@@ -91,4 +91,3 @@ DS.conn = {
     ? Promise.resolve(null)
     : rpc.call('channels.qr', { name: c.id })),
 };
-

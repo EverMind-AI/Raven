@@ -24,13 +24,15 @@ factory = "raven_everos.tools:make_understand_media_tool"
 # keys are type-checked at the door, unknown keys pass through with a
 # warning. No key declares a default -- the factory keeps owning its defaults
 # in code, so a valid config behaves exactly as before; only an invalid type
-# fails loudly at activation instead of misbehaving later. ``root`` and
-# ``owned`` are what the onboarding wizard records about the data root it
-# found or created; ``agent_id`` / ``user_id`` are the identity the wizard
-# writes when it does not come from the host via ``ServiceLocator``.
+# fails loudly at activation instead of misbehaving later. ``root``, ``owned``
+# and ``port`` are what the onboarding wizard records about the data root it
+# found or created and the address it means to serve on; ``agent_id`` /
+# ``user_id`` are the identity the wizard writes when it does not come from the
+# host via ``ServiceLocator``.
 [plugin.config_schema]
 base_url = { type = "string" }
 root     = { type = "string" }
 owned    = { type = "boolean" }
+port     = { type = "integer" }
 agent_id = { type = "string" }
 user_id  = { type = "string" }

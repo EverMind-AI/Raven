@@ -120,7 +120,7 @@ export async function refresh(): Promise<void> {
     const snap = await source().load()
     set({ snap, epoch: state.epoch + 1 })
   } catch (e) {
-    toast(`加载失败：${(e as Error).message || String(e)}`)
+    toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
   }
 }
 

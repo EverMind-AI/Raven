@@ -272,6 +272,8 @@ def _sessions_across_two_files(tmp_path):
     Carries events of both shapes on purpose. One is attributed by session id,
     the other only by session key -- and the key-only shape is the one a reader
     can drop silently, which is exactly what happened until a review caught it.
+    A third shape carries neither, so the comparisons below also reach the
+    derived per-day session that both readers have to spell the same way.
     """
     logs = tmp_path / "logs"
     early = _span("split-session", "span-early", start="2026-07-01T00:00:00+00:00")
@@ -280,7 +282,12 @@ def _sessions_across_two_files(tmp_path):
     _write_spans(logs / "archive" / "2026-07-01" / "audit-spans-2026-07-01-1.log", [early])
     _write_spans(
         logs / "audit-spans.log",
-        [late, _span("other-session", "span-other"), _span("third-session", "span-third")],
+        [
+            late,
+            _span("other-session", "span-other"),
+            _span("third-session", "span-third"),
+            _sessionless_span("span-sessionless"),
+        ],
     )
     _write_events(
         logs / "audit-events.log",
@@ -400,8 +407,9 @@ def test_trace_owner_resolves_a_trace_to_its_session(tmp_path):
 def test_llm_calls_match_the_whole_corpus_reader(tmp_path):
     logs = tmp_path / "logs"
     call = _span("live-session", "span-call", name="llm.call")
-    # A call the election cannot place in a session. The whole-corpus reader drops
-    # it, so this one has to as well.
+    # A call the election cannot place in a session. It is no longer dropped --
+    # it lands in the derived per-day background session -- and what this test
+    # pins either way is that both readers make the same call about it.
     orphan = {**_span("x", "span-orphan", name="llm.call"), "attributes": {"span.type": "model"}}
     _write_spans(logs / "audit-spans.log", [call, orphan, _span("live-session", "span-tool")])
 
@@ -417,7 +425,7 @@ def test_llm_calls_match_the_whole_corpus_reader(tmp_path):
         if span["name"] == "llm.call"
     )
     assert sorted(entry["span"]["spanId"] for entry in calls) == want
-    assert "span-orphan" not in {entry["span"]["spanId"] for entry in calls}
+    assert "span-orphan" in {entry["span"]["spanId"] for entry in calls}
 
 
 def test_a_stale_sidecar_is_rebuilt_rather_than_trusted(tmp_path):
@@ -613,3 +621,161 @@ def test_python_and_the_viewer_resolve_a_shell_identically(tmp_path):
     assert json.dumps(from_python, ensure_ascii=False, sort_keys=True) == json.dumps(
         from_viewer, ensure_ascii=False, sort_keys=True
     )
+
+
+def _sessionless_span(span_id: str, *, name: str = "llm.call", start: str = "2026-08-01T00:00:00+00:00") -> dict:
+    """What a cron heartbeat or a plugin load writes: real work, no session.
+
+    The writer leaves ``session.id`` and ``session.key`` off entirely, because
+    there is no session -- a timer fired, or the process started up.
+    """
+    span = _span("", span_id, name=name, start=start)
+    span["attributes"] = {"span.type": "model"}
+    return span
+
+
+def _reachable_span_ids(payload: dict) -> set[str]:
+    return {span["spanId"] for session in payload["sessions"] for trace in session["traces"] for span in trace["spans"]}
+
+
+def test_a_span_with_no_session_is_still_reachable(tmp_path):
+    """Work that belongs to no session is still work, and it still has to show.
+
+    A cron heartbeat and a plugin load carry no ``session.id``. Keying the whole
+    payload on a session id drops them, and the drop is silent: a day whose only
+    activity was scheduled reads as a day with no activity at all.
+    """
+    _write_spans(
+        tmp_path / "logs" / "audit-spans.log",
+        [_span("real-session", "span-in-session"), _sessionless_span("span-background")],
+    )
+
+    with _viewer(tmp_path) as port:
+        payload = _get(port, "/api/data")
+
+    reachable = _reachable_span_ids(payload)
+    assert "span-in-session" in reachable
+    assert "span-background" in reachable
+
+
+def test_a_background_row_says_so_on_both_readers(tmp_path):
+    """The row a reader must be able to pass over says what it is.
+
+    Newest-first ordering puts a background day at the top whenever the last
+    thing the store saw belonged to no session, and the panel opens on whatever
+    is first. Answering that by matching the id's prefix in the page would put
+    the naming convention in a second place; the reader that mints the prefix
+    declares it instead, and both readers have to agree because a session list
+    row and a whole-corpus session are compared field for field elsewhere.
+    """
+    _write_spans(
+        tmp_path / "logs" / "audit-spans.log",
+        [
+            _span("real-session", "span-in-session", start="2026-08-01T00:00:00+00:00"),
+            _sessionless_span("span-background", start="2026-08-02T00:00:00+00:00"),
+        ],
+    )
+
+    with _viewer(tmp_path) as port:
+        full = _get(port, "/api/data")
+        listed = _get(port, "/api/sessions")
+
+    flagged = {session["sessionId"]: session["isBackground"] for session in full["sessions"]}
+    assert flagged == {"real-session": False, "background:2026-08-02": True}
+    assert {row["sessionId"]: row["isBackground"] for row in listed["sessions"]} == flagged
+    # The ordering the page then has to work around: the background day is newer,
+    # so it is the row a caller taking the first one would land on.
+    assert listed["sessions"][0]["sessionId"] == "background:2026-08-02"
+
+
+def test_a_sessionless_trace_across_midnight_has_one_owner(tmp_path):
+    """A trace grouped by day can be held by two rows; the jump needs one.
+
+    Work with no session is grouped by the calendar day of each span, which is
+    the grain that keeps a year of timer ticks from becoming a session each. The
+    edge it leaves is a trace that runs across UTC midnight: its spans land in
+    two rows, and the page follows a subagent run to its parent turn by trace id.
+    Whichever row is reached first is not an answer, it is an accident of
+    iteration order, so the later half is written first here to force it.
+
+    Measured incidence on a real store is zero -- every sessionless trace there
+    carried a single span -- so this pins the resolution rather than reporting a
+    failure anyone has seen. It widens with any background work that outlives a
+    timer tick.
+    """
+    early = _sessionless_span("span-before-midnight", start="2026-08-01T23:50:00+00:00")
+    late = _sessionless_span("span-after-midnight", start="2026-08-02T00:10:00+00:00")
+    for span in (early, late):
+        span["traceId"] = "trace-straddle"
+    late["parentSpanId"] = "span-before-midnight"
+    _write_spans(tmp_path / "logs" / "audit-spans.log", [late, early])
+
+    with _viewer(tmp_path) as port:
+        listed = _get(port, "/api/sessions")
+        owner = _get(port, "/api/trace-owner?traceId=trace-straddle")
+
+    # Both halves are rows -- the split is the known cost of the day grain.
+    assert {row["sessionId"] for row in listed["sessions"]} == {
+        "background:2026-08-01",
+        "background:2026-08-02",
+    }
+    # And the trace has exactly one owner: the half that started it.
+    assert owner["sessionId"] == "background:2026-08-01"
+
+
+def test_a_sessionless_span_with_no_start_time_is_still_reachable(tmp_path):
+    """The fallback the day derivation takes when there is no day to take.
+
+    ``backgroundSessionId`` answers ``background:undated`` for a start time it
+    cannot slice, and nothing upstream rejects such a span -- ``normalizeSpan``
+    passes ``startTime`` through as it finds it. No writer emits one today, so
+    the value here is that the pool exists and is reachable rather than that a
+    store has ever held one: without it every undated span would share whatever
+    id the empty slice produced, unnoticed.
+    """
+    undated = _sessionless_span("span-undated")
+    del undated["startTime"]
+    _write_spans(
+        tmp_path / "logs" / "audit-spans.log",
+        [_span("real-session", "span-in-session"), undated],
+    )
+
+    with _viewer(tmp_path) as port:
+        payload = _get(port, "/api/data")
+        listed = _get(port, "/api/sessions")
+
+    assert "span-undated" in _reachable_span_ids(payload)
+    assert "background:undated" in {row["sessionId"] for row in listed["sessions"]}
+
+
+def test_a_sidecar_from_the_previous_schema_does_not_hide_background_spans(tmp_path):
+    """A sidecar written before background spans were indexed must be rebuilt.
+
+    The index is content the reader trusts instead of re-reading the log, so a
+    change to *what goes into* it is a schema change. Leave ``SCHEMA`` alone and
+    every archive already on disk keeps answering with the old contents -- the
+    fix ships and changes nothing for the history it was written for, which is
+    the silent-history failure ``readSidecar`` is paranoid about.
+    """
+    logs = tmp_path / "logs"
+    archive = logs / "archive" / "2026-08-01" / "audit-spans-2026-08-01-1.log"
+    _write_spans(archive, [_span("real-session", "span-in-session"), _sessionless_span("span-background")])
+    _write_spans(logs / "audit-spans.log", [_span("live-session", "span-live")])
+
+    # /api/sessions is the sharded reader -- the one backed by the sidecar.
+    # /api/data rebuilds from the logs every time and would never notice.
+    with _viewer(tmp_path) as port:
+        assert "background:2026-08-01" in _session_ids(_get(port, "/api/sessions"))
+
+    sidecar = logs / "index" / "archive" / "2026-08-01" / "audit-spans-2026-08-01-1.log.json"
+    assert sidecar.exists(), "a rotated file should have been indexed"
+
+    # Exactly what the previous version left on disk: same log, same size and
+    # mtime, but indexed by a build that had no notion of a background session.
+    index = json.loads(sidecar.read_text(encoding="utf-8"))
+    index["schema"] = 2
+    index["pairs"] = [pair for pair in index["pairs"] if not str(pair.get("id") or "").startswith("background:")]
+    sidecar.write_text(json.dumps(index), encoding="utf-8")
+
+    with _viewer(tmp_path) as port:
+        assert "background:2026-08-01" in _session_ids(_get(port, "/api/sessions"))
