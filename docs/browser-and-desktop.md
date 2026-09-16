@@ -66,7 +66,12 @@ On an installed raven: `<raven's python> -m playwright install chromium` (the
 driver prints the exact line when Chromium is missing). Everything else is on
 by default; turn it off with `tools.disabledTools: ["browser_navigate", ...]`.
 
-To watch the model without opening the panel, set
+The web UI opens the workspace on its Browser tab the first time a turn calls
+a `browser_*` tool (once per turn, never on replay), so the model's page is in
+view without the reader hunting for it; the tab's pop-out button moves the
+same Chromium into a real window.
+
+To have that window from the start instead, set
 `tools.browser.headfulOnAgentUse: true`: the model's first navigate (or new
 tab) pops Chromium out as a real window on the desktop, the same relaunch the
 panel's pop-out button does, with logins carried over in the persistent

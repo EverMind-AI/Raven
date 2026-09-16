@@ -14,7 +14,19 @@ DS.agents ??= { list: async () => [] };
 
 /* ── tool-event hooks ──────────────────────────────────────────────────
    Fed the FULL argument object, because that is where the diff lives. */
+let wsBrowserShownTurn = -1;
+
 function wsOnTool(name, args, silent) {
+  if (/^browser_/.test(name)) {
+    /* The model's first browser call of a turn brings the page into view, the
+       way its first spawn opens the agents lane. Once per turn, so a reader
+       who closes the panel is not fought on the next click; never on replay. */
+    if (!silent && wsBrowserShownTurn !== WS.turn) {
+      wsBrowserShownTurn = WS.turn;
+      if (!wsOpen || wsTab !== 'browser') setWs(true, 'browser');
+    }
+    return;
+  }
   const a = wsArgs(name, args);
   const path = a.path || a.file_path || '';
   let hit = null;
