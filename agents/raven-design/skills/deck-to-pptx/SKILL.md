@@ -114,6 +114,12 @@ which of the four were defaults.
 11. After generating, rebuild the page and look at the render. Only the composed page counts.
 12. Read the deck's own render before delivering. Every page, at 90 dpi or more; fix what it
     showed and render again.
+13. The body is filled. Content runs to within 0.5in of the footer; no gap over 0.75in between
+    groups; a card or panel is filled over 35% and has under 0.45in clear on any side. A run
+    that measures short is centred with `page().holding(...)` or the page gets its picture or
+    diagram; a page that ends above 70% of the height is rebuilt.
+14. Copy stays inside its box: measure with `fits` and `text_size` before drawing, and a box
+    that would overflow gets a bigger box, a split page or fewer words, never smaller type.
 
 ## Technical decks
 
