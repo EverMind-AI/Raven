@@ -1928,23 +1928,59 @@ def _step4_memory(
         )
         return None
 
-    ui = _onboard_ui()
-    for name, step in steps:
-        outcome = step.run(
-            ui,
-            step_no=4,
-            non_interactive=non_interactive,
-            main_model=main_model,
-            warnings=warnings,
-            skip_test=skip_test,
+    chosen = _choose_memory_screen(steps) if len(steps) > 1 else steps[0][0]
+    if chosen is None:
+        set_memory_backend(None)
+        console.print(
+            t(
+                "  [dim]Long-term memory stays off.[/dim]\n"
+                "  [dim]Run `raven onboard` again whenever you want to configure it.[/dim]"
+            )
         )
-        if outcome is StepOutcome.BACK:
-            return _BACK
-        if outcome is StepOutcome.CONFIGURED:
-            set_memory_backend(name)
-            return None
-    set_memory_backend(None)
+        return None
+    name, step = next(pair for pair in steps if pair[0] == chosen)
+    outcome = step.run(
+        _onboard_ui(),
+        step_no=4,
+        non_interactive=non_interactive,
+        main_model=main_model,
+        warnings=warnings,
+        skip_test=skip_test,
+    )
+    if outcome is StepOutcome.BACK:
+        return _BACK
+    set_memory_backend(name if outcome is StepOutcome.CONFIGURED else None)
     return None
+
+
+_MEMORY_OFF = "__off__"
+
+
+def _choose_memory_screen(steps: list[tuple[str, "OnboardStep"]]) -> Optional[str]:
+    """Which plugin screen to run when more than one memory backend is installed.
+
+    One backend is active at a time, so the wizard asks rather than walking
+    every screen in registry order -- the second install would otherwise have
+    to decline the first backend to reach its own. Returns the contribution
+    name, or ``None`` for "off".
+    """
+    questionary = _require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+
+    names = [name for name, _ in steps]
+    current = _selected_backend()
+    choices = [questionary.Choice(name, value=name) for name in names]
+    choices.append(questionary.Choice(t("Off"), value=_MEMORY_OFF))
+    chosen = questionary.select(
+        t("Which memory backend?"),
+        choices=choices,
+        default=current if current in names else None,
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+    ).ask()
+    if chosen is None:
+        raise typer.Exit(1)
+    return None if chosen == _MEMORY_OFF else chosen
 
 
 # ---------------------------------------------------------------------------
