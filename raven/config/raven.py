@@ -22,7 +22,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 from raven.config.loader import (
@@ -752,13 +752,14 @@ class TokenWiseConfig(_Base):
 # they need user-facing knobs.
 
 
-class EverOSConfig(_Base):
-    """Embedded everos extraction pipeline configuration.
+class ExtractionConfig(_Base):
+    """The local pipeline that distils skills out of finished turns.
 
-    When enabled, every completed user→agent turn is funneled into a
-    local pipeline that distills an AgentCase + zero-or-more SkillOps
-    into ``<workspace>/.cache/skills.db``. No external services
-    required (replaces the EverOS HTTP path for skill extraction).
+    Every completed user-agent turn is funnelled into it, and what comes out
+    is an AgentCase plus zero or more SkillOps in ``<workspace>/.cache/skills.db``.
+    It calls no service and needs no plugin -- the name it used to carry
+    (``everos``) came from the HTTP path it replaced, and said the opposite of
+    what is true: this runs whether or not a memory backend is installed.
     """
 
     enabled: bool = False
@@ -817,7 +818,7 @@ class SkillForgeConfig(_Base):
 
     Evolution is handled by the embedded ``everos``
     extraction pipeline, configured via
-    ``skill_forge.everos``. The LLM used by that pipeline
+    ``skill_forge.extraction``. The LLM used by that pipeline
     is selected by ``skill_forge.evolve_model`` (falls back to the
     active agent model when unset).
 
@@ -1068,12 +1069,16 @@ class SkillForgeConfig(_Base):
     retirement_idle_days: int = 90
     """Active skill unused for this long → deprecated."""
 
-    # --- Embedded extraction pipeline (everos) ---
-    everos: EverOSConfig = Field(default_factory=EverOSConfig)
-    """Embedded everos extraction pipeline. Distinct from the
-    SkillForge master switch above: the retrieval/injection path can be
-    enabled (``skill_forge.enabled=True``) without extraction, and vice
-    versa."""
+    # --- Local extraction pipeline ---
+    extraction: ExtractionConfig = Field(
+        default_factory=ExtractionConfig,
+        validation_alias=AliasChoices("extraction", "everos"),
+    )
+    """The local skill-extraction pipeline. Distinct from the SkillForge
+    master switch above: the retrieval/injection path can be enabled
+    (``skill_forge.enabled=True``) without extraction, and vice versa.
+
+    ``everos`` still loads, for a config written before the rename."""
 
     # --- Validators ---
 

@@ -916,7 +916,7 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
     if "restrictToWorkspace" in exec_cfg and "restrictToWorkspace" not in tools:
         tools["restrictToWorkspace"] = exec_cfg.pop("restrictToWorkspace")
     # Relocate any legacy ``agents.defaults.{everos,everosSkillLight,
-    # everos_skill_light}`` block to ``skillForge.everos`` (the current
+    # everos_skill_light}`` block to ``skillForge.extraction`` (the current
     # home for the embedded extraction pipeline). The retired plain
     # ``agents.defaults.everos`` block from the EverOS-HTTP era is also
     # dropped — old configs may still carry it but the runtime no
@@ -931,7 +931,7 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
         if dropped_everos is not None:
             _log.info("Migrated: dropped agents.defaults.everos (retired)")
         if legacy_esl is not None:
-            # Strip retired everosSkillLight keys that EverOSConfig
+            # Strip retired everosSkillLight keys that ExtractionConfig
             # (extra='forbid') no longer accepts; the per-turn gate is now
             # sourced from skill_forge.detect_min_tool_calls. snake_case and
             # camelCase both, since user configs may use either.
@@ -955,11 +955,29 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
                 sf_key = "skillForge"
                 data[sf_key] = {}
             skill_forge = data[sf_key]
-            if "everos" not in skill_forge:
-                skill_forge["everos"] = legacy_esl
+            if "extraction" not in skill_forge and "everos" not in skill_forge:
+                skill_forge["extraction"] = legacy_esl
                 _log.info(
-                    "Migrated: agents.defaults.everosSkillLight → skillForge.everos",
+                    "Migrated: agents.defaults.everosSkillLight -> skillForge.extraction",
                 )
+
+    # ``skillForge.everos`` -> ``skillForge.extraction``. The block configures
+    # the local pipeline that distils skills out of finished turns; it calls no
+    # service and needs no plugin, and the old name said the opposite. Renamed
+    # in place rather than read through the alias forever, so a reader of their
+    # own config is not told this belongs to the memory backend.
+    for sf_key in ("skillForge", "skill_forge"):
+        forge = data.get(sf_key) if isinstance(data, dict) else None
+        if not isinstance(forge, dict):
+            continue
+        legacy_block = forge.pop("everos", None)
+        if legacy_block is None:
+            continue
+        if "extraction" in forge:
+            _log.info("Migrated: dropped %s.everos (extraction was already set)", sf_key)
+        else:
+            forge["extraction"] = legacy_block
+            _log.info("Migrated: %s.everos -> %s.extraction", sf_key, sf_key)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts

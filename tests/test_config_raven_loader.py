@@ -144,8 +144,8 @@ def test_everos_under_skill_forge(stub_config_path: Path) -> None:
         },
     )
     cfg = ec_module.load_raven_config()
-    assert cfg.skill_forge.everos.enabled is True
-    assert cfg.skill_forge.everos.max_skills_top_k == 6
+    assert cfg.skill_forge.extraction.enabled is True
+    assert cfg.skill_forge.extraction.max_skills_top_k == 6
 
 
 def test_everos_camel_case_under_skill_forge(
@@ -164,15 +164,15 @@ def test_everos_camel_case_under_skill_forge(
         },
     )
     cfg = ec_module.load_raven_config()
-    assert cfg.skill_forge.everos.enabled is True
-    assert cfg.skill_forge.everos.max_skills_top_k == 3
+    assert cfg.skill_forge.extraction.enabled is True
+    assert cfg.skill_forge.extraction.max_skills_top_k == 3
 
 
 def test_legacy_agents_defaults_everos_skill_light_migrated(
     stub_config_path: Path,
 ) -> None:
     """Old configs put ``everosSkillLight`` under ``agents.defaults``;
-    the loader migration relocates it under ``skillForge.everos`` so
+    the loader migration relocates it under ``skillForge.extraction`` so
     users don't lose their settings."""
     _write_config(
         stub_config_path,
@@ -185,8 +185,8 @@ def test_legacy_agents_defaults_everos_skill_light_migrated(
         },
     )
     cfg = ec_module.load_raven_config()
-    assert cfg.skill_forge.everos.enabled is True
-    assert cfg.skill_forge.everos.max_skills_top_k == 7
+    assert cfg.skill_forge.extraction.enabled is True
+    assert cfg.skill_forge.extraction.max_skills_top_k == 7
 
 
 def test_legacy_everos_skill_light_with_retired_keys_loads_without_crash(
@@ -194,7 +194,7 @@ def test_legacy_everos_skill_light_with_retired_keys_loads_without_crash(
 ) -> None:
     """Regression: an old config whose agents.defaults.everosSkillLight still
     carries the retired minMessages/minToolCalls (and a retired everos block)
-    must load without a ValidationError. EverOSConfig is extra='forbid', so the
+    must load without a ValidationError. ExtractionConfig is extra='forbid', so the
     migration has to strip those keys before relocating the block."""
     _write_config(
         stub_config_path,
@@ -215,8 +215,8 @@ def test_legacy_everos_skill_light_with_retired_keys_loads_without_crash(
         },
     )
     cfg = ec_module.load_raven_config()  # must not raise
-    assert cfg.skill_forge.everos.max_skills_top_k == 5
-    assert cfg.skill_forge.everos.retire_confidence == 0.1
+    assert cfg.skill_forge.extraction.max_skills_top_k == 5
+    assert cfg.skill_forge.extraction.retire_confidence == 0.1
 
 
 def test_new_location_wins_when_both_present(stub_config_path: Path) -> None:
@@ -236,8 +236,8 @@ def test_new_location_wins_when_both_present(stub_config_path: Path) -> None:
         },
     )
     cfg = ec_module.load_raven_config()
-    assert cfg.skill_forge.everos.enabled is True
-    assert cfg.skill_forge.everos.max_skills_top_k == 9
+    assert cfg.skill_forge.extraction.enabled is True
+    assert cfg.skill_forge.extraction.max_skills_top_k == 9
 
 
 def test_extension_keys_with_unknown_field_rejected(stub_config_path: Path) -> None:
@@ -273,3 +273,43 @@ def test_translate_and_knowledge_blocks_roundtrip(stub_config_path: Path) -> Non
     assert cfg.translate.provider == "openai"
     assert cfg.knowledge.embedding_model == "openai/text-embedding-3-small"
     assert cfg.knowledge.embedding_provider == "openai"
+
+
+def test_the_old_everos_spelling_is_migrated_not_merely_tolerated(stub_config_path: Path) -> None:
+    """A config written before the rename keeps its values and loses the name.
+
+    The block configures the local extraction pipeline, which calls no service
+    and needs no plugin -- the old name said it belonged to the memory backend,
+    which is the thing worth not leaving in somebody's config file. Tolerating
+    the old spelling forever would leave every existing reader told the wrong
+    thing, so the key moves and the alias is only there for the load that
+    happens before the migration writes.
+    """
+    _write_config(
+        stub_config_path,
+        {"skill_forge": {"enabled": True, "everos": {"enabled": True, "max_skills_top_k": 7}}},
+    )
+
+    cfg = ec_module.load_raven_config()
+
+    assert cfg.skill_forge.extraction.enabled is True
+    assert cfg.skill_forge.extraction.max_skills_top_k == 7
+
+
+def test_the_new_name_wins_when_a_config_somehow_carries_both(stub_config_path: Path) -> None:
+    """Hand-edited, or edited by two tools. The one the reader can see in the
+    current schema is the one that applies; the retired key is dropped."""
+    _write_config(
+        stub_config_path,
+        {
+            "skill_forge": {
+                "enabled": True,
+                "everos": {"enabled": False, "max_skills_top_k": 1},
+                "extraction": {"enabled": True, "max_skills_top_k": 9},
+            }
+        },
+    )
+
+    cfg = ec_module.load_raven_config()
+
+    assert cfg.skill_forge.extraction.max_skills_top_k == 9
