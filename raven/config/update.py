@@ -11,6 +11,7 @@ across restarts without touching unrelated fields.
 from __future__ import annotations
 
 import json
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -580,6 +581,47 @@ def embedding_model_change(previous: dict[str, Any], fields: dict[str, Any]) -> 
     # English paragraph on an otherwise translated screen.
     return t(_EMBEDDING_MODEL_CHANGED, was=was, now=now)
 
+def initialize_a2a_server(*, config_path: Path | None = None) -> str | None:
+    """Mint this install's inbound A2A credential and switch the face on.
+
+    Returns the token it generated, or None when the install already had one.
+
+    No schema default can carry this. The token is per-install secret material,
+    so the field ships empty and is materialized here instead -- the same reason
+    the Skill Hub endpoint is seeded at onboard time rather than declared. An
+    empty token is not a weak credential but a closed door: ``a2a/auth.py``
+    refuses every caller while it is empty, so enabling without minting one
+    would advertise a face that answers nobody.
+
+    A present token is the "already initialized" mark. It is never rotated, and
+    ``enabled`` is not re-asserted alongside it, so an operator who switched the
+    face back off keeps it off across every later onboard.
+
+    The minting write is the one that fixes the file to owner-only, and it does
+    so from the temp file's first byte rather than with a chmod afterwards.
+    Nothing else narrows this config -- ``save_config`` creates it under the
+    process umask, 0644 under the common one -- and it already holds provider
+    API keys, so the narrowing is owed either way. A run that mints nothing
+    writes nothing, and so leaves whatever mode the operator chose.
+    """
+    path = config_path or get_config_path()
+
+    def _apply(_text: str | None) -> tuple[str | None, str | None]:
+        data = read_raw_or_raise(path)
+        server = data.setdefault("a2a", {}).setdefault("server", {})
+        if server.get("token"):
+            return None, None
+        minted = secrets.token_urlsafe(32)
+        server["token"] = minted
+        server["enabled"] = True
+        return json.dumps(data, indent=2, ensure_ascii=False), minted
+
+    token = atomic_update(path, _apply, mode=0o600)
+    if token is not None:
+        # The value itself never reaches the log: it is the credential.
+        logger.info("config/update: a2a.server initialized (token minted, face enabled)")
+    return token
+
 
 __all__ = [
     "EmbeddingPinError",
@@ -594,4 +636,5 @@ __all__ = [
     "set_memory_backend",
     "set_skill_blocked",
     "set_playbook_disabled",
+    "initialize_a2a_server",
 ]

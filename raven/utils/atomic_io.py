@@ -130,8 +130,19 @@ def atomic_replace(path: Path, data: str, *, mode: int | None = None) -> None:
         _replace_unlocked(path, data, create_mode=mode)
 
 
-def atomic_update(path: Path, update: Callable[[str | None], tuple[str | None, T]]) -> T:
-    """Lock ``path`` across a read-modify-write transaction."""
+def atomic_update(
+    path: Path,
+    update: Callable[[str | None], tuple[str | None, T]],
+    *,
+    mode: int | None = None,
+) -> T:
+    """Lock ``path`` across a read-modify-write transaction.
+
+    ``mode`` carries the same meaning as in ``atomic_replace``: hold that exact
+    mode from the temp file's creation onward, for a transaction that writes
+    secret material. Without it a brand-new file lands at the process umask,
+    which a chmod afterwards can only narrow once the bytes are already there.
+    """
     with _locked(path):
         try:
             current = path.read_text(encoding="utf-8")
@@ -139,5 +150,5 @@ def atomic_update(path: Path, update: Callable[[str | None], tuple[str | None, T
             current = None
         replacement, result = update(current)
         if replacement is not None:
-            _replace_unlocked(path, replacement)
+            _replace_unlocked(path, replacement, create_mode=mode)
         return result
