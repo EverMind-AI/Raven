@@ -1015,9 +1015,10 @@ class WiringMixin:
         # process manages, but it is still a hand-off this method's gate must
         # cover -- see raven.agent.subagent.role.WITHHELD_FROM_SUBAGENT.
         #
-        # Only with a peer configured. This one schema costs ~330 tokens
-        # reserved on every turn of every conversation (the total is pinned by
-        # tests/test_agent_loop_token_budget.py), and a host with no peers has
+        # Only with a peer configured. This one schema costs about 157 tokens in
+        # the `tools` array of every turn of every conversation -- measured off a
+        # captured provider call, not estimated; the total is pinned by
+        # tests/test_agent_loop_token_budget.py -- and a host with no peers has
         # nowhere to send a message. Reaching an agent that needs no credential
         # still means listing its origin with `credential` empty, which
         # `a2a_client.peers.auth_headers` sends no header for -- so nothing
