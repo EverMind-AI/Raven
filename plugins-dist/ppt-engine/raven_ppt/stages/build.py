@@ -242,21 +242,17 @@ class BuildStage:
             data["pdf_path"] = str(preview)
         # After the publish and only then: the destination the user named gets the
         # bytes out/ just got, so a refused build above leaves the last good deck
-        # standing there rather than a half-built one.
+        # standing there rather than a half-built one. The deck alone: the PDF
+        # under out/ is the engine's preview, and the web surface renders a deck
+        # it is shown on its own, so the user's directory gets one file.
         stated = read_destination(project)
         if stated is not None:
             try:
-                copy = deliver(project, delivered, staged.digest, staged.pages, destination=stated, preview=preview)
+                copy = deliver(project, delivered, staged.digest, staged.pages, destination=stated, preview=None)
             except DeliveryError as exc:
                 data["delivery_failed"] = f"{stated}: {exc}"
             else:
                 data["delivered_to"] = str(copy.path)
-                if copy.preview is not None:
-                    data["delivered_pdf"] = str(copy.preview)
-                if copy.preview_kept_back:
-                    # The one file this delivery did not write, said where the model
-                    # can pass it on: the reply is the only place the user hears it.
-                    data["delivered_pdf_kept_back"] = copy.preview_kept_back
         return StageResult(ok=True, findings=tuple(findings), data=data)
 
     def _showing(self, pages: int, slides: Sequence[int] | None, page_from: int, pending) -> list[int]:

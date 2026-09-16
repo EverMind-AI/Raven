@@ -1322,13 +1322,13 @@ async def test_the_delivered_path_and_the_slide_count_are_words_the_author_repea
     project: Project, tmp_path: Path
 ) -> None:
     delivered = tmp_path / "handoff" / "ravenx-intro.pptx"
-    result = _ok(project, pages=12, delivered_to=str(delivered), delivered_pdf=str(delivered.with_suffix(".pdf")))
+    result = _ok(project, pages=12, delivered_to=str(delivered), pdf_path=str(project.exports_dir / "deck.pdf"))
 
     body = _body(await _tool(project, result).execute(project="tarvis"))
 
     assert body["ok"] is True and body["delivered_to"] == str(delivered)
     assert body["next_step"].startswith(f"tell the user in these terms: the deck is at {delivered} and has 12 slides")
-    assert f"its PDF preview is {delivered.with_suffix('.pdf')}" in body["next_step"]
+    assert "PDF" not in body["next_step"] and "pdf_path" not in body, "the deliverable is the deck alone"
     assert body["pptx_path"] in body["next_step"], "out/ is still named as the engine's own copy"
 
 

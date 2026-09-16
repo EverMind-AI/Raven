@@ -261,11 +261,9 @@ class PptBuildTool(Tool):
                         "directory ending in / to keep the deck's own name. State it once -- on any build, a "
                         "draft included -- and it is kept for this deck: every build that publishes writes the "
                         "deck under out/ and copies the same bytes there, first delivery and every revision "
-                        "after, and the reply names that path with the slide count. The deck's PDF preview is "
-                        "written beside it under the same name as a second file, but only when nothing is at "
-                        "that .pdf name already: a file there is the user's and is left alone, and the reply "
-                        "says the preview stayed under out/ -- tell them that when it does. A copy you make "
-                        "yourself with exec is not recorded and not the deliverable"
+                        "after, and the reply names that path with the slide count. One file lands there, the "
+                        ".pptx; the render under out/ is the engine's own preview and is not delivered. A copy "
+                        "you make yourself with exec is not recorded and not the deliverable"
                     ),
                 },
                 "draft": {
@@ -417,8 +415,6 @@ class PptBuildTool(Tool):
                 payload["consequences_folded"] = folded
         if "pptx_path" in result.data:
             payload["pptx_path"] = result.data["pptx_path"]
-        if "pdf_path" in result.data:
-            payload["pdf_path"] = result.data["pdf_path"]
         if result.data.get("republished"):
             payload["republished"] = True
         if changed := result.data.get("delivery_changed"):
@@ -890,7 +886,7 @@ def _delivered(data: dict[str, Any], stated: dict[str, Any]) -> dict[str, Any]:
     on to the user.
     """
     landed: dict[str, Any] = {}
-    for key in ("delivered_to", "delivered_pdf", "delivered_pdf_kept_back", "delivery_failed"):
+    for key in ("delivered_to", "delivery_failed"):
         if key in data:
             landed[key] = data[key]
     if stated and "delivered_to" not in landed:
@@ -950,9 +946,7 @@ def _delivery_ask(
     if "delivered_to" in payload:
         return (
             f"tell the user in these terms: the deck is at {payload['delivered_to']} and has {pages} slides"
-            + (f"; its PDF preview is {payload['delivered_pdf']}" if "delivered_pdf" in payload else "")
-            + (f". Say this too: {payload['delivered_pdf_kept_back']}" if "delivered_pdf_kept_back" in payload else "")
-            + f". That is the path the user named; out/ holds the engine's own copy at {payload['pptx_path']}"
+            f". That is the path the user named; out/ holds the engine's own copy at {payload['pptx_path']}"
         )
     if "delivery_failed" in payload:
         return (

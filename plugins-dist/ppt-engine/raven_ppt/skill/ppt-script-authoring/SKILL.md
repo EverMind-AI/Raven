@@ -1994,11 +1994,8 @@ through -- and had read back to you -- and would not change is finished.
 the deck's own name -- on any build, a draft included; it is kept for the deck, and every
 build that publishes writes `out/` and copies the same bytes there, the first time and on
 every revision after. The reply comes back with `delivered_to` and the slide count, and
-those are the words to give the user. Two files land, not one: the deck's PDF preview is
-written beside it under the same stem -- but only where nothing holds that `.pdf` name
-already. A file there is the user's own and is left untouched, the preview stays under
-`out/`, and the reply says so in `delivered_pdf_kept_back`; pass that on, because it is
-the user's directory and they are the one who knows what that file was. A copy you make
+those are the words to give the user. One file lands: the `.pptx`. The render under
+`out/` is the engine's own preview and is not delivered or handed over. A copy you make
 with `exec` is recorded nowhere, is not the deliverable, and is called out as such.
 
 ## 11. The order is enforced, not suggested
