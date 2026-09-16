@@ -13,8 +13,10 @@ Only the agent turn is stubbed. The credential resolution, the card fetch, the
 SDK client, the JSON-RPC framing, the SSE stream and the routes are all real.
 """
 
+import json
 from collections.abc import AsyncIterator
 
+import httpx
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
@@ -79,3 +81,89 @@ async def test_an_unlisted_peer_is_refused_rather_than_answered(peer: TestServer
         await send_message(A2aConfig(peers=[]), f"{origin}/.well-known/agent-card.json", "hello")
 
     assert "echo" not in str(excinfo.value)
+
+
+class _Agent:
+    def __init__(self, name: str, description: str) -> None:
+        self.name = name
+        self.description = description
+
+
+ROSTER = [_Agent("Raven-Code", "Writes and edits code."), _Agent("Raven-Design", "Makes visual decks.")]
+
+
+@pytest.fixture
+async def peer_with_roster() -> AsyncIterator[TestServer]:
+    """The same real face, given a roster it can derive an extended card from."""
+
+    async def run_turn(prompt: str, *, conversation_id: str, broker: object) -> str:
+        return f"echo: {prompt}"
+
+    app = web.Application()
+    add_a2a_routes(app, SERVING, build_request_handler(SERVING, run_turn, roster=lambda: ROSTER))
+    server = TestServer(app)
+    await server.start_server()
+    try:
+        yield server
+    finally:
+        await server.close()
+
+
+async def _rpc(origin: str, method: str, *, token: str | None) -> dict:
+    headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    async with httpx.AsyncClient() as http:
+        reply = await http.post(
+            f"{origin}/a2a",
+            headers=headers,
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {}},
+        )
+    return {"status": reply.status_code, "body": reply.json()}
+
+
+async def test_the_unauthenticated_card_hides_the_sub_agents_the_extended_one_names(
+    peer_with_roster: TestServer,
+) -> None:
+    """The two-card split, proved over the wire rather than in the builders.
+
+    The public card answers a plain GET with no credential, so it must not carry
+    the host's roster. The extended card carries it and is reachable only
+    through the authenticated RPC channel. Asserting both against one running
+    server is what makes this a property of the deployment rather than of two
+    functions that happen to differ.
+    """
+    origin = _origin(peer_with_roster)
+
+    async with httpx.AsyncClient() as http:
+        public = (await http.get(f"{origin}/.well-known/agent-card.json")).json()
+
+    assert "Raven-Code" not in json.dumps(public)
+    assert public["capabilities"]["extendedAgentCard"] is True
+
+    extended = await _rpc(origin, "GetExtendedAgentCard", token=TOKEN)
+    assert extended["status"] == 200
+    named = {s["name"] for s in extended["body"]["result"]["skills"]}
+    assert {"Raven-Code", "Raven-Design"} <= named
+
+
+async def test_the_extended_card_is_refused_without_the_credential(peer_with_roster: TestServer) -> None:
+    """It rides the same bearer check as every other RPC method -- that is the
+    entire reason the roster may live on it."""
+    refused = await _rpc(_origin(peer_with_roster), "GetExtendedAgentCard", token=None)
+
+    assert refused["status"] == 401
+    assert "Raven-Code" not in json.dumps(refused["body"])
+
+
+async def test_a_host_with_no_roster_says_so_in_the_protocol_s_own_words(peer: TestServer) -> None:
+    """`peer` is built without a roster, so it must answer
+    ExtendedAgentCardNotConfiguredError rather than a generic failure -- and its
+    public card must not have advertised the method in the first place."""
+    async with httpx.AsyncClient() as http:
+        public = (await http.get(f"{_origin(peer)}/.well-known/agent-card.json")).json()
+    assert public["capabilities"]["extendedAgentCard"] is False
+
+    answer = await _rpc(_origin(peer), "GetExtendedAgentCard", token=TOKEN)
+
+    assert answer["body"]["error"]["message"] == "ExtendedAgentCardNotConfiguredError"

@@ -18,7 +18,7 @@ where dict-to-protobuf conversion happens, exactly once per method, so
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Sequence
 from typing import Any
 
 from a2a.helpers import get_message_text
@@ -32,13 +32,13 @@ from a2a.types import (
     SendMessageRequest,
     SubscribeToTaskRequest,
 )
-from a2a.utils.errors import InvalidParamsError, InvalidRequestError
+from a2a.utils.errors import ExtendedAgentCardNotConfiguredError, InvalidParamsError, InvalidRequestError
 from aiohttp import web
 from google.protobuf.json_format import ParseDict
 from google.protobuf.message import Message as ProtoMessage
 from loguru import logger
 
-from raven.a2a.card import build_agent_card
+from raven.a2a.card import build_agent_card, build_extended_agent_card
 from raven.a2a.executor import RavenAgentExecutor, RunTurn
 from raven.a2a.routes_aiohttp import add_a2a_routes
 from raven.config.schema import A2aConfig
@@ -92,8 +92,29 @@ class _RequestHandlerAdapter:
     typed ``Any`` -- nothing statically requires the literal SDK class.
     """
 
-    def __init__(self, handler: DefaultRequestHandler) -> None:
+    def __init__(
+        self,
+        handler: DefaultRequestHandler,
+        *,
+        config: A2aConfig | None = None,
+        base_url: str = "",
+        roster: Callable[[], Sequence[Any]] | None = None,
+    ) -> None:
         self._handler = handler
+        self._config = config
+        self._base_url = base_url
+        self._roster = roster
+
+    @property
+    def serves_extended_card(self) -> bool:
+        """Whether `on_get_extended_agent_card` will answer rather than refuse.
+
+        Read by the card route: the public card's
+        `capabilities.extended_agent_card` and this handler's answer are two
+        statements about one fact, and they are built in different places, so
+        the route asks rather than deciding for itself.
+        """
+        return self._roster is not None and self._config is not None
 
     async def on_message_send(self, params: Any, _context: Any) -> Any:
         """Dispatch a fresh `SendMessage`, or answer one parked on a question.
@@ -123,6 +144,23 @@ class _RequestHandlerAdapter:
                     message="that task is still running and is not waiting for input; wait for it to finish"
                 )
         return await self._handler.on_message_send(request, ServerCallContext())
+
+    async def on_get_extended_agent_card(self, _params: Any, _context: Any) -> Any:
+        """The authenticated half of the Card, derived per call.
+
+        Not baked at construction like the public card: the roster is the live
+        sub-agent set, and on the gateway-mounted hosting the loop that owns it
+        does not exist yet when the face is mounted. Resolving it per call is
+        also what keeps a hot `apply_agents` from leaving this answer stale.
+
+        `ExtendedAgentCardNotConfiguredError` is the protocol's own word for
+        "this host serves no extended card", and is what a process given no
+        roster must say -- matching `capabilities.extended_agent_card`, which
+        the public card sets false in exactly that case.
+        """
+        if self._roster is None or self._config is None:
+            raise ExtendedAgentCardNotConfiguredError()
+        return build_extended_agent_card(self._config, base_url=self._base_url, agents=list(self._roster()))
 
     async def on_message_send_stream(self, params: Any, _context: Any) -> AsyncGenerator[Any, None]:
         """The streaming sibling of `on_message_send`, and it needs the same two
@@ -178,6 +216,7 @@ def build_request_handler(
     run_turn: RunTurn,
     *,
     base_url: str = "",
+    roster: Callable[[], Sequence[Any]] | None = None,
 ) -> _RequestHandlerAdapter:
     """A request handler serving `run_turn` as this agent's behaviour.
 
@@ -191,9 +230,13 @@ def build_request_handler(
     handler = DefaultRequestHandler(
         agent_executor=RavenAgentExecutor(run_turn),
         task_store=InMemoryTaskStore(),
-        agent_card=build_agent_card(config, base_url=base_url or config.server.path),
+        agent_card=build_agent_card(
+            config,
+            base_url=base_url or config.server.path,
+            extended_available=roster is not None,
+        ),
     )
-    return _RequestHandlerAdapter(handler)
+    return _RequestHandlerAdapter(handler, config=config, base_url=base_url or config.server.path, roster=roster)
 
 
 async def serve_standalone(

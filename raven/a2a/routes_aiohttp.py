@@ -41,6 +41,7 @@ METHODS: dict[str, str] = {
     "ListTasks": "on_list_tasks",
     "CancelTask": "on_cancel_task",
     "SubscribeToTask": "on_subscribe_to_task",
+    "GetExtendedAgentCard": "on_get_extended_agent_card",
 }
 
 #: The two methods whose handler coroutine is an async generator, not a coroutine
@@ -127,7 +128,12 @@ def add_a2a_routes(app: web.Application, config: A2aConfig, handler: Any) -> Non
         # `aiohttp.web` does not re-export `yarl.URL` (there is no `web.URL`); the
         # server's path is always absolute, so plain concatenation is enough.
         base = str(request.url.origin()) + config.server.path
-        return web.json_response(MessageToDict(build_agent_card(config, base_url=base)))
+        # Asked of the handler rather than assumed: whether an extended card can
+        # be served is the handler's fact, and a card that advertises one this
+        # process cannot answer sends the caller to a refusal.
+        extended = bool(getattr(handler, "serves_extended_card", False))
+        card = build_agent_card(config, base_url=base, extended_available=extended)
+        return web.json_response(MessageToDict(card))
 
     async def serve_rpc(request: web.Request) -> web.StreamResponse:
         try:
