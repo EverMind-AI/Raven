@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent import instances as instances_mod
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods.instances import (
@@ -105,6 +106,43 @@ async def test_instances_lists_only_this_session(_isolated_registry: Any) -> Non
 
     assert [(r["agent"], r["handle"]) for r in out["instances"]] == [("Raven-Code", "a")]
     assert out["pending_handoff_count"] == 0
+
+
+async def test_instances_stamps_the_start_of_the_turn_being_answered(
+    _isolated_registry: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reader drawing a clock needs the turn's own start, and only the
+    activity has it -- the turn's, not the moment collection opened."""
+    await _isolated_registry.upsert_spawn("s1", "Raven-Code", "a", "running")
+
+    class _Live:
+        # Both, deliberately, and only one may be published. `started_at_ms` is
+        # when collection opened; a spawn builds its activity before waiting on
+        # `hold_handle`, so for a queued one the two differ by the whole wait and
+        # publishing the earlier let a pane open claiming work it had not done.
+        started_at_ms = 1699999700000
+        turn_started_at_ms = 1700000000000
+
+    monkeypatch.setattr(
+        run_activity,
+        "live_instance",
+        lambda key, agent, handle: _Live() if (key, agent, handle) == ("s1", "Raven-Code", "a") else None,
+    )
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert out["instances"][0]["turnStartedAtMs"] == 1700000000000
+
+
+async def test_instances_leaves_the_turn_start_off_a_row_answering_nothing(_isolated_registry: Any) -> None:
+    """Absent, not zero, and absent is the signal: a reader shows a clock when
+    the field is there and nothing when it is not, so an instance that finished
+    between two polls stops counting instead of freezing on its last number."""
+    await _isolated_registry.upsert_spawn("s1", "Raven-Code", "a", "completed")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert "turnStartedAtMs" not in out["instances"][0]
 
 
 async def test_instances_reports_a_dead_running_row_as_interrupted(_isolated_registry: Any) -> None:

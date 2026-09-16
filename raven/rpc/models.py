@@ -230,6 +230,16 @@ class InstanceRow(_Strict):
             "instance that came from no orchestration, so its presence is what says the row has a source."
         ),
     )
+    turn_started_at_ms: int | None = Field(
+        default=None,
+        alias="turnStartedAtMs",
+        description=(
+            "When the turn this instance is answering right now began. Absent when it is answering "
+            "none, so presence is what says the instance is working and the number is what says "
+            "for how long. Not `updatedAtMs`, which every registry write stamps -- a binding "
+            "commit and a graph-origin write move it too, so it dates the row and not the turn."
+        ),
+    )
 
 
 class TranscriptToolCall(_Strict):
@@ -4048,6 +4058,48 @@ class PlaybooksDeleteResult(_Strict):
     )
 
 
+class PlaybooksCreateParams(_Strict):
+    name: str
+    workflow: str = Field(
+        ...,
+        description=(
+            "The whole procedure in plain language: steps in order, what each produces and "
+            "consumes, per-run parameters, trigger phrases, and any MCP server a step needs. "
+            "The generator sees only this text."
+        ),
+    )
+    skills: list[str] | None = None
+
+
+class PlaybooksCreateResult(_Strict):
+    name: str
+    created: bool = Field(
+        ...,
+        description=(
+            "Whether a playbook now exists. False only when the generation failed, in which case `errors` says why."
+        ),
+    )
+    path: str = Field(..., description="Where the file landed; empty when nothing was created.")
+    notes: list[str] = Field(
+        ...,
+        description=(
+            "The composer's own open questions -- assumptions it made and gaps it could not "
+            "close. Written into the file's prose for review and returned here so a client need "
+            "not read the file back."
+        ),
+    )
+    errors: list[str] = Field(
+        ...,
+        description=("Why the composer could not produce a valid playbook. Non-empty exactly when `created` is false."),
+    )
+    adopted: bool = Field(
+        ...,
+        description=(
+            "Whether the live library loaded the new file, so it is usable in this process without a restart."
+        ),
+    )
+
+
 class PlaybooksRunParams(_Strict):
     name: str
     session_key: str = Field(
@@ -4256,6 +4308,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "playbooks.validate": (PlaybooksValidateParams, PlaybooksValidateResult),
     "playbooks.delete": (PlaybooksDeleteParams, PlaybooksDeleteResult),
     "playbooks.run": (PlaybooksRunParams, PlaybooksRunResult),
+    "playbooks.create": (PlaybooksCreateParams, PlaybooksCreateResult),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
     "plughub.detail": (PlughubDetailParams, PlughubDetailResult),

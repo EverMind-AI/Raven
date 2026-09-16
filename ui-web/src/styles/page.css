@@ -5061,6 +5061,11 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 :root[data-theme="light"] .agent-mark img { color-scheme: light; }
 .agent-kind { flex: none; padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: 999px;
   background: var(--surface); color: var(--muted); font: 8.5px/1.45 var(--mono); text-transform: lowercase; }
+/* Beside the mode chip in a pane header, in the tabular mono the other elapsed
+   numbers use -- a proportional font makes a per-second clock jitter sideways
+   as its digits change width. */
+.pane-turnms { flex: none; font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  font-variant-numeric: tabular-nums; }
 .agent-headrow { display: flex; align-items: center; min-width: 0; }
 .agent-headrow .agent-head { flex: 1; min-width: 0; }
 /* Standing, not revealed on hover: this is the only way to start a conversation

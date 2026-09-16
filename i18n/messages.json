@@ -5407,6 +5407,10 @@
       "en": "Start a new conversation with {name}",
       "zh": "和 {name} 开一个新会话"
     },
+    "gui.ws.instance_turn_elapsed": {
+      "en": "Working for {d}",
+      "zh": "\u672c\u8f6e\u5df2\u8fd0\u884c {d}"
+    },
     "gui.ws.instance_new_fail": {
       "en": "Could not start: {why}",
       "zh": "无法新建：{why}"
