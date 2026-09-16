@@ -641,7 +641,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # Wire the broker into the mid-turn askers. deep_research goes
                 # through the loop so a tool built later by promotion (a mid-session
                 # enable) inherits the broker too, not just the startup one.
-                if (ask_tool := agent.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
+                if callable(getattr(ask_tool := agent.tools.get("ask_user"), "set_broker", None)):
                     ask_tool.set_broker(question_broker)
                 agent.set_deep_research_broker(question_broker)
 
@@ -677,7 +677,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     from raven.rpc.question_broker import RoutingQuestionBroker
 
                     routed_broker = RoutingQuestionBroker(page=page_mount.question_broker, channel=question_broker)
-                    if (ask_tool := agent.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
+                    if callable(getattr(ask_tool := agent.tools.get("ask_user"), "set_broker", None)):
                         ask_tool.set_broker(routed_broker)
                     agent.set_deep_research_broker(routed_broker)
                     # Route channel="tui" outbounds from the gateway's own

@@ -43,6 +43,8 @@ emit it as an entire answer, considered for the strict path too.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 TOOL_OUTPUT_ELIDED = "[earlier tool output elided to fit the context window]"
 """Body substituted for an older tool result when the turn must be shrunk to fit.
 
@@ -161,7 +163,7 @@ an answer. Defined here so the emitter and the recognisers cannot drift apart.
 
 # Permissive recognisers: (name, matcher). Used only where a false positive is
 # free. Keep the names stable - they are the diagnostic a reader gets back.
-_HARNESS_BODIES: tuple[tuple[str, object], ...] = (
+_HARNESS_BODIES: tuple[tuple[str, Callable[[str], bool]], ...] = (
     ("tool_output_elided", lambda s: TOOL_OUTPUT_ELIDED in s),
     ("search_closed", lambda s: s.lstrip().startswith(SEARCH_CLOSED_PREFIX)),
 )
@@ -202,7 +204,7 @@ def harness_body_kind(content: object) -> str | None:
     if not s.strip():
         return None
     for name, matches in _HARNESS_BODIES:
-        if matches(s):  # type: ignore[operator]
+        if matches(s):
             return name
     return None
 

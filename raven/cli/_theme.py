@@ -96,7 +96,8 @@ def _osc_reply_to_rgb(data: str) -> tuple[int, int, int] | None:
         parts = data[idx + len(marker) :].strip().strip("\a\033\\").split("/")
         if len(parts) >= 3:
             try:
-                return tuple(int(p[:2], 16) for p in parts[:3])  # type: ignore[return-value]
+                red, green, blue = (int(p[:2], 16) for p in parts[:3])
+                return red, green, blue
             except ValueError:
                 return None
     hidx = data.find("#")

@@ -13,23 +13,59 @@ outline. Name its absolute path in the reply.
 | Need | Call | Note |
 | --- | --- | --- |
 | Facts the material does not carry | `web_search`, then `web_fetch` the page | there is no other search |
-| A real logo, product shot, published chart | `https://google.serper.dev/images` | key at `tools.web.search.apiKey`, see `references/assets.md` |
+| A real logo, product shot, published chart | `image_search` | direct image URL, pixel size and source page per hit; see `references/assets.md` |
 | A picture that does not exist yet | `image_generate` | reference pictures go in `images`, up to six |
-| An icon | `raven_ppt.services.assets.icons` | 1304 outline icons, see `references/assets.md` |
+| Page furniture: grid, heading, text, points, card, plane, rule, footer, table, picture placement, formula | the engine's helper modules, written beside the script | `ppt_layout`; see `references/assets.md` |
+| An icon | `add_icon`, `find_icons` from `ppt_icons` | 1304 outline icons, see `references/assets.md` |
+| A connector, a timeline, a chart | `connect`, `timeline` from `ppt_shapes`; `ppt_charts` | see `references/assets.md` |
+| A figure or table from a paper | PyMuPDF on `raven-python` | from the PDF you were given, else one you downloaded; crop the region or pull the embedded image; see `references/assets.md` |
+| A formula | `add_formula` from `raven_ppt.services.assets.formulas`, on `raven-python` | one line of TeX in, a picture in the deck's ink at true size out; see `references/assets.md` |
+| Symbols inside a sentence | `math_runs` from the same module | `_A`, `^2`, `θ*` become real sub- and superscript runs; see `references/assets.md` |
 | Render a page to look at it | `soffice --headless --convert-to pdf`, then `pdftoppm` | |
 
 With no image key configured, `image_generate` says so. Say which pages would have had a
 picture and carry them on type, grid, rule and colour.
 
+## Furniture from the modules, the rest by hand
+
+- Before the build script, write the engine's helper modules beside it, once
+  (`references/assets.md` has the command). Import from `ppt_layout`, `ppt_theme`, `ppt_icons`,
+  `ppt_shapes` and `ppt_charts`.
+- Page furniture comes from them and is not rewritten: text, points, cards, rules, heading,
+  footer, source note, chart, formula, and the grid a region divides itself into (`grid`,
+  `split_left`, `stack`; measure with `fits`, `text_size`, `table_size` first).
+- `table` is the ordinary grid: header row, columns, numbers aligned, rows as tall as their
+  text. A table that needs merged cells, a header spanning columns, an icon or a mark inside
+  a cell, a colour per cell, or more columns than fit at 14pt is drawn by hand.
+- Generic marks -- a camera, a warning, a calendar -- come from the packaged icon set
+  (`add_icon`, `find_icons`). The mark of a real thing -- a company's logo, a product's icon,
+  a framework's badge, a paper's venue -- is searched (`image_search`), downloaded and placed
+  as a picture, and a deck that names companies or products carries their marks.
+- Everything that makes a page its own is drawn by hand with python-pptx: a diagram, a
+  polygon, a map, a custom arrow, a gradient, a hero number, a cover or section composition.
+  Compose it from `plane`, `rule`, `connect` and `preset` where they fit and draw the rest.
+- A placed picture is finished by hand: a hairline or a frame, a shadow, a scrim under type
+  laid over it, a crop to the shape the page wants, a full-bleed background under a plane of
+  ink. `picture_fit` places and captions; it does not treat.
+- The theme is a copy of a packaged one with the deck's own colours and faces changed.
+- On this route there is no ANTI-SLOP-CHECK.md, no contract and no Task State. Do not
+  initialize or update one.
+
+## Read two skills first
+
+`local/deck-to-pptx` (this file) and `local/design-editorial-and-presentations`, which owns
+the content order and the editorial judgement. Read both before the first page.
+
 ## Settle four things first
 
-Language, audience, length, and whether the deck runs light or dark. They are the user's to
-decide, every page is measured against them, and a deck built on a guess is measured
-against a brief nobody agreed to.
+Language, audience, length, ground. Take each from the first of these that settles it: the
+request; what memory recalled about this user; the defaults. Defaults: the language the
+request is written in; a general audience; about 20 pages; a light ground.
 
-Ask with `ask_user`, in one call, before any other work. Where there is no user to ask --
-the request arrived from another agent -- read all four out of the request and say in the
-reply which you took and where from. Do not default any of them silently.
+Ask with `ask_user` only for a decision none of the three settles and the deck cannot start
+without: at most one call, before any other work, recommending the default. Where there is
+no user to ask (the request came from another agent), take the defaults. Say in the reply
+which of the four were defaults.
 
 ## Rules
 
@@ -50,8 +86,8 @@ reply which you took and where from. Do not default any of them silently.
    brand's website is a starting point, not the verdict** -- a dark web hero does not make
    a dark deck, and a printed handout and a projected keynote want opposite grounds.
    Chaining every background off the first one gives a deck one look and no decision.
-5. [layouts.md](references/layouts.md) holds reference shapes with their proportions and
-   the type ramp. Read it to widen the list you choose from, not to pick from a menu: what
+5. [layouts.md](references/layouts.md) holds reference shapes with their proportions, the
+   type ramp, and nine compositions measured off the packaged templates. Read it to widen the list you choose from, not to pick from a menu: what
    a page has to say decides its shape. No one shape on more than 60% of the deck.
 6. Repeating units -- a card, a row, a step -- take an icon from the packaged set. Search it
    by what the unit is about, not by a filename: 1304 of them ship beside this agent, and
@@ -76,7 +112,28 @@ reply which you took and where from. Do not default any of them silently.
 10. Every prompt names the region the type needs -- which side, what share -- and ends with
    `no text, no letters, no numbers`. All words on a page are set by the typography.
 11. After generating, rebuild the page and look at the render. Only the composed page counts.
-12. Read the deck's own render before delivering. Every page.
+12. Read the deck's own render before delivering. Every page, at 90 dpi or more; fix what it
+    showed and render again.
+13. Every component is full: what it holds earns its place on the page.
+14. Components stand in a hierarchy: one thing read first, the rest stepping down, groups told
+    apart by the space between them.
+15. The layout uses the whole page. A page that comes up short is recomposed, not left.
+
+## Technical decks
+
+- A paper walk-through, a method or an architecture talk uses the paper's own figures and
+  tables. Crop them from the PDF (`references/assets.md`). Given no PDF: `web_search` the
+  title, download the PDF from the publisher or arXiv, crop from that. `image_search` for the
+  published figure only when no PDF can be had.
+- Redraw only what the paper has no picture of, and say so in the caption.
+- A formula that stacks (fraction, root, sum with limits): `add_formula(slide, tex, left_in,
+  top_in, size_pt=...)`, one formula per call, `size_pt` = the body size beside it.
+- A sentence carrying symbols (`p(θ | D_A)`, `F_i`, `θ*`): `math_runs(paragraph, text,
+  size_pt=...)`.
+- A lone Greek letter or plain `λ`: typed.
+- Never leave `_A` or `^2` as characters in a text box.
+- Caption figures and formulas with the paper's own figure and equation numbers.
+- After placing a figure or a formula, render the page and look at it.
 
 ## The numbers a page is measured against
 
@@ -98,6 +155,8 @@ If it does not fit at these sizes, split the page or cut it -- never shrink the 
 
 ## Mechanics that bite here
 
+For what is drawn with python-pptx directly; the helper modules handle these themselves.
+
 - **A connector lands on a box at both ends.** A line into empty space is a node you did
   not draw, and nothing checks for it.
 - **A hand-drawn table does not reflow.** Every box is placed absolutely, so a cell that
@@ -106,12 +165,9 @@ If it does not fit at these sizes, split the page or cut it -- never shrink the 
   the row height from that, then place the rule. Set every element in a row from one
   baseline, and put every ground down before any word, or the fill covers the copy.
 
-- **`python3` on the path is not the interpreter that has `python-pptx`.** Check with
-  `python3 -c "import pptx"` before writing the build script. Where it fails, the one that
-  works is the raven install's own `.venv/bin/python`, and `raven_ppt` (the icons) is on
-  its path too. Run the script with that interpreter, or put its `site-packages` on
-  `sys.path` at the top of the script. A build whose first line is
-  `from pptx import Presentation` dies on line one otherwise.
+- **Run the build script with `raven-python`**, the interpreter on PATH that has `pptx` and
+  `raven_ppt`; `python3` does not. Check with `raven-python -c "import pptx, raven_ppt"`. Do
+  not look for a `.venv`, build a venv, or install python-pptx.
 - `spAutoFit` with `word_wrap=False` makes LibreOffice re-centre the text. Remove
   `a:spAutoFit` and `a:normAutofit` from `bodyPr` when alignment has to hold.
 - `shape.shadow.inherit = False` on every drawn shape, or the theme stamps a drop shadow.
@@ -123,8 +179,8 @@ If it does not fit at these sizes, split the page or cut it -- never shrink the 
 ## Load when you need it
 
 - [layouts.md](references/layouts.md) -- eleven reference page shapes with the proportions
-  they measured, seventeen cover/section/KPI/process compositions, and when a table is the
-  wrong page. A registry to widen the list you choose from; the numbers above hold without
+  they measured, seventeen cover/section/KPI/process compositions, nine compositions
+  measured off the packaged templates, and when a table is the wrong page. A registry to widen the list you choose from; the numbers above hold without
   it.
 - [gates.md](references/gates.md) -- what refuses a deck and what only reports, with the
   number each check compares against. Read before the first build.

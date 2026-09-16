@@ -80,7 +80,7 @@ def _install_demo_plugin(root: Path) -> Path:
     plug = root / "plugins" / "swapdemo"
     plug.mkdir(parents=True)
     plug.joinpath("raven-plugin.toml").write_text(
-        '[plugin]\nid = "swapdemo"\nversion = "1.0"\nenabled_by_default = true\n'
+        '[plugin]\nid = "swapdemo"\nversion = "1.0"\n'
         "[[plugin.contributes.memory_backends]]\n"
         'name = "swapdemo"\nfactory = "swapdemo_backend:make"\n'
     )
@@ -438,3 +438,49 @@ def test_the_door_roster_guard_bites(tmp_path):
     )
     strays = _door_strays(tmp_path)
     assert len(strays) == 2 and all("grab.py" in s for s in strays), strays
+
+
+@pytest.mark.asyncio
+async def test_a_backend_whose_stop_raises_does_not_break_the_generation_swap():
+    """``stop`` is contract-bound to be logged and ignored, and the swap path
+    is the one that had it unwrapped: a plugin raising here would surface out
+    of the serve loop through ``_unbind_generation``."""
+    from raven.core.runtime import RavenRuntime
+
+    order: list[str] = []
+
+    class _Backend:
+        async def stop(self):
+            order.append("stop")
+            raise RuntimeError("plugin teardown exploded")
+
+    class _Subagents:
+        async def cancel_all(self):
+            order.append("cancel_all")
+
+    class _Loop:
+        subagents = _Subagents()
+
+        async def stop_plugin_services(self):
+            order.append("stop_plugin_services")
+
+        async def close_mcp(self):
+            order.append("close_mcp")
+
+        def stop(self):
+            order.append("loop_stop")
+
+        async def drain_backend_stores(self):
+            order.append("drain_backend_stores")
+
+    rt = RavenRuntime(
+        loop=_Loop(),
+        plugin_registry=None,
+        backend=_Backend(),
+        strategies=None,
+        deliverables=None,
+    )
+
+    await rt.dispose()
+
+    assert order.index("drain_backend_stores") < order.index("stop")

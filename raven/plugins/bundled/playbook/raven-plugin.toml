@@ -4,7 +4,6 @@ version            = "0.2.0"
 display_name       = "Playbooks"
 raven              = ">=0.2"
 bundled            = true
-enabled_by_default = true
 
 # Both tools are built unbound: the funnel they serve is assembled by the
 # loop after every factory has run, and arrives through bind_runtime

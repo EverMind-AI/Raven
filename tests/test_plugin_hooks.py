@@ -50,7 +50,6 @@ def _discovered(plugin_id: str, hooks: list[tuple[str, str]]) -> DiscoveredPlugi
     mf = PluginManifest(
         id=plugin_id,
         version="0.1.0",
-        enabled_by_default=True,
         contributes=Contributes(hooks=[HookContribution(name=n, factory=f) for n, f in hooks]),
     )
     return DiscoveredPlugin(manifest=mf, source=ManifestOrigin.USER, location=None)
@@ -189,7 +188,7 @@ async def test_a_plugin_hook_boards_the_built_loops_chain(tmp_path: Path, monkey
     plug = tmp_path / "plugins" / "demohook"
     plug.mkdir(parents=True)
     plug.joinpath("raven-plugin.toml").write_text(
-        '[plugin]\nid = "demohook"\nversion = "1.0"\nenabled_by_default = true\n'
+        '[plugin]\nid = "demohook"\nversion = "1.0"\n'
         "[[plugin.contributes.hooks]]\n"
         'name = "demo-note"\nfactory = "demohook_mod:make"\n'
     )

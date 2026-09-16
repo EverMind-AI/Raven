@@ -107,6 +107,8 @@ _INITIALIZED = False
 # A real server mints a distinct id per session; the counter keeps the stub from
 # making concurrent sessions collide in a way no real agent would.
 _SESSIONS = 0
+# What each session is currently answering with, so a resumed one can report it.
+_SESSION_MODELS: dict[str, str] = {}
 
 _SESSION_CAPS = {"fork": {}, "list": {}, "resume": {}}
 if MODE != "no_session_delete":
@@ -663,6 +665,7 @@ def main() -> None:
             else:
                 global _SESSIONS
                 _SESSIONS += 1
+                _SESSION_MODELS[f"stub-session-{_SESSIONS}"] = "stub:model-a"
                 ok(
                     request_id,
                     {
@@ -682,8 +685,65 @@ def main() -> None:
                                 {"name": "no-id-so-skipped"},
                             ],
                         },
+                        # The stable model surface, as raven's own ACP server
+                        # serves it and as every agent this host drives answers:
+                        # one configOptions entry with category "model", grouped
+                        # choices under it. `models.availableModels` above is the
+                        # older key, kept because the reader for it is still
+                        # there and a stub that dropped it would stop covering
+                        # the agents that do send it.
+                        "configOptions": [
+                            {
+                                "id": "mode",
+                                "category": "mode",
+                                "type": "select",
+                                "options": [{"value": "ignored", "name": "not a model"}],
+                            },
+                            {
+                                "id": "model",
+                                "name": "Model",
+                                "category": "model",
+                                "type": "select",
+                                "currentValue": _SESSION_MODELS[f"stub-session-{_SESSIONS}"],
+                                "options": [
+                                    {
+                                        "group": "stub",
+                                        "name": "Stub",
+                                        "options": [
+                                            {"value": "stub:model-a", "name": "model-a"},
+                                            {"value": "stub:model-b", "name": "model-b"},
+                                            {"name": "no-value-so-skipped"},
+                                        ],
+                                    }
+                                ],
+                            },
+                        ],
                     },
                 )
+        elif method == "session/set_config_option":
+            # Logged on entry, not on success: a test asserting that NO frame was
+            # sent has to see every frame, and a print behind the refusals below
+            # leaves an unrequested call looking identical to no call at all.
+            print(
+                f"stub: session/set_config_option {params.get('configId')}={params.get('value')}",
+                file=sys.stderr,
+                flush=True,
+            )
+            if MODE == "refuse_restore" and params.get("value") == "stub:model-a":
+                # Takes a switch and refuses the way back, which is the shape a
+                # host has to survive: it moved the session and cannot unmove it.
+                err(request_id, -32011, "will not switch back to 'stub:model-a'")
+            elif MODE == "no_models":
+                err(request_id, -32602, "unknown configuration option 'model'")
+            elif params.get("configId") != "model":
+                err(request_id, -32602, f"unknown configuration option {params.get('configId')!r}")
+            elif params.get("value") not in ("stub:model-a", "stub:model-b"):
+                # The runtime's own refusal, with its own code: a value it will
+                # not write is not an internal error.
+                err(request_id, -32011, f"will not switch to {params.get('value')!r}")
+            else:
+                _SESSION_MODELS[str(params.get("sessionId"))] = str(params.get("value"))
+                ok(request_id, {"configOptions": []})
         elif method == "session/set_mode":
             if MODE == "no_modes":
                 err(request_id, -32601, "session/set_mode is not implemented")
@@ -696,7 +756,24 @@ def main() -> None:
             if params.get("sessionId") == "pruned-session":
                 err(request_id, -32001, "Session not found")
             else:
-                ok(request_id, {})
+                # A resumed session reports the model it is actually on, which is
+                # whatever it was last switched to. A host that read this as the
+                # session's original would restore the override it meant to undo.
+                sid = str(params.get("sessionId"))
+                ok(
+                    request_id,
+                    {
+                        "configOptions": [
+                            {
+                                "id": "model",
+                                "category": "model",
+                                "type": "select",
+                                "currentValue": _SESSION_MODELS.get(sid, "stub:model-a"),
+                                "options": [],
+                            }
+                        ]
+                    },
+                )
         elif method == "session/delete":
             if MODE == "delete_fails":
                 err(request_id, -32601, "session/delete is not implemented")

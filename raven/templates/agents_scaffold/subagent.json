@@ -9,7 +9,7 @@
   "readyTimeoutMs": 120000,
   "timeout": null,
   "maxOutputChars": 60000,
-  "everos": {
+  "memory": {
     "userId": "my-agent",
     "agentId": "my-agent"
   }

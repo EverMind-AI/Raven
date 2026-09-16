@@ -13,11 +13,17 @@ from __future__ import annotations
 import dataclasses
 
 
-def test_the_service_locator_grants_are_the_ledgered_eight() -> None:
+def test_the_service_locator_grants_are_the_ledgered_nine() -> None:
     from raven.plugins.context import ServiceLocator
 
     assert sorted(f.name for f in dataclasses.fields(ServiceLocator)) == [
         "agent_id",
+        # The host's embedding endpoint (model, base url, key, optional width).
+        # A credential grant, and a deliberate single source: raven.knowledge
+        # reads the same block, so one endpoint serves the installation rather
+        # than each feature carrying a copy to rotate. A backend that wants its
+        # own still has one -- this is what the host hands over, not a ceiling.
+        "embedding",
         # The host's tools.media.<kind> section, read live and resolved as the
         # host's own image_generate resolves it (paper: contracts/plugin_surface.py).
         # A credential grant: whoever holds it can spend the deployment's image
@@ -70,6 +76,7 @@ def test_the_manifest_kinds_are_ledgered() -> None:
     assert sorted(Contributes.model_fields) == [
         "hooks",
         "memory_backends",
+        "onboard",
         "services",
         "session_observers",
         "tool_gates",
@@ -83,7 +90,6 @@ def test_the_manifest_kinds_are_ledgered() -> None:
         "config_schema",
         "contributes",
         "display_name",
-        "enabled_by_default",
         "id",
         "raven",
         "version",

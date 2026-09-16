@@ -882,3 +882,37 @@ async def test_the_sweep_leaves_a_retained_source_still_in_use(kb) -> None:
     pdf_preview._sweep(pdf_preview.cache_dir())
 
     assert alias.is_file()
+
+
+async def test_a_page_runs_only_when_the_request_asks(client: TestClient, tmp_path: Path) -> None:
+    """The reader's opt-in travels on the request, and nothing remembers it.
+
+    What ``run`` grants is what a PDF already has -- ``allow-scripts`` with no
+    ``allow-same-origin`` -- so the origin stays opaque and the page still
+    reaches no cookie of the session's. What it newly permits is the page making
+    requests of its own, which is why it is an act rather than a default.
+    """
+    page = tmp_path / "deck.html"
+    page.write_text("<h1>hi</h1>", encoding="utf-8")
+
+    plain = await client.get("/file", params={"path": str(page)}, headers=auth())
+    asked = await client.get("/file", params={"path": str(page), "run": "1"}, headers=auth())
+
+    assert plain.headers["Content-Security-Policy"] == "sandbox"
+    assert asked.headers["Content-Security-Policy"] == "sandbox allow-scripts"
+    assert "allow-same-origin" not in asked.headers["Content-Security-Policy"]
+
+    again = await client.get("/file", params={"path": str(page)}, headers=auth())
+    assert again.headers["Content-Security-Policy"] == "sandbox", "the grant is not remembered"
+
+
+async def test_only_the_kinds_that_can_need_it_may_be_asked_to_run(client: TestClient, tmp_path: Path) -> None:
+    """A text file has no code to run, so `run` on one is a request with no
+    meaning -- and answering it would widen the grant past the two kinds an
+    agent writes that can need their own code to finish."""
+    notes = tmp_path / "notes.txt"
+    notes.write_text("plain", encoding="utf-8")
+
+    r = await client.get("/file", params={"path": str(notes), "run": "1"}, headers=auth())
+
+    assert r.headers["Content-Security-Policy"] == "sandbox"

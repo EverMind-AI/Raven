@@ -21,7 +21,10 @@ with a rule here:
 
 `placeholder_marks` is said once per page for the same reason as `prototype_kept`:
 the template's numerals and glyphs on a cloned page are advisory, the author may be
-keeping them on purpose, and a page told twice is told for nothing.
+keeping them on purpose, and a page told twice is told for nothing. `layout_picture`
+is said once per deck: it names the layouts whose artwork every page on them shows,
+ends by saying an illustration is the design and is kept, and came back word for
+word on ten of ten builds of one delivered deck.
 
 A fifth rule, and the only one here about two gates contradicting each other
 rather than one repeating itself. `type_drift` and `row_type_drift` measure the
@@ -51,7 +54,7 @@ from pathlib import Path
 from raven_ppt.contracts import Project, brief_path, load_brief, load_outline, outline_path
 from raven_ppt.contracts.findings import Finding
 
-SAID_ONCE_KINDS = frozenset({"prototype_kept", "placeholder_marks"})
+SAID_ONCE_KINDS = frozenset({"prototype_kept", "placeholder_marks", "layout_picture"})
 # The pair whose baselines disagree, nearer answer first: where a slot on a page has
 # both, the row's own spread is the reading the author acts on.
 OUTRANKED_BY_ROW = ("type_drift", "row_type_drift")

@@ -450,7 +450,6 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # to make (web search, jina): still a tool's own key, no provider
         # verdict -- the entrances themselves no longer read any key.
         "raven/core/runtime.py",
-        "raven/config/update_everos.py",
         # The RPC surface that renders that EverOS section: the same key,
         # reduced to a set/unset flag for the settings page. No verdict about
         # a Raven provider is being made from it.
@@ -486,9 +485,6 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # and an empty answer disables routing rather than ruling on a provider.
         "raven/routing/classifier.py",
         "raven/cli/onboard_commands.py",
-        # Carries the wizard's EverOS cluster split out of onboard_commands --
-        # same reads, same argument, new file name.
-        "raven/cli/onboard_everos.py",
         # The same EverOS section again, read by the knowledge embedder: the
         # three strings it needs to reach an OpenAI-compatible endpoint, and
         # their absence read as "no embedding is configured, so there are no

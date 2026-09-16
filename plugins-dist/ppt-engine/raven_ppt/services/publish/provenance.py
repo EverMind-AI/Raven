@@ -194,7 +194,9 @@ def _custom(data: bytes) -> bytes | None:
         return None
     marked = False
     for prop in list(root):
-        if VENDOR.search(prop.get("name", "")) or VENDOR.search("".join(prop.itertext())):
+        # lxml's stub types itertext() as Iterator[str | bytes] because one
+        # element API serves byte-mode trees too; _parse builds a str tree here.
+        if VENDOR.search(prop.get("name", "")) or VENDOR.search("".join(prop.itertext())):  # ty: ignore[no-matching-overload]
             root.remove(prop)
             marked = True
     return _serialise(root) if marked else None

@@ -75,10 +75,11 @@ class RouterHit:
 @runtime_checkable
 class ForgeSkillSource(Protocol):
     """One pool of skills the router can ask. Internal Protocol — the
-    set of sources is fixed at compile time (Local + Mass + Everos);
+    set of sources is fixed at compile time (Local + Mass + the
+    configured memory backend);
     third parties extend retrieval by contributing a
     :class:`MemoryBackend` whose ``agent``-track ``recall`` hits get
-    re-emitted by :class:`EverosSkillSource`.
+    re-emitted by :class:`BackendSkillSource`.
 
     Why ``weight`` is a class attribute, not a method param: weights
     are router-wide policy, not per-call, so they belong with the
@@ -87,7 +88,8 @@ class ForgeSkillSource(Protocol):
     """
 
     name: str
-    """Stable source identifier (``"local"`` / ``"mass"`` / ``"everos"``).
+    """Stable source identifier (``"local"`` / ``"mass"`` / the
+    configured ``memory.backend`` name).
     Used as the prefix in :attr:`RouterHit.qualified_id` and as the
     feedback-dispatch routing key."""
 

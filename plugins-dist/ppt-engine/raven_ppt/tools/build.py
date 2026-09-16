@@ -17,6 +17,7 @@ instruction it got while seventeen colour bars stood untouched.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,8 +81,94 @@ class Reading:
 
 
 def _read_payload(read: dict[str, Any]) -> dict[str, Any]:
-    """The reading's own fields, without the envelope this reply already has."""
-    return {key: value for key, value in read.items() if key not in ("ok", "project", "next_step")}
+    """The reading's own fields, without the envelope this reply already has.
+
+    `open_findings` included: the ledger is read after the reading is filed, so the
+    reply's own `open_findings` already holds what this reading found.
+    """
+    return {key: value for key, value in read.items() if key not in ("ok", "project", "next_step", "open_findings")}
+
+
+# A Python warning as the runner's stderr prints it: `file:line: SomeWarning: message`,
+# followed by the source line that raised it.
+_WARNING_LINE = re.compile(r"^(?P<where>\S+):(?P<line>\d+): (?P<kind>\w*Warning): (?P<message>.*)$")
+WARNED_FILENAME = "warned.json"
+
+
+def _warnings(stderr: str, deck: Project | None = None) -> str:
+    """The script's stderr as the reply carries it: each warning once, and once per deck.
+
+    A warning the projected modules raise per call comes out once per call, and a page
+    with six pictures said the same thing six times; the build directory's absolute
+    path headed every one of them. Across builds the same four `replace_picture`
+    warnings came back in six receipts of one run, six hundred characters each, for
+    calls the author had looked at and kept -- so a warning already carried by an
+    earlier receipt of this deck is counted here rather than printed again. The line
+    number is not part of what makes it the same warning: an edit above the call moves
+    it. A traceback is not a warning and is never folded.
+    """
+    seen: set[str] = set()
+    kept: list[str] = []
+    said = _warned(deck)
+    repeated: list[str] = []
+    newly: list[str] = []
+    lines = stderr.splitlines()
+    index = 0
+    while index < len(lines):
+        flat = re.sub(r"(?:/[^\s:]+)?/deck/build/", "deck/build/", lines[index].rstrip())
+        index += 1
+        if not flat.strip() or flat in seen:
+            continue
+        seen.add(flat)
+        match = _WARNING_LINE.match(flat)
+        if match is None:
+            kept.append(flat)
+            continue
+        source = ""
+        if index < len(lines) and lines[index].startswith((" ", "\t")):
+            source = lines[index].rstrip()
+            index += 1
+        key = f"{match.group('where')}|{match.group('kind')}|{match.group('message')}"
+        if key in said:
+            repeated.append(match.group("message"))
+            continue
+        newly.append(key)
+        kept.append(flat)
+        if source:
+            kept.append(source)
+    if repeated:
+        named = "; ".join(_shortened_warning(message) for message in repeated[:4])
+        more = f" and {len(repeated) - 4} more" if len(repeated) > 4 else ""
+        kept.append(
+            f"{len(repeated)} warning(s) unchanged since an earlier build of this deck, not repeated here: "
+            f"{named}{more}"
+        )
+    if newly and deck is not None:
+        try:
+            _warned_path(deck).parent.mkdir(parents=True, exist_ok=True)
+            _warned_path(deck).write_text(json.dumps(sorted(said | set(newly))), encoding="utf-8")
+        except OSError:
+            pass
+    return "\n".join(kept)[-3000:].strip()
+
+
+def _shortened_warning(message: str, limit: int = 70) -> str:
+    flat = " ".join(message.split())
+    return flat if len(flat) <= limit else flat[: limit - 3] + "..."
+
+
+def _warned_path(deck: Project) -> Path:
+    return deck.state_dir / WARNED_FILENAME
+
+
+def _warned(deck: Project | None) -> set[str]:
+    if deck is None:
+        return set()
+    try:
+        held = json.loads(_warned_path(deck).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {str(item) for item in held} if isinstance(held, list) else set()
 
 
 class PptBuildTool(Tool):
@@ -174,11 +261,9 @@ class PptBuildTool(Tool):
                         "directory ending in / to keep the deck's own name. State it once -- on any build, a "
                         "draft included -- and it is kept for this deck: every build that publishes writes the "
                         "deck under out/ and copies the same bytes there, first delivery and every revision "
-                        "after, and the reply names that path with the slide count. The deck's PDF preview is "
-                        "written beside it under the same name as a second file, but only when nothing is at "
-                        "that .pdf name already: a file there is the user's and is left alone, and the reply "
-                        "says the preview stayed under out/ -- tell them that when it does. A copy you make "
-                        "yourself with exec is not recorded and not the deliverable"
+                        "after, and the reply names that path with the slide count. One file lands there, the "
+                        ".pptx; the render under out/ is the engine's own preview and is not delivered. A copy "
+                        "you make yourself with exec is not recorded and not the deliverable"
                     ),
                 },
                 "draft": {
@@ -320,9 +405,9 @@ class PptBuildTool(Tool):
         # cropped past what its frame can hold, and whatever else stopped being a crash.
         # A warning nobody reads is a crash with worse manners, so it comes back beside
         # the findings rather than staying in a stderr only a failure used to show.
-        stderr = (getattr(outcome, "stderr", "") or "").strip()
+        stderr = _warnings(getattr(outcome, "stderr", "") or "", deck)
         if stderr:
-            payload["warnings"] = stderr[-3000:]
+            payload["warnings"] = stderr
         if findings:
             shown_findings, folded = _folded(findings)
             payload["measured"] = _return.grouped(shown_findings)
@@ -330,8 +415,6 @@ class PptBuildTool(Tool):
                 payload["consequences_folded"] = folded
         if "pptx_path" in result.data:
             payload["pptx_path"] = result.data["pptx_path"]
-        if "pdf_path" in result.data:
-            payload["pdf_path"] = result.data["pdf_path"]
         if result.data.get("republished"):
             payload["republished"] = True
         if changed := result.data.get("delivery_changed"):
@@ -356,9 +439,8 @@ class PptBuildTool(Tool):
             # those three published. Every run that never left draft never delivered, and
             # the party choosing whether to be judged is the party the gates are for.
             payload["draft_does_not_deliver"] = (
-                "these pages are drawn, and a draft is not what delivers them -- the deck reaches the user "
-                "only from a finished build (`draft: false`), which is also the call that runs every gate "
-                "and takes the second reading"
+                "a draft is not what delivers them: build with `draft: false` to run the gates, take the "
+                "second reading and publish"
             )
         if dropped := result.data.get("dropped_pages"):
             # Said whether or not the cap released anything else, because it is the one
@@ -373,9 +455,6 @@ class PptBuildTool(Tool):
             )
 
         shown = list(result.data.get("showing") or [])
-        outline = load_outline(outline_path(deck))
-        if outline is not None:
-            payload["planned_pages"] = [page.as_dict() for page in outline.pages if page.page in set(shown)]
         # Blocking is decided on everything measured, before any folding: what refuses
         # publication cannot depend on how the reply is arranged.
         blocking = _return.blocking_of(findings, self.profile.blocking_kinds)
@@ -807,7 +886,7 @@ def _delivered(data: dict[str, Any], stated: dict[str, Any]) -> dict[str, Any]:
     on to the user.
     """
     landed: dict[str, Any] = {}
-    for key in ("delivered_to", "delivered_pdf", "delivered_pdf_kept_back", "delivery_failed"):
+    for key in ("delivered_to", "delivery_failed"):
         if key in data:
             landed[key] = data[key]
     if stated and "delivered_to" not in landed:
@@ -867,9 +946,7 @@ def _delivery_ask(
     if "delivered_to" in payload:
         return (
             f"tell the user in these terms: the deck is at {payload['delivered_to']} and has {pages} slides"
-            + (f"; its PDF preview is {payload['delivered_pdf']}" if "delivered_pdf" in payload else "")
-            + (f". Say this too: {payload['delivered_pdf_kept_back']}" if "delivered_pdf_kept_back" in payload else "")
-            + f". That is the path the user named; out/ holds the engine's own copy at {payload['pptx_path']}"
+            f". That is the path the user named; out/ holds the engine's own copy at {payload['pptx_path']}"
         )
     if "delivery_failed" in payload:
         return (

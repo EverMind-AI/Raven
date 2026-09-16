@@ -163,6 +163,14 @@ class PptTemplateTool(Tool):
                         "an add_picture line in it runs as pasted"
                     ),
                 },
+                "borrowed": {
+                    "type": "string",
+                    "description": (
+                        "with pages: read them out of this bundled template instead of the bound one, by the "
+                        "stem borrowable_pages names (e.g. mint_memphis_thesis_defense) -- the geometry of a "
+                        "page you are borrowing, before you clone it"
+                    ),
+                },
             },
             "required": ["project"],
         }
@@ -173,6 +181,7 @@ class PptTemplateTool(Tool):
         path: str | None = None,
         pages: list[int] | None = None,
         palette: dict[str, Any] | None = None,
+        borrowed: str | None = None,
         **kwargs: Any,
     ) -> str | ToolResult:
         try:
@@ -226,7 +235,7 @@ class PptTemplateTool(Tool):
             )
 
         if pages:
-            return await self._as_code(deck, template, pages, payload)
+            return await self._as_code(deck, template, pages, payload, borrowed=borrowed)
         return await self._as_renders(deck, template, payload)
 
     def _bind(self, deck: Project, path: str):
@@ -290,10 +299,11 @@ class PptTemplateTool(Tool):
             "accent": str(entry["accent"]),
             "the_template_also_holds": held[:10],
             "yours_to_change": (
-                "THEMES gives you these as a starting point, not a rule. Look at the pages above: if the "
-                "ground you see is not the one named here, set it -- `T['background'] = '#RRGGBB'` in your "
-                "program -- and the planes and muted copy derived from it follow. The same goes for any "
-                "field. A colour you can see beats a colour something measured"
+                "THEMES gives you these as read from the file, not as a rule. Look at the pages above: if the "
+                "ground you see is not the one named here, state it once with `ppt_template(project, "
+                "palette={'background': '#RRGGBB'})` and the planes and muted copy derived from it follow "
+                "on every page. The same goes for any role. A colour you can see beats a colour something "
+                "measured"
             ),
         }
 
@@ -477,7 +487,6 @@ class PptTemplateTool(Tool):
             payload["house_style"] = house.brief()
         examples_named: list[str] = []
         if listing:
-            payload["structural_pages_are"] = [entry.line() for entry in listing if entry.role]
             payload["template_pages"] = [entry.line() for entry in listing]
             # Named page by page, and by the arrangement each one is, because the reply
             # that named only the structural pages got exactly the structural pages
@@ -536,9 +545,8 @@ class PptTemplateTool(Tool):
         # beside the shape it holds is a different offer from a category.
         if examples_named:
             asks.append(
-                "give every content page a prototype from this list, by the arrangement it holds: "
-                + "; ".join(examples_named)
-                + " -- record the page number you picked in the plan's `prototype` field and clone it with "
+                "give every content page a prototype from the list under content_pages, by the arrangement it "
+                "holds -- record the page number you picked in the plan's `prototype` field and clone it with "
                 "`clone_page(prs, prototype(tpl, N))` and `replace_text`. A page you compose instead has `plane`, `write` and "
                 "`stack` and nothing else, and whatever this template draws that those cannot -- a timeline, "
                 "a ring of badges, a numbered pill, a figure card -- is on these pages and nowhere else. "
@@ -548,10 +556,9 @@ class PptTemplateTool(Tool):
         if carried:
             payload["layout_pictures"] = carried
             asks.append(
-                "this template keeps some of its photographs on its layouts, where every page on the layout "
-                "inherits them and a `replace_picture` on a cloned page never reaches them: "
-                + "; ".join(carried)
-                + ". Change one for every page at once with `replace_picture(layout_pictures(slide)[0], "
+                "this template keeps some of its photographs on its layouts (under layout_pictures), where "
+                "every page on the layout inherits them and a `replace_picture` on a cloned page never reaches "
+                "them. Change one for every page at once with `replace_picture(layout_pictures(slide)[0], "
                 "FIGURES/'x.png', 'cover')` after `from ppt_template import layout_pictures`, and keep the rest "
                 "of that layout's art: the chips, marks and rules beside the picture are the cover's design, and "
                 "a cover that dropped them for a full-bleed photograph came out as type on fog. A cut-out slot "
@@ -568,10 +575,9 @@ class PptTemplateTool(Tool):
         if borrowable:
             payload["borrowable_pages"] = [said for _, _, said in borrowable]
             asks.append(
-                "for a page no example above can carry, borrow one of these pages from another bundled "
-                "template -- its colours and master become this deck's, only the arrangement comes across: "
-                + "; ".join(said for _, _, said in borrowable)
-                + ". Clone it with `clone_page(prs, prototype(bundled('<template>'), N))` after "
+                "for a page no example above can carry, borrow one of the pages under borrowable_pages from "
+                "another bundled template -- its colours and master become this deck's, only the arrangement "
+                "comes across. Clone it with `clone_page(prs, prototype(bundled('<template>'), N))` after "
                 "`from ppt_template import bundled`, and record both `borrowed: '<template>'` and "
                 "`prototype: N` on that page of the plan"
                 + (
@@ -743,24 +749,42 @@ class PptTemplateTool(Tool):
             return None
 
     async def _as_code(
-        self, deck: Project, template: Any, pages: list[int], payload: dict[str, Any]
+        self, deck: Project, template: Any, pages: list[int], payload: dict[str, Any], borrowed: str | None = None
     ) -> str | ToolResult:
         """The chosen pages as source, with their pictures written where it can find them.
 
         The pictures go into the build directory rather than beside the template,
         so the `add_picture("template_00.png", ...)` in the reference is a line the
         author can paste and run: that directory is where the program runs.
+
+        `borrowed` names another bundled template to read from: a page offered under
+        `borrowable_pages` has geometry an author wants before cloning it, and the bound
+        template's file does not hold it.
         """
+        from raven_ppt.services.template.defaults import bundled_path
+
+        source, page_count = template.source, template.example_pages
+        if borrowed:
+            source = bundled_path(borrowed)
+            if source is None:
+                return _return.failed(
+                    f"no bundled template is called {borrowed!r}",
+                    hint="borrowed takes a stem from borrowable_pages, such as mint_memphis_thesis_defense",
+                )
+            from pptx import Presentation
+
+            page_count = len(Presentation(str(source)).slides)
+            payload["borrowed"] = source.stem
         deck.build_dir.mkdir(parents=True, exist_ok=True)
         asked = sorted(set(pages))
         # Out of range first: "page 9 of a 2-page template" is a different mistake from
         # "page 5 is a content page", and answering the second for the first sends an
         # author looking for a house style that has nothing to do with it.
-        beyond = [number for number in asked if number > template.example_pages]
+        beyond = [number for number in asked if number > page_count]
         if beyond and len(beyond) == len(asked):
             return _return.failed(
-                f"none of pages {asked} could be read out of {template.source.name}",
-                hint=f"the template ships {template.example_pages} example pages, numbered from 1",
+                f"none of pages {asked} could be read out of {source.name}",
+                hint=f"the template ships {page_count} example pages, numbered from 1",
             )
         asked = [number for number in asked if number not in beyond]
         sources = []
@@ -769,7 +793,7 @@ class PptTemplateTool(Tool):
         cut: dict[str, dict[str, int]] = {}
         carried = 0
         for number in asked:
-            page = decompile(template.source, number - 1, images_dir=deck.build_dir)
+            page = decompile(source, number - 1, images_dir=deck.build_dir)
             if page is None:
                 continue
             block = page.summary(imports=False)
@@ -794,8 +818,8 @@ class PptTemplateTool(Tool):
             carried += len(block)
         if not sources:
             return _return.failed(
-                f"none of pages {sorted(set(pages))} could be read out of {template.source.name}",
-                hint=f"the template ships {template.example_pages} example pages, numbered from 1",
+                f"none of pages {sorted(set(pages))} could be read out of {source.name}",
+                hint=f"the template ships {page_count} example pages, numbered from 1",
             )
 
         asks = [
@@ -814,9 +838,7 @@ class PptTemplateTool(Tool):
                 "a figure -- means emptying that space first -- `clear_region(slide, page_box(shape_at(slide, n)))` "
                 "for where one shape is, or `clear_region(slide, Box.corners(x0, y0, x1, y1))` for a space of "
                 "your own, since four bare numbers cannot say which reading they are and are refused -- which "
-                "reports every shape it took out and every one still lying over your box. A run that swept the "
-                "page by hand instead kept the arrows, the number labels and every connector, and drew two "
-                "charts on top of them"
+                "reports every shape it took out and every one still lying over your box"
             )
         # Apart from `cannot_be_redrawn`, because the answer is the opposite one. A run
         # was told to clone a chart page and replace_text it, got a chart holding the

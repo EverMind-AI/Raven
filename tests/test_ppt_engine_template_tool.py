@@ -242,9 +242,33 @@ async def test_pages_come_back_as_source_the_author_can_paste(workspace: Path, h
 
     assert isinstance(result, ToolResult)
     code = result.blocks[0]["text"]
-    assert "# page 0 of the template" in code
+    assert "# page 1 of the template" in code, "numbered as the menu and pages_read number it"
     assert "slide.shapes.add_textbox" in code
     assert _body(result)["pages_read"] == [1]
+
+
+_BUNDLED = Path(__file__).resolve().parents[1] / "plugins-dist" / "ppt-engine" / "raven_ppt" / "assets" / "templates"
+
+
+@pytest.mark.skipif(
+    not (_BUNDLED / "mint_memphis_thesis_defense.pptx").is_file(), reason="the template payload is fetched"
+)
+async def test_a_borrowed_page_can_be_read_back_as_source_before_it_is_cloned(workspace: Path, house: Path):
+    """The pages under borrowable_pages come from another file, and until now the only
+    read-back opened the bound template: an author borrowing a timeline had its render
+    and none of its geometry."""
+    tool = PptTemplateTool(workspace, FakeViews())
+    await tool.execute(project="talk", path="uploads/house-style.pptx")
+
+    result = await tool.execute(project="talk", pages=[6], borrowed="mint_memphis_thesis_defense")
+
+    assert isinstance(result, ToolResult)
+    body = _body(result)
+    assert body["ok"] and body["pages_read"] == [6] and body["borrowed"] == "mint_memphis_thesis_defense"
+    assert "# page 6 of the template" in result.blocks[0]["text"]
+
+    refused = _body(await tool.execute(project="talk", pages=[6], borrowed="no_such_template"))
+    assert not refused["ok"] and "no bundled template is called 'no_such_template'" in refused["error"]
 
 
 async def test_a_page_read_carries_the_pages_and_not_the_roster_again(workspace: Path, house: Path):

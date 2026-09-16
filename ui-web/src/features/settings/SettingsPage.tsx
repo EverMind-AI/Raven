@@ -2170,9 +2170,9 @@ function DefaultsPage({ s }: { s: SettingsState }): JSX.Element {
         title={t('gui.set.dm.embed')}
         note={t('gui.set.dm.embed_note')}
         kind="embedding"
-        pinKey="knowledge"
-        modelField="embeddingModel"
-        providerField="embeddingProvider"
+        pinKey="embedding"
+        modelField="model"
+        providerField="provider"
         foot={t('gui.set.dm.embed_warn')}
         s={s}
       />
@@ -2322,6 +2322,7 @@ function MemoryPage({ s }: { s: SettingsState }): JSX.Element {
   const raw = s.snap.raw
   const [nl, say] = useNl()
   const secs = (s.snap.everos && s.snap.everos.sections) || {}
+  const everosNote = s.snap.everos && s.snap.everos.available === false ? s.snap.everos.note || '' : ''
   /* Only the ones with a key to lend, which is narrower than `on`. That flag
      is `credential_status(...).ok` -- "this provider is usable" -- and two
      kinds satisfy it with no key at all: oauth is authenticated by a token
@@ -2346,6 +2347,13 @@ function MemoryPage({ s }: { s: SettingsState }): JSX.Element {
         <div className="ch">
           <div className="t">{t('gui.set.mem.models')}</div>
         </div>
+        {everosNote ? (
+          /* Nothing to configure here, and the rows would say "not set",
+             which is what a present-but-unconfigured install looks like too. */
+          <div className="fset">
+            <div className="empty-note">{everosNote}</div>
+          </div>
+        ) : (
         <div className="fset">
           {MEM_ROLES.map(([sec, key, required]) => (
             <MemRole
@@ -2360,6 +2368,7 @@ function MemoryPage({ s }: { s: SettingsState }): JSX.Element {
             />
           ))}
         </div>
+        )}
         {nl && <div className="nlmsg">{nl}</div>}
       </div>
     </>
@@ -2521,7 +2530,7 @@ interface WebVendorPick {
 const WEB_VENDOR: Record<string, WebVendorPick> = {
   web_search: {
     path: 'tools.web.search.provider',
-    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl'],
+    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl', 'serply'],
     fallback: 'serper',
   },
   web_fetch: {
@@ -2539,6 +2548,7 @@ const WEB_VENDOR_LABEL: Record<string, string> = {
   exa: 'Exa',
   brave: 'Brave Search',
   firecrawl: 'Firecrawl',
+  serply: 'Serply',
 }
 function webVendor(id: string, raw: Record<string, unknown>): string {
   const pick = WEB_VENDOR[id]!

@@ -61,6 +61,17 @@ def test_a_source_caption_is_quoted_and_credited() -> None:
     assert INSPECTED_CAPTION_LEAD not in said
 
 
+def test_the_figure_line_names_the_file_the_program_places() -> None:
+    """The id is not the file: a program wrote `fig("tiananmen-495f76b2e8.jpg")` off a
+    line that named only the id, and the file under PPT_FIGURES_DIR was `tiananmen.jpg`."""
+    figure = Figure(figure_id="tiananmen-495f76b2e8", kind="image", file="tiananmen.jpg", width_px=1200, height_px=800)
+
+    said = figure.summary()
+
+    assert "tiananmen-495f76b2e8 (image, 1200x800px, file tiananmen.jpg)" in said
+    assert "file" not in Figure(figure_id="fig_3", kind="figure").summary(), "no file, nothing said about one"
+
+
 def test_both_captions_reach_the_reader_when_a_figure_carries_both() -> None:
     """`caption or visual_caption` returned one string, so whichever came second was
     simply gone -- and the disagreement worth noticing was gone with it."""

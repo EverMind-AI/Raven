@@ -265,9 +265,8 @@ def row_band(shape, size_pt: float | None = None) -> str:
 def _band(width_in: float, font_px: int, lines: int, bold: bool, han: bool) -> tuple[int, int]:
     """How many characters of one script the box takes, at both bounds."""
     room = width_in * 96 / RENDER_DRIFT_HEADROOM
-    return tuple(  # type: ignore[return-value]
-        max(0, int(room * bound // (_em(bold, han) * font_px)) * lines) for bound in BOUNDS
-    )
+    at_bound, at_overshoot = (max(0, int(room * bound // (_em(bold, han) * font_px)) * lines) for bound in BOUNDS)
+    return at_bound, at_overshoot
 
 
 def _em(bold: bool, han: bool) -> float:

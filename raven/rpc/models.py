@@ -2276,6 +2276,44 @@ class SubagentsInstanceSetModeResult(_Strict):
     )
 
 
+class SubagentModelChoice(_Strict):
+    """One model an agent offers, as its own handshake advertised it."""
+
+    value: str = Field(..., description="The id the agent takes back.")
+    name: str = Field("", description="What the agent asked to be shown, usually far shorter than the value.")
+    group: str = Field("", description="The agent's own bucketing, a provider typically. Empty when it offered none.")
+
+
+class SubagentsInstanceSetModelParams(_Strict):
+    session_key: str
+    agent: str
+    handle: str
+    model: str | None = Field(
+        None,
+        description=(
+            "The opaque provider-qualified id the agent offered. Never a display name: the two differ and "
+            "the agent takes only the id back. Omit it to report without changing."
+        ),
+    )
+    clear: bool = Field(
+        False,
+        description=(
+            "Drop this instance's override, returning it to the agent's own model. Ignored when model is given."
+        ),
+    )
+
+
+class SubagentsInstanceSetModelResult(_Strict):
+    model: str | None = Field(
+        None, description="This instance's override, or null when it follows the agent's own model."
+    )
+    available_models: list[SubagentModelChoice] = Field(
+        default_factory=list,
+        alias="availableModels",
+        description="Everything this agent offers, so one reply is enough to draw the control.",
+    )
+
+
 class SessionSetModeParams(_Strict):
     session_key: str
     mode: str | None = Field(None, description="The tier id to switch to. Omit it to report without changing.")
@@ -2982,6 +3020,17 @@ class SettingsEverosParams(_Strict):
 class SettingsEverosResult(_Strict):
     sections: dict[str, EverosSection]
     config_path: str
+    available: bool = Field(
+        description="Whether this install has an EverOS to configure at all. False leaves sections empty and note set.",
+    )
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Why this page has nothing to show, when that is not a failure: the memory "
+            "plugin is not installed, or it is installed but is not what memory.backend "
+            "names. Null when the store was actually consulted."
+        ),
+    )
 
 
 class SettingsEverosSetParams(_Strict):
@@ -3190,6 +3239,14 @@ class MemoryStatsResult(_Strict):
     profiles: int
     agent_cases: int
     agent_skills: int
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Why this page has nothing to show, when that is not a failure: the memory "
+            "plugin is not installed, or it is installed but is not what memory.backend "
+            "names. Null when the store was actually consulted."
+        ),
+    )
 
 
 class MemoryItem(_Strict):
@@ -3223,6 +3280,14 @@ class MemoryListResult(_Strict):
     total: int
     page: int
     page_size: int
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Why this page has nothing to show, when that is not a failure: the memory "
+            "plugin is not installed, or it is installed but is not what memory.backend "
+            "names. Null when the store was actually consulted."
+        ),
+    )
 
 
 class MemoryDeleteParams(_Strict):
@@ -4434,6 +4499,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagents.instance.forget": (SubagentsInstanceForgetParams, SubagentsInstanceForgetResult),
     "subagents.instance.steer": (SubagentsInstanceSteerParams, SubagentsInstanceSteerResult),
     "subagents.instance.set_mode": (SubagentsInstanceSetModeParams, SubagentsInstanceSetModeResult),
+    "subagents.instance.set_model": (SubagentsInstanceSetModelParams, SubagentsInstanceSetModelResult),
     # system.*
     "system.hello": (SystemHelloParams, SystemHelloResult),
     "system.ping": (SystemPingParams, SystemPingResult),
