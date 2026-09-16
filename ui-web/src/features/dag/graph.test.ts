@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { CARD, GAP_X, GAP_Y, H, PAD, SHEET, W, depths, layout, layers, ordered, shape, summary, took } from './graph'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { DagNode, DagRun } from './types'
@@ -15,11 +16,11 @@ beforeEach(() => {
     confirmAsk: () => {},
     showPage: () => {},
   }
-  window.RavenShell = shell
+  setShell(shell)
 })
 
 afterEach(() => {
-  delete window.RavenShell
+  resetShell()
 })
 
 const node = (id: string, deps: string[] = [], over: Partial<DagNode> = {}): DagNode => ({

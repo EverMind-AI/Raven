@@ -3,6 +3,7 @@
    file only knows how to speak memory.* over /rpc. Installing onto the
    seam replaces the fixture source before the first paint. */
 
+import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { T } from '../demo/010-kernel.js'

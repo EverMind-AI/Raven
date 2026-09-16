@@ -5,6 +5,9 @@
    fresh, and forwards gateway events into the island. Installing onto the
    seam replaces the fixture source before the first paint. */
 
+import { islands } from '../../islands'
+import { setFault as setMemFault } from '../../shell/banner'
+import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { LANG, T } from '../demo/010-kernel.js'
@@ -54,24 +57,24 @@ function onMcpStatus(p) {
     // ext.list) — coalesce the reload; startup syncs fire one event per server.
     clearTimeout(pmExtSoon);
     pmExtSoon = setTimeout(() => loadExt()
-      .then(() => RavenIslands.plugins.event({ kind: 'rows' }))
+      .then(() => islands.plugins.event({ kind: 'rows' }))
       .catch(() => {}), 250);
   }
-  RavenIslands.plugins.event({
+  islands.plugins.event({
     kind: 'status', name: p.name, state: p.state, tool_count: p.tool_count, error: p.error,
     auth_url: p.auth_url || null,
   });
 }
 
 function onOauthPending(p) {
-  RavenIslands.plugins.event({
+  islands.plugins.event({
     kind: 'authPending', server: p.server, url: p.url,
     expires_in: p.expires_in, interactive: p.interactive,
   });
 }
 
 function onOauthDone(p) {
-  RavenIslands.plugins.event({ kind: 'authDone', server: p.server, ok: !!p.ok, error: p.error });
+  islands.plugins.event({ kind: 'authDone', server: p.server, ok: !!p.ok, error: p.error });
 }
 
 /* Everything this part used to do while the concatenated page script ran, in

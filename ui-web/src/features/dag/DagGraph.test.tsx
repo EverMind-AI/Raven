@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DagGraph, visibleLayers } from './DagGraph'
 import { CARD, SHEET } from './graph'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { DagNode } from './types'
@@ -31,11 +32,11 @@ let host: HTMLDivElement
 let root: Root
 
 beforeEach(() => {
-  window.RavenShell = {
+  setShell({
     T: (key, vars) => key + (vars ? ` ${JSON.stringify(vars)}` : ''),
     confirmAsk: () => {},
     showPage: () => {},
-  } satisfies Shell
+  } satisfies Shell)
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -43,7 +44,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => { root.unmount() })
-  delete window.RavenShell
+  resetShell()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
 })

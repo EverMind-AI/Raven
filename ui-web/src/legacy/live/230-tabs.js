@@ -11,6 +11,8 @@
    so an absent surface answers with no rows rather than an error, and
    `absent` is what the island's empty state reads to tell the two apart. */
 
+import { islands } from '../../islands'
+import { current as sessionCurrent } from '../../shell/session'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { mediaOf } from './080-overrides.js'
@@ -111,7 +113,7 @@ export function install() {
      scroll). A member here rather than its own binding, because a painter is
      only ever wanted for a record, and this is the source the records come
      from. */
-    stagePaint: (box, r, opts) => RavenIslands.transcript.agentStage(box, r, opts),
+    stagePaint: (box, r, opts) => islands.transcript.agentStage(box, r, opts),
   };
 
   if (new URLSearchParams(location.search).get('desk-demo') === '1') {
@@ -228,11 +230,11 @@ export function install() {
       const turns = demoHistory.get(handle) || [];
       turns.push({ call_id: `${handle}-${Date.now()}-u`, role: 'user', content: text, at_ms: Date.now() });
       demoHistory.set(handle, turns);
-      RavenIslands.subagents.directEvent({ agent, handle }, 'message.start', { content: text });
+      islands.subagents.directEvent({ agent, handle }, 'message.start', { content: text });
       setTimeout(() => {
         turns.push({ call_id: `${handle}-${Date.now()}-a`, role: 'assistant', content: `已收到并完成：${text}`, at_ms: Date.now() });
         row.status = 'completed'; row.updatedAtMs = Date.now();
-        RavenIslands.subagents.directEvent({ agent, handle }, 'message.complete', {});
+        islands.subagents.directEvent({ agent, handle }, 'message.complete', {});
       }, 1200);
     };
   }

@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetShell } from './bridge'
 
 import type { Shell } from './bridge'
 
@@ -13,7 +14,7 @@ let set: (typeof import('./ctxchip'))['set']
 
 /* The catalogue's own shape for the tooltip, so the test reads what a reader
    would see rather than a key. */
-function install(): void {
+async function install(): Promise<void> {
   const fake: Shell = {
     T: (key, vars) =>
       key === 'gui.ctx.tip' && vars
@@ -22,7 +23,10 @@ function install(): void {
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
   }
-  window.RavenShell = fake
+  /* Through the bridge the fresh module graph above will read, not the one
+     this file imported: the reset gave the module under test a new copy. */
+  const { setShell } = await import('./bridge')
+  setShell(fake)
 }
 
 const chip = (): HTMLElement => document.getElementById('ctxChip') as HTMLElement
@@ -33,7 +37,7 @@ const RING = 47.75
 beforeEach(async () => {
   vi.resetModules()
   ;({ draw, set } = await import('./ctxchip'))
-  install()
+  await install()
   /* page.html's own markup for the chip, r included -- the radius is half of
      the offset arithmetic this file asserts on. */
   document.body.innerHTML =
@@ -45,7 +49,7 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
-  delete window.RavenShell
+  resetShell()
 })
 
 describe('the context ring', () => {

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { Shell } from './bridge'
 import { open } from './upgrade'
+import { resetShell, setShell } from './bridge'
 
 function wire(): void {
   const shell: Shell = {
@@ -10,11 +11,11 @@ function wire(): void {
     confirmAsk: () => {},
     showPage: () => {},
   }
-  window.RavenShell = shell
+  setShell(shell)
 }
 
 afterEach(() => {
-  delete window.RavenShell
+  resetShell()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
 })

@@ -6,6 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 
 import { _resetForTests, add, dropClass, forget, remove, session, sync } from './sheets'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 
@@ -15,7 +16,7 @@ function wire(): void {
     confirmAsk: () => {},
     showPage: () => {},
   }
-  window.RavenShell = shell
+  setShell(shell)
   /* `.chat` and `.dock` because dockLift measures them; without both it returns
      early, which would make every assertion below pass for the wrong reason. */
   document.body.innerHTML =
@@ -40,7 +41,7 @@ beforeEach(() => {
 
 afterEach(() => {
   sessionReset()
-  delete window.RavenShell
+  resetShell()
   document.body.innerHTML = ''
 })
 
@@ -281,8 +282,8 @@ describe('who counts as asking', () => {
     'features/composer/clarify.ts': true,
     // The graph sheet is what steps aside for the two above; it asks nothing.
     'features/dag/mount.tsx': false,
-    // Not a tenant: the export binding the shell hands to the demo layer.
-    'main.tsx': false,
+    // Not a tenant: the export binding the island bag hands to the demo layer.
+    'islands.ts': false,
   }
 
   const sources = (): Array<[string, string]> => {

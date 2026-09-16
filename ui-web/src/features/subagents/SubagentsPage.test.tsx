@@ -16,7 +16,9 @@ import * as store from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { islands } from '../../islands'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { setShell, shell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { JSX } from 'react'
@@ -29,7 +31,7 @@ import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow, Subagen
 const paints: Array<{ ctx: unknown; opts?: { key?: string; empty?: string; reset?: boolean } }> = []
 
 /* The island runs against the same two seams production wires up: a fake
-   shell on window.RavenShell (T returns its key, dur a deterministic stamp)
+   shell handed in through setShell (T returns its key, dur a deterministic stamp)
    and a source on sources.agents -- the fixture shape for demo behaviour,
    list/context/node for live behaviour. */
 function wire(source: AgentsSource): void {
@@ -40,7 +42,7 @@ function wire(source: AgentsSource): void {
     showPage: () => {},
     wsShows: (tab) => tab === 'agents',
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   sessionReset()
   setCurrent('s1')
   source.stagePaint = (box, ctx, opts) => {
@@ -111,7 +113,6 @@ afterEach(() => {
   cleanup()
   store._resetForTests()
   sessionReset()
-  window.RavenIslands = undefined
   vi.useRealTimers()
   vi.restoreAllMocks()
   resetSources()
@@ -119,8 +120,7 @@ afterEach(() => {
 
 describe('subagents island, the list', () => {
   it('routes an existing instance opener into the floating workspace', () => {
-    const openAgent = vi.fn()
-    window.RavenIslands = { workspace: { openAgent } }
+    const openAgent = vi.spyOn(islands.workspace, 'openAgent').mockImplementation(() => {})
     const row = inst({ handle: 'resume-me', resumable: true })
     store.openInstance(row)
     /* Second argument is the record this promotion replaces; a row opened
@@ -132,8 +132,7 @@ describe('subagents island, the list', () => {
   })
 
   it('routes a legacy run detail into a workspace record pane', () => {
-    const openAgentRecord = vi.fn()
-    window.RavenIslands = { workspace: { openAgentRecord } }
+    const openAgentRecord = vi.spyOn(islands.workspace, 'openAgentRecord').mockImplementation(() => {})
     const row: AgentRow = { id: 'spawn-1', kind: 'spawn', label: 'legacy task' }
     store.openRow(row)
     expect(openAgentRecord).toHaveBeenCalledWith(row)
@@ -1688,8 +1687,7 @@ describe('subagents island, an instance detail', () => {
        the summary never reached the record row at all; and the pane's own header
        reads `row.node` before `row.label`, so the id would have won even once
        the summary arrived. */
-    const openAgentRecord = vi.fn()
-    window.RavenIslands = { workspace: { openAgentRecord } }
+    const openAgentRecord = vi.spyOn(islands.workspace, 'openAgentRecord').mockImplementation(() => {})
     instances([], { instances: async () => [], node: async () => ({ messages: [] }) })
     await act(async () => {
       store.openDagNode('r1', {
@@ -1718,9 +1716,8 @@ describe('subagents island, an instance detail', () => {
 
   it('promotes that node once, not on every heartbeat after it', async () => {
     const row = inst({ handle: 'h-1', status: 'completed', resumable: true, runId: 'r1', nodeId: 'shape' })
-    const openAgent = vi.fn()
-    const openAgentRecord = vi.fn()
-    window.RavenIslands = { workspace: { openAgent, openAgentRecord } }
+    const openAgent = vi.spyOn(islands.workspace, 'openAgent').mockImplementation(() => {})
+    const openAgentRecord = vi.spyOn(islands.workspace, 'openAgentRecord').mockImplementation(() => {})
     instances([], {
       instances: async () => [row],
       instanceHistory: async () => ({ turns: [] }),
@@ -1812,7 +1809,7 @@ describe('subagents island, an instance detail', () => {
           ],
       }),
     })
-    window.RavenShell!.wsShows = () => false
+    shell().wsShows = () => false
 
     render(<InstanceConversation row={row} />, {
       container: document.getElementById('wsBody')!,
@@ -1873,7 +1870,7 @@ describe('subagents island, an instance detail', () => {
           : [{ role: 'assistant', content: 'first' }, { role: 'assistant', content: 'second' }],
       }),
     })
-    window.RavenShell!.wsShows = () => false
+    shell().wsShows = () => false
 
     render(<AgentRecordConversation row={row} />, {
       container: document.getElementById('wsBody')!,

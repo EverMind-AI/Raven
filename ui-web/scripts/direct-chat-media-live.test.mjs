@@ -19,7 +19,7 @@ import { fakeGateway, loadPart } from './legacy-part.mjs'
    and the real note text behind it -- the note is what splits the message. */
 async function sender(calls) {
   const part = await loadPart(() => import('../src/legacy/live/230-tabs.js'), {
-    globals: { sessionCurrent: () => 's1', RavenIslands: {} },
+    fakes: { 'src/shell/session': { current: () => 's1' } },
   })
   await fakeGateway((method, params) => { calls.push([method, params]); return Promise.resolve({}) })
   const { sources } = await import('../src/state/sources')

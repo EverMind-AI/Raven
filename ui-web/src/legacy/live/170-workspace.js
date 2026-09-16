@@ -4,6 +4,8 @@
    an answer makes clickable. Installing onto the seam replaces the fixture
    source before the first paint. */
 
+import { islands } from '../../islands'
+import { current as sessionCurrent } from '../../shell/session'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { HOST_PLATFORM } from '../demo/010-kernel.js'
@@ -38,7 +40,7 @@ const livePathOf = (s) => {
   const t = String(s).trim().replace(/:\d+(?::\d+)?$/, '');
   if (!t || /\s/.test(t)) return null;
   if (/(?:^|\/)(?:\.raven\/)?workspace\/./.test(t)) return relToWorkspace(t) || t;
-  const hit = RavenIslands.workspace.changes().find((c) => c.key === t || wsShortPath(c.key) === t);
+  const hit = islands.workspace.changes().find((c) => c.key === t || wsShortPath(c.key) === t);
   return hit ? hit.key : null;
 };
 
@@ -85,7 +87,7 @@ export function install() {
      stops calling a directory a link at all (see the dir check there). */
     open: ({ p, dir }) => (dir
       ? gateway().call('fs.reveal', { path: p, session: sessionCurrent() || '' }).catch(() => {})
-      : RavenIslands.workspace.showFile(p)),
+      : islands.workspace.showFile(p)),
   };
 
   sources.workspace = {

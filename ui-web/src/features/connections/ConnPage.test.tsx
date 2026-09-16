@@ -7,6 +7,7 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { ConnChannel, ConnQr, ConnSource } from './types'
@@ -30,7 +31,7 @@ function chan(over: Partial<ConnChannel> = {}): ConnChannel {
 }
 
 /* The island runs against the same two seams production wires up: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
+   shell handed in through setShell (T returns its key, so tests assert catalogue
    keys, not translations) and a fixture source on sources.conn. */
 function install(rows: ConnChannel[], over: Partial<ConnSource> = {}) {
   const calls: Array<[string, unknown]> = []
@@ -64,7 +65,7 @@ function install(rows: ConnChannel[], over: Partial<ConnSource> = {}) {
     },
     showPage: (id) => shellCalls.push(['showPage', id]),
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   setSources({ conn: source })
   document.body.innerHTML =
     '<section id="connPage"><div id="connBody"></div></section>' +

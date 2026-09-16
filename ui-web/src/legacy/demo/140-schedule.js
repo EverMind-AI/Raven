@@ -4,23 +4,27 @@
    handler and the live layer's redrawAll still call -- and the fixture
    source. */
 
+import { cronExprHuman, cronWhen } from '../../features/cron/humanize'
+import { islands } from '../../islands'
+import { setCurrent as sessionSet } from '../../shell/session'
+import { show as toast } from '../../shell/toast'
 import { sources } from '../../state/sources'
 import { $, T } from './010-kernel.js'
 import { CRONS, FREQ } from './030-fixtures.js'
 import { sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
 import { ask, noteRow } from './060-conversation.js'
 
-function openMem() { RavenIslands.memory.open(); }
-function closeMem() { RavenIslands.memory.close(); }
-function openKb() { RavenIslands.knowledge.open(); }
-function closeKb() { RavenIslands.knowledge.close(); }
+function openMem() { islands.memory.open(); }
+function closeMem() { islands.memory.close(); }
+function openKb() { islands.knowledge.open(); }
+function closeKb() { islands.knowledge.close(); }
 function drawMem() {
   /* A language flip re-renders #memBody with the new catalogue. */
-  RavenIslands.memory.redraw();
+  islands.memory.redraw();
 }
 function drawKb() {
   /* A language flip re-renders #kbBody with the new catalogue. */
-  RavenIslands.knowledge.redraw();
+  islands.knowledge.redraw();
 }
 
 /* ══ module 4: scheduled work ═════════════════════════════════════
@@ -32,14 +36,14 @@ function drawKb() {
    actions close it: sources.cron.runNow and sources.cron.openRun below, and the live
    twin at live/100-schedules.js. The rail opens the page by importing the
    island (features/rail/RailPage.tsx); it does not come through here. */
-function closeCron() { RavenIslands.cron.close(); }
-function refreshCron() { return RavenIslands.cron.refresh(); }
+function closeCron() { islands.cron.close(); }
+function refreshCron() { return islands.cron.refresh(); }
 function drawCron() {
   /* A language flip re-renders #cronBody with the new catalogue. */
-  RavenIslands.cron.redraw();
+  islands.cron.redraw();
 }
 /* Boot calls this to prefetch rows without opening the page. */
-function cronWarm() { return RavenIslands.cron.warm(); }
+function cronWarm() { return islands.cron.warm(); }
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */

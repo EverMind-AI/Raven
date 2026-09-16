@@ -6,7 +6,9 @@ import { KnowledgeApp } from './KnowledgePage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { settingsTab } from '../../state/settingsTab'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { setShell } from '../../shell/bridge'
 
 import type { KbBase, KbDoc, KbSearch, KnowledgeSource } from './types'
 import type { Shell } from '../../shell/bridge'
@@ -26,7 +28,7 @@ function base(over: Partial<KbBase> & { id: string }): KbBase {
 }
 
 /* The island runs against the same two seams production wires: a fake shell on
-   window.RavenShell (T returns its key, so tests assert catalogue keys rather
+   setShell (T returns its key, so tests assert catalogue keys rather
    than translations) and a fixture source on sources.knowledge. */
 const pages: (string | null)[] = []
 const opened: number[] = []
@@ -73,7 +75,7 @@ function source(over: Partial<KnowledgeSource> = {}): void {
     openSet: () => opened.push(1),
     closeDetail: () => {},
   } as unknown as Shell
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   setSources({
     knowledge: {
       status: async () => ({ configured: true, model: 'bge-m3' }),
@@ -129,21 +131,21 @@ describe('the knowledge page', () => {
   it('sends an unconfigured reader to the section that configures it', async () => {
     /* The status alone named a state and stopped. The endpoint is set in a
        settings section, and a reader told only its name has to go hunting.
-       Asserted through `window.sTab`, which is what the settings store's
+       Asserted through the shared tab slot, which is what the settings store's
        `setTab` writes and its `open` reads back before lifting the dialog. */
     source({ status: async () => ({ configured: false, model: '' }) })
     /* `open()` refreshes from the settings source; a stub keeps the click from
        rejecting into an unhandled promise. */
     setSources({ settings: { load: async () => ({}) } as unknown as SettingsSource })
-    window.sTab = 'usage'
+    settingsTab.id = 'usage'
     await mount()
     expect(screen.getByText('gui.kb.unconfigured')).toBeTruthy()
     expect(screen.getByText('gui.kb.unconfigured_where')).toBeTruthy()
     await act(async () => {
       screen.getByText('gui.kb.unconfigured_go').click()
     })
-    expect(window.sTab).toBe('memory')
-    /* And the dialog is actually opened. `sTab` alone passes with the open
+    expect(settingsTab.id).toBe('memory')
+    /* And the dialog is actually opened. The slot alone passes with the open
        call deleted, which is a button that aims a dialog nobody raises. */
     expect(opened.length).toBe(1)
   })

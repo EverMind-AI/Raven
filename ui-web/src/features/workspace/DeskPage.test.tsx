@@ -10,8 +10,12 @@ import * as desk from './deskStore'
 import * as workspace from './store'
 
 import { setCurrent } from '../../shell/session'
+/* The wiring main.tsx gets from this import: the desk's file opener is handed
+   to the workspace store here, and `openDelivery` reaches the desk through it. */
+import '../../islands'
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources } from '../../state/sources'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { InstanceRow } from '../subagents/types'
@@ -41,7 +45,7 @@ function wire(): void {
   agentRows = []
   asked.length = 0
   setCurrent('s1')
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   setSources({
     workspace: source,
     agents: {
@@ -49,7 +53,6 @@ function wire(): void {
       instances: async (key: string) => { asked.push(key); return agentRows },
     },
   })
-  window.RavenIslands = { workspace: { openFile: desk.openDeskFile } }
   localStorage.clear()
   document.body.innerHTML = '<div id="split" data-open="true"></div>'
   desk._resetForTests()
@@ -66,9 +69,8 @@ afterEach(() => {
     deliveries.restore([])
     workspace.restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
   })
-  window.RavenShell = undefined
+  resetShell()
   resetSources()
-  window.RavenIslands = undefined
   setCurrent(null)
   agents.reset()
   turn._resetForTests()

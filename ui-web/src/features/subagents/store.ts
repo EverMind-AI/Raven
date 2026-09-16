@@ -84,6 +84,23 @@ function set(p: Partial<AgentsState>): void {
 
 export const source = (): AgentsSource => ds<AgentsSource>('agents')
 
+/* Where a pane opened from this panel goes: the floating desk, when the page
+   has one. Handed in (src/islands.ts) rather than imported from
+   features/workspace/deskStore, which is what the island bag used to stand in
+   for: the desk imports this store back and subscribes to it as it evaluates,
+   so an import in this direction would run that subscription against a
+   half-built module. Null on a page with no desk wired, which is every test
+   that does not ask for one. */
+interface AgentPane {
+  openAgent(row: InstanceRow, recordId?: string | null): void
+  openAgentRecord(row: AgentRow): void
+}
+let pane: AgentPane | null = null
+
+export function setAgentPane(p: AgentPane): void {
+  pane = p
+}
+
 export const absent = (): boolean => {
   const a = source().absent
   return a ? a() : false
@@ -329,13 +346,12 @@ export function openInstance(it: InstanceRow, recordId?: string | null): void {
   stageFresh = true
   paintedStatus = null
   set({ open: { kind: 'instance', agent: it.agent, handle: it.handle }, who: it.agent, epoch: state.epoch + 1 })
-  const workspace = window.RavenIslands?.workspace as
-    { openAgent?: (row: InstanceRow, recordId?: string | null) => void } | undefined
+  const workspace = pane
   /* The record this promotion is replacing, when it is a spawn's: the desk can
      derive a graph node's record id from the row, but a spawn's is the call id
      and the row does not carry one. Left off and the record pane stays open
      beside the instance pane. */
-  workspace?.openAgent?.(it, recordId || null)
+  workspace?.openAgent(it, recordId || null)
 }
 
 /* Rises once per start. Identifies the request `starting` is held for, so a
@@ -699,8 +715,7 @@ export function openRow(it: AgentRow): void {
        promotion above swaps in the instance view when one turns up. */
     if (it.instance) refreshInstances(true)
   }
-  const workspace = window.RavenIslands?.workspace as { openAgentRecord?: (row: AgentRow) => void } | undefined
-  workspace?.openAgentRecord?.(it)
+  pane?.openAgentRecord(it)
 }
 
 /* The dag sheet opens its nodes here (the sheet stays the map, this panel is
@@ -729,8 +744,7 @@ export function openDagNode(
      id stays the fallback: a run old enough to have no summary still has one. */
   const label = n.summary || n.id
   set({ open: { kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label }, who: null })
-  const workspace = window.RavenIslands?.workspace as { openAgentRecord?: (row: AgentRow) => void } | undefined
-  workspace?.openAgentRecord?.({ kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label })
+  pane?.openAgentRecord({ kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label })
   /* Opened before this panel had ever asked for its rows: ask now, and the
      refresh promotes this to the instance view if a row turns up. */
   refreshInstances(true)

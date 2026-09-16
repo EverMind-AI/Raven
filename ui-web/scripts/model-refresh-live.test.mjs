@@ -25,6 +25,11 @@ async function live({ session = null, answers = null } = {}) {
   let switching = false
   const settings = await loadPart(() => import('../src/legacy/live/120-settings.js'), {
     fakes: {
+      'src/shell/session': { current: () => session, setCurrent: () => {} },
+      'src/shell/banner': { draw: () => {} },
+      'src/shell/toast': { show: (t) => calls.push(['toast', t]) },
+      'src/shell/tier': { load: () => {} },
+      'src/shell/perm': { setFromConfig: (m) => calls.push(['setPermMode', m]) },
       'demo/010-kernel.js': { $: looseQuery() },
       'demo/040-state.js': {
         modelCurrent: () => '',
@@ -41,16 +46,9 @@ async function live({ session = null, answers = null } = {}) {
       'demo/100-workspace.js': { setWs: () => {}, wsReset: () => {} },
       'live/050-turn.js': { resetTurnState: () => {} },
     },
-    globals: {
-      RavenIslands: {
-        settings: { openModels: () => calls.push(['openModels']) },
-        rail: { endRename: () => {} },
-      },
-      sessionCurrent: () => session,
-      sessionSet: () => {},
-      drawBanner: () => {},
-      toast: (t) => calls.push(['toast', t]),
-      loadTier: () => {},
+    islands: {
+      settings: { openModels: () => calls.push(['openModels']) },
+      rail: { endRename: () => {} },
     },
   })
   await fakeGateway((method, params) => {
@@ -63,7 +61,6 @@ async function live({ session = null, answers = null } = {}) {
     return new Promise((res, rej) => pending.push({ method, params, res, rej }))
   })
   const overrides = await import('../src/legacy/live/080-overrides.js')
-  window.setPermMode = (m) => calls.push(['setPermMode', m])
   const tick = () => new Promise((r) => setTimeout(r, 0))
   return {
     settings,

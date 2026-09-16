@@ -6,6 +6,7 @@ import { createRef } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { KeyInput } from './key-input'
+import { resetShell, setShell } from './bridge'
 
 import type { Shell } from './bridge'
 
@@ -13,12 +14,12 @@ const shell: Shell = { T: (key: string) => key, confirmAsk: () => {}, showPage: 
 
 afterEach(() => {
   cleanup()
-  delete window.RavenShell
+  resetShell()
 })
 
 describe('the key field', () => {
   const mount = (): { input: HTMLInputElement; eye: HTMLButtonElement } => {
-    window.RavenShell = shell
+    setShell(shell)
     const view = render(<KeyInput placeholder="API Key" />)
     return {
       input: view.container.querySelector('input')!,
@@ -56,7 +57,7 @@ describe('the key field', () => {
   it('is still a plain input to whoever holds its ref', () => {
     /* Every caller hands it a ref and reads `.value` off it, the way it did
        when this was a bare `<input type="password">`. */
-    window.RavenShell = shell
+    setShell(shell)
     const ref = createRef<HTMLInputElement>()
     render(<KeyInput ref={ref} aria-label="Anthropic API Key" />)
 

@@ -29,7 +29,7 @@ function required(schema) {
    what registers it -- onto the seam, which is where the rail reads it. */
 async function fixtures() {
   const part = await loadPart(() => import('../src/legacy/demo/154-playbooks.js'), {
-    globals: { RavenIslands: { playbooks: { open() {}, close() {} } } },
+    islands: { playbooks: { open() {}, close() {} } },
   })
   const { sources } = await import('../src/state/sources')
   part.install()

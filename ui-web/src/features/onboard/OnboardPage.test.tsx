@@ -7,6 +7,7 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources } from '../../state/sources'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { OnboardProvider, OnboardSource } from './types'
@@ -67,7 +68,7 @@ function install(providers: OnboardProvider[] = [connected, keyed], over: Partia
     confirmAsk: () => {},
     showPage: () => {}
   }
-  window.RavenShell = shell
+  setShell(shell)
   setSources({ onboard: h.source })
   document.body.innerHTML = '<div id="onb" hidden></div>'
   return h
@@ -97,7 +98,7 @@ afterEach(() => {
   cleanup()
   store._resetForTests()
   vi.useRealTimers()
-  delete window.RavenShell
+  resetShell()
   resetSources()
   document.body.innerHTML = ''
 })

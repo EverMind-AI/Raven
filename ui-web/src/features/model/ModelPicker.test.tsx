@@ -7,6 +7,7 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources } from '../../state/sources'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { ModelSource, Provider } from './types'
@@ -70,7 +71,7 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
     confirmAsk: () => {},
     showPage: () => {},
   }
-  window.RavenShell = shell
+  setShell(shell)
   setSources({ model: source })
   document.body.innerHTML = '<button id="modelChip">chip</button>'
   return h
@@ -100,7 +101,7 @@ const type = (text: string) =>
 afterEach(() => {
   act(() => store._resetForTests())
   cleanup()
-  delete window.RavenShell
+  resetShell()
   resetSources()
   document.body.innerHTML = ''
 })

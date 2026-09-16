@@ -1,5 +1,11 @@
 /* ══ app state ════════════════════════════════════════════════════ */
 
+import { islands } from '../../islands'
+import { show as menuAt } from '../../shell/menu'
+import { close as closePermPop } from '../../shell/perm'
+import { setCurrent as sessionSet } from '../../shell/session'
+import { close as closeTierPop } from '../../shell/tier'
+import { show as toast } from '../../shell/toast'
 import { $, T, mk } from './010-kernel.js'
 import { sessionRows } from './050-rail.js'
 
@@ -11,11 +17,11 @@ let rt = 'local', undoBin = null;
 
 const stop_ = () => { timers.forEach(clearTimeout); timers = []; };
 const later = (ms, fn) => timers.push(setTimeout(fn, ms));
-const down = () => RavenIslands.transcript.down();
+const down = () => islands.transcript.down();
 const sess = (id) => sessionRows().find((s) => s.id === id);
 
 /* ══ composer drafts ══════════════════════════════════════════════
-   Storage and ownership live in RavenIslands.composer. */
+   Storage and ownership live in islands.composer. */
 /* ══ confirm dialog ═══════════════════════════════════════════════ */
 let cfFn = null;
 function confirmAsk(title, body, label, fn) {
@@ -144,11 +150,15 @@ export function install() {
     approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose,
     drawQueue: queueDraw, queuePush, queueShift,
     queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft,
-    claimDraft, turn } = RavenIslands.composer);
-  ({ current: modelCurrent, setCurrent: modelSet } = RavenIslands.model);
-  ({ failureBar, bootError, upShade } = RavenIslands.chrome);
+    claimDraft, turn } = islands.composer);
+  ({ current: modelCurrent, setCurrent: modelSet } = islands.model);
+  ({ failureBar, bootError, upShade } = islands.chrome);
 
-  /* Preview without an engine: __approve('rm -rf build/'). */
+  /* Dev-only hook, beside __clarify, __upnote and __dag in the live layer and
+   for the same reason: the approval sheet only appears when an engine asks for
+   one, which is too long a loop to design a sheet in. On window because a
+   devtools console is the only caller there will ever be
+   (__approve('rm -rf build/')). */
   window.__approve = (p) => approveSheet(p || 'rm -rf build/',
     () => toast(T('gui.confirm.allow')), () => toast(T('gui.confirm.deny')));
 

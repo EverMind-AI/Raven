@@ -9,6 +9,7 @@
    island tracks its own surface, but the `subagent.*` source (230-tabs.js)
    still reads these. */
 
+import { islands } from '../../islands'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 
@@ -47,8 +48,8 @@ function onFrameJson(p) {
 export function install() {
   sources.browser = {
     embedded: true,
-    urls: () => RavenIslands.workspace.urls(),
-    openUrl: (u) => RavenIslands.chrome.openUrl(u),
+    urls: () => islands.workspace.urls(),
+    openUrl: (u) => islands.chrome.openUrl(u),
     frame: (p) => gateway().call('browser.frame', p),
     open: (p) => gateway().call('browser.open', p),
     watch: (p) => gateway().call('browser.watch', p),

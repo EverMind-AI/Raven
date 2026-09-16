@@ -11,7 +11,7 @@ import type { Root } from 'react-dom/client'
  *
  * The roots are created on the first paint rather than at bundle time: this
  * script is assembled AHEAD of the page script (ui-web/build.py), so neither
- * window.RavenShell nor DS.composer exists yet when it evaluates. install()
+ * the shell nor the composer source exists yet when it evaluates. install()
  * therefore only registers listeners -- every handler reads the seams lazily,
  * by which time the page has published them.
  */

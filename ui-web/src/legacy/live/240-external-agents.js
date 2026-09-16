@@ -12,6 +12,9 @@
    availability check, which can cost up to ten seconds per entry and would only
    re-measure what the write just changed. */
 
+import { plainTitle } from '../../features/rail/title'
+import { islands } from '../../islands'
+import { current as sessionCurrent } from '../../shell/session'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { drawWs, setWs, wsOpen, wsPick } from '../demo/100-workspace.js'
@@ -92,7 +95,7 @@ async function xaFetch(probe) {
    second transcript view inside the sheet: same panel, same renderer, and the
    sheet stays the map rather than becoming the territory. */
 function dagOpenNode(runId, n) {
-  RavenIslands.subagents.openDagNode(runId, n);
+  islands.subagents.openDagNode(runId, n);
   /* The open above already raised the node's own window, and in desk mode that
      window IS the view -- so there is no panel tab left to pick. Picking one
      anyway routed through `openDeskTab`, whose whole job is to open the
@@ -220,12 +223,12 @@ export function install() {
      mode that is the whole answer. The panel's agents view is only needed where
      there are no windows. */
     if (!document.documentElement.classList.contains('desk-ready')) setWs(true, 'agents');
-    const match = () => RavenIslands.subagents.rows().find((x) => x.kind !== 'dag'
+    const match = () => islands.subagents.rows().find((x) => x.kind !== 'dag'
       && (!label || plainTitle(x.label) === plainTitle(label))
       && (!agent || (x.agent || 'raven') === (agent || 'raven')));
     const attempt = (n) => {
       const it = match();
-      if (it) { RavenIslands.subagents.openRow(it); return; }
+      if (it) { islands.subagents.openRow(it); return; }
       if (n >= 4) {
         /* Nothing was found, so nothing was opened -- and a click that opens
          nothing reads as broken. `refresh` keeps the drawn list on a failed
@@ -233,10 +236,10 @@ export function install() {
          registry spells differently lands here, and the reader is left with a
          list they can search by hand. Only on this branch: the palette beside
          a window the reader did get is the thing this whole change removes. */
-        RavenIslands.workspace.openDeskTab('agents');
+        islands.workspace.openDeskTab('agents');
         return;
       }
-      RavenIslands.subagents.refresh(true);
+      islands.subagents.refresh(true);
       setTimeout(() => attempt(n + 1), 700);
     };
     attempt(0);

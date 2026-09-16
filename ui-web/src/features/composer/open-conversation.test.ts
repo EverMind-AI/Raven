@@ -44,6 +44,10 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
 
   const part = await loadPart(() => import('../../legacy/live/080-overrides.js'), {
     fakes: {
+      'src/shell/banner': { draw: () => {} },
+      'src/shell/tier': { load: () => {} },
+      'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id; log.push(`pointer:${String(id)}`) } },
+      'src/shell/toast': { show: (text: string) => log.push(`toast:${text}`) },
       'demo/010-kernel.js': { $: looseQuery(), T: (key: string) => key },
       'demo/040-state.js': {
         claimDraft: (id: string | null) => log.push(`claimDraft:${String(id)}`),
@@ -98,14 +102,7 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
       },
       'live/170-workspace.js': { wsSetRoot: (root: string) => log.push(`wsRoot:${root}`) },
     },
-    globals: {
-      RavenIslands: { rail: { endRename: () => {} } },
-      drawBanner: () => {},
-      loadTier: () => {},
-      sessionCurrent: () => current,
-      sessionSet: (id: string | null) => { current = id; log.push(`pointer:${String(id)}`) },
-      toast: (text: string) => log.push(`toast:${text}`),
-    },
+    islands: { rail: { endRename: () => {} } },
   })
 
   await fakeGateway(async (method: string, params: { key?: string } = {}) => {

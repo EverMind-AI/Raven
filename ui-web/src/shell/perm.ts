@@ -16,8 +16,9 @@
  * The config file is the choice's home; localStorage only remembers the last
  * known value so the chip paints right before the live layer has loaded the
  * config. The live layer pushes the loaded value in through setFromConfig and
- * persists a pick through the late-bound window.persistPermMode -- late-bound
- * so the demo layer, which has no engine, simply has nobody listening.
+ * registers how a pick is written through setPermPersister -- registered
+ * rather than imported so the demo layer, which has no engine, simply leaves
+ * nobody listening.
  */
 
 import { t } from './bridge'
@@ -84,6 +85,15 @@ function commit(value: string): void {
 
 /* The mode the engine actually holds, pushed in by the live layer once the
    config has loaded (and again whenever another surface changes it). */
+/* How a pick reaches the config, when anything can write one. Registered by
+   ui-web/src/legacy/live/120-settings.js, which owns the settings transport;
+   null on the offline shell, where the pick commits locally. */
+let persist: ((mode: string) => Promise<boolean> | boolean) | null = null
+
+export function setPermPersister(fn: (mode: string) => Promise<boolean> | boolean): void {
+  persist = fn
+}
+
 export function setFromConfig(value: string): void {
   if (!TIERS.some((p) => p.id === value) || value === mode) return
   commit(value)
@@ -176,14 +186,12 @@ function row(p: Tier): HTMLButtonElement {
   if (p.id === mode) r.appendChild(tick())
   r.onclick = () => {
     close()
-    /* Late-bound: the live layer persists to config (the gate reads it live);
-       the demo layer publishes nothing and the pick commits locally. The chip
-       commits only on acknowledgement -- painting the new mode while the write
-       failed would show `ask` over a gate still running `full`, a false
-       security state, so a rejected write leaves the chip on the mode the
-       engine actually holds. */
-    const persist = (window as unknown as { persistPermMode?: (m: string) => Promise<boolean> | boolean })
-      .persistPermMode
+    /* Registered by the live layer, which persists to config (the gate reads
+       it live); the offline shell registers nothing and the pick commits
+       locally. The chip commits only on acknowledgement -- painting the new
+       mode while the write failed would show `ask` over a gate still running
+       `full`, a false security state, so a rejected write leaves the chip on
+       the mode the engine actually holds. */
     if (!persist) {
       commit(p.id)
       return

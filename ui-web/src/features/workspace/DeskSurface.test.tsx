@@ -10,6 +10,7 @@ import * as workspace from './store'
 
 import { setCurrent } from '../../shell/session'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { InstanceRow } from '../subagents/types'
@@ -32,7 +33,7 @@ function wire(): void {
     hostPlatform: () => 'mac',
     canBrowse: true,
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   setSources({ workspace: source, prose: { pathOf: () => null, linkTargetOf: () => null } })
   /* The viewer reads /file for a text kind; a pending promise keeps it on the
      spinner rather than letting happy-dom dial a socket. */
@@ -53,7 +54,7 @@ afterEach(() => {
     desk._resetForTests()
     deliveries.restore([])
   })
-  window.RavenShell = undefined
+  resetShell()
   resetSources()
   vi.unstubAllGlobals()
 })

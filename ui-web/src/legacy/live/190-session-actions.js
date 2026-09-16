@@ -4,6 +4,9 @@
    conversation -- and the island only offers it on the main lane, so a
    delegated run's pane never claims to fork a session it does not have. */
 
+import { plainTitle } from '../../features/rail/title'
+import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell/session'
+import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { $, T } from '../demo/010-kernel.js'
@@ -108,8 +111,10 @@ export function install() {
     if (x.id === 'gui.compress') x.fn = compressNow;
   });
 
-  // Dev-only hook: lets a design pass preview the clarify sheet without
-  // spending a model turn (window.__clarify({question, choices})).
+  // Dev-only hooks, on window because a devtools console is the only caller
+  // either will ever have. The first lets a design pass preview the clarify
+  // sheet without spending a model turn (window.__clarify({question,
+  // choices})).
   window.__clarify = (p) => onClarifyRequest(p || { request_id: 'dev', question: '预览', choices: ['A', 'B'] });
 
   // Same reason: the update row's version state only appears when a release is

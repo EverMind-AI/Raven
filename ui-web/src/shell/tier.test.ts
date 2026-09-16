@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as session from './session'
 import * as tier from './tier'
 import { resetSources, setSources } from '../state/sources'
+import { resetShell, setShell } from './bridge'
 
 import type { Shell } from './bridge'
 import type { TierReply, TierSource } from './tier'
@@ -49,7 +50,7 @@ function source(): void {
 }
 
 beforeEach(() => {
-  window.RavenShell = { T: (key) => key, confirmAsk: () => {}, showPage: () => {} } as Shell
+  setShell({ T: (key) => key, confirmAsk: () => {}, showPage: () => {} } as Shell)
   markup()
   tier._resetForTests()
   session._resetForTests()
@@ -60,7 +61,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  delete window.RavenShell
+  resetShell()
   document.body.innerHTML = ''
   tier._resetForTests()
   session._resetForTests()

@@ -10,6 +10,7 @@ import * as tail from '../transcript/tail'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources } from '../../state/sources'
+import { setShell } from '../../shell/bridge'
 
 import type { ComposerSource, SlashCmd } from './types'
 import type { Shell } from '../../shell/bridge'
@@ -102,7 +103,7 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     stop: () => { calls.halted += 1 },
     ...over,
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   setSources({ composer: source })
   document.body.innerHTML = DOCK
   return { source, calls }

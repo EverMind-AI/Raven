@@ -99,7 +99,7 @@ export const deliveriesOf = (lane: Lane, turn: number): DeliveryRow[] =>
 
 /* Straight to the renderer rather than out through the shell: prose.ts is a
    pure function in this same bundle, and a bridge verb would round-trip
-   window.RavenShell.md -> window.md -> back into it while hiding the
+   the shell bridge and back into it while hiding the
    transcript from anyone auditing md()'s callers. */
 export const mdHtml = (src: string): string => md(src)
 export const durText = formatDuration

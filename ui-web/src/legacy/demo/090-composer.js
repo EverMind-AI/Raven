@@ -8,6 +8,10 @@
 /* The field itself stays a name: the skills panel drops a prompt into it and
    the draft store reads it back. */
 
+import { plainTitle } from '../../features/rail/title'
+import { islands } from '../../islands'
+import { current as sessionCurrent } from '../../shell/session'
+import { show as toast } from '../../shell/toast'
 import { sources } from '../../state/sources'
 import { $, T, slashHelp, slashName } from './010-kernel.js'
 import { RUNS } from './030-fixtures.js'
@@ -18,10 +22,10 @@ import { replay } from './080-replay.js'
 
 let ta;
 
-function goState() { RavenIslands.composer.goPaint(); }
-function drawMeter() { RavenIslands.composer.drawMeter(); }
-function taFit() { RavenIslands.composer.fitField(); }
-function dockLift() { RavenIslands.composer.dockLift(); }
+function goState() { islands.composer.goPaint(); }
+function drawMeter() { islands.composer.drawMeter(); }
+function taFit() { islands.composer.fitField(); }
+function dockLift() { islands.composer.dockLift(); }
 
 /* ══ session commands ═════════════════════════════════════════════
    Only what acts on THIS conversation. Navigation lives in the rail, so

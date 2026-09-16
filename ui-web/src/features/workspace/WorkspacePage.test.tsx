@@ -8,6 +8,7 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { setShell, shell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { WorkspaceSnapshot, WorkspaceSource, WsChange } from './types'
@@ -44,7 +45,7 @@ function emptyWs(over: Partial<WorkspaceSnapshot> = {}): WorkspaceSnapshot {
 }
 
 /* The island runs against the same two seams production wires up: a fake
-   shell on window.RavenShell (T returns its key) and a source on
+   shell handed in through setShell (T returns its key) and a source on
    sources.workspace -- the fixture shape for demo behaviour, a list/reveal
    shape for live behaviour. */
 function install(ws: WorkspaceSnapshot, over: Partial<WorkspaceSource> = {}, view = { tab: 'diff', open: true, picked: true }) {
@@ -70,7 +71,7 @@ function install(ws: WorkspaceSnapshot, over: Partial<WorkspaceSource> = {}, vie
     },
     wsPick: (tab) => shellCalls.push(['wsPick', tab]),
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   /* The file view renders markdown through the bundle's renderer, which reads
      DS.prose for what counts as an openable path -- the page installs it in
      demo/020-prose.js, so the harness does too. */
@@ -679,7 +680,7 @@ describe('workspace island', () => {
        the shell has no md verb to stub, which is the point of the test. */
     expect(prose.querySelector('h2')?.textContent).toBe('Title')
     expect(prose.querySelector('strong')?.textContent).toBe('this')
-    expect('md' in (window.RavenShell as object)).toBe(false)
+    expect('md' in (shell() as object)).toBe(false)
   })
 
   it('shows the viewer error when the file read failed', async () => {

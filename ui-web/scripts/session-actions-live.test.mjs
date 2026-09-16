@@ -22,6 +22,9 @@ async function harness({ rows }) {
   const slash = [{ id: 'gui.clear' }, { id: 'gui.compress' }]
   const part = await loadPart(() => import('../src/legacy/live/190-session-actions.js'), {
     fakes: {
+      'src/shell/session': { current: () => current },
+      'src/features/rail/title': { plainTitle: (t) => String(t) },
+      'src/shell/toast': { show: (text) => calls.push(['toast', text]) },
       'demo/010-kernel.js': {
         $: looseQuery(),
         /* Enough of the real thing to see WHICH conversation a message names. */
@@ -50,11 +53,6 @@ async function harness({ rows }) {
       'live/050-turn.js': { fmtTok: (n) => String(n) },
       'live/080-overrides.js': { draft: false },
       'live/210-update-notice.js': { showUpNote: () => {} },
-    },
-    globals: {
-      sessionCurrent: () => current,
-      plainTitle: (t) => String(t),
-      toast: (text) => calls.push(['toast', text]),
     },
   })
   await fakeGateway((method, params) => {
