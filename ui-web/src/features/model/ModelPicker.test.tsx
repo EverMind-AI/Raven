@@ -6,6 +6,7 @@ import { ModelPickerApp } from './ModelPicker'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { ModelSource, Provider } from './types'
@@ -70,7 +71,7 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
     showPage: () => {},
   }
   window.RavenShell = shell
-  window.DS = { model: source }
+  setSources({ model: source })
   document.body.innerHTML = '<button id="modelChip">chip</button>'
   return h
 }
@@ -100,7 +101,7 @@ afterEach(() => {
   act(() => store._resetForTests())
   cleanup()
   delete window.RavenShell
-  delete window.DS
+  resetSources()
   document.body.innerHTML = ''
 })
 describe('the model picker', () => {
@@ -453,7 +454,7 @@ describe('the model picker, closing', () => {
 
   it('does nothing at all on a page with no source installed', () => {
     install()
-    delete window.DS
+    resetSources()
     mount()
     expect(() => openIt()).not.toThrow()
     expect(pick()).toBeNull()

@@ -6,6 +6,7 @@ import { PlaybooksApp } from './PlaybooksPage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { PlaybookDetail, PlaybookNode, PlaybookRow, PlaybooksSource } from './types'
 import type { Shell } from '../../shell/bridge'
@@ -59,7 +60,7 @@ function detail(over: Partial<PlaybookDetail> & { name: string }): PlaybookDetai
 
 /* The island runs against the two seams production wires: a fake shell on
    window.RavenShell (T answers its own key, so assertions name catalogue keys
-   rather than translations) and a fixture source on window.DS.playbooks. */
+   rather than translations) and a fixture source on sources.playbooks. */
 const pages: (string | null)[] = []
 
 function install(over: Partial<PlaybooksSource> = {}): void {
@@ -69,14 +70,13 @@ function install(over: Partial<PlaybooksSource> = {}): void {
     showPage: (id: string | null) => pages.push(id),
     closeDetail: () => {}
   } as unknown as Shell
-  window.DS = {
-    ...(window.DS || {}),
+  setSources({
     playbooks: {
       list: async () => [row({ name: 'issue-triage' })],
       get: async (name: string) => detail({ name }),
       ...over
     }
-  }
+  })
 }
 
 async function mount() {
@@ -91,7 +91,7 @@ afterEach(() => {
   cleanup()
   store._resetForTests()
   pages.length = 0
-  delete (window as { DS?: unknown }).DS
+  resetSources()
 })
 
 describe('the playbook library', () => {

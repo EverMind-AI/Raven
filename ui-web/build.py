@@ -9,7 +9,7 @@ Sources under ``src/``:
 - ``.modern/modern.iife.js`` -- the bundle Vite builds from ``src/main.tsx``,
                      injected at the script marker.
 
-The three layers under ``src/legacy/`` are ES modules now, reached from
+The two layers under ``src/legacy/`` are ES modules now, reached from
 ``src/main.tsx`` through ``src/legacy/index.js`` and bundled by Vite with
 everything else, so this script no longer assembles them and no longer inlines
 the message catalogue either (``src/legacy/demo/010-kernel.js`` imports
@@ -46,9 +46,6 @@ ASSETV_MARK = "__ASSETV__"
 # do while the concatenated script ran, and several of them read what an earlier
 # one wrote. src/legacy/index.js calls them in exactly this order -- regenerate
 # it (scripts/codemod/a3-index.mjs) after renaming, adding or removing a part.
-_SEAM_PARTS = [
-    "000-datasource.js",
-]
 _DEMO_PARTS = [
     "010-kernel.js",
     "020-prose.js",

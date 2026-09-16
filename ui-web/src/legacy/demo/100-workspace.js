@@ -10,10 +10,10 @@
 
    The renderer and shared state are owned by the workspace island
    (ui-web/src/features/workspace/); what stays here is the tool-event bookkeeping
-   the fixture hooks feed, the panel chrome outside #wsBody, and the fixture DS
-   source. */
+   the fixture hooks feed, the panel chrome outside #wsBody, and the fixture
+   workspace source. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, HOST_PLATFORM, T } from './010-kernel.js'
 import { wsOnTool, wsOnToolDone } from './110-subagents.js'
 
@@ -99,7 +99,7 @@ function wsArgs(name, args) {
 
 /* Tools report absolute paths; the workspace root is the same on every row and
    carries no information. The live layer's source knows the real root. */
-function wsShortPath(p) { return DS.workspace.shortPath(p); }
+function wsShortPath(p) { return sources.workspace.shortPath(p); }
 
 /* One row per path, not per call: five edits to the same file is one changed
    file with five hunks, which is how a person thinks about it. */
@@ -226,9 +226,9 @@ export function install() {
   /* The fixture source: what the workspace island may ask of demo mode. No
    list/reveal and no canBrowse -- the file tab keeps its demo empty note, and
    opening a change stays the honest toast. Registered, not
-   declared-for-override: live mode installs its own DS.workspace and this
+   declared-for-override: live mode installs its own sources.workspace and this
    object is never consulted. */
-  DS.workspace ??= {
+  sources.workspace ??= {
     shortPath: (p) => String(p),
     hostPlatform: () => HOST_PLATFORM,
     openPath: (p) => toast(`demo：正式版会用系统默认程序打开 ${p}`),
@@ -242,7 +242,7 @@ export function install() {
    The turn number is the one WS.changes files rows under: bumped per turn by
    the live layer, and per user message with text by wsOnHistory. The
    transcript counts it the same way over the same payload. */
-  DS.artifacts ??= {
+  sources.artifacts ??= {
     changes: (turn) => WS.changes.filter((c) => c.turn === turn),
   };
 }

@@ -5,7 +5,7 @@
    source before the first paint. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { HOST_PLATFORM } from '../demo/010-kernel.js'
 import { wsShortPath } from '../demo/100-workspace.js'
 
@@ -76,7 +76,7 @@ export function install() {
   /* Assigned, not ??=: the fixture source (demo/020-prose.js) is already on the
    seam by the time this runs, and replacing it before the first paint is the
    whole point. */
-  DS.prose = {
+  sources.prose = {
     pathOf: livePathOf,
     linkTargetOf: liveLinkTargetOf,
     /* A folder is not something the page can show any more -- the file tree went
@@ -88,7 +88,7 @@ export function install() {
       : RavenIslands.workspace.showFile(p)),
   };
 
-  DS.workspace = {
+  sources.workspace = {
     hostPlatform: () => HOST_PLATFORM,
     canBrowse: true,
     reveal: (p) => gateway().call('fs.reveal', { path: p, session: sessionCurrent() || '' }),

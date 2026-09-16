@@ -9,6 +9,7 @@ import * as desk from './deskStore'
 import * as workspace from './store'
 
 import { setCurrent } from '../../shell/session'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { InstanceRow } from '../subagents/types'
@@ -32,7 +33,7 @@ function wire(): void {
     canBrowse: true,
   }
   window.RavenShell = fakeShell
-  window.DS = { workspace: source, prose: { pathOf: () => null, linkTargetOf: () => null } }
+  setSources({ workspace: source, prose: { pathOf: () => null, linkTargetOf: () => null } })
   /* The viewer reads /file for a text kind; a pending promise keeps it on the
      spinner rather than letting happy-dom dial a socket. */
   vi.stubGlobal('fetch', () => new Promise(() => {}))
@@ -53,7 +54,7 @@ afterEach(() => {
     deliveries.restore([])
   })
   window.RavenShell = undefined
-  window.DS = undefined
+  resetSources()
   vi.unstubAllGlobals()
 })
 
@@ -85,10 +86,9 @@ describe("the header of a graph node's pane", () => {
     /* The pane asks the agents seam for the node's record; the header is what
        this is about, so an empty answer is enough. */
     setCurrent('s1')
-    window.DS = {
-      ...window.DS,
+    setSources({
       agents: { list: async () => [], instances: async () => [], node: async () => ({ messages: [] }) },
-    } as typeof window.DS
+    })
   })
 
   afterEach(() => {
@@ -380,10 +380,9 @@ describe('the collapsed launcher', () => {
     /* The agents store files its lists under the open conversation and drops an
        answer for any other, so the harness has to be in one. */
     setCurrent('s1')
-    window.DS = {
-      ...window.DS,
+    setSources({
       agents: { list: async () => [], instances: async () => agentRows },
-    } as typeof window.DS
+    })
   })
 
   afterEach(() => {
@@ -536,10 +535,9 @@ describe('a pane headed by an instance', () => {
   beforeEach(() => {
     agentRows = []
     setCurrent('s1')
-    window.DS = {
-      ...window.DS,
+    setSources({
       agents: { list: async () => [], instances: async () => agentRows },
-    } as typeof window.DS
+    })
   })
 
   afterEach(() => {

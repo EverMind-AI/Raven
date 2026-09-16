@@ -7,18 +7,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
 
-interface CapabilitiesSource {
-  loaded(): boolean
-  load(): Promise<boolean>
-}
+import type { CapabilitiesSource } from '../../state/sources'
 
+/* Narrower than the real PluginsSource: the two verbs the capabilities page
+   reaches for, so a fake here does not have to answer the whole island's. */
 interface PluginsSource {
   manual(name: string, address: string): Promise<void>
   rows(): Array<{ name: string }>
 }
 
-/* What the parts install onto the seam. `DS` is a bare `{}` in the legacy
-   source, so the shape a test drives it through is declared here. */
+/* The three domains the parts install, as this test drives them. `skills` is
+   narrower than SkillsSource: the only verb the capabilities page reads off it
+   is the installed list, and naming the whole interface would mean faking
+   every other verb to say anything about that one. */
 interface Seam {
   capabilities: CapabilitiesSource
   skills: { installed(): Array<{ name: string }> }
@@ -26,8 +27,8 @@ interface Seam {
 }
 
 async function seam(): Promise<Seam> {
-  const { DS } = await import('../../legacy/seam/000-datasource.js')
-  return DS as unknown as Seam
+  const { sources } = await import('../../state/sources')
+  return sources as unknown as Seam
 }
 
 /* `openCaps` with the two verbs it drives registered as decorators -- which is

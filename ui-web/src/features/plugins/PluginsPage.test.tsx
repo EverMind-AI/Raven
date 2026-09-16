@@ -6,6 +6,7 @@ import { PlugApp } from './PluginsPage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { DetailEntry, InstalledRow, MarketItem, PluginsSource } from './types'
@@ -53,7 +54,7 @@ function entryOf(it: MarketItem, over: Partial<DetailEntry> = {}): DetailEntry {
 
 /* The island runs against the same two seams production wires: a fake shell
    on window.RavenShell (T returns its key, so tests assert catalogue keys)
-   and a fixture source on window.DS.plugins. */
+   and a fixture source on sources.plugins. */
 function install(
   items: MarketItem[],
   rowsArr: InstalledRow[] = [],
@@ -102,7 +103,7 @@ function install(
     plugRedraw: () => shellCalls.push(['plugRedraw', null]),
   }
   window.RavenShell = fakeShell
-  window.DS = { plugins: source }
+  setSources({ plugins: source })
   document.body.innerHTML =
     '<section class="page" id="capsPage" data-open="true"><div id="capsBody"></div></section>' +
     '<aside class="detail" id="detail" data-open="false"><div id="dTitle"></div><div id="dBody"></div></aside>'
@@ -124,6 +125,7 @@ afterEach(() => {
   })
   cleanup()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('plugins island', () => {

@@ -4,7 +4,7 @@
    flight, the say buffer the session row's preview reads, and the clocks. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, T, dur } from '../demo/010-kernel.js'
 import { down, queueShift, sess, sheetSession, turn } from '../demo/040-state.js'
 import { sessionDraw, sessionReplace, sessionRows } from '../demo/050-rail.js'
@@ -107,8 +107,8 @@ function onEvent(ev) {
         status: d.status,
         body: d.content || '',
         open: () => {
-          if (isDag) { DS.transcript.openDagRun(d.run_id || d.label || ''); return; }
-          DS.transcript.openSpawn('', d.label || '');
+          if (isDag) { sources.transcript.openDagRun(d.run_id || d.label || ''); return; }
+          sources.transcript.openSpawn('', d.label || '');
         },
       });
     }
@@ -462,13 +462,13 @@ async function refreshList() {
 export function install() {
   // Per-turn cost lives under each answer and "a turn is running" is now the
   // ticking row above the composer, so the strip under the field stays empty.
-  DS.composer.meter = () => '';
+  sources.composer.meter = () => '';
 
   /* Opening a delegated graph: the last node if this page already holds the run's
    own record, the agents panel otherwise. Installed as a source verb rather
    than written inline in the delivered handler, because the row a RELOAD draws
    has to open the same thing the live row does. */
-  DS.transcript.openDagRun = function (runId) {
+  sources.transcript.openDagRun = function (runId) {
     const id = String(runId || '');
     if (id) {
       const d = RavenIslands.dag.run(sheetSession());
@@ -491,7 +491,7 @@ export function install() {
    is reloaded and the group is simply gone -- which is exactly how an older
    resident gateway, with no session.pin to call at all, presents itself. Put
    the row back and say so. */
-  DS.sessions.pin = (id, pinned) => gateway().call('session.pin', { session_id: id, pinned: !!pinned })
+  sources.sessions.pin = (id, pinned) => gateway().call('session.pin', { session_id: id, pinned: !!pinned })
     .catch((e) => {
       const s = sess(id);
       if (s) { s.pin = !pinned; sessionDraw(); }

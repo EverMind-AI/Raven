@@ -6,7 +6,7 @@
    buffers the events that arrive while it is away; returning reattaches the
    DOM and replays the buffer, so nothing is lost. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $ } from '../demo/010-kernel.js'
 import { down, queueRestore, queueSnapshot, sess, turn } from '../demo/040-state.js'
 import { sessionDraw } from '../demo/050-rail.js'
@@ -94,7 +94,7 @@ export function install() {
    releases a lane host once it leaves the page, and the only copy of a turn
    still streaming lives in one of these arrays until restoreTurn puts it
    back. */
-  DS.transcript.parked = (node) => {
+  sources.transcript.parked = (node) => {
     for (const pk of parkedTurns.values()) if (pk.nodes.includes(node)) return true;
     return false;
   };

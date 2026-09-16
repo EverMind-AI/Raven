@@ -3,12 +3,12 @@
    send/stop button, the queued rows, the attachment tray, the slash palette
    and the live turn row that rides the tail of the transcript. What remains
    here is the island's shell face -- the names the rest of the page still
-   calls, the fixture half of DS.composer, and the demo replay's own send. */
+   calls, the fixture half of sources.composer, and the demo replay's own send. */
 
 /* The field itself stays a name: the skills panel drops a prompt into it and
    the draft store reads it back. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, T, slashHelp, slashName } from './010-kernel.js'
 import { RUNS } from './030-fixtures.js'
 import { confirmAsk, queuePush, runState, sess, stop_, turn } from './040-state.js'
@@ -72,9 +72,9 @@ function halt() {
 export function install() {
   ta = $('#ta');
 
-  /* The fixture half of DS.composer. Turn state belongs to the composer island;
+  /* The fixture half of sources.composer. Turn state belongs to the composer island;
    live mode installs its own meter wording and upload transport over this. */
-  DS.composer ??= {
+  sources.composer ??= {
     meter: () => (turn.busy() ? T('gui.meter.running')
       : runState.use ? T('gui.meter.usage', { calls: runState.use.calls, in: (runState.use.in / 1000).toFixed(1), out: (runState.use.out / 1000).toFixed(1) })
       : ''),

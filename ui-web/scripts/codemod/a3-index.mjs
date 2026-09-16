@@ -1,4 +1,4 @@
-// Generates src/legacy/index.js from build.py's three manifests, so the one
+// Generates src/legacy/index.js from build.py's two manifests, so the one
 // entry point cannot drift from the order the concatenated page had.
 //
 //   node scripts/codemod/a3-index.mjs [--write]
@@ -13,14 +13,13 @@ const manifest = (n) => [...py.match(new RegExp(`_${n}_PARTS = \\[([\\s\\S]*?)\\
 const ident = (dir, file) => dir + file.replace(/\.js$/, '').replace(/^(\d+)-(.*)$/, (_, n, rest) => n + rest.replace(/-(.)/g, (__, c) => c.toUpperCase()))
 const layer = (dir, parts) => parts.map((p) => ({ id: ident(dir, p), path: `./${dir}/${p}` }))
 
-const seam = layer('seam', manifest('SEAM'))
 const demo = layer('demo', manifest('DEMO'))
 const live = layer('live', manifest('LIVE'))
-const all = [...seam, ...demo, ...live]
+const all = [...demo, ...live]
 
 const out = `/* The one entry point of the legacy page script.
 
-   Until this refactor the 49 parts were concatenated in the order three
+   Until this refactor the 48 parts were concatenated in the order the two
    manifests in ui-web/build.py pin, and that order was load-bearing: a part
    read names the parts before it had already defined. ES modules do not
    honour that order -- each module evaluates when the graph first reaches it,
@@ -40,7 +39,7 @@ ${all.map((m) => `import * as ${m.id} from '${m.path}'`).join('\n')}
 import { liveMode } from './live/010-boot-guard.js'
 
 const DEMO = [
-${[...seam, ...demo].map((m) => `  ${m.id},`).join('\n')}
+${demo.map((m) => `  ${m.id},`).join('\n')}
 ]
 
 const LIVE = [

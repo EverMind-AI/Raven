@@ -1,4 +1,4 @@
-import { shell, t } from '../../shell/bridge'
+import { ds, shell, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 
 import type { KbBase, KbDoc, KbHit, KbSettings, KbStatus, KnowledgeSource } from './types'
@@ -118,11 +118,7 @@ export function getState(): State {
   return state
 }
 
-function source(): KnowledgeSource {
-  const ds = (globalThis as { DS?: { knowledge?: KnowledgeSource } }).DS
-  if (!ds || !ds.knowledge) throw new Error('no knowledge source installed')
-  return ds.knowledge
-}
+const source = (): KnowledgeSource => ds<KnowledgeSource>('knowledge')
 
 export async function load(): Promise<void> {
   let src: KnowledgeSource

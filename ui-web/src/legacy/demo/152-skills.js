@@ -1,7 +1,7 @@
 /* ══ module 2c: skill market ══════════════════════════════════════
    The renderer is the skills island (ui-web/src/features/skills/): the hub
    market, the installed view and the shared detail drawer's skill sheet
-   all render through it, off DS.skills. What remains here is its shell
+   all render through it, off sources.skills. What remains here is its shell
    face -- the chrome around #capsBody (title, search field, the
    installed button), the names other layers still call -- and the
    fixture source. */
@@ -10,7 +10,7 @@
    composer opens pre-filled, cursor at the end, ready to complete.
    Shared verb: the plugin layer and the skills island both call it. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, T, applyDecorators, mk } from './010-kernel.js'
 import { SKILLS } from './030-fixtures.js'
 import { closeDetail, decorateCloseDetail, decorateExtSet, decorateShowPage, drawCapsBadge, extTab } from './120-capabilities.js'
@@ -106,7 +106,7 @@ export function install() {
     return { sync() {
       b.hidden = extTab !== 'skill' || RavenIslands.skills.view() === 'installed';
       b.innerHTML = '';
-      b.append(mk('span', null, T('gui.plug.installed_n', { n: DS.skills.installed().length })));
+      b.append(mk('span', null, T('gui.plug.installed_n', { n: sources.skills.installed().length })));
     } };
   })();
 
@@ -147,7 +147,7 @@ export function install() {
     });
   }
 
-  DS.skills ??= {
+  sources.skills ??= {
     search: async ({ query, category, page, limit }) => {
       const q = (query || '').toLowerCase();
       const rows = HUB_FIXTURE.filter((x) => (!category || x.category === category)

@@ -1,5 +1,5 @@
 /* -- playbooks: the rpc source ----------------------------------------
-   The island talks to DS.playbooks and knows nothing about transport; this
+   The island talks to sources.playbooks and knows nothing about transport; this
    file only knows how to speak playbooks.* over /rpc. Installing onto the
    same name is what swaps the demo library for what is really on disk.
 
@@ -8,12 +8,12 @@
    wants the list. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.playbooks = {
+  sources.playbooks = {
     list: () => gateway().call('playbooks.list', {}).then((r) => (r && r.playbooks) || []),
     get: (name) => gateway().call('playbooks.get', { name }).then((r) => r && r.playbook),
     credentials: (name) => gateway().call('playbooks.credentials.get', { name }),

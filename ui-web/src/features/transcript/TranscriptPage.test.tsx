@@ -15,17 +15,19 @@ import { markMissing as markDeliveryMissing } from '../workspace/deliveries'
 import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { ProseTarget } from '../../shell/prose'
-import type { HistoryMessage, SpawnListRow, TranscriptSource } from './types'
+import type { WorkspaceSource } from '../workspace/types'
+import type { ArtifactsSource, HistoryMessage, SpawnListRow, TranscriptSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 /* The island runs against the same two seams production wires: a fake shell
    on window.RavenShell (T returns its key, prefixed by the current language
-   so a flip is observable) and a source on window.DS.transcript. */
+   so a flip is observable) and a source on sources.transcript. */
 let lang = 'en'
 
 /* The renders are counted on the REAL renderer, not a stub: the island imports
@@ -52,13 +54,13 @@ function wire(over: Partial<TranscriptSource> = {}): void {
     okOf: (_n, p) => !/^\s*(error|traceback|failed)\b/i.test(p),
     ...over,
   }
-  window.DS = {
+  setSources({
     transcript: source,
-    workspace: { shortPath: (p: string) => p, openPath: (p: string) => opened.push(p) },
-    artifacts: { changes: (n: number) => PRODUCED.get(n) || [] },
+    workspace: { shortPath: (p: string) => p, openPath: (p: string) => opened.push(p) } as unknown as WorkspaceSource,
+    artifacts: { changes: (n: number) => PRODUCED.get(n) || [] } as unknown as ArtifactsSource,
     /* The renderer reads this for what counts as an openable path. */
     prose: { pathOf: () => null, linkTargetOf: () => null },
-  }
+  })
   document.body.innerHTML = '<div id="scroll"><div class="col" id="stage"></div></div>'
 }
 
@@ -122,6 +124,7 @@ afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 const iso = (ms: number): string => new Date(ms).toISOString()
@@ -539,11 +542,11 @@ describe('transcript island, history', () => {
   })
 
   /* An edit's detail header names the file through the workspace source's
-     shortener, reached as window.DS.workspace rather than through ds(). The
+     shortener, reached as sources.workspace rather than through ds(). The
      fixture answers shortPath with the identity, so bypassing the call is
      invisible: this test gives it something to actually shorten. */
   it('names an edit through the workspace shortener, not the raw path', () => {
-    ;(window.DS as { workspace: { shortPath: (p: string) => string } }).workspace.shortPath =
+    ;(sources.workspace as { shortPath: (p: string) => string }).shortPath =
       (raw) => raw.replace('/home/me/project/', '')
     act(() => {
       mount.history([
@@ -1537,7 +1540,7 @@ describe('a delegated result coming back', () => {
     act(() => {
       mount.delivered({
         label: 'run-7', isDag: true, status: 'ok', body: injected,
-        open: () => (window.DS as { transcript?: TranscriptSource }).transcript?.openDagRun?.('run-7'),
+        open: () => sources.transcript?.openDagRun?.('run-7'),
       })
     })
     act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
@@ -2312,7 +2315,7 @@ describe('transcript island, tool episodes', () => {
      click-to-open dead with the whole suite still green. */
   describe('a path chip in tool output', () => {
     const wireProse = (open: (at: ProseTarget) => void): void => {
-      window.DS = { ...window.DS, prose: { pathOf: () => null, linkTargetOf: () => null, open } }
+      setSources({ prose: { pathOf: () => null, linkTargetOf: () => null, open } })
     }
 
     function chip(): HTMLElement {
@@ -2641,7 +2644,7 @@ describe('transcript island, lane lifetime', () => {
     const parked = stage().querySelector('[data-tsl]')! as HTMLElement
     /* What live/060-parked.js does on a mid-turn session switch: the stage's
        children are held in a detached array, then wiped off the page. */
-    ;(window.DS!.transcript as TranscriptSource).parked = (node) => node === parked
+    ;(sources.transcript as TranscriptSource).parked = (node) => node === parked
     stage().innerHTML = ''
     turn('the other session')
     seen.md = 0

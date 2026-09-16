@@ -6,6 +6,7 @@ import { SkillsApp } from './SkillsPage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { HubItem, InstalledSkill, SkillsSource } from './types'
@@ -29,7 +30,7 @@ function hubItem(over: Partial<HubItem> = {}): HubItem {
 
 /* The island runs against the same two seams production wires: a fake
    shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on window.DS.skills. */
+   keys, not translations) and a fixture source on sources.skills. */
 function install(items: HubItem[], over: Partial<SkillsSource> = {}, installed: InstalledSkill[] = []) {
   const calls: string[] = []
   const source: SkillsSource = {
@@ -53,7 +54,7 @@ function install(items: HubItem[], over: Partial<SkillsSource> = {}, installed: 
     },
   }
   window.RavenShell = fakeShell
-  window.DS = { skills: source }
+  setSources({ skills: source })
   document.body.innerHTML =
     '<section id="capsPage" data-open="true"><div id="capsBody"></div></section>' +
     '<aside id="detail" data-open="false"><b id="dTitle"></b><div id="dBody"></div></aside>'
@@ -74,6 +75,7 @@ afterEach(() => {
   })
   cleanup()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('skills island', () => {

@@ -8,8 +8,10 @@ import * as lookStore from '../../shell/look'
 import * as notifications from '../../shell/notifications'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
+import type { RailSource } from '../rail/types'
 import type { SettingsSnapshot, SettingsSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -69,7 +71,7 @@ function type(field: HTMLInputElement, value: string): void {
 
 /* The island runs against the same two seams production wires up: a fake
    shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on window.DS.settings. */
+   keys, not translations) and a fixture source on sources.settings. */
 function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> = {}) {
   const calls: Array<[string, unknown]> = []
   const source: SettingsSource = {
@@ -111,15 +113,15 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
   /* The danger card's button is a SESSION operation offered from this page, so
      it goes out through DS.sessions rather than this page's own source. */
   const wiped: Array<null> = []
-  window.DS = {
+  setSources({
     settings: source,
     sessions: {
       snapshot: () => ({ rows: [{}, {}, {}], cur: null, busy: false }),
       replace: () => {},
       open: () => {},
       deleteAll: () => wiped.push(null),
-    },
-  }
+    } as unknown as RailSource,
+  })
   /* `#setModal` is the dialog the add-model drawer portals into: it is
      positioned against that box rather than the window, so a harness without
      it would render the drawer nowhere. */
@@ -152,6 +154,7 @@ afterEach(() => {
   localStorage.clear()
   lookStore.load()
   notifications.setEnabled(false)
+  resetSources()
 })
 
 describe('settings island', () => {

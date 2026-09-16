@@ -1,6 +1,6 @@
 /* ══ module 3b2: playbooks ════════════════════════════════════════
    The renderer is the playbooks island (ui-web/src/features/playbooks/): the
-   library wall and one playbook's graph both draw off DS.playbooks. What
+   library wall and one playbook's graph both draw off sources.playbooks. What
    lives here is the shell face -- the two verbs the rail and Escape call --
    and the fixture library, so the page is explorable with no engine behind
    it.
@@ -10,7 +10,7 @@
    and a fixture in the island's own shape would hide a mapping bug until
    live. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 
 function openPb() { RavenIslands.playbooks.open(); }
 function closePb() { RavenIslands.playbooks.close(); }
@@ -251,7 +251,7 @@ export function install() {
       error: "nodes.2.subagent: 'sec-raven' is not in the agent registry",
     },
   ];
-  DS.playbooks ??= {
+  sources.playbooks ??= {
     credentials: async (name) => {
       const p = PB_FIXTURE.find((x) => x.name === name);
       if (!p) throw new Error('no playbook named ' + name);

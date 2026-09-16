@@ -12,6 +12,7 @@ import {
   fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath,
 } from '../workspace/store'
 import { useTick } from '../../shell/tick'
+import { sources } from '../../state/sources'
 import { releaseUpward } from './overscroll'
 import * as store from './store'
 import * as tail from './tail'
@@ -433,7 +434,7 @@ function Dtl({ c, open }: { c: CallData; open: boolean }): ReactElement | null {
 
 const shortOr = (p: string): string => {
   try {
-    return (window.DS?.workspace as { shortPath?: (p: string) => string } | undefined)?.shortPath?.(p) ?? p
+    return sources.workspace?.shortPath?.(p) ?? p
   } catch { return p }
 }
 

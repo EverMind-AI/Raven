@@ -7,6 +7,7 @@ import * as deliveries from './deliveries'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { WorkspaceSnapshot, WorkspaceSource, WsChange } from './types'
@@ -44,7 +45,7 @@ function emptyWs(over: Partial<WorkspaceSnapshot> = {}): WorkspaceSnapshot {
 
 /* The island runs against the same two seams production wires up: a fake
    shell on window.RavenShell (T returns its key) and a source on
-   window.DS.workspace -- the fixture shape for demo behaviour, a list/reveal
+   sources.workspace -- the fixture shape for demo behaviour, a list/reveal
    shape for live behaviour. */
 function install(ws: WorkspaceSnapshot, over: Partial<WorkspaceSource> = {}, view = { tab: 'diff', open: true, picked: true }) {
   store.restore(ws)
@@ -73,7 +74,7 @@ function install(ws: WorkspaceSnapshot, over: Partial<WorkspaceSource> = {}, vie
   /* The file view renders markdown through the bundle's renderer, which reads
      DS.prose for what counts as an openable path -- the page installs it in
      demo/020-prose.js, so the harness does too. */
-  window.DS = { workspace: source, prose: { pathOf: () => null, linkTargetOf: () => null } }
+  setSources({ workspace: source, prose: { pathOf: () => null, linkTargetOf: () => null } })
   /* The viewer fetches /file for text kinds; a pending promise keeps the
      spinner up instead of letting happy-dom dial a real socket. */
   vi.stubGlobal('fetch', () => new Promise(() => {}))
@@ -98,6 +99,7 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('workspace island', () => {

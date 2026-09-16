@@ -27,7 +27,7 @@ import { RPC_METHODS } from '../src/rpc/generated'
    plugin-add path in live/150-plugins.js. */
 const UNCHECKED = ['raven.mcp.list', 'raven.mcp.set']
 
-const FILES = ['seam', 'demo', 'live'].flatMap((layer) =>
+const FILES = ['demo', 'live'].flatMap((layer) =>
   partNames(layer).map((name) => `${layer}/${name}`),
 )
 

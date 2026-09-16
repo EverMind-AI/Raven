@@ -8,6 +8,7 @@ import * as deliveries from './deliveries'
 import * as desk from './deskStore'
 import * as workspace from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { InstanceRow } from '../subagents/types'
@@ -23,10 +24,10 @@ let agentRows: InstanceRow[] = []
 function wire(): void {
   panelCalls.length = 0
   agentRows = []
-  window.DS = {
+  setSources({
     workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: true, openPath: () => {} },
     agents: { list: async () => [], instances: async () => agentRows },
-  }
+  })
   const fakeShell: Shell = {
     T: (key) => key,
     confirmAsk: (_title, _body, _label, fn) => fn(),
@@ -65,7 +66,7 @@ afterEach(() => {
   desk._resetForTests()
   sessionReset()
   agents.reset()
-  window.DS = undefined
+  resetSources()
   window.RavenShell = undefined
   localStorage.clear()
   sessionStorage.clear()

@@ -5,14 +5,16 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import * as store from './store'
+import { resetSources, setSources } from '../../state/sources'
 
 beforeEach(() => {
+  resetSources()
   window.RavenShell = {
     T: (key: string) => key,
   } as unknown as typeof window.RavenShell
-  window.DS = {
+  setSources({
     transcript: { clean: (t: string) => t, okOf: () => true },
-  } as unknown as typeof window.DS
+  })
   store._resetForTests()
 })
 

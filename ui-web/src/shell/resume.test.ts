@@ -9,10 +9,12 @@ import { openDeskAgent, openDeskAgentRecord, openDeskFile, openDeskTab, getState
 import { landing, refreshDag, resume, watch } from './resume'
 import { _resetForTests as sessionReset, setCurrent } from './session'
 import { reset as agentsLeave, _resetForTests as agentsReset, getState as agentsState } from '../features/subagents/store'
+import { resetSources, setSources } from '../state/sources'
 
 import type { Shell } from './bridge'
 import type { DagRun } from '../features/dag/types'
 import type { InstanceRow } from '../features/subagents/types'
+import type { TranscriptSource } from '../features/transcript/types'
 
 const NOTE = 'raven.gui.view.dag'
 
@@ -52,13 +54,13 @@ let dagRun: (runId: string) => Promise<unknown> = () => Promise.resolve(runWire)
 function wire(): void {
   const shell: Shell = { T: (key) => key, confirmAsk: () => {}, showPage: () => {} }
   window.RavenShell = shell
-  window.DS = {
+  setSources({
     transcript: {
       dagRun: (runId: string) => {
         readRuns.push(runId)
         return dagRun(runId)
       },
-    },
+    } as unknown as TranscriptSource,
     agents: {
       list: () => Promise.resolve([]),
       instances: () => {
@@ -70,8 +72,7 @@ function wire(): void {
         return listSlow ? Promise.resolve().then(() => Promise.resolve()).then(() => listed) : Promise.resolve(listed)
       },
     },
-    subagents: {},
-  }
+  })
   /* The same wiring main.tsx does: the panel's open verbs reach the desk
      through this bag, so replaying an open lands in a real pane. */
   window.RavenIslands = { workspace: { openAgent: openDeskAgent, openAgentRecord: openDeskAgentRecord } }
@@ -122,7 +123,7 @@ afterEach(() => {
   sheetReset()
   sessionReset()
   window.RavenShell = undefined
-  window.DS = undefined
+  resetSources()
   window.RavenIslands = undefined
   document.body.innerHTML = ''
   sessionStorage.clear()

@@ -12,6 +12,7 @@ import {
 } from '../../shell/session'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { MenuItem } from '../../shell/menu'
@@ -44,7 +45,7 @@ interface Harness {
 
 /* The island runs against the same two seams production wires: a fake shell
    on window.RavenShell (T returns its key, so tests assert catalogue keys)
-   and a snapshot source on window.DS.sessions. */
+   and a snapshot source on sources.sessions. */
 function install(over: Partial<RailSnapshot> = {}): Harness {
   const state: RailSnapshot = { rows: [row()], cur: 'a', busy: false, ...over }
   const calls: Array<[string, unknown]> = []
@@ -63,11 +64,11 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     state.cur = id
     store.draw()
   })
-  window.DS = { sessions: {
+  setSources({ sessions: {
     snapshot: () => state,
     replace: (rows: SessRow[]) => { state.rows = rows },
     open: (s: SessRow) => calls.push(['openSession', s.id]),
-  } }
+  } as unknown as RailSource })
   document.body.innerHTML =
     '<div class="app" data-page="off">' +
     '<button id="newBtn"></button><button id="skillBtn"></button>' +
@@ -79,7 +80,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
 }
 
 /* The installed source, for the cases that add a write verb to it. */
-const src = (): RailSource => window.DS!.sessions as RailSource
+const src = (): RailSource => sources.sessions as RailSource
 
 /* The nav the assembled page hands over (demo/155-bridge.js reads it off
    NAV_OF and MORE_ROWS): every module page, the rail button each one lights
@@ -126,6 +127,7 @@ afterEach(() => {
   sessionReset()
   found.term = ''
   localStorage.clear()
+  resetSources()
 })
 
 describe('rail island', () => {
@@ -314,13 +316,13 @@ describe('rail island', () => {
     install()
     const host = mount()
     expect(screen.getByText('GTM research')).toBeTruthy()
-    window.DS = {
+    setSources({
       sessions: {
         snapshot: () => {
           throw new Error('gone')
         }
-      }
-    }
+      } as unknown as RailSource
+    })
     act(() => store.draw())
     expect(host.querySelectorAll('.sess').length).toBe(1)
     expect(screen.getByText('GTM research')).toBeTruthy()

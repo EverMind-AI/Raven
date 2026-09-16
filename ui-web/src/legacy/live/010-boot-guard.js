@@ -4,7 +4,7 @@
    real turn events; opened from disk (file://) or with ?stub=1 the
    demo keeps its mock data untouched. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { turn } from '../demo/040-state.js'
 import { openLiveSession } from './080-overrides.js'
 
@@ -45,7 +45,7 @@ export function install() {
 
   /* Set before the deferred first paint, cleared once the real counts land. */
   (() => { const r = document.querySelector('.rail'); if (r) r.dataset.counts = 'pending'; })();
-  DS.sessions = {
+  sources.sessions = {
     snapshot: () => ({ rows: liveSessionRows, cur: sessionCurrent(), busy: turn.busy() }),
     replace: (rows) => { liveSessionRows = rows; },
     open: (s) => openLiveSession(s),

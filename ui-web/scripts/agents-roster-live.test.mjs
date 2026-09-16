@@ -15,10 +15,10 @@ import { fakeGateway, loadPart } from './legacy-part.mjs'
 async function roster(call) {
   const part = await loadPart(() => import('../src/legacy/live/230-tabs.js'))
   await fakeGateway(call)
-  const { DS } = await import('../src/legacy/seam/000-datasource.js')
+  const { sources } = await import('../src/state/sources')
   part.install()
-  if (!DS.agents) throw new Error('DS.agents is absent from the live layer')
-  return DS.agents.roster
+  if (!sources.agents) throw new Error('sources.agents is absent from the live layer')
+  return sources.agents.roster
 }
 
 const ROWS = [

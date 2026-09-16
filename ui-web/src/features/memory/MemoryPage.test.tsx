@@ -6,6 +6,7 @@ import { MemoryApp } from './MemoryPage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { MemItem, MemStats, MemorySource } from './types'
@@ -28,7 +29,7 @@ function item(over: Partial<MemItem> = {}): MemItem {
 
 /* The island runs against the same two seams production wires: a fake
    shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on window.DS.memory. */
+   keys, not translations) and a fixture source on sources.memory. */
 function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null) {
   const calls: string[] = []
   const source: MemorySource = {
@@ -50,7 +51,7 @@ function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null
     },
   }
   window.RavenShell = fakeShell
-  window.DS = { memory: source }
+  setSources({ memory: source })
   document.body.innerHTML =
     '<section id="memPage"><div id="memBody"></div></section>' +
     '<aside id="detail" data-open="false"><b id="dTitle">—</b><div id="dBody"></div></aside>'
@@ -72,6 +73,7 @@ afterEach(() => {
   })
   cleanup()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('memory island', () => {

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as tier from '../../shell/tier'
 import { InstanceMode } from './InstanceMode'
+import { resetSources, setSources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { AgentsSource, InstanceModeReply, InstanceRow } from './types'
@@ -44,7 +45,7 @@ function wire(over: Partial<AgentsSource> = {}): void {
     instanceSetMode: async (agent, handle, mode) => { asked.push(['set', agent, handle, mode]); return answer(mode) },
     ...over,
   }
-  window.DS = { agents: source } as unknown as typeof window.DS
+  setSources({ agents: source })
   document.body.innerHTML = '<div id="menu" data-open="false"></div><div id="toasts"></div>'
 }
 
@@ -61,6 +62,7 @@ afterEach(() => {
   cleanup()
   delete window.RavenShell
   document.body.innerHTML = ''
+  resetSources()
 })
 
 const chip = (): HTMLElement | null => document.querySelector('.pane-imode')

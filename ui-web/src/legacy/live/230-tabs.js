@@ -12,7 +12,7 @@
    `absent` is what the island's empty state reads to tell the two apart. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { mediaOf } from './080-overrides.js'
 import { rpcGone, rpcHas } from './220-browser.js'
 
@@ -21,7 +21,7 @@ let agentsWatch = null;
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.agents = {
+  sources.agents = {
     /* Filtered on whether the agent can be dispatched, not on where it came
      from. It filtered `vendored` -- which is true of every agent that ships
      WITH raven -- so Raven-Code, Raven-PPT and Raven-Research were absent from
@@ -116,7 +116,7 @@ export function install() {
 
   if (new URLSearchParams(location.search).get('desk-demo') === '1') {
     const now = Date.now();
-    const liveRoster = DS.agents.roster;
+    const liveRoster = sources.agents.roster;
     /* Only the two running rows carry `turnStartedAtMs`, and deliberately: absent
      is what says an instance is answering nothing, so a canvas where every row
      had one would draw a clock on finished work and hide the rule. */
@@ -177,8 +177,8 @@ export function install() {
       inherited: demoInherits(handle),
       availableModes: (DEMO_RUNGS[handle] || []).slice(),
     });
-    DS.agents.instanceMode = async (_agent, handle) => demoModeReply(handle);
-    DS.agents.instanceSetMode = async (_agent, handle, mode) => {
+    sources.agents.instanceMode = async (_agent, handle) => demoModeReply(handle);
+    sources.agents.instanceSetMode = async (_agent, handle, mode) => {
       if (mode === null) demoOverride.delete(handle);
       else if (!(DEMO_RUNGS[handle] || []).some((m) => m.id === mode)) {
         /* The manager refuses a rung the agent does not advertise and names what
@@ -191,9 +191,9 @@ export function install() {
     /* The tier chip and these panes are one system: under Auto a pane is showing
      the conversation's tier, so a switch has to move it here too. Wrapping the
      canvas's own tier source is what lets that be seen without a server. */
-    if (DS.tier) {
-      const tierSet = DS.tier.set;
-      DS.tier.set = async (mode) => {
+    if (sources.tier) {
+      const tierSet = sources.tier.set;
+      sources.tier.set = async (mode) => {
         const r = await tierSet(mode);
         if (r && r.mode) demoTier = r.mode;
         return r;
@@ -212,16 +212,16 @@ export function install() {
       }).catch(() => {});
       return bindDemo;
     };
-    DS.agents.instances = async () => {
+    sources.agents.instances = async () => {
       await bindDemoAgents();
       return demoInstances.slice();
     };
-    DS.agents.instanceHistory = async (_agent, handle) => ({ turns: (demoHistory.get(handle) || []).slice() });
-    DS.agents.instanceForget = async (agent, handle) => {
+    sources.agents.instanceHistory = async (_agent, handle) => ({ turns: (demoHistory.get(handle) || []).slice() });
+    sources.agents.instanceForget = async (agent, handle) => {
       const at = demoInstances.findIndex((row) => row.agent === agent && row.handle === handle);
       if (at >= 0) demoInstances.splice(at, 1);
     };
-    DS.agents.instanceSend = async (agent, handle, text) => {
+    sources.agents.instanceSend = async (agent, handle, text) => {
       const row = demoInstances.find((item) => item.agent === agent && item.handle === handle);
       if (!row) throw new Error('Instance not found');
       row.status = 'running'; row.updatedAtMs = Date.now();

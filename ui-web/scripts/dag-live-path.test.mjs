@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { loadPart, looseQuery } from './legacy-part.mjs'
 
-/* `DS.transcript.openDagRun` is installed by live/050-turn.js onto the source
+/* `sources.transcript.openDagRun` is installed by live/050-turn.js onto the source
    object live/040-history.js built, so the seam is where it is read back. */
 async function opener(calls, run) {
   const part = await loadPart(() => import('../src/legacy/live/050-turn.js'), {
@@ -22,13 +22,11 @@ async function opener(calls, run) {
       sessionCurrent: () => 'a',
     },
   })
-  const { DS } = await import('../src/legacy/seam/000-datasource.js')
-  DS.transcript = {}
-  DS.composer = {}
-  DS.sessions = {}
+  const { setSources, sources } = await import('../src/state/sources')
+  setSources({ transcript: {}, composer: {}, sessions: {} })
   part.install()
-  if (!DS.transcript.openDagRun) throw new Error('openDagRun is absent from the live layer')
-  return DS.transcript.openDagRun
+  if (!sources.transcript.openDagRun) throw new Error('openDagRun is absent from the live layer')
+  return sources.transcript.openDagRun
 }
 
 describe('the live DAG opener', () => {

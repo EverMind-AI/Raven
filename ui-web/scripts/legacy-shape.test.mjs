@@ -1,6 +1,6 @@
 /* The shape that makes the legacy module graph's evaluation order irrelevant.
  *
- * The 49 parts were one concatenated script whose order was load-bearing, and
+ * The 48 parts were one concatenated script whose order was load-bearing, and
  * ES modules do not honour that order: each evaluates when the graph first
  * reaches it, depth first. Both layers also contain a cycle -- 14 files in
  * demo/, 7 in live/ -- so inside one, a module can be evaluated before the
@@ -32,13 +32,13 @@ import { partNames } from './legacy-part.mjs'
 const url = (p) => new URL(`../${p}`, import.meta.url)
 /* The parts, in the order src/legacy/index.js installs them -- which is also
    where partNames checks that every file on disk is installed. */
-const FILES = ['seam', 'demo', 'live'].flatMap((layer) =>
+const FILES = ['demo', 'live'].flatMap((layer) =>
   partNames(layer).map((name) => `${layer}/${name}`),
 )
 /* What the codemod allows a top-level initialiser to read. Not trusted here:
    the gate derives the real condition from the import graph and checks that
    every one of these is outside every cycle. */
-const CODEMOD_LEAVES = new Set(['seam/000-datasource.js', 'demo/010-kernel.js', 'demo/020-prose.js', 'demo/030-fixtures.js'])
+const CODEMOD_LEAVES = new Set(['demo/010-kernel.js', 'demo/020-prose.js', 'demo/030-fixtures.js'])
 
 const texts = new Map(FILES.map((rel) => [rel, readFileSync(url(`src/legacy/${rel}`), 'utf8')]))
 const trees = new Map(
