@@ -3945,6 +3945,45 @@ class PlaybooksDeleteResult(_Strict):
     )
 
 
+class PlaybooksRunParams(_Strict):
+    name: str
+    session_key: str = Field(
+        ...,
+        description=(
+            "The conversation this run reports to, as its own `channel:chat_id`. Required because a "
+            "run's progress and completion announce are addressed to a conversation, and an RPC call "
+            "is an origin nothing else sets one for."
+        ),
+    )
+    params: dict[str, JsonValue] | None = None
+    fills: dict[str, JsonValue] | None = None
+    confirmed: bool | None = Field(
+        None,
+        description=(
+            "The caller's statement that it already put this run to the user, so the graph-level gate "
+            "does not ask a second time. Send it only when a person actually saw the run and agreed."
+        ),
+    )
+
+
+class PlaybooksRunResult(_Strict):
+    name: str
+    kind: Literal["dag", "guidance", "gaps", "questions"] = Field(
+        ...,
+        description=(
+            "`dag`: dispatched, `reply` is the receipt. `guidance`: prompt-mode composition "
+            "instructions. `gaps`: nothing was dispatched and `reply` names what is missing. "
+            "`questions`: it cannot proceed and `reply` says why."
+        ),
+    )
+    reply: str = Field(
+        ...,
+        description=(
+            "The executor's own answer, verbatim. For a dispatched graph this is the receipt the run id is read out of."
+        ),
+    )
+
+
 class OkResult(_Strict):
     ok: bool
 
@@ -4106,6 +4145,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "playbooks.set_enabled": (PlaybooksSetEnabledParams, PlaybooksSetEnabledResult),
     "playbooks.validate": (PlaybooksValidateParams, PlaybooksValidateResult),
     "playbooks.delete": (PlaybooksDeleteParams, PlaybooksDeleteResult),
+    "playbooks.run": (PlaybooksRunParams, PlaybooksRunResult),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
     "plughub.detail": (PlughubDetailParams, PlughubDetailResult),
