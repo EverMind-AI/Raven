@@ -1,62 +1,73 @@
 // @vitest-environment happy-dom
-import { sandboxSource } from '../../../scripts/legacy-source.mjs'
-
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
 
 import * as turn from './turn'
 
-interface ParkedHarness {
-  parkTurn(): void
-  restoreTurn(value: unknown): void
-  transitionTurn(owner: string, event: turn.TurnEvent): void
-  parkedTurns: Map<string, { phase: turn.TurnSnapshot; queue: string[]; ws: unknown }>
-  setOwner(owner: string): void
-}
+type ParkedPart = typeof import('../../legacy/live/060-parked.js')
 
-const source = sandboxSource('src/legacy/live/060-parked.js')
-
-function harness(): {
-  api: ParkedHarness
+async function harness(): Promise<{
+  part: ParkedPart
   queueRestore: ReturnType<typeof vi.fn>
   workspaceRestore: ReturnType<typeof vi.fn>
   drainQueue: ReturnType<typeof vi.fn>
+  setOwner(owner: string): void
   setCurrent(value: string): void
-} {
+}> {
   document.body.innerHTML = '<div id="stage"><div id="answer">partial</div></div>'
   let current = 'a'
   const queueRestore = vi.fn()
   const drainQueue = vi.fn()
   const workspace = { changes: [], urls: [], file: null, turn: 1, unseen: 0 }
   const workspaceRestore = vi.fn((next: typeof workspace) => Object.assign(workspace, next))
-  const raven = {
-    composer: {
-      liveAnchor: () => 42,
-      setLiveAnchor: vi.fn(),
+  const part = (await loadPart(() => import('../../legacy/live/060-parked.js'), {
+    fakes: {
+      'demo/010-kernel.js': { $: looseQuery() },
+      'demo/040-state.js': {
+        down: vi.fn(),
+        queueRestore,
+        queueSnapshot: () => ['queued'],
+        sess: () => ({ status: null }),
+        /* The island's own phase machine, which is what is under test here. */
+        turn,
+      },
+      'demo/050-rail.js': { sessionDraw: vi.fn() },
+      'demo/090-composer.js': { drawMeter: vi.fn(), goState: vi.fn() },
+      'demo/100-workspace.js': {
+        drawWs: vi.fn(),
+        wsOpen: false,
+        wsRestore: vi.fn(),
+        wsView: () => ({ tab: 'files', picked: null }),
+      },
+      'live/050-turn.js': {
+        live: {
+          st: null, steps: [], say: '', open: new Map(), sawEpisode: false,
+          startedAt: 1, answerAt: 0,
+        },
+        onEvent: vi.fn(),
+        paintSay: vi.fn(),
+        stopSayPaint: vi.fn(),
+      },
+      'live/080-overrides.js': { drainQueue },
     },
-    workspace: {
-      snapshot: () => ({ ...workspace }),
-      restore: workspaceRestore,
+    globals: {
+      RavenIslands: {
+        composer: { liveAnchor: () => 42, setLiveAnchor: vi.fn() },
+        workspace: { snapshot: () => ({ ...workspace }), restore: workspaceRestore },
+      },
+      sessionCurrent: () => current,
+      drawBanner: vi.fn(),
     },
-  }
-  const names = [
-    'DS', 'turn', 'stopSayPaint', 'sess', '$', 'live', 'queueSnapshot', 'RavenIslands', 'wsView',
-    'sessionCurrent', 'queueRestore', 'wsRestore', 'onEvent', 'paintSay', 'drawMeter', 'goState',
-    'sessionDraw', 'drawBanner', 'drawWs', 'wsOpen', 'down', 'drainQueue',
-  ]
-  const values = [
-    { transcript: {} }, turn, vi.fn(), () => ({ status: null }),
-    (selector: string) => document.querySelector(selector),
-    { st: null, steps: [], say: '', open: new Map(), sawEpisode: false, startedAt: 1, answerAt: 0 },
-    () => ['queued'], raven,
-    () => ({ tab: 'files', picked: null }), () => current, queueRestore, vi.fn(), vi.fn(), vi.fn(), vi.fn(),
-    vi.fn(), vi.fn(), vi.fn(), undefined, false, vi.fn(), drainQueue,
-  ]
-  const build = new Function(...names, `${source}\nreturn {
-    parkTurn, restoreTurn, transitionTurn, parkedTurns,
-    setOwner(value) { park.turnOwner = value; },
-  };`) as (...args: unknown[]) => ParkedHarness
+  })) as ParkedPart
   return {
-    api: build(...values), queueRestore, workspaceRestore, drainQueue,
+    part,
+    queueRestore,
+    workspaceRestore,
+    drainQueue,
+    /* `park.turnOwner` is inferred null from its initialiser; the part
+       writes a session key into it. */
+    setOwner: (owner) => { (part.park as { turnOwner: string | null }).turnOwner = owner },
     setCurrent: (value) => { current = value },
   }
 }
@@ -64,41 +75,44 @@ function harness(): {
 afterEach(() => turn._resetForTests())
 
 describe('the legacy parked-turn adapter', () => {
-  it('round-trips the phase and queue through island accessors', () => {
-    const { api, queueRestore, workspaceRestore } = harness()
-    api.setOwner('a')
+  it('round-trips the phase and queue through island accessors', async () => {
+    const { part, queueRestore, workspaceRestore, setOwner } = await harness()
+    const { parkTurn, restoreTurn, parkedTurns } = part
+    setOwner('a')
+    /* `turn.busy()` is what parkTurn gates on, so the phase has to be real. */
     turn.dispatch({ type: 'stream', cancellable: false })
-    api.parkTurn()
-    const parked = api.parkedTurns.get('a')!
+    parkTurn()
+    const parked = parkedTurns.get('a')!
     expect(parked.phase).toEqual({ phase: 'streaming', cancellable: false, resume: null })
     expect(parked.queue).toEqual(['queued'])
     expect(parked.ws).toEqual({ changes: [], urls: [], file: null, turn: 1, unseen: 0 })
 
     turn.dispatch({ type: 'idle' })
-    api.restoreTurn(parked)
+    restoreTurn(parked)
     expect(turn.snapshot()).toEqual({ phase: 'streaming', cancellable: false, resume: null })
     expect(queueRestore).toHaveBeenCalledWith(['queued'])
     expect(workspaceRestore).toHaveBeenCalledWith(parked.ws)
     expect(document.getElementById('answer')?.textContent).toBe('partial')
   })
 
-  it('updates a parked conversation without changing the visible phase', () => {
-    const { api, drainQueue, setCurrent } = harness()
-    api.setOwner('a')
+  it('updates a parked conversation without changing the visible phase', async () => {
+    const { part, drainQueue, setCurrent, setOwner } = await harness()
+    const { parkTurn, restoreTurn, transitionTurn, parkedTurns } = part
+    setOwner('a')
     turn.dispatch({ type: 'stream', cancellable: true })
-    api.parkTurn()
+    parkTurn()
     setCurrent('b')
     turn.dispatch({ type: 'idle' })
 
-    api.transitionTurn('a', { type: 'wait' })
+    transitionTurn('a', { type: 'wait' })
     expect(turn.phase()).toBe('idle')
-    expect(api.parkedTurns.get('a')?.phase.phase).toBe('waiting')
-    api.transitionTurn('a', { type: 'resume' })
-    expect(api.parkedTurns.get('a')?.phase.phase).toBe('streaming')
-    api.transitionTurn('a', { type: 'idle' })
+    expect(parkedTurns.get('a')?.phase.phase).toBe('waiting')
+    transitionTurn('a', { type: 'resume' })
+    expect(parkedTurns.get('a')?.phase.phase).toBe('streaming')
+    transitionTurn('a', { type: 'idle' })
 
     setCurrent('a')
-    api.restoreTurn(api.parkedTurns.get('a'))
+    restoreTurn(parkedTurns.get('a'))
     expect(turn.phase()).toBe('idle')
     expect(drainQueue).toHaveBeenCalledOnce()
   })

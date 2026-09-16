@@ -48,74 +48,73 @@ async function compressNow() {
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-DS.transcript.branch = () => {
-  rpc.call('session.branch', { session_id: sessionCurrent() })
-    .then((r) => {
-      if (!r.session_id) { toast(T('gui.sess.branch_empty')); return; }
-      const s = { id: r.session_id, title: r.title || T('gui.sess.branch_title'),
-        last: T('gui.sess.branched'), when: T('gui.sess.just_now'),
-        at: Math.floor(Date.now() / 1000), run: null, live: true };
-      sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s);
-      toast(T('gui.sess.branched_n', { n: r.message_count || 0 }));
-    })
-    .catch((e) => toast(T('gui.op.branch_failed', { detail: e.message || e })));
-};
+  DS.transcript.branch = () => {
+    rpc.call('session.branch', { session_id: sessionCurrent() })
+      .then((r) => {
+        if (!r.session_id) { toast(T('gui.sess.branch_empty')); return; }
+        const s = { id: r.session_id, title: r.title || T('gui.sess.branch_title'),
+          last: T('gui.sess.branched'), when: T('gui.sess.just_now'),
+          at: Math.floor(Date.now() / 1000), run: null, live: true };
+        sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s);
+        toast(T('gui.sess.branched_n', { n: r.message_count || 0 }));
+      })
+      .catch((e) => toast(T('gui.op.branch_failed', { detail: e.message || e })));
+  };
 
-DS.composer.slash.forEach((x) => {
-  if (x.id === 'gui.clear') {
-    x.fn = () => confirmAsk(T('gui.clear_title'), T('gui.clear_body'), T('gui.clear_yes'), () => {
-      /* Which conversation was cleared, read once. The reply used to ask for the
+  DS.composer.slash.forEach((x) => {
+    if (x.id === 'gui.clear') {
+      x.fn = () => confirmAsk(T('gui.clear_title'), T('gui.clear_body'), T('gui.clear_yes'), () => {
+        /* Which conversation was cleared, read once. The reply used to ask for the
          pointer again, and by then it can name a different one: clearing A and
          clicking B mid-flight wiped B's stage, gave B the new-task layout, and
          stamped B's row "cleared" while B's transcript sat untouched on disk. */
-      const key = sessionCurrent();
-      rpc.call('session.clear', { session_id: key })
-        .then(() => {
-          /* The row belongs to the conversation that was cleared, wherever the
+        const key = sessionCurrent();
+        rpc.call('session.clear', { session_id: key })
+          .then(() => {
+            /* The row belongs to the conversation that was cleared, wherever the
              reader is now -- it really is empty, and a list that says otherwise
              is wrong until the next reload. */
-          const s = sess(key); if (s) s.last = T('gui.sess.cleared');
-          sessionDraw();
-          /* The stage and the meter are the open conversation's, so they are
+            const s = sess(key); if (s) s.last = T('gui.sess.cleared');
+            sessionDraw();
+            /* The stage and the meter are the open conversation's, so they are
              only this reply's to touch while it IS the open one. */
-          if (key !== sessionCurrent()) return;
-          $('#stage').innerHTML = ''; pitch();
-          drawMeter();
-        })
-        /* A failure is news for the conversation it happened to. Posted on
-           whatever is open, it reads as that conversation refusing to clear;
-           dropped, the reader walks away believing a session was wiped when its
-           transcript is still on disk, which is the one direction where being
-           wrong costs something. So it goes where the other session actions put
-           theirs -- a toast naming the conversation, same as delete, archive and
-           rename in this file. Not the row's `status = 'err'` channel: nothing
-           clears that (openLiveSession only clears 'done'), so it would pin a
-           failure marker on a row whose conversation is fine once opened. */
-        .catch((e) => {
-          const detail = (e.data && e.data.detail) || e.message || String(e);
-          if (key !== sessionCurrent()) {
-            const s = sess(key);
-            toast(T('gui.sess.clear_failed', { title: plainTitle((s && s.title) || key), detail }));
-            return;
-          }
-          noteRow(T('gui.clear_title'), detail);
-        });
-    });
-  }
-  if (x.id === 'gui.compress') x.fn = compressNow;
-});
+            if (key !== sessionCurrent()) return;
+            $('#stage').innerHTML = ''; pitch();
+            drawMeter();
+          })
+          /* A failure is news for the conversation it happened to. Posted on
+             whatever is open, it reads as that conversation refusing to clear;
+             dropped, the reader walks away believing a session was wiped when its
+             transcript is still on disk, which is the one direction where being
+             wrong costs something. So it goes where the other session actions put
+             theirs -- a toast naming the conversation, same as delete, archive and
+             rename in this file. Not the row's `status = 'err'` channel: nothing
+             clears that (openLiveSession only clears 'done'), so it would pin a
+             failure marker on a row whose conversation is fine once opened. */
+          .catch((e) => {
+            const detail = (e.data && e.data.detail) || e.message || String(e);
+            if (key !== sessionCurrent()) {
+              const s = sess(key);
+              toast(T('gui.sess.clear_failed', { title: plainTitle((s && s.title) || key), detail }));
+              return;
+            }
+            noteRow(T('gui.clear_title'), detail);
+          });
+      });
+    }
+    if (x.id === 'gui.compress') x.fn = compressNow;
+  });
 
-// Dev-only hook: lets a design pass preview the clarify sheet without
-// spending a model turn (window.__clarify({question, choices})).
-window.__clarify = (p) => rpc.notify['clarify.request'](p || { request_id: 'dev', question: '预览', choices: ['A', 'B'] });
+  // Dev-only hook: lets a design pass preview the clarify sheet without
+  // spending a model turn (window.__clarify({question, choices})).
+  window.__clarify = (p) => rpc.notify['clarify.request'](p || { request_id: 'dev', question: '预览', choices: ['A', 'B'] });
 
-// Same reason: the update row's version state only appears when a release is
-// actually newer, which never happens on a dev checkout
-// (window.__upnote('ver', '0.1.11')).
-window.__upnote = (kind, latest) => showUpNote(kind || 'ver', latest);
+  // Same reason: the update row's version state only appears when a release is
+  // actually newer, which never happens on a dev checkout
+  // (window.__upnote('ver', '0.1.11')).
+  window.__upnote = (kind, latest) => showUpNote(kind || 'ver', latest);
 }
 
 export { compressNow }

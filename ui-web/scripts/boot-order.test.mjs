@@ -1,19 +1,18 @@
-/* The assembled page defers its first data-driven paint until live sources exist. */
+// @vitest-environment happy-dom
+/* The page defers its first data-driven paint until live sources exist. */
 
 import { readFileSync } from 'node:fs'
+/* Off cwd, not off `import.meta.url`: under happy-dom that is an http URL. */
+import { resolve } from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
-import { sandboxSource } from './legacy-source.mjs'
+import { loadPart, partNames, partTexts } from './legacy-part.mjs'
 
-const demo = sandboxSource(new URL('../src/legacy/demo/160-boot.js', import.meta.url))
-const build = readFileSync(new URL('../build.py', import.meta.url), 'utf8')
-const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
-if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
-const liveParts = [...manifest[1].matchAll(/"([^"]+\.js)"/g)].map((m) => m[1])
-const liveTexts = liveParts.map((name) => readFileSync(new URL(`../src/legacy/live/${name}`, import.meta.url), 'utf8'))
+const liveParts = partNames('live')
+const liveTexts = partTexts('live').map(([, text]) => text)
 const live = liveTexts.join('')
-const index = readFileSync(new URL('../src/legacy/index.js', import.meta.url), 'utf8')
+const index = readFileSync(resolve(process.cwd(), 'src/legacy/index.js'), 'utf8')
 
 const STEPS = [
   'lookLoad', 'paneLoad', 'setRail', 'sessionDraw', 'sessionOpen', 'drawCapsBadge',
@@ -21,35 +20,56 @@ const STEPS = [
   'setRuntime', 'goState',
 ]
 
-function harness(rows = []) {
+/* The boot part installed with every step of its own list replaced, and the
+   microtask queue held: what this is about is the order of the list and when
+   it runs, neither of which any step's own work decides. */
+async function harness(rows = []) {
   const calls = []
   const queued = []
-  const page = {}
-  const values = STEPS.map((name) => name === 'sessionRows'
-    ? () => rows
-    : (...args) => calls.push([name, ...args]))
-  const install = Function(
-    ...STEPS,
-    'sessionRows', 'bootError', 'queueMicrotask', 'window', 'RavenIslands', 'DS', 'addEventListener',
-    `${demo}\ninstall();\nreturn { bootPage };`,
-  )
-  const api = install(
-    ...values,
-    () => rows,
-    (where, error) => { throw new Error(`${where}: ${error}`) },
-    (fn) => queued.push(fn),
-    page,
-    { onboard: { open: () => {} } },
-    {},
-    () => {},
-  )
-  return { api, calls, page, queued }
+  const step = (name) => (...args) => calls.push([name, ...args])
+  const part = await loadPart(() => import('../src/legacy/demo/160-boot.js'), {
+    fakes: {
+      'demo/040-state.js': {
+        bootError: (where, error) => { throw new Error(`${where}: ${error}`) },
+      },
+      'demo/050-rail.js': {
+        sessionDraw: step('sessionDraw'),
+        sessionOpen: step('sessionOpen'),
+        sessionRows: () => rows,
+      },
+      'demo/090-composer.js': { goState: step('goState') },
+      'demo/100-workspace.js': { bumpWs: step('bumpWs') },
+      'demo/120-capabilities.js': { drawCapsBadge: step('drawCapsBadge') },
+      'demo/130-settings.js': { drawSettings: step('drawSettings'), setRuntime: step('setRuntime') },
+      'demo/150-chrome.js': { setRail: step('setRail') },
+      'demo/152-skills.js': { drawCaps: step('drawCaps') },
+    },
+    globals: {
+      RavenIslands: { onboard: { open: () => {} } },
+      lookLoad: step('lookLoad'),
+      paneLoad: step('paneLoad'),
+      drawPerm: step('drawPerm'),
+      loadTier: step('loadTier'),
+      drawCtx: step('drawCtx'),
+      drawFoot: step('drawFoot'),
+    },
+  })
+  /* Held rather than let run: the whole claim is that the queued boot happens
+     after the install pass, so the test has to be the one that releases it. */
+  const real = globalThis.queueMicrotask
+  globalThis.queueMicrotask = (fn) => queued.push(fn)
+  try { part.install() } finally { globalThis.queueMicrotask = real }
+  return { part, calls, queued }
 }
 
-describe('the assembled page boot order', () => {
-  it('boots fixture mode after the assembled script task', () => {
+afterEach(() => {
+  delete window.__liveBoot
+})
+
+describe('the page boot order', () => {
+  it('boots fixture mode after the install pass', async () => {
     const row = { id: 'fixture' }
-    const { calls, queued } = harness([row])
+    const { calls, queued } = await harness([row])
     expect(calls).toEqual([])
     expect(queued).toHaveLength(1)
 
@@ -59,23 +79,23 @@ describe('the assembled page boot order', () => {
     expect(calls.find(([name]) => name === 'sessionOpen')).toEqual(['sessionOpen', row])
   })
 
-  it('lets live claim the first paint and tolerates its empty session source', () => {
-    const { api, calls, page, queued } = harness()
-    page.__liveBoot = 1
+  it('lets live claim the first paint and tolerates its empty session source', async () => {
+    const { part, calls, queued } = await harness()
+    window.__liveBoot = 1
     queued.shift()()
     expect(calls).toEqual([])
 
-    queued.push(api.bootPage)
+    queued.push(part.bootPage)
     queued.shift()()
 
     expect(calls.map(([name]) => name)).toEqual(STEPS.filter((name) => name !== 'sessionOpen'))
   })
 
-  /* The parts are modules now, so "before" is no longer a position in one
-     concatenated text: it is the order src/legacy/index.js installs them in.
-     Three things carry the rule -- the queue is the last part's, it is the last
-     thing that part installs, and the index installs the live parts in the
-     manifest's order, after the demo half and only in live mode. */
+  /* The parts are modules, so "before" is not a position in one concatenated
+     text: it is the order src/legacy/index.js installs them in. Three things
+     carry the rule -- the queue is the last part's, it is the last thing that
+     part installs, and the index installs the live parts in that order, after
+     the demo half and only in live mode. */
   it('queues live boot only after every synchronous source installer', () => {
     const carriers = liveParts.filter((_, i) => liveTexts[i].includes('queueMicrotask(bootPage);'))
     expect(carriers).toEqual([liveParts.at(-1)])
@@ -85,7 +105,7 @@ describe('the assembled page boot order', () => {
     const body = last.slice(opened, last.indexOf('\n}\n', opened))
     expect(body.trimEnd().endsWith('queueMicrotask(bootPage);')).toBe(true)
 
-    const installs = [...live.matchAll(/^DS\.[A-Za-z0-9_.]+\s*=/gm)]
+    const installs = [...live.matchAll(/^\s*DS\.[A-Za-z0-9_.]+\s*=/gm)]
     expect(installs.length).toBeGreaterThan(10)
 
     const listed = [...index.matchAll(/^import \* as \w+ from '\.\/live\/([^']+)'$/gm)].map((m) => m[1])
@@ -112,11 +132,11 @@ describe('first-run model setup', () => {
 
 /* Where the live layer starts recording which conversation the tab is on.
    An ordering rule no unit test can hold: the demo shell has already opened its
-   canned session by the time this file runs, and the line above it clears the
-   pointer again. Watching before either of those wrote `a` into the note and
+   canned session by the time this part installs, and the line above it clears
+   the pointer again. Watching before either of those wrote `a` into the note and
    then deleted it, so a reload never had a conversation to come back to. */
 describe('the live boot guard', () => {
-  const guard = readFileSync(new URL('../src/legacy/live/010-boot-guard.js', import.meta.url), 'utf8')
+  const guard = readFileSync(resolve(process.cwd(), 'src/legacy/live/010-boot-guard.js'), 'utf8')
 
   it('starts the view watch, and only after it has cleared the pointer', () => {
     const clear = guard.indexOf('sessionSet(null)')
@@ -127,10 +147,9 @@ describe('the live boot guard', () => {
 })
 
 describe('the permission chip mirrors every settings load', () => {
-  /* The push lives outside loadSettings (model-refresh-live.test.mjs extracts
-     that function's source and evaluates it under node), so each caller must
-     invoke it itself -- boot included, or a cold page shows the localStorage
-     cache while the gate enforces the server's mode. */
+  /* The push lives outside loadSettings, so each caller must invoke it itself
+     -- boot included, or a cold page shows the localStorage cache while the
+     gate enforces the server's mode. */
   it('each loadSettings call site pushes the mode afterwards', () => {
     const callers = [...live.matchAll(/(?<!function )loadSettings\(\)/g)].length
     const pushes = [...live.matchAll(/pushPermMode\(\)|\.then\(pushPermMode\)/g)].length

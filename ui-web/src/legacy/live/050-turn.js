@@ -458,46 +458,45 @@ async function refreshList() {
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-// Per-turn cost lives under each answer and "a turn is running" is now the
-// ticking row above the composer, so the strip under the field stays empty.
-DS.composer.meter = () => '';
+  // Per-turn cost lives under each answer and "a turn is running" is now the
+  // ticking row above the composer, so the strip under the field stays empty.
+  DS.composer.meter = () => '';
 
-/* Opening a delegated graph: the last node if this page already holds the run's
+  /* Opening a delegated graph: the last node if this page already holds the run's
    own record, the agents panel otherwise. Installed as a source verb rather
    than written inline in the delivered handler, because the row a RELOAD draws
    has to open the same thing the live row does. */
-DS.transcript.openDagRun = function (runId) {
-  const id = String(runId || '');
-  if (id) {
-    const d = RavenIslands.dag.run(sheetSession());
-    const last = d && d.run_id === id ? d.order[d.order.length - 1] : null;
-    if (last) {
-      /* With what the node is FOR, not only its id. The run holds every node's
+  DS.transcript.openDagRun = function (runId) {
+    const id = String(runId || '');
+    if (id) {
+      const d = RavenIslands.dag.run(sheetSession());
+      const last = d && d.run_id === id ? d.order[d.order.length - 1] : null;
+      if (last) {
+        /* With what the node is FOR, not only its id. The run holds every node's
          summary and this row handed over the slug alone, so a pane opened from
          the trail was headed by a name for the machine while the same node opened
          from the sheet was headed by what it did. */
-      const n = d.nodes && d.nodes.get ? d.nodes.get(last) : null;
-      dagOpenNode(id, { id: last, summary: (n && n.node_summary) || null });
-      return;
+        const n = d.nodes && d.nodes.get ? d.nodes.get(last) : null;
+        dagOpenNode(id, { id: last, summary: (n && n.node_summary) || null });
+        return;
+      }
     }
-  }
-  setWs(true, 'agents');
-};
+    setWs(true, 'agents');
+  };
 
-/* A refused persist must not stay quiet. The row moves optimistically, but a
+  /* A refused persist must not stay quiet. The row moves optimistically, but a
    pin the server never accepted looks identical to one it did until the page
    is reloaded and the group is simply gone -- which is exactly how an older
    resident gateway, with no session.pin to call at all, presents itself. Put
    the row back and say so. */
-DS.sessions.pin = (id, pinned) => rpc.call('session.pin', { session_id: id, pinned: !!pinned })
-  .catch((e) => {
-    const s = sess(id);
-    if (s) { s.pin = !pinned; sessionDraw(); }
-    toast(T('gui.sess.pin_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
-  });
+  DS.sessions.pin = (id, pinned) => rpc.call('session.pin', { session_id: id, pinned: !!pinned })
+    .catch((e) => {
+      const s = sess(id);
+      if (s) { s.pin = !pinned; sessionDraw(); }
+      toast(T('gui.sess.pin_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
+    });
 }
 
 export { live, resetTurnState, ensureStep, paintSay, stopSayPaint, flushSay, turnDur, onEvent, fmtTok, finishTurn, NAMING_GRACE_MS, namingTimers, titlePlaceholder, settleNaming, namingGaveUp, namingDeclined, namingSuperseded, namingEnded, beginNaming, refreshList }

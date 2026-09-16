@@ -272,181 +272,180 @@ const SESSION_FIXTURES = [
 ];
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-CH_FIELDS = {
-  feishu:   creds(['app_id','应用 App ID'], ['app_secret','应用 App Secret', true]),
-  wecom:    creds(['corp_id','企业 CorpID'], ['secret','应用 Secret', true]),
-  slack:    creds(['bot_token','机器人 Bot Token', true], ['app_token','应用 App Token', true]),
-  dingtalk: creds(['client_id','应用 ClientID'], ['client_secret','应用 ClientSecret', true]),
-  qq:       creds(['app_id','App ID'], ['app_secret','App Secret', true]),
-  telegram: creds(['token','机器人 Token', true]),
-  discord:  creds(['bot_token','机器人 Bot Token', true]),
-  matrix:   creds(['homeserver','主服务器地址'], ['access_token','访问令牌', true]),
-  mochat:   creds(['claw_token','Claw Token', true]),
-  email:    creds(['imap_host','收件服务器（IMAP 地址）'], ['imap_username','邮箱账号'],
-                  ['imap_password','邮箱密码或授权码', true], ['smtp_host','发件服务器（SMTP 地址）'],
-                  ['smtp_username','发件账号'], ['smtp_password','发件密码或授权码', true]),
-  /* Two entrances sign in instead: no form, a code on the phone. */
-  weixin:   [],
-  whatsapp: []
-};
-CHANNELS = [
-  { id:'feishu',   key:'gui.chan.feishu',   on:true,  who:'EverMind', running:true },
-  { id:'wecom',    key:'gui.chan.wecom',    on:false },
-  { id:'weixin',   key:'gui.chan.weixin',   on:false, qrLogin:true },
-  { id:'slack',    name:'Slack',    on:false },
-  { id:'dingtalk', key:'gui.chan.dingtalk', on:false },
-  { id:'qq',       name:'QQ',       on:false },
-  { id:'telegram', name:'Telegram', on:false },
-  { id:'discord',  name:'Discord',  on:false },
-  { id:'whatsapp', name:'WhatsApp', on:false, qrLogin:true },
-  { id:'email',    key:'gui.chan.email',    on:true,  who:'weixiang@evermind.ai', running:true },
-  { id:'matrix',   name:'Matrix',   on:false },
-  { id:'mochat',   key:'gui.chan.mochat',   on:false }
-].map((c) => {
-  const fs = CH_FIELDS[c.id] || [];
-  /* An entrance in service has its credentials in place; one that is not is
+  CH_FIELDS = {
+    feishu:   creds(['app_id','应用 App ID'], ['app_secret','应用 App Secret', true]),
+    wecom:    creds(['corp_id','企业 CorpID'], ['secret','应用 Secret', true]),
+    slack:    creds(['bot_token','机器人 Bot Token', true], ['app_token','应用 App Token', true]),
+    dingtalk: creds(['client_id','应用 ClientID'], ['client_secret','应用 ClientSecret', true]),
+    qq:       creds(['app_id','App ID'], ['app_secret','App Secret', true]),
+    telegram: creds(['token','机器人 Token', true]),
+    discord:  creds(['bot_token','机器人 Bot Token', true]),
+    matrix:   creds(['homeserver','主服务器地址'], ['access_token','访问令牌', true]),
+    mochat:   creds(['claw_token','Claw Token', true]),
+    email:    creds(['imap_host','收件服务器（IMAP 地址）'], ['imap_username','邮箱账号'],
+                    ['imap_password','邮箱密码或授权码', true], ['smtp_host','发件服务器（SMTP 地址）'],
+                    ['smtp_username','发件账号'], ['smtp_password','发件密码或授权码', true]),
+    /* Two entrances sign in instead: no form, a code on the phone. */
+    weixin:   [],
+    whatsapp: []
+  };
+  CHANNELS = [
+    { id:'feishu',   key:'gui.chan.feishu',   on:true,  who:'EverMind', running:true },
+    { id:'wecom',    key:'gui.chan.wecom',    on:false },
+    { id:'weixin',   key:'gui.chan.weixin',   on:false, qrLogin:true },
+    { id:'slack',    name:'Slack',    on:false },
+    { id:'dingtalk', key:'gui.chan.dingtalk', on:false },
+    { id:'qq',       name:'QQ',       on:false },
+    { id:'telegram', name:'Telegram', on:false },
+    { id:'discord',  name:'Discord',  on:false },
+    { id:'whatsapp', name:'WhatsApp', on:false, qrLogin:true },
+    { id:'email',    key:'gui.chan.email',    on:true,  who:'weixiang@evermind.ai', running:true },
+    { id:'matrix',   name:'Matrix',   on:false },
+    { id:'mochat',   key:'gui.chan.mochat',   on:false }
+  ].map((c) => {
+    const fs = CH_FIELDS[c.id] || [];
+    /* An entrance in service has its credentials in place; one that is not is
      missing all of them, which is what its row counts down. */
-  return { ...c, fields:c.on ? filled(fs) : fs, missing:c.on ? [] : fs.map((f) => f.key) };
-});
-RUNS = {
-  gtm: {
-    key: 'gtm', title: 'GTM agent 市场调研',
-    ask: '调研一下市场上做 GTM agent 的产品',
-    use: { calls: 4, in: 14226, out: 3180, cost: 0.021, wall: 41000 },
-    /* Web search unconfigured: searches fail; fall back to fetching official sites directly */
-    ev: [
-      { t:'ep' },
-      { t:'think', d:900, s:7, x:'用户想了解 GTM（Go-To-Market）agent 赛道。要覆盖四块：代表性公司、产品能力、融资、趋势判断。先并行搜几路关键词，再抓官网补细节，最后交叉核对。' },
-      { t:'say', d:700, x:'我来调研市场上做 GTM Agent 的产品，先并行搜几路关键词。' },
-      { t:'t+', d:340, id:1, n:'web_search', a:'GTM agent AI go-to-market automation 2026' },
-      { t:'t-', d:640, id:1, ok:false, r:NOKEY, ms:0 },
-      { t:'t+', d:110, id:2, n:'web_search', a:'best GTM AI agents Clay Apollo 11x' },
-      { t:'t-', d:560, id:2, ok:false, r:NOKEY, ms:0 },
-      { t:'ep', d:420 },
-      { t:'think', d:800, s:6, x:'搜索能力没启用。改用 web_fetch 直接抓官网——信息密度更高，而且可引用来源。' },
-      { t:'say', d:600, x:'网页搜索还没配置，我改用直接抓取官网的方式。' },
-      { t:'t+', d:300, id:3, n:'web_fetch', a:'https://www.clay.com' },
-      { t:'t-', d:1500, id:3, ok:true, r:'{"status":200,"extractor":"jina-reader","length":5000}', ms:1500 },
-      { t:'t+', d:140, id:4, n:'web_fetch', a:'https://www.11x.ai' },
-      { t:'t-', d:1150, id:4, ok:true, r:'{"status":200,"extractor":"jina-reader","length":4820}', ms:1150 },
-      { t:'t+', d:140, id:5, n:'web_fetch', a:'https://unifygtm.com' },
-      { t:'t-', d:900, id:5, ok:true, r:'{"status":200,"extractor":"jina-reader","length":3960}', ms:900 },
-      { t:'ep', d:420 },
-      { t:'think', d:850, s:5, x:'三家数据够了，整理成对比表，再给趋势判断。要标注搜索没跑，融资数字可能滞后。' },
-      ...GTM_FILE_EVENTS,
-      { t:'t+', d:120, id:11, n:'deliver_files', a:{ files:[{ path:'research/gtm-compare.md' }] } },
-      { t:'t-', d:120, id:11, ok:true, r:'Delivered 1 file: gtm-compare.md', ms:120,
-        meta:{ raven_delivery:{ files:GTM_DELIVERY_FILES } } },
-      { t:'answer', d:500, x: ANSWER_GTM + `
+    return { ...c, fields:c.on ? filled(fs) : fs, missing:c.on ? [] : fs.map((f) => f.key) };
+  });
+  RUNS = {
+    gtm: {
+      key: 'gtm', title: 'GTM agent 市场调研',
+      ask: '调研一下市场上做 GTM agent 的产品',
+      use: { calls: 4, in: 14226, out: 3180, cost: 0.021, wall: 41000 },
+      /* Web search unconfigured: searches fail; fall back to fetching official sites directly */
+      ev: [
+        { t:'ep' },
+        { t:'think', d:900, s:7, x:'用户想了解 GTM（Go-To-Market）agent 赛道。要覆盖四块：代表性公司、产品能力、融资、趋势判断。先并行搜几路关键词，再抓官网补细节，最后交叉核对。' },
+        { t:'say', d:700, x:'我来调研市场上做 GTM Agent 的产品，先并行搜几路关键词。' },
+        { t:'t+', d:340, id:1, n:'web_search', a:'GTM agent AI go-to-market automation 2026' },
+        { t:'t-', d:640, id:1, ok:false, r:NOKEY, ms:0 },
+        { t:'t+', d:110, id:2, n:'web_search', a:'best GTM AI agents Clay Apollo 11x' },
+        { t:'t-', d:560, id:2, ok:false, r:NOKEY, ms:0 },
+        { t:'ep', d:420 },
+        { t:'think', d:800, s:6, x:'搜索能力没启用。改用 web_fetch 直接抓官网——信息密度更高，而且可引用来源。' },
+        { t:'say', d:600, x:'网页搜索还没配置，我改用直接抓取官网的方式。' },
+        { t:'t+', d:300, id:3, n:'web_fetch', a:'https://www.clay.com' },
+        { t:'t-', d:1500, id:3, ok:true, r:'{"status":200,"extractor":"jina-reader","length":5000}', ms:1500 },
+        { t:'t+', d:140, id:4, n:'web_fetch', a:'https://www.11x.ai' },
+        { t:'t-', d:1150, id:4, ok:true, r:'{"status":200,"extractor":"jina-reader","length":4820}', ms:1150 },
+        { t:'t+', d:140, id:5, n:'web_fetch', a:'https://unifygtm.com' },
+        { t:'t-', d:900, id:5, ok:true, r:'{"status":200,"extractor":"jina-reader","length":3960}', ms:900 },
+        { t:'ep', d:420 },
+        { t:'think', d:850, s:5, x:'三家数据够了，整理成对比表，再给趋势判断。要标注搜索没跑，融资数字可能滞后。' },
+        ...GTM_FILE_EVENTS,
+        { t:'t+', d:120, id:11, n:'deliver_files', a:{ files:[{ path:'research/gtm-compare.md' }] } },
+        { t:'t-', d:120, id:11, ok:true, r:'Delivered 1 file: gtm-compare.md', ms:120,
+          meta:{ raven_delivery:{ files:GTM_DELIVERY_FILES } } },
+        { t:'answer', d:500, x: ANSWER_GTM + `
 
 ### 一处存疑
 
 本轮**网页搜索未启用**，以上只基于三家官网的公开信息，融资数字可能滞后。在「能力」里配好网页搜索后，我可以再跑一轮交叉验证。` },
-      { t:'end' }
-    ],
-    /* Web search configured: searches succeed, coverage is wider, findings can be cross-checked */
-    evOk: [
-      { t:'ep' },
-      { t:'think', d:900, s:7, x:'GTM agent 赛道。先并行搜三路关键词拿到候选名单，再挑代表性的抓官网核对细节，最后交叉验证融资数字。' },
-      { t:'say', d:700, x:'我来调研市场上做 GTM Agent 的产品，先并行搜几路关键词。' },
-      { t:'t+', d:340, id:1, n:'web_search', a:'GTM agent AI go-to-market automation 2026' },
-      { t:'t-', d:900, id:1, ok:true, r:'18 条结果 · clay.com / 11x.ai / unifygtm.com / apollo.io …', ms:900 },
-      { t:'t+', d:120, id:2, n:'web_search', a:'GTM agent funding round 2026' },
-      { t:'t-', d:780, id:2, ok:true, r:'11 条结果 · crunchbase / techcrunch / saastr', ms:780 },
-      { t:'ep', d:400 },
-      { t:'think', d:800, s:6, x:'名单齐了。抓两家官网补产品细节，融资用检索结果交叉核对。' },
-      { t:'say', d:600, x:'名单拿到了，我抓官网补产品细节，融资数字用检索结果交叉核对。' },
-      { t:'t+', d:300, id:3, n:'web_fetch', a:'https://www.clay.com' },
-      { t:'t-', d:1400, id:3, ok:true, r:'{"status":200,"extractor":"jina-reader","length":5000}', ms:1400 },
-      { t:'t+', d:140, id:4, n:'web_fetch', a:'https://www.11x.ai' },
-      { t:'t-', d:1100, id:4, ok:true, r:'{"status":200,"extractor":"jina-reader","length":4820}', ms:1100 },
-      { t:'ep', d:400 },
-      { t:'think', d:900, s:7, x:'三家各自的细节不是一个人读得完的量。拆成三路并行读，各出一份结构化摘要，再汇到一个节点里对表——这就是一张 dag。' },
-      { t:'say', d:700, x:'我把三家分头交给 subagent 细读，最后汇成一张对比表。' },
-      /* The one dag call on this canvas, and its `a` is the argument object
+        { t:'end' }
+      ],
+      /* Web search configured: searches succeed, coverage is wider, findings can be cross-checked */
+      evOk: [
+        { t:'ep' },
+        { t:'think', d:900, s:7, x:'GTM agent 赛道。先并行搜三路关键词拿到候选名单，再挑代表性的抓官网核对细节，最后交叉验证融资数字。' },
+        { t:'say', d:700, x:'我来调研市场上做 GTM Agent 的产品，先并行搜几路关键词。' },
+        { t:'t+', d:340, id:1, n:'web_search', a:'GTM agent AI go-to-market automation 2026' },
+        { t:'t-', d:900, id:1, ok:true, r:'18 条结果 · clay.com / 11x.ai / unifygtm.com / apollo.io …', ms:900 },
+        { t:'t+', d:120, id:2, n:'web_search', a:'GTM agent funding round 2026' },
+        { t:'t-', d:780, id:2, ok:true, r:'11 条结果 · crunchbase / techcrunch / saastr', ms:780 },
+        { t:'ep', d:400 },
+        { t:'think', d:800, s:6, x:'名单齐了。抓两家官网补产品细节，融资用检索结果交叉核对。' },
+        { t:'say', d:600, x:'名单拿到了，我抓官网补产品细节，融资数字用检索结果交叉核对。' },
+        { t:'t+', d:300, id:3, n:'web_fetch', a:'https://www.clay.com' },
+        { t:'t-', d:1400, id:3, ok:true, r:'{"status":200,"extractor":"jina-reader","length":5000}', ms:1400 },
+        { t:'t+', d:140, id:4, n:'web_fetch', a:'https://www.11x.ai' },
+        { t:'t-', d:1100, id:4, ok:true, r:'{"status":200,"extractor":"jina-reader","length":4820}', ms:1100 },
+        { t:'ep', d:400 },
+        { t:'think', d:900, s:7, x:'三家各自的细节不是一个人读得完的量。拆成三路并行读，各出一份结构化摘要，再汇到一个节点里对表——这就是一张 dag。' },
+        { t:'say', d:700, x:'我把三家分头交给 subagent 细读，最后汇成一张对比表。' },
+        /* The one dag call on this canvas, and its `a` is the argument object
          rather than a label string: the card is built from the arguments, so a
          label would draw three boxes and no edges -- the shape this card exists
          to stop showing. */
-      { t:'t+', d:300, id:5, n:'run_subagent_dag', a: DAG_GTM },
-      { t:'dag', d:120, k:'dag.run_started', p:{ run_id: DAG_RUN,
-        nodes: DAG_GTM.nodes.map((n) => ({ id: n.id, subagent: n.subagent, depends_on: n.depends_on })) } },
-      { t:'dag', d:200, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_clay', status:'running', started_at: 1000 } },
-      { t:'dag', d:40,  k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_11x', status:'running', started_at: 1000 } },
-      { t:'dag', d:40,  k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_unify', status:'running', started_at: 1000 } },
-      { t:'dag', d:700, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_clay', status:'completed', ended_at: 5200 } },
-      { t:'dag', d:260, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_unify', status:'completed', ended_at: 6100 } },
-      { t:'dag', d:180, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_11x', status:'completed', ended_at: 6900 } },
-      { t:'dag', d:120, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'compare', status:'running', started_at: 6900 } },
-      { t:'dag', d:900, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'compare', status:'completed', ended_at: 10400 } },
-      { t:'t-', d:200, id:5, ok:true, ms:2600,
-        r:`DAG ${DAG_RUN}: 4 个节点全部完成` },
-      { t:'ep', d:400 },
-      { t:'think', d:850, s:5, x:'官网与检索结果对得上，可以出表。' },
-      ...GTM_FILE_EVENTS,
-      { t:'t+', d:120, id:11, n:'deliver_files', a:{ files:[{ path:'research/gtm-compare.md' }] } },
-      { t:'t-', d:120, id:11, ok:true, r:'Delivered 1 file: gtm-compare.md', ms:120,
-        meta:{ raven_delivery:{ files:GTM_DELIVERY_FILES } } },
-      { t:'answer', d:500, x: ANSWER_GTM + `
+        { t:'t+', d:300, id:5, n:'run_subagent_dag', a: DAG_GTM },
+        { t:'dag', d:120, k:'dag.run_started', p:{ run_id: DAG_RUN,
+          nodes: DAG_GTM.nodes.map((n) => ({ id: n.id, subagent: n.subagent, depends_on: n.depends_on })) } },
+        { t:'dag', d:200, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_clay', status:'running', started_at: 1000 } },
+        { t:'dag', d:40,  k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_11x', status:'running', started_at: 1000 } },
+        { t:'dag', d:40,  k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_unify', status:'running', started_at: 1000 } },
+        { t:'dag', d:700, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_clay', status:'completed', ended_at: 5200 } },
+        { t:'dag', d:260, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_unify', status:'completed', ended_at: 6100 } },
+        { t:'dag', d:180, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_11x', status:'completed', ended_at: 6900 } },
+        { t:'dag', d:120, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'compare', status:'running', started_at: 6900 } },
+        { t:'dag', d:900, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'compare', status:'completed', ended_at: 10400 } },
+        { t:'t-', d:200, id:5, ok:true, ms:2600,
+          r:`DAG ${DAG_RUN}: 4 个节点全部完成` },
+        { t:'ep', d:400 },
+        { t:'think', d:850, s:5, x:'官网与检索结果对得上，可以出表。' },
+        ...GTM_FILE_EVENTS,
+        { t:'t+', d:120, id:11, n:'deliver_files', a:{ files:[{ path:'research/gtm-compare.md' }] } },
+        { t:'t-', d:120, id:11, ok:true, r:'Delivered 1 file: gtm-compare.md', ms:120,
+          meta:{ raven_delivery:{ files:GTM_DELIVERY_FILES } } },
+        { t:'answer', d:500, x: ANSWER_GTM + `
 
 ### 可信度
 
 融资数字由**检索结果与官网双向核对**，两处一致。搜索一并覆盖了 Apollo、Regie 等次级玩家，未进表是因为主业不在 agent。` },
-      { t:'end' }
-    ]
-  },
+        { t:'end' }
+      ]
+    },
 
-  fix: {
-    key: 'fix', title: '修复登录偶发超时',
-    ask: '登录接口偶发超时，帮我定位并修掉',
-    use: { calls: 7, in: 38104, out: 5202, cost: 0.058, wall: 96000 },
-    ev: [
-      { t:'ep' },
-      { t:'think', d:900, s:8, x:'偶发超时的常见成因：连接池耗尽、下游依赖抖动、锁竞争。先定位代码入口，日志量大就交给 subagent 并行扫。' },
-      { t:'say', d:700, x:'我先看登录链路的代码，同时派两个 subagent 分头查日志和数据库。' },
-      { t:'t+', d:300, id:1, n:'grep', a:'func Login' },
-      { t:'t-', d:480, id:1, ok:true, r:'internal/handler/auth.go:42 · internal/service/session.go:118', ms:480 },
-      { t:'t+', d:130, id:2, n:'read_file', a:'internal/service/session.go' },
-      { t:'t-', d:390, id:2, ok:true, r:'package service · 214 行', ms:390 },
-      { t:'t+', d:130, id:3, n:'spawn', a:'log-analyst · 扫 7 天网关日志' },
-      { t:'t+', d:90,  id:4, n:'spawn', a:'db-inspector · 检查连接池与慢查询' },
-      { t:'t-', d:2500, id:3, ok:true, r:'超时集中在每小时 00-03 分，p99 从 180ms 跳到 12s，与定时任务重合', ms:2500 },
-      { t:'t-', d:420, id:4, ok:true, r:'max_open_conns=10；定时任务批量写入时占满连接池', ms:2900 },
-      { t:'ep', d:420 },
-      { t:'think', d:1000, s:9, x:'两条线索对上了：批量任务占满 10 个连接，登录请求排队等连接直到网关超时。修法是给后台任务独立连接池，并让请求路径快速失败。' },
-      { t:'say', d:700, x:'定位到了：整点的批量任务把连接池占满，登录请求在排队等连接。我来改。' },
-      { t:'t+', d:300, id:5, n:'edit_file', a:'internal/db/pool.go' },
-      { t:'t-', d:620, id:5, ok:true, r:'+8 -2', ms:620,
-        diff:['@@ -14,7 +14,21 @@ func NewPool(cfg Config) (*Pool, error) {',
-              '-\tdb.SetMaxOpenConns(10)',
-              '-\tdb.SetMaxIdleConns(2)',
-              '+\t// Requests and background jobs no longer share a pool: a batch',
-              '+\t// write used to hold all 10 connections and login requests',
-              '+\t// queued behind it until the gateway timed out.',
-              '+\tdb.SetMaxOpenConns(25)',
-              '+\tdb.SetMaxIdleConns(8)',
-              '+\tbg := db.Clone()',
-              '+\tbg.SetMaxOpenConns(4)'] },
-      { t:'t+', d:140, id:6, n:'exec', a:'go test ./internal/... -run TestLogin -count=3' },
-      { t:'t-', d:2100, id:6, ok:true, r:'ok internal/service 4.812s · 3 runs, 0 failures', ms:2100 },
-      { t:'ep', d:300 },
-      { t:'t+', d:200, id:7, n:'list_dir', a:'internal/db' },
-      { t:'t-', d:300, id:7, ok:true, ms:300,
-        r:'pool.go\npool_test.go\nmigrate.go\ntx.go\nconn.go\nmetrics.go\nretry.go\nREADME.md' },
-      { t:'ep', d:150 },
-      { t:'t+', d:150, id:8, n:'read_file', a:'internal/db/pool_test.go' },
-      { t:'t-', d:250, id:8, ok:true, r:'package db · 3 处断言引用了旧的连接上限', ms:250 },
-      { t:'ep', d:150 },
-      { t:'t+', d:150, id:9, n:'exec', a:'go vet ./internal/db/...' },
-      { t:'t-', d:400, id:9, ok:true, r:'', ms:400 },
-      { t:'ep', d:320 },
-      { t:'think', d:700, s:4, x:'测试通过。把根因、改动、验证写清楚，并给出后续建议。' },
-      { t:'t+', d:120, id:10, n:'deliver_files', a:{ files:[{ path:'internal/db/pool.go' }] } },
-      { t:'t-', d:120, id:10, ok:true, r:'Delivered 1 file: pool.go', ms:120,
-        meta:{ raven_delivery:{ files:FIX_DELIVERY_FILES } } },
-      { t:'answer', d:500, x:`## 根因
+    fix: {
+      key: 'fix', title: '修复登录偶发超时',
+      ask: '登录接口偶发超时，帮我定位并修掉',
+      use: { calls: 7, in: 38104, out: 5202, cost: 0.058, wall: 96000 },
+      ev: [
+        { t:'ep' },
+        { t:'think', d:900, s:8, x:'偶发超时的常见成因：连接池耗尽、下游依赖抖动、锁竞争。先定位代码入口，日志量大就交给 subagent 并行扫。' },
+        { t:'say', d:700, x:'我先看登录链路的代码，同时派两个 subagent 分头查日志和数据库。' },
+        { t:'t+', d:300, id:1, n:'grep', a:'func Login' },
+        { t:'t-', d:480, id:1, ok:true, r:'internal/handler/auth.go:42 · internal/service/session.go:118', ms:480 },
+        { t:'t+', d:130, id:2, n:'read_file', a:'internal/service/session.go' },
+        { t:'t-', d:390, id:2, ok:true, r:'package service · 214 行', ms:390 },
+        { t:'t+', d:130, id:3, n:'spawn', a:'log-analyst · 扫 7 天网关日志' },
+        { t:'t+', d:90,  id:4, n:'spawn', a:'db-inspector · 检查连接池与慢查询' },
+        { t:'t-', d:2500, id:3, ok:true, r:'超时集中在每小时 00-03 分，p99 从 180ms 跳到 12s，与定时任务重合', ms:2500 },
+        { t:'t-', d:420, id:4, ok:true, r:'max_open_conns=10；定时任务批量写入时占满连接池', ms:2900 },
+        { t:'ep', d:420 },
+        { t:'think', d:1000, s:9, x:'两条线索对上了：批量任务占满 10 个连接，登录请求排队等连接直到网关超时。修法是给后台任务独立连接池，并让请求路径快速失败。' },
+        { t:'say', d:700, x:'定位到了：整点的批量任务把连接池占满，登录请求在排队等连接。我来改。' },
+        { t:'t+', d:300, id:5, n:'edit_file', a:'internal/db/pool.go' },
+        { t:'t-', d:620, id:5, ok:true, r:'+8 -2', ms:620,
+          diff:['@@ -14,7 +14,21 @@ func NewPool(cfg Config) (*Pool, error) {',
+                '-\tdb.SetMaxOpenConns(10)',
+                '-\tdb.SetMaxIdleConns(2)',
+                '+\t// Requests and background jobs no longer share a pool: a batch',
+                '+\t// write used to hold all 10 connections and login requests',
+                '+\t// queued behind it until the gateway timed out.',
+                '+\tdb.SetMaxOpenConns(25)',
+                '+\tdb.SetMaxIdleConns(8)',
+                '+\tbg := db.Clone()',
+                '+\tbg.SetMaxOpenConns(4)'] },
+        { t:'t+', d:140, id:6, n:'exec', a:'go test ./internal/... -run TestLogin -count=3' },
+        { t:'t-', d:2100, id:6, ok:true, r:'ok internal/service 4.812s · 3 runs, 0 failures', ms:2100 },
+        { t:'ep', d:300 },
+        { t:'t+', d:200, id:7, n:'list_dir', a:'internal/db' },
+        { t:'t-', d:300, id:7, ok:true, ms:300,
+          r:'pool.go\npool_test.go\nmigrate.go\ntx.go\nconn.go\nmetrics.go\nretry.go\nREADME.md' },
+        { t:'ep', d:150 },
+        { t:'t+', d:150, id:8, n:'read_file', a:'internal/db/pool_test.go' },
+        { t:'t-', d:250, id:8, ok:true, r:'package db · 3 处断言引用了旧的连接上限', ms:250 },
+        { t:'ep', d:150 },
+        { t:'t+', d:150, id:9, n:'exec', a:'go vet ./internal/db/...' },
+        { t:'t-', d:400, id:9, ok:true, r:'', ms:400 },
+        { t:'ep', d:320 },
+        { t:'think', d:700, s:4, x:'测试通过。把根因、改动、验证写清楚，并给出后续建议。' },
+        { t:'t+', d:120, id:10, n:'deliver_files', a:{ files:[{ path:'internal/db/pool.go' }] } },
+        { t:'t-', d:120, id:10, ok:true, r:'Delivered 1 file: pool.go', ms:120,
+          meta:{ raven_delivery:{ files:FIX_DELIVERY_FILES } } },
+        { t:'answer', d:500, x:`## 根因
 
 整点的批量同步任务和登录请求**共用同一个连接池**（\`max_open_conns=10\`）。任务一跑就占满连接，登录请求卡在获取连接处，一直等到网关 15s 超时。
 
@@ -465,10 +464,10 @@ go test ./internal/... -run TestLogin -count=3   →  3 runs, 0 failures
 \`\`\`
 
 建议再观察一个整点周期。要我顺手加一条「p99 超过 1s」的告警吗？` },
-      { t:'end' }
-    ]
-  }
-};
+        { t:'end' }
+      ]
+    }
+  };
 }
 
 export { TOOL_GROUPS, TOOLS, SKILLS, PLUGINS, FREQ, CRONS, DELIVER, cronFailing, creds, filled, CH_FIELDS, CHANNELS, chanName, INSTALLABLE, cap, capOn, tool, needsAttn, attnCount, STATE_TXT, stateText, NOKEY, GTM_DOC, GTM_DELIVERY_FILES, FIX_DELIVERY_FILES, GTM_FILE_EVENTS, ANSWER_GTM, DAG_RUN, DAG_GTM, RUNS, eventsFor, SESSION_FIXTURES }

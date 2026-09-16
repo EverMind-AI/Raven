@@ -12,14 +12,13 @@ import { rpc } from './020-rpc.js'
 import { startDraft } from './080-overrides.js'
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-DS.sessions.deleteAll = async () => {
-  const gone = [];
-  for (const s of sessionRows().slice()) {
-    try {
-      /* A refusal is a SUCCESSFUL response, not a rejection: `session.delete`
+  DS.sessions.deleteAll = async () => {
+    const gone = [];
+    for (const s of sessionRows().slice()) {
+      try {
+        /* A refusal is a SUCCESSFUL response, not a rejection: `session.delete`
          answers `{deleted: null, still_on_disk: true}` for a removal the
          filesystem refused. Awaiting alone caught only the transport failures,
          so a refusal counted as a removal -- which is exactly what the note
@@ -30,17 +29,17 @@ DS.sessions.deleteAll = async () => {
          was removed, and when there was nothing to remove; keep it when the
          file survived, or when a server too old to carry the field leaves the
          question open. */
-      const r = await rpc.call('session.delete', { session_id: s.id });
-      if (r.deleted !== s.id && r.still_on_disk !== false) continue;
-      gone.push(s.id); dropDraft(s.id);
-    } catch { /* counted by what is left below */ }
-  }
-  sessionReplace(sessionRows().filter((s) => !gone.includes(s.id)));
-  sessionSet(null);
-  startDraft();
-  drawSettings();
-  toast(sessionRows().length
-    ? T('gui.set.dat.del_partial', { n: gone.length, left: sessionRows().length })
-    : T('gui.set.dat.del_done', { n: gone.length }));
-};
+        const r = await rpc.call('session.delete', { session_id: s.id });
+        if (r.deleted !== s.id && r.still_on_disk !== false) continue;
+        gone.push(s.id); dropDraft(s.id);
+      } catch { /* counted by what is left below */ }
+    }
+    sessionReplace(sessionRows().filter((s) => !gone.includes(s.id)));
+    sessionSet(null);
+    startDraft();
+    drawSettings();
+    toast(sessionRows().length
+      ? T('gui.set.dat.del_partial', { n: gone.length, left: sessionRows().length })
+      : T('gui.set.dat.del_done', { n: gone.length }));
+  };
 }

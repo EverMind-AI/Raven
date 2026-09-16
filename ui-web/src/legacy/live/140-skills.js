@@ -17,33 +17,32 @@ import { extLoaded, loadExt, skillsLive } from './090-extensions.js'
 const skillhubErr = (e) => (e.data && e.data.detail) || e.message || e;
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-DS.skills = {
-  search: (p) => rpc.call('skillhub.search', {
-    query: p.query, category: p.category, page: p.page, limit: p.limit,
-  }),
-  detail: (id) => rpc.call('skillhub.detail', { id }),
-  install: (id) => rpc.call('skillhub.install', { id })
-    .then(() => loadExt().catch(() => {}))
-    .catch((e) => {
-      toast(T('gui.plug.op_failed', { err: skillhubErr(e) }));
-      throw { handled: true };
+  DS.skills = {
+    search: (p) => rpc.call('skillhub.search', {
+      query: p.query, category: p.category, page: p.page, limit: p.limit,
     }),
-  remove: (name) => rpc.call('skillhub.remove', { name })
-    .then(() => loadExt().catch(() => {}))
-    .catch((e) => {
-      toast(T('gui.plug.op_failed', { err: skillhubErr(e) }));
-      throw { handled: true };
-    }),
-  installed: () => skillsLive,
-  /* Whether the one boot-time read actually landed. Without it an empty
+    detail: (id) => rpc.call('skillhub.detail', { id }),
+    install: (id) => rpc.call('skillhub.install', { id })
+      .then(() => loadExt().catch(() => {}))
+      .catch((e) => {
+        toast(T('gui.plug.op_failed', { err: skillhubErr(e) }));
+        throw { handled: true };
+      }),
+    remove: (name) => rpc.call('skillhub.remove', { name })
+      .then(() => loadExt().catch(() => {}))
+      .catch((e) => {
+        toast(T('gui.plug.op_failed', { err: skillhubErr(e) }));
+        throw { handled: true };
+      }),
+    installed: () => skillsLive,
+    /* Whether the one boot-time read actually landed. Without it an empty
      list means both "nothing is installed" and "the read never happened",
      and the page has to draw the same nothing for a working install and a
      broken socket. */
-  loaded: () => extLoaded,
-};
+    loaded: () => extLoaded,
+  };
 }
 
 export { skillhubErr }

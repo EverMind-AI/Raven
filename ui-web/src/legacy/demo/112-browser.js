@@ -13,12 +13,11 @@ import { DS } from '../seam/000-datasource.js'
 import { WS } from './100-workspace.js'
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-DS.browser ??= {
-  embedded: false,
-  urls: () => WS.urls,
-  openUrl: (u) => toast(`demo：正式版会用系统浏览器打开 ${u}`),
-};
+  DS.browser ??= {
+    embedded: false,
+    urls: () => WS.urls,
+    openUrl: (u) => toast(`demo：正式版会用系统浏览器打开 ${u}`),
+  };
 }

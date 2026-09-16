@@ -27,38 +27,37 @@ const brB64Blob = (b64) => {
 };
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-DS.browser = {
-  embedded: true,
-  urls: () => RavenIslands.workspace.urls(),
-  openUrl: (u) => RavenIslands.chrome.openUrl(u),
-  frame: (p) => rpc.call('browser.frame', p),
-  open: (p) => rpc.call('browser.open', p),
-  watch: (p) => rpc.call('browser.watch', p),
-  mode: (p) => rpc.call('browser.mode', p),
-  close: () => rpc.call('browser.close', {}),
-  tabs: (p) => rpc.call('browser.tabs', p),
-  input: (p) => rpc.call('browser.input', p),
-  onFrame: null,
-};
+  DS.browser = {
+    embedded: true,
+    urls: () => RavenIslands.workspace.urls(),
+    openUrl: (u) => RavenIslands.chrome.openUrl(u),
+    frame: (p) => rpc.call('browser.frame', p),
+    open: (p) => rpc.call('browser.open', p),
+    watch: (p) => rpc.call('browser.watch', p),
+    mode: (p) => rpc.call('browser.mode', p),
+    close: () => rpc.call('browser.close', {}),
+    tabs: (p) => rpc.call('browser.tabs', p),
+    input: (p) => rpc.call('browser.input', p),
+    onFrame: null,
+  };
 
-/* Screencast frames arrive as binary WS messages:
+  /* Screencast frames arrive as binary WS messages:
    "RVF1" + u32 header length + JSON header + raw JPEG. */
-rpc.binary = (buf) => {
-  const u8 = new Uint8Array(buf);
-  if (u8.length < 8 || u8[0] !== 0x52 || u8[1] !== 0x56 || u8[2] !== 0x46 || u8[3] !== 0x31) return;
-  const hl = new DataView(buf).getUint32(4);
-  let head;
-  try { head = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl))); } catch { return; }
-  if (DS.browser.onFrame) DS.browser.onFrame(head, new Blob([u8.subarray(8 + hl)], { type: 'image/jpeg' }));
-};
+  rpc.binary = (buf) => {
+    const u8 = new Uint8Array(buf);
+    if (u8.length < 8 || u8[0] !== 0x52 || u8[1] !== 0x56 || u8[2] !== 0x46 || u8[3] !== 0x31) return;
+    const hl = new DataView(buf).getUint32(4);
+    let head;
+    try { head = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl))); } catch { return; }
+    if (DS.browser.onFrame) DS.browser.onFrame(head, new Blob([u8.subarray(8 + hl)], { type: 'image/jpeg' }));
+  };
 
-/* Old servers still notify frames as base64 JSON; same hook after decode. */
-rpc.notify['browser.frame'] = (p) => {
-  if (DS.browser.onFrame) DS.browser.onFrame(p, p.jpeg ? brB64Blob(p.jpeg) : null);
-};
+  /* Old servers still notify frames as base64 JSON; same hook after decode. */
+  rpc.notify['browser.frame'] = (p) => {
+    if (DS.browser.onFrame) DS.browser.onFrame(p, p.jpeg ? brB64Blob(p.jpeg) : null);
+  };
 }
 
 export { RPC_ABSENT, rpcGone, rpcHas, brB64Blob }

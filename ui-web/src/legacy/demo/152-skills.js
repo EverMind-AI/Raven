@@ -97,90 +97,89 @@ const HUB_FIXTURE = [
 ];
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-skInstBtn = (() => {
-  const b = mk('button', 'pminstbtn');
-  b.onclick = () => RavenIslands.skills.toggleView();
-  $('.cbar').appendChild(b);
-  return { sync() {
-    b.hidden = extTab !== 'skill' || RavenIslands.skills.view() === 'installed';
-    b.innerHTML = '';
-    b.append(mk('span', null, T('gui.plug.installed_n', { n: DS.skills.installed().length })));
-  } };
-})();
+  skInstBtn = (() => {
+    const b = mk('button', 'pminstbtn');
+    b.onclick = () => RavenIslands.skills.toggleView();
+    $('.cbar').appendChild(b);
+    return { sync() {
+      b.hidden = extTab !== 'skill' || RavenIslands.skills.view() === 'installed';
+      b.innerHTML = '';
+      b.append(mk('span', null, T('gui.plug.installed_n', { n: DS.skills.installed().length })));
+    } };
+  })();
 
-{
-  const prevInput = $('#cq').oninput;
-  $('#cq').oninput = () => {
-    if (extTab === 'skill') { RavenIslands.skills.setQuery($('#cq').value.trim()); return; }
-    if (prevInput) prevInput();
-  };
-  $('#cq').onkeydown = (e) => {
-    if (e.isComposing || e.keyCode === 229) return;
-    if (e.key !== 'Enter' || extTab !== 'skill') return;
-    e.preventDefault();
-    RavenIslands.skills.searchNow($('#cq').value.trim());
-  };
+  {
+    const prevInput = $('#cq').oninput;
+    $('#cq').oninput = () => {
+      if (extTab === 'skill') { RavenIslands.skills.setQuery($('#cq').value.trim()); return; }
+      if (prevInput) prevInput();
+    };
+    $('#cq').onkeydown = (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key !== 'Enter' || extTab !== 'skill') return;
+      e.preventDefault();
+      RavenIslands.skills.searchNow($('#cq').value.trim());
+    };
 
-  decorateExtSet((prev) => (tab) => {
-    const was = extTab;
-    prev(tab);
-    if (extTab !== was) RavenIslands.skills.reset();
-  });
+    decorateExtSet((prev) => (tab) => {
+      const was = extTab;
+      prev(tab);
+      if (extTab !== was) RavenIslands.skills.reset();
+    });
 
-  decorateShowPage((prev) => (id) => {
-    prev(id);
-    if (id !== 'capsPage') RavenIslands.skills.dropDrawer();
-  });
+    decorateShowPage((prev) => (id) => {
+      prev(id);
+      if (id !== 'capsPage') RavenIslands.skills.dropDrawer();
+    });
 
-  decorateCloseDetail((prev) => () => { RavenIslands.skills.dropDrawer(); prev(); });
-  $('#dClose').onclick = () => closeDetail();
+    decorateCloseDetail((prev) => () => { RavenIslands.skills.dropDrawer(); prev(); });
+    $('#dClose').onclick = () => closeDetail();
 
-  /* The island owns the view; the chrome follows it from out here. A view
+    /* The island owns the view; the chrome follows it from out here. A view
      flip redraws the whole tab (title, bar, hero) through drawCaps; any
      other change only needs the installed count refreshed. */
-  RavenIslands.skills.subscribe(() => {
-    const v = RavenIslands.skills.view();
-    if (v !== skView) { skView = v; if (extTab === 'skill') drawCaps(); return; }
-    skInstBtn.sync();
-  });
-}
-
-DS.skills ??= {
-  search: async ({ query, category, page, limit }) => {
-    const q = (query || '').toLowerCase();
-    const rows = HUB_FIXTURE.filter((x) => (!category || x.category === category)
-      && (!q || `${x.name} ${x.description}`.toLowerCase().includes(q)));
-    const from = ((page || 1) - 1) * (limit || 24);
-    const items = rows.slice(from, from + (limit || 24)).map((x) => {
-      const inst = SKILLS.find((s) => s.name === x.name);
-      return { ...x, installed: !!inst, installed_name: inst ? inst.name : '' };
+    RavenIslands.skills.subscribe(() => {
+      const v = RavenIslands.skills.view();
+      if (v !== skView) { skView = v; if (extTab === 'skill') drawCaps(); return; }
+      skInstBtn.sync();
     });
-    return { items, total: rows.length };
-  },
-  detail: async (id) => {
-    const x = HUB_FIXTURE.find((h) => h.id === id) || {};
-    return { description: x.description, category: x.category, source: x.source,
-      license: 'MIT', quality_score: x.quality_score, tags: x.tags || [],
-      subscores: { utility: 8, robustness: 7, safety: 9 },
-      files: ['SKILL.md'], body_tokens: 1200,
-      skill_md: `# ${x.name || id}\n\n${x.description || ''}` };
-  },
-  install: async (id) => {
-    const x = HUB_FIXTURE.find((h) => h.id === id);
-    if (!x) return;
-    SKILLS.push({ id: x.name, name: x.name, reach: 'local', state: 'on',
-      glyph: (x.name[0] || 'S').toUpperCase(), ver: '—', src: x.source,
-      one: x.description, cat: x.category, hub: true, hubId: x.id });
-  },
-  remove: async (name) => {
-    const i = SKILLS.findIndex((s) => s.name === name);
-    if (i >= 0) SKILLS.splice(i, 1);
-  },
-  installed: () => SKILLS,
-};
+  }
+
+  DS.skills ??= {
+    search: async ({ query, category, page, limit }) => {
+      const q = (query || '').toLowerCase();
+      const rows = HUB_FIXTURE.filter((x) => (!category || x.category === category)
+        && (!q || `${x.name} ${x.description}`.toLowerCase().includes(q)));
+      const from = ((page || 1) - 1) * (limit || 24);
+      const items = rows.slice(from, from + (limit || 24)).map((x) => {
+        const inst = SKILLS.find((s) => s.name === x.name);
+        return { ...x, installed: !!inst, installed_name: inst ? inst.name : '' };
+      });
+      return { items, total: rows.length };
+    },
+    detail: async (id) => {
+      const x = HUB_FIXTURE.find((h) => h.id === id) || {};
+      return { description: x.description, category: x.category, source: x.source,
+        license: 'MIT', quality_score: x.quality_score, tags: x.tags || [],
+        subscores: { utility: 8, robustness: 7, safety: 9 },
+        files: ['SKILL.md'], body_tokens: 1200,
+        skill_md: `# ${x.name || id}\n\n${x.description || ''}` };
+    },
+    install: async (id) => {
+      const x = HUB_FIXTURE.find((h) => h.id === id);
+      if (!x) return;
+      SKILLS.push({ id: x.name, name: x.name, reach: 'local', state: 'on',
+        glyph: (x.name[0] || 'S').toUpperCase(), ver: '—', src: x.source,
+        one: x.description, cat: x.category, hub: true, hubId: x.id });
+    },
+    remove: async (name) => {
+      const i = SKILLS.findIndex((s) => s.name === name);
+      if (i >= 0) SKILLS.splice(i, 1);
+    },
+    installed: () => SKILLS,
+  };
 }
 
 export { useInTask, skView, skInstBtn, drawCapsDecorators, drawCaps, decorateDrawCaps, drawCapsBase, HUB_FIXTURE }

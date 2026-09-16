@@ -23,23 +23,22 @@ function drawConn() {
 function connCloseDialog() { RavenIslands.connections.closeDialog(); }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-/* The fixture source: the demo's canned channels behind the same interface
+  /* The fixture source: the demo's canned channels behind the same interface
    the rpc source implements. Rows are the CHANNELS objects themselves,
    mutated in place, which is what makes demo edits stick across a redraw.
    Writes refuse politely, as the offline demo always did. */
-DS.conn ??= {
-  rows: async () => CHANNELS,
-  /* The demo's world has a host in it -- one of its channels is receiving --
+  DS.conn ??= {
+    rows: async () => CHANNELS,
+    /* The demo's world has a host in it -- one of its channels is receiving --
      so it answers yes. Left unanswered, the page would tell the reader nothing
      is running it over a row that is. */
-  hostRunning: () => true,
-  toggle: async (c, on) => { c.on = on; },
-  apply: async () => { nlSay(null); },
-  qr: async () => null,
-};
+    hostRunning: () => true,
+    toggle: async (c, on) => { c.on = on; },
+    apply: async () => { nlSay(null); },
+    qr: async () => null,
+  };
 }
 
 export { closeConn, drawConn, connCloseDialog }

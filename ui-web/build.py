@@ -14,8 +14,10 @@ The three layers under ``src/legacy/`` are ES modules now, reached from
 everything else, so this script no longer assembles them and no longer inlines
 the message catalogue either (``src/legacy/demo/010-kernel.js`` imports
 ``i18n/messages.json`` directly). The manifests below stay: they are the order
-``src/legacy/index.js`` installs the parts in, and twelve sandbox tests plus one
-Python test outside this directory read them from here.
+``src/legacy/index.js`` installs the parts in, and one Python test outside this
+directory calls ``_concat``. No sandbox test reads them any more -- the
+harnesses import the parts (``ui-web/scripts/legacy-part.mjs``), and the two
+shape gates take the list of parts from ``src/legacy/index.js``.
 Run:
 
     python ui-web/build.py
@@ -104,9 +106,9 @@ _LIVE_PARTS = [
 def _concat(subdir: str, manifest: list[str]) -> str:
     """The layer's parts as one text, in manifest order.
 
-    Nothing in the build reads this any more; it is what the sandbox tests and
-    the Python test outside this directory search for a function they then
-    evaluate. The layer names stay "seam" / "demo" / "live" for every caller.
+    Nothing in the build reads this any more; it is what the Python test
+    outside this directory searches for a function it then evaluates. The layer
+    names stay "seam" / "demo" / "live" for every caller.
     """
     layer = ROOT / "src" / "legacy" / subdir
     found = {p.name for p in layer.glob("*.js")}
