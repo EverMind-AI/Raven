@@ -1,7 +1,7 @@
 /* ---- overrides ----------------------------------------------------- */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, T } from '../demo/010-kernel.js'
 import { claimDraft, confirmAsk, dropDraft, loadDraft, parkDraft, queueClear, queuePush, queueShift, sess, sheetsForget, stop_, turn } from '../demo/040-state.js'
 import { markNewCurrent, sessionDraw, sessionOpen, sessionReplace, sessionRows } from '../demo/050-rail.js'
@@ -614,13 +614,13 @@ export function install() {
   /* The two actions, installed on the source the composer already asks. `stop`
    is the go button's other half and the Escape key's; `send` is what the island
    hands a folded message to. */
-  DS.composer.send = liveSend;
+  sources.composer.send = liveSend;
   /* The one way anything outside the dock can get a conversation to work in. The
    composer has always made one on its first send; this is the same promotion
    offered by name, for a caller that needs the conversation and has no message
    to start it with. */
-  DS.composer.startConversation = () => openConversation();
-  DS.composer.stop = function () {
+  sources.composer.startConversation = () => openConversation();
+  sources.composer.stop = function () {
     /* A runtime turn (a delegated result re-entering) is NOT cancellable:
      turn.cancel resolves only handles turn.send registered, and the stop
      button claiming the UI here would reset the stage while the delegated
@@ -640,7 +640,7 @@ export function install() {
     softStop(true);
   };
 
-  DS.sessions.remove = function (s) {
+  sources.sessions.remove = function (s) {
     confirmAsk(T('gui.sess.delete_title'), T('gui.sess.delete_body', { title: s.title }), T('gui.sess.delete'), async () => {
       try {
         const r = await gateway().call('session.delete', { session_id: s.id });
@@ -662,7 +662,7 @@ export function install() {
     });
   };
 
-  DS.sessions.archive = async function (s) {
+  sources.sessions.archive = async function (s) {
     try {
       const at = sessionRows().findIndex(row => row.id === s.id);
       const result = await gateway().call('session.archive', { session_id: s.id, archived: true });
@@ -698,8 +698,8 @@ export function install() {
    off the input it had just created -- reaching into another layer's DOM, and
    missing an Enter, which replaces that input while it still has focus. The
    island tells us instead. */
-  DS.sessions.renamed = (id, title, previous) => {
-    /* A refused rename must not stay quiet -- same reason `DS.sessions.pin` puts
+  sources.sessions.renamed = (id, title, previous) => {
+    /* A refused rename must not stay quiet -- same reason `sources.sessions.pin` puts
      its flag back. The row moved optimistically, so a name the server rejected
      (too long for the metadata record) looks identical to one it took until the
      page is reloaded and the old name is simply back. */

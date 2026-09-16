@@ -1,6 +1,7 @@
 import { ds, shell, t } from '../../shell/bridge'
 import { formatDuration } from '../../shell/duration'
 import { current as currentSession, onChange as onSessionChange } from '../../shell/session'
+import { sources } from '../../state/sources'
 import { plainTitle as stripTitle } from '../rail/title'
 import { instanceCtxStatus, toInstanceCtx } from './history'
 
@@ -1010,8 +1011,7 @@ export function subscribeDetailPoll(listener: () => void): () => void {
 }
 
 export function hook(): void {
-  const seam = window.DS
-  const src = seam && (seam['agents'] as AgentsSource | undefined)
+  const src = sources.agents
   if (!src || !src.watch || src === hooked) return
   hooked = src
   src.watch(onPoll)

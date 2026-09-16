@@ -9,7 +9,7 @@
    your disk -- so the badge is what answers "where does my data go".   */
 /* ── 工具: built in, fixed list, on/off only ───────────────────────── */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { T } from './010-kernel.js'
 
 const TOOL_GROUPS = [
@@ -145,7 +145,7 @@ const tool = (id) => TOOLS.find((t) => t.id === id);
 const needsAttn = (c) => c.state === 'need' || c.state === 'fail' || !!c.update;
 /* Skills never block (they are method, not access), so the rail badge that
    says "something needs you" belongs to the plugins module alone. */
-const attnCount = () => DS.plugins.rows().filter(needsAttn).length;
+const attnCount = () => sources.plugins.rows().filter(needsAttn).length;
 
 const STATE_TXT = {
   on:   { t: 'gui.state.on',   cls: '' },

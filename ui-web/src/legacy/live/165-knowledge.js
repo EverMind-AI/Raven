@@ -1,16 +1,16 @@
 /* -- knowledge bases: the rpc source ----------------------------------
-   The island talks to DS.knowledge and knows nothing about transport; this
+   The island talks to sources.knowledge and knows nothing about transport; this
    file only knows how to speak knowledge.* over /rpc. Installing onto the
    same name is what swaps the demo fixtures for a real engine. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { uploadRefusalBySize } from './020-rpc.js'
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.knowledge = {
+  sources.knowledge = {
     status: () => gateway().call('knowledge.status', {}),
     /* Unwrapped here rather than in the island: the contract answers an object
      so it can grow a field beside the list, and the page wants the list. */

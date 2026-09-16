@@ -4,13 +4,13 @@
    seam replaces the fixture source before the first paint. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { T } from '../demo/010-kernel.js'
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.memory = {
+  sources.memory = {
     stats: () => gateway().call('memory.stats', {}),
     list: (req) => gateway().call('memory.list', {
       kind: req.kind, page: req.page, page_size: req.page_size, q: req.q || null,

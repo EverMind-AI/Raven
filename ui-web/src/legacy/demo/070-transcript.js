@@ -4,12 +4,12 @@
    activity rows), the answer -- and painted into a lane host inside the
    #stage container. What remains here is the island's shell face -- the names
    the replay, the composer, the schedules fixture and the live layer still
-   call -- and the fixture half of DS.transcript. */
+   call -- and the fixture half of sources.transcript. */
 
 /* One step of a turn: the handle keeps the legacy widget surface
    (hasThink/hasSay/failed setters, tool().done(), seal()). */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { sess } from './040-state.js'
 import { sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
 
@@ -61,10 +61,10 @@ const ACT_ICO = {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  /* The fixture half of DS.transcript. The demo replay passes explicit ok
+  /* The fixture half of sources.transcript. The demo replay passes explicit ok
    flags and clean previews, so the reading hooks are identity; branch keeps
    the demo's canned fork. Live mode installs the rpc source over this. */
-  DS.transcript ??= {
+  sources.transcript ??= {
     clean: (t) => String(t == null ? '' : t).trim(),
     okOf: () => true,
     branch: (text) => {

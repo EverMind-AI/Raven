@@ -1,6 +1,6 @@
 /* ══ module 1b: the conversation ══════════════════════════════════ */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, I18N } from './010-kernel.js'
 import { RUNS, cap } from './030-fixtures.js'
 import { loadDraft, parkDraft, queueClear, runState, stop_, turn } from './040-state.js'
@@ -104,14 +104,14 @@ function noteRow(label, detail, opts) {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  /* The fixture half of DS.banner, and only that half. `cap` reads the capability
+  /* The fixture half of sources.banner, and only that half. `cap` reads the capability
    list, which the live layer does fill in place -- but live mode does not use
    this reading of it: live/120-settings.js installs a source that refuses the
    suggestion outright, because a config gap belongs in the settings page, not
    as a strip over every conversation.
    Live mode installs its source before the shared deferred boot, so this
    fixture source is never consulted for a live page's first paint. */
-  DS.banner ??= {
+  sources.banner ??= {
     websearchNeeds: () => { const c = cap('websearch'); return !!c && c.state === 'need'; },
   };
 }

@@ -61,9 +61,8 @@ async function harness({ rows }) {
     calls.push(['rpc', method, params && params.session_id])
     return new Promise((res, rej) => { settle = { res, rej } })
   })
-  const { DS } = await import('../src/legacy/seam/000-datasource.js')
-  DS.composer = { slash }
-  DS.transcript = {}
+  const { setSources } = await import('../src/state/sources')
+  setSources({ composer: { slash }, transcript: {} })
   part.install()
   const tick = () => new Promise((r) => setTimeout(r, 0))
   return {

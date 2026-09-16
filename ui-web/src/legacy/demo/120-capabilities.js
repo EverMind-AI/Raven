@@ -1,6 +1,6 @@
 /* ══ module 2: capabilities page ══════════════════════════════════ */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, applyDecorators } from './010-kernel.js'
 import { markNewCurrent } from './050-rail.js'
 import { drawCaps } from './152-skills.js'
@@ -69,7 +69,7 @@ function extSetBase(tab) {
 async function openCaps(tab) {
   extSet(tab);
   showPage('capsPage');
-  const src = DS.capabilities;
+  const src = sources.capabilities;
   if (src.loaded()) { drawCaps(); drawCapsBadge(); }
   else {
     const box = $('#capsBody'); box.innerHTML = '';
@@ -142,7 +142,7 @@ function drawCapsBadge() {}
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.capabilities ??= { loaded: () => true, load: async () => false };
+  sources.capabilities ??= { loaded: () => true, load: async () => false };
   XA_FIXTURE = [
     /* `vendored` is not decoration: it is what tells the page that connecting this
      row means running the product's installer, not writing a config entry from a
@@ -181,7 +181,7 @@ export function install() {
   /* The fixture source: mutate the row in place so the page is still explorable
    with no gateway behind it, and answer with the same array every time, which
    is what makes those edits stick across a redraw. */
-  DS.xa ??= {
+  sources.xa ??= {
     load: async () => XA_FIXTURE,
     act: async (op, row, args) => {
       const a = args || {};

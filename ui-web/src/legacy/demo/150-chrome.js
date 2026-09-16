@@ -5,7 +5,7 @@
    handler over a text field asks this first. keyCode 229 is the older spelling
    some IMEs still send instead of isComposing. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, T } from './010-kernel.js'
 import { modelCurrent, modelSet, turn } from './040-state.js'
 import { renameTitle, sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
@@ -96,7 +96,7 @@ export function install() {
       if ($('#xaPage').dataset.open === 'true') return closeXa();
       if ($('#connPage').dataset.open === 'true') return closeConn();
       if (setIsOpen()) return closeSet();
-      if (turn.busy()) return DS.composer.stop();
+      if (turn.busy()) return sources.composer.stop();
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault(); setRail(true); toggleFind(true);
@@ -168,7 +168,7 @@ export function install() {
   $('#mAdd').onclick = async () => {
     const n = $('#mName').value.trim(), a = $('#mAddr').value.trim();
     if (!n || !a) { toast(T('gui.adv.need_fields')); return; }
-    try { await DS.plugins.manual(n, a); }
+    try { await sources.plugins.manual(n, a); }
     catch (e) { toast(T('gui.plug.op_failed', { err: e.message || e })); return; }
     $('#mName').value = ''; $('#mAddr').value = '';
     drawCaps(); drawCapsBadge(); toast(T('gui.adv.added_x', { name: n }));

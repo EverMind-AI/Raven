@@ -11,6 +11,7 @@ import * as workspace from './store'
 
 import { setCurrent } from '../../shell/session'
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { InstanceRow } from '../subagents/types'
@@ -41,13 +42,13 @@ function wire(): void {
   asked.length = 0
   setCurrent('s1')
   window.RavenShell = fakeShell
-  window.DS = {
+  setSources({
     workspace: source,
     agents: {
       list: async () => [],
       instances: async (key: string) => { asked.push(key); return agentRows },
     },
-  }
+  })
   window.RavenIslands = { workspace: { openFile: desk.openDeskFile } }
   localStorage.clear()
   document.body.innerHTML = '<div id="split" data-open="true"></div>'
@@ -66,7 +67,7 @@ afterEach(() => {
     workspace.restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
   })
   window.RavenShell = undefined
-  window.DS = undefined
+  resetSources()
   window.RavenIslands = undefined
   setCurrent(null)
   agents.reset()

@@ -4,7 +4,7 @@
    text to copy. Each gets the affordance its kind earns and nothing more.
 
    The renderer is ui-web/src/shell/prose.ts and the click is ui-web/src/shell/chips.ts.
-   What stays here is the offline demo's half of DS.prose: which strings resolve
+   What stays here is the offline demo's half of sources.prose: which strings resolve
    to something openable in a page with no server behind it, and what happens
    when the reader clicks one.
 
@@ -15,7 +15,7 @@
    the file exists. A path that merely looks like one stays plain text: a dead
    link is worse than no link. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { setWs } from './100-workspace.js'
 
 const demoPathOf = (s) => {
@@ -37,7 +37,7 @@ const demoLinkTargetOf = (u) => {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.prose ??= {
+  sources.prose ??= {
     pathOf: demoPathOf,
     linkTargetOf: demoLinkTargetOf,
     /* Nothing to show but the file view itself: the demo has no filesystem, so

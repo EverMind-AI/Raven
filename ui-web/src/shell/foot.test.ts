@@ -2,6 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { draw } from './foot'
+import { resetSources, setSources } from '../state/sources'
+
+import type { SettingsSource } from '../features/settings/types'
 
 interface Facts {
   version?: string | null
@@ -11,7 +14,7 @@ interface Facts {
 const originalPlatform = Object.getOwnPropertyDescriptor(navigator, 'platform')
 
 function install(facts: Facts = {}): void {
-  window.DS = { settings: { version: () => facts.version ?? null } }
+  setSources({ settings: { version: () => facts.version ?? null } as unknown as SettingsSource })
   Object.defineProperty(navigator, 'platform', {
     configurable: true,
     value: facts.mac ? 'MacIntel' : 'Linux x86_64',
@@ -26,7 +29,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  delete window.DS
+  resetSources()
   if (originalPlatform) Object.defineProperty(navigator, 'platform', originalPlatform)
   else Reflect.deleteProperty(navigator, 'platform')
 })

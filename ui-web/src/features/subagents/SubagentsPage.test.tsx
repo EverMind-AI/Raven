@@ -16,9 +16,11 @@ import * as store from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { JSX } from 'react'
+import type { ComposerSource } from '../composer/types'
 import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow, SubagentRow } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -28,7 +30,7 @@ const paints: Array<{ ctx: unknown; opts?: { key?: string; empty?: string; reset
 
 /* The island runs against the same two seams production wires up: a fake
    shell on window.RavenShell (T returns its key, dur a deterministic stamp)
-   and a source on window.DS.agents -- the fixture shape for demo behaviour,
+   and a source on sources.agents -- the fixture shape for demo behaviour,
    list/context/node for live behaviour. */
 function wire(source: AgentsSource): void {
   paints.length = 0
@@ -45,7 +47,7 @@ function wire(source: AgentsSource): void {
     paints.push({ ctx, opts })
     box.appendChild(document.createElement('p'))
   }
-  window.DS = { agents: source }
+  setSources({ agents: source })
   document.body.innerHTML =
     '<span id="wsAgentRun" hidden></span><div class="ws-body" id="wsBody" data-view="agents"></div>'
 }
@@ -112,6 +114,7 @@ afterEach(() => {
   window.RavenIslands = undefined
   vi.useRealTimers()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('subagents island, the list', () => {
@@ -290,18 +293,18 @@ describe('subagents island, the list', () => {
   }
 
   /* The composer seam the roster borrows to get a conversation. Installed after
-     `startable`, which replaces `window.DS` wholesale. Answers the way the live
+     `startable`, which replaces the whole seam. Answers the way the live
      layer's does: a new id, and the session pointer moved onto it. */
   function starter(over?: () => Promise<string>): string[] {
     const made: string[] = []
-    window.DS!.composer = {
+    setSources({ composer: {
       startConversation: over ?? (async () => {
         const id = `made-${made.length + 1}`
         made.push(id)
         setCurrent(id)
         return id
       }),
-    } as unknown as NonNullable<typeof window.DS>['composer']
+    } as unknown as ComposerSource })
     return made
   }
 
@@ -1097,12 +1100,12 @@ describe('subagents island, an instance detail', () => {
         said.push(text)
       },
     })
-    ;(window.DS as { composer?: unknown }).composer = {
+    setSources({ composer: {
       upload: async (req: { name: string; content_b64: string }) => {
         uploaded.push(`${req.name}:${req.content_b64}`)
         return { path: `uploads/${req.name}`, size: 3 }
       },
-    }
+    } as unknown as ComposerSource })
     await mount()
     await act(async () => {
       ;(await screen.findByText('chatty')).closest('.sarow')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -1150,9 +1153,9 @@ describe('subagents island, an instance detail', () => {
         said.push(text)
       },
     })
-    ;(window.DS as { composer?: unknown }).composer = {
+    setSources({ composer: {
       upload: async (req: { name: string }) => ({ path: `uploads/${req.name}`, size: 3 }),
-    }
+    } as unknown as ComposerSource })
     await mount()
     await act(async () => {
       ;(await screen.findByText('chatty')).closest('.sarow')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))

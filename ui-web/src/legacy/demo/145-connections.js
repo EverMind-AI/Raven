@@ -9,7 +9,7 @@
    flyout opens the page by importing the island (shell/navfly.ts); it does
    not come through here. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { CHANNELS } from './030-fixtures.js'
 import { nlSay } from './130-settings.js'
 
@@ -29,7 +29,7 @@ export function install() {
    the rpc source implements. Rows are the CHANNELS objects themselves,
    mutated in place, which is what makes demo edits stick across a redraw.
    Writes refuse politely, as the offline demo always did. */
-  DS.conn ??= {
+  sources.conn ??= {
     rows: async () => CHANNELS,
     /* The demo's world has a host in it -- one of its channels is receiving --
      so it answers yes. Left unanswered, the page would tell the reader nothing

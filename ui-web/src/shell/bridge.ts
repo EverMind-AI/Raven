@@ -3,13 +3,15 @@
  * The shell publishes late-bound closures on window.RavenShell (see
  * ui-web/src/legacy/demo/155-bridge.js): late-bound so the live layer's rebinds --
  * toast, most notably -- win over the demo definitions the bridge was
- * evaluated with. window.DS is the DataSource seam object itself, published
- * by ui-web/src/legacy/seam/000-datasource.js.
+ * evaluated with. The data half is a module of its own (state/sources.ts),
+ * which both legacy layers import and install their sources into.
  *
  * Everything here throws loudly when the shell is absent: an island runs
  * inside the assembled page or inside a test that installed fakes, never
  * standalone, and a silent fallback would just move the failure downstream.
  */
+
+import { type Sources, sources } from '../state/sources'
 
 /* What the workspace panel's chrome (still legacy: the tab bar, the badge,
    the open/close buttons) currently shows. */
@@ -68,7 +70,6 @@ export interface Shell {
 declare global {
   interface Window {
     RavenShell?: Shell
-    DS?: Record<string, unknown>
     RavenIslands?: Record<string, unknown>
   }
 }
@@ -84,8 +85,7 @@ export function t(key: string, vars?: Record<string, string | number>, fallback?
 }
 
 export function ds<S>(domain: string): S {
-  const seam = window.DS
-  const source = seam && (seam[domain] as S | undefined)
+  const source = sources[domain as keyof Sources] as S | undefined
   if (!source) throw new Error(`DS.${domain} is not installed`)
   return source
 }

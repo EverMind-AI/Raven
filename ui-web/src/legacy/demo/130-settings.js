@@ -7,7 +7,7 @@
 /* The fixture provider rows. Live mode owns the rows fetched from its model
    source, so it never refills this demo list in place. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, LANG, T, langSet, mk } from './010-kernel.js'
 import { TOOLS, TOOL_GROUPS } from './030-fixtures.js'
 import { modelCurrent } from './040-state.js'
@@ -117,7 +117,7 @@ export function install() {
    rather than staying a name the live layer overwrites. It has to live in this
    layer either way: the list and the current session are page bindings, and an
    island cannot reassign one. */
-  DS.sessions.deleteAll = () => {
+  sources.sessions.deleteAll = () => {
     sessionReplace([]); sessionSet(null); sessionDraw(); $('#stage').innerHTML = '';
     $('#title').textContent = T('gui.new_task'); pitch();
   };
@@ -126,8 +126,8 @@ export function install() {
    implements. Writes refuse with the tag the island renders as the in-row
    not-live message; usage answers null, which the island draws as the demo's
    no-data note. Registered, not declared-for-override -- live mode installs
-   its own DS.settings and this object is never consulted. */
-  DS.settings ??= {
+   its own sources.settings and this object is never consulted. */
+  sources.settings ??= {
     load: async () => ({
       raw: {}, configPath: '~/.raven/config.json', everos: null,
       providers: PROVIDERS, curProvider: '', model: modelCurrent(),
@@ -142,7 +142,7 @@ export function install() {
     checkUpdate: () => notLive(),
     setLang: (v) => langPickDemo(v),
   };
-  DS.tier ??= {
+  sources.tier ??= {
     read: async () => ({ mode: tierDemo, availableModes: tierMenuDemo() }),
     set: async (mode) => { tierDemo = mode; return { mode: tierDemo, availableModes: tierMenuDemo() }; },
   };

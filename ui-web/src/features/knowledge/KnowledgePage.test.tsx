@@ -6,9 +6,11 @@ import { KnowledgeApp } from './KnowledgePage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { KbBase, KbDoc, KbSearch, KnowledgeSource } from './types'
 import type { Shell } from '../../shell/bridge'
+import type { SettingsSource } from '../settings/types'
 
 function base(over: Partial<KbBase> & { id: string }): KbBase {
   return {
@@ -25,7 +27,7 @@ function base(over: Partial<KbBase> & { id: string }): KbBase {
 
 /* The island runs against the same two seams production wires: a fake shell on
    window.RavenShell (T returns its key, so tests assert catalogue keys rather
-   than translations) and a fixture source on window.DS.knowledge. */
+   than translations) and a fixture source on sources.knowledge. */
 const pages: (string | null)[] = []
 const opened: number[] = []
 
@@ -72,8 +74,7 @@ function source(over: Partial<KnowledgeSource> = {}): void {
     closeDetail: () => {},
   } as unknown as Shell
   window.RavenShell = fakeShell
-  window.DS = {
-    ...(window.DS || {}),
+  setSources({
     knowledge: {
       status: async () => ({ configured: true, model: 'bge-m3' }),
       bases: async () => [],
@@ -85,8 +86,8 @@ function source(over: Partial<KnowledgeSource> = {}): void {
       search: async () => ({ hits: [], search_ms: 0, embed_ms: 0 }),
       removeDoc: async () => {},
       ...over,
-    },
-  }
+    } as KnowledgeSource,
+  })
 }
 
 async function mount() {
@@ -104,7 +105,7 @@ afterEach(() => {
   opened.length = 0
   toastHost().replaceChildren()
   confirms.length = 0
-  delete (window as { DS?: unknown }).DS
+  resetSources()
 })
 
 /* Open one row's action menu. The four operations live behind it now: four
@@ -133,7 +134,7 @@ describe('the knowledge page', () => {
     source({ status: async () => ({ configured: false, model: '' }) })
     /* `open()` refreshes from the settings source; a stub keeps the click from
        rejecting into an unhandled promise. */
-    ;(window.DS as Record<string, unknown>).settings = { load: async () => ({}) }
+    setSources({ settings: { load: async () => ({}) } as unknown as SettingsSource })
     window.sTab = 'usage'
     await mount()
     expect(screen.getByText('gui.kb.unconfigured')).toBeTruthy()
@@ -301,9 +302,9 @@ describe('the knowledge page', () => {
 
   it('reports a missing source rather than throwing into the render', async () => {
     source()
-    delete (window as { DS?: unknown }).DS
+    resetSources()
     await mount()
-    expect(screen.getByText('no knowledge source installed')).toBeTruthy()
+    expect(screen.getByText('DS.knowledge is not installed')).toBeTruthy()
   })
 
   it('keeps its rendered shape, bases', async () => {

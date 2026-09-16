@@ -13,7 +13,7 @@
  *
  * So every free identifier in the layers has to be one of: declared in the
  * part, imported by it, a browser global, or a name the page hangs on window
- * (main.tsx publishes 28 plus RavenIslands; the legacy layers publish nine of
+ * (main.tsx publishes 28 plus RavenIslands; the legacy layers publish eight of
  * their own). A free WRITE is never allowed, whatever the name.
  *
  * eslint is not a dependency of this package and this does not add one: the
@@ -30,7 +30,7 @@ import { partNames } from './legacy-part.mjs'
 const url = (p) => new URL(`../${p}`, import.meta.url)
 /* The parts, in the order src/legacy/index.js installs them -- which is also
    where partNames checks that every file on disk is installed. */
-const FILES = ['seam', 'demo', 'live'].flatMap((layer) =>
+const FILES = ['demo', 'live'].flatMap((layer) =>
   partNames(layer).map((name) => `${layer}/${name}`),
 )
 const texts = new Map(FILES.map((rel) => [rel, readFileSync(url(`src/legacy/${rel}`), 'utf8')]))

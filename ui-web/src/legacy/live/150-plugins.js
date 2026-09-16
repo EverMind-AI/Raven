@@ -6,7 +6,7 @@
    seam replaces the fixture source before the first paint. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { LANG, T } from '../demo/010-kernel.js'
 import { extLoaded, loadExt, pluginsLive } from './090-extensions.js'
 import { showUpNote } from './210-update-notice.js'
@@ -77,7 +77,7 @@ function onOauthDone(p) {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.plugins = {
+  sources.plugins = {
     // A search failure is rendered in the page (market_down + retry), not
     // toasted -- the island owns that surface.
     search: (q, category) => gateway().call('plughub.search', { q, category })
@@ -126,7 +126,7 @@ export function install() {
       await loadExt();
     },
     rows: () => pluginsLive,
-    /* See DS.skills.loaded: the same one boot-time read feeds both. */
+    /* See sources.skills.loaded: the same one boot-time read feeds both. */
     loaded: () => extLoaded,
     reload: () => loadExt(),
   };

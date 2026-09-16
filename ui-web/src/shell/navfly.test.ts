@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { markNew as railMarkNew } from '../features/rail/store'
 import { MORE_ROWS, draw, install as installNav, mark, toggle } from './navfly'
+import { resetSources, setSources } from '../state/sources'
 
 import type { Shell } from './bridge'
+import type { RailSource } from '../features/rail/types'
 
 /* The three openers are direct imports now, so the pages they open are observed
    by standing in for those modules rather than for a shell verb. */
@@ -44,7 +46,7 @@ function install(over: Partial<Shell> = {}): Harness {
     ...over,
   }
   window.RavenShell = fake
-  window.DS = { sessions: { snapshot: () => ({ rows: [], cur: 'a', busy: false, query: '' }) } }
+  setSources({ sessions: { snapshot: () => ({ rows: [], cur: 'a', busy: false, query: '' }) } as unknown as RailSource })
   return seen
 }
 
@@ -80,7 +82,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete window.RavenShell
-  delete window.DS
+  resetSources()
 })
 
 describe('the nav flyout', () => {

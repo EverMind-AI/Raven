@@ -10,7 +10,7 @@
    still reads these. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 
 const RPC_ABSENT = new Set();
 const rpcGone = (name, e) => {
@@ -34,18 +34,18 @@ function onFrameBytes(buf) {
   const hl = new DataView(buf).getUint32(4);
   let head;
   try { head = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl))); } catch { return; }
-  if (DS.browser.onFrame) DS.browser.onFrame(head, new Blob([u8.subarray(8 + hl)], { type: 'image/jpeg' }));
+  if (sources.browser.onFrame) sources.browser.onFrame(head, new Blob([u8.subarray(8 + hl)], { type: 'image/jpeg' }));
 }
 
 /* Old servers still notify frames as base64 JSON; same hook after decode. */
 function onFrameJson(p) {
-  if (DS.browser.onFrame) DS.browser.onFrame(p, p.jpeg ? brB64Blob(p.jpeg) : null);
+  if (sources.browser.onFrame) sources.browser.onFrame(p, p.jpeg ? brB64Blob(p.jpeg) : null);
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.browser = {
+  sources.browser = {
     embedded: true,
     urls: () => RavenIslands.workspace.urls(),
     openUrl: (u) => RavenIslands.chrome.openUrl(u),

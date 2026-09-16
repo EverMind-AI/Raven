@@ -1,5 +1,6 @@
 import { ds, shell, t } from '../../shell/bridge'
 import { open as openUrl } from '../../shell/open-url'
+import { sources } from '../../state/sources'
 
 import type { BrowserReply, BrowserSource, BrowserTabRow, ChromiumSource, FrameHead } from './types'
 
@@ -466,8 +467,7 @@ export function hidden(): void {
 /* The island's subscription to the pushed-frame hook. Called once the seam
    exists (the island bundle evaluates before the seam script does). */
 export function hook(): void {
-  const seam = window.DS
-  const src = seam && (seam['browser'] as BrowserSource | undefined)
+  const src = sources.browser
   if (src && src.embedded) src.onFrame = onFrame
 }
 

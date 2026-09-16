@@ -3,136 +3,166 @@
  *
  * Two callers depend on this and only one of them is a send: the composer's
  * first message, and the sub-agent roster's new-instance button, which needs a
- * conversation for the instance to live in. The live layer is plain script, so
- * the function is sliced out and driven directly -- the same way
- * `features/rail/session-delete.test.ts` pins its neighbour in this file.
+ * conversation for the instance to live in. The part is driven as a module,
+ * with its collaborators replaced per part and per export
+ * (ui-web/scripts/legacy-part.mjs) -- so the draft is entered through the real
+ * `startDraft` and the promotion is the real one.
  *
  * What is pinned here is the ORDER, which is the part a reader cannot see and
  * the send silently depends on: the pointer moves, then the caller's hook runs,
  * then the staged settings go up. The hook is where `liveSend` records the
  * turn's owner, and a reader switching conversations inside those round trips
- * would otherwise leave the in-flight turn parked under the wrong one.
+ * would otherwise leave the in-flight turn parked under the wrong one. The
+ * order is read off the traffic the promotion actually puts on the transport
+ * rather than off injected functions: the staged model, tier and permission
+ * writes ARE three calls, and a test that watched stand-ins for them could not
+ * tell a call that was made from one that was only prepared.
  */
 
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
+import { describe, expect, it } from 'vitest'
 
-import { describe, expect, it, vi } from 'vitest'
-
-const source = readFileSync('src/legacy/live/080-overrides.js', 'utf8') as string
-
-/* Just the one function, not the file: the rest of this layer reaches for
-   dozens of globals that have nothing to do with the promotion. */
-/* Both halves: the entry point that decides whether to promote at all, and the
-   promotion itself. They are one unit of behaviour and the first calls the
-   second. */
-const slice = (start: string): string => {
-  const begin = source.indexOf(start)
-  if (begin < 0) throw new Error(`open-conversation.test: ${start} is gone from 080-overrides.js`)
-  return source.slice(begin, source.indexOf('\n}\n', begin) + 2)
-}
-const fnSource = `let promoting = null;\n`
-  + `${slice('async function openConversation(preview, atPointer) {')}\n`
-  + `${slice('async function promote(preview, atPointer) {')}\n`
-  + `${slice('function sendOnSession(text, failed) {')}\n`
-  + slice('function dispatchSend(text, failed) {')
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
 
 interface Row { id: string; title: string; last: string; persisted: boolean }
+interface Staged { model: { model: string; provider: string } | null; tier: string | null; perm: string | null }
 
-function harness(startAsDraft: boolean) {
+/* What a staged pick writes, named by the call it becomes: `config.set` carries
+   both the model and the permission mode, so the key is part of the name. */
+const traffic = (method: string, params: { key?: string }): string =>
+  `rpc:${method}${method === 'config.set' ? `:${params.key ?? ''}` : ''}`
+
+async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {}) {
   const log: string[] = []
   const rows: Row[] = []
-  let pointer: string | null = startAsDraft ? null : 'already-open'
+  /* Every write to the staged model the promotion refuses and re-reads, with
+     the generation it was checked against -- the one observable that says which
+     view the promotion belongs to. */
+  const reReads: Array<[string | null, number]> = []
+  let current: string | null = startAsDraft ? null : 'already-open'
   let minted = 0
-  /* The transport the sliced functions reach through `gateway()`. A fake
-     rather than the installed one: this harness evaluates the functions in a
-     scope of its own, so the seam it hands them is a parameter like every
-     other collaborator. */
-  const rpc = {
-    call: vi.fn(async (method: string) => {
-      log.push(`rpc:${method}`)
+  let bumpOnCreate: (() => void) | null = null
+
+  const part = await loadPart(() => import('../../legacy/live/080-overrides.js'), {
+    fakes: {
+      'demo/010-kernel.js': { $: looseQuery(), T: (key: string) => key },
+      'demo/040-state.js': {
+        claimDraft: (id: string | null) => log.push(`claimDraft:${String(id)}`),
+        dropDraft: () => {},
+        loadDraft: () => {},
+        parkDraft: () => {},
+        queueClear: () => {},
+        queuePush: () => {},
+        queueShift: () => null,
+        sheetsForget: () => {},
+        stop_: () => {},
+        turn: { dispatch: () => {}, busy: () => false, snapshot: () => ({}), restore: () => {} },
+      },
+      'demo/050-rail.js': {
+        markNewCurrent: () => {},
+        sessionDraw: () => log.push('draw'),
+        sessionOpen: () => {},
+        sessionReplace: () => {},
+        sessionRows: () => rows,
+      },
+      'demo/060-conversation.js': { ask: () => {}, pitch: () => {}, splitAtts: (t: string) => ({ text: t, atts: [] }), unpitch: () => {} },
+      'demo/070-transcript.js': { killStatus: () => {}, showStatus: () => {} },
+      'demo/090-composer.js': { drawMeter: () => {}, goState: () => {}, ta: { focus: () => {} } },
+      'demo/100-workspace.js': { setWs: () => {}, wsOnHistory: () => {}, wsReset: () => {} },
+      'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
+      'demo/152-skills.js': { drawCaps: () => {} },
+      'live/030-sessions.js': { rowPreview: (t: string) => t, touchSession: (id: string) => log.push(`touch:${id}`) },
+      'live/050-turn.js': {
+        beginNaming: () => log.push('naming'),
+        live: { subId: null },
+        namingDeclined: () => log.push('namingDeclined'),
+        resetTurnState: () => {},
+        turnDur: () => 0,
+      },
+      'live/060-parked.js': {
+        park: { turnOwner: null, lastAsk: '' },
+        parkTurn: () => {},
+        parkedTurns: {},
+        restoreTurn: () => {},
+        subBySession: {},
+        subSession: {},
+        transitionTurn: () => {},
+      },
+      'live/120-settings.js': {
+        loadPermMode: () => {},
+        /* The re-read a refused model write ends with, which is the only place
+           the generation the promotion began on becomes visible. */
+        loadProviders: (id: string | null, gen: number) => { reReads.push([id, gen]) },
+        openModelsForMissingProvider: () => false,
+        stagedPerm: () => (part.staged as Staged).perm,
+        stagedTier: () => (part.staged as Staged).tier,
+      },
+      'live/170-workspace.js': { wsSetRoot: (root: string) => log.push(`wsRoot:${root}`) },
+    },
+    globals: {
+      RavenIslands: { rail: { endRename: () => {} } },
+      drawBanner: () => {},
+      loadTier: () => {},
+      sessionCurrent: () => current,
+      sessionSet: (id: string | null) => { current = id; log.push(`pointer:${String(id)}`) },
+      toast: (text: string) => log.push(`toast:${text}`),
+    },
+  })
+
+  await fakeGateway(async (method: string, params: { key?: string } = {}) => {
+    log.push(traffic(method, params))
+    if (method === 'session.create') {
       minted += 1
+      if (bumpOnCreate) bumpOnCreate()
       return { session_id: `made-${minted}`, info: { cwd: '/w' } }
-    }),
+    }
+    if (method === 'config.set' && params.key === 'model' && refuseModelWrite) {
+      throw new Error('refused')
+    }
+    return {}
+  })
+
+  /* The real way in: `startDraft` is what raises the flag `openConversation`
+     reads, and it takes the next view ticket while it does. Its own wiring is
+     noise here, so the log starts after it. */
+  const enterDraft = (): void => { part.startDraft(); log.length = 0 }
+  if (startAsDraft) enterDraft()
+  /* Staged picks belong to the draft, so they go on after it: startDraft
+     clears all three. */
+  const stage = (over: Partial<Staged> = {}): void => {
+    Object.assign(part.staged, { model: { model: 'm', provider: 'p' }, tier: 'high', perm: 'ask', ...over })
   }
-  const gateway = (): typeof rpc => rpc
-  const say = (name: string) => (...args: unknown[]): void => {
-    log.push(args.length && typeof args[0] === 'string' ? `${name}:${args[0] as string}` : name)
+
+  return {
+    openConversation: part.openConversation as (preview?: string, atPointer?: (id: string) => void) => Promise<string | null>,
+    sendOnSession: part.sendOnSession as (text: string, failed: (e: unknown) => void) => void,
+    isDraft: () => part.draft as boolean,
+    viewGen: () => part.viewGen as number,
+    enterDraft,
+    stage,
+    onCreate: (fn: () => void) => { bumpOnCreate = fn },
+    /* Counted on the transport rather than in the log, which a new draft
+       clears. */
+    minted: () => minted,
+    reReads,
+    log,
+    rows,
+    pointer: () => current,
   }
-  const build = new Function(
-    'gateway', 'T', 'sessionCurrent', 'sessionSet', 'sessionRows', 'claimDraft',
-    'applyStagedModel', 'applyStagedTier', 'applyStagedPerm', 'sessionDraw',
-    'subscribe', 'wsSetRoot', 'startAsDraft', 'touchSession', 'beginNaming',
-    'mediaOf', 'namingDeclined', 'setSessionWorkdir',
-    `let draft = startAsDraft; let viewGen = 7; const park = { turnOwner: null, lastAsk: '' }; let pendingWorkdir = null;\n${fnSource}\n`
-    + 'return { openConversation, sendOnSession, isDraft: () => draft, '
-    + 'turnOwner: () => park.turnOwner, setDraft: (on) => { draft = on; }, '
-    + 'stageWorkdir: (dir) => { pendingWorkdir = dir; }, stagedWorkdir: () => pendingWorkdir };',
-  ) as (...args: unknown[]) => {
-    openConversation: (preview?: string, atPointer?: (id: string) => void) => Promise<string | null>
-    sendOnSession: (text: string, failed: (e: unknown) => void) => void
-    isDraft: () => boolean
-    turnOwner: () => string | null
-    setDraft: (on: boolean) => void
-    stageWorkdir: (dir: string | null) => void
-    stagedWorkdir: () => string | null
-  }
-  const built = build(
-    gateway,
-    (key: string) => key,
-    () => pointer,
-    (id: string | null) => { pointer = id; log.push(`pointer:${String(id)}`) },
-    () => rows,
-    say('claimDraft'),
-    async (...a: unknown[]) => { log.push(`staged:model:${String(a[1])}`) },
-    say('staged:tier'),
-    say('staged:perm'),
-    say('draw'),
-    async (id: string) => { log.push(`subscribe:${id}`) },
-    say('wsRoot'),
-    startAsDraft,
-    (id: string) => { log.push(`touch:${id}`) },
-    () => { log.push('naming') },
-    () => ({}),
-    say('namingDeclined'),
-    say('workdir'),
-  )
-  return { ...built, log, rows, rpc, pointer: () => pointer }
 }
 
 describe('getting a conversation to work in', () => {
   it('answers the open one, and makes nothing, when there already is one', async () => {
     /* "Give me a conversation" is what both callers want, so the seam answers it
        rather than having to be asked separately whether it applies. */
-    const h = harness(false)
+    const h = await harness(false)
     await expect(h.openConversation()).resolves.toBe('already-open')
-    expect(h.rpc.call).not.toHaveBeenCalled()
+    expect(h.minted()).toBe(0)
     expect(h.log).toEqual([])
     expect(h.rows).toEqual([])
   })
 
-  it('hands the staged folder to the create, puts it on the row, and spends it', async () => {
-    const h = harness(true)
-    h.stageWorkdir('/w/thesis')
-    await expect(h.openConversation()).resolves.toBe('made-1')
-    expect(h.rpc.call).toHaveBeenCalledWith('session.create', { workdir: '/w/thesis' })
-    expect((h.rows[0] as Row & { workdir?: string | null }).workdir).toBe('/w/thesis')
-    /* Spent by the create, so the next draft starts from no folder; and the
-       chip is told the conversation it now reports on. */
-    expect(h.stagedWorkdir()).toBeNull()
-    expect(h.log).toContain('workdir:/w/thesis')
-  })
-
-  it('creates with no folder when none was staged, and the chip is told so', async () => {
-    const h = harness(true)
-    await h.openConversation()
-    expect(h.rpc.call).toHaveBeenCalledWith('session.create', {})
-    expect((h.rows[0] as Row & { workdir?: string | null }).workdir).toBeNull()
-    expect(h.log).toContain('workdir')
-  })
-
   it('promotes the draft, and answers with the conversation it made', async () => {
-    const h = harness(true)
+    const h = await harness(true)
     await expect(h.openConversation()).resolves.toBe('made-1')
     expect(h.isDraft()).toBe(false)
     expect(h.pointer()).toBe('made-1')
@@ -146,13 +176,14 @@ describe('getting a conversation to work in', () => {
 
   it('takes the caller preview for the row when there is one', async () => {
     /* The send's half: its row says what was asked, not that nothing was. */
-    const h = harness(true)
+    const h = await harness(true)
     await h.openConversation('do the thing')
     expect(h.rows[0]!.last).toBe('do the thing')
   })
 
   it('runs the caller hook once the pointer has moved and before the settings go up', async () => {
-    const h = harness(true)
+    const h = await harness(true)
+    h.stage()
     const seen: Array<string | null> = []
     await h.openConversation(undefined, (id) => {
       h.log.push(`hook:${id}`)
@@ -167,12 +198,11 @@ describe('getting a conversation to work in', () => {
       'pointer:made-1',
       'hook:made-1',
       'claimDraft:made-1',
-      'workdir',
-      'staged:model:7',
-      'staged:tier:made-1',
-      'staged:perm:made-1',
+      'rpc:config.set:model',
+      'rpc:session.set_mode',
+      'rpc:config.set:permissions.mode',
       'draw',
-      'subscribe:made-1',
+      'rpc:turn.subscribe',
     ])
   })
 
@@ -180,14 +210,14 @@ describe('getting a conversation to work in', () => {
     /* `draft` stays raised across `session.create`, so a second press arriving in
        that window used to read the page as still a draft. Both callers want the
        same conversation; both get it, and each one's hook still runs. */
-    const h = harness(true)
+    const h = await harness(true)
     const hooks: string[] = []
     const [a, b] = await Promise.all([
       h.openConversation('first', (id) => hooks.push(`a:${id}`)),
       h.openConversation('second', (id) => hooks.push(`b:${id}`)),
     ])
     expect([a, b]).toEqual(['made-1', 'made-1'])
-    expect(h.rpc.call).toHaveBeenCalledTimes(1)
+    expect(h.minted()).toBe(1)
     expect(h.rows).toHaveLength(1)
     expect(hooks.sort()).toEqual(['a:made-1', 'b:made-1'])
   })
@@ -198,11 +228,11 @@ describe('getting a conversation to work in', () => {
        the flag again -- and that draft has to become its own conversation. A
        hold left standing would hand it the previous one, and the instance would
        be filed under a conversation the reader had left. */
-    const h = harness(true)
+    const h = await harness(true)
     await expect(h.openConversation()).resolves.toBe('made-1')
-    h.setDraft(true)
+    h.enterDraft()
     await expect(h.openConversation()).resolves.toBe('made-2')
-    expect(h.rpc.call).toHaveBeenCalledTimes(2)
+    expect(h.minted()).toBe(2)
     expect(h.rows.map((r) => r.id)).toEqual(['made-2', 'made-1'])
   })
 
@@ -216,7 +246,8 @@ describe('getting a conversation to work in', () => {
        Reachable only since the roster gained the ability to promote. Every
        other way in went through `liveSend`, which marks the turn busy before
        the promotion starts, so a second send was queued rather than sent. */
-    const h = harness(true)
+    const h = await harness(true)
+    h.stage()
     const rosterDone = h.openConversation()
     /* Let the create resolve, which is what moves the pointer and lowers the
        flag -- the window the earlier concurrency test never entered, because it
@@ -230,7 +261,7 @@ describe('getting a conversation to work in', () => {
     const sent = h.log.indexOf('rpc:turn.send')
     expect(sent).toBeGreaterThan(-1)
     /* After all four, not before any of them. */
-    for (const step of ['staged:model:7', 'staged:tier:made-1', 'staged:perm:made-1', 'subscribe:made-1']) {
+    for (const step of ['rpc:config.set:model', 'rpc:session.set_mode', 'rpc:config.set:permissions.mode', 'rpc:turn.subscribe']) {
       expect(h.log.indexOf(step)).toBeGreaterThan(-1)
       expect(sent).toBeGreaterThan(h.log.indexOf(step))
     }
@@ -238,9 +269,17 @@ describe('getting a conversation to work in', () => {
 
   it('carries the view generation the promotion began on into the staged model', async () => {
     /* Taken before the first await, so a late answer is checked against the view
-       as it stood when this started rather than whatever is open by then. */
-    const h = harness(true)
+       as it stood when this started rather than whatever is open by then. Made
+       visible by refusing the write: a refusal re-reads the providers against
+       the generation it carried. The reader leaves for a new draft while
+       `session.create` is in flight -- which is what raises the ticket -- and
+       the staged pick is put back, so the write still happens. */
+    const h = await harness(true, { refuseModelWrite: true })
+    h.stage()
+    const began = h.viewGen()
+    h.onCreate(() => { h.enterDraft(); h.stage() })
     await h.openConversation()
-    expect(h.log).toContain('staged:model:7')
+    expect(h.viewGen()).toBe(began + 1)
+    expect(h.reReads).toContainEqual(['made-1', began])
   })
 })

@@ -33,7 +33,7 @@ async function harness({ rows, deferSubscribe } = {}) {
   const pending = []
   const subs = []
   /* The seam the live layer reaches openLiveSession through: sessionOpen is
-     DS.sessions.open, which the boot guard installs as openLiveSession. Bound
+     sources.sessions.open, which the boot guard installs as openLiveSession. Bound
      through this holder rather than stubbed, so the reconnect drives the real
      function. */
   const api = {}
@@ -126,10 +126,8 @@ async function harness({ rows, deferSubscribe } = {}) {
   })
   const parked = await import('../src/legacy/live/060-parked.js')
   const turnState = await import('../src/legacy/live/050-turn.js')
-  const { DS } = await import('../src/legacy/seam/000-datasource.js')
-  DS.composer = {}
-  DS.sessions = {}
-  DS.transcript = {}
+  const { setSources } = await import('../src/state/sources')
+  setSources({ composer: {}, sessions: {}, transcript: {} })
   const rpcUi = await import('../src/legacy/live/020-rpc.js')
   part.install()
   const env = {

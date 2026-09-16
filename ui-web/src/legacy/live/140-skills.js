@@ -10,7 +10,7 @@
    live source through loadExt so every installed surface answers the change. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { T } from '../demo/010-kernel.js'
 import { extLoaded, loadExt, skillsLive } from './090-extensions.js'
 
@@ -19,7 +19,7 @@ const skillhubErr = (e) => (e.data && e.data.detail) || e.message || e;
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.skills = {
+  sources.skills = {
     search: (p) => gateway().call('skillhub.search', {
       query: p.query, category: p.category, page: p.page, limit: p.limit,
     }),
