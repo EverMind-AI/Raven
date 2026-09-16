@@ -1163,3 +1163,44 @@ def test_a_swap_cancelled_mid_unbind_leaves_no_live_watcher_thread(tmp_path) -> 
             break
         time.sleep(0.1)
     assert _live() == before, "a generation's watcher outlived the shutdown"
+
+
+async def test_the_control_plane_keeps_the_historical_port_when_the_span_is_free(monkeypatch) -> None:
+    """The fallback below must not move the port on a host that has one free."""
+    from raven.cli.gateway_commands import _CONTROL_PORT_DEFAULT, _control_plane_port
+    from raven.rpc.transports import ws
+
+    async def _free(preferred: int, **_kwargs) -> int:
+        return preferred + 1
+
+    monkeypatch.setattr(ws, "pick_port", _free)
+    assert await _control_plane_port() == _CONTROL_PORT_DEFAULT + 1
+
+
+async def test_the_control_plane_falls_back_to_an_os_assigned_port(monkeypatch) -> None:
+    """Every port in the probe span can be refused at once, and then the gateway
+    must still come up. Windows reserves whole hundred-port blocks (winnat), a
+    host whose dynamic range starts low gets them over 8765..8784, and a bind
+    inside one fails while netstat shows the port unused. The raise reached no
+    handler, so `raven web` died on a port nobody had asked for."""
+    from raven.cli.gateway_commands import _control_plane_port
+    from raven.rpc.transports import ws
+
+    async def _none_free(preferred: int, **_kwargs) -> int:
+        raise OSError(f"no free port in {preferred}..{preferred + 20}")
+
+    monkeypatch.setattr(ws, "pick_port", _none_free)
+    assert await _control_plane_port() == 0
+
+
+def test_the_gateway_takes_its_control_port_from_the_fallback() -> None:
+    """The two tests above only bind the helper; this pins the caller to it.
+    Both passed while the command still probed inline, which is the state that
+    shipped the failure."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    assert "ControlPlaneServer(await _control_plane_port()" in src
+    assert "pick_port(8765)" not in src, "an inline probe has no fallback to fall back to"

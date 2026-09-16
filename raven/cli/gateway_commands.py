@@ -45,6 +45,32 @@ console = Console()
 # in-flight turn and reconnects MCP); see SwapCoordinator.
 _SWAP_MIN_INTERVAL_S = 5.0
 
+_CONTROL_PORT_DEFAULT = 8765
+
+
+async def _control_plane_port() -> int:
+    """The historical control-plane port, or any free one when its span is taken.
+
+    ``pick_port`` probes twenty ports forward and raises when every one is
+    refused. On Windows all twenty can be refused at once: winnat reserves
+    whole hundred-port blocks (``netsh interface ipv4 show excludedportrange``),
+    a host whose dynamic range starts low gets them in the 8000s, and a bind
+    inside one fails with WinError 10013 while netstat shows the port free. The
+    raise reached no handler, so the gateway died on a port nobody asked for --
+    `raven web` could not start at all on such a host.
+
+    Falling back costs nothing: no client needs this port to be predictable,
+    they all read it from the lock payload, and ``ControlPlaneServer.start``
+    reads the bound port back off the socket for exactly this case.
+    """
+    from raven.rpc.transports.ws import pick_port
+
+    try:
+        return await pick_port(_CONTROL_PORT_DEFAULT)
+    except OSError:
+        logger.warning("control plane: no free port from {}; taking an OS-assigned one", _CONTROL_PORT_DEFAULT)
+        return 0
+
 
 def _risk_banner(config) -> str | None:
     """Startup banner for the dangerous default combo: no sandbox + a channel
@@ -1000,7 +1026,6 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
 
             from raven.rpc.control import ControlPlaneServer, register_control_methods
             from raven.rpc.dispatcher import Dispatcher
-            from raven.rpc.transports.ws import pick_port
 
             started_at = time.time()
             shutdown_requested = False
@@ -1048,13 +1073,13 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 shutdown=_shutdown,
             )
             # Never unauthenticated and never configured: the token is minted
-            # per boot and dies with the process; the port is probed forward
-            # from the historical default. Local clients read both from the
-            # lock payload, the same way `doctor` finds the gateway.
+            # per boot and dies with the process; the port comes from
+            # _control_plane_port. Local clients read both from the lock
+            # payload, the same way `doctor` finds the gateway.
             control_token = secrets.token_urlsafe(24)
 
             try:
-                control = ControlPlaneServer(await pick_port(8765), auth_token=control_token)
+                control = ControlPlaneServer(await _control_plane_port(), auth_token=control_token)
                 control.bind(control_dispatcher)
                 bound_host, bound_port = await control.start()
                 publish_control_endpoint(bound_host, bound_port, control_token)
