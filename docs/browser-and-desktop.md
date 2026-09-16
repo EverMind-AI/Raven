@@ -65,6 +65,14 @@ uv run playwright install chromium   # the browser binary
 On an installed raven: `<raven's python> -m playwright install chromium` (the
 driver prints the exact line when Chromium is missing). Everything else is on
 by default; turn it off with `tools.disabledTools: ["browser_navigate", ...]`.
+
+To watch the model without opening the panel, set
+`tools.browser.headfulOnAgentUse: true`: the model's first navigate (or new
+tab) pops Chromium out as a real window on the desktop, the same relaunch the
+panel's pop-out button does, with logins carried over in the persistent
+profile. Off by default because a server has no desktop to pop into. Decided
+once per process, so the reader can fold the window back into the panel
+without the next call popping it out again; a change takes a restart.
 Navigation policy (`raven/browser/policy.py`) refuses non-http(s) schemes and
 link-local addresses; `RAVEN_BROWSER_BLOCK_PRIVATE=1` also refuses loopback and
 private ranges.
