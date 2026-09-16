@@ -44,7 +44,7 @@ export interface MemListResult {
   note?: string | null
 }
 
-/* The DS.memory contract both the fixture source (demo shell) and the rpc
+/* The DS.memory contract both the offline fixture library and the rpc
    source (live layer) implement. The island only ever talks to this. The
    fixture source has no engine behind it and rejects list with
    `{ down: true }`, which the island renders as the page's down note. */

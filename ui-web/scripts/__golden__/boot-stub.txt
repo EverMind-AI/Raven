@@ -68,7 +68,7 @@ div.app[data-rail=on]
     div#railGrip.grip[data-i18n-aria=gui.resize_rail][data-i18n-title=gui.resize_rail]
   div.main
     div#split.split[data-full=false][data-open=false]
-      div.chat
+      div.chat[data-fresh=1]
         div.top
           h1#title
           button#renameBtn.ghost-ic.tipdn[data-i18n-aria=gui.rename_session][data-i18n-tip=gui.rename_session]
@@ -83,151 +83,8 @@ div.app[data-rail=on]
             span#wsBdg.bdg
         div#scroll.scroll
           div#bannerHost
-            div.banner
-              b
-              span
-              button
-              button.x
           div#flash.flash
           div#stage.col
-            div[data-tsl=1]
-              div.ask.in
-                div.b
-                div.ansfoot
-                  div.acts
-                    button[data-label=Copy][data-tip=Copy]
-                      svg
-                        rect
-                        path
-                  span.turnmeta
-              div.tfold
-                button.tfh
-                  span.lb
-                  span.tm
-                  svg.cv
-                    path
-                div.tfb
-              div.answer-turn
-                div.answer.in
-                  div.prose
-                    h2
-                    p
-                      strong
-                    div.tw
-                      table
-                        thead
-                          tr
-                            th
-                            th
-                            th
-                            th
-                        tbody
-                          tr
-                            td
-                            td
-                            td
-                            td
-                          tr
-                            td
-                            td
-                            td
-                            td
-                          tr
-                            td
-                            td
-                            td
-                            td
-                    h3
-                    ul
-                      li
-                        strong
-                      li
-                        strong
-                      li
-                        strong
-                    h3
-                    p
-                      strong
-                div.arts
-                  section.asec.deliveries
-                    div.ahd
-                      span.ahm
-                        span.lb
-                        span.n
-                    div.atiles
-                      div.atile.missing
-                        span.pic.none
-                          svg.fi
-                            path
-                          span.ft
-                        span.cap
-                          span.nm
-                          span.mt
-                        button.hit
-                      div.atile.missing
-                        span.pic.none
-                          svg.fi
-                            path
-                          span.ft
-                        span.cap
-                          span.nm
-                          span.mt
-                        button.hit
-                      div.atile.missing
-                        span.pic.none
-                          svg.fi
-                            path
-                          span.ft
-                        span.cap
-                          span.nm
-                          span.mt
-                        button.hit
-                    button.amore
-                  section.asec.changes
-                    div.ahd
-                      span.ahm
-                        span.lb
-                        span.n
-                    div.achanges
-                      button.achange
-                        span.ck.new
-                        span.cn
-                        span.ct
-                        span.ca
-                        span.cd
-                      button.achange
-                        span.ck.edit
-                        span.cn
-                        span.ct
-                        span.ca
-                        span.cd
-                      button.achange
-                        span.ck.edit
-                        span.cn
-                        span.ct
-                        span.ca
-                        span.cd
-                      button.achange
-                        span.ck.new
-                        span.cn
-                        span.ct
-                        span.ca
-                        span.cd
-                    button.amore
-                div.ansfoot
-                  div.acts
-                    button[data-label=Copy][data-tip=Copy]
-                      svg
-                        rect
-                        path
-                    button[data-label=Branch into a new session][data-tip=Branch into a new session]
-                      svg
-                        circle
-                        circle
-                        circle
-                        path
-                        path
-                  span.turnmeta
         button#backpill.backpill
           svg
             path
@@ -258,7 +115,7 @@ div.app[data-rail=on]
                 span.led
                 span#envName
               span#meter.meter
-              button#ctxChip.chip.ctx[data-tip=context 17k/200k 9%]
+              button#ctxChip.chip.ctx
                 svg.ring
                   circle.bg
                   circle.fg

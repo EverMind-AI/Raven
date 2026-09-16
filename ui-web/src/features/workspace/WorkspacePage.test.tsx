@@ -73,8 +73,8 @@ function install(ws: WorkspaceSnapshot, over: Partial<WorkspaceSource> = {}, vie
   }
   setShell(fakeShell)
   /* The file view renders markdown through the bundle's renderer, which reads
-     DS.prose for what counts as an openable path -- the page installs it in
-     demo/020-prose.js, so the harness does too. */
+     sources.prose for what counts as an openable path -- the page installs it
+     from features/workspace/source.ts, so the harness does too. */
   setSources({ workspace: source, prose: { pathOf: () => null, linkTargetOf: () => null } })
   /* The viewer fetches /file for text kinds; a pending promise keeps the
      spinner up instead of letting happy-dom dial a real socket. */

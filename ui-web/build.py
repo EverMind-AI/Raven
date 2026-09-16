@@ -48,17 +48,13 @@ ASSETV_MARK = "__ASSETV__"
 # it (scripts/legacy-index.mjs) after renaming, adding or removing a part.
 _DEMO_PARTS = [
     "010-kernel.js",
-    "020-prose.js",
-    "030-fixtures.js",
     "040-state.js",
     "050-rail.js",
     "060-conversation.js",
     "070-transcript.js",
-    "080-replay.js",
     "090-composer.js",
     "100-workspace.js",
     "110-subagents.js",
-    "112-browser.js",
     "120-capabilities.js",
     "130-settings.js",
     "140-schedule.js",

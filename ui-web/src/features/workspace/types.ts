@@ -92,7 +92,7 @@ export interface WorkspaceSnapshot extends WsShared {
   deliveries: DeliveryRow[]
 }
 
-/* The DS.workspace contract. The fixture source (demo shell) offers only
+/* The DS.workspace contract. A page with no host behind it offers only
    shortPath and the demo toast; the rpc source (live layer) adds the fs.*
    surface and flags it with canBrowse -- which is how the island knows to
    draw the real file view instead of the demo's note. */
