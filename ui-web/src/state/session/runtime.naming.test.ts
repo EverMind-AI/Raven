@@ -1,62 +1,74 @@
 // @vitest-environment happy-dom
-/* The live layer's session-naming block: a placeholder that always ends, and a
-   title that lands without a page reload. */
+/* The runtime's session naming: a placeholder that always ends, and a title
+   that lands without a page reload. */
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery, partTexts } from './legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery, partTexts } from '../../../scripts/legacy-part.mjs'
 
-/* The four naming functions driven together: they only make sense that way,
-   and each one on its own would only assert that it exists. */
-async function harness({ rows, current, titleCall }) {
+type Runtime = typeof import('./runtime')
+
+interface Row { id: string; title: string; naming?: boolean }
+
+/* The four naming verbs driven together: they only make sense that way, and
+   each one on its own would only assert that it exists. */
+async function harness({ rows, current, titleCall }: {
+  rows: Row[]
+  current: string | null
+  titleCall: (method: string, params?: unknown) => Promise<unknown>
+}): Promise<Runtime & { heading: HTMLElement; draws: string[] }> {
   document.body.innerHTML = '<h1 id="title"></h1>'
-  const heading = document.getElementById('title')
-  const draws = []
-  const part = await loadPart(() => import('../src/legacy/live/050-turn.js'), {
+  const heading = document.getElementById('title') as HTMLElement
+  const draws: string[] = []
+  /* The part is loaded first and the seam imported after it, which is the
+     order that keeps one module graph: a mock consulted from inside another
+     mock's factory would hand a cycle-mate the unmocked module. */
+  await loadPart(() => import('../../legacy/live/050-turn.js'), {
     fakes: {
       'src/shell/session': { current: () => current },
-      'src/features/rail/title': { plainTitle: (s) => String(s) },
-      'demo/010-kernel.js': { $: looseQuery(), T: (key) => key },
-      'demo/040-state.js': { sess: (id) => rows.find((r) => r.id === id) },
+      'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
+      'demo/010-kernel.js': { $: looseQuery(), T: (key: string) => key },
+      'demo/040-state.js': { sess: (id: string) => rows.find((r) => r.id === id) },
       'demo/050-rail.js': { sessionDraw: () => draws.push('draw') },
     },
   })
+  const runtime = (await import('./runtime')) as Runtime
   await fakeGateway(titleCall)
-  return { ...part, heading, draws }
+  return { ...runtime, heading, draws }
 }
 
 describe('the live naming block', () => {
   it('parks a placeholder on the row and the top bar while the name is coming', async () => {
-    const rows = [{ id: 's1', title: 'gui.new_task' }]
+    const rows: Row[] = [{ id: 's1', title: 'gui.new_task' }]
     const h = await harness({ rows, current: 's1', titleCall: async () => ({}) })
 
     h.beginNaming('please cut a desktop release')
 
-    expect(rows[0].naming).toBe(true)
+    expect(rows[0]!.naming).toBe(true)
     expect(h.heading.textContent).toBe('')
     expect(h.heading.classList.contains('skel')).toBe(true)
     expect(h.heading.querySelector('.sk')).not.toBeNull()
   })
 
   it('leaves a session that already has a name alone', async () => {
-    const rows = [{ id: 's1', title: 'Release checklist' }]
+    const rows: Row[] = [{ id: 's1', title: 'Release checklist' }]
     const h = await harness({ rows, current: 's1', titleCall: async () => ({}) })
 
     h.beginNaming('please cut a desktop release')
 
-    expect(rows[0].naming).toBeUndefined()
+    expect(rows[0]!.naming).toBeUndefined()
     expect(h.heading.classList.contains('skel')).toBe(false)
   })
 
   it('fills the name in and clears the placeholder when the event lands', async () => {
-    const rows = [{ id: 's1', title: 'gui.new_task' }]
+    const rows: Row[] = [{ id: 's1', title: 'gui.new_task' }]
     const h = await harness({ rows, current: 's1', titleCall: async () => ({}) })
     h.beginNaming('please cut a desktop release')
 
     h.settleNaming('s1', 'Cut a desktop release')
 
-    expect(rows[0].naming).toBe(false)
-    expect(rows[0].title).toBe('Cut a desktop release')
+    expect(rows[0]!.naming).toBe(false)
+    expect(rows[0]!.title).toBe('Cut a desktop release')
     expect(h.heading.classList.contains('skel')).toBe(false)
     expect(h.heading.textContent).toBe('Cut a desktop release')
   })
@@ -64,8 +76,8 @@ describe('the live naming block', () => {
   it('gives up on its own and takes the name the server already has', async () => {
     /* The one failure a reader cannot leave by waiting. Without the timer the
        row shimmers until the page is reloaded. */
-    const rows = [{ id: 's1', title: 'gui.new_task' }]
-    const asked = []
+    const rows: Row[] = [{ id: 's1', title: 'gui.new_task' }]
+    const asked: Array<[string, unknown]> = []
     const h = await harness({
       rows,
       current: 's1',
@@ -77,13 +89,13 @@ describe('the live naming block', () => {
     vi.useFakeTimers()
     try {
       h.beginNaming('please cut a desktop release')
-      expect(rows[0].naming).toBe(true)
+      expect(rows[0]!.naming).toBe(true)
 
       await vi.advanceTimersByTimeAsync(12_000)
-      await vi.waitFor(() => expect(rows[0].naming).toBe(false))
+      await vi.waitFor(() => expect(rows[0]!.naming).toBe(false))
 
       expect(asked).toEqual([['session.title', { session_id: 's1' }]])
-      expect(rows[0].title).toBe('please cut a desktop rele')
+      expect(rows[0]!.title).toBe('please cut a desktop rele')
       expect(h.heading.classList.contains('skel')).toBe(false)
     } finally {
       vi.useRealTimers()
@@ -96,16 +108,16 @@ describe('the live naming block', () => {
        and the read answers null. Landing on the default name here would leave
        the row saying "New task" until a reload, because nothing re-reads the
        session the reader is looking at. */
-    const rows = [{ id: 's1', title: 'gui.new_task' }]
+    const rows: Row[] = [{ id: 's1', title: 'gui.new_task' }]
     const h = await harness({ rows, current: 's1', titleCall: async () => ({ title: null }) })
     vi.useFakeTimers()
     try {
       h.beginNaming('please cut a desktop release for the beta channel')
 
       await vi.advanceTimersByTimeAsync(12_000)
-      await vi.waitFor(() => expect(rows[0].naming).toBe(false))
+      await vi.waitFor(() => expect(rows[0]!.naming).toBe(false))
 
-      expect(rows[0].title).toBe('please cut a desktop release for the beta channel')
+      expect(rows[0]!.title).toBe('please cut a desktop release for the beta channel')
       expect(h.heading.textContent).toBe('please cut a desktop release for the beta channel')
       expect(h.heading.classList.contains('skel')).toBe(false)
     } finally {
@@ -114,23 +126,23 @@ describe('the live naming block', () => {
   })
 
   it('prefers the stored title over the opening line when the server has one', async () => {
-    const rows = [{ id: 's1', title: 'gui.new_task' }]
+    const rows: Row[] = [{ id: 's1', title: 'gui.new_task' }]
     const h = await harness({ rows, current: 's1', titleCall: async () => ({ title: 'Cut a release' }) })
     vi.useFakeTimers()
     try {
       h.beginNaming('please cut a desktop release for the beta channel')
 
       await vi.advanceTimersByTimeAsync(12_000)
-      await vi.waitFor(() => expect(rows[0].naming).toBe(false))
+      await vi.waitFor(() => expect(rows[0]!.naming).toBe(false))
 
-      expect(rows[0].title).toBe('Cut a release')
+      expect(rows[0]!.title).toBe('Cut a release')
     } finally {
       vi.useRealTimers()
     }
   })
 
   it('stops shimmering even when the fallback read fails', async () => {
-    const rows = [{ id: 's1', title: 'gui.new_task' }]
+    const rows: Row[] = [{ id: 's1', title: 'gui.new_task' }]
     const h = await harness({
       rows,
       current: 's1',
@@ -143,9 +155,9 @@ describe('the live naming block', () => {
       h.beginNaming('please cut a desktop release')
 
       await vi.advanceTimersByTimeAsync(12_000)
-      await vi.waitFor(() => expect(rows[0].naming).toBe(false))
+      await vi.waitFor(() => expect(rows[0]!.naming).toBe(false))
 
-      expect(rows[0].title).toBe('please cut a desktop release')
+      expect(rows[0]!.title).toBe('please cut a desktop release')
       expect(h.heading.classList.contains('skel')).toBe(false)
     } finally {
       vi.useRealTimers()
@@ -160,17 +172,17 @@ describe('a server that declines to name', () => {
        for the whole grace period and only then showed the opening line. That
        made "hi" the slowest thing you could send -- a long request generates
        and lands in a second or two. */
-    const rows = [{ id: 's1', title: 'gui.new_task' }]
+    const rows: Row[] = [{ id: 's1', title: 'gui.new_task' }]
     const h = await harness({ rows, current: 's1', titleCall: async () => ({}) })
     vi.useFakeTimers()
     try {
       h.beginNaming('你好')
-      expect(rows[0].naming).toBe(true)
+      expect(rows[0]!.naming).toBe(true)
 
       h.namingDeclined('s1')
 
-      expect(rows[0].naming).toBe(false)
-      expect(rows[0].title).toBe('你好')
+      expect(rows[0]!.naming).toBe(false)
+      expect(rows[0]!.title).toBe('你好')
       expect(h.heading.classList.contains('skel')).toBe(false)
       /* Nothing left armed: the timer must be cleared, or it fires later and
          overwrites a title the reader is already looking at. */
@@ -183,23 +195,23 @@ describe('a server that declines to name', () => {
   it('does not touch a session that never started waiting', async () => {
     /* `beginNaming` declines to start a wait for an already-named session, and
        a decline arriving for that session must not blank its title. */
-    const rows = [{ id: 's1', title: 'Release checklist' }]
+    const rows: Row[] = [{ id: 's1', title: 'Release checklist' }]
     const h = await harness({ rows, current: 's1', titleCall: async () => ({}) })
     h.beginNaming('please cut a desktop release')
 
     h.namingDeclined('s1')
 
-    expect(rows[0].title).toBe('Release checklist')
-    expect(rows[0].naming).toBeUndefined()
+    expect(rows[0]!.title).toBe('Release checklist')
+    expect(rows[0]!.naming).toBeUndefined()
   })
 })
 
 /* The rules below are about the source rather than about a behaviour a harness
    can drive: which call sites carry a branch, and which branch a dispatcher
    reaches. Read per part, in the order src/legacy/index.js installs them. */
-const live = partTexts('live')
+const live = partTexts('live') as Array<[string, string]>
 const liveText = live.map(([, text]) => text).join('')
-const turnText = live.find(([name]) => name === '050-turn.js')[1]
+const turnText = live.find(([name]) => name === '050-turn.js')![1]!
 
 describe('the wiring between turn.send and the placeholder', () => {
   /* The functions above can all be right while nothing calls them -- this
@@ -279,19 +291,19 @@ describe('what a naming_ended reason means for the row', () => {
      over -- so the reason handling is exercised here instead of matched. */
 
   it('keeps a name typed mid-wait, and does not fall back to the opening line', async () => {
-    const rows = [{ id: 's1', title: 'gui.new_task' }]
+    const rows: Row[] = [{ id: 's1', title: 'gui.new_task' }]
     const h = await harness({ rows, current: 's1', titleCall: async () => ({ title: 'Release checklist' }) })
     vi.useFakeTimers()
     try {
       h.beginNaming('please cut a desktop release with the new signing key')
 
       // the person renames while the model is still writing; the server took it
-      rows[0].title = 'Release checklist'
+      rows[0]!.title = 'Release checklist'
 
       await h.namingEnded('s1', 'renamed')
 
-      expect(rows[0].title).toBe('Release checklist')
-      expect(rows[0].naming).toBe(false)
+      expect(rows[0]!.title).toBe('Release checklist')
+      expect(rows[0]!.naming).toBe(false)
       expect(h.heading.textContent).toBe('Release checklist')
       expect(vi.getTimerCount()).toBe(0)
     } finally {
@@ -302,17 +314,17 @@ describe('what a naming_ended reason means for the row', () => {
   it('takes the stored name when the rename happened in another client', async () => {
     /* This row never saw the rename, so clearing the placeholder alone would
        leave it on the default name until something else refreshed the list. */
-    const rows = [{ id: 's1', title: 'gui.new_task' }]
+    const rows: Row[] = [{ id: 's1', title: 'gui.new_task' }]
     const h = await harness({ rows, current: 's1', titleCall: async () => ({ title: 'Named elsewhere' }) })
     h.beginNaming('please cut a desktop release')
 
     await h.namingEnded('s1', 'renamed')
 
-    expect(rows[0].title).toBe('Named elsewhere')
+    expect(rows[0]!.title).toBe('Named elsewhere')
   })
 
   it('keeps what the row has when the stored read fails, never the opening line', async () => {
-    const rows = [{ id: 's1', title: 'Release checklist' }]
+    const rows: Row[] = [{ id: 's1', title: 'Release checklist' }]
     const h = await harness({
       rows,
       current: 's1',
@@ -322,37 +334,37 @@ describe('what a naming_ended reason means for the row', () => {
     })
     // A wait is open on this row even though it is named: the rename landed
     // after beginNaming, which is the race the server reports.
-    rows[0].title = 'gui.new_task'
+    rows[0]!.title = 'gui.new_task'
     h.beginNaming('please cut a desktop release')
-    rows[0].title = 'Release checklist'
+    rows[0]!.title = 'Release checklist'
 
     await h.namingEnded('s1', 'renamed')
 
-    expect(rows[0].title).toBe('Release checklist')
-    expect(rows[0].naming).toBe(false)
+    expect(rows[0]!.title).toBe('Release checklist')
+    expect(rows[0]!.naming).toBe(false)
   })
 
   it('settles the other three reasons onto the opening line', async () => {
     for (const reason of ['timeout', 'no_title', 'error']) {
-      const rows = [{ id: 's1', title: 'gui.new_task' }]
+      const rows: Row[] = [{ id: 's1', title: 'gui.new_task' }]
       const h = await harness({ rows, current: 's1', titleCall: async () => ({}) })
       h.beginNaming('please cut a desktop release')
 
       await h.namingEnded('s1', reason)
 
-      expect(rows[0].title, reason).toBe('please cut a desktop release')
-      expect(rows[0].naming, reason).toBe(false)
+      expect(rows[0]!.title, reason).toBe('please cut a desktop release')
+      expect(rows[0]!.naming, reason).toBe(false)
     }
   })
 
   it('does nothing for a session that never started waiting', async () => {
-    const rows = [{ id: 's1', title: 'Release checklist' }]
+    const rows: Row[] = [{ id: 's1', title: 'Release checklist' }]
     const h = await harness({ rows, current: 's1', titleCall: async () => ({ title: 'from the server' }) })
 
     await h.namingEnded('s1', 'renamed')
     await h.namingEnded('s1', 'timeout')
 
-    expect(rows[0].title).toBe('Release checklist')
-    expect(rows[0].naming).toBeUndefined()
+    expect(rows[0]!.title).toBe('Release checklist')
+    expect(rows[0]!.naming).toBeUndefined()
   })
 })

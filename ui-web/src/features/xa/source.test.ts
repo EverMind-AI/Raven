@@ -6,11 +6,12 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { resetXaSeen, xaFetch, xaRowOf } from './source'
+import { resetXaSeen, xaFetch, xaRowOf, xaSource } from './source'
 import { FixtureTransport } from '../../rpc/fixtureTransport'
 import { setGateway } from '../../state/gateway'
 
 import type { XaRowWire } from './source'
+import type { XaRow } from './types'
 
 const wire = (over: Partial<XaRowWire>): XaRowWire => ({ name: 'codex', ...over } as XaRowWire)
 
@@ -105,5 +106,99 @@ describe('refetching the list', () => {
     await xaFetch(false)
     const [row] = await xaFetch(false)
     expect(row?.probe_status).toBe('unknown')
+  })
+})
+
+/* Every write the cards can make, and the re-read each one ends with: the list
+   is refetched after a write rather than patched locally, so a row the server
+   shaped differently than the page expected cannot drift. */
+function writes(): { asked: Array<[string, Record<string, unknown>]> } {
+  const asked: Array<[string, Record<string, unknown>]> = []
+  const transport = new FixtureTransport({})
+  transport.call = (async (method: string, params: Record<string, unknown>) => {
+    asked.push([method, params])
+    return { rows: [] }
+  }) as typeof transport.call
+  setGateway(transport)
+  return { asked }
+}
+
+const card = (over: Partial<XaRow> = {}): XaRow =>
+  ({ name: 'codex', preset: 'codex-cli', description: 'the cli one', configured: true, ...over } as XaRow)
+
+describe('the seven writes a card can make', () => {
+  it('connects with the preset and the three fields a person can type', async () => {
+    /* Only name / description / key travel: every execution field comes from
+       the preset server-side, because a page that could post a command line
+       would make "which agent is this" unanswerable. */
+    const { asked } = writes()
+
+    await xaSource.act('connect', card({ preset: 'codex-cli' }), { new_name: 'mine', description: 'd', api_key: 'k' })
+
+    expect(asked).toEqual([
+      ['subagents.add', { preset: 'codex-cli', name: 'mine', description: 'd', api_key: 'k' }],
+      ['subagents.list', { probe: false }],
+    ])
+  })
+
+  it('updates without renaming when the name did not change', async () => {
+    const { asked } = writes()
+
+    await xaSource.act('update', card(), { new_name: 'codex', description: 'a new line' })
+
+    expect(asked[0]).toEqual(['subagents.update', {
+      name: 'codex', new_name: undefined, description: 'a new line', api_key: undefined,
+    }])
+  })
+
+  it('toggles one switch for every kind of row', async () => {
+    const { asked } = writes()
+
+    await xaSource.act('toggle', card(), { enabled: true })
+
+    expect(asked[0]).toEqual(['subagents.toggle', { name: 'codex', enabled: true }])
+  })
+
+  it('migrates as a remove and an add, in that order', async () => {
+    /* A stale transport is the one connect that cannot be a flag: there is no
+       "change the transport" write, so it is an entry replaced rather than an
+       entry mutated underneath its session handles. */
+    const { asked } = writes()
+
+    await xaSource.act('migrate', card())
+
+    expect(asked.map(([method]) => method))
+      .toEqual(['subagents.remove', 'subagents.add', 'subagents.list'])
+    expect(asked[1]).toEqual(['subagents.add', {
+      preset: 'codex-cli', name: 'codex', description: 'the cli one',
+    }])
+  })
+
+  it('tests a configured row against its config, and an unconfigured one against its preset', async () => {
+    /* The one call here that spends the agent's own quota, which is why nothing
+       runs it on page load. */
+    const { asked } = writes()
+
+    await xaSource.act('test', card({ configured: true }))
+    await xaSource.act('test', card({ configured: false }))
+
+    expect(asked.filter(([m]) => m === 'subagents.test').map(([, p]) => p.source))
+      .toEqual(['config', 'preset'])
+  })
+
+  it('cancels a test by name alone', async () => {
+    const { asked } = writes()
+
+    await xaSource.act('test_cancel', card())
+
+    expect(asked[0]).toEqual(['subagents.test_cancel', { name: 'codex' }])
+  })
+
+  it('starts a build by name alone', async () => {
+    const { asked } = writes()
+
+    await xaSource.act('build', card())
+
+    expect(asked[0]).toEqual(['subagents.build', { name: 'codex' }])
   })
 })

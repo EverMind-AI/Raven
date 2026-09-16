@@ -1,23 +1,27 @@
 // @vitest-environment happy-dom
-/* The live layer draws the runtime's turn clock, not its own. */
-
-import { readFileSync } from 'node:fs'
-/* Off cwd, not off `import.meta.url`: under happy-dom that is an http URL. */
-import { resolve } from 'node:path'
+/* The runtime draws the engine's turn clock, not its own. */
 
 import { describe, expect, it } from 'vitest'
 
-import { loadPart, looseQuery } from './legacy-part.mjs'
+import { loadPart, looseQuery, partTexts } from '../../../scripts/legacy-part.mjs'
 
-/* The clock run against a `live` we control -- the point is which of the two
-   numbers it returns, so both have to be observable and different. */
-async function turnPart(stamps, stubs = {}) {
-  const part = await loadPart(() => import('../src/legacy/live/050-turn.js'), {
+type Runtime = typeof import('./runtime')
+
+/* The clock run against a turn state we control -- the point is which of the
+   two numbers it returns, so both have to be observable and different. */
+async function turnPart(
+  stamps: Record<string, unknown>,
+  stubs: { state?: Record<string, unknown>; transcript?: Record<string, unknown> } = {},
+): Promise<Runtime> {
+  /* The part is loaded first and the seam imported after it, which is the
+     order that keeps one module graph: a mock consulted from inside another
+     mock's factory would hand a cycle-mate the unmocked module. */
+  await loadPart(() => import('../../legacy/live/050-turn.js'), {
     fakes: {
       'src/shell/session': { current: () => 's1' },
       'src/shell/ctxchip': { set: () => {} },
       'src/shell/notifications': { show: () => {} },
-      'demo/010-kernel.js': { $: looseQuery(), dur: (ms) => `${ms}ms`, T: (k) => k },
+      'demo/010-kernel.js': { $: looseQuery(), dur: (ms: number) => `${ms}ms`, T: (k: string) => k },
       'demo/040-state.js': {
         down: () => {},
         queueShift: () => undefined,
@@ -36,8 +40,9 @@ async function turnPart(stamps, stubs = {}) {
       workspace: { currentTurn: () => 1 },
     },
   })
-  Object.assign(part.live, stamps)
-  return part
+  const runtime = (await import('./runtime')) as Runtime
+  Object.assign(runtime.state(), stamps)
+  return runtime
 }
 
 describe('the live turn clock', () => {
@@ -46,41 +51,41 @@ describe('the live turn clock', () => {
   const stamps = { startedAt: 1_000_000, answerAt: 1_268_000 }
 
   it('draws the duration the runtime measured, not the one this page timed', async () => {
-    expect((await turnPart(stamps)).turnDur(20_440)).toBe('20440ms')
+    expect((await turnPart(stamps)).duration(20_440)).toBe('20440ms')
   })
 
   it('falls back to its own stamps when the server sends no duration', async () => {
-    expect((await turnPart(stamps)).turnDur(undefined)).toBe('268000ms')
+    expect((await turnPart(stamps)).duration(undefined)).toBe('268000ms')
   })
 
   it('keeps the one-second floor on the runtime number', async () => {
-    expect((await turnPart(stamps)).turnDur(12)).toBe('1000ms')
+    expect((await turnPart(stamps)).duration(12)).toBe('1000ms')
   })
 
   it('reports nothing when it has neither a server number nor an anchor', async () => {
-    expect((await turnPart({ startedAt: 0, answerAt: 0 })).turnDur(undefined)).toBe(null)
+    expect((await turnPart({ startedAt: 0, answerAt: 0 })).duration(undefined)).toBe(null)
   })
 })
 
 describe('the live turn wiring', () => {
   /* The real `finishTurn` against stubs -- the claim is that the duration
-     reaches the clock, and only running it can show that. Its `turnDur` is the
-     part's own, so the two halves are wired here exactly as they are on the
+     reaches the clock, and only running it can show that. Its `duration` is the
+     same one, so the two halves are wired here exactly as they are on the
      page. */
   const stamps = { st: null, steps: [], say: '', startedAt: 1_000_000, answerAt: 1_268_000 }
 
-  async function finisher(drawn) {
-    const part = await turnPart(stamps, {
+  async function finisher(drawn: Array<string | null>) {
+    const runtime = await turnPart(stamps, {
       transcript: {
-        finishTurn: (_st, _steps, clock) => drawn.push(clock),
+        finishTurn: (_st: unknown, _steps: unknown, clock: string | null) => drawn.push(clock),
         artifacts: () => {},
       },
     })
-    return part.finishTurn
+    return runtime.finishTurn
   }
 
   it('hands the clock the duration off message.complete, not its own stamps', async () => {
-    const drawn = []
+    const drawn: Array<string | null> = []
     /* Stamps that span four and a half minutes -- a delegated turn's wait --
        against a runtime that says the turn itself took twenty seconds. */
     ;(await finisher(drawn))({ usage: {}, duration_ms: 20_440 })
@@ -88,7 +93,7 @@ describe('the live turn wiring', () => {
   })
 
   it('still draws a clock when the server sends no duration', async () => {
-    const drawn = []
+    const drawn: Array<string | null> = []
     ;(await finisher(drawn))({ usage: {} })
     expect(drawn).toEqual(['268000ms'])
   })
@@ -97,7 +102,8 @@ describe('the live turn wiring', () => {
     /* An ordering rule about one branch of the dispatcher, so it is read off
        the part's own text: the branch runs for an event the harness above
        cannot distinguish from the one before it. */
-    const src = readFileSync(resolve(process.cwd(), 'src/legacy/live/050-turn.js'), 'utf8')
+    const live = partTexts('live') as Array<[string, string]>
+    const src = live.find(([name]) => name === '050-turn.js')![1]
     const mark = "} else if (ev.type === 'turn.started') {"
     const start = src.indexOf(mark)
     expect(start).toBeGreaterThan(-1)

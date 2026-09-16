@@ -23,6 +23,9 @@ import { describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
 
+type Runtime = typeof import('./runtime')
+type Registry = typeof import('./registry')
+
 interface Row { id: string; title: string; last: string; persisted: boolean }
 interface Staged { model: { model: string; provider: string } | null; tier: string | null; perm: string | null }
 
@@ -42,6 +45,9 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
   let minted = 0
   let bumpOnCreate: (() => void) | null = null
 
+  /* The part is loaded first and the seams imported after it, which is the
+     order that keeps one module graph: a mock consulted from inside another
+     mock's factory would hand a cycle-mate the unmocked module. */
   const part = await loadPart(() => import('../../legacy/live/080-overrides.js'), {
     fakes: {
       'src/shell/banner': { draw: () => {} },
@@ -106,9 +112,11 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
     },
     islands: { rail: { endRename: () => {} } },
   })
+  const runtime = (await import('./runtime')) as Runtime
+  const registry = (await import('./registry')) as Registry
   /* The view ticket is its own module now; taken from the instance loadPart's
      reset just produced, not from a binding held across it. */
-  const { generation } = await import('../../state/session/generation')
+  const { generation } = await import('./generation')
 
   await fakeGateway(async (method: string, params: { key?: string } = {}) => {
     log.push(traffic(method, params))
@@ -126,7 +134,7 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
   /* The real way in: `startDraft` is what raises the flag `openConversation`
      reads, and it takes the next view ticket while it does. Its own wiring is
      noise here, so the log starts after it. */
-  const enterDraft = (): void => { part.startDraft(); log.length = 0 }
+  const enterDraft = (): void => { registry.switchToDraft(); log.length = 0 }
   if (startAsDraft) enterDraft()
   /* Staged picks belong to the draft, so they go on after it: startDraft
      clears all three. */
@@ -135,9 +143,9 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
   }
 
   return {
-    openConversation: part.openConversation as (preview?: string, atPointer?: (id: string) => void) => Promise<string | null>,
-    sendOnSession: part.sendOnSession as (text: string, failed: (e: unknown) => void) => void,
-    isDraft: () => part.draft as boolean,
+    openConversation: runtime.openConversation,
+    sendOnSession: runtime.sendOnSession,
+    isDraft: () => runtime.isDraft(),
     viewGen: () => generation(),
     enterDraft,
     stage,
