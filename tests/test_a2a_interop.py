@@ -24,6 +24,7 @@ from aiohttp.test_utils import TestServer
 from raven.a2a.routes_aiohttp import add_a2a_routes
 from raven.a2a.runtime import build_request_handler
 from raven.a2a_client.client import send_message
+from raven.a2a_client.peers import same_origin
 from raven.config.schema import A2aConfig, A2aPeerConfig
 
 TOKEN = "t0ken"
@@ -167,3 +168,49 @@ async def test_a_host_with_no_roster_says_so_in_the_protocol_s_own_words(peer: T
     answer = await _rpc(_origin(peer), "GetExtendedAgentCard", token=TOKEN)
 
     assert answer["body"]["error"]["message"] == "ExtendedAgentCardNotConfiguredError"
+
+
+async def test_both_cards_send_a_caller_back_to_the_origin_it_arrived_on(
+    peer_with_roster: TestServer,
+) -> None:
+    """The two cards must not disagree about where this agent is.
+
+    `supportedInterfaces[].url` is what a caller dials and what raven's own
+    same-origin guard measures a peer against, and the answer depends on the
+    request: one face is reachable under every name that routes to it -- a
+    tunnel, a published container port, a proxy -- so a URL fixed at mount time
+    is right for at most one of them.
+
+    Over the wire on a server bound to an ephemeral port, because that is the
+    only way the two computations are forced to agree on a value neither could
+    have been written to expect. Asserting the two builders match in-process
+    would pass on any pair of constants.
+    """
+    origin = _origin(peer_with_roster)
+
+    async with httpx.AsyncClient() as http:
+        public = (await http.get(f"{origin}/.well-known/agent-card.json")).json()
+    extended = await _rpc(origin, "GetExtendedAgentCard", token=TOKEN)
+
+    served = extended["body"]["result"]["supportedInterfaces"][0]["url"]
+    assert served == public["supportedInterfaces"][0]["url"]
+    assert served == f"{origin}/a2a"
+
+
+async def test_the_extended_cards_interface_passes_ravens_own_same_origin_guard(
+    peer_with_roster: TestServer,
+) -> None:
+    """The consumer's predicate, imported rather than restated.
+
+    `send_message` refuses a peer whose card declares an interface off the card's
+    own origin. A relative URL reads as off-origin to `same_origin`, so a card
+    built without the request would make this host's own guard reject it -- which
+    a test asserting "the URL is absolute" would not have shown.
+    """
+    origin = _origin(peer_with_roster)
+    card_url = f"{origin}/.well-known/agent-card.json"
+
+    extended = await _rpc(origin, "GetExtendedAgentCard", token=TOKEN)
+
+    for interface in extended["body"]["result"]["supportedInterfaces"]:
+        assert same_origin(card_url, interface["url"])

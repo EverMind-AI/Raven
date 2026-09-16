@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from a2a.server.context import ServerCallContext
 from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP
 from a2a.utils.proto_utils import to_stream_response
 from aiohttp import web
@@ -24,6 +25,18 @@ from google.protobuf.message import Message as ProtoMessage
 from raven.a2a.auth import is_authorized
 from raven.a2a.card import CARD_PATH, PROTOCOL_VERSION, build_agent_card
 from raven.config.schema import A2aConfig
+
+CALL_BASE_URL = "base_url"
+"""Key under which a call's own interface URL rides `ServerCallContext.state`.
+
+The URL a card advertises is a property of the request that asked for it, not
+of the process: one face answers on every name it is reachable under -- an SSH
+tunnel, a published container port, a reverse proxy -- and each caller must be
+sent back to the origin it actually used. The card route has always read that
+off the live request; this key is how the RPC route hands the handler the same
+fact, so the extended card cannot disagree with the public one about where
+this agent is.
+"""
 
 VERSION_HEADER = "A2A-Version"
 
@@ -102,8 +115,18 @@ def _as_stream_response(event: Any) -> Any:
     return to_stream_response(event) if isinstance(event, ProtoMessage) else event
 
 
+def _interface_url(request: web.Request, config: A2aConfig) -> str:
+    """Where this agent's JSON-RPC interface is, as *this* caller reached it.
+
+    One computation for both routes. `aiohttp.web` does not re-export `yarl.URL`
+    (there is no `web.URL`); the server's path is always absolute, so plain
+    concatenation is enough.
+    """
+    return str(request.url.origin()) + config.server.path
+
+
 async def _serve_stream(
-    request: web.Request, handler: Any, method_name: str, params: Any, request_id: Any
+    request: web.Request, handler: Any, method_name: str, params: Any, request_id: Any, context: Any
 ) -> web.StreamResponse:
     """One `data:` frame per event, each carrying the same JSON-RPC envelope a
     non-streaming call would return once. A mid-stream handler failure still
@@ -112,7 +135,7 @@ async def _serve_stream(
     response = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
     await response.prepare(request)
     try:
-        async for event in getattr(handler, method_name)(params, None):
+        async for event in getattr(handler, method_name)(params, context):
             payload = {"jsonrpc": "2.0", "id": request_id, "result": _to_jsonable(_as_stream_response(event))}
             await response.write(f"data: {json.dumps(payload)}\n\n".encode())
     except Exception as exc:
@@ -125,9 +148,7 @@ def add_a2a_routes(app: web.Application, config: A2aConfig, handler: Any) -> Non
     """Mount the card and the JSON-RPC endpoint onto `app`."""
 
     async def serve_card(request: web.Request) -> web.Response:
-        # `aiohttp.web` does not re-export `yarl.URL` (there is no `web.URL`); the
-        # server's path is always absolute, so plain concatenation is enough.
-        base = str(request.url.origin()) + config.server.path
+        base = _interface_url(request, config)
         # Asked of the handler rather than assumed: whether an extended card can
         # be served is the handler's fact, and a card that advertises one this
         # process cannot answer sends the caller to a refusal.
@@ -162,12 +183,17 @@ def add_a2a_routes(app: web.Application, config: A2aConfig, handler: Any) -> Non
             return web.json_response(error_response("MethodNotFoundError", request_id), status=200)
 
         params = body.get("params") or {}
+        # Carries this request's own origin to the handler. `GetExtendedAgentCard`
+        # builds a card and so needs the same answer `serve_card` gives; handing it
+        # to every method keeps one dispatch rather than a second path that has to
+        # be kept in step.
+        context = ServerCallContext(state={CALL_BASE_URL: _interface_url(request, config)})
 
         if method in STREAMING_METHODS:
-            return await _serve_stream(request, handler, method_name, params, request_id)
+            return await _serve_stream(request, handler, method_name, params, request_id, context)
 
         try:
-            result = await getattr(handler, method_name)(params, None)
+            result = await getattr(handler, method_name)(params, context)
             # Serialization stays inside the guarded region, same as the streaming branch's
             # json.dumps: a result that fails to convert or encode is a caller-facing
             # InternalError, not an unhandled exception that falls through to a bare 500.

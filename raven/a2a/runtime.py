@@ -5,14 +5,18 @@ task store and an event queue; the only thing it lacks is what a turn is, which
 is ``RavenAgentExecutor``. This module is where those two meet, so no other file
 has to know how the SDK is put together.
 
-``DefaultRequestHandler`` speaks protobuf request types and a real
-``ServerCallContext``; ``routes_aiohttp`` speaks plain JSON-RPC ``params`` dicts
-and passes ``None`` for context (that is what Task 9's fake-handler tests
-exercise, and it is fine for a test double, but a real ``DefaultRequestHandler``
-rejects both). ``_RequestHandlerAdapter`` below is the seam between the two: it
+``DefaultRequestHandler`` speaks protobuf request types; ``routes_aiohttp``
+speaks plain JSON-RPC ``params`` dicts, which a real ``DefaultRequestHandler``
+rejects. ``_RequestHandlerAdapter`` below is the seam between the two: it
 presents the same six generic method names ``routes_aiohttp`` calls, and it is
 where dict-to-protobuf conversion happens, exactly once per method, so
 ``routes_aiohttp`` itself never has to know the SDK's proto types exist.
+
+The context both speak is the SDK's own ``ServerCallContext``. What
+``routes_aiohttp`` puts in its ``state`` is per-request fact the process cannot
+know -- see ``CALL_BASE_URL`` -- so a method that needs one reads it off the
+call. A direct call may still pass ``None``; every method either ignores the
+context or falls back, and none dereferences it.
 """
 
 from __future__ import annotations
@@ -40,7 +44,7 @@ from loguru import logger
 
 from raven.a2a.card import build_agent_card, build_extended_agent_card
 from raven.a2a.executor import RavenAgentExecutor, RunTurn
-from raven.a2a.routes_aiohttp import add_a2a_routes
+from raven.a2a.routes_aiohttp import CALL_BASE_URL, add_a2a_routes
 from raven.config.schema import A2aConfig
 from raven.contracts.asking import QuestionResponder
 from raven.permissions.turn import start_permission_turn
@@ -85,11 +89,11 @@ class _RequestHandlerAdapter:
     a real ``DefaultRequestHandler``.
 
     Deliberately not a ``DefaultRequestHandler`` subclass: every method it
-    overrides would take a different, incompatible signature (a dict instead of
-    a proto request, ``None`` instead of a real context), which is a Liskov
-    violation dressed up as inheritance. Composition says the same thing
-    honestly, and ``routes_aiohttp.add_a2a_routes``'s ``handler`` parameter is
-    typed ``Any`` -- nothing statically requires the literal SDK class.
+    overrides would take a different, incompatible signature -- a dict where the
+    SDK declares a proto request -- which is a Liskov violation dressed up as
+    inheritance. Composition says the same thing honestly, and
+    ``routes_aiohttp.add_a2a_routes``'s ``handler`` parameter is typed ``Any``
+    -- nothing statically requires the literal SDK class.
     """
 
     def __init__(
@@ -145,13 +149,20 @@ class _RequestHandlerAdapter:
                 )
         return await self._handler.on_message_send(request, ServerCallContext())
 
-    async def on_get_extended_agent_card(self, _params: Any, _context: Any) -> Any:
+    async def on_get_extended_agent_card(self, _params: Any, context: Any) -> Any:
         """The authenticated half of the Card, derived per call.
 
         Not baked at construction like the public card: the roster is the live
         sub-agent set, and on the gateway-mounted hosting the loop that owns it
         does not exist yet when the face is mounted. Resolving it per call is
         also what keeps a hot `apply_agents` from leaving this answer stale.
+
+        The interface URL is read off the call rather than off this object for
+        the same reason the card route reads it off the request: it is where the
+        *caller* reached this agent, and a face behind a tunnel or a published
+        container port is reachable under a name the process cannot know. The
+        constructed value is the fallback for a direct call that carries no
+        context.
 
         `ExtendedAgentCardNotConfiguredError` is the protocol's own word for
         "this host serves no extended card", and is what a process given no
@@ -160,7 +171,9 @@ class _RequestHandlerAdapter:
         """
         if self._roster is None or self._config is None:
             raise ExtendedAgentCardNotConfiguredError()
-        return build_extended_agent_card(self._config, base_url=self._base_url, agents=list(self._roster()))
+        state = getattr(context, "state", None) or {}
+        base_url = state.get(CALL_BASE_URL) or self._base_url
+        return build_extended_agent_card(self._config, base_url=base_url, agents=list(self._roster()))
 
     async def on_message_send_stream(self, params: Any, _context: Any) -> AsyncGenerator[Any, None]:
         """The streaming sibling of `on_message_send`, and it needs the same two
@@ -222,7 +235,11 @@ def build_request_handler(
 
     Returns the dict-speaking adapter, not a bare ``DefaultRequestHandler``:
     ``routes_aiohttp``'s two call sites hand every method a JSON-RPC ``params``
-    dict and a ``None`` context, which only the adapter accepts.
+    dict, which only the adapter accepts.
+
+    `base_url` is the fallback for a call that carries no context; a request
+    served through ``add_a2a_routes`` overrides it with the origin that request
+    actually arrived on, so nothing built here is what a caller is finally told.
 
     `agent_card` is required by the SDK, not optional -- a two-argument call
     raises TypeError -- so the config has to reach here to build one.
