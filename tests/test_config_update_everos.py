@@ -551,10 +551,18 @@ class TestEmbeddingHasTwoHomes:
             {"model": "Qwen/Qwen3-Embedding-4B", "provider": "siliconflow"},
         )
         env = ue.host_embedding_env()
-        # The provider half already named whose credential this is, so the
-        # stored ``provider/model`` spelling loses its head on the wire.
-        assert env["EVEROS_EMBEDDING__MODEL"] == "Qwen3-Embedding-4B"
+        # Verbatim: "Qwen" is the org on HuggingFace and SiliconFlow serves the
+        # id under that name. A head only comes off when it is the provider's
+        # own -- the rule `raven.providers.wire` owns for every model id.
+        assert env["EVEROS_EMBEDDING__MODEL"] == "Qwen/Qwen3-Embedding-4B"
         assert env["EVEROS_EMBEDDING__API_KEY"] == "sk-sf"
+
+        self._raven_config(
+            tmp_path,
+            monkeypatch,
+            {"model": "siliconflow/BAAI/bge-m3", "provider": "siliconflow"},
+        )
+        assert ue.host_embedding_env()["EVEROS_EMBEDDING__MODEL"] == "BAAI/bge-m3"
 
     def test_the_documented_env_override_is_an_operators_choice(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -578,9 +586,7 @@ class TestEmbeddingHasTwoHomes:
             ("API_KEY", "sk-operator"),
         ):
             monkeypatch.setenv(f"EVEROS_EMBEDDING__{name}", value)
-        self._raven_config(
-            tmp_path, monkeypatch, {"model": "ravens/model", "provider": "siliconflow"}
-        )
+        self._raven_config(tmp_path, monkeypatch, {"model": "ravens/model", "provider": "siliconflow"})
 
         assert ue.everos_has_own_embedding() is True
         assert ue.host_embedding_env() == {}
@@ -603,12 +609,10 @@ class TestEmbeddingHasTwoHomes:
         monkeypatch.setenv("EVEROS_EMBEDDING__MODEL", "operators/model")
         monkeypatch.delenv("EVEROS_EMBEDDING__BASE_URL", raising=False)
         monkeypatch.delenv("EVEROS_EMBEDDING__API_KEY", raising=False)
-        self._raven_config(
-            tmp_path, monkeypatch, {"model": "ravens/model", "provider": "siliconflow"}
-        )
+        self._raven_config(tmp_path, monkeypatch, {"model": "ravens/model", "provider": "siliconflow"})
 
         assert ue.everos_has_own_embedding() is False
-        assert ue.host_embedding_env()["EVEROS_EMBEDDING__MODEL"] == "model"
+        assert ue.host_embedding_env()["EVEROS_EMBEDDING__MODEL"] == "ravens/model"
 
     def test_ravens_own_binding_is_not_an_operators_export(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -630,9 +634,7 @@ class TestEmbeddingHasTwoHomes:
 
         everos_home.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(_EVEROS_TEMPLATE, everos_home)
-        self._raven_config(
-            tmp_path, monkeypatch, {"model": "ravens/model", "provider": "siliconflow"}
-        )
+        self._raven_config(tmp_path, monkeypatch, {"model": "ravens/model", "provider": "siliconflow"})
         endpoint = SimpleNamespace(model="ravens/model", base_url="https://ravens/v1", api_key="sk-raven")
 
         assert ue.embedding_is_env_managed() is False, "nothing is exported yet"

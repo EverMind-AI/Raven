@@ -119,6 +119,23 @@ def _provider_serving(base_url: str) -> str | None:
     return None
 
 
+def endpoint_is_ravens_own() -> bool:
+    """Whether raven's own block names the endpoint every reader uses.
+
+    Both halves or neither: the block records a model and the provider that
+    serves it, and a model alone resolves to nothing -- so a config carrying
+    only one of them has not adopted the endpoint, whatever it looks like on a
+    settings page.
+    """
+    try:
+        from raven.config.raven import load_raven_config
+
+        pin = load_raven_config().embedding
+    except Exception:  # noqa: BLE001 - an unreadable config has adopted nothing
+        return False
+    return bool(pin.model and pin.provider)
+
+
 def adopt_legacy_endpoint(raw: dict) -> bool:
     """Rewrite the memory backend's endpoint as an ``embedding`` pin, in ``raw``.
 
@@ -195,6 +212,7 @@ def load_embedding_config() -> EmbeddingConfig | None:
     try:
         from raven.config.raven import load_raven_config
         from raven.config.update_providers import resolve_provider_credentials
+        from raven.providers.wire import wire_model
     except Exception:  # noqa: BLE001 - an import failure here is not this module's to report
         return None
 
@@ -211,19 +229,14 @@ def load_embedding_config() -> EmbeddingConfig | None:
     resolved = resolve_provider_credentials(provider)
     if resolved is None:
         logger.warning(
-            "knowledge: embedding provider {!r} has no usable credential, so nothing can be "
-            "embedded until it has one",
+            "knowledge: embedding provider {!r} has no usable credential, so nothing can be embedded until it has one",
             provider,
         )
         return None
 
     base_url, api_key = resolved
-    # The provider half already said whose credential this is, so a stored
-    # ``provider/model`` spelling has served its purpose: what goes on the wire
-    # is the vendor's own id, which is the tail.
-    wire_model = model.split("/", 1)[1] if "/" in model else model
     return EmbeddingConfig(
-        model=wire_model,
+        model=wire_model(model, client_provider=provider),
         base_url=base_url.rstrip("/"),
         api_key=api_key,
         dimensions=pin.dimensions if pin.dimensions and pin.dimensions > 0 else None,
