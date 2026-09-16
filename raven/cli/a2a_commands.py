@@ -1,8 +1,12 @@
 """`raven a2a serve`: the A2A face without a gateway.
 
-The headless hosting. The gateway-mounted one is ``gate.mount_if_allowed``,
+The headless hosting. The gateway-mounted one is ``gate.mount_gateway_face``,
 called from the app builder; both refuse in a sub-agent process through the same
 check, so neither can be the one that forgot.
+
+The two are not gated alike, which is easy to misread as an oversight: the config
+flag decides only the gateway-mounted face, because running this command is
+itself the opt-in for this one.
 """
 
 from __future__ import annotations
