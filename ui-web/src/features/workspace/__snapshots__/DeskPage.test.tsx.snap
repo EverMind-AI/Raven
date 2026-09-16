@@ -1,0 +1,54 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`asking for the instance list > keeps its rendered shape 1`] = `
+"div.desk-palette[data-anchored=true][data-phase=in]
+  div.desk-drag
+    div.desk-tabs
+      button
+        svg
+          path
+          path
+        span.lb
+      button
+        svg
+          rect
+          path
+        span.lb
+      button
+        svg
+          rect
+          path
+        span.lb
+  div.desk-body
+    div.salist.agent-roster
+      section.agent-group
+        div.agent-headrow
+          button.agent-head
+            span.agent-fold[data-empty=false][data-open=true]
+              svg
+                path
+            span.agent-mark
+              svg
+                rect
+                path
+            b
+            span.agent-kind
+        div.agent-instances
+          div.sarow.inst
+            span.desk-status
+              span.wkg.sw
+                i
+                i
+                i
+            span.nm
+            button.inst-retire
+              svg
+                path
+  div.desk-resize
+button.ghost-ic.desk-follow-toggle[data-working=true]
+  svg
+    path
+    circle
+    circle
+    circle"
+`;

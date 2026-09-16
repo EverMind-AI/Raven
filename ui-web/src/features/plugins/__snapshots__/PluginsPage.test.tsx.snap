@@ -1,0 +1,82 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`plugins island > keeps its rendered shape, installed shelf 1`] = `
+"div.pmback
+  button.mini.ghost
+  b
+div.csec
+  div.hd
+    b
+    span.n
+  div.hubgrid
+    div.hubcard.pmcard
+      div.top
+        div.pmhead
+          span.pmtile.th4
+          div.pmnm
+            span
+        button.swi
+      p.one
+      div.foot
+        span.pmst.ok
+          i.pmdot
+          span
+        span.pmcnt
+          span.pmsign.faint
+div.csec
+  div.hd
+    b
+    span.n
+  div.hubgrid
+    div.hubcard.pmcard
+      div.top
+        div.pmhead
+          span.pmtile.th1
+          div.pmnm
+            span
+        button.swi
+      p.one
+      div.foot
+        span.pmst.ok
+          i.pmdot
+          span
+        div.act
+          button.mini.gold"
+`;
+
+exports[`plugins island > keeps its rendered shape, market 1`] = `
+"div.pmchips
+  button.pill
+  button.pill
+div.hubgrid
+  div.hubcard.pmcard
+    div.top
+      div.pmhead
+        span.pmtile.th4
+        div.pmid
+          div.pmnm
+            span
+            span
+              svg.pmvfd
+                path
+                path
+          div.pmpub
+    p.one
+    div.foot
+      span.pmcnt
+      div.act
+        button.mini.gold
+  div.hubcard.pmcard
+    div.top
+      div.pmhead
+        span.pmtile.th5
+        div.pmid
+          div.pmnm
+            span
+          div.pmpub
+    p.one
+    div.foot
+      span.pmcnt
+      div.act
+        button.mini.gold"
+`;

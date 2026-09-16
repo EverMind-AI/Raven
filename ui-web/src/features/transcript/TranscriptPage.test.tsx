@@ -14,6 +14,8 @@ import * as attachmentCache from '../../shell/attachment-cache'
 import { markMissing as markDeliveryMissing } from '../workspace/deliveries'
 import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { ProseTarget } from '../../shell/prose'
 import type { HistoryMessage, SpawnListRow, TranscriptSource } from './types'
@@ -894,6 +896,26 @@ describe('transcript island, history', () => {
     expect(notes[0]?.textContent).toContain('en:gui.notice.memory_flush')
     expect(notes[1]?.classList.contains('bad')).toBe(true)
     expect((notes[1] as HTMLElement).title).toBe('send failed · socket closed')
+  })
+
+  it('keeps its rendered shape', () => {
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'read both' },
+        {
+          role: 'assistant', text: '',
+          tool_calls: [
+            { id: 'c1', name: 'read_file', arguments: '{"path":"/tmp/a.log"}' },
+            { id: 'c2', name: 'read_file', arguments: '{"path":"/tmp/b.log"}' },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'line1' },
+        { role: 'tool', tool_call_id: 'c2', name: 'read_file', text: 'Error: no such file' },
+        { role: 'assistant', text: 'one of them is missing' },
+      ])
+    })
+    openTurns()
+    expect(domSnapshot(document.getElementById('stage')!)).toMatchSnapshot()
   })
 })
 

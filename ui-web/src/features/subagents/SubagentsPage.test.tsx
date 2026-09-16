@@ -15,6 +15,8 @@ import {
 import * as store from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { JSX } from 'react'
 import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow, SubagentRow } from './types'
@@ -777,6 +779,19 @@ describe('subagents island, the list', () => {
     expect(rows.map((r) => r.querySelector('.agent-mark img')?.getAttribute('src') ?? null))
       .toEqual(['assets/agents/claudecode-color.svg', 'assets/agents/raven.svg', null])
     expect(rows.every((r) => !!r.querySelector('.agent-mark'))).toBe(true)
+  })
+
+  it('keeps its rendered shape', async () => {
+    instances([
+      inst({ handle: 'live', status: 'running' }),
+      inst({ handle: 'waiting', status: 'idle' }),
+      inst({ handle: 'broke', status: 'failed' }),
+      inst({ handle: 'gone', status: 'interrupted' }),
+      inst({ handle: 'finished', status: 'completed' }),
+    ])
+    await mount()
+    await screen.findByText('live')
+    expect(domSnapshot(document.getElementById('wsBody')!)).toMatchSnapshot()
   })
 })
 
@@ -1876,6 +1891,19 @@ describe('subagents island, an instance detail', () => {
 
     expect(paints).toHaveLength(2)
     expect((paints[1]!.ctx as { messages: unknown[] }).messages).toHaveLength(2)
+  })
+
+  it('keeps its rendered shape', async () => {
+    const row = inst({ handle: 'research-a2a-726da8', status: 'completed', resumable: true })
+    await openInstance(row, {
+      instanceHistory: async () => ({
+        turns: [
+          { call_id: 'c1', role: 'user' as const, content: 'investigate the protocol', at_ms: 1000 },
+          { call_id: 'c1', role: 'assistant' as const, content: 'done', at_ms: 2000 },
+        ],
+      }),
+    })
+    expect(domSnapshot(document.getElementById('wsBody')!)).toMatchSnapshot()
   })
 })
 

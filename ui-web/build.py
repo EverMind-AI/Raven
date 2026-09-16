@@ -31,6 +31,7 @@ Run:
 import hashlib
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -191,7 +192,7 @@ def main() -> None:
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
     (dist / "index.html").write_text(out, encoding="utf-8")
-    print(f"built dist/index.html ({len(out):,} bytes)")
+    print(f"built dist/index.html ({len(out):,} bytes)", flush=True)
 
     # Static assets stay files rather than data: URIs -- inlining 320 KB of
     # artwork would grow the page by a third again in base64 and re-download it
@@ -204,7 +205,15 @@ def main() -> None:
         shutil.copytree(src_assets, out_assets)
         shutil.copy2(ROOT / "icon" / "raven.svg", out_assets / "raven.svg")
         total = sum(p.stat().st_size for p in out_assets.rglob("*") if p.is_file())
-        print(f"copied dist/assets ({total:,} bytes)")
+        print(f"copied dist/assets ({total:,} bytes)", flush=True)
+    _check_boot_snapshot(dist / "index.html")
+
+
+def _check_boot_snapshot(index: Path) -> None:
+    """Refuse a page whose booted DOM shape moved; see scripts/boot-snapshot.mjs."""
+    result = subprocess.run(["node", str(ROOT / "scripts" / "boot-snapshot.mjs"), str(index)], check=False)
+    if result.returncode != 0:
+        raise SystemExit("ui-web/build.py: booted DOM shape differs from scripts/__golden__/boot-stub.txt")
 
 
 if __name__ == "__main__":

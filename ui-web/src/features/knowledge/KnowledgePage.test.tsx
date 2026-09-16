@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { KnowledgeApp } from './KnowledgePage'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { KbBase, KbDoc, KbSearch, KnowledgeSource } from './types'
 import type { Shell } from '../../shell/bridge'
 
@@ -302,6 +304,13 @@ describe('the knowledge page', () => {
     delete (window as { DS?: unknown }).DS
     await mount()
     expect(screen.getByText('no knowledge source installed')).toBeTruthy()
+  })
+
+  it('keeps its rendered shape, bases', async () => {
+    source({ bases: async () => [base({ id: 'b1', name: 'handbook', documents: 3 })] })
+    const view = await mount()
+    expect(await screen.findByText('handbook')).toBeTruthy()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
   })
 })
 
@@ -730,6 +739,22 @@ describe('documents and search', () => {
       await slow
     })
     expect(screen.getByText('one')).toBeTruthy()
+  })
+
+  it('keeps its rendered shape, documents', async () => {
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [
+        doc({ id: 'd1', source: 'done.md', status: 'ready', chunk_count: 2 }),
+        doc({ id: 'd3', source: 'broke.md', status: 'failed', error: 'endpoint said 400' }),
+      ],
+    })
+    const view = await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await openRowMenu('done.md')
+    expect(domSnapshot(view.container)).toMatchSnapshot()
   })
 })
 

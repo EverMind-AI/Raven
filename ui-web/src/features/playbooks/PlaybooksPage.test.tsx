@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { PlaybooksApp } from './PlaybooksPage'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { PlaybookDetail, PlaybookNode, PlaybookRow, PlaybooksSource } from './types'
 import type { Shell } from '../../shell/bridge'
 
@@ -651,6 +653,27 @@ describe('the playbook library', () => {
     expect(pages).toEqual(['pbPage'])
     store.closePage()
     expect(pages).toEqual(['pbPage', null])
+  })
+
+  it('keeps its rendered shape, library', async () => {
+    install({
+      list: async () => [
+        row({ name: 'issue-triage' }),
+        row({ name: 'release-notes', description: 'what changed in a version' })
+      ]
+    })
+    const view = await mount()
+    expect(await screen.findByText('issue-triage')).toBeTruthy()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
+  })
+
+  it('keeps its rendered shape, graph', async () => {
+    install()
+    const view = await mount()
+    fireEvent.click(screen.getByText('issue-triage'))
+    await act(async () => {})
+    expect(document.querySelectorAll('.pbnode')).toHaveLength(2)
+    expect(domSnapshot(view.container)).toMatchSnapshot()
   })
 })
 

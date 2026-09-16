@@ -1,0 +1,41 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`memory island > keeps its rendered shape 1`] = `
+"div.pmhero
+  h3
+div.memstats
+  button.mstat
+    div.k
+    div.v
+    div.h
+  button.mstat
+    div.k
+    div.v
+    div.h
+  button.mstat
+    div.k
+    div.v
+    div.h
+  button.mstat
+    div.k
+    div.v
+    div.h
+div.memtools
+  div.cfind
+    svg.ic
+      circle
+      path
+    input
+  span.n
+div.memlist
+  div.memrow
+    div.t
+      b
+      span.when
+    div.s
+  div.memrow
+    div.t
+      b
+      span.when
+    div.s"
+`;

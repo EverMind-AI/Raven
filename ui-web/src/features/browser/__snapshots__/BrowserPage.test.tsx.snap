@@ -1,0 +1,55 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`browser island, embedded shape (the rpc source) > keeps its rendered shape 1`] = `
+"div.btabs
+  div.btab
+    img.fav
+    span.tt
+    button.bx
+  button.btab-new
+div.bbar
+  div.nav
+    button.ghost-ic.bk
+      svg
+        path
+    button.ghost-ic.fw
+      svg
+        path
+    button.ghost-ic.brl
+      svg
+        path
+  span.burl
+    span.sec.ok
+      svg
+        path
+    input.url
+  div.bprog
+    i
+  button.ghost-ic
+    svg
+      path
+  button.ghost-ic
+    svg
+      path
+div.bstage
+  canvas.shot
+  input.kbsink
+  div.waiting"
+`;
+
+exports[`browser island, links shape (the fixture source) > keeps its rendered shape 1`] = `
+"button.urow
+  svg
+    path
+  span.u
+    small
+  svg.ext
+    path
+button.urow
+  svg
+    path
+  span.u
+    small
+  svg.ext
+    path"
+`;

@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ModelPickerApp } from './ModelPicker'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { ModelSource, Provider } from './types'
 
@@ -228,6 +230,13 @@ describe('the model picker', () => {
     /* The second provider is filtered out of the columns entirely, so the only
        empty message reachable here is the search one. */
     expect(rows('provs').length).toBe(1)
+  })
+
+  it('keeps its rendered shape', () => {
+    install()
+    const view = mount()
+    openIt()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
   })
 })
 
@@ -510,6 +519,13 @@ describe('the capability icons', () => {
     /* `use` resolves the first definition of an id, so a second copy would be
        dead markup repeated on every open. */
     expect(document.querySelectorAll('.mpick .model-tag-defs').length).toBe(1)
+  })
+
+  it('keeps its rendered shape', () => {
+    install({}, TAGGED)
+    const view = mount()
+    openIt()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
   })
 })
 
