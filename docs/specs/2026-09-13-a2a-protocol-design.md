@@ -248,13 +248,44 @@ this is.
 That reasoning is about the channel, not the field, so it governs anything that would name
 the host's inventory on the public card -- an `AgentCapabilities.extensions` entry included.
 A capability list does not become safe by moving to a different key in the same
-unauthenticated document.
+unauthenticated document. The next section does put the roster in `extensions`, and that is
+consistent: what makes it admissible there is the authenticated channel it rides, not the
+field it lands in.
 
-The extended card is where the derive-once rule does apply. It carries one skill per
-sub-agent on the live roster, derived per call rather than baked when the face is mounted:
-on the gateway-mounted hosting the loop that owns that roster does not exist yet at mount
-time, and a hot `apply_agents` would otherwise leave the answer stale. A host given no
-roster answers `ExtendedAgentCardNotConfiguredError`, the protocol's own word for it.
+The extended card is where the derive-once rule does apply, and it splits the derived
+material across two fields by what each field means.
+
+`skills` gains exactly one entry, `subagent-orchestration`, beside the general one. A
+skill is the protocol's word for something this agent can be *asked to do*, and a peer
+cannot ask for one named sub-agent: it can only send a message to this host, which then
+decides what to dispatch. A skill per sub-agent would therefore advertise call targets
+that do not exist, and a caller acting on the advertisement has no method to reach them.
+What the peer can genuinely request is the orchestration, so that is the skill, and its
+description tells the caller to state an outcome rather than name an agent.
+
+`capabilities.extensions` carries the roster itself, under
+`https://raven.evermind.ai/a2a/extensions/sub-agents/v1`, as `params.agents` -- a list of
+`{name, description}`. `AgentExtension` is the protocol's own extension point and the only
+place a conformant card may carry a payload the spec does not define: `AgentCard` is a
+closed set of fourteen protobuf fields, so a custom top-level key such as `subAgents` is
+rejected by a strict parser and silently dropped by a lenient one. The entry declares
+`required: false`, so a reader that does not know the URI ignores it and still talks to
+this host; the URI is versioned in its path, because a peer keying off it has no other way
+to tell which shape of `params` it is being handed.
+
+Both are derived per call rather than baked when the face is mounted: on the
+gateway-mounted hosting the loop that owns the roster does not exist yet at mount time, and
+a hot `apply_agents` would otherwise leave the answer stale. A host given no roster at all
+answers `ExtendedAgentCardNotConfiguredError`, the protocol's own word for it; a host whose
+roster is merely empty gets neither the orchestration skill nor the extension, since a card
+states what the build can do and an empty roster is nothing to orchestrate.
+
+The package's own seed row is left out of that roster. It is the host's in-process loop --
+the agent the Card already describes in `name` and `description`, and the one a peer
+reaches by sending a message to the interface the Card advertises -- so naming it offers a
+second route to the agent the caller is already talking to, under a second name. The filter
+resolves the seed's legacy spelling rather than comparing against its current name, because
+a roster assembled from stored records can carry either.
 
 `supportedInterfaces[].url` is a property of the request, not of the process, and both
 cards derive it from the origin the caller arrived on. One face answers under every name

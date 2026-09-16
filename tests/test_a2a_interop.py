@@ -21,6 +21,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
+from raven.a2a.card import SUBAGENT_EXTENSION_URI
 from raven.a2a.routes_aiohttp import add_a2a_routes
 from raven.a2a.runtime import build_request_handler
 from raven.a2a_client.client import send_message
@@ -140,12 +141,14 @@ async def test_the_unauthenticated_card_hides_the_sub_agents_the_extended_one_na
         public = (await http.get(f"{origin}/.well-known/agent-card.json")).json()
 
     assert "Raven-Code" not in json.dumps(public)
+    assert public["capabilities"].get("extensions", []) == []
     assert public["capabilities"]["extendedAgentCard"] is True
 
     extended = await _rpc(origin, "GetExtendedAgentCard", token=TOKEN)
     assert extended["status"] == 200
-    named = {s["name"] for s in extended["body"]["result"]["skills"]}
-    assert {"Raven-Code", "Raven-Design"} <= named
+    capabilities = extended["body"]["result"]["capabilities"]
+    (extension,) = [e for e in capabilities["extensions"] if e["uri"] == SUBAGENT_EXTENSION_URI]
+    assert [row["name"] for row in extension["params"]["agents"]] == ["Raven-Code", "Raven-Design"]
 
 
 async def test_the_extended_card_is_refused_without_the_credential(peer_with_roster: TestServer) -> None:

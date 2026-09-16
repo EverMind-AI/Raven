@@ -21,18 +21,37 @@ from typing import Protocol
 from a2a.types import (
     AgentCapabilities,
     AgentCard,
+    AgentExtension,
     AgentInterface,
     AgentSkill,
     HTTPAuthSecurityScheme,
     SecurityScheme,
 )
+from google.protobuf.struct_pb2 import Struct
 
 from raven import __version__
+from raven.config.agent_names import is_builtin_agent_name
 from raven.config.schema import A2aConfig
 
 CARD_PATH = "/.well-known/agent-card.json"
 JSONRPC_BINDING = "JSONRPC"
 PROTOCOL_VERSION = "1.0"
+
+SUBAGENT_EXTENSION_URI = "https://raven.evermind.ai/a2a/extensions/sub-agents/v1"
+"""Identifies the roster carried in `AgentCapabilities.extensions`.
+
+`AgentExtension` is the protocol's own extension point, and the only place a
+conformant card may carry a payload the spec does not define: `AgentCard` is a
+closed set of fourteen protobuf fields, so a custom top-level key is rejected by
+a strict parser and silently dropped by a lenient one. A reader that does not
+know this URI ignores the entry -- which is why `required` is false -- and one
+that does knows the shape of `params` without having to guess it from a skill
+list.
+
+Versioned in the path so a later change of shape is a new URI rather than a
+redefinition of this one: a peer keying off the URI has no other way to tell
+which shape it is being handed.
+"""
 
 
 def build_agent_card(config: A2aConfig, *, base_url: str, extended_available: bool = False) -> AgentCard:
@@ -108,21 +127,53 @@ def build_extended_agent_card(config: A2aConfig, *, base_url: str, agents: Seque
     caller of this one has already presented the bearer token the public card
     told it to use, and is by definition an operator-admitted peer.
 
-    Sub-agents become skills rather than an `AgentCapabilities.extensions` entry:
-    a skill is the protocol's own word for "a thing this agent can be asked to
-    do", and a caller that reads skills at all reads them without having to
-    understand a raven-specific extension URI first.
+    The roster rides `capabilities.extensions`, not `skills`. A skill is the
+    protocol's word for something this agent can be *asked to do*, and a peer
+    cannot ask for `Raven-Code` -- it can only send a message to this host,
+    which then decides what to dispatch. Listing each sub-agent as a skill
+    therefore advertises call targets that do not exist. What the peer can
+    actually ask for is the orchestration itself, which is one skill; which
+    agents back it is reference data, and `AgentExtension` is where the protocol
+    puts data it does not define (see :data:`SUBAGENT_EXTENSION_URI`).
+
+    The package's own seed row is dropped from that data. It is this host's
+    in-process loop -- the agent this card already describes, and the one a peer
+    reaches by sending a message to the interface above -- so naming it would
+    offer a second route to the agent the caller is already talking to, under a
+    second name. `is_builtin_agent_name` rather than a comparison against the
+    name: the seed answers to a legacy spelling too, and may be redeclared over
+    ACP without ceasing to be the host's generic agent.
+
+    A host whose roster is empty gets neither the skill nor the extension. The
+    file's rule is that a card answers what the build actually does, and a
+    gateway whose loop has not started yet has nothing to orchestrate.
     """
     card = build_agent_card(config, base_url=base_url, extended_available=True)
-    for agent in agents:
-        card.skills.append(
-            AgentSkill(
-                id=f"subagent:{agent.name}",
-                name=agent.name,
-                description=agent.description,
-                tags=["sub-agent"],
-                input_modes=["text/plain"],
-                output_modes=["text/plain"],
-            )
+    roster = [agent for agent in agents if not is_builtin_agent_name(agent.name)]
+    if not roster:
+        return card
+    card.skills.append(
+        AgentSkill(
+            id="subagent-orchestration",
+            name="Sub-agent orchestration",
+            description=(
+                "Break a task across the sub-agents installed on this device, dispatch each step to "
+                "the one that fits, and report the result. State the outcome you need rather than an "
+                "agent to run: which agents exist is this host's own business, and it sequences them."
+            ),
+            tags=["delegation", "orchestration", "sub-agents"],
+            input_modes=["text/plain"],
+            output_modes=["text/plain"],
         )
+    )
+    params = Struct()
+    params.update({"agents": [{"name": agent.name, "description": agent.description} for agent in roster]})
+    card.capabilities.extensions.append(
+        AgentExtension(
+            uri=SUBAGENT_EXTENSION_URI,
+            description="The sub-agents this host can dispatch work to.",
+            required=False,
+            params=params,
+        )
+    )
     return card
