@@ -43,6 +43,7 @@
  */
 
 import { ds, t } from './bridge'
+import { clearance } from './popover'
 import { show as toast } from './toast'
 
 export interface TierOption {
@@ -219,18 +220,18 @@ export function open(): void {
     box.appendChild(row(m))
   })
 
-  /* Positioned off the chip and reparented to the body for the reason `perm.ts`
-     records: the composer card's entrance animation makes it a containing
-     block, which quietly re-bases `position: fixed` inside it. */
+  /* Positioned off the chip, raised clear of the card, and reparented to the
+     body -- all three for the reasons `perm.ts` records next door. */
   if (pop.parentElement !== document.body) document.body.appendChild(pop)
   pop.dataset.open = 'true'
   const vw = document.documentElement.clientWidth
   const at = chip.getBoundingClientRect()
+  const over = clearance(chip)
   const r = pop.getBoundingClientRect()
   pop.style.position = 'fixed'
   pop.style.left = `${Math.max(8, Math.min(vw - r.width - 8, at.left - 8))}px`
   pop.style.right = 'auto'
-  pop.style.top = `${Math.max(8, at.top - r.height - 6)}px`
+  pop.style.top = `${Math.max(8, over.top - r.height - 6)}px`
   pop.style.bottom = 'auto'
   pop.style.zIndex = '46'
   chip.setAttribute('aria-expanded', 'true')

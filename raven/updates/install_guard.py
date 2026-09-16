@@ -25,6 +25,8 @@ from importlib import metadata
 from pathlib import Path
 from typing import Optional
 
+from raven.home import raven_home
+
 MARKER_NAME = "upgrade.json"
 
 _UNPARENTED_GRACE_S = 120.0
@@ -52,13 +54,6 @@ class InstallFault:
 
 
 def marker_path() -> Path:
-    # From raven.home, where it is defined, not from the raven.config re-export:
-    # importing anything under raven.config runs that package's __init__, which
-    # pulls the whole settings stack in. The marker is written while uv is about
-    # to delete this environment, so the fewer modules this path needs to import
-    # at that moment, the better.
-    from raven.home import raven_home
-
     return raven_home() / MARKER_NAME
 
 

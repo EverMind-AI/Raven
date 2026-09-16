@@ -8,10 +8,12 @@ import type { Shell } from './bridge'
 import type { TierReply, TierSource } from './tier'
 
 /* The same nodes page.html carries, in the same nesting: the chip holds the icon
-   slot and the label and ships `hidden`, the panel holds the list. */
+   slot and the label and ships `hidden`, the panel holds the list. The wrapper
+   is `.dock-in` because that is the composer card there, and the card is what
+   the panel has to open clear of. */
 function markup(): void {
   document.body.innerHTML = `
-    <div class="card">
+    <div class="dock-in">
       <button class="chip" id="tierChip" aria-expanded="false" aria-haspopup="true" hidden>
         <svg class="pico" viewBox="0 0 24 24" aria-hidden="true"></svg>
         <span id="tierName"></span>
@@ -318,5 +320,25 @@ describe('the sub-agent tier chip', () => {
 
     expect(pop().parentElement).toBe(document.body)
     expect(pop().style.position).toBe('fixed')
+  })
+
+  it('opens clear of the composer card, not clear of the chip on it', async () => {
+    /* happy-dom measures every box as zero, so the three that decide the
+       placement are given the rects they have on the running page: the card at
+       436..562 and the chip on its bottom bar at 518. */
+    await tier.load()
+    const box = (el: Element, top: number, height: number): void => {
+      el.getBoundingClientRect = () =>
+        ({ top, bottom: top + height, left: 40, right: 40, width: 0, height, x: 40, y: top } as DOMRect)
+    }
+    box(document.querySelector('.dock-in')!, 436, 126)
+    box(chip(), 518, 21)
+    box(pop(), 0, 240)
+
+    tier.open()
+
+    /* 436 - 240 - 6. Raised off the chip it was 272, which put the panel's lower
+       edge at 512 -- inside the card, over the line being typed. */
+    expect(parseFloat(pop().style.top)).toBe(190)
   })
 })

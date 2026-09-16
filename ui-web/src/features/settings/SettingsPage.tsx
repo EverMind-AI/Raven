@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'rea
 import { createPortal } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
+import { show as menuAt } from '../../shell/menu'
 import { KeyInput } from '../../shell/key-input'
 import * as lookStore from '../../shell/look'
 import * as notifications from '../../shell/notifications'
@@ -259,6 +260,12 @@ const UpdateIcon = (): JSX.Element => (
     <path d="M4 4v3.6h3.6" />
     <path d="M4 13a8 8 0 0 0 13.7 5.7L20 16.4" />
     <path d="M20 20v-3.6h-3.6" />
+  </svg>
+)
+
+const FunnelIcon = (): JSX.Element => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M3.5 5.5h17l-6.5 7.6v6.4l-4-2.2v-4.2z" />
   </svg>
 )
 
@@ -1487,20 +1494,37 @@ function ProvPanel({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Elemen
      the pane and the wizard came to disagree about the second such provider. */
   const acceptsApiKey = pv.acceptsKey ?? pv.kind !== 'local'
   const initialBase = pv.apiBase || pv.defaultApiBase || ''
+  const platforms = pv.platforms ?? []
+  /* Which storefront the stored address belongs to, matched rather than
+     remembered: the config holds an address, not a choice, so a section written
+     by the CLI or by hand lands on the right row here too. Falls to the first,
+     which is what a provider with no address yet is served by. */
+  const [platform, setPlatform] = useState(
+    () => platforms.find((p) => p.api_base === initialBase)?.api_base ?? platforms[0]?.api_base ?? '',
+  )
   /* An address this provider cannot be reached without: the credential gate
      wants it in every submission, default or not. */
   const baseRequired = pv.needsBase || pv.kind === 'endpoint'
   const save = (): void => {
     const params: Record<string, unknown> = { slug: pv.id }
     if (acceptsApiKey) params.api_key = key.current?.value.trim() ?? ''
-    const typedBase = base.current?.value.trim() ?? ''
+    /* A chosen platform is the address, so it always travels. The rule below
+       is for a field a person may have left on a shipped default they never
+       touched; here there is no default to leave -- picking the first row is
+       still picking, and a key issued by that storefront works nowhere else. */
+    const typedBase = platforms.length ? platform : (base.current?.value.trim() ?? '')
+    if (platforms.length && typedBase) {
+      params.api_base = typedBase
+    }
     /* Only what the person actually chose gets written. A shipped default is
        shown so the pane can answer "where does this go", but several of them
        are display-only on purpose -- dashscope's compatible-mode address is
        one LiteLLM's own driver must not be handed -- so saving the field
        unchanged would silently turn a label into an override and break the
        route it was only describing. */
-    if (typedBase && (baseRequired || typedBase !== initialBase)) params.api_base = typedBase
+    if (!platforms.length && typedBase && (baseRequired || typedBase !== initialBase)) {
+      params.api_base = typedBase
+    }
     if (pv.kind === 'local' && !params.api_base) {
       store.provSay(t('gui.model.need_base'))
       return
@@ -1548,7 +1572,10 @@ function ProvPanel({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Elemen
               <div className="msec" data-sec="key">
                 <div className="mhead">
                   <div className="t">{t('gui.model.api_key')}</div>
-                  {pv.homepage && (
+                  {/* One link is wrong where the signups are separate: a key
+                      from the CNY storefront works on none of the others, so
+                      the link belongs on the row that names the platform. */}
+                  {!platforms.length && pv.homepage && (
                     <a
                       className="mdocs"
                       href={pv.homepage}
@@ -1593,6 +1620,39 @@ function ProvPanel({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Elemen
                 done the job with another tool, which is the wrong way round --
                 and `gui.model.base_ph`, "for your own gateway", is written for
                 exactly the providers it was hidden from. */}
+            {platforms.length ? (
+              <div className="msec" data-sec="platform">
+                <div className="mhead">
+                  <div className="t">{t('gui.model.select_platform')}</div>
+                </div>
+                <div className="mplat" role="radiogroup" aria-label={t('gui.model.select_platform')}>
+                  {platforms.map((entry) => (
+                    <label className="mplatrow" key={entry.api_base}>
+                      <input
+                        type="radio"
+                        name={`platform-${pv.id}`}
+                        value={entry.api_base}
+                        checked={platform === entry.api_base}
+                        onChange={() => setPlatform(entry.api_base)}
+                      />
+                      <span className="nm">{entry.label}</span>
+                      <a
+                        className="mdocs"
+                        href={entry.signup_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(event) => {
+                          event.preventDefault()
+                          openUrl(entry.signup_url)
+                        }}
+                      >
+                        {t('gui.model.get_key')}
+                      </a>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : (
             <div className="msec" data-sec="host">
               <div className="mhead">
                 <div className="t">{t('gui.model.api_host')}</div>
@@ -1619,6 +1679,7 @@ function ProvPanel({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Elemen
                 </button>
               </div>
             </div>
+            )}
           </>
         )}
         <ModelList pv={pv} s={s} />
@@ -1668,13 +1729,24 @@ function ProvRow({ pv, s, selected }: { pv: ProviderRow; s: SettingsState; selec
    `openai_codex` share one too, and those are two things a reader picks
    between rather than one thing with variants. Members are listed in the order
    they should appear inside the group. */
-const RAIL_GROUPS: ReadonlyArray<{ key: string; label: string; members: readonly string[] }> = [
+/* Families the rail folds into one row. `icon` is for a family whose heading
+   names the vendor while no member's row does: Zhipu sells GLM as Z.ai abroad
+   and as BigModel at home, and neither brand is the company, so borrowing the
+   first member's mark would put one platform's logo on both. MiniMax needs
+   none -- its first member is the company row. */
+const RAIL_GROUPS: ReadonlyArray<{
+  key: string
+  label: string
+  members: readonly string[]
+  icon?: string
+}> = [
   { key: 'minimax', label: 'MiniMax', members: ['minimax', 'minimax_cn_api', 'minimax_global', 'minimax_cn'] },
+  { key: 'zhipu', label: 'Zhipu', members: ['zai', 'bigmodel'], icon: 'zhipu' },
 ]
 
 type RailEntry =
   | { kind: 'one'; key: string; pv: ProviderRow }
-  | { kind: 'group'; key: string; label: string; rows: ProviderRow[] }
+  | { kind: 'group'; key: string; label: string; rows: ProviderRow[]; icon?: string }
 
 /* The rail's rows, with each declared family collapsed into one entry.
  *
@@ -1694,12 +1766,54 @@ function railEntries(providers: ProviderRow[]): RailEntry[] {
     done.add(group.key)
     const rows = group.members.map((id) => byId.get(id)).filter((row): row is ProviderRow => !!row)
     if (rows.length < 2) entries.push({ kind: 'one', key: rows[0]!.id, pv: rows[0]! })
-    else entries.push({ kind: 'group', key: group.key, label: group.label, rows })
+    else entries.push({ kind: 'group', key: group.key, label: group.label, rows, ...(group.icon ? { icon: group.icon } : {}) })
   }
   return entries
 }
 
 const entryRows = (entry: RailEntry): ProviderRow[] => (entry.kind === 'one' ? [entry.pv] : entry.rows)
+
+/* What the rail can be narrowed to. `on` is the same fact the row's dot draws
+   -- a provider with a working credential -- so the list and the dots cannot
+   disagree about which half a row is in. */
+const PROV_FILTERS = ['all', 'on', 'off'] as const
+type ProvFilter = (typeof PROV_FILTERS)[number]
+
+const matchesFilter = (pv: ProviderRow, filter: ProvFilter): boolean =>
+  filter === 'all' || (filter === 'on' ? pv.on : !pv.on)
+
+/* Narrow the rail, keeping a family a family.
+ *
+ * The name is matched against what the reader can see -- a row's label, and a
+ * family's own heading, so "minimax" finds the group whose members are called
+ * Global and CN. Never the slug: `ollama_chat` is not on screen, and a query
+ * that hits invisible text reads as a list filtering itself at random.
+ *
+ * A group is filtered from the inside too. Asking for the enabled half of a
+ * family and being handed all four members back is the same wrong answer as
+ * showing an unrelated provider, and a family left with one member stops being
+ * one: it becomes a plain row, because hiding a lone provider behind a fold
+ * costs a click and saves nothing (see `railEntries`). */
+function narrowRail(entries: RailEntry[], query: string, filter: ProvFilter): RailEntry[] {
+  const needle = query.trim().toLowerCase()
+  const hit = (text: string): boolean => !needle || text.toLowerCase().includes(needle)
+  const out: RailEntry[] = []
+  for (const entry of entries) {
+    if (entry.kind === 'one') {
+      if (hit(entry.pv.name) && matchesFilter(entry.pv, filter)) out.push(entry)
+      continue
+    }
+    /* A hit on the family's own name keeps every member it applies to, so
+       searching "minimax" does not also require knowing what the four are
+       called individually. */
+    const named = hit(entry.label)
+    const rows = entry.rows.filter((pv) => (named || hit(pv.name)) && matchesFilter(pv, filter))
+    if (!rows.length) continue
+    if (rows.length < 2) out.push({ kind: 'one', key: rows[0]!.id, pv: rows[0]! })
+    else out.push({ ...entry, rows })
+  }
+  return out
+}
 
 /* One folded family in the rail. Reads as a provider row -- same mark, same
    name, same dot -- because that is what it stands in for while closed. The
@@ -1725,7 +1839,7 @@ function ProvGroup({
     <div className="mgrp">
       <button className="mrow gh" type="button" aria-expanded={open} onClick={onToggle}>
         <span className="cv">⌄</span>
-        <ProviderIcon id={entry.rows[0]!.id} name={entry.label} />
+        <ProviderIcon id={entry.icon ?? entry.rows[0]!.id} name={entry.label} />
         <span className="nm">{entry.label}</span>
         <span className="gc">{entry.rows.length}</span>
         {/* Only while closed: the member row says it better when it is visible. */}
@@ -1751,14 +1865,18 @@ function ProvGroup({
  * the same rule: splitting MiniMax across the two halves puts the same vendor
  * in two places, which is the thing grouping it was meant to stop. */
 function ProvSplit({ s }: { s: SettingsState }): JSX.Element {
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<ProvFilter>('all')
   const entries = railEntries(s.snap.providers)
   const connected = (entry: RailEntry): boolean => entryRows(entry).some((pv) => pv.on)
-  const ordered = [...entries.filter(connected), ...entries.filter((entry) => !connected(entry))]
+  const all = [...entries.filter(connected), ...entries.filter((entry) => !connected(entry))]
+  const ordered = narrowRail(all, query, filter)
   const rows = ordered.flatMap(entryRows)
   /* Resolved rather than stored: before anything is picked the pane shows the
      first connected provider, and a provider that disappears from the list
      must not leave the pane empty. */
   const selected = rows.find((p) => p.id === s.provOpen) ?? rows.find((p) => p.on) ?? rows[0]
+  const narrowed = query.trim() !== '' || filter !== 'all'
   /* Closed is the point of the fold, so the set starts empty -- except for the
      family holding whatever the pane opens on, which would otherwise be
      selected and invisible. Seeded once: after that the fold is the reader's,
@@ -1770,6 +1888,24 @@ function ProvSplit({ s }: { s: SettingsState }): JSX.Element {
   )
   const toggleGroup = (key: string) => (): void =>
     setOpenGroups((keys) => (keys.includes(key) ? keys.filter((k) => k !== key) : [...keys, key]))
+  /* A narrowed rail is drawn open. The fold is a way to keep a long list
+     readable, and the reader who typed a name has already said which rows they
+     want -- leaving the match folded away answers a search with an empty list.
+     The reader's own folds are untouched underneath, so clearing the box puts
+     the rail back exactly as they had it. */
+  const isOpen = (key: string): boolean => narrowed || openGroups.includes(key)
+
+  const openFilterMenu = (event: React.MouseEvent<HTMLButtonElement>): void => {
+    const at = event.currentTarget.getBoundingClientRect()
+    menuAt(
+      at.left,
+      at.bottom + 6,
+      PROV_FILTERS.map((name) => ({
+        label: `${t(`gui.model.prov_filter.${name}`)}${name === filter ? ' \u2713' : ''}`,
+        fn: () => setFilter(name),
+      })),
+    )
+  }
 
   useEffect(() => {
     if (!s.provFocus) return
@@ -1778,25 +1914,55 @@ function ProvSplit({ s }: { s: SettingsState }): JSX.Element {
     if (field) field.focus()
   })
 
-  if (!rows.length) return <div className="pnote">{t('gui.model.none_connected')}</div>
+  /* Asked before the narrowing, so "nothing is set up yet" and "nothing matches
+     what you typed" stay two different answers. Reporting the first for the
+     second would tell a reader with twelve keys saved that they have none. */
+  if (!all.length) return <div className="pnote">{t('gui.model.none_connected')}</div>
   return (
     <div className="msplit">
       <ModelTagDefs />
-      <div className="mrail">
-        {ordered.map((entry) =>
-          entry.kind === 'one' ? (
-            <ProvRow key={entry.key} pv={entry.pv} s={s} selected={entry.pv.id === selected?.id} />
+      <div className="mrailwrap">
+        <div className="mrhead">
+          <input
+            className="mrsearch"
+            type="text"
+            value={query}
+            placeholder={t('gui.model.prov_search_ph')}
+            aria-label={t('gui.model.prov_search_ph')}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <button
+            className="mrfilter"
+            type="button"
+            aria-haspopup="true"
+            aria-label={t('gui.model.prov_filter_tip')}
+            title={t('gui.model.prov_filter_tip')}
+            data-narrowed={filter !== 'all'}
+            onClick={openFilterMenu}
+          >
+            <FunnelIcon />
+          </button>
+        </div>
+        <div className="mrail">
+          {!rows.length ? (
+            <div className="pnote">{t('gui.model.prov_no_match')}</div>
           ) : (
-            <ProvGroup
-              key={entry.key}
-              entry={entry}
-              s={s}
-              open={openGroups.includes(entry.key)}
-              onToggle={toggleGroup(entry.key)}
-              {...(selected ? { selectedId: selected.id } : {})}
-            />
-          ),
-        )}
+            ordered.map((entry) =>
+              entry.kind === 'one' ? (
+                <ProvRow key={entry.key} pv={entry.pv} s={s} selected={entry.pv.id === selected?.id} />
+              ) : (
+                <ProvGroup
+                  key={entry.key}
+                  entry={entry}
+                  s={s}
+                  open={isOpen(entry.key)}
+                  onToggle={toggleGroup(entry.key)}
+                  {...(selected ? { selectedId: selected.id } : {})}
+                />
+              ),
+            )
+          )}
+        </div>
       </div>
       {selected ? <ProvPanel key={selected.id} pv={selected} s={s} /> : null}
     </div>

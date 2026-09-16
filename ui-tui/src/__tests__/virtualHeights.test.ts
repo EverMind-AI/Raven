@@ -191,9 +191,7 @@ describe('dag panel height', () => {
   it('is unchanged for a run with nothing running and nothing open', () => {
     const msg = msgWithDag(runWith([node('a', 'completed')]))
 
-    expect(estimatedMsgHeight(msg, 100, { ...BASE, dagOpen: new Set() })).toBe(
-      estimatedMsgHeight(msg, 100, BASE)
-    )
+    expect(estimatedMsgHeight(msg, 100, { ...BASE, dagOpen: new Set() })).toBe(estimatedMsgHeight(msg, 100, BASE))
   })
 
   it('re-keys when a node starts running', () => {
@@ -283,7 +281,6 @@ describe('estimatedMsgHeight covers quoted prose', () => {
     )
   })
 })
-
 
 // A settled card opens on its own predicate now, so the estimator can no longer
 // treat a stretch of work as one row. Same contract as the quoted-prose suite

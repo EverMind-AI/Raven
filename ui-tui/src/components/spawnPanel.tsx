@@ -199,9 +199,7 @@ export const SpawnPanel = memo(function SpawnPanel({
               /* `hidden` offsets the key out of the window, so a row keeps its
                  instance as the tail slides (see the same note in
                  `dagNodeTrace`). */
-              fit.shown.map((msg, index) => (
-                <MessageLine cols={inner} dense key={fit.hidden + index} msg={msg} t={t} />
-              ))
+              fit.shown.map((msg, index) => <MessageLine cols={inner} dense key={fit.hidden + index} msg={msg} t={t} />)
             ) : (
               <Text color={t.color.text} wrap="wrap">
                 {prompt.length > PROMPT_CHARS ? `${prompt.slice(0, PROMPT_CHARS)}\n…` : prompt}

@@ -8,6 +8,12 @@ import time
 
 import pytest
 
+# Imported here, before any test runs: beta_channel binds ReleaseInfo from
+# raven.updates.upgrade the first time it is imported, and the tests below stand
+# a fake in for that module through sys.modules. Left to _refresh's lazy import,
+# the first import of beta_channel in a worker that happened to run this file
+# first found the fake, and the ImportError was swallowed as a failed refresh.
+from raven.updates import beta_channel
 from raven.updates import update_notice as un
 
 
@@ -292,8 +298,6 @@ def beta(cache, monkeypatch):
     The channel is faked at `channel()` rather than by writing a beta.json, so
     the test never depends on whether the machine running it has joined.
     """
-    from raven.updates import beta_channel
-
     chan = beta_channel.BetaChannel(project="85454048", username="raven-beta", token="gldt-secret")
     monkeypatch.setattr(beta_channel, "channel", lambda: chan)
     return beta_channel
@@ -416,8 +420,6 @@ def stable(monkeypatch):
     whether the developer running it happens to have joined the channel, and on a
     machine that has, it fetches the real registry instead of the fake.
     """
-    from raven.updates import beta_channel
-
     monkeypatch.setattr(beta_channel, "channel", lambda: None)
 
 

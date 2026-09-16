@@ -12,6 +12,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 
 import { t } from '../../shell/bridge'
 import { ModelTagDefs, ModelTags } from '../../shell/model-tags'
+import { clearance } from '../../shell/popover'
 import { ProviderIcon, ProviderStatus } from '../../shell/provider-mark'
 import * as store from './store'
 
@@ -55,17 +56,24 @@ function Pick(): JSX.Element {
      anchor when it fits, which is where the composer chip wants it; clamped
      into the viewport either way. documentElement metrics, not window.innerWidth
      -- the latter reads 0 inside some embedded webviews and would push the
-     popover into the corner. */
+     popover into the corner.
+
+     The anchor sets the side, `clearance` the two edges: the model chip is on
+     the composer card's bottom bar, so raising the popover off the chip alone
+     put it over the line the reader types on, and dropping it below the chip
+     put it over the bar itself. Off a settings row `clearance` answers with the
+     row, which is the anchor again and changes nothing there. */
   useLayoutEffect(() => {
     const el = box.current
     if (!el) return
     const vw = document.documentElement.clientWidth
     const vh = document.documentElement.clientHeight
     const r = host.getBoundingClientRect()
+    const over = clearance(host)
     const b = el.getBoundingClientRect()
-    const above = r.top - b.height - 8
+    const above = over.top - b.height - 8
     el.style.left = `${Math.max(12, Math.min(r.left, vw - b.width - 12))}px`
-    el.style.top = `${above >= 12 ? above : Math.min(r.bottom + 8, Math.max(12, vh - b.height - 12))}px`
+    el.style.top = `${above >= 12 ? above : Math.min(over.bottom + 8, Math.max(12, vh - b.height - 12))}px`
     field.current?.focus()
   }, [host])
 

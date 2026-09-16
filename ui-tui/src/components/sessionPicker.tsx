@@ -10,6 +10,7 @@ import type { GatewayClient } from '../gatewayClientStub.js'
 import type { SessionDeleteResponse, SessionListItem, SessionListResponse } from '../gatewayTypes.js'
 import type { Theme } from '../theme.js'
 
+import { t as uiText } from '../i18n/index.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { OverlayHint, useOverlayKeys, windowOffset } from './overlayControls.js'
 
@@ -173,14 +174,14 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
   })
 
   if (loading) {
-    return <Text color={t.color.muted}>loading sessions…</Text>
+    return <Text color={t.color.muted}>{uiText('gui.panel.loading_sessions')}</Text>
   }
 
   if (err && !items.length) {
     return (
       <Box flexDirection="column">
-        <Text color={t.color.label}>error: {err}</Text>
-        <OverlayHint t={t}>Esc/q cancel</OverlayHint>
+        <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text>
+        <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
   }
@@ -188,8 +189,8 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
   if (!items.length) {
     return (
       <Box flexDirection="column">
-        <Text color={t.color.muted}>no previous sessions</Text>
-        <OverlayHint t={t}>Esc/q cancel</OverlayHint>
+        <Text color={t.color.muted}>{uiText('gui.panel.no_sessions')}</Text>
+        <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
   }
@@ -202,7 +203,7 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
         Resume Session
       </Text>
 
-      {offset > 0 && <Text color={t.color.muted}> ↑ {offset} more</Text>}
+      {offset > 0 && <Text color={t.color.muted}> {uiText('gui.panel.more_up', '', { n: offset })}</Text>}
 
       {items.slice(offset, offset + VISIBLE).map((s, vi) => {
         const i = offset + vi
@@ -233,18 +234,20 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
               inverse={selected}
               wrap="truncate-end"
             >
-              {pendingDelete ? 'press d again to delete' : s.title || s.preview || '(untitled)'}
+              {pendingDelete ? uiText('gui.panel.press_d_again') : s.title || s.preview || '(untitled)'}
             </Text>
           </Box>
         )
       })}
 
-      {offset + VISIBLE < items.length && <Text color={t.color.muted}> ↓ {items.length - offset - VISIBLE} more</Text>}
-      {err && <Text color={t.color.label}>error: {err}</Text>}
+      {offset + VISIBLE < items.length && (
+        <Text color={t.color.muted}> {uiText('gui.panel.more_down', '', { n: items.length - offset - VISIBLE })}</Text>
+      )}
+      {err && <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text>}
       {deleting ? (
-        <OverlayHint t={t}>deleting…</OverlayHint>
+        <OverlayHint t={t}>{uiText('gui.panel.deleting')}</OverlayHint>
       ) : (
-        <OverlayHint t={t}>↑/↓ select · Enter resume · 1-9 quick · d delete · Esc/q cancel</OverlayHint>
+        <OverlayHint t={t}>{uiText('gui.panel.k_sessions')}</OverlayHint>
       )}
     </Box>
   )

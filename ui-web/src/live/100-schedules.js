@@ -31,14 +31,14 @@ DS.cron = {
   rows: () => rpc.call('cron.list', {}).then((r) => r.jobs.map(cronToRow)),
   toggle: (j) => rpc.call('cron.set_enabled', { id: j.id, enabled: !j.on })
     .then(() => toast(T(!j.on ? 'gui.cron.resumed_x' : 'gui.cron.paused_x', { name: j.name })))
-    .catch((e) => toast(`操作失败：${e.message || e}`)),
+    .catch((e) => toast(T('gui.op.action_failed', { detail: e.message || e }))),
   /* Toasted here, and still rejected: the caller's success branch closes the
      job's page, so resolving after a failed delete would bounce the reader
      back to a list where the row they just deleted is still there. */
   remove: (j) => rpc.call('cron.delete', { id: j.id })
     .then(() => toast(T('gui.cron.deleted_x', { name: j.name })))
     .catch((err) => {
-      toast(`删除失败：${err.message || err}`);
+      toast(T('gui.op.delete_failed', { detail: err.message || err }));
       throw { handled: true };
     }),
   /* `async` is load bearing, not decoration: `jobToSave` reports a bad draft by
@@ -50,7 +50,7 @@ DS.cron = {
   save: async (draft) => {
     const payload = jobToSave(draft);
     return rpc.call('cron.save', payload).then((r) => cronToRow(r.job)).catch((e) => {
-      toast(`保存失败：${(e.data && e.data.detail) || e.message || e}`);
+      toast(T('gui.op.save_failed', { detail: (e.data && e.data.detail) || e.message || e }));
       throw { handled: true };
     });
   },
@@ -60,7 +60,7 @@ DS.cron = {
     }))),
   runNow: (j) => rpc.call('cron.run_now', { id: j.id })
     .then(() => toast(T('gui.cron.triggered_x', { name: j.name })))
-    .catch((e) => toast(`触发失败：${e.message || e}`)),
+    .catch((e) => toast(T('gui.op.trigger_failed', { detail: e.message || e }))),
   openRun: async (j) => {
     closeCron();
     const s = { id: `cron:${j.id}`, title: j.name, last: '', when: '',

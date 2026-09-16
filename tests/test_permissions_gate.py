@@ -1098,3 +1098,133 @@ async def test_a_refused_config_write_is_not_reported_as_persisted(no_grants, mo
     persisted = [a for a in recorded if "permission.persisted" in a]
     assert persisted and persisted[-1]["permission.persisted"] is False
     assert "not a table" in persisted[-1]["permission.persist.refused"]
+
+
+def test_a_brief_is_named_on_the_prompt_rather_than_pasted_into_it():
+    """The prompt asks about the call, not with the call's own material.
+
+    A dispatch carries its brief as an argument, so serialising the arguments
+    put most of the outgoing prompt into the question about whether to send it --
+    cut mid-sentence, with the fields that decide the call past the cut. The
+    reader needs to know a brief is there and how much of it; the text itself is
+    not what they are judging.
+    """
+    brief = "Make a deck introducing the assistant. " * 40
+    line = action_line("spawn", {"node_id": "intro-deck", "agent": "Raven-PPT", "prompt_template": brief})
+
+    assert "intro-deck" in line, "the node id decides the call and has to survive"
+    assert "Raven-PPT" in line, "so does which agent runs"
+    assert f"({len(brief)} chars)" in line, "the brief is counted, so its weight is known"
+    assert "..." in line, "and only its ends survive, not the brief"
+    assert len(line) < 200, "which is what stops it crowding out the fields above"
+
+
+def test_the_prompt_stays_short_enough_to_read_to_the_end():
+    """A question a person cannot finish reading is answered out of habit."""
+    wide = {f"field_{i}": f"value-{i}" for i in range(40)}
+    line = action_line("some_tool", wide)
+
+    assert len(line) < 200
+    assert "more)" in line, "the arguments that did not fit are counted, not dropped silently"
+
+
+def test_a_short_argument_is_still_shown_in_full():
+    """Summarising is for prose. An id, a path or a flag is the decision."""
+    line = action_line("write_file", {"path": "/etc/hosts", "append": False})
+
+    assert "/etc/hosts" in line
+    assert "append=False" in line
+
+
+def test_the_command_is_the_action_for_a_shell_call():
+    """Unchanged, and covered here so the rewrite above cannot quietly take it."""
+    assert action_line("exec", {"command": "ls -la"}) == "ls -la"
+
+
+def test_what_a_call_will_act_on_survives_the_summary():
+    """Prose and targets are both "long", and only one of them may be hidden.
+
+    A list of paths is not material the call carries, it is what the call will
+    do something to. Counting it leaves the reader authorising a deletion
+    without being told what is deleted -- and an unknown tool sits in the ask
+    tier precisely because nobody can infer its effects from its name.
+    """
+    line = action_line("delete_files", {"paths": ["/etc/passwd"]})
+    assert "/etc/passwd" in line
+
+
+def test_a_graph_shows_its_steps_and_not_their_briefs():
+    """The two rules meeting on one argument.
+
+    A node names the step, the agent that runs it and what it is for -- all of
+    which decide the call -- and carries a prompt, which does not. Opening the
+    container is what keeps the first three; the leaf rule is what keeps the
+    fourth out.
+    """
+    nodes = [
+        {"id": "pull", "subagent": "data-raven", "node_summary": "pull the feedback", "prompt_template": "x" * 800},
+        {"id": "write", "subagent": "Raven", "node_summary": "write the report", "prompt_template": "y" * 900},
+    ]
+    line = action_line("run_subagent_dag", {"task_summary": "weekly digest", "nodes": nodes})
+
+    assert "pull" in line and "data-raven" in line, "the step and its agent are the action"
+    assert "(800 chars)" in line, "its brief is counted rather than carried"
+    assert len(line) < 200, "and cannot crowd out the three fields above"
+
+
+def test_a_container_too_wide_to_open_still_says_what_it_holds():
+    """A partial list plus a remainder says what kind of thing this touches;
+    a bare count says nothing at all."""
+    line = action_line("delete_files", {"paths": [f"/var/log/app-{i}.log" for i in range(40)]})
+
+    assert "/var/log/app-0.log" in line
+    assert "more" in line
+    assert len(line) < 200
+
+
+def test_a_long_target_stays_identifiable_instead_of_becoming_a_count():
+    """Length alone cannot tell a target from prose.
+
+    A deeply nested workspace path is as long as a paragraph and is the opposite
+    kind of thing: it says which file is about to be overwritten. Replacing it
+    with a character count asks for an authorisation nobody can give. Both ends
+    survive because both ends identify -- the root says where, the tail says
+    which.
+    """
+    path = "/Users/admin/workspace/projects/raven/ui-web/src/features/subagents/deeply/nested/report.md"
+    line = action_line("write_file", {"path": path, "content": "replacement"})
+
+    assert "/Users/admin" in line, "the root says where this is"
+    assert "report.md" in line, "and the tail says which file"
+    assert f"({len(path)} chars)" in line
+
+
+def test_a_long_identifier_nested_in_a_container_is_identifiable_too():
+    """The scalar rule has to hold wherever the scalar sits."""
+    path = "/Users/admin/workspace/projects/raven/ui-web/src/features/subagents/deeply/nested/report.md"
+    line = action_line("delete_files", {"paths": [path]})
+
+    assert "/Users/admin" in line
+    assert "report.md" in line
+
+
+def test_a_container_whose_members_do_not_fit_still_names_one():
+    """A count alone is the one answer that says nothing about what is touched.
+
+    When no member fits whole the first is cut to the room available, which
+    still names the kind of thing this call reaches; the rest are counted.
+    """
+    nodes = [
+        {"id": "pull", "subagent": "data-raven", "node_summary": "pull the feedback", "prompt_template": "x" * 800},
+        {"id": "write", "subagent": "Raven", "node_summary": "write the report", "prompt_template": "y" * 900},
+    ]
+    line = action_line("run_subagent_dag", {"task_summary": "weekly digest", "nodes": nodes})
+
+    assert "pull" in line and "data-raven" in line
+    assert "items>" not in line, "never a bare count"
+
+
+def test_a_flag_is_not_dressed_up_as_a_string():
+    """`append=False` and a string reading "False" are different answers."""
+    line = action_line("write_file", {"path": "/tmp/x", "append": False})
+    assert "append=False" in line

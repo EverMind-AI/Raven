@@ -1366,6 +1366,26 @@ class TestRecallNeverBlocks:
         assert await b.recall("q", user_id="u", top_k=5) == []
         assert b._state is ServiceState.UNRESPONSIVE
 
+    async def test_an_answered_request_that_failed_leaves_the_state_alone(self) -> None:
+        """A status line proves the service is up; only this call failed.
+
+        Demoting on it made one unprocessable payload cost every later call in
+        the process: they short-circuit on the state guard without reaching the
+        wire. A real import lost four of five sources to a single 500.
+        """
+        import httpx
+
+        from raven_everos.backend import ServiceState
+
+        request = httpx.Request("POST", "http://localhost:18791/api/v2/memory/add")
+        response = httpx.Response(500, request=request)
+        adapter = MagicMock()
+        adapter.search = AsyncMock(side_effect=httpx.HTTPStatusError("boom", request=request, response=response))
+        b = self._backend(ServiceState.READY, adapter)
+
+        assert await b.recall("q", user_id="u", top_k=5) == []
+        assert b._state is ServiceState.READY
+
     async def test_a_refusal_consults_the_child_process(self) -> None:
         import httpx
 
@@ -1479,6 +1499,11 @@ class TestWriteBudgetFollowsTheCaller:
     extract, which is why _MEMORIZE_TIMEOUT_S was set to six minutes in the
     first place. Capping every write at the turn's budget silently overrode
     that, and the overrun then filed a slow extraction as a dead service.
+
+    The short budget follows the slice's size rather than being flat: an append
+    is not free work either -- EverOS may carve a boundary out of one, which
+    runs a model -- so a hundred-message importer batch needs more patience
+    than a turn's handful.
     """
 
     @staticmethod
@@ -1510,7 +1535,34 @@ class TestWriteBudgetFollowsTheCaller:
 
         await b.store("s", [{"role": "user", "content": "x"}], metadata={"is_final": False})
 
-        assert seen == [mod._STORE_TIMEOUT_S]
+        assert seen == [mod._store_budget(1)]
+        assert seen[0] >= mod._STORE_TIMEOUT_S
+
+    async def test_a_bulk_batch_gets_more_than_a_turns_patience(self, monkeypatch) -> None:
+        """The importer hands over up to a hundred messages in one append.
+
+        At the flat turn budget that call timed out against a server still
+        working on it, which demoted the backend and failed every source behind
+        it in the same run.
+        """
+        from raven_everos import backend as mod
+
+        seen: list[float] = []
+
+        async def _spy(coro, timeout=None):
+            seen.append(timeout)
+            return await coro
+
+        monkeypatch.setattr(mod.asyncio, "wait_for", _spy)
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        b = self._backend(adapter)
+
+        batch = [{"role": "user", "content": f"m{i}"} for i in range(100)]
+        await b.store("s", batch, metadata={"is_final": False})
+
+        assert seen == [mod._store_budget(100)]
+        assert seen[0] > mod._STORE_TIMEOUT_S * 2
 
     async def test_a_final_flush_gets_the_extraction_budget(self, monkeypatch) -> None:
         from raven_everos import backend as mod

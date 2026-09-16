@@ -1,9 +1,10 @@
 import { ds, shell, t } from '../../shell/bridge'
 import { formatDuration } from '../../shell/duration'
-import { current as currentSession } from '../../shell/session'
+import { current as currentSession, onChange as onSessionChange } from '../../shell/session'
 import { plainTitle as stripTitle } from '../rail/title'
 import { instanceCtxStatus, toInstanceCtx } from './history'
 
+import type { ComposerSource } from '../composer/types'
 import type { AgentRow, AgentsSource, InstanceCtx, InstanceRow, OpenItem, SubagentRow } from './types'
 
 /* Page state, outside React on purpose: the legacy shell drives this view
@@ -149,6 +150,37 @@ let at = 0
 let drawn = ''
 
 const sessionKey = (): string => currentSession() || ''
+
+/* The seam that can turn the draft on screen into a real conversation, or
+   nothing where the page has no way to make one (the demo canvas, which has no
+   server behind it). Read per call rather than captured, the way this page's
+   other borrow from the composer is (`uploader` in SubagentsPage.tsx): the live
+   layer installs over the demo source after boot, so a member captured at import
+   is the wrong one.
+
+   Borrowed from the composer rather than grown here because the composer is
+   what has always created conversations -- on its first send -- and one
+   promotion with two callers is the point. */
+function conversationStarter(): ComposerSource['startConversation'] {
+  try {
+    return ds<ComposerSource>('composer').startConversation
+  } catch {
+    return undefined
+  }
+}
+
+/* Whether an instance can be started at all, which is not the same question as
+   whether there is a conversation right now: on the new-task screen there is
+   none, and pressing the roster's button is the reader asking for both -- the
+   conversation, then the instance in it.
+
+   The pointer's own change is exported beside it as a subscription, which is
+   the pair `useSyncExternalStore` takes. Nothing else in this store moves when
+   a draft is promoted -- the roster is read on mount and the promotion touches
+   no state held here -- so a panel drawing this answer can only be redrawn by
+   watching the pointer itself. */
+export const canStartInstance = (): boolean => !!sessionKey() || !!conversationStarter()
+export const watchConversation = (listener: () => void): (() => void) => onSessionChange(listener)
 
 export function refresh(force = false): Promise<void> {
   /* The list asks on each draw and a fresh answer causes one; the floor keeps
@@ -340,6 +372,13 @@ export function addressable(row: SubagentRow | undefined): boolean {
    the standalone panel an instance opens the panel's own detail, and in the desk
    it opens a desk pane. A row already takes its opener that way; so does this.
 
+   The conversation is made here when there is not one. An instance lives inside
+   a conversation, and the roster is drawn on the new-task screen where the page
+   is still a draft -- so this used to return false before its first await, which
+   reached the reader as a button that did nothing at all when pressed. Pressing
+   it is the reader asking for both, and the composer's own promotion is what
+   answers: the same one its first send has always run.
+
    The list is refreshed before the open rather than after, so the row the panel
    is showing is one the list already holds; opening first left a detail whose
    own row arrived a heartbeat later. */
@@ -348,8 +387,11 @@ export function startInstance(
   open: (row: InstanceRow) => void = openInstance,
 ): Promise<boolean> {
   const src = source()
-  const key = sessionKey()
-  if (!src.instanceCreate || !key || state.starting) return Promise.resolve(false)
+  const start = conversationStarter()
+  /* Refused only when there is no conversation AND no way to make one, which is
+     the same predicate the roster draws the button from -- one answer behind
+     both, so a page that cannot act never offers the click. */
+  if (!src.instanceCreate || (!sessionKey() && !start) || state.starting) return Promise.resolve(false)
   set({ starting: agent, startFail: null, epoch: state.epoch + 1 })
   /* Which request this is. `starting` names the one the panel is waiting on, and
      only that one may release it: two creates overlap across a conversation
@@ -374,15 +416,32 @@ export function startInstance(
      `starting` is not gated on the session, because a conversation that has gone
      must not leave the next one's button disabled -- but it is gated on the
      request, which is not the same thing and is what `ticket` is for. */
-  const mine = (): boolean => sessionKey() === key
+  /* The conversation the press was made in -- empty on the new-task screen,
+     where the promotion below is about to make one. */
+  const from = sessionKey()
+  let key = ''
+  /* Once the create is out, the answer belongs to the conversation it was filed
+     under; before that -- a promotion that failed, so there is still no
+     conversation -- it belongs to the one the press was made in. Reading `key`
+     alone made a failed promotion nobody's, and the card that exists to report
+     it stayed empty. */
+  const mine = (): boolean => sessionKey() === (key || from)
 
-  /* The refusal is caught around the CREATE alone, not around the whole chain.
-     Everything after it -- the refresh, the open -- happens to an instance the
-     server has already minted, so a failure there is not a failure to start and
-     must not be reported as one: the card would say the run could not be created
-     while the row for it sat in the list underneath. */
-  return src
-    .instanceCreate(agent, key)
+  /* The refusal is caught around the CREATE and the promotion before it, not
+     around the whole chain. A conversation that could not be made is a run that
+     did not start, and the card is where that belongs. Everything AFTER the
+     create -- the refresh, the open -- happens to an instance the server has
+     already minted, so a failure there is not a failure to start and must not be
+     reported as one: the card would say the run could not be created while the
+     row for it sat in the list underneath. */
+  return Promise.resolve(sessionKey() || start!())
+    .then((id) => {
+      /* Settled here rather than captured above, and it is what `mine()` is
+         measured against: when this call is the one that promoted the draft,
+         the conversation the create belongs to is the one it just made. */
+      key = id
+      return src.instanceCreate!(agent, id)
+    })
     .catch((e: unknown) => {
       /* `data.detail` first, because `message` is the wire CODE. A refused
          create carries the reason the reader can act on -- the agent is off, or

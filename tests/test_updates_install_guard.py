@@ -75,6 +75,29 @@ class TestTheMarker:
         guard.write_marker()
         assert guard.read_marker() is not None
 
+    def test_writing_it_stays_inside_the_kernel(self) -> None:
+        """write_marker runs while uv is about to delete the environment the
+        process is executing from, and the real-uv fixture that models that
+        moment installs httpx, rich and typer only. Everything it imports must
+        therefore stop at raven.home: raven.config brings the settings stack,
+        and pydantic with it. An isolated subprocess, because other tests in
+        the session import both long before this one runs.
+
+        This pins the one call site the fixture tripped on. The closure of the
+        whole handoff is still proven only by
+        tests/integration/test_cli_upgrade_real_uv.py, which the default run
+        deselects.
+        """
+        script = (
+            "import sys\n"
+            "from raven.updates import install_guard\n"
+            "install_guard.write_marker(to_version='9.9.9')\n"
+            "print(sorted(name for name in ('pydantic', 'raven.config') if name in sys.modules))\n"
+        )
+        result = subprocess.run([sys.executable, "-I", "-c", script], capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "[]", result.stdout
+
 
 class TestWhetherTheUpgradeIsStillRunning:
     def test_a_helper_that_is_running_is_live(self) -> None:
