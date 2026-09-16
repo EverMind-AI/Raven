@@ -307,11 +307,23 @@ def test_doctor_answers_where_the_memories_are(healthy_config: Path, no_memory_s
     no_memory_server.setattr(ue, "everos_root", lambda: tmp_path / "mem-root")
     no_memory_server.setattr(ue, "everos_owned", lambda: True)
 
+    # The renderer is pinned, not the environment: rich hard-wraps the value
+    # column at the console width and breaks mid-token, so at the default 80 an
+    # 81-character root splits as "mem-roo" + "t" and no tail segment is safe to
+    # assert. Whether it splits follows the tmp_path length, which is why this
+    # passes on a mac -- /tmp resolves to /private/tmp and the eight extra
+    # characters move the wrap point -- and fails on the CI runner. Pinning the
+    # console object is what tests/test_cli_plugin_commands.py does for the same
+    # trap, and it holds whatever the ambient width is.
+    from rich.console import Console
+
+    from raven.cli import doctor_commands
+
+    no_memory_server.setattr(doctor_commands, "console", Console(width=300))
+
     r = runner.invoke(app, ["doctor"])
 
     assert r.exit_code == 0, r.stdout
-    # Asserting the tail segment, not the whole path: rich wraps long paths and
-    # the full string is not contiguous in stdout.
     assert "Memories:" in r.stdout
     assert "mem-root" in r.stdout
     assert "Address:" in r.stdout
@@ -1387,7 +1399,7 @@ def _wide_console(monkeypatch: pytest.MonkeyPatch) -> None:
     token like pw-cache mid-word."""
     from rich.console import Console
 
-    monkeypatch.setattr(doctor_commands, "console", Console(width=400))
+    monkeypatch.setattr(doctor_commands, "console", Console(width=300))
 
 
 def _fake_playwright(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, markers: tuple[str, ...]) -> Path:

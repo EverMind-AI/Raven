@@ -1166,6 +1166,16 @@ about the base rather than about today's config.
 _Avoid_: conflating with Memory — Memory is what the agent learned from its own
 turns; a Knowledge Base is material a person handed it.
 
+**Document Origin**:
+Which kind of data source a document in a Knowledge Base arrived through --
+`file` (uploaded), `note` (typed into the page) or `url` (a web page the gateway
+read). A note and a captured page are both stored as markdown blobs beside the
+uploads, so the origin is what tells three rows of `.md` apart, and it is what
+decides whether a document can be edited in place: only a note can, because
+every other origin is a copy of something the reader holds elsewhere.
+_Avoid_: reading a folder as a fourth origin -- the browser walks a picked or
+dropped directory itself, so each of its files arrives as `file`.
+
 **Section**:
 One parsed region of a source document, before chunking — a heading and the text
 under it, a page, a slide. A parser produces Sections and never splits them.

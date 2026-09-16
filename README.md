@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/d56804e5-5d4b-4493-bc70-71bd38833806)
+![Raven banner](https://github.com/user-attachments/assets/412b7a32-9aa3-48a3-80c9-db0b8ca704be?raw=true)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -212,25 +212,6 @@ source deployment, install Python 3.12, `uv`, Node.js, and npm. A source
 checkout also needs the repository dependencies installed before starting the
 engine.
 
-### 🚀 Start the server from source
-
-From the repository root:
-
-```bash
-make install-deps
-make build-ui
-uv run raven web
-```
-
-`raven web` opens the local page and leaves the engine running after the
-terminal exits. It defaults to `http://127.0.0.1:18792`. Use
-`uv run raven web --foreground` when debugging, or `uv run raven web --stop` to
-stop the resident engine. The first run can start without a configured model;
-add one from **Settings > Models** or run `uv run raven onboard`.
-
-To run only the engine without the browser launcher, use
-`uv run raven gateway`.
-
 ### 🐳 Start with Docker Compose
 
 The repository Compose setup builds the page and Python environment as part of
@@ -238,7 +219,7 @@ the image, so no separate host-side build is required:
 
 ```bash
 cd docker
-docker compose up 
+docker compose up
 ```
 
 Open <http://127.0.0.1:18793>. The Compose container runs the full `gateway`
@@ -290,6 +271,25 @@ Run the locally built image through Compose by exporting
 `RAVEN_IMAGE=raven:local` (or prefixing the command with that assignment) and
 running `docker compose up` from `docker/`. The Makefile shortcut is
 `RAVEN_IMAGE=raven:local make docker-up`. Stop the stack with `make docker-down`.
+
+### 🚀 Start the server from source
+
+From the repository root:
+
+```bash
+make install-deps
+make build-ui
+uv run raven web
+```
+
+`raven web` opens the local page and leaves the engine running after the
+terminal exits. It defaults to `http://127.0.0.1:18792`. Use
+`uv run raven web --foreground` when debugging, or `uv run raven web --stop` to
+stop the resident engine. The first run can start without a configured model;
+add one from **Settings > Model Providers** or run `uv run raven onboard`.
+
+To run only the engine without the browser launcher, use
+`uv run raven gateway`.
 
 ## 📚 Documentation
 

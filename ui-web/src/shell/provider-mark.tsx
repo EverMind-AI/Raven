@@ -7,20 +7,47 @@ import { open as openUrl } from './open-url'
 import type { JSX } from 'react'
 
 const ICONS: Record<string, string> = {
+  ai302: 'ai302',
   aihubmix: 'aihubmix',
+  radeon_cloud: 'amd',
+  aionly: 'aionly',
+  alayanew: 'alayanew',
   anthropic: 'anthropic',
   azure_openai: 'azureai',
+  baichuan: 'baichuan',
+  /* Zhipu's own mark, not Z.ai's: same vendor, two platforms and two logos. */
+  bigmodel: 'zhipu',
+  /* Not a provider: the rail's Zhipu family addresses its heading mark by
+     this name, the company's rather than either platform's. */
+  gpustack: 'gpustack',
+  lanyun: 'lanyun',
+  ocoolai: 'ocoolai',
+  ovms: 'ovms',
+  ph8: 'ph8',
+  xirang: 'xirang',
+  zhipu: 'zhipu',
+  baidu_cloud: 'baiducloud',
+  burncloud: 'burncloud',
+  cerebras: 'cerebras',
   dashscope: 'alibabacloud',
   deepseek: 'deepseek',
+  dmxapi: 'dmxapi',
+  doc2x: 'doc2x',
+  fireworks_ai: 'fireworks',
   gemini: 'gemini',
   github_copilot: 'githubcopilot',
   groq: 'groq',
   hosted_vllm: 'vllm',
+  huggingface: 'huggingface',
   lm_studio: 'lmstudio',
+  longcat: 'longcat',
   minimax: 'minimax',
   minimax_cn_api: 'minimax',
   minimax_cn: 'minimax',
   minimax_global: 'minimax',
+  mineru: 'mineru',
+  mistral: 'mistral',
+  modelscope: 'modelscope',
   moonshot: 'moonshot',
   nvidia_nim: 'nvidia',
   ollama: 'ollama',
@@ -28,8 +55,20 @@ const ICONS: Record<string, string> = {
   openai: 'openai',
   openai_codex: 'codex',
   openrouter: 'openrouter',
+  paddleocr: 'paddleocr',
+  perplexity: 'perplexity',
+  poe: 'poe',
+  ppio: 'ppio',
+  qiniu: 'qiniu',
   siliconflow: 'siliconcloud',
+  sophnet: 'sophnet',
+  stepfun: 'stepfun',
+  together_ai: 'together',
+  /* Tencent Cloud's product, and its mark is the one it ships under. */
+  tokenhub: 'tencentcloud',
   volcengine: 'volcengine',
+  xai: 'xai',
+  xiaomi_mimo: 'xiaomimimo',
   zai: 'zai',
 }
 
@@ -68,6 +107,37 @@ const VENDOR_ICONS: Record<string, string> = {
   'z-ai': 'zai',
   'zai': 'zai',
   'zai-org': 'zai',
+  /* Also the asset names `VENDOR_BY_NAME` answers with, because that table and
+     this one are read through the same lookup: a family recognised by its
+     model name arrives here as the asset it should wear, and every other value
+     that table produces happens to be spelled the same as a namespace. Without
+     these two, `gemini-3.1-pro` on any shelf but Gemini's own -- and any
+     `doubao`/`seed` off VolcEngine's -- resolved to nothing and wore the
+     gateway's mark instead of the model maker's. */
+  'gemini': 'gemini',
+  'volcengine': 'volcengine',
+  /* The namespaces the added shelves publish under. Hugging Face, Together,
+     Fireworks and Poe all file a model under whoever made it, so these are
+     what the id's middle segment actually says. */
+  'baidu': 'wenxin',
+  'cerebras': 'cerebras',
+  'longcat': 'longcat',
+  'meta': 'meta',
+  'meta-llama': 'meta',
+  'mistral': 'mistral',
+  'mistralai': 'mistral',
+  'perplexity': 'perplexity',
+  'stepfun': 'stepfun',
+  'stepfun-ai': 'stepfun',
+  'grok': 'grok',
+  'xai': 'xai',
+  'xiaomi': 'xiaomimimo',
+  'xiaomimimo': 'xiaomimimo',
+  'wenxin': 'wenxin',
+  /* Zhipu's own spelling of its namespace, which the snapshot uses and no
+     entry above covered -- `zai-org` and `z-ai` are the other two. */
+  'zhipuai': 'zai',
+  'zhipu': 'zhipu',
 }
 
 /* The asset tree's digest, appended to every asset URL.
@@ -86,6 +156,46 @@ const stamp = (): string => {
 }
 
 const assetUrl = (icon: string): string => `assets/providers/${icon}.svg${stamp()}`
+
+/* Marks that ship a second drawing for the dark theme, and marks that instead
+   lean on a filter.
+ *
+ * Both are facts about the files, derived from their shapes by
+ * tests/test_ui_provider_marks.py rather than kept by hand. A vendor logo is
+ * mostly its own colours and wants neither -- it is legible on both grounds and
+ * a filter would only take the brand somewhere it does not go. What needs
+ * answering is ink: a mark drawn in black disappears on a dark ground. The
+ * vendor's own dark drawing is the right answer where there is one, and an
+ * invert is the fallback where there is not. */
+const DARK_PAIRED = new Set([
+  'cerebras',
+  'codex',
+  'githubcopilot',
+  'grok',
+  'kimi',
+  'longcat',
+  'minimax',
+  'moonshot',
+  'ocoolai',
+  'ollama',
+  'openai',
+  'openrouter',
+  'poe',
+  'xai',
+  'xiaomimimo',
+  'zai',
+  'zhipu',
+])
+
+const TONES: Record<string, 'mono' | 'hybrid' | 'mono-white'> = {
+  amd: 'mono-white',
+  anthropic: 'hybrid',
+  mineru: 'hybrid',
+  vllm: 'mono',
+}
+
+const darkUrl = (icon: string): string | null =>
+  DARK_PAIRED.has(icon) ? `assets/providers/${icon}-dark.svg${stamp()}` : null
 
 /* Which vendor made a model, read off its name.
  *
@@ -113,6 +223,22 @@ const VENDOR_BY_NAME: ReadonlyArray<readonly [RegExp, string]> = [
   [/^glm/i, 'zai'],
   [/^nemotron/i, 'nvidia'],
   [/^(?:doubao|seed|skylark)/i, 'volcengine'],
+  /* Grok is xAI's product and has its own mark, the same split Kimi and
+     Moonshot have above: the company's mark is what the provider row wears. */
+  [/^grok/i, 'grok'],
+  /* Mistral ships six families under names that only rhyme -- Magistral,
+     Devstral, Pixtral, Voxtral, Ministral, Mixtral -- and none of them
+     contains "mistral", so a prefix on the company name alone would leave
+     most of its own shelf unmarked. */
+  [/^(?:mistral|magistral|devstral|pixtral|codestral|voxtral|ministral|mixtral|open-mi[sx]tral)/i, 'mistral'],
+  [/^sonar/i, 'perplexity'],
+  [/^step-/i, 'stepfun'],
+  [/^ernie/i, 'wenxin'],
+  [/^longcat/i, 'longcat'],
+  [/^mimo/i, 'xiaomimimo'],
+  /* Meta's mark, not LlamaIndex's: the id names the weights. Last of the
+     family rules, so a reseller's own prefix on a Llama still wins. */
+  [/^llama/i, 'meta'],
 ]
 
 export function vendorFromName(model: string): string {
@@ -123,8 +249,10 @@ export function vendorFromName(model: string): string {
   return ''
 }
 
+const vendorIcon = (vendor: string): string | undefined => VENDOR_ICONS[vendor.toLowerCase()]
+
 export function vendorIconPath(vendor: string): string | null {
-  const icon = VENDOR_ICONS[vendor.toLowerCase()]
+  const icon = vendorIcon(vendor)
   return icon ? assetUrl(icon) : null
 }
 
@@ -133,25 +261,57 @@ export function providerIconPath(id: string): string | null {
   return icon ? assetUrl(icon) : null
 }
 
+/* Raven's own mark, for a row that is this installation rather than a vendor.
+   Not under `providers/` -- it is not one -- but it wants the same digest, or
+   a replaced drawing stays cached under the URL its predecessor held. */
+export function ravenIconPath(): string {
+  return `assets/raven.svg${stamp()}`
+}
+
 /* An icon that degrades instead of breaking.
  *
  * The map says which asset a name should wear; whether that file is in the
  * bundle is a separate question, and one this cannot answer before the request.
  * So a load failure falls through to the same initial an unmapped name gets --
  * which is what makes "drop the svg in" the whole of adding a vendor. */
-function Mark({ src, tag, letter }: { src: string | null; tag: string; letter: string }): JSX.Element {
+function Mark({ src, icon, tag, letter }: {
+  src: string | null
+  icon?: string | null
+  tag: string
+  letter: string
+}): JSX.Element {
   const [broken, setBroken] = useState(false)
   if (src && !broken) {
+    const dark = icon ? darkUrl(icon) : null
+    const tone = icon ? TONES[icon] : undefined
+    /* Both drawings are in the markup and the stylesheet shows one, because
+       which theme is on is a CSS question here: nothing publishes it to React,
+       and `system` follows the OS without anyone being told. The light one
+       keeps the error handler -- a pair that 404s should fall back to the
+       initial exactly as a lone mark does. */
     return (
-      <img
-        className="provider-icon"
-        src={src}
-        alt=""
-        aria-hidden="true"
-        draggable="false"
-        data-provider={tag}
-        onError={() => setBroken(true)}
-      />
+      <>
+        <img
+          className={'provider-icon' + (dark ? ' mark-light' : '')}
+          src={src}
+          alt=""
+          aria-hidden="true"
+          draggable="false"
+          data-provider={tag}
+          {...(tone ? { 'data-tone': tone } : {})}
+          onError={() => setBroken(true)}
+        />
+        {dark && (
+          <img
+            className="provider-icon mark-dark"
+            src={dark}
+            alt=""
+            aria-hidden="true"
+            draggable="false"
+            data-provider={tag}
+          />
+        )}
+      </>
     )
   }
   return (
@@ -162,7 +322,7 @@ function Mark({ src, tag, letter }: { src: string | null; tag: string; letter: s
 }
 
 export function ProviderIcon({ id, name }: { id: string; name: string }): JSX.Element {
-  return <Mark src={providerIconPath(id)} tag={id} letter={name} />
+  return <Mark src={providerIconPath(id)} icon={ICONS[id]} tag={id} letter={name} />
 }
 
 /* One row of a model list: the model's own vendor where that is known, the
@@ -188,9 +348,12 @@ export function ModelIcon({
   /* The vendor's own mark, else the provider serving it. The initial, when it
      comes to that, is the vendor's: a column of identical letters is the same
      problem as a column of identical logos. */
+  /* Whichever mark won decides which pair and tone apply -- the model's own
+     where it has one, the provider's where it does not. */
   return (
     <Mark
       src={own || providerIconPath(provider)}
+      icon={own ? vendorIcon(key) : ICONS[provider]}
       tag={own ? key : provider}
       letter={vendor || name}
     />

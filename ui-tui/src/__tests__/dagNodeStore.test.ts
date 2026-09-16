@@ -6,12 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import type { TranscriptMessage } from '../rpc/index.js'
 
-import {
-  $dagNodeTraces,
-  getDagNodeTrace,
-  resetDagNodeTraces,
-  setDagNodeTrace
-} from '../app/dagNodeStore.js'
+import { $dagNodeTraces, getDagNodeTrace, resetDagNodeTraces, setDagNodeTrace } from '../app/dagNodeStore.js'
 
 const say = (text: string): TranscriptMessage => ({ role: 'assistant', text })
 

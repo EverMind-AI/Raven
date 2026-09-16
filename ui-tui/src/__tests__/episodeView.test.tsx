@@ -163,9 +163,7 @@ describe('EpisodeView', () => {
 
     // A call still running is the one that must stay shut -- its result row
     // would appear under a spinner and move as the output arrived.
-    const running = [
-      step(0, 'checking', [call('b', 'exec', 'pwd', { done: false, ok: true, resultPreview: '/repo' })])
-    ]
+    const running = [step(0, 'checking', [call('b', 'exec', 'pwd', { done: false, ok: true, resultPreview: '/repo' })])]
 
     expect(view(running, { live: true })).not.toContain('/repo')
   })

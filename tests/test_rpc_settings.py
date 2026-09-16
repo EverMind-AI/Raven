@@ -277,3 +277,204 @@ async def test_default_permission_mode_is_a_settings_key(cfg):
     assert _read(cfg)["permissions"]["mode"] == "smart"
     with pytest.raises(ConfigValidationError):
         await rpc_console.settings_set({"key": "permissions.mode", "value": "yolo"})
+
+
+async def test_extension_pin_writes_roundtrip_through_raven_loader(cfg):
+    from raven.config.raven import load_raven_config
+
+    await rpc_console.settings_set({"key": "translate.model", "value": "openai/gpt-5-mini"})
+    await rpc_console.settings_set({"key": "translate.provider", "value": "openai"})
+    await rpc_console.settings_set({"key": "knowledge.embeddingModel", "value": "openai/text-embedding-3-small"})
+    await rpc_console.settings_set({"key": "knowledge.embeddingProvider", "value": "openai"})
+
+    loaded = load_raven_config(cfg)
+
+    assert loaded.translate.model == "openai/gpt-5-mini"
+    assert loaded.translate.provider == "openai"
+    assert loaded.knowledge.embedding_model == "openai/text-embedding-3-small"
+    assert loaded.knowledge.embedding_provider == "openai"
+
+
+class TestAPinIsWrittenAsOneThing:
+    """Both halves of a model pin land in one write, or neither does.
+
+    A pair written a key at a time has two ways to end up mismatched, and the
+    surface cannot close either from its side: a connection dropping between
+    the writes leaves a new model beside the old provider, with the repair
+    write having to travel the connection that just failed; and two surfaces
+    saving at once interleave into a pair neither of them chose, with every
+    individual write succeeding. One key is one ``atomic_update``.
+    """
+
+    async def test_the_pair_lands_together(self, cfg):
+        r = await rpc_console.settings_set(
+            {
+                "key": "knowledge",
+                "value": {"embeddingModel": "openai/text-embedding-3-large", "embeddingProvider": "openai"},
+            }
+        )
+
+        assert r["applied"] is True
+        block = _read(cfg)["knowledge"]
+        assert block["embeddingModel"] == "openai/text-embedding-3-large"
+        assert block["embeddingProvider"] == "openai"
+
+    async def test_a_refused_half_writes_neither(self, cfg):
+        """The whole point. Validation runs over the pair before the file is
+        touched, so the half that would have passed is not left behind."""
+        with pytest.raises(ConfigValidationError):
+            await rpc_console.settings_set(
+                {
+                    "key": "knowledge",
+                    "value": {"embeddingModel": "openai/text-embedding-3-large", "embeddingProvider": "nosuchvendor"},
+                }
+            )
+
+        assert "knowledge" not in _read(cfg)
+
+    async def test_half_a_pair_is_not_a_pin(self, cfg):
+        with pytest.raises(ConfigValidationError):
+            await rpc_console.settings_set({"key": "knowledge", "value": {"embeddingModel": "openai/x"}})
+
+        assert "knowledge" not in _read(cfg)
+
+    async def test_the_rest_of_the_block_survives_the_write(self, cfg):
+        """``sessionTitle`` carries enabled, the timeout and the width gate
+        beside its pin. A replacing write would drop all three."""
+        cfg.write_text(
+            json.dumps({"sessionTitle": {"enabled": True, "timeoutSeconds": 8.0, "budget": 24}}),
+            encoding="utf-8",
+        )
+
+        await rpc_console.settings_set(
+            {"key": "sessionTitle", "value": {"model": "openai/gpt-5.4-mini", "provider": "openai"}}
+        )
+
+        block = _read(cfg)["sessionTitle"]
+        assert block["model"] == "openai/gpt-5.4-mini"
+        assert block["provider"] == "openai"
+        assert (block["enabled"], block["timeoutSeconds"], block["budget"]) == (True, 8.0, 24)
+
+    async def test_clearing_a_pin_clears_both_halves(self, cfg):
+        cfg.write_text(
+            json.dumps({"translate": {"model": "openai/gpt-5.5", "provider": "openai"}}),
+            encoding="utf-8",
+        )
+
+        await rpc_console.settings_set({"key": "translate", "value": {"model": "", "provider": ""}})
+
+        block = _read(cfg)["translate"]
+        assert block["model"] is None and block["provider"] is None
+
+
+class TestAWriteFollowsTheSpellingTheConfigAlreadyUses:
+    """Every block and field is accepted under two spellings.
+
+    The models set ``alias_generator=to_camel`` with ``populate_by_name=True``,
+    so a hand-written config may hold ``session_title`` or ``sessionTitle`` and
+    both are valid. A write that always used its own spelling did not update
+    such a config, it added a second key beside the first -- and because the
+    models forbid extras, the block that was already there became an extra
+    input and the whole config stopped loading. Every case here is a config
+    that loaded before the write and has to load after it.
+    """
+
+    @staticmethod
+    def _loads(cfg) -> bool:
+        from raven.config.raven import load_raven_config
+
+        try:
+            load_raven_config()
+        except Exception:
+            return False
+        return True
+
+    async def test_a_snake_case_block_is_updated_not_duplicated(self, cfg):
+        cfg.write_text(json.dumps({"session_title": {"enabled": True, "model": "old/m"}}), encoding="utf-8")
+
+        await rpc_console.settings_set(
+            {"key": "sessionTitle", "value": {"model": "openai/gpt-5.4-mini", "provider": "openai"}}
+        )
+
+        raw = _read(cfg)
+        assert "sessionTitle" not in raw, "a second spelling of the block is what breaks the load"
+        assert raw["session_title"]["model"] == "openai/gpt-5.4-mini"
+        assert raw["session_title"]["provider"] == "openai"
+        assert raw["session_title"]["enabled"] is True
+        assert self._loads(cfg)
+
+    async def test_snake_case_leaves_are_updated_not_duplicated(self, cfg):
+        cfg.write_text(
+            json.dumps({"knowledge": {"embedding_model": "openai/old", "embedding_provider": "openai"}}),
+            encoding="utf-8",
+        )
+
+        await rpc_console.settings_set(
+            {"key": "knowledge", "value": {"embeddingModel": "openai/new", "embeddingProvider": "openai"}}
+        )
+
+        block = _read(cfg)["knowledge"]
+        assert set(block) == {"embedding_model", "embedding_provider"}
+        assert block["embedding_model"] == "openai/new"
+        assert self._loads(cfg)
+
+    async def test_a_single_leaf_write_follows_the_block_too(self, cfg):
+        """Not only the pair: the leaf keys address the same block and grew the
+        same duplicate."""
+        cfg.write_text(json.dumps({"session_title": {"enabled": True}}), encoding="utf-8")
+
+        await rpc_console.settings_set({"key": "sessionTitle.model", "value": "openai/x"})
+
+        raw = _read(cfg)
+        assert "sessionTitle" not in raw
+        assert raw["session_title"]["model"] == "openai/x"
+        assert self._loads(cfg)
+
+    async def test_a_camel_case_config_is_left_in_its_own_spelling(self, cfg):
+        cfg.write_text(json.dumps({"sessionTitle": {"enabled": True, "model": "old"}}), encoding="utf-8")
+
+        await rpc_console.settings_set({"key": "sessionTitle", "value": {"model": "openai/new", "provider": "openai"}})
+
+        raw = _read(cfg)
+        assert "session_title" not in raw
+        assert raw["sessionTitle"]["model"] == "openai/new"
+        assert self._loads(cfg)
+
+    async def test_a_block_that_is_not_there_yet_is_written_camel(self, cfg):
+        """No existing spelling to follow, so the alias the models generate."""
+        await rpc_console.settings_set(
+            {"key": "knowledge", "value": {"embeddingModel": "openai/new", "embeddingProvider": "openai"}}
+        )
+
+        assert set(_read(cfg)["knowledge"]) == {"embeddingModel", "embeddingProvider"}
+        assert self._loads(cfg)
+
+
+class TestClearingAPinThroughItsLeafKeys:
+    """``None`` clears a half, the same as the empty string.
+
+    A surface that has no value to send sends ``null`` rather than inventing
+    one, and "follow the conversation" is the documented unset state -- so this
+    is a way back to it, not a malformed write to refuse.
+    """
+
+    async def test_null_clears_the_model_half(self, cfg):
+        cfg.write_text(json.dumps({"translate": {"model": "openai/gpt-5.5"}}), encoding="utf-8")
+
+        await rpc_console.settings_set({"key": "translate.model", "value": None})
+
+        assert _read(cfg)["translate"]["model"] is None
+
+    async def test_null_clears_the_provider_half(self, cfg):
+        cfg.write_text(json.dumps({"translate": {"provider": "openai"}}), encoding="utf-8")
+
+        await rpc_console.settings_set({"key": "translate.provider", "value": None})
+
+        assert _read(cfg)["translate"]["provider"] is None
+
+    async def test_whitespace_is_not_a_provider(self, cfg):
+        """Trimmed to nothing reads as unset rather than as a provider named
+        with spaces, which no registry lookup would match."""
+        await rpc_console.settings_set({"key": "translate.provider", "value": "   "})
+
+        assert _read(cfg)["translate"]["provider"] is None

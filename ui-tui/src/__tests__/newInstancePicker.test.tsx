@@ -143,7 +143,7 @@ describe('NewInstancePicker', () => {
 
   it('treats a server that does not report statefulness as offering nothing', async () => {
     const h = mount([agent({ name: 'Raven-Code', stateful: undefined })])
-    await waitFor(h.frame, 'no sub-agent')
+    await waitFor(h.frame, 'no subagent')
 
     expect(h.frame()).not.toContain('Raven-Code')
   })
@@ -226,7 +226,7 @@ describe('NewInstancePicker', () => {
 
   it('says so when nothing can be instantiated', async () => {
     const h = mount([])
-    await waitFor(h.frame, 'no sub-agent')
+    await waitFor(h.frame, 'no subagent')
 
     expect(h.frame()).toContain('Esc/q cancel')
   })

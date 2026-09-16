@@ -513,3 +513,65 @@ async def test_a_rename_typed_mid_call_is_reported_as_a_rename(tmp_path: Path) -
     await task
 
     assert _ended_reasons(emitter) == ["renamed"]
+
+
+class TestTheQuickPinDecidesWhoNamesTheSession:
+    """``sessionTitle.model`` paired with ``sessionTitle.provider``.
+
+    The model half alone used to be handed to the namer while the provider
+    stayed the conversation's, which is the mis-pairing every subsystem pin
+    exists to avoid: one vendor's id posted to another's endpoint on that
+    other's key. So the pair is bound through the pool, and a pair that cannot
+    be built follows the conversation rather than half-applying.
+    """
+
+    @staticmethod
+    def _settings(model=None, provider=None):
+        from raven.config.raven import SessionTitleConfig
+
+        return SessionTitleConfig(model=model, provider=provider)
+
+    @staticmethod
+    def _loop(pin):
+        class _Pool:
+            def bind_pin(self, model, provider_name=None):
+                self.asked = (model, provider_name)
+                return pin
+
+        class _Loop:
+            provider_pool = _Pool()
+
+        return _Loop()
+
+    def test_an_unset_pin_asks_the_pool_nothing(self) -> None:
+        from raven.rpc.methods.turn import _quick_pin
+
+        loop = self._loop(pin=object())
+        assert _quick_pin(loop, self._settings()) is None
+
+    def test_a_bound_pair_is_what_names_the_session(self) -> None:
+        from raven.rpc.methods.turn import _quick_pin
+
+        bound = object()
+        loop = self._loop(pin=bound)
+
+        result = _quick_pin(loop, self._settings(model="openai/gpt-5.4-mini", provider="openai"))
+
+        assert result is bound
+        # Both halves reach the pool: passing only the model is what let a
+        # gateway-served id resolve to the wrong vendor.
+        assert loop.provider_pool.asked == ("openai/gpt-5.4-mini", "openai")
+
+    def test_a_pin_the_pool_refuses_follows_the_conversation(self) -> None:
+        from raven.rpc.methods.turn import _quick_pin
+
+        loop = self._loop(pin=None)
+
+        assert _quick_pin(loop, self._settings(model="openai/gpt-5.4-mini", provider="openai")) is None
+
+    def test_no_pool_is_not_a_reason_to_guess(self) -> None:
+        """Naming is an errand beside the turn; without the one thing that
+        resolves credentials it declines rather than sending the id anyway."""
+        from raven.rpc.methods.turn import _quick_pin
+
+        assert _quick_pin(object(), self._settings(model="openai/gpt-5.4-mini", provider="openai")) is None

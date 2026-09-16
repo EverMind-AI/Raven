@@ -6,14 +6,14 @@
 DS.transcript.branch = () => {
   rpc.call('session.branch', { session_id: sessionCurrent() })
     .then((r) => {
-      if (!r.session_id) { toast('这个会话还没有内容，无法分叉'); return; }
+      if (!r.session_id) { toast(T('gui.sess.branch_empty')); return; }
       const s = { id: r.session_id, title: r.title || T('gui.sess.branch_title'),
         last: T('gui.sess.branched'), when: T('gui.sess.just_now'),
         at: Math.floor(Date.now() / 1000), run: null, live: true };
       sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s);
-      toast(`已分叉，带上了 ${r.message_count || 0} 条消息`);
+      toast(T('gui.sess.branched_n', { n: r.message_count || 0 }));
     })
-    .catch((e) => toast(`分叉失败：${e.message || e}`));
+    .catch((e) => toast(T('gui.op.branch_failed', { detail: e.message || e })));
 };
 
 DS.composer.slash.forEach((x) => {

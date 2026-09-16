@@ -29,6 +29,17 @@ from oncall_flow.process_backend import ProcessExecutor  # noqa: E402
 CMD = "env CUDA_VISIBLE_DEVICES=1 python3 /frozen/train.py --config {config} --run-dir {job_dir}"
 
 
+@pytest.fixture(autouse=True)
+def _no_gone_grace_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ten gone-grace polls at no wait each: FakeHost answers "gone" the same way
+    every time, so the 30 s the production sleep adds prove nothing. Patched here
+    rather than in the root conftest because the plugin lives under agents/ and
+    is only importable once this module has put it on sys.path."""
+    from oncall_flow import process_backend
+
+    monkeypatch.setattr(process_backend, "_GONE_GRACE_SLEEP_S", 0.0)
+
+
 class FakeHost:
     """Just enough of a host: a job table, a clock, and a result store."""
 
@@ -1028,6 +1039,7 @@ async def test_a_command_that_detaches_itself_is_stopped_and_refused_in_the_resu
     )
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_the_launcher_stops_a_child_that_escaped_when_run_in_a_real_shell(tmp_path):
     """The generated launcher against a real shell, not its text: the command

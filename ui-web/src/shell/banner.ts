@@ -57,13 +57,13 @@ export function draw(): void {
 function websearchNotice(): HTMLElement {
   const b = document.createElement('div')
   b.className = 'banner'
-  b.appendChild(el('b', '网页搜索还没配置'))
-  b.appendChild(el('span', '现在 Raven 只能抓你给出的网址，不能自己找资料。'))
-  const go = el('button', '去配置')
+  b.appendChild(el('b', t('gui.ws.notice_title')))
+  b.appendChild(el('span', t('gui.ws.notice_body')))
+  const go = el('button', t('gui.ws.notice_go'))
   go.onclick = () => shell().openWebsearch?.()
   const x = el('button', '✕')
   x.className = 'x'
-  x.setAttribute('aria-label', '忽略')
+  x.setAttribute('aria-label', t('gui.ws.notice_dismiss'))
   /* Dismissable, unlike the fault above: an unconfigured capability is a
      suggestion, and the reader saying "not now" is an answer. */
   x.onclick = () => b.remove()

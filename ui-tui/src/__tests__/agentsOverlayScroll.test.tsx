@@ -62,7 +62,12 @@ const seed = () => {
   const turns = []
   let at = 1
   for (let i = 0; i < 6; i++) {
-    turns.push({ call_id: `u${i}`, role: 'user' as const, content: `question ${i}\n\nwith a second paragraph`, at_ms: at++ })
+    turns.push({
+      call_id: `u${i}`,
+      role: 'user' as const,
+      content: `question ${i}\n\nwith a second paragraph`,
+      at_ms: at++
+    })
     turns.push({
       call_id: `a${i}`,
       role: 'assistant' as const,

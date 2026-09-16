@@ -47,9 +47,21 @@ import tempfile
 import time
 from pathlib import Path
 
+from loguru import logger
+
 from raven.utils import office
 
-RENDERABLE_SUFFIXES = frozenset({".pptx"})
+# What LibreOffice is asked to turn into a PDF. Decks were the first, because
+# the page can frame a PDF and cannot draw a .pptx; a knowledge base takes
+# uploads in the rest of the office formats and the page cannot draw those
+# either. The legacy trio is here deliberately -- .doc and .xls have no reader
+# in the browser and no pure-Python one worth trusting, so LibreOffice is not
+# one option among several for them, it is the only one.
+#
+# Not a general "anything LibreOffice opens" list: every suffix here is a
+# conversion the gateway will start on a page's say-so, and the timeout below
+# is sized for a document rather than for a spreadsheet nobody meant to render.
+RENDERABLE_SUFFIXES = frozenset({".pptx", ".ppt", ".docx", ".doc", ".xlsx", ".xls", ".odt", ".odp", ".ods", ".rtf"})
 
 # A deck of forty image-heavy pages converts in about half a minute on a cold
 # profile; three minutes is a hang, not a slow deck.
@@ -126,6 +138,53 @@ def published_pdf(source: Path, workspace: Path | None = None) -> Path | None:
     return None
 
 
+def sources_dir() -> Path:
+    """Where a renderer keeps a suffixed copy of what it was asked to convert.
+
+    Under the cache but not in its root: the root holds ``<key>.pdf`` outputs
+    and ``published_pdf`` looks for a sibling PDF beside whatever it is given,
+    so a copy sitting next to those would let one document's rendering answer
+    for another's.
+    """
+    return cache_dir() / "sources"
+
+
+def forget_source(document_id: str) -> None:
+    """Drop the retained copy for one document, if there is one.
+
+    Here rather than with the caller that makes it, because this module owns
+    the directory: a function that empties part of this cache belongs beside
+    the one that fills it, and reaching back the other way puts the two rpc
+    modules in an import cycle.
+
+    Matched on the id rather than on a name, because a suffix that has since
+    changed would leave a copy behind and the point of this call is that
+    nothing is left.
+    """
+    directory = sources_dir()
+    if not directory.is_dir():
+        return
+    for entry in directory.glob(f"{document_id}.*"):
+        # The rendering's name is a digest of this file's path and stamp, so
+        # the key has to be taken while the file is still here. The PDF is a
+        # readable copy of the whole document, which is the thing a delete is
+        # being asked to get rid of.
+        rendered = None
+        try:
+            rendered = cache_dir() / f"{cache_key(entry)}.pdf"
+        except OSError:
+            pass
+        for path in (entry, rendered):
+            if path is None:
+                continue
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                # A sweep takes it later. Failing a delete over its cache copy
+                # would leave a reader with a row they cannot be rid of.
+                logger.debug("pdf-preview: could not remove {}", path)
+
+
 def cache_key(source: Path) -> str:
     st = source.stat()
     digest = hashlib.sha256(f"{source}\0{st.st_size}\0{st.st_mtime_ns}".encode()).hexdigest()
@@ -166,7 +225,10 @@ def _render(source: Path, target: Path, timeout_s: float) -> None:
     executable = find_soffice()
     if executable is None:
         raise PdfPreviewUnavailableError(
-            "LibreOffice is not installed on the gateway host, so a deck cannot be shown as a PDF. "
+            # Named for what the reader asked to see, not for the first
+            # caller this had: a spreadsheet reported as a deck reads like
+            # the wrong file was opened.
+            f"LibreOffice is not installed on the gateway host, so {source.name} cannot be shown. "
             "Install it with: " + office.install_hint()
         )
     root = cache_dir()
@@ -181,7 +243,7 @@ def _render(source: Path, target: Path, timeout_s: float) -> None:
             done = office.to_pdf(source, staged, executable=executable, timeout_s=timeout_s, profile_root=scratch)
         except TimeoutError as exc:
             raise PdfPreviewTimeoutError(
-                f"LibreOffice took longer than {timeout_s:g}s to render the deck and was stopped"
+                f"LibreOffice took longer than {timeout_s:g}s to render {source.name} and was stopped"
             ) from exc
         except FileNotFoundError as exc:
             raise PdfPreviewUnavailableError(
@@ -217,9 +279,15 @@ def _touched(cached: Path) -> Path:
 
 def _sweep(root: Path) -> None:
     cutoff = time.time() - CACHE_TTL_S
-    for entry in root.glob("*.pdf"):
+    # ``*`` under the root's own subdirectories as well as the root: a renderer
+    # that has to give its input a meaningful suffix keeps a copy of the source
+    # beside the output, and a sweep that only counts the outputs lets those
+    # accumulate for as long as the installation lives. Their owner removes
+    # them when the document goes; this is what bounds the ones whose owner
+    # never got the chance.
+    for entry in (*root.glob("*.pdf"), *root.glob("*/*")):
         try:
-            if entry.stat().st_mtime < cutoff:
+            if entry.is_file() and entry.stat().st_mtime < cutoff:
                 entry.unlink()
         except OSError:
             continue

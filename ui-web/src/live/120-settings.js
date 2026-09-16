@@ -95,12 +95,18 @@ async function loadSettings() {
   try { await loadProviders(); } catch { /* model options unavailable — keep the rows already shown */ }
 }
 
-/* Providers the page does not offer. `custom` reaches any OpenAI-compatible
-   endpoint with an address of your own, which is the whole of what vLLM/Local
-   was for -- two rows for one job, and the reader has to guess which. Hidden
-   here rather than dropped from the registry: a section already configured
-   under it keeps loading, keeps being served, and keeps routing. */
-const HIDDEN_PROVIDERS = new Set(['hosted_vllm']);
+/* Providers the page does not offer. Both are the generic "some endpoint of
+   your own" row, and the page answers that question twice over without them:
+   the runtimes have named rows of their own -- Ollama, LM Studio, GPUStack,
+   OpenVINO -- and every row carries an API Host field for pointing a vendor at
+   a gateway you run. What was left was a row whose name says nothing about
+   what it reaches, next to fifty that do.
+
+   Hidden here rather than dropped from the registry: a section already
+   configured under either name keeps loading, keeps being served, and keeps
+   routing, and `raven provider list` and the onboarding wizard still offer
+   both -- which is also where a vendor Raven carries no spec for is set up. */
+const HIDDEN_PROVIDERS = new Set(['hosted_vllm', 'custom']);
 
 let providersLive = [];
 let defaultModelLive = '';
@@ -145,13 +151,17 @@ async function loadProviders(sid, gen) {
     labels: p.model_labels || {},
     protocols: p.protocols || {}, protocolOverrides: p.protocol_overrides || {},
     kind: p.auth_type || 'api_key', needsBase: !!p.needs_api_base,
+    // Addresses to choose between. A provider that has them is asked which
+    // storefront the key came from instead of being handed a host field --
+    // the key does not say, and the three are separate accounts.
+    platforms: p.platforms || [],
     // Whether this one has a key field: false for an address-only local
     // deployment, true for the local servers that can sit behind a token.
     // Answered by the backend so the pane and the wizard cannot disagree.
     acceptsKey: p.accepts_api_key !== false,
     apiBase: p.api_base || '', defaultApiBase: p.default_api_base || '',
     env: p.key_env || '', warn: p.warning || '',
-    key: p.authenticated ? '已配置' : '',
+    key: p.authenticated ? T('gui.set.tls.key_set') : '',
   }));
   if (mo.model) { modelSet(mo.model); setModelLabel(); }
 }
@@ -172,7 +182,7 @@ DS.settings = {
     /* The tool inventory is part of settings. Loading it here keeps every
        opener on the island's one refresh path rather than replacing the
        demo-layer openSettings binding in live mode. */
-    try { await loadExt(); } catch (e) { toast(`加载失败：${e.message || e}`); }
+    try { await loadExt(); } catch (e) { toast(T('gui.op.load_failed', { detail: e.message || e })); }
     await loadSettings();
     pushPermMode();
     await loadEveros();
@@ -281,7 +291,7 @@ async function langPickLive(next, { persist } = {}) {
        not agree with -- the same key drives the TUI and the agent's replies. */
     langSet(prev);
     redrawAll();
-    toast(`切换语言失败：${(e.data && e.data.detail) || e.message || e}`);
+    toast(T('gui.op.lang_failed', { detail: (e.data && e.data.detail) || e.message || e }));
   }
 }
 

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from raven_ppt.services.assets import text_metrics
 from raven_ppt.services.assets.fonts import (
     _SYSTEM_CJK as SYSTEM_CJK,
 )
@@ -25,6 +26,7 @@ from raven_ppt.services.assets.fonts import (
     MEASURED_SAFE_FONTS,
     measurement_fonts,
 )
+from raven_ppt.services.assets.text_metrics import MeasuredWidth
 
 
 def test_the_measurement_faces_are_packaged_with_their_licence() -> None:
@@ -124,3 +126,51 @@ def test_the_widths_reach_the_module_that_estimates_with_them() -> None:
     namespace: dict = {}
     exec(compile(source[source.index("_FACE_WIDTH = {") : source.index("_WIDEST_FACE")], "<table>", "exec"), namespace)
     assert namespace["_FACE_WIDTH"] == FACE_WIDTH
+
+
+class _CountingFont:
+    """Stands in for the loaded TTF so a test can count `getlength` calls."""
+
+    def __init__(self, calls: list[str]) -> None:
+        self._calls = calls
+
+    def getlength(self, run: str) -> float:
+        self._calls.append(run)
+        return float(len(run) * 10)
+
+
+def test_repeating_a_measured_key_does_not_call_getlength_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The memo sits in front of `_freetype`, so a repeat width() is a cache hit.
+
+    A template measurement and a deck build's QA gates both ask `width()` for the
+    same (bold, font_px, text) far more often than there are distinct ones, and
+    each ask used to re-run FreeType's `getlength`.
+    """
+    measurer = MeasuredWidth()
+    calls: list[str] = []
+    monkeypatch.setattr(measurer, "_font", lambda path, size: _CountingFont(calls))
+
+    first = measurer.width("Raven", 24)
+    second = measurer.width("Raven", 24)
+
+    assert first == second
+    assert calls == ["Raven"]
+
+
+def test_the_width_cache_evicts_the_oldest_key_once_full(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(text_metrics, "_WIDTH_CACHE_MAX", 2)
+    measurer = MeasuredWidth()
+    calls: list[str] = []
+    monkeypatch.setattr(measurer, "_font", lambda path, size: _CountingFont(calls))
+
+    measurer.width("one", 10)
+    measurer.width("two", 10)
+    measurer.width("three", 10)  # cache is full at "one","two" -- this evicts "one"
+    calls.clear()
+
+    measurer.width("two", 10)
+    measurer.width("three", 10)
+    assert calls == [], "the two keys newer than the evicted one should still be cached"
+
+    measurer.width("one", 10)
+    assert calls == ["one"], "the oldest key was evicted, so it has to be re-measured"

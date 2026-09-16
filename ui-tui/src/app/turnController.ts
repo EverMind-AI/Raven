@@ -1305,8 +1305,7 @@ class TurnController {
 
       return {
         ...state,
-        spawnRuns:
-          at === -1 ? [...state.spawnRuns, folded] : state.spawnRuns.map((run, i) => (i === at ? folded : run))
+        spawnRuns: at === -1 ? [...state.spawnRuns, folded] : state.spawnRuns.map((run, i) => (i === at ? folded : run))
       }
     })
 

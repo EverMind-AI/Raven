@@ -38,12 +38,43 @@ EXPECTED_PROVIDER_NAMES = {
     "lm_studio",
     "ollama_chat",
     "groq",
+    "xai",
+    "mistral",
+    "together_ai",
+    "fireworks_ai",
+    "perplexity",
+    "cerebras",
+    "huggingface",
+    "poe",
+    "xiaomi_mimo",
+    "baichuan",
+    "baidu_cloud",
+    "stepfun",
+    "longcat",
+    "modelscope",
+    "qiniu",
+    "ai302",
+    "dmxapi",
+    "burncloud",
+    "ocoolai",
+    "ppio",
+    "lanyun",
+    "alayanew",
+    "sophnet",
+    "tokenhub",
+    "xirang",
+    "ph8",
+    "aionly",
+    "radeon_cloud",
+    "gpustack",
+    "ovms",
+    "bigmodel",
 }
 
 
-def test_registry_has_exactly_24_providers() -> None:
-    assert len(PROVIDERS) == 24
-    assert len(EXPECTED_PROVIDER_NAMES) == 24
+def test_registry_has_exactly_55_providers() -> None:
+    assert len(PROVIDERS) == 55
+    assert len(EXPECTED_PROVIDER_NAMES) == 55
 
 
 def test_registry_provider_name_set_is_pinned() -> None:
@@ -353,22 +384,60 @@ LABELLED_PROVIDERS = frozenset(
         "aihubmix",
         "anthropic",
         "azure_openai",
+        "cerebras",
         "dashscope",
         "deepseek",
         "gemini",
         "github_copilot",
         "groq",
+        "huggingface",
         "minimax",
         "minimax_cn",
         "minimax_cn_api",
         "minimax_global",
+        "mistral",
         "moonshot",
         "openai",
         "openrouter",
+        "perplexity",
+        "poe",
         "siliconflow",
+        "xai",
         "zai",
     }
 )
+
+
+def test_a_rank_only_row_does_not_hide_the_row_that_describes_the_model() -> None:
+    """A curated entry ranks a model; it does not describe one.
+
+    A provider upstream carries no rows for gets its shortlist from the curated
+    array alone, so the row filed under it holds a rank and nothing else. Found
+    by provider, that row is not None, which used to end the lookup and label
+    the model with its own id -- the picker then offered a shortlist of bare ids
+    for exactly the providers whose shortlist had to be written by hand.
+    """
+    from raven.providers.catalog import SOURCE_SNAPSHOT, describe
+    from raven.providers.common_models import common_models_for
+    from raven.providers.registry_data import row_by_name, row_for
+    from raven.providers.wire import split_model_id
+
+    shadowed = []
+    for spec in PROVIDERS:
+        for stored in common_models_for(spec.name):
+            vendor_id = split_model_id(stored)[1] or stored
+            own = row_for(spec.name, vendor_id)
+            if own is None or own.name:
+                continue
+            # Nameless under its own provider, but described elsewhere: the
+            # borrowed row is what a reader must be shown.
+            elsewhere = row_by_name(vendor_id)
+            if elsewhere is not None and elsewhere.name:
+                shadowed.append((spec.name, stored, describe(spec.name, stored).source))
+
+    regressed = [row for row in shadowed if row[2] != SOURCE_SNAPSHOT]
+    assert not regressed, f"a rank-only row hid a described one: {regressed}"
+    assert shadowed, "no curated row is currently nameless -- this guard now proves nothing"
 
 
 def _rows_by_provider() -> dict[str, list]:
@@ -617,6 +686,47 @@ def test_our_env_key_is_the_one_litellm_will_read(spec) -> None:
         return
 
     assert spec.env_key in expected, f"{spec.name}: we set {spec.env_key!r}, LiteLLM reads one of {expected}"
+
+
+def test_a_json_configured_providers_env_key_matches_the_file_litellm_ships() -> None:
+    """The check above skips these, so the same drift would pass unnoticed.
+
+    LiteLLM serves its "openai_like" vendors from a bundled JSON table rather
+    than from a driver, and ``validate_environment`` names no variable for them
+    -- which is a gap in the evidence, not a licence to guess. The table itself
+    is the answer, so read it: a vendor that renames its variable upstream fails
+    here instead of failing as an authentication error at the first call.
+    """
+    import json
+    from pathlib import Path
+
+    from raven.providers.litellm_setup import import_litellm
+
+    table = Path(import_litellm().__file__).parent / "llms" / "openai_like" / "providers.json"
+    if not table.exists():
+        pytest.skip("LiteLLM no longer ships an openai_like provider table")
+
+    declared = json.loads(table.read_text(encoding="utf-8"))
+    checked = 0
+    for spec in PROVIDERS:
+        entry = declared.get(spec.name)
+        if not isinstance(entry, dict) or not entry.get("api_key_env"):
+            continue
+        if spec.model_prefix != spec.name:
+            # Reached through another vendor's driver, so the variable LiteLLM
+            # reads is that driver's and this row describes a route we do not
+            # take. AiHubMix speaks OpenAI's API and its key rides
+            # OPENAI_API_KEY; the vendor's own name here would set nothing.
+            continue
+        checked += 1
+        assert spec.env_key == entry["api_key_env"], (
+            f"{spec.name}: we set {spec.env_key!r}, LiteLLM's table names {entry['api_key_env']!r}"
+        )
+        if spec.default_api_base and entry.get("base_url"):
+            assert spec.default_api_base == entry["base_url"], (
+                f"{spec.name}: we probe {spec.default_api_base!r}, LiteLLM posts to {entry['base_url']!r}"
+            )
+    assert checked, "no registry provider is served from LiteLLM's openai_like table any more"
 
 
 def test_the_env_key_exemption_list_has_no_stale_entries() -> None:

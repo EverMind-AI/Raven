@@ -230,10 +230,7 @@ export function fitsFastAppend(
   }
 
   return (
-    cursor === current.length &&
-    current.length > 0 &&
-    !current.includes('\n') &&
-    lineWidth + sw < Math.max(1, columns)
+    cursor === current.length && current.length > 0 && !current.includes('\n') && lineWidth + sw < Math.max(1, columns)
   )
 }
 
