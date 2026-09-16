@@ -80,7 +80,7 @@ which of the four were defaults.
    a dark deck, and a printed handout and a projected keynote want opposite grounds.
    Chaining every background off the first one gives a deck one look and no decision.
 5. [layouts.md](references/layouts.md) holds reference shapes with their proportions, the
-   type ramp, and twenty compositions measured off the packaged templates. Read it to widen the list you choose from, not to pick from a menu: what
+   type ramp, and nine compositions measured off the packaged templates. Read it to widen the list you choose from, not to pick from a menu: what
    a page has to say decides its shape. No one shape on more than 60% of the deck.
 6. Repeating units -- a card, a row, a step -- take an icon from the packaged set. Search it
    by what the unit is about, not by a filename: 1304 of them ship beside this agent, and
@@ -168,7 +168,7 @@ For what is drawn with python-pptx directly; the helper modules handle these the
 ## Load when you need it
 
 - [layouts.md](references/layouts.md) -- eleven reference page shapes with the proportions
-  they measured, seventeen cover/section/KPI/process compositions, twenty compositions
+  they measured, seventeen cover/section/KPI/process compositions, nine compositions
   measured off the packaged templates, and when a table is the wrong page. A registry to widen the list you choose from; the numbers above hold without
   it.
 - [gates.md](references/gates.md) -- what refuses a deck and what only reports, with the
