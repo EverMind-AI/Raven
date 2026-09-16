@@ -40,6 +40,11 @@ picture and carry them on type, grid, rule and colour.
 - On this route there is no ANTI-SLOP-CHECK.md, no contract and no Task State. Do not
   initialize or update one.
 
+## Read two skills first
+
+`local/deck-to-pptx` (this file) and `local/design-editorial-and-presentations`, which owns
+the content order and the editorial judgement. Read both before the first page.
+
 ## Settle four things first
 
 Language, audience, length, ground. Take each from the first of these that settles it: the
@@ -59,44 +64,50 @@ which of the four were defaults.
    figure: **fetch it, never generate it.** A generated stand-in for something that exists
    is a fabrication the page presents as evidence. Generate only what has no original:
    illustration, backdrop, atmosphere.
-3. Anything the deck names that has a face of its own -- a company, a product, a repository,
+3. Before the build, every page is named with the picture it carries: a photograph the search
+   found, a paper's own figure, a published chart, or a diagram drawn on the page. Pages with
+   only type and cards are at most a third of the deck. A page about a model, a method, a
+   dataset or a milestone carries that thing's own figure or an official example image,
+   whatever the audience. The first search list covers every page; a page left without its
+   picture gets a second search. `count` is 8 per query.
+4. Anything the deck names that has a face of its own -- a company, a product, a repository,
    a place -- has a picture somewhere. Search the whole deck's list in one pass before
    drawing anything: what the material names, and the ordinary furniture it never links --
    the logos, the marks, the product shots. Keep each picture's page URL beside it for the
    source note. A page about five products with no mark of any of them is a page that did
    not look.
-4. Decide the deck's visual direction once, before the first picture, and say what it is:
+5. Decide the deck's visual direction once, before the first picture, and say what it is:
    ground, two or three colours, and whether pictures are photographs or drawings. **A
    brand's website is a starting point, not the verdict** -- a dark web hero does not make
    a dark deck, and a printed handout and a projected keynote want opposite grounds.
    Chaining every background off the first one gives a deck one look and no decision.
-5. [layouts.md](references/layouts.md) holds reference shapes with their proportions and
+6. [layouts.md](references/layouts.md) holds reference shapes with their proportions and
    the type ramp. Read it to widen the list you choose from, not to pick from a menu: what
    a page has to say decides its shape. No one shape on more than 60% of the deck.
-6. Repeating units -- a card, a row, a step -- take an icon from the packaged set. Search it
+7. Repeating units -- a card, a row, a step -- take an icon from the packaged set. Search it
    by what the unit is about, not by a filename: 1304 of them ship beside this agent, and
    `references/assets.md` says how.
    An icon is a mark and not an illustration: about 0.7in, one weight and one colour across
    the deck, and no filled disc behind it.
-7. The cover, the contents page, the closing page and every section opener get a generated
+8. The cover, the contents page, the closing page and every section opener get a generated
    background. Not a flat colour block, not a body page's photograph, not nothing.
    **Two or three backgrounds cover a deck.** Section openers share one; the cover and the
    closing page can be the same picture at different crops. A distinct generation per
    section is 8 serial calls where 3 would do, and a deck whose openers all look different
    has no house. Each call takes over a minute and they do not overlap, so settle the whole
    short list before building rather than asking for one more while drawing each page.
-8. Before generating a picture for a page, render that page and look at it. Ask for what the
+9. Before generating a picture for a page, render that page and look at it. Ask for what the
    page lacks.
-9. Give `image_generate` the brand material in `images`. Do not describe it in words.
+10. Give `image_generate` the brand material in `images`. Do not describe it in words.
    **Crop the reference to the mark first.** A reference outranks the prompt: hand it a
    web hero, an og image or a screenshot and it will reproduce that page -- the wordmark,
    the headline, the buttons -- however firmly the prompt says no text. Say what to take
    from the reference (its palette, its texture, its light) and that its layout, its type
    and its furniture are not to be reproduced.
-10. Every prompt names the region the type needs -- which side, what share -- and ends with
+11. Every prompt names the region the type needs -- which side, what share -- and ends with
    `no text, no letters, no numbers`. All words on a page are set by the typography.
-11. After generating, rebuild the page and look at the render. Only the composed page counts.
-12. Read the deck's own render before delivering. Every page, at 90 dpi or more; fix what it
+12. After generating, rebuild the page and look at the render. Only the composed page counts.
+13. Read the deck's own render before delivering. Every page, at 90 dpi or more; fix what it
     showed and render again.
 
 ## Technical decks
