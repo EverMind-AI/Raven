@@ -476,7 +476,16 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
        a report the agent wrote is readable without running its scripts. */
     body = f.kind === 'pdf'
       ? <iframe referrerPolicy="no-referrer" src={fileURL(f.path)} />
-      : <iframe sandbox="" referrerPolicy="no-referrer" src={fileURL(f.path)} />
+      /* The note rides above the frame rather than inside it: the frame's
+         document is what was denied scripts, so it cannot be the thing that
+         explains the denial. Without it a page drawn on a canvas arrives as a
+         rectangle of its own background colour, which reads as a broken file
+         rather than a withheld capability -- and the reader goes looking for
+         the bug in what the agent wrote. */
+      : <>
+        <div className="vnote">{t('gui.ws.html_no_scripts')}</div>
+        <iframe sandbox="" referrerPolicy="no-referrer" src={fileURL(f.path)} />
+      </>
   } else if (asDeck) {
     body = <DeckBody f={f} />
   } else if (f.kind === 'bin') {
