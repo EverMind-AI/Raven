@@ -1117,10 +1117,17 @@ def _config_everos_role(
             # holds nothing for resolves to nothing, and the wizard would have
             # reported success over a service still running keyword-only.
             _UI.keep_provider_credentials(result["provider"], api_key=result["api_key"], base_url=result["base_url"])
-            _UI.set_embedding_endpoint({"model": result["model"], "provider": result["provider"]})
+            cost = _UI.set_embedding_endpoint({"model": result["model"], "provider": result["provider"]})
         else:
             set_everos_section(section, result)
-        _UI.console.print(_UI.t("  [green]✓ {label} configured.[/green]", label=label))
+            cost = ""
+        _UI.console.print(_UI.t("  [green]\u2713 {label} configured.[/green]", label=label))
+        if cost:
+            # After the tick, not instead of it: the write did happen, and what
+            # it costs is about the stores, not about whether this screen
+            # worked. Printed verbatim -- an operator who has indexed anything
+            # has to act on it.
+            _UI.console.print(_UI.t("  [yellow]! {cost}[/yellow]", cost=cost), highlight=False)
         return
 
 

@@ -573,6 +573,26 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
             raise ConfigValidationError(f"{key} must be a list of strings")
         return _write_raw_key(key, value)
 
+    if key in ("embedding", "embedding.model", "embedding.provider"):
+        # Through the endpoint writer rather than the raw one, so this block has
+        # a single way in. The raw path wrote a pin nothing had checked and said
+        # nothing about what the change costs -- and a model swapped on this
+        # page invalidates every vector already stored just as surely as one
+        # swapped in the wizard.
+        from raven.config.update import EmbeddingPinError, embedding_model_change, set_embedding_endpoint
+
+        checker = _SETTINGS_SIMPLE_KEYS[key]
+        fields = checker(value) if key == "embedding" else {key.split(".", 1)[1]: checker(value)}
+        try:
+            previous = set_embedding_endpoint(fields)
+        except EmbeddingPinError as exc:
+            raise ConfigValidationError(str(exc)) from exc
+        warning = embedding_model_change(previous, fields)
+        result: dict[str, Any] = {"applied": True, "previous": previous or None}
+        if warning:
+            result["warning"] = warning
+        return result
+
     checker = _SETTINGS_SIMPLE_KEYS.get(key)
     if checker is not None:
         written = _write_raw_key(key, checker(value), merge=key in _MERGED_KEYS)

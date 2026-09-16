@@ -52,14 +52,19 @@ class OnboardUI:
     the host cannot reach. Lent rather than done by the plugin because where
     credentials live is the host's business."""
     resolve_main_model: Callable[[str], dict[str, Any]]
-    set_embedding_endpoint: Callable[[dict[str, Any]], None]
+    set_embedding_endpoint: Callable[[dict[str, Any]], str]
     """Record an embedding endpoint in the host's own config.
 
     Lent because the endpoint is not the backend's to keep: a knowledge base
     reads the same block, and a screen that wrote it into its own file left the
     host's empty -- so the operator configured it here and every other reader
     still had to fall back. A backend that wants an endpoint of its own writes
-    that where it keeps its own settings; this is the shared one."""
+    that where it keeps its own settings; this is the shared one.
+
+    Returns a sentence to show the operator, empty when there is nothing to
+    say. Changing the model invalidates every vector already stored -- by this
+    screen and by the knowledge base alike -- and the host says what that costs
+    rather than leaving each screen to word it."""
 
 
 class OnboardStep(Protocol):

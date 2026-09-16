@@ -1854,6 +1854,13 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
 # ---------------------------------------------------------------------------
 
 
+def _record_embedding_endpoint(fields: dict[str, Any]) -> str:
+    """Store the pin and answer with what the change costs, if anything."""
+    from raven.config.update import embedding_model_change, set_embedding_endpoint
+
+    return embedding_model_change(set_embedding_endpoint(fields), fields)
+
+
 def _keep_provider_credentials(provider: str, *, api_key: str, base_url: str | None = None) -> None:
     """Store a key the wizard collected under the provider it was given for.
 
@@ -1874,7 +1881,6 @@ def _keep_provider_credentials(provider: str, *, api_key: str, base_url: str | N
 def _onboard_ui() -> "OnboardUI":
     """The wizard shell a plugin's screen borrows for the length of one run."""
     from raven.cli._styles import RAVEN_STYLE
-    from raven.config.update import set_embedding_endpoint
     from raven.config.update_providers import lend_provider_credentials, resolve_main_model
     from raven.plugins import OnboardUI
 
@@ -1892,7 +1898,7 @@ def _onboard_ui() -> "OnboardUI":
         lend_provider_credentials=lend_provider_credentials,
         keep_provider_credentials=_keep_provider_credentials,
         resolve_main_model=resolve_main_model,
-        set_embedding_endpoint=lambda fields: set_embedding_endpoint(fields),
+        set_embedding_endpoint=_record_embedding_endpoint,
     )
 
 

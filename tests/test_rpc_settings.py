@@ -40,6 +40,10 @@ def cfg(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
     path.write_text("{}", encoding="utf-8")
     monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    # And the process-wide pointer: writers that `from ... import
+    # get_config_path` hold the original function object, which the patch above
+    # does not reach. Reset per test by the suite's home fixture.
+    raven_home.set_config_path(path)
     return path
 
 
@@ -520,11 +524,20 @@ async def test_default_permission_mode_is_a_settings_key(cfg):
 
 async def test_extension_pin_writes_roundtrip_through_raven_loader(cfg):
     from raven.config.raven import load_raven_config
+    from raven.config.update_providers import set_provider_fields
+
+    # The embedding pin is checked against the provider before it is stored, so
+    # the provider has to be one this config actually holds a key for.
+    set_provider_fields("openai", {"api_key": "sk-openai"})
 
     await rpc_console.settings_set({"key": "translate.model", "value": "openai/gpt-5-mini"})
     await rpc_console.settings_set({"key": "translate.provider", "value": "openai"})
-    await rpc_console.settings_set({"key": "embedding.model", "value": "openai/text-embedding-3-small"})
-    await rpc_console.settings_set({"key": "embedding.provider", "value": "openai"})
+    await rpc_console.settings_set(
+        {
+            "key": "embedding",
+            "value": {"model": "openai/text-embedding-3-small", "provider": "openai"},
+        }
+    )
 
     loaded = load_raven_config(cfg)
 
@@ -546,6 +559,9 @@ class TestAPinIsWrittenAsOneThing:
     """
 
     async def test_the_pair_lands_together(self, cfg):
+        from raven.config.update_providers import set_provider_fields
+
+        set_provider_fields("openai", {"api_key": "sk-openai"})
         r = await rpc_console.settings_set(
             {
                 "key": "embedding",
@@ -604,6 +620,42 @@ class TestAPinIsWrittenAsOneThing:
 
         block = _read(cfg)["translate"]
         assert block["model"] is None and block["provider"] is None
+
+
+class TestTheEmbeddingPinHasOneWayIn:
+    """Two writers for one block is one writer that checks and one that does
+    not. The settings page's pin row wrote raw -- no provider check, and no
+    word about what a changed model costs -- while the wizard and the memory
+    card went through the endpoint writer and got both."""
+
+    async def test_the_page_cannot_store_a_pin_that_cannot_embed(self, cfg):
+        from raven.config.update_providers import set_provider_fields
+
+        set_provider_fields("openai", {"api_key": "sk-openai"})
+
+        with pytest.raises(ConfigValidationError, match="no usable credential"):
+            await rpc_console.settings_set(
+                {"key": "embedding", "value": {"model": "text-embedding-3-small", "provider": "siliconflow"}}
+            )
+
+        assert "embedding" not in _read(cfg)
+
+    async def test_the_page_says_what_moving_the_model_costs(self, cfg):
+        from raven.config.update_providers import set_provider_fields
+
+        set_provider_fields("openai", {"api_key": "sk-openai"})
+        first = await rpc_console.settings_set(
+            {"key": "embedding", "value": {"model": "text-embedding-3-small", "provider": "openai"}}
+        )
+        assert "warning" not in first, "nothing was replaced, so there is nothing to warn about"
+
+        moved = await rpc_console.settings_set(
+            {"key": "embedding", "value": {"model": "text-embedding-3-large", "provider": "openai"}}
+        )
+
+        assert "text-embedding-3-small" in moved["warning"]
+        assert "text-embedding-3-large" in moved["warning"]
+        assert "rebuild" in moved["warning"]
 
 
 class TestAWriteFollowsTheSpellingTheConfigAlreadyUses:

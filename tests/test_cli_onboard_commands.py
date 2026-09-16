@@ -1667,6 +1667,29 @@ def test_giving_up_says_what_is_lost_in_both_languages(
         assert needle in out, f"{lang}: missing {needle!r}"
 
 
+def test_the_wizard_says_what_moving_the_embedding_model_costs(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Reconfiguring this role is where an operator most easily throws away
+    every vector they have. The screen writes the pin and then says so -- after
+    the tick, because the write did happen."""
+    from raven.config.update import set_embedding_endpoint
+    from raven_everos.onboard import _EVEROS_PROVIDERS
+
+    _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
+    set_embedding_endpoint({"model": "the-old-one", "provider": "openrouter"})
+    openrouter = next(p for p in _EVEROS_PROVIDERS if p["name"] == "openrouter")
+
+    ui = onboard_commands._onboard_ui()
+    cost = ui.set_embedding_endpoint({"model": "the-new-one", "provider": openrouter["name"]})
+
+    assert "the-old-one" in cost and "the-new-one" in cost
+    assert "rebuild" in cost
+    # And nothing to say when the pin is re-written unchanged, or the screen
+    # would cry wolf at everyone who picks "Keep current".
+    assert ui.set_embedding_endpoint({"model": "the-new-one", "provider": openrouter["name"]}) == ""
+
+
 def test_memory_enable_writes_everos_sections(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
