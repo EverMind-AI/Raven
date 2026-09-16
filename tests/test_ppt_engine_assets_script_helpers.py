@@ -328,7 +328,7 @@ def test_no_shape_helper_takes_a_type_size_a_face_or_a_placement_from_its_caller
     Which is how `preset(..., width_pt=1.5)` and `connect(..., width_pt=1.5)` arrived
     without anyone weighing them. The ruling, written here so the next one is argued
     rather than repeated: `width_pt` stays. It is the pen and not the type -- how thick
-    a drawn line is, the same quantity `add_icon(width_pt=1.75)` already took -- and
+    a drawn line is, the same quantity `add_icon(width_pt=...)` already took -- and
     the hard invariant's red line is the type size and the font face, which decide
     whether a page can be read and which the engine's own ladder owns. Nothing about a
     1.5pt rule can make a page illegible, and there is no other way to say "hairline"

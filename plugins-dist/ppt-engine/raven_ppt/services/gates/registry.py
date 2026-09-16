@@ -723,7 +723,7 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
                 words,
                 _layout_structural(deck.outline) + _house(deck.outline, deck.prototypes),
                 cloned=_cloned(deck.outline),
-                borrowed=_borrowed(deck.outline),
+                borrowed=_borrowed_pages(deck.outline),
             ),
         ),
     }
@@ -776,7 +776,7 @@ def _cloned(outline: Any | None) -> list[int]:
     return [int(page.page) for page in pages if getattr(page, "prototype", None) is not None]
 
 
-def _borrowed(outline: Any | None) -> list[int]:
+def _borrowed_pages(outline: Any | None) -> list[int]:
     """The pages laid out as a reference deck's page, whose group gaps are that layout's."""
     pages = getattr(outline, "pages", ()) if outline is not None else ()
     return [int(page.page) for page in pages if getattr(page, "borrowed", "")]

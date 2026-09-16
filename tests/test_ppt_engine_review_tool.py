@@ -1257,7 +1257,8 @@ async def test_an_underfilled_page_dismissed_as_the_templates_composition_is_ref
 
     accepted = _payload(
         await tool.execute(
-            project="ws", dismiss=[{"id": ident, "reason": "已放大照片至面板底部，三栏正文加高铺满下沿"}]
+            project="ws",
+            dismiss=[{"id": ident, "reason": "模板自身的面板比例，但已放大照片至面板底部，三栏正文加高铺满下沿"}],
         )
     )
     assert accepted["dismissed"] == [ident] and accepted["open_findings"]["count"] == 0

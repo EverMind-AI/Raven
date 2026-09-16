@@ -1387,5 +1387,9 @@ def test_house_pages_are_the_templates_role_pages_and_nothing_cloned_from_a_cont
 
     assert registry._house(outline, template) == [1, 2]
     assert registry._cloned(outline) == [1, 2, 3, 4]
-    assert registry._borrowed(outline) == [4]
+    assert registry._borrowed_pages(outline) == [4]
+    # The file list the template gates take keeps its own name: a page-number list
+    # under it sent Path(4) into placeholder_copy and check_deck swallowed the error.
+    files = registry._borrowed(outline)
+    assert files and all(isinstance(path, Path) for path in files)
     assert registry._house(outline, None) == []

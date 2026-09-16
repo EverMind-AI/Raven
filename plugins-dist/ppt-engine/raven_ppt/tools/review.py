@@ -756,9 +756,12 @@ def _house_pages(deck: Project) -> set[int]:
         return set()
     if state.template is None:
         return set()
-    from raven_ppt.services.template.menu import menu, roles
+    try:
+        from raven_ppt.services.template.menu import menu, roles
 
-    furniture = set(roles(menu(state.template.source)).values())
+        furniture = set(roles(menu(state.template.source)).values())
+    except Exception:  # noqa: BLE001 -- an unreadable template leaves no house pages, as the gate registry reads it
+        return set()
     return {
         int(page.page)
         for page in outline.pages
