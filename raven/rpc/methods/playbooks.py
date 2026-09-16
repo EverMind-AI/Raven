@@ -204,8 +204,8 @@ async def playbooks_get(params: dict) -> dict:
 # needs to draw the tab.
 
 
-def _known_name(raw: Any) -> str:
-    """One playbook's name, checked for shape before it reaches the store.
+def _kebab_name(raw: Any) -> str:
+    """One playbook's name, checked for shape and nothing else.
 
     The shape check is not cosmetic and is not the store's job. A name is joined
     to the library root to resolve a directory, so ``../sibling`` resolves
@@ -215,9 +215,10 @@ def _known_name(raw: Any) -> str:
     ``raven playbook create`` already enforces; this is the same rule on the way
     in rather than only on the way out.
 
-    Checked BEFORE the first lookup, because the lookup is itself the escape:
-    ``origin_of`` answers ``user`` for a traversal, so a guard placed after it
-    has already been told the wrong answer.
+    Separate from the existence check because the two callers want opposite
+    answers to it: every handler that acts on a playbook needs the name to
+    resolve, and creation needs it not to. Sharing the shape rule rather than
+    the whole guard is what keeps those two from drifting apart.
 
     Answers the clean name so a caller cannot go on using the raw one.
     """
@@ -231,6 +232,19 @@ def _known_name(raw: Any) -> str:
         raise ConfigValidationError("name is required")
     if not re.fullmatch(NAME_RE, name):
         raise ConfigValidationError(f"playbook names are kebab-case ({NAME_RE}); got {name!r}")
+    return name
+
+
+def _known_name(raw: Any) -> str:
+    """One playbook's name, checked for shape and then for existence.
+
+    The shape goes first, because the lookup is itself the escape: ``origin_of``
+    answers ``user`` for a traversal, so a guard placed after it has already
+    been told the wrong answer.
+    """
+    from raven.rpc.errors import ConfigValidationError
+
+    name = _kebab_name(raw)
     if _store().origin_of(name) is None:
         raise ConfigValidationError(f"no playbook named {name}")
     return name
@@ -376,9 +390,10 @@ async def playbooks_oauth_clear(params: dict) -> dict:
 #
 # Everything below is reachable from `raven playbook`, and the rule these
 # handlers keep is that they reach it through the same door rather than around
-# it: enabling writes the deny list the CLI writes, and running goes through the
-# runtime the model's own tool goes through. A second path to the same library
-# would be a second place for its rules to live.
+# it: enabling writes the deny list the CLI writes, running goes through the
+# runtime the model's own tool goes through, and creation binds the composer
+# both creation entries bind. A second path to the same library would be a
+# second place for its rules to live.
 
 
 async def playbooks_set_enabled(params: dict) -> dict:
@@ -625,6 +640,124 @@ async def playbooks_run(
     return {"name": name, "kind": plan.kind, "reply": plan.reply}
 
 
+def _generation_budget_s() -> float:
+    """How long one generation may take, read from the entry that declares it.
+
+    Taken from the conversational tool's own ``timeout_seconds`` rather than
+    written again here. Creation is a draft plus repair rounds and the two
+    entries should not disagree about how long that may take -- and a number
+    copied is a number that drifts, where a number read moves for both the
+    moment either is reconsidered.
+    """
+    from raven.agent.tools.create_playbook import CreatePlaybookTool
+
+    return float(CreatePlaybookTool.timeout_seconds)
+
+
+async def playbooks_create(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """Generate a playbook from a description of the work and store it.
+
+    Takes a description, never a spec. Generation, validation and repair stay
+    inside ``PlaybookGenerator``, which is what keeps a caller from writing an
+    arbitrary graph into the library through this door -- the same rule the
+    conversational entry states for itself, and the reason neither offers a
+    field for the nodes.
+
+    The two pre-flight checks refuse: a name that is not kebab-case, and a name
+    the library already holds. Both are single facts, and both are worth
+    catching before spending a generation rather than after.
+
+    A generation that fails does not refuse. It produces a *list* of reasons the
+    composer could not resolve, and an error code carries one string; a caller
+    that has just spent a minute of model time on this is owed the list rather
+    than a flattened sentence. ``created`` tells the two halves apart, and
+    ``errors`` is non-empty exactly when it is false.
+
+    ``notes`` are the generator's own open questions -- assumptions it made and
+    gaps it could not close. They are written into the file's prose for a human
+    to review and are returned here so a client need not read the file back to
+    show them.
+    """
+    import asyncio
+
+    from raven.playbook import PlaybookExistsError, PlaybookGenerationError
+    from raven.rpc.errors import ConfigValidationError
+
+    name = _kebab_name(params.get("name"))
+    workflow = str(params.get("workflow") or "").strip()
+    if not workflow:
+        raise ConfigValidationError("workflow is required: the generator sees only this text")
+    raw_skills = params.get("skills") or []
+    skills = [str(s) for s in raw_skills if str(s).strip()] if isinstance(raw_skills, list) else []
+
+    loop = None
+    if agent_loop_factory is not None:
+        try:
+            loop = agent_loop_factory()
+        except Exception:  # noqa: BLE001 - no loop is a refusal, not a crash
+            loop = None
+    runtime = getattr(loop, "_playbooks", None)
+    if runtime is None:
+        raise ConfigValidationError("playbooks are not running on this host, so nothing can be generated")
+
+    store = runtime.store
+    if store.origin_of(name) is not None:
+        raise ConfigValidationError(
+            f"a {store.origin_of(name)} playbook named {name!r} already exists; pick another name"
+        )
+
+    budget = _generation_budget_s()
+    try:
+        generated = await asyncio.wait_for(runtime.generator.generate(workflow, skills), budget)
+    except PlaybookGenerationError as exc:
+        return {
+            "name": name,
+            "created": False,
+            "path": "",
+            "notes": [],
+            "errors": list(getattr(exc, "errors", None) or [str(exc)]),
+            "adopted": False,
+        }
+    except TimeoutError:
+        return {
+            "name": name,
+            "created": False,
+            "path": "",
+            "notes": [],
+            "errors": [f"generation did not finish within {budget:.0f}s"],
+            "adopted": False,
+        }
+
+    spec = generated.spec.model_copy(update={"name": name})
+    try:
+        path = store.save(spec, notes=generated.notes)
+    except PlaybookExistsError as exc:
+        # The name was free at the pre-flight and taken by the time the
+        # generation finished. The file on disk is the other request's and is
+        # kept, so this is a refusal rather than a result claiming a write.
+        raise ConfigValidationError(
+            f"playbook {name!r} was created while this one was generating; the existing file was kept"
+        ) from exc
+
+    # Handed to the live library in the same call, as the conversational entry
+    # does. Reported rather than assumed: a playbook written but not loadable is
+    # a different state from one that is ready, and "created" alone would send a
+    # caller to run a name that cannot resolve.
+    adopted = bool(runtime.adopt(name))
+    return {
+        "name": name,
+        "created": True,
+        "path": str(path),
+        "notes": list(generated.notes or []),
+        "errors": [],
+        "adopted": adopted,
+    }
+
+
 def register_playbooks_methods(
     dispatcher: Dispatcher,
     *,
@@ -650,6 +783,11 @@ def register_playbooks_methods(
 
     dispatcher.register("playbooks.run", _run)
 
+    async def _create(p: dict) -> dict:
+        return await playbooks_create(p, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("playbooks.create", _create)
+
 
 __all__ = [
     "playbooks_credentials_clear",
@@ -659,6 +797,7 @@ __all__ = [
     "playbooks_list",
     "playbooks_oauth_authorize",
     "playbooks_oauth_clear",
+    "playbooks_create",
     "playbooks_run",
     "register_playbooks_methods",
 ]

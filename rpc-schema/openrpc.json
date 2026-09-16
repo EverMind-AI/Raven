@@ -5603,6 +5603,91 @@
       ]
     },
     {
+      "name": "playbooks.create",
+      "summary": "Generate a playbook from a description of the work and store it in the user layer. Takes a description, never a spec: generation, validation and repair stay inside the composer, which is what keeps a caller from writing an arbitrary graph into the library. A name that is not kebab-case, or one the library already holds, is refused before a generation is spent. A generation that fails answers `created: false` with the composer's reasons in `errors`, because those are a list and an error code carries one string.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "Short kebab-case name; becomes the library directory name. Must not already exist in either layer."
+          }
+        },
+        {
+          "name": "workflow",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "The whole procedure in plain language: steps in order, what each produces and consumes, per-run parameters, trigger phrases, and any MCP server a step needs. The generator sees only this text."
+          }
+        },
+        {
+          "name": "skills",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Skill names to pin to specific steps, when the caller named some."
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksCreateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "created",
+            "path",
+            "notes",
+            "errors",
+            "adopted"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "created": {
+              "type": "boolean",
+              "description": "Whether a playbook now exists. False only when the generation failed, in which case `errors` says why."
+            },
+            "path": {
+              "type": "string",
+              "description": "Where the file landed; empty when nothing was created."
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The composer's own open questions -- assumptions it made and gaps it could not close. Written into the file's prose for review and returned here so a client need not read the file back."
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Why the composer could not produce a valid playbook. Non-empty exactly when `created` is false."
+            },
+            "adopted": {
+              "type": "boolean",
+              "description": "Whether the live library loaded the new file, so it is usable in this process without a restart."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
       "name": "approval.respond",
       "summary": "Answer a pending approval request.",
       "params": [
