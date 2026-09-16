@@ -21,7 +21,6 @@ from typing import Protocol
 from a2a.types import (
     AgentCapabilities,
     AgentCard,
-    AgentExtension,
     AgentInterface,
     AgentSkill,
     HTTPAuthSecurityScheme,
@@ -29,7 +28,6 @@ from a2a.types import (
     SecurityScheme,
     StringList,
 )
-from google.protobuf.struct_pb2 import Struct
 
 from raven import __version__
 from raven.config.agent_names import is_builtin_agent_name
@@ -187,14 +185,14 @@ def build_extended_agent_card(config: A2aConfig, *, base_url: str, agents: Seque
             output_modes=["text/plain"],
         )
     )
-    params = Struct()
-    params.update({"agents": [{"name": agent.name, "description": agent.description} for agent in roster]})
-    card.capabilities.extensions.append(
-        AgentExtension(
-            uri=SUBAGENT_EXTENSION_URI,
-            description="The sub-agents this host can dispatch work to.",
-            required=False,
-            params=params,
-        )
+    # Built in place rather than from a constructed `Struct`: `params` is a
+    # `google.protobuf.Struct`, whose class is generated at import time and has
+    # no stub, so naming the type is an unresolved import to the type checker
+    # while the field itself is declared by `AgentExtension` and resolves fine.
+    extension = card.capabilities.extensions.add(
+        uri=SUBAGENT_EXTENSION_URI,
+        description="The sub-agents this host can dispatch work to.",
+        required=False,
     )
+    extension.params.update({"agents": [{"name": agent.name, "description": agent.description} for agent in roster]})
     return card
