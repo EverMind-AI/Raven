@@ -357,9 +357,10 @@ def test_the_wire_form_of_a_model_id_is_built_in_one_module() -> None:
         # Strips a known prefix off a model id to recover the vendor's own id for
         # a connectivity probe. Also decomposition.
         "raven/cli/onboard_commands.py",
-        # Carries the wizard's EverOS cluster split out of onboard_commands --
-        # the same prefix-stripping read, same argument, new file name.
-        "raven/cli/onboard_everos.py",
+        # The wizard's provider-resolution helpers, moved here so a plugin's
+        # onboard screen reuses them through OnboardUI -- the same
+        # prefix-stripping read, same argument, new file name.
+        "raven/config/update_providers.py",
     }
     needles = (".model_prefix", ".skip_prefixes", '"model_prefix"', '"skip_prefixes"')
     offenders = {

@@ -4,13 +4,35 @@ from __future__ import annotations
 
 import json
 import tomllib
+from types import SimpleNamespace
 
 import pytest
 
+from raven import home as raven_home
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import console as rpc_console
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_embedding_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Take the operator's documented override out of the ambient shell.
+
+    ``EVEROS_EMBEDDING__*`` is a real input to ``everos_has_own_embedding``,
+    so a developer who exports it turns every case here that assumes no
+    override into a different case -- silently, and only on their machine. A
+    case that reads one answer on one machine and another elsewhere is not
+    pinning anything. Cases that are about the override set it themselves,
+    after this has run.
+    """
+    for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS"):
+        monkeypatch.delenv(f"EVEROS_EMBEDDING__{name}", raising=False)
+    import raven_everos.config as _ue
+
+    # Provenance is process-global; a case that bound the host endpoint would
+    # otherwise tell the next one that raven had already written those.
+    _ue._BOUND_HERE.clear()
 
 
 @pytest.fixture()
@@ -18,6 +40,10 @@ def cfg(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
     path.write_text("{}", encoding="utf-8")
     monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    # And the process-wide pointer: writers that `from ... import
+    # get_config_path` hold the original function object, which the patch above
+    # does not reach. Reset per test by the suite's home fixture.
+    raven_home.set_config_path(path)
     return path
 
 
@@ -85,10 +111,10 @@ async def test_memory_backend_not_writable(cfg):
 @pytest.fixture()
 def everos_toml(tmp_path, monkeypatch):
     path = tmp_path / "everos.toml"
-    monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: path.parent)
+    monkeypatch.setattr("raven_everos.config.everos_root", lambda: path.parent)
     # Upstream gates the write primitives on root ownership; a tmp root is not
     # one raven created, so declare it owned for the test.
-    monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: True)
+    monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
     return path
 
 
@@ -107,12 +133,250 @@ async def test_everos_get_masks_key(everos_toml):
 
 
 async def test_everos_set_merges_section(everos_toml):
-    await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "m1", "api_key": "k1"}})
-    await rpc_console.settings_everos_set({"section": "embedding", "fields": {"base_url": "https://x/v1"}})
+    await rpc_console.settings_everos_set({"section": "rerank", "fields": {"model": "m1", "api_key": "k1"}})
+    await rpc_console.settings_everos_set({"section": "rerank", "fields": {"base_url": "https://x/v1"}})
     import tomllib
 
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"] == {"model": "m1", "api_key": "k1", "base_url": "https://x/v1"}
+    assert data["rerank"] == {"model": "m1", "api_key": "k1", "base_url": "https://x/v1"}
+
+
+class TestEmbeddingCardFollowsTheEndpointHome:
+    """The embedding endpoint is raven's, and everos.toml keeps an override.
+
+    The card has to read and write whichever of the two is in force. Reading
+    only the file left it blank for an install the wizard had just configured,
+    and filling it in from there wrote a second endpoint that silently
+    outranked the one a knowledge base goes on reading -- the divergence the
+    move was meant to end, recreated through the settings page.
+    """
+
+    async def test_the_card_shows_the_endpoint_raven_holds(self, everos_toml, tmp_path, monkeypatch) -> None:
+        import json
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "embedding": {"model": "Qwen/Qwen3-Embedding-4B", "provider": "deepinfra"},
+                    "providers": {"deepinfra": {"apiKey": "sk-1", "apiBase": "https://e.test/v1"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        # The process-wide pointer rather than two patched names: the pin is
+        # read back through the loader, which binds `get_config_path` itself.
+        raven_home.set_config_path(cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+
+        card = (await rpc_console.settings_everos({}))["sections"]["embedding"]
+
+        # The pair as stored -- the model spelled the way it was chosen, not
+        # the way the vendor is addressed -- beside the address it resolves to.
+        assert card["model"] == "Qwen/Qwen3-Embedding-4B"
+        assert card["provider"] == "deepinfra"
+        assert card["base_url"] == "https://e.test/v1"
+        assert card["api_key_set"] is True
+
+    async def test_saving_the_card_writes_where_the_card_reads(self, everos_toml, tmp_path, monkeypatch) -> None:
+        import json
+        import tomllib
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps({"providers": {"siliconflow": {"apiKey": "sk-2", "apiBase": "https://e.test/v1"}}}),
+            encoding="utf-8",
+        )
+        # The process-wide pointer rather than two patched names: the pin is
+        # read back through the loader, which binds `get_config_path` itself.
+        raven_home.set_config_path(cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+
+        await rpc_console.settings_everos_set(
+            {"section": "embedding", "fields": {"model": "bge-m3", "provider": "siliconflow"}}
+        )
+
+        block = json.loads(cfg.read_text(encoding="utf-8"))["embedding"]
+        assert block == {"model": "bge-m3", "provider": "siliconflow"}
+        # And not into the file, where it would outrank what it just wrote.
+        assert "embedding" not in tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+
+    async def test_an_address_is_refused_rather_than_dropped(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """Raven's block holds no credential -- it names the provider that has
+        one. Accepting an address or a key and discarding it reads to the
+        caller as a value that was stored."""
+        import json
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps({"providers": {"siliconflow": {"apiKey": "sk", "apiBase": "https://sf/v1"}}}), encoding="utf-8"
+        )
+        # The process-wide pointer rather than two patched names: the pin is
+        # read back through the loader, which binds `get_config_path` itself.
+        raven_home.set_config_path(cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+
+        with pytest.raises(ConfigValidationError, match="base_url"):
+            await rpc_console.settings_everos_set(
+                {
+                    "section": "embedding",
+                    "fields": {"model": "m", "provider": "siliconflow", "base_url": "https://elsewhere/v1"},
+                }
+            )
+
+    async def test_half_a_pin_is_refused_from_either_end(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """Both halves or neither. A model with nobody to serve it reads as
+        configured on every screen while every reader resolves it to nothing;
+        a provider with nothing to run is the same write from the other end,
+        reported as saved and storing nothing anyone can use."""
+        import json
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps({"providers": {"siliconflow": {"apiKey": "sk", "apiBase": "https://sf/v1"}}}), encoding="utf-8"
+        )
+        # The process-wide pointer rather than two patched names: the pin is
+        # read back through the loader, which binds `get_config_path` itself.
+        raven_home.set_config_path(cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+
+        with pytest.raises(ConfigValidationError, match="needs the provider"):
+            await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "orphan"}})
+
+        # The card's lender picker with the model box left blank sends exactly
+        # this, and used to come back applied.
+        with pytest.raises(ConfigValidationError, match="needs the model"):
+            await rpc_console.settings_everos_set({"section": "embedding", "fields": {}, "borrow_from": "siliconflow"})
+
+        assert "embedding" not in json.loads(cfg.read_text(encoding="utf-8"))
+
+    async def test_the_card_survives_ravens_own_startup_binding(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """The page as a running install reaches it: after `backend.start()`.
+
+        That call puts the host endpoint into this process, and a reader
+        without provenance then saw three complete variables and told the card
+        an operator owned them -- so the card went blank and the save was
+        refused by naming variables nobody had set.
+        """
+        import json
+
+        import raven_everos.config as ue
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "embedding": {"model": "ravens/model", "provider": "siliconflow"},
+                    "providers": {"siliconflow": {"apiKey": "sk-raven", "apiBase": "https://ravens/v1"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        # The process-wide pointer rather than two patched names: the pin is
+        # read back through the loader, which binds `get_config_path` itself.
+        raven_home.set_config_path(cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+        ue.configure_embedding_env(
+            SimpleNamespace(model="ravens/model", base_url="https://ravens/v1", api_key="sk-raven")
+        )
+
+        card = (await rpc_console.settings_everos({}))["sections"]["embedding"]
+        assert card["model"] == "ravens/model", "the card must still show what raven holds"
+
+        await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "edited"}})
+        assert json.loads(cfg.read_text(encoding="utf-8"))["embedding"]["model"] == "edited"
+
+    async def test_borrowing_a_provider_records_its_name_rather_than_its_key(
+        self, everos_toml, tmp_path, monkeypatch
+    ) -> None:
+        """The card's lender picker is the path that still works here. For the
+        EverOS file a borrow copies the address and the key across; for raven's
+        block the name is the whole point, and copying would produce two fields
+        the block has no place for."""
+        import json
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps({"providers": {"siliconflow": {"apiKey": "sk-sf", "apiBase": "https://sf/v1"}}}),
+            encoding="utf-8",
+        )
+        raven_home.set_config_path(cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+
+        await rpc_console.settings_everos_set(
+            {"section": "embedding", "fields": {"model": "bge-m3"}, "borrow_from": "siliconflow"}
+        )
+
+        assert json.loads(cfg.read_text(encoding="utf-8"))["embedding"] == {
+            "model": "bge-m3",
+            "provider": "siliconflow",
+        }
+
+    async def test_moving_the_model_says_what_it_costs(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """Everything already embedded answers to the old model, and a query
+        embedded with the new one lands somewhere unrelated in the same space.
+        Said once, where the change is made."""
+        import json
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "embedding": {"model": "bge-m3", "provider": "siliconflow"},
+                    "providers": {"siliconflow": {"apiKey": "sk-sf", "apiBase": "https://sf/v1"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        raven_home.set_config_path(cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+
+        unchanged = await rpc_console.settings_everos_set(
+            {"section": "embedding", "fields": {"model": "bge-m3", "provider": "siliconflow"}}
+        )
+        assert "warning" not in unchanged
+
+        moved = await rpc_console.settings_everos_set(
+            {"section": "embedding", "fields": {"model": "bge-large", "provider": "siliconflow"}}
+        )
+        assert "bge-m3" in moved["warning"] and "bge-large" in moved["warning"]
+
+    async def test_a_save_the_environment_would_outrank_is_refused(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """The exported variables beat both files, so a save accepted here
+        would be written and then ignored -- the silent no-op this card was
+        just fixed for, arriving by the one route left."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text("{}", encoding="utf-8")
+        # The process-wide pointer rather than two patched names: the pin is
+        # read back through the loader, which binds `get_config_path` itself.
+        raven_home.set_config_path(cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+        for name, value in (("MODEL", "op/model"), ("BASE_URL", "https://op/v1"), ("API_KEY", "sk-op")):
+            monkeypatch.setenv(f"EVEROS_EMBEDDING__{name}", value)
+
+        with pytest.raises(ConfigValidationError, match="EVEROS_EMBEDDING__MODEL"):
+            await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "whatever"}})
+
+    async def test_an_operators_own_section_keeps_both_halves(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """Someone who wrote [embedding] into everos.toml chose that endpoint
+        for memory; the card stays on it for reading and for writing."""
+        import json
+        import tomllib
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text("{}", encoding="utf-8")
+        # The process-wide pointer rather than two patched names: the pin is
+        # read back through the loader, which binds `get_config_path` itself.
+        raven_home.set_config_path(cfg)
+        everos_toml.write_text('[embedding]\nmodel = "bge-own"\napi_key = "k"\n', encoding="utf-8")
+
+        card = (await rpc_console.settings_everos({}))["sections"]["embedding"]
+        assert card["model"] == "bge-own"
+
+        await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "bge-own-2"}})
+
+        assert tomllib.loads(everos_toml.read_text(encoding="utf-8"))["embedding"]["model"] == "bge-own-2"
+        assert "embedding" not in json.loads(cfg.read_text(encoding="utf-8"))
 
 
 async def test_everos_set_rejects_bad_input(everos_toml):
@@ -144,10 +408,10 @@ async def test_everos_set_borrows_a_connected_provider(everos_toml, lender):
     in the file is the real key, copied -- not the provider's name."""
     lender({"apiKey": "sk-lent", "apiBase": "https://lender.example/v1"})
     await rpc_console.settings_everos_set(
-        {"section": "embedding", "fields": {"model": "qwen/qwen3-embedding-8b"}, "borrow_from": "openrouter"}
+        {"section": "rerank", "fields": {"model": "qwen/qwen3-embedding-8b"}, "borrow_from": "openrouter"}
     )
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"] == {
+    assert data["rerank"] == {
         "model": "qwen/qwen3-embedding-8b",
         "api_key": "sk-lent",
         "base_url": "https://lender.example/v1",
@@ -165,21 +429,19 @@ async def test_borrowing_reads_an_endpoints_section(everos_toml, lender):
             ]
         }
     )
-    await rpc_console.settings_everos_set(
-        {"section": "embedding", "fields": {"model": "m"}, "borrow_from": "openrouter"}
-    )
+    await rpc_console.settings_everos_set({"section": "rerank", "fields": {"model": "m"}, "borrow_from": "openrouter"})
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"]["api_key"] == "sk-from-endpoint"
-    assert data["embedding"]["base_url"] == "https://ep.example/v1"
+    assert data["rerank"]["api_key"] == "sk-from-endpoint"
+    assert data["rerank"]["base_url"] == "https://ep.example/v1"
 
 
 async def test_borrowing_reads_an_api_key_list_section(everos_toml, lender):
     """The other shape the precedence exists for: Gemini's rotation list never
     populates the flat field either."""
     lender({"apiKeyList": ["k-gem-1", "k-gem-2"], "apiBase": "https://gem.example/v1"}, name="gemini")
-    await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "m"}, "borrow_from": "gemini"})
+    await rpc_console.settings_everos_set({"section": "rerank", "fields": {"model": "m"}, "borrow_from": "gemini"})
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"]["api_key"] == "k-gem-1"
+    assert data["rerank"]["api_key"] == "k-gem-1"
 
 
 async def test_a_borrowed_key_beats_the_redaction_the_page_echoes(everos_toml, lender):
@@ -188,14 +450,14 @@ async def test_a_borrowed_key_beats_the_redaction_the_page_echoes(everos_toml, l
     lender({"apiKey": "sk-lent", "apiBase": "https://lender.example/v1"})
     await rpc_console.settings_everos_set(
         {
-            "section": "embedding",
+            "section": "rerank",
             "fields": {"model": "m", "api_key": "****set****", "base_url": "https://stale/v1"},
             "borrow_from": "openrouter",
         }
     )
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"]["api_key"] == "sk-lent"
-    assert data["embedding"]["base_url"] == "https://lender.example/v1"
+    assert data["rerank"]["api_key"] == "sk-lent"
+    assert data["rerank"]["base_url"] == "https://lender.example/v1"
 
 
 async def test_borrowing_keeps_the_section_url_when_the_lender_has_none(everos_toml, lender):
@@ -203,15 +465,15 @@ async def test_borrowing_keeps_the_section_url_when_the_lender_has_none(everos_t
     reader typed: only the key is certain to be worth copying."""
     lender({"apiKey": "sk-lent"}, name="custom")
     await rpc_console.settings_everos_set(
-        {"section": "embedding", "fields": {"base_url": "https://mine/v1"}, "borrow_from": "custom"}
+        {"section": "rerank", "fields": {"base_url": "https://mine/v1"}, "borrow_from": "custom"}
     )
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"]["api_key"] == "sk-lent"
+    assert data["rerank"]["api_key"] == "sk-lent"
     # `custom` carries a registry default address, so the borrow does have one to
     # give and it wins -- which is the same rule as every other lender. What the
     # section keeps on its own is covered by the endpoints case above, where the
     # entry supplies the address.
-    assert data["embedding"]["base_url"]
+    assert data["rerank"]["base_url"]
 
 
 async def test_borrowing_finds_a_provider_stored_under_another_spelling(everos_toml, lender):
@@ -220,11 +482,9 @@ async def test_borrowing_finds_a_provider_stored_under_another_spelling(everos_t
     used, which is exactly the case the invariant in
     `test_provider_resolution_invariants` exists to keep working."""
     lender({"apiKey": "sk-hyphen", "apiBase": "https://hyph.example/v1"}, name="some-vendor")
-    await rpc_console.settings_everos_set(
-        {"section": "embedding", "fields": {"model": "m"}, "borrow_from": "some-vendor"}
-    )
+    await rpc_console.settings_everos_set({"section": "rerank", "fields": {"model": "m"}, "borrow_from": "some-vendor"})
     data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
-    assert data["embedding"]["api_key"] == "sk-hyphen"
+    assert data["rerank"]["api_key"] == "sk-hyphen"
 
 
 async def test_borrowing_refuses_what_it_cannot_lend(everos_toml, lender):
@@ -232,14 +492,10 @@ async def test_borrowing_refuses_what_it_cannot_lend(everos_toml, lender):
     satisfies the first and has nothing to answer the second with."""
     lender({"apiKey": "sk-lent"})
     with pytest.raises(ConfigValidationError, match="no such provider"):
-        await rpc_console.settings_everos_set(
-            {"section": "embedding", "fields": {"model": "m"}, "borrow_from": "nobody"}
-        )
+        await rpc_console.settings_everos_set({"section": "rerank", "fields": {"model": "m"}, "borrow_from": "nobody"})
     lender({"apiBase": "http://127.0.0.1:11434/v1"}, name="ollama")
     with pytest.raises(ConfigValidationError, match="no api key to lend"):
-        await rpc_console.settings_everos_set(
-            {"section": "embedding", "fields": {"model": "m"}, "borrow_from": "ollama"}
-        )
+        await rpc_console.settings_everos_set({"section": "rerank", "fields": {"model": "m"}, "borrow_from": "ollama"})
 
 
 async def test_everos_clear_optional_only(everos_toml):
@@ -281,18 +537,27 @@ async def test_default_permission_mode_is_a_settings_key(cfg):
 
 async def test_extension_pin_writes_roundtrip_through_raven_loader(cfg):
     from raven.config.raven import load_raven_config
+    from raven.config.update_providers import set_provider_fields
+
+    # The embedding pin is checked against the provider before it is stored, so
+    # the provider has to be one this config actually holds a key for.
+    set_provider_fields("openai", {"api_key": "sk-openai"})
 
     await rpc_console.settings_set({"key": "translate.model", "value": "openai/gpt-5-mini"})
     await rpc_console.settings_set({"key": "translate.provider", "value": "openai"})
-    await rpc_console.settings_set({"key": "knowledge.embeddingModel", "value": "openai/text-embedding-3-small"})
-    await rpc_console.settings_set({"key": "knowledge.embeddingProvider", "value": "openai"})
+    await rpc_console.settings_set(
+        {
+            "key": "embedding",
+            "value": {"model": "openai/text-embedding-3-small", "provider": "openai"},
+        }
+    )
 
     loaded = load_raven_config(cfg)
 
     assert loaded.translate.model == "openai/gpt-5-mini"
     assert loaded.translate.provider == "openai"
-    assert loaded.knowledge.embedding_model == "openai/text-embedding-3-small"
-    assert loaded.knowledge.embedding_provider == "openai"
+    assert loaded.embedding.model == "openai/text-embedding-3-small"
+    assert loaded.embedding.provider == "openai"
 
 
 class TestAPinIsWrittenAsOneThing:
@@ -307,17 +572,20 @@ class TestAPinIsWrittenAsOneThing:
     """
 
     async def test_the_pair_lands_together(self, cfg):
+        from raven.config.update_providers import set_provider_fields
+
+        set_provider_fields("openai", {"api_key": "sk-openai"})
         r = await rpc_console.settings_set(
             {
-                "key": "knowledge",
-                "value": {"embeddingModel": "openai/text-embedding-3-large", "embeddingProvider": "openai"},
+                "key": "embedding",
+                "value": {"model": "openai/text-embedding-3-large", "provider": "openai"},
             }
         )
 
         assert r["applied"] is True
-        block = _read(cfg)["knowledge"]
-        assert block["embeddingModel"] == "openai/text-embedding-3-large"
-        assert block["embeddingProvider"] == "openai"
+        block = _read(cfg)["embedding"]
+        assert block["model"] == "openai/text-embedding-3-large"
+        assert block["provider"] == "openai"
 
     async def test_a_refused_half_writes_neither(self, cfg):
         """The whole point. Validation runs over the pair before the file is
@@ -367,6 +635,47 @@ class TestAPinIsWrittenAsOneThing:
         assert block["model"] is None and block["provider"] is None
 
 
+class TestTheEmbeddingPinHasOneWayIn:
+    """Two writers for one block is one writer that checks and one that does
+    not. The settings page's pin row wrote raw -- no provider check, and no
+    word about what a changed model costs -- while the wizard and the memory
+    card went through the endpoint writer and got both."""
+
+    async def test_the_page_cannot_store_a_pin_that_cannot_embed(self, cfg):
+        from raven.config.update_providers import set_provider_fields
+
+        set_provider_fields("openai", {"api_key": "sk-openai"})
+
+        with pytest.raises(ConfigValidationError, match="no usable credential"):
+            await rpc_console.settings_set(
+                {"key": "embedding", "value": {"model": "text-embedding-3-small", "provider": "siliconflow"}}
+            )
+
+        assert "embedding" not in _read(cfg)
+
+    async def test_the_page_says_what_moving_the_model_costs(self, cfg):
+        from raven.config.update_providers import set_provider_fields
+
+        set_provider_fields("openai", {"api_key": "sk-openai"})
+        first = await rpc_console.settings_set(
+            {"key": "embedding", "value": {"model": "text-embedding-3-small", "provider": "openai"}}
+        )
+        assert "warning" not in first, "nothing was replaced, so there is nothing to warn about"
+
+        moved = await rpc_console.settings_set(
+            {"key": "embedding", "value": {"model": "text-embedding-3-large", "provider": "openai"}}
+        )
+
+        assert "text-embedding-3-small" in moved["warning"]
+        assert "text-embedding-3-large" in moved["warning"]
+        assert "rebuild" in moved["warning"]
+        # Says what has to happen, not which product does it. Whose memory
+        # backend is installed is not the host's business to assume, and a host
+        # message printing one backend's command is the coupling the seam
+        # exists to remove.
+        assert "everos" not in moved["warning"].casefold()
+
+
 class TestAWriteFollowsTheSpellingTheConfigAlreadyUses:
     """Every block and field is accepted under two spellings.
 
@@ -404,18 +713,13 @@ class TestAWriteFollowsTheSpellingTheConfigAlreadyUses:
         assert self._loads(cfg)
 
     async def test_snake_case_leaves_are_updated_not_duplicated(self, cfg):
-        cfg.write_text(
-            json.dumps({"knowledge": {"embedding_model": "openai/old", "embedding_provider": "openai"}}),
-            encoding="utf-8",
-        )
+        cfg.write_text(json.dumps({"memory": {"memory_top_k": 3}}), encoding="utf-8")
 
-        await rpc_console.settings_set(
-            {"key": "knowledge", "value": {"embeddingModel": "openai/new", "embeddingProvider": "openai"}}
-        )
+        await rpc_console.settings_set({"key": "memory.memoryTopK", "value": 7})
 
-        block = _read(cfg)["knowledge"]
-        assert set(block) == {"embedding_model", "embedding_provider"}
-        assert block["embedding_model"] == "openai/new"
+        block = _read(cfg)["memory"]
+        assert set(block) == {"memory_top_k"}, "a second spelling of the leaf is what breaks the load"
+        assert block["memory_top_k"] == 7
         assert self._loads(cfg)
 
     async def test_a_single_leaf_write_follows_the_block_too(self, cfg):
@@ -442,11 +746,9 @@ class TestAWriteFollowsTheSpellingTheConfigAlreadyUses:
 
     async def test_a_block_that_is_not_there_yet_is_written_camel(self, cfg):
         """No existing spelling to follow, so the alias the models generate."""
-        await rpc_console.settings_set(
-            {"key": "knowledge", "value": {"embeddingModel": "openai/new", "embeddingProvider": "openai"}}
-        )
+        await rpc_console.settings_set({"key": "memory.memoryTopK", "value": 7})
 
-        assert set(_read(cfg)["knowledge"]) == {"embeddingModel", "embeddingProvider"}
+        assert set(_read(cfg)["memory"]) == {"memoryTopK"}
         assert self._loads(cfg)
 
 
@@ -478,3 +780,40 @@ class TestClearingAPinThroughItsLeafKeys:
         await rpc_console.settings_set({"key": "translate.provider", "value": "   "})
 
         assert _read(cfg)["translate"]["provider"] is None
+
+
+async def test_everos_rpcs_name_the_missing_distribution(everos_toml):
+    """Without the plugin, both handlers say what to install.
+
+    The module they import ships with ``everos-memory``, so on an install
+    without it the import used to reach the client as a generic internal error
+    carrying a traceback -- a page cannot act on that, and its own catch turns
+    it into a row that reads "not set", which is what a configured-but-empty
+    section looks like too.
+    """
+
+
+async def test_reading_without_the_plugin_says_there_is_nothing_to_configure(everos_toml):
+    """The page used to render four "not set" rows here -- identical to an
+    install where the plugin is present and merely unconfigured -- so a person
+    could fill in a model and a key and have nothing happen, with no way to
+    learn why."""
+    from tests._everos_presence import everos_plugin_absent
+
+    with everos_plugin_absent():
+        out = await rpc_console.settings_everos({})
+
+    assert out["available"] is False
+    assert out["sections"] == {}
+    assert "everos-memory" in out["note"]
+
+
+async def test_writing_without_the_plugin_is_a_typed_error(everos_toml):
+    """A save has somewhere to fail, unlike a read: the page surfaces a write
+    error. What it must not be is a traceback wrapped as an internal error."""
+    from tests._everos_presence import everos_plugin_absent
+
+    with everos_plugin_absent(), pytest.raises(ConfigValidationError) as caught:
+        await rpc_console.settings_everos_set({"section": "llm", "fields": {"model": "m"}})
+
+    assert "everos-memory" in str(caught.value)

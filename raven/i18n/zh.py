@@ -303,6 +303,7 @@ MESSAGES: dict[str, str] = {
     "(no address declared)": "（未声明地址）",
     "running at {where}": "正在 {where} 上运行",
     "  [green]v Found a memory directory Raven can take over[/green]\n      memory dir  {a0}\n      state       {status}": "  [green]✓ 找到一份 Raven 可以接管的记忆目录[/green]\n      记忆目录   {a0}\n      状态       {status}",
+    "Long-term memory": "长期记忆",
     "EverOS long-term memory": "EverOS 长期记忆",
     "  [dim]Starting EverOS service...[/dim]": "  [dim]正在启动 EverOS 服务...[/dim]",
     "  [yellow]⚠ {names} is configured but EverOS could not build it.[/yellow]\n  [dim]Memory runs degraded until this is fixed.[/dim]\n  [dim]Check: {a1}[/dim]": "  [yellow]⚠ {names} 已配置，但 EverOS 未能构建成功。[/yellow]\n  [dim]在此修复前，记忆能力将处于降级状态。[/dim]\n  [dim]请查看：{a1}[/dim]",

@@ -14,7 +14,7 @@ assert that:
    (the authoritative extraction check, mirroring
    ``test_everos_extraction_real_llm``); and
 2. the distilled skill is retrievable through the production
-   :meth:`EverosBackend.recall` path — the same call ``EverosSkillSource``
+   :meth:`EverosBackend.recall` path — the same call ``BackendSkillSource``
    makes to fill the ``# Skills`` context section — returned as ``type==skill``.
 
 Assertions are structural + keyword, never exact-string, because LLM
@@ -160,7 +160,7 @@ async def test_weather_skill_evolves_and_is_recallable(
         f"extracted skill not weather-related; got name={skill.name!r} desc={skill.description[:160]!r}"
     )
 
-    # 3) Retrieve through the production recall path (what EverosSkillSource
+    # 3) Retrieve through the production recall path (what BackendSkillSource
     #    uses to fill ``# Skills``): the distilled skill must come back as
     #    ``type == skill``, not only its source cases.
     be = _backend(tmp_path, user_id=ids.user_id, agent_id=ids.agent_id)

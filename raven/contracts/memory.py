@@ -29,12 +29,29 @@ The Protocol is :func:`typing.runtime_checkable` so ``isinstance(x,
 MemoryBackend)`` works in tests — at the cost of accepting any class
 whose surface matches, including duck-typed mocks. That's the trade we
 want: contract tests don't have to inherit from a base class.
+
+Failure contract. A session host -- the agent loop, the TUI, the gateway,
+``raven serve`` -- wraps every call into a backend and treats a raise as the
+loss of that one call: ``recall`` counts as no hits, ``store`` as not landed,
+``start`` as no long-term memory for this session, ``feedback`` and ``stop``
+as logged and ignored. The import CLI (``raven import``) is the deliberate
+exception: nothing wraps ``start`` or ``stop`` there, so a raise in either ends
+the command, and a ``store`` that raises or returns ``False`` fails that one
+source and leaves it unsubmitted for a retry rather than passing as not landed:
+``run_import`` catches per source, and a ``False`` becomes the
+``MemoryWriteDroppedError`` that ``_feed_session`` raises into that same
+``except``. A bulk import that runs against nothing would consume the source
+list while writing nothing.
+
+A backend that can classify its own failures (a timeout is not a refused
+connection) should catch and act on them, because the host cannot; what it
+does not understand it may let propagate.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 # ---------------------------------------------------------------------------
 # Data carrier
@@ -74,6 +91,49 @@ class Memory:
     """
 
 
+HealthStatus = Literal["ok", "degraded", "missing"]
+"""How one thing a backend depends on stands: working, working worse, or a
+fault. Only ``"missing"`` counts against the host's exit code."""
+
+
+@dataclass(frozen=True)
+class HealthCheck:
+    """One line of :attr:`BackendHealth.checks`, rendered verbatim."""
+
+    label: str
+    """What was checked, in the backend's own vocabulary (a role name, a
+    server, an address). The host prints it and does not interpret it."""
+
+    status: HealthStatus
+    """``"ok"`` when nothing is wrong with this one, ``"degraded"`` when it
+    costs quality rather than function, ``"missing"`` when memory cannot work
+    until someone fixes it."""
+
+    hint: str | None = None
+    """What a person should look at, or the value that answers the check (a
+    path, an address). ``None`` when the label and status say it all."""
+
+
+@dataclass(frozen=True)
+class BackendHealth:
+    """A backend's own account of itself, for the two hosts that ask.
+
+    ``ready`` answers the importer's question; ``checks`` answers
+    ``raven doctor``'s. They are separate because a backend can be
+    diagnosable and not usable: a server that starts on demand has nothing
+    wrong with it and still cannot take a write this second.
+    """
+
+    ready: bool
+    """Whether a write issued now would land. The importer refuses to run on
+    ``False``: one deliberate batch against nothing writes nothing while
+    consuming the source list."""
+
+    checks: list[HealthCheck]
+    """What ``raven doctor`` prints, one line each, in this order. Empty is
+    valid: a backend with nothing to report and nothing wrong."""
+
+
 # ---------------------------------------------------------------------------
 # Protocol
 # ---------------------------------------------------------------------------
@@ -83,18 +143,24 @@ class Memory:
 class MemoryBackend(Protocol):
     """The single contract every memory plugin implements.
 
-    Five methods, ordered by hot-path:
+    Eight methods, ordered by hot-path:
 
     1. :meth:`recall` — called by ``ContextEngine.assemble`` every turn
        (potentially twice: once for user-track memory with ``user_id``,
        once for agent-track skills with ``agent_id`` via
-       :class:`EverosSkillSource`).
+       :class:`BackendSkillSource`).
     2. :meth:`store` — called by AgentLoop after each turn to persist
        the conversation slice.
     3. :meth:`feedback` — called by AgentLoop's after-turn dispatcher
        when ``injected_skill_ids`` contains source-qualified entries
        belonging to this backend.
     4. :meth:`start` / :meth:`stop` — lifecycle, awaited by the host.
+    5. :meth:`health` — asked by ``raven doctor`` and ``raven import``,
+       off the turn path, before or after ``start``.
+    6. :meth:`delete` — asked by the memory browser when a person removes
+       one memory; never on the turn path.
+    7. :meth:`recall_session` — asked after a sub-agent has run, to read
+       back what that conversation left behind; never on the turn path.
     """
 
     async def recall(
@@ -115,9 +181,13 @@ class MemoryBackend(Protocol):
         use ``user_id`` and return ``[]`` for the ``agent_id`` call.
         Passing neither or both is a caller bug — return ``[]``.
 
-        Empty result is a valid response (no hits); raise on transport
-        errors, auth failures, etc. The host will fall back to other
-        sources via ``SkillForgeRouter._safe_search``.
+        Empty result is a valid response (no hits). A raise is tolerated by
+        the host and costs this call its hits; prefer returning ``[]`` for
+        failures the backend can recognize. The host also bounds the call
+        with a per-turn wall clock (the floor under any backend, since this
+        Protocol does not oblige one to have a timeout at all; the constant
+        lives in ``raven/context_engine/segments/memory.py``) and abandons a
+        slower call, so keep the backend's own timeouts stricter than that.
         """
         ...
 
@@ -141,6 +211,25 @@ class MemoryBackend(Protocol):
         or ``is_final``; normal AgentLoop turns leave it ``None``.
         Backends that do not consume metadata ignore it silently.
 
+        Two keys are conventions every backend should honour if it can:
+
+        ``flush``
+            ``True`` means extract from this slice now rather than when the
+            backend's own cadence next comes round. The host sets it when it
+            is handing over a conversation that has already finished, and
+            will read the result back immediately -- waiting for a turn
+            counter that will never advance again would return nothing.
+
+        ``user_id`` / ``agent_id``
+            Whose memory this slice is, **for this call only**. The host sets
+            them when writing on behalf of a sub-agent that ran in a process
+            of its own: the content is that agent's, not the host's, and
+            filing it under the host would put it where recall for that agent
+            never looks. This does not make a second source for the backend's
+            own identity, which stays the one the host granted at build time;
+            it is an explicit per-call override and nothing reads it as a
+            default.
+
         Does not raise on transport / auth errors; it reports them.
         Both known callers act on the return value: the AgentLoop
         retries a turn's write with backoff and gives up after a fixed
@@ -156,6 +245,49 @@ class MemoryBackend(Protocol):
         """
         ...
 
+    async def recall_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[Memory]:
+        """Every memory held under ``session_id`` for one track.
+
+        An exact filter, not a search: no query, no ranking, no ``top_k``.
+        It answers "what did this conversation leave behind", which is what
+        the host asks after a sub-agent has run in a process of its own. That
+        is a different question from :meth:`recall`'s, and folding it in there
+        would mean a query nobody wrote and a score nothing computed.
+
+        Same XOR rule as :meth:`recall`: exactly one of ``user_id`` /
+        ``agent_id``. ``[]`` is a valid answer -- an empty session, and equally
+        a backend that cannot filter by session at all. A host feature built on
+        this degrades to "nothing to report" rather than failing, so a backend
+        is free not to implement it.
+        """
+        ...
+
+    async def delete(self, memory_id: str, *, kind: str | None = None) -> bool:
+        """Remove one memory from what :meth:`recall` can return.
+
+        ``kind`` is backend-native and opaque to the host: the host echoes back
+        whatever its own listing handed it and never interprets the value, the
+        same escape hatch ``Memory.metadata`` is.
+
+        ``False`` means this memory was not deleted -- the backend does not
+        support deletion at all, does not support this kind, or had no such
+        row. A no-op implementation returning ``False`` is valid and idiomatic,
+        like :meth:`feedback`; a caller turns it into "this cannot be deleted
+        here" rather than reporting a removal that did not happen.
+
+        Whatever the backend treats as its source of truth is what must change.
+        Deleting only a derived index leaves the memory recallable again the
+        moment that index is rebuilt, which is indistinguishable from the
+        delete never happening -- and worse, because the user was told it had.
+        """
+        ...
+
     async def feedback(self, signals: dict[str, Any]) -> None:
         """Consume a free-form signal dict (e.g. injected/used skill ids).
 
@@ -168,8 +300,15 @@ class MemoryBackend(Protocol):
 
     async def start(self) -> None:
         """One-time / idempotent initialization (open connections,
-        warm caches, run migrations). The host awaits this exactly
-        once during agent boot; failures abort startup."""
+        warm caches, run migrations).
+
+        The host calls this once at boot, but may not await it before the
+        first turn: the TUI and ``raven serve`` spawn it as a task, so
+        ``recall`` and ``store`` must tolerate being called while ``start``
+        is still running -- no hits and not landed are the expected answers
+        then. A raise leaves the session without this backend; it does not
+        abort the host.
+        """
         ...
 
     async def stop(self) -> None:
@@ -178,8 +317,22 @@ class MemoryBackend(Protocol):
         cleans up)."""
         ...
 
+    async def health(self) -> BackendHealth | None:
+        """Whether the backend can work now, and what a person should look at
+        when it cannot.
 
-__all__ = ["Memory", "MemoryBackend"]
+        Callable before or after ``start``: ``raven doctor`` asks an instance
+        it never started, ``raven import`` asks after starting one. ``ready``
+        is the import gate (a write now would land);
+        ``checks`` is what doctor prints, verbatim, one line each. Only a real
+        fault is ``"missing"``; a server that starts on demand and is not
+        running yet is ``"ok"`` with a hint. ``None`` means this backend
+        offers no diagnostics and the host proceeds.
+        """
+        ...
+
+
+__all__ = ["BackendHealth", "HealthCheck", "HealthStatus", "Memory", "MemoryBackend"]
 
 
 __tier__ = "contract"

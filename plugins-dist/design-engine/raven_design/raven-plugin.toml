@@ -16,7 +16,6 @@
 id = "design-engine"
 version = "0.2.0"
 display_name = "Design Engine"
-enabled_by_default = true
 
 # The design turn frame: on the way in (before_user_inbound) one Visual Domain
 # Selector call classifies the task against the fifteen packaged domain Skills

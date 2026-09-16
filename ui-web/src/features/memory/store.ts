@@ -24,6 +24,11 @@ export interface MemoryState {
      'down' is the fixture source's answer, rendered as the demo's plain
      down note without the stat band. */
   phase: MemPhase
+  /* Why there is nothing to show, when that is not a failure: no memory
+     plugin installed, or one installed that memory.backend does not name.
+     Four zeros and a retry button said neither, and read as "your memories
+     are gone" instead of "they are not kept here". */
+  note: string
   err: string
   detail: MemItem | null
 }
@@ -36,6 +41,7 @@ let state: MemoryState = {
   total: 0,
   stats: null,
   phase: 'idle',
+  note: '',
   err: '',
   detail: null,
 }
@@ -63,10 +69,13 @@ function failure(e: unknown): string {
 }
 
 export async function load(): Promise<void> {
-  set({ phase: 'loading', err: '' })
+  /* `note` is cleared with `err`: it explains the answer this load is about
+     to fetch, and a stale one outlives the condition it described -- after
+     installing the plugin the page would keep saying it is missing. */
+  set({ phase: 'loading', err: '', note: '' })
   try {
     const r = await source().list({ kind: state.kind, page: state.page, page_size: MEM_PAGE_SIZE, q: state.q || null })
-    set({ items: r.items || [], total: r.total || 0, phase: 'ready' })
+    set({ items: r.items || [], total: r.total || 0, note: r.note || '', phase: 'ready' })
   } catch (e) {
     if ((e as { down?: boolean }).down) set({ phase: 'down' })
     else set({ phase: 'error', err: failure(e) })
@@ -76,7 +85,7 @@ export async function load(): Promise<void> {
 export function refreshStats(): Promise<void> {
   return source()
     .stats()
-    .then((stats) => set({ stats }))
+    .then((stats) => set({ stats, note: (stats && stats.note) || state.note }))
     .catch(() => set({ stats: null }))
 }
 

@@ -17,11 +17,12 @@ exactly one :class:`PluginContext`. From it, the factory pulls:
 The locator is a frozen dataclass: factories cannot mutate the host's
 view of available services, only read from it.
 
-The three shapes a plugin implements against (``ServiceLocator``,
-``RuntimeHandles``, ``BindDeclinedError``) are papers now -- defined in
-``raven.contracts.plugin_surface`` under the contract tier's version and
-ledger -- and re-exported here verbatim: this module stays the documented
-import address for plugin authors.
+The shapes a plugin implements against (``ServiceLocator``,
+``RuntimeHandles``, ``BindDeclinedError``, and the onboarding trio
+``OnboardStep`` / ``OnboardUI`` / ``StepOutcome``) are papers now -- defined
+in ``raven.contracts.plugin_surface`` and ``raven.contracts.onboard`` under
+the contract tier's version and ledger -- and re-exported here verbatim: this
+module stays the documented import address for plugin authors.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from raven.contracts.onboard import OnboardStep, OnboardUI, StepOutcome
 from raven.contracts.plugin_surface import BindDeclinedError, RuntimeHandles, ServiceLocator
 
 
@@ -44,4 +46,12 @@ class PluginContext:
     )
 
 
-__all__ = ["BindDeclinedError", "PluginContext", "RuntimeHandles", "ServiceLocator"]
+__all__ = [
+    "BindDeclinedError",
+    "OnboardStep",
+    "OnboardUI",
+    "PluginContext",
+    "RuntimeHandles",
+    "ServiceLocator",
+    "StepOutcome",
+]

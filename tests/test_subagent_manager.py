@@ -38,6 +38,7 @@ from raven.config.schema import (
     ThirdPartyCliSubagentConfig,
     ThirdPartyOpenAISubagentConfig,
 )
+from raven.contracts.memory import Memory
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
@@ -2307,6 +2308,42 @@ async def _drain_record_tasks(manager: SubagentManager) -> None:
     await asyncio.gather(*list(manager._record_tasks))
 
 
+class _LifecycleBackend:
+    """A memory backend that records its own lifecycle, in order.
+
+    `object()` cannot stand in for one: nothing about it fails when the record
+    path hands it to `store` without ever awaiting `start`, and a real adapter
+    answers that with `False` -- the record says "unavailable" while the
+    service was running the whole time. Every call is logged rather than
+    asserted on the spot, because both the prime and the poll swallow whatever
+    a backend raises; the order this leaves behind is the evidence.
+    """
+
+    def __init__(self, memories: list[Memory] | None = None) -> None:
+        self.events: list[str] = []
+        self._memories = memories or []
+
+    async def start(self) -> None:
+        self.events.append("start")
+
+    async def stop(self) -> None:
+        self.events.append("stop")
+
+    async def store(self, session_id: str, messages: list[dict], *, metadata: dict | None = None) -> bool:
+        # Both spellings, as the shipped adapter reads them: raven's config
+        # writes camelCase and the contract documents snake_case, and a fake
+        # that understood only one would hide the mismatch this test is for.
+        meta = metadata or {}
+        owner = f"{meta.get('user_id') or meta.get('userId')}/{meta.get('agent_id') or meta.get('agentId')}"
+        self.events.append(f"store[{owner}]" if "start" in self.events else "store-before-start")
+        return True
+
+    async def recall_session(self, session_id: str, *, user_id=None, agent_id=None) -> list[Memory]:
+        owner = user_id or agent_id
+        self.events.append(f"recall[{owner}]" if "start" in self.events else "recall-before-start")
+        return self._memories if user_id else []
+
+
 async def _unavailable_everos(*args: Any, **kwargs: Any) -> list:
     """Make the poll after a prime fail on its first look, with no sleep.
 
@@ -2319,20 +2356,17 @@ async def _unavailable_everos(*args: Any, **kwargs: Any) -> list:
     raise RuntimeError("no live everos in tests")
 
 
-class TestHostEverosAddressWithoutThePlugin:
-    """No plugin means no host-run everos, so there is no host address either.
+class TestMemoryScopeWithoutThePlugin:
+    """A memory block is read from config, not from any backend.
 
-    The constant that used to be returned here is the plugin's own, and reading
-    it was an unguarded import in the middle of a background writer -- one that
-    turned every spawn of an everos-declaring agent into a traceback.
+    The host used to reach into the plugin for a default address, an unguarded
+    import in the middle of a background writer that turned every spawn of a
+    memory-declaring agent into a traceback. There is no address here now: what
+    a memory belongs to is the backend's vocabulary, and the backend is asked
+    for it rather than the host assembling one.
     """
 
-    def test_the_host_address_is_empty_rather_than_a_traceback(self) -> None:
-        with everos_plugin_absent():
-            assert manager_mod._host_everos_base_url() == ""
-
-    def test_an_agent_that_named_its_own_address_keeps_it(self, tmp_path: Path, monkeypatch) -> None:
-        """Only the default comes from the plugin; a declared address does not."""
+    def test_the_block_is_read_without_the_plugin_present(self, tmp_path: Path, monkeypatch) -> None:
         manager = _third_party_manager(
             tmp_path,
             monkeypatch,
@@ -2340,16 +2374,36 @@ class TestHostEverosAddressWithoutThePlugin:
                 ThirdPartyCliSubagentConfig(
                     name="Raven-Code",
                     command="raven --prompt {prompt}",
-                    everos={"agentId": "raven-code", "baseUrl": "http://box:9000"},
+                    memory={"agentId": "raven-code"},
                 )
             ],
         )
 
         with everos_plugin_absent():
-            identity = manager.everos_identity("Raven-Code")
+            scope = manager.memory_scope("Raven-Code")
 
-        assert identity is not None
-        assert identity.base_url == "http://box:9000"
+        assert scope is not None
+        assert scope.agent_id == "raven-code"
+
+    def test_a_declared_address_is_dropped_rather_than_honoured(self, tmp_path: Path, monkeypatch) -> None:
+        """Nothing ever set one, and honouring it would mean every backend
+        growing a per-call way to address a different server."""
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[
+                ThirdPartyCliSubagentConfig(
+                    name="Raven-Code",
+                    command="raven --prompt {prompt}",
+                    memory={"agentId": "raven-code", "baseUrl": "http://box:9000"},
+                )
+            ],
+        )
+
+        scope = manager.memory_scope("Raven-Code")
+
+        assert scope is not None
+        assert "baseUrl" not in scope.block and "base_url" not in scope.block
 
 
 class TestTraceSourceWiring:
@@ -2358,7 +2412,7 @@ class TestTraceSourceWiring:
     async def test_trace_agent_primes_with_prompt_and_answer(self, tmp_path: Path, monkeypatch) -> None:
         primed: list[tuple[str, list[dict]]] = []
 
-        async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+        async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
             primed.append((session_id, turn))
             return True
 
@@ -2369,12 +2423,15 @@ class TestTraceSourceWiring:
                 ThirdPartyAcpSubagentConfig(
                     name="Coder",
                     command="hermes acp",
-                    everos={"userId": "liv", "agentId": "coder", "source": "trace"},
+                    memory={"userId": "liv", "agentId": "coder", "source": "trace"},
                 )
             ],
         )
         with (
             patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            # The record path builds and starts a backend per record; this
+            # process runs none, and the prime and the poll are both faked here.
+            patch("raven.agent.subagent.manager.SubagentManager._memory_backend", lambda self: _LifecycleBackend()),
             patch("raven.agent.subagent_memory.collect_memories", _unavailable_everos),
         ):
             await _run_one_spawn(manager, agent="Coder", prompt="read it", reply="no readme")
@@ -2389,7 +2446,7 @@ class TestTraceSourceWiring:
     async def test_agent_source_is_never_primed(self, tmp_path: Path, monkeypatch) -> None:
         primed: list[str] = []
 
-        async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+        async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
             primed.append(session_id)
             return True
 
@@ -2400,11 +2457,14 @@ class TestTraceSourceWiring:
                 ThirdPartyCliSubagentConfig(
                     name="Raven-Code",
                     command="raven --prompt {prompt}",
-                    everos={"agentId": "raven-code"},
+                    memory={"agentId": "raven-code"},
                 )
             ],
         )
-        with patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime):
+        with (
+            patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            patch("raven.agent.subagent.manager.SubagentManager._memory_backend", lambda self: _LifecycleBackend()),
+        ):
             await _run_one_spawn(manager, agent="Raven-Code", prompt="read it", reply="done")
             await _drain_record_tasks(manager)
 
@@ -2417,7 +2477,7 @@ class TestTraceSourceWiring:
         # backend raised, so that prefix is part of the turn too.
         primed: list[list[dict]] = []
 
-        async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+        async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
             primed.append(turn)
             return True
 
@@ -2428,12 +2488,15 @@ class TestTraceSourceWiring:
                 ThirdPartyAcpSubagentConfig(
                     name="Coder",
                     command="hermes acp",
-                    everos={"userId": "liv", "agentId": "coder", "source": "trace"},
+                    memory={"userId": "liv", "agentId": "coder", "source": "trace"},
                 )
             ],
         )
         with (
             patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            # The record path builds and starts a backend per record; this
+            # process runs none, and the prime and the poll are both faked here.
+            patch("raven.agent.subagent.manager.SubagentManager._memory_backend", lambda self: _LifecycleBackend()),
             patch("raven.agent.subagent_memory.collect_memories", _unavailable_everos),
         ):
             await _run_one_failing_spawn(manager, agent="Coder", prompt="read it", error="boom")
@@ -2441,6 +2504,80 @@ class TestTraceSourceWiring:
 
         assert primed
         assert "[failed] Error: boom" in primed[0][-1]["content"]
+
+    async def test_the_record_path_starts_the_backend_before_it_writes(self, tmp_path: Path, monkeypatch) -> None:
+        """`maybe_build_memory_backend` hands back a backend nobody started, and
+        an unstarted adapter answers the prime's `store` with `False` -- the
+        record then says "unavailable" while the service was up the whole time.
+
+        The prime and the poll are both real here, against a backend that logs
+        what happened to it: the order -- and the owner each half addressed --
+        is the assertion.
+        """
+        backend = _LifecycleBackend([Memory(text="the readme is missing", metadata={"type": "episode"})])
+        # One look, no backoff: the fake answers on the first one, and the trace
+        # budget would otherwise sleep two seconds waiting for a second.
+        monkeypatch.setattr(manager_mod, "TRACE_BUDGET_S", 1.0)
+
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[
+                ThirdPartyAcpSubagentConfig(
+                    name="Coder",
+                    command="hermes acp",
+                    memory={"userId": "liv", "agentId": "coder", "source": "trace"},
+                )
+            ],
+        )
+        with patch("raven.agent.subagent.manager.SubagentManager._memory_backend", lambda self: backend):
+            await _run_one_spawn(manager, agent="Coder", prompt="read it", reply="no readme")
+            await _drain_record_tasks(manager)
+
+        assert backend.events == ["start", "store[liv/coder]", "recall[liv]", "recall[coder]", "stop"], backend.events
+
+    async def test_an_install_without_the_memory_plugin_records_nothing(self, tmp_path: Path, monkeypatch) -> None:
+        """No memory plugin is an ordinary install, not an error. The record
+        path must stop before the prime rather than hand `None` onward."""
+        primed: list[str] = []
+
+        async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
+            primed.append(session_id)
+            return True
+
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[
+                ThirdPartyAcpSubagentConfig(
+                    name="Coder",
+                    command="hermes acp",
+                    memory={"userId": "liv", "agentId": "coder", "source": "trace"},
+                )
+            ],
+        )
+        with (
+            patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            patch("raven.agent.subagent.manager.SubagentManager._memory_backend", lambda self: None),
+        ):
+            await _run_one_spawn(manager, agent="Coder", prompt="read it", reply="no readme")
+            await _drain_record_tasks(manager)
+
+        assert primed == []
+
+    async def test_a_backend_the_factory_cannot_build_is_no_backend(self, tmp_path: Path, monkeypatch) -> None:
+        """A record is written after the call it describes has answered, so a
+        factory that raises must read as "no record" rather than reach the run."""
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[ThirdPartyAcpSubagentConfig(name="Coder", command="hermes acp", memory={"agentId": "coder"})],
+        )
+        with patch(
+            "raven.core.plugin_stack.maybe_build_memory_backend",
+            side_effect=RuntimeError("the plugin is not installed"),
+        ):
+            assert manager._memory_backend() is None
 
     async def test_a_direct_chat_primes_with_prompt_and_answer(self, tmp_path: Path, monkeypatch) -> None:
         """The `chat()` lane reaches `prime_from_turn` through its own `finally`
@@ -2454,7 +2591,7 @@ class TestTraceSourceWiring:
         """
         primed: list[tuple[str, list[dict]]] = []
 
-        async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+        async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
             primed.append((session_id, turn))
             return True
 
@@ -2466,13 +2603,16 @@ class TestTraceSourceWiring:
                     name="Coder",
                     command="cat {agent_id}",
                     resume_command="cat --resume {agent_id}",
-                    everos={"userId": "liv", "agentId": "coder", "source": "trace"},
+                    memory={"userId": "liv", "agentId": "coder", "source": "trace"},
                 )
             ],
         )
         manager.registry._backends["Coder"] = _StubThirdPartyBackend(reply="no readme")
         with (
             patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            # The record path builds and starts a backend per record; this
+            # process runs none, and the prime and the poll are both faked here.
+            patch("raven.agent.subagent.manager.SubagentManager._memory_backend", lambda self: _LifecycleBackend()),
             patch("raven.agent.subagent_memory.collect_memories", _unavailable_everos),
         ):
             await manager.chat(session_key="cli", agent="Coder", handle="h1", text="read it")
