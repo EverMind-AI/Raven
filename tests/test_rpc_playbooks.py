@@ -1119,3 +1119,53 @@ async def test_a_session_whose_workspace_will_not_resolve_is_refused(
             agent_loop_factory=_loop_with(rt, workdir_raises=True),
         )
     assert rt.calls == [], "nothing dispatches into a workspace that did not resolve"
+
+
+@pytest.mark.asyncio
+async def test_validate_judges_agents_against_the_table_a_run_would_use(
+    library: PlaybookStore,
+) -> None:
+    """The two endpoints have to answer about one table, or they contradict.
+
+    A dispatch resolves a step's agent against the live in-process registry; the
+    agents list is deliberately off a watcher, so a row another process wrote is
+    on disk and not yet here. Reading the file, a check would call a step clean
+    that the run then refuses -- and the refusal's own advice is to come here.
+    """
+    library.save(_spec())
+
+    live = type("_Reg", (), {"all_names": lambda self: ["Raven"]})()
+    loop = type("_Loop", (), {"subagents": type("_M", (), {"registry": live})()})()
+
+    out = await mod.playbooks_validate({"name": "competitor-scan"}, agent_loop_factory=lambda: loop)
+    assert out["ok"] is True, "every step names Raven, which the live table has"
+
+    thin = type("_Reg", (), {"all_names": lambda self: ["SomeOtherAgent"]})()
+    thin_loop = type("_Loop", (), {"subagents": type("_M", (), {"registry": thin})()})()
+
+    out = await mod.playbooks_validate({"name": "competitor-scan"}, agent_loop_factory=lambda: thin_loop)
+    assert out["ok"] is False, "the live table decides, so a missing agent is a finding"
+    assert any("Raven" in e for e in out["errors"])
+
+
+@pytest.mark.asyncio
+async def test_the_registered_validate_is_given_the_loop_to_ask(library: PlaybookStore) -> None:
+    """Wired at registration, or the live table is never reached in production.
+
+    The handler prefers the running registry and falls back to the config file
+    when it has no loop to ask. That fallback is also what a registration which
+    forgot to pass the factory would look like -- silently, and only on the
+    machine where the two tables have drifted apart.
+    """
+    from raven.rpc.dispatcher import Dispatcher
+
+    library.save(_spec())
+    thin = type("_Reg", (), {"all_names": lambda self: ["SomeOtherAgent"]})()
+    loop = type("_Loop", (), {"subagents": type("_M", (), {"registry": thin})()})()
+
+    d = Dispatcher()
+    mod.register_playbooks_methods(d, agent_loop_factory=lambda: loop)
+    resp = await d.dispatch(
+        {"jsonrpc": "2.0", "id": 1, "method": "playbooks.validate", "params": {"name": "competitor-scan"}}
+    )
+    assert resp["result"]["ok"] is False, "the loop's table reached the handler through registration"

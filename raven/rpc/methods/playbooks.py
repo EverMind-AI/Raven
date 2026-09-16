@@ -372,17 +372,13 @@ async def playbooks_oauth_clear(params: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# The library as a thing a person changes, not only reads.
+# The library as a thing a person changes and runs, not only reads.
 #
-# Everything below has been reachable from `raven playbook` since the library
-# shipped; what it has not been is reachable from anything else. A surface that
-# can draw a playbook as disabled and offer no way to enable it is showing a
-# state it cannot act on, which is the gap these close.
-#
-# Deliberately not here: `run` and `create`. Both take model time -- a graph to
-# completion, a generation -- and a JSON-RPC call that occupies the socket for
-# minutes blocks every other call on it. They need a dispatch that answers with
-# a handle and reports progress, which is a different change.
+# Everything below is reachable from `raven playbook`, and the rule these
+# handlers keep is that they reach it through the same door rather than around
+# it: enabling writes the deny list the CLI writes, and running goes through the
+# runtime the model's own tool goes through. A second path to the same library
+# would be a second place for its rules to live.
 
 
 async def playbooks_set_enabled(params: dict) -> dict:
@@ -411,7 +407,41 @@ async def playbooks_set_enabled(params: dict) -> dict:
     return {"name": name, "enabled": enabled, "changed": bool(changed)}
 
 
-async def playbooks_validate(params: dict) -> dict:
+def _known_agent_names(agent_loop_factory: "AgentLoopFactory | None") -> list[str]:
+    """The agent table a dispatch would resolve against, as it stands now.
+
+    The live registry first, and the config file only when there is no loop to
+    ask. The two are not always the same table: the agents list is deliberately
+    kept off a watcher and moved only by an explicit apply, so a row written by
+    another process -- ``raven agents new --register`` is the documented one --
+    is on disk and not yet in this process. Read from the file here, a step
+    naming that agent would validate clean and then be refused at dispatch,
+    which is the reverse of what a check is for: this answers "would it run",
+    and the only table that can say is the one the run would use.
+    """
+    loop = None
+    if agent_loop_factory is not None:
+        try:
+            loop = agent_loop_factory()
+        except Exception:  # noqa: BLE001 - no loop is a fallback, not a failure
+            loop = None
+    registry = getattr(getattr(loop, "subagents", None), "registry", None)
+    if registry is not None:
+        return list(registry.all_names())
+
+    from raven.agent.subagent.registry import AgentRegistry
+    from raven.config.loader import load_config
+
+    offline = AgentRegistry()
+    offline.apply(load_config().subagents.agents)
+    return list(offline.all_names())
+
+
+async def playbooks_validate(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
     """Check one playbook without running it: the spec's shape, then its rules.
 
     Answers rather than raises. A playbook that does not validate is the normal
@@ -426,8 +456,6 @@ async def playbooks_validate(params: dict) -> dict:
     import yaml
     from pydantic import ValidationError
 
-    from raven.agent.subagent.registry import AgentRegistry
-    from raven.config.loader import load_config
     from raven.playbook.validate import validate_structure
 
     name = _known_name(params.get("name"))
@@ -445,9 +473,7 @@ async def playbooks_validate(params: dict) -> dict:
     except (ValidationError, ValueError, yaml.YAMLError) as exc:
         errors.append(str(exc))
     if spec is not None:
-        registry = AgentRegistry()
-        registry.apply(load_config().subagents.agents)
-        errors.extend(validate_structure(spec, known_agents=registry.all_names()))
+        errors.extend(validate_structure(spec, known_agents=_known_agent_names(agent_loop_factory)))
     return {"name": name, "ok": not errors, "errors": errors, "path": str(store.path_for(name))}
 
 
@@ -612,7 +638,11 @@ def register_playbooks_methods(
     dispatcher.register("playbooks.oauth.authorize", playbooks_oauth_authorize)
     dispatcher.register("playbooks.oauth.clear", playbooks_oauth_clear)
     dispatcher.register("playbooks.set_enabled", playbooks_set_enabled)
-    dispatcher.register("playbooks.validate", playbooks_validate)
+
+    async def _validate(p: dict) -> dict:
+        return await playbooks_validate(p, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("playbooks.validate", _validate)
     dispatcher.register("playbooks.delete", playbooks_delete)
 
     async def _run(p: dict) -> dict:
