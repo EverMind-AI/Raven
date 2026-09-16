@@ -147,24 +147,52 @@ _INLINE_ARG_LIMIT = 60
 _ACTION_LINE_LIMIT = 160
 
 
-def _argument_summary(value: Any) -> str:
-    """One argument, as short as it can be without becoming a lie.
+def _argument_summary(value: Any, budget: int) -> str:
+    """One argument, as short as it can be without hiding what it targets.
 
-    A value small enough to read is shown; anything larger is named by its size
-    or its shape. The distinction is what the reader is being asked about: an
-    id, a path or an agent's name decides the call, and a paragraph of prose is
-    the material the call carries rather than the call itself.
+    Two different things get shortened here and they need opposite treatment.
+    Prose -- a brief, a file body, a message -- is the material the call carries,
+    and pasting it into the question pushes out everything the reader needs, so a
+    long string is named by its size. A container is not prose: a list of paths,
+    a graph's nodes and the agents they name are what the call will *act on*, and
+    an approver who cannot see them cannot approve. So containers are opened
+    rather than counted, as far as the budget allows, and whatever did not fit is
+    counted beside what did -- a partial list plus a remainder still says what
+    kind of thing this call touches, where a bare count says nothing at all.
+
+    That the leaves stay short is what makes opening a container safe: a node
+    carrying an 800-character prompt renders as its id, its agent and a named
+    size, not as the prompt.
     """
     if isinstance(value, str):
-        if len(value) <= _INLINE_ARG_LIMIT:
-            return repr(value)
-        return f"<{len(value)} chars>"
+        return repr(value) if len(value) <= _INLINE_ARG_LIMIT else f"<{len(value)} chars>"
     if isinstance(value, (list, tuple)):
-        return f"<{len(value)} items>"
+        return _container_summary([_argument_summary(item, budget) for item in value], budget, "[", "]", "items")
     if isinstance(value, dict):
-        return f"<{len(value)} keys>"
+        pieces = [f"{k}={_argument_summary(v, budget)}" for k, v in value.items()]
+        return _container_summary(pieces, budget, "{", "}", "keys")
     text = str(value)
     return text if len(text) <= _INLINE_ARG_LIMIT else f"<{len(text)} chars>"
+
+
+def _container_summary(pieces: list[str], budget: int, open_: str, close: str, noun: str) -> str:
+    """As many rendered members as the budget holds, and a count of the rest."""
+    if not pieces:
+        return f"{open_}{close}"
+    shown: list[str] = []
+    room = budget - 2
+    for piece in pieces:
+        if room - len(piece) - 2 < 0:
+            break
+        shown.append(piece)
+        room -= len(piece) + 2
+    hidden = len(pieces) - len(shown)
+    if not shown:
+        return f"<{len(pieces)} {noun}>"
+    body = ", ".join(shown)
+    if hidden:
+        body += f", +{hidden} more"
+    return f"{open_}{body}{close}"
 
 
 def action_line(tool_name: str, params: dict[str, Any]) -> str:
@@ -187,8 +215,13 @@ def action_line(tool_name: str, params: dict[str, Any]) -> str:
     shown: list[str] = []
     room = _ACTION_LINE_LIMIT - len(tool_name)
     for key in sorted(params):
-        piece = f"{key}={_argument_summary(params[key])}"
-        if room - len(piece) - 1 < 0:
+        # The budget handed down is what is left *after* this argument's name,
+        # so a value rendered to fit actually fits. Getting that wrong drops the
+        # whole argument rather than shortening it, which is the one outcome
+        # worse than a bare count: a delete whose paths did not fit would say
+        # nothing about what it deletes.
+        piece = f"{key}={_argument_summary(params[key], max(room - len(key) - 1, _INLINE_ARG_LIMIT))}"
+        if shown and room - len(piece) - 1 < 0:
             break
         shown.append(piece)
         room -= len(piece) + 1

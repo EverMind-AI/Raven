@@ -1138,3 +1138,44 @@ def test_a_short_argument_is_still_shown_in_full():
 def test_the_command_is_the_action_for_a_shell_call():
     """Unchanged, and covered here so the rewrite above cannot quietly take it."""
     assert action_line("exec", {"command": "ls -la"}) == "ls -la"
+
+
+def test_what_a_call_will_act_on_survives_the_summary():
+    """Prose and targets are both "long", and only one of them may be hidden.
+
+    A list of paths is not material the call carries, it is what the call will
+    do something to. Counting it leaves the reader authorising a deletion
+    without being told what is deleted -- and an unknown tool sits in the ask
+    tier precisely because nobody can infer its effects from its name.
+    """
+    line = action_line("delete_files", {"paths": ["/etc/passwd"]})
+    assert "/etc/passwd" in line
+
+
+def test_a_graph_shows_its_steps_and_not_their_briefs():
+    """The two rules meeting on one argument.
+
+    A node names the step, the agent that runs it and what it is for -- all of
+    which decide the call -- and carries a prompt, which does not. Opening the
+    container is what keeps the first three; the leaf rule is what keeps the
+    fourth out.
+    """
+    nodes = [
+        {"id": "pull", "subagent": "data-raven", "node_summary": "pull the feedback", "prompt_template": "x" * 800},
+        {"id": "write", "subagent": "Raven", "node_summary": "write the report", "prompt_template": "y" * 900},
+    ]
+    line = action_line("run_subagent_dag", {"task_summary": "weekly digest", "nodes": nodes})
+
+    assert "pull" in line and "data-raven" in line, "the step and its agent are the action"
+    assert "<800 chars>" in line, "its brief is named"
+    assert "xxx" not in line, "and never quoted"
+
+
+def test_a_container_too_wide_to_open_still_says_what_it_holds():
+    """A partial list plus a remainder says what kind of thing this touches;
+    a bare count says nothing at all."""
+    line = action_line("delete_files", {"paths": [f"/var/log/app-{i}.log" for i in range(40)]})
+
+    assert "/var/log/app-0.log" in line
+    assert "more" in line
+    assert len(line) < 200
