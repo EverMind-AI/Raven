@@ -635,6 +635,36 @@ class TestAPinIsWrittenAsOneThing:
         assert block["model"] is None and block["provider"] is None
 
 
+class TestAPinCanNameAnyProviderThisConfigHolds:
+    """Raven carries no spec for every vendor LiteLLM can reach.
+
+    Checking a pin's provider against the registry alone made a working
+    endpoint uneditable on the page that exists to edit it: the wizard stored
+    `provider: deepinfra`, every reader resolved it, and this surface called it
+    a provider that does not exist.
+    """
+
+    async def test_a_section_in_the_config_is_proof_the_vendor_exists(self, cfg):
+        from raven.config.update_providers import set_provider_fields
+        from raven.providers.registry import find_by_name
+
+        assert find_by_name("deepinfra") is None, "the point of this test is a vendor with no spec"
+        set_provider_fields("deepinfra", {"api_key": "sk-di", "api_base": "https://api.deepinfra.com/v1/openai"})
+
+        r = await rpc_console.settings_set(
+            {"key": "embedding", "value": {"model": "Qwen/Qwen3-Embedding-8B", "provider": "deepinfra"}}
+        )
+
+        assert r["applied"] is True
+        assert _read(cfg)["embedding"] == {"model": "Qwen/Qwen3-Embedding-8B", "provider": "deepinfra"}
+
+    async def test_a_name_nothing_holds_is_still_a_typo(self, cfg):
+        """The check still earns its keep: a misspelling would otherwise
+        surface as a silent fallback to the conversation's model."""
+        with pytest.raises(ConfigValidationError, match="no provider named"):
+            await rpc_console.settings_set({"key": "embedding", "value": {"model": "m", "provider": "deepinfr"}})
+
+
 class TestTheEmbeddingPinHasOneWayIn:
     """Two writers for one block is one writer that checks and one that does
     not. The settings page's pin row wrote raw -- no provider check, and no

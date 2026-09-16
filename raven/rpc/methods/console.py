@@ -756,14 +756,32 @@ def _chk_pin_model(key: str):
     return chk
 
 
+def _configured_provider_section(slug: str) -> bool:
+    """Whether this config holds a section for ``slug``."""
+    try:
+        from raven.config.loader import get_config_path, read_raw_or_raise
+
+        providers = read_raw_or_raise(get_config_path()).get("providers")
+    except Exception:  # noqa: BLE001 - an unreadable config proves nothing exists
+        return False
+    return isinstance(providers, dict) and slug in providers
+
+
 def _chk_pin_provider(key: str):
     """A pin's provider half: a configured provider's slug, or empty to unset.
 
-    Checked against the registry rather than against the config: naming a
+    Known to the registry, or already a section in this config: naming a
     provider that has no credentials yet is an ordinary order of operations
     (pick the model, then go and add the key), while naming one that does not
     exist is a typo that would otherwise surface as a silent fallback to the
     conversation's model.
+
+    The config half is not a loophole, it is the other half of the same
+    question. Raven carries no spec for every vendor LiteLLM can reach, and a
+    section the operator wrote is proof the vendor exists -- so a pin the
+    wizard stored through one surface could not be edited through this one,
+    which is how a working DeepInfra endpoint became uneditable on the page
+    that exists to edit it.
     """
     inner = _chk_str(key, 100)
 
@@ -776,7 +794,7 @@ def _chk_pin_provider(key: str):
         from raven.providers.registry import canonical_provider_name, find_by_name
 
         slug = canonical_provider_name(text)
-        if find_by_name(slug) is None:
+        if find_by_name(slug) is None and not _configured_provider_section(slug):
             raise ConfigValidationError(f"{key}: no provider named {text!r}")
         return slug
 
