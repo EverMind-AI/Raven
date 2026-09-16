@@ -1214,6 +1214,59 @@
       ]
     },
     {
+      "id": "macos-desktop",
+      "version": "1.0.0",
+      "name": {
+        "zh": "macOS 桌面操控",
+        "en": "macOS Desktop Control"
+      },
+      "summary": {
+        "zh": "让智能体操作这台 Mac 的桌面应用",
+        "en": "Let the agent operate this Mac's desktop apps"
+      },
+      "description": {
+        "zh": "开源 macos-mcp(本机通过 uvx 运行):截屏并标注可交互元素、读取无障碍树、点击、输入、快捷键、滚动、切换应用。首次启动会弹出系统权限请求;需要在 系统设置 > 隐私与安全性 里为运行 Raven 的宿主授予「辅助功能」与「屏幕录制」,否则截图只有壁纸。",
+        "en": "The open-source macos-mcp server (runs locally via uvx): annotated screenshots, the accessibility tree, click, type, shortcuts, scroll and app switching. macOS prompts for permissions on first start; grant Accessibility and Screen Recording to whatever hosts Raven in System Settings > Privacy & Security, or screenshots show only the wallpaper."
+      },
+      "category": "productivity",
+      "publisher": {
+        "name": "CursorTouch",
+        "verified": false
+      },
+      "homepage": "https://github.com/CursorTouch/MacOS-MCP",
+      "risk_tier": 2,
+      "contributes": [
+        {
+          "kind": "mcp",
+          "connection": {
+            "type": "stdio",
+            "command": "uvx",
+            "args": [
+              "macos-mcp==0.4.6",
+              "serve",
+              "--transport",
+              "stdio"
+            ],
+            "env": {
+              "ANONYMIZED_TELEMETRY": "false"
+            },
+            "tool_timeout": 60
+          },
+          "auth": {
+            "mode": "none"
+          },
+          "tools_preview": [
+            "Snapshot",
+            "Click",
+            "Type",
+            "Shortcut",
+            "Scroll",
+            "App"
+          ]
+        }
+      ]
+    },
+    {
       "id": "chrome-devtools",
       "version": "1.0.0",
       "name": {

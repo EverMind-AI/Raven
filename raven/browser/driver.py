@@ -5,6 +5,12 @@ Design notes worth keeping:
 * **The page is shared, not per-caller.** The agent's tools and the GUI panel
   address one page. That is what lets a reader log in by hand and the agent
   continue on the other side of the login.
+* **Several agents, one browser, one tab each.** A caller that names an
+  ``owner`` (a conversation, a sub-agent run) is bound to a tab: the active one
+  if nobody else holds it, otherwise a fresh one. Its later calls land on that
+  tab whatever the panel is showing, and each of its actions brings the tab to
+  the front so the panel shows what the model is doing. Callers with no owner
+  are the reader's own hands.
 * **Reading is structural, not visual.** ``snapshot`` walks the DOM for the
   handful of things a caller acts on and hands back stable ``ref`` ids. Asking
   the model to find a button in a JPEG costs far more and works less often, so
@@ -22,6 +28,7 @@ import asyncio
 import base64
 import shlex
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -68,9 +75,21 @@ that opens one per iteration costs a renderer process each -- the machine goes
 down before anything in raven notices. The number is generous for a reader and
 still bounded."""
 
+OWNER_IDLE_S = 600.0
+"""How long an owner keeps its tab without touching it.
+
+A sub-agent run that finished, or a conversation the reader walked away from,
+never says goodbye. Past this the binding lapses and the tab is free for the
+next owner to claim, so a single-agent user who comes back tomorrow finds the
+agent on the tab they are looking at rather than on a fresh one beside it."""
+
 
 class BrowserUnavailableError(RuntimeError):
     """Playwright or its Chromium is not installed."""
+
+
+class BrowserBusyError(RuntimeError):
+    """No tab can be given to this owner right now."""
 
 
 # The elements a caller can actually act on, plus the few that carry the page's
@@ -142,6 +161,19 @@ _SNAPSHOT_JS = """
 }
 """.replace("%MAX_TEXT%", str(MAX_TEXT_CHARS))
 
+_OPENS_TAB_JS = """
+(el) => {
+  const a = el.closest('a[target]') || (el.tagName === 'FORM' ? el : el.closest('form[target]'));
+  return !!(a && a.target === '_blank');
+}
+"""
+
+
+@dataclass
+class _Owner:
+    page: Any
+    seen: float
+
 
 @dataclass
 class _State:
@@ -158,6 +190,11 @@ class _State:
     # click that goes nowhere with nothing said is indistinguishable from a
     # dead link.
     refused: str = ""
+    owners: dict[str, _Owner] = field(default_factory=dict)
+    adopting: set[asyncio.Task] = field(default_factory=set)
+    # When the reader last acted on any page, so a tool can tell its model that
+    # the page it is about to read was changed by a hand other than its own.
+    touched: float = 0.0
 
 
 class Browser:
@@ -264,7 +301,7 @@ class Browser:
             # popups. A target=_blank link becomes a new tab and the view
             # follows it -- the native behaviour, and both the agent and the
             # panel keep addressing the active tab.
-            self._s.context.on("page", lambda p: asyncio.ensure_future(self._adopt(p)))
+            self._s.context.on("page", self._on_new_page)
             # The URL-string check on `goto` is the only one a caller can reach,
             # and it is not the only way the page moves: a click follows an href
             # the driver never sees, a popup becomes the active tab, and goto
@@ -367,17 +404,129 @@ class Browser:
             except Exception:
                 logger.exception("browser: could not restream after tab switch")
 
+    def _on_new_page(self, page: Any) -> None:
+        task = asyncio.ensure_future(self._adopt(page))
+        self._s.adopting.add(task)
+        task.add_done_callback(self._s.adopting.discard)
+
+    async def _settle(self) -> None:
+        """Wait for popups already announced to be adopted.
+
+        An action that opened one returns from Playwright before the handler
+        above has run, so a caller reading the page straight after would read
+        the opener. Only adoptions already in flight are waited for; a popup
+        Chromium has not announced yet is caught by the caller's next read.
+        """
+        pending = [t for t in self._s.adopting if not t.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
     async def _adopt(self, page: Any) -> None:
-        """A popup becomes a new tab and the view follows it."""
+        """A popup becomes a new tab and the view follows it.
+
+        So does the owner whose page opened it: a target=_blank link the agent
+        clicked has to land where the agent reads next, or it reads the page it
+        left and reports that the click did nothing. The rebind happens before
+        the load wait so a caller settling on it is not made to wait out a slow
+        popup to learn which tab is now its own.
+        """
         if page is self._s.page or self._s.context is None:
             return
         self._wire(page)
         try:
+            opener = await page.opener()
+        except Exception:
+            opener = None
+        if opener is not None:
+            for rec in self._s.owners.values():
+                if rec.page is opener:
+                    rec.page = page
+        self._s.page = page
+        try:
             await page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT_MS)
         except Exception:
             pass
+        await self._restream()
+
+    # ---- ownership -----------------------------------------------------------
+
+    def _owner_live(self, rec: _Owner, now: float) -> bool:
+        try:
+            closed = rec.page.is_closed()
+        except Exception:
+            closed = True
+        return not closed and now - rec.seen < OWNER_IDLE_S
+
+    def _reap_owners(self, now: float) -> None:
+        for key in [k for k, rec in self._s.owners.items() if not self._owner_live(rec, now)]:
+            del self._s.owners[key]
+
+    def owner_of(self, page: Any) -> str | None:
+        """Which live owner holds this page, if any."""
+        now = time.monotonic()
+        for key, rec in self._s.owners.items():
+            if rec.page is page and self._owner_live(rec, now):
+                return key
+        return None
+
+    def url_for(self, owner: str | None) -> str:
+        """Where an owner's tab is, without starting anything or rebinding."""
+        if owner is not None:
+            rec = self._s.owners.get(owner)
+            if rec is not None and self._owner_live(rec, time.monotonic()):
+                return rec.page.url
+        return self.url
+
+    async def _page_for(self, owner: str | None, *, act: bool = True) -> Any:
+        """The page a caller works on, binding an owner on its first call.
+
+        ``owner=None`` is the reader; ``act`` says whether the call changes the
+        page, which is what the touch stamp and the front-most switch follow --
+        a read from either side must not move what the panel shows.
+        """
+        active = await self._ensure()
+        now = time.monotonic()
+        if owner is None:
+            if act:
+                self._s.touched = now
+            return active
+        self._reap_owners(now)
+        rec = self._s.owners.get(owner)
+        if rec is not None:
+            rec.seen = now
+            page = rec.page
+        else:
+            held = {id(r.page) for k, r in self._s.owners.items() if k != owner}
+            if id(active) not in held:
+                page = active
+            elif len(self._pages()) >= MAX_TABS:
+                raise BrowserBusyError(f"tab limit reached ({MAX_TABS}); close one before opening another")
+            else:
+                page = await self._s.context.new_page()
+                self._wire(page)
+            self._s.owners[owner] = _Owner(page, now)
+        if act:
+            await self._focus(page)
+        return page
+
+    async def _focus(self, page: Any) -> None:
+        """Make this tab the one the panel shows."""
+        if page is self._s.page:
+            return
         self._s.page = page
         await self._restream()
+        try:
+            await page.bring_to_front()
+        except Exception:
+            pass
+
+    def touched_since(self, when: float) -> bool:
+        """Whether the reader acted on any page after ``when`` (a monotonic stamp)."""
+        return self._s.touched > when
+
+    def release(self, owner: str) -> None:
+        """Forget an owner's binding; its tab stays open for whoever claims it next."""
+        self._s.owners.pop(owner, None)
 
     # ---- tabs ----------------------------------------------------------------
 
@@ -387,62 +536,93 @@ class Browser:
             return []
         return [p for p in ctx.pages if not p.is_closed()]
 
-    async def tabs(self) -> list[dict[str, Any]]:
-        """Every open tab, active flag included. Never starts Chromium."""
+    async def tabs(self, owner: str | None = None) -> list[dict[str, Any]]:
+        """Every open tab, active flag included. Never starts Chromium.
+
+        With an ``owner``, ``yours`` marks the tab bound to it and ``held``
+        the tabs another live owner is working in.
+        """
         out: list[dict[str, Any]] = []
+        mine = self._s.owners.get(owner) if owner is not None else None
         for i, p in enumerate(self._pages()):
             title = ""
             try:
                 title = await p.title()
             except Exception:
                 pass
-            out.append(
-                {
-                    "index": i,
-                    "url": p.url,
-                    "title": title,
-                    "active": p is self._s.page,
-                    "loading": bool(getattr(p, "_raven_loading", False)),
-                }
-            )
+            row: dict[str, Any] = {
+                "index": i,
+                "url": p.url,
+                "title": title,
+                "active": p is self._s.page,
+                "loading": bool(getattr(p, "_raven_loading", False)),
+            }
+            if owner is not None:
+                holder = self.owner_of(p)
+                row["yours"] = mine is not None and mine.page is p
+                row["held"] = holder is not None and holder != owner
+            out.append(row)
         return out
 
-    async def tab_new(self, url: str | None = None) -> dict[str, Any]:
+    async def tab_new(self, url: str | None = None, *, owner: str | None = None) -> dict[str, Any]:
         await self._ensure()
         if len(self._pages()) >= MAX_TABS:
             return await self._state(error=f"tab limit reached ({MAX_TABS}); close one first")
         page = await self._s.context.new_page()
         self._wire(page)
-        self._s.page = page
-        await self._restream()
+        if owner is not None:
+            self._s.owners[owner] = _Owner(page, time.monotonic())
+        else:
+            self._s.touched = time.monotonic()
+        await self._focus(page)
         if url and url.strip():
-            return await self.goto(url.strip())
-        return await self._state()
+            return await self.goto(url.strip(), owner=owner)
+        return await self._state(page=page)
 
-    async def tab_activate(self, index: int) -> dict[str, Any]:
+    async def tab_activate(self, index: int, *, owner: str | None = None) -> dict[str, Any]:
+        """Bring a tab to the front; an owner asking is rebound to it.
+
+        A tab another live owner is working in is refused to an owner: two
+        agents typing into one page is the collision the binding exists to
+        prevent, and a reader who wants to look at it can, with no owner.
+        """
         pages = self._pages()
         if not (0 <= index < len(pages)):
             return await self._state(error=f"no tab {index}")
-        if pages[index] is not self._s.page:
-            self._s.page = pages[index]
-            await self._restream()
-            try:
-                await self._s.page.bring_to_front()
-            except Exception:
-                pass
-        return await self._state()
+        page = pages[index]
+        if owner is not None:
+            holder = self.owner_of(page)
+            if holder is not None and holder != owner:
+                return await self._state(error=f"tab {index} is being used by another agent", page=page)
+            self._s.owners[owner] = _Owner(page, time.monotonic())
+        else:
+            self._s.touched = time.monotonic()
+        await self._focus(page)
+        return await self._state(page=page)
 
-    async def tab_close(self, index: int) -> dict[str, Any]:
-        """Close one tab; closing the last one closes the browser (native)."""
+    async def tab_close(self, index: int, *, owner: str | None = None) -> dict[str, Any]:
+        """Close one tab; closing the last one closes the browser (native).
+
+        The same refusal as ``tab_activate`` for an owner closing another
+        owner's tab; the owner's own binding lapses with the tab.
+        """
         pages = self._pages()
         if not (0 <= index < len(pages)):
             return await self._state(error=f"no tab {index}")
         victim = pages[index]
+        if owner is not None:
+            holder = self.owner_of(victim)
+            if holder is not None and holder != owner:
+                return await self._state(error=f"tab {index} is being used by another agent", page=victim)
+        else:
+            self._s.touched = time.monotonic()
         was_active = victim is self._s.page
         try:
             await victim.close()
         except Exception:
             pass
+        for key in [k for k, rec in self._s.owners.items() if rec.page is victim]:
+            del self._s.owners[key]
         rest = self._pages()
         if not rest:
             await self.close()
@@ -509,23 +689,23 @@ class Browser:
 
     # ---- navigation --------------------------------------------------------
 
-    async def goto(self, url: str) -> dict[str, Any]:
+    async def goto(self, url: str, *, owner: str | None = None) -> dict[str, Any]:
         # Checked before the page is ensured: a refused target must not be the
         # thing that launches Chromium.
         try:
             target = check_navigation(url)
         except NavigationRefusedError as exc:
             return await self._state(error=str(exc))
-        page = await self._ensure()
+        page = await self._page_for(owner)
         async with self._s.lock:
             try:
                 await page.goto(target, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
             except Exception as exc:
-                return await self._state(error=str(exc))
-        return await self._state()
+                return await self._state(error=str(exc), page=page)
+        return await self._state(page=page)
 
-    async def go(self, direction: str) -> dict[str, Any]:
-        page = await self._ensure()
+    async def go(self, direction: str, *, owner: str | None = None) -> dict[str, Any]:
+        page = await self._page_for(owner)
         async with self._s.lock:
             try:
                 if direction == "back":
@@ -535,29 +715,30 @@ class Browser:
                 else:
                     await page.reload(timeout=NAV_TIMEOUT_MS)
             except Exception as exc:
-                return await self._state(error=str(exc))
-        return await self._state()
+                return await self._state(error=str(exc), page=page)
+        return await self._state(page=page)
 
     # ---- reading -----------------------------------------------------------
 
-    async def snapshot(self) -> dict[str, Any]:
+    async def snapshot(self, *, owner: str | None = None) -> dict[str, Any]:
         """The page as things a caller can act on, with stable refs."""
-        page = await self._ensure()
+        page = await self._page_for(owner, act=False)
         try:
             data = await page.evaluate(_SNAPSHOT_JS, MAX_REFS)
         except Exception as exc:
-            return await self._state(error=str(exc))
+            return await self._state(error=str(exc), page=page)
         data["console"] = list(self._s.console[-20:])
+        data["tab"] = self._index_of(page)
         return data
 
-    async def screenshot(self, quality: int = 60, full: bool = False) -> str:
+    async def screenshot(self, quality: int = 60, full: bool = False, *, owner: str | None = None) -> str:
         """A base64 JPEG. The panel shows it; a tool uses it to check its work.
 
         scale="css" keeps the image at viewport size: the context renders at
         2x for the reader's stream, and a 2x screenshot would quadruple what
         the model pays to look at the same page.
         """
-        page = await self._ensure()
+        page = await self._page_for(owner, act=False)
         raw = await page.screenshot(type="jpeg", quality=max(1, min(100, quality)), full_page=full, scale="css")
         return base64.b64encode(raw).decode("ascii")
 
@@ -645,18 +826,25 @@ class Browser:
                 except Exception:
                     pass
 
-    async def _history_reach(self) -> tuple[bool, bool]:
-        """(can_back, can_forward) for the active tab, via CDP history.
+    def _index_of(self, page: Any) -> int | None:
+        for i, p in enumerate(self._pages()):
+            if p is page:
+                return i
+        return None
 
-        Uses the screencast's CDP session when one is live; otherwise a
-        short-lived one. Any failure degrades to (True, True) — a wrongly
-        enabled arrow no-ops, a wrongly disabled one loses a capability.
+    async def _history_reach(self, page: Any = None) -> tuple[bool, bool]:
+        """(can_back, can_forward) for a tab (the active one by default), via CDP history.
+
+        Uses the screencast's CDP session when one is live and it is the active
+        tab being asked about; otherwise a short-lived one. Any failure degrades
+        to (True, True) — a wrongly enabled arrow no-ops, a wrongly disabled one
+        loses a capability.
         """
-        page = self._s.page
+        page = page if page is not None else self._s.page
         if page is None:
             return False, False
         try:
-            cdp = self._s.cdp
+            cdp = self._s.cdp if page is self._s.page else None
             own = False
             if cdp is None:
                 cdp = await self._s.context.new_cdp_session(page)
@@ -670,15 +858,15 @@ class Browser:
         except Exception:
             return True, True
 
-    async def _state(self, error: str | None = None) -> dict[str, Any]:
-        page = self._s.page
+    async def _state(self, error: str | None = None, *, page: Any = None) -> dict[str, Any]:
+        page = page if page is not None else self._s.page
         title = ""
         if page is not None:
             try:
                 title = await page.title()
             except Exception:
                 pass
-        can_back, can_fwd = await self._history_reach()
+        can_back, can_fwd = await self._history_reach(page)
         out: dict[str, Any] = {
             "url": page.url if page else "",
             "title": title,
@@ -688,6 +876,7 @@ class Browser:
             "can_back": can_back,
             "can_forward": can_fwd,
             "tab_count": len(self._pages()),
+            "tab": self._index_of(page) if page is not None else None,
         }
         if not error and self._s.refused:
             # Reported once, then forgotten: a click that goes nowhere with
@@ -716,62 +905,95 @@ class Browser:
 
     # ---- acting ------------------------------------------------------------
 
-    async def _locate(self, ref: str) -> Any:
-        page = await self._ensure()
+    @staticmethod
+    def _locate(page: Any, ref: str) -> Any:
         return page.locator(f'[data-raven-ref="{ref}"]')
 
     async def click(
-        self, ref: str | None = None, x: int | None = None, y: int | None = None, button: str = "left"
+        self,
+        ref: str | None = None,
+        x: int | None = None,
+        y: int | None = None,
+        button: str = "left",
+        *,
+        owner: str | None = None,
     ) -> dict[str, Any]:
-        page = await self._ensure()
+        page = await self._page_for(owner)
         async with self._s.lock:
             try:
                 if ref:
-                    await (await self._locate(ref)).click(timeout=ACT_TIMEOUT_MS)
+                    loc = self._locate(page, ref)
+                    # A link that opens a tab is announced by Chromium after the
+                    # click resolves; waiting for the popup here is what lets
+                    # the readback describe the tab the agent is now on rather
+                    # than the one it left. Only a declared target can be
+                    # known in advance -- a window.open in a handler is caught
+                    # by the owner's next read, once the tab has been adopted.
+                    opens_tab = await loc.evaluate(_OPENS_TAB_JS, timeout=ACT_TIMEOUT_MS)
+                    if opens_tab:
+                        async with page.expect_popup(timeout=ACT_TIMEOUT_MS):
+                            await loc.click(timeout=ACT_TIMEOUT_MS, button=button)
+                    else:
+                        await loc.click(timeout=ACT_TIMEOUT_MS, button=button)
                 elif x is not None and y is not None:
                     await page.mouse.click(x, y, button=button)
                 else:
-                    return await self._state(error="click needs a ref or x/y")
-                # A click that navigates needs the load to settle before the
-                # caller reads the page, or it reads the old one.
-                await page.wait_for_load_state("domcontentloaded", timeout=ACT_TIMEOUT_MS)
+                    return await self._state(error="click needs a ref or x/y", page=page)
+                page = await self._landed(page, owner)
             except Exception as exc:
-                return await self._state(error=str(exc))
-        return await self._state()
+                return await self._state(error=str(exc), page=page)
+        return await self._state(page=page)
 
-    async def type_text(self, text: str, ref: str | None = None, submit: bool = False) -> dict[str, Any]:
-        page = await self._ensure()
+    async def _landed(self, page: Any, owner: str | None) -> Any:
+        """The page an action ends on, loaded enough to read.
+
+        A click that navigates needs the load to settle before the caller
+        reads the page, or it reads the old one; a click that opened a popup
+        moved its owner to the popup, and that is the page to settle and report.
+        """
+        await self._settle()
+        if owner is not None:
+            rec = self._s.owners.get(owner)
+            if rec is not None:
+                page = rec.page
+        await page.wait_for_load_state("domcontentloaded", timeout=ACT_TIMEOUT_MS)
+        return page
+
+    async def type_text(
+        self, text: str, ref: str | None = None, submit: bool = False, *, owner: str | None = None
+    ) -> dict[str, Any]:
+        page = await self._page_for(owner)
         async with self._s.lock:
             try:
                 if ref:
-                    loc = await self._locate(ref)
-                    await loc.fill(text, timeout=ACT_TIMEOUT_MS)
+                    await self._locate(page, ref).fill(text, timeout=ACT_TIMEOUT_MS)
                 else:
                     await page.keyboard.type(text)
                 if submit:
                     await page.keyboard.press("Enter")
-                    await page.wait_for_load_state("domcontentloaded", timeout=ACT_TIMEOUT_MS)
+                    page = await self._landed(page, owner)
             except Exception as exc:
-                return await self._state(error=str(exc))
-        return await self._state()
+                return await self._state(error=str(exc), page=page)
+        return await self._state(page=page)
 
-    async def press(self, key: str) -> dict[str, Any]:
-        page = await self._ensure()
+    async def press(self, key: str, *, owner: str | None = None) -> dict[str, Any]:
+        page = await self._page_for(owner)
         async with self._s.lock:
             try:
                 await page.keyboard.press(key)
+                page = await self._landed(page, owner)
             except Exception as exc:
-                return await self._state(error=str(exc))
-        return await self._state()
+                return await self._state(error=str(exc), page=page)
+        return await self._state(page=page)
 
-    async def scroll(self, dx: int = 0, dy: int = 0) -> dict[str, Any]:
-        page = await self._ensure()
+    async def scroll(self, dx: int = 0, dy: int = 0, *, owner: str | None = None) -> dict[str, Any]:
+        page = await self._page_for(owner)
         async with self._s.lock:
             try:
                 await page.mouse.wheel(dx, dy)
             except Exception as exc:
-                return await self._state(error=str(exc))
-        return await self._state()
+                return await self._state(error=str(exc), page=page)
+        return await self._state(page=page)
 
     # ---- the reader's raw input ---------------------------------------------
     # No lock and no state readback: these arrive as a stream (a drag is dozens
@@ -788,7 +1010,7 @@ class Browser:
         dx: float = 0,
         dy: float = 0,
     ) -> None:
-        page = await self._ensure()
+        page = await self._page_for(None)
         m = page.mouse
         if action == "move" and x is not None:
             await m.move(x, y or 0)
@@ -802,7 +1024,7 @@ class Browser:
             await m.wheel(dx, dy)
 
     async def key_event(self, key: str, action: str = "press") -> None:
-        page = await self._ensure()
+        page = await self._page_for(None)
         kb = page.keyboard
         if action == "down":
             await kb.down(key)
@@ -813,7 +1035,7 @@ class Browser:
 
     async def insert_text(self, text: str) -> None:
         """Composed text (IME input) lands as-is -- key events cannot spell it."""
-        page = await self._ensure()
+        page = await self._page_for(None)
         await page.keyboard.insert_text(text)
 
 

@@ -408,7 +408,7 @@ async def test_tab_activate_switches_the_shared_page_and_restreams(monkeypatch: 
         streams.append("restream")
 
     monkeypatch.setattr(b, "_restream", restream)
-    monkeypatch.setattr(b, "_state", lambda error=None: _fake_state(b))
+    monkeypatch.setattr(b, "_state", lambda error=None, page=None: _fake_state(b))
 
     await b.tab_activate(1)
 
@@ -425,7 +425,7 @@ async def test_tab_close_of_the_active_tab_moves_to_a_neighbour(monkeypatch: pyt
         pass
 
     monkeypatch.setattr(b, "_restream", restream)
-    monkeypatch.setattr(b, "_state", lambda error=None: _fake_state(b))
+    monkeypatch.setattr(b, "_state", lambda error=None, page=None: _fake_state(b))
 
     await b.tab_close(1)
 

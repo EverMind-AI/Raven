@@ -390,6 +390,14 @@ class RavenLoopBackend:
             tools.register(
                 WebFetchTool(api_key=self._web_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
             )
+        # The same browser the parent drives, in a tab of this run's own: the
+        # tools name the run in flight as their owner, so two sub-agents
+        # browsing at once are two tabs, never one page typed into twice.
+        from raven.agent.tools.browser import browser_tools
+
+        for tool in browser_tools():
+            if allowed(tool.name):
+                tools.register(tool)
 
         # A resumed instance brings its own history, system prompt included;
         # rebuilding the prompt here would append a second system turn. A
