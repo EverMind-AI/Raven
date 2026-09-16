@@ -628,11 +628,11 @@ class HarnessNode:
 
         Evolver code should call this when constructing new
         :class:`HarnessNode` instances so the node carries the kernel
-        version it was created under. Falls back to ``"unknown"`` if
-        the import fails (shouldn't happen in normal operation).
+        version it was created under. Falls back to ``"unknown"`` when raven
+        is not importable at all, which a bench run outside the install is.
         """
         try:
-            from raven.__core_version__ import __version__
+            from raven import __version__
 
             return __version__
         except ImportError:

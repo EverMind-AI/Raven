@@ -143,8 +143,8 @@ class WebSearchTool(Tool):
             raise ValueError(f"unknown web_search provider {provider!r}; one of {sorted(SEARCH_PROVIDERS)}")
         # A callable is the live form (a reader over the config file), so a key
         # added there serves the next call; a plain string stays a snapshot.
-        self._api_key_source = api_key if callable(api_key) else None
-        self._init_api_key = None if callable(api_key) else api_key
+        self._api_key_source: "Callable[[], str] | None" = api_key if callable(api_key) else None
+        self._init_api_key: str | None = None if callable(api_key) else api_key
         self.max_results = max_results
         self.proxy = proxy
         self.provider = provider

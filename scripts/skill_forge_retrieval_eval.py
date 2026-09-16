@@ -26,10 +26,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from raven.context_engine.base import AssemblyContext
-from raven.memory_engine.base import TokenBudget
-
 from raven.context_engine.segments.skills import SkillsSegmentBuilder
+from raven.contracts.assembled import TokenBudget
+from raven.contracts.context import AssemblyContext
 from raven.memory_engine.skill_forge import (
     LocalSkillSource,
     SkillForgeRouter,

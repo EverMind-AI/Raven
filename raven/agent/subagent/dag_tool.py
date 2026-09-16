@@ -1042,7 +1042,7 @@ class SubAgentDagTool(Tool):
         mcp_scope: str | None = None,
         mcp_credential_gaps: "Callable[[], frozenset[str]] | None" = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> str | ToolResult:
         """Run one graph. ``mcp_servers`` is this run's own MCP definitions.
 
         Not a model-facing argument: it is absent from :meth:`parameters`, and
@@ -1074,7 +1074,7 @@ class SubAgentDagTool(Tool):
         background: bool,
         confirm: bool = False,
         task_summary: str = "",
-    ) -> str:
+    ) -> str | ToolResult:
         # Refused whole rather than per node, and ahead of validation, for the
         # same reason validation runs early: a refused graph must cost zero
         # sub-agent dispatches.
@@ -1641,7 +1641,11 @@ class SubAgentDagTool(Tool):
         point) gets that behaviour without configuring anything.
         """
         cfg = self._verdict_config
-        if self._provider_for is None or not cfg.verdict_enabled:
+        # Bound here rather than read off self inside the closure: the guard
+        # below must hold for the call, and an attribute re-read later is a
+        # different value.
+        provider_for = self._provider_for
+        if provider_for is None or not cfg.verdict_enabled:
             return None
 
         async def _judge(
@@ -1650,7 +1654,7 @@ class SubAgentDagTool(Tool):
             # Resolved here, not when this tool was built: the loop's provider is
             # a property over the running turn's binding, so a session that
             # switched model must reach the judge.
-            provider = self._provider_for()
+            provider = provider_for()
             if provider is None:
                 return Verdict(accomplished=True)
             evidence, complete = await self._node_evidence(store, node.id, cfg.evidence_budget_chars)

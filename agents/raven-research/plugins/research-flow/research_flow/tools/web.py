@@ -955,7 +955,7 @@ class WebSearchTool(Tool):
 
     async def _search(
         self, state: _SearchTurnState, query: str, count: int | None, k: int | None = None, page: int = 1
-    ) -> tuple[str, list[str], dict[str, int]]:
+    ) -> tuple[str, list[str], dict[str, int | None]]:
         """Returns the rendered text, the ordered result URLs, and the shaping sizes.
 
         The URL list is returned rather than parsed back out of the text: the ledger

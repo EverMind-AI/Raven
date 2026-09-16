@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 from pydantic.alias_generators import to_camel
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from raven.config.agent_names import THIRD_PARTY_PRESET_NAMES
 from raven.contracts.path_policy import WORKSPACE_DEFAULT_SENTINEL
@@ -2488,7 +2488,7 @@ class Config(BaseSettings):
 
         return SkillForgeConfig()
 
-    model_config = ConfigDict(
+    model_config = SettingsConfigDict(
         env_prefix="NANOBOT_",
         env_nested_delimiter="__",
         extra="forbid",

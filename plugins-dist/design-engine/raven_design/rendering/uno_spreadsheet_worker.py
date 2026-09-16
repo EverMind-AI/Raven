@@ -10,9 +10,12 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-import uno
-from com.sun.star.beans import PropertyValue
-from com.sun.star.uno import Exception as UnoException
+# This module runs inside LibreOffice's bundled interpreter, which is the only
+# one that carries the UNO bridge. It is never imported by the host process, so
+# these three are unresolvable from raven's environment by design.
+import uno  # ty: ignore[unresolved-import]
+from com.sun.star.beans import PropertyValue  # ty: ignore[unresolved-import]
+from com.sun.star.uno import Exception as UnoException  # ty: ignore[unresolved-import]
 
 
 def _property(name: str, value: Any) -> PropertyValue:

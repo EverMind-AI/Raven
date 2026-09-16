@@ -33,7 +33,7 @@ class ProviderPool:
         # re-login, an edited config file) has to be visible without a restart.
         # Cached bindings are dropped when the config that produced them is no
         # longer the current one.
-        self._supplier = config if callable(config) else (lambda: config)
+        self._supplier: "Callable[[], Config]" = config if callable(config) else (lambda: config)
         self._cache: dict[tuple[str, str], ModelBinding] = {}
         self._cache_key: str | None = None
 

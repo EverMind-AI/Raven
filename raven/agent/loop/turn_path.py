@@ -93,7 +93,7 @@ if TYPE_CHECKING:
     from raven.agent.loop.checkpoint import CheckpointService
     from raven.contracts.token_strategy import UsageSnapshot
     from raven.spine.events import NoticeKind
-    from raven.spine.runner import Drain, Emit
+    from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
 
 
@@ -2841,9 +2841,9 @@ class TurnPathMixin:
         inline_tool_stream: bool = False,
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
-    ) -> LoopOutcome:
+    ) -> "TurnOutcome":
         """Spine-native turn entry: consume a TurnRequest, fan the agent's output
-        onto the single ``emit``, return a LoopOutcome. Collapses the legacy
+        onto the single ``emit``, return a TurnOutcome. Collapses the legacy
         output paths (a str return + the five callbacks) onto one boundary.
 
         Named ``run_turn`` rather than ``run``: ``run`` is the runtime keep-alive
