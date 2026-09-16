@@ -2802,7 +2802,7 @@ describe('transcript island, delegated calls', () => {
   /* A conversation as `session.resume` hands it back: the assistant's call, then
      the tool row the server stamped the run's task id onto. */
   /* The spawn turn, and then a turn that only answered.
-     
+
      That second turn is what keeps the first one's fold SHUT, which is the
      state every case below is about: a replay opens the fold of the turn the
      conversation ends on, and a turn with no work of its own has no fold to
