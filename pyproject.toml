@@ -27,7 +27,7 @@ dependencies = [
     "croniter>=6.0.0,<7.0.0",
     "pyyaml>=6.0",
     "prompt-toolkit>=3.0.0",
-    "json-repair>=0.30.0",
+    "json-repair>=0.60.1",
     # everos token-aware truncation (text.py). Currently also a
     # transitive dep of litellm — pinning it directly so the everos
     # extractor keeps working if upstream ever drops it.
@@ -42,7 +42,7 @@ dependencies = [
     # a dependency that only arrives by accident is one an upgrade can remove.
     "idna>=3.4,<4.0.0",
     "portalocker>=3.2.0",
-    "mcp>=1.27.0",
+    "mcp>=1.28.1",
     "orjson>=3.11.6,<4.0",
     # knn model router (routing/knn_router.py) embedding KNN. Currently also a
     # transitive dep (via lancedb) -- pinning it directly so routing keeps
@@ -52,7 +52,7 @@ dependencies = [
     # us anyway via everos[multimodal] -> everalgo-parser, but that is a
     # three-hop transitive path — pinning it directly so reading an image keeps
     # working if any link in that chain drops it.
-    "pillow>=10.0.0",
+    "pillow>=12.3.0",
     # Rasterises a QR-login channel's scan URL server-side, so the page shows an
     # <img> instead of carrying a QR encoder. Not in the channel extras where it
     # started: signing in to WeChat happens in the UI, and an install that cannot
@@ -66,7 +66,7 @@ dependencies = [
     # retrieval keeps working if that chain ever changes.
     "lancedb>=0.33,<1.0",
     "ripgrep-bin>=15.2.0,<16.0.0",
-    "aiohttp>=3.13.4",
+    "aiohttp>=3.14.3",
     "click>=8.1",
     "pyarrow>=17",
 ]
@@ -85,7 +85,7 @@ channel-discord = ["websockets>=16.0,<17.0"]
 channel-whatsapp = []
 channel-matrix = [
     "matrix-nio>=0.25.2; sys_platform != 'win32'",
-    "mistune>=3.0.0,<4.0.0",
+    "mistune>=3.3.3,<4.0.0",
     "nh3>=0.2.17,<1.0.0",
 ]
 channel-feishu = ["lark-oapi>=1.5.0,<2.0.0"]
@@ -211,7 +211,7 @@ design-engine = { workspace = true }
 
 [tool.uv]
 constraint-dependencies = [
-    "aiohttp>=3.13.4",
+    "aiohttp>=3.14.3",
     # everalgo-boundary 0.3.0 added a required third field to the
     # DetectionResult NamedTuple; everalgo-agent-memory still constructs it with
     # two, under a range (>=0.2.0,<2.0.0) wide enough to pick the break up. The
@@ -468,7 +468,7 @@ dev = [
     "grimp>=3.16",
     "hatchling>=1.32.0",
     "import-linter>=2.14",
-    "json-repair>=0.59.5",
+    "json-repair>=0.60.1",
     "jsonschema>=4.23.0",
     "packaging>=26.1",
     "pexpect>=4.9",

@@ -13,7 +13,7 @@ dependencies = [
     "raven",
     # Image inspection, margin cropping, motion keyframes and preview
     # composition across the rendering package (fork pin kept).
-    "pillow>=10.0.0",
+    "pillow>=12.3.0",
 ]
 
 [project.optional-dependencies]

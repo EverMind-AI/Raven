@@ -33,7 +33,7 @@ dependencies = [
     "cairosvg>=2.7,<3",
     # The fork's raven[render] half: page rasterisation deliberately walks
     # pdfium (Apache-2.0), keeping the AGPL surface to reading source documents.
-    "pillow>=11.3,<13",
+    "pillow>=12.3.0,<13",
     "pypdfium2>=4.30,<5",
     # Not imported here. The design lane launches a browser and declares
     # playwright in an extra, and an extra is one more thing an installer has to
