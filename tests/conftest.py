@@ -612,7 +612,7 @@ def _no_openrouter_network(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _no_provider_probe(monkeypatch):
-    """Keep the credential probe off the network.
+    """Keep the credential probe's socket off the network, and only the socket.
 
     `model.options` asks every configured provider for `/v1/models` to learn
     what it serves, and a test that writes an address gets a real connection
@@ -622,18 +622,32 @@ def _no_provider_probe(monkeypatch):
     `[ovms]`, whose address is `10.0.0.5:8080`, came to wait nearly four
     seconds for something it was never going to reach.
 
-    Answering "not reachable" is what those tests already expect: a row is
-    configured by holding an address, not by a probe that answered. The two
-    files that assert on a live answer patch this themselves, and their patch
-    lands after this one.
+    Fenced at `_probe_models_endpoint`, the one place every HTTP probe opens its
+    client, rather than at `test_provider`: the vocabulary a caller reads back
+    -- `unknown_provider`, `not_configured`, `no_probe_endpoint` -- is decided
+    above this line, and a test asking which of those a section earns is asking
+    about that code, not about the network. A probe that hands in its own
+    `transport` is mounting a fake server on purpose, and that is the injection
+    point the function documents, so those go through untouched.
     """
     from raven.config import update_providers
 
-    monkeypatch.setattr(
-        update_providers,
-        "test_provider",
-        lambda name, **kwargs: {"ok": False, "error": "no probe in tests"},
-    )
+    real = update_providers._probe_models_endpoint
+
+    def unreachable(url, headers, *, timeout_s, transport=None, extras=()):
+        if transport is not None:
+            return real(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
+        return {
+            "ok": False,
+            "status": "network_error",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "no probe in tests",
+        }
+
+    monkeypatch.setattr(update_providers, "_probe_models_endpoint", unreachable)
     yield
 
 
