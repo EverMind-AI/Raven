@@ -54,7 +54,7 @@ function harness(): {
   ]
   const build = new Function(...names, `${source}\nreturn {
     parkTurn, restoreTurn, transitionTurn, parkedTurns,
-    setOwner(value) { turnOwner = value; },
+    setOwner(value) { park.turnOwner = value; },
   };`) as (...args: unknown[]) => ParkedHarness
   return {
     api: build(...values), queueRestore, workspaceRestore, drainQueue,

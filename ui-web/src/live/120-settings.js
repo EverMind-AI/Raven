@@ -33,7 +33,7 @@ let everosLive = null;
    calls it late-bound. */
 window.persistPermMode = (m) => {
   const sid = sessionCurrent();
-  if (!sid) { pendingPerm = m; return true; }
+  if (!sid) { staged.perm = m; return true; }
   return rpc.call('config.set', { key: 'permissions.mode', value: m, scope: 'session', session_id: sid })
     .then((r) => {
       if (r && r.applied) return true;
@@ -43,10 +43,10 @@ window.persistPermMode = (m) => {
     .catch(() => { toast(T('gui.perm.save_failed')); return false; });
 };
 
-/* Read by the send path, next to the staged model and tier. `pendingPerm` is
-   declared beside them in 080, where all three are reset on the two paths
+/* Read by the send path, next to the staged model and tier. `staged` is
+   declared in 080, where all three of its fields are reset on the two paths
    that abandon a draft. */
-function stagedPerm() { const p = pendingPerm; pendingPerm = null; return p; }
+function stagedPerm() { const p = staged.perm; staged.perm = null; return p; }
 
 async function loadEveros() {
   try {
@@ -111,11 +111,13 @@ const HIDDEN_PROVIDERS = new Set(['hosted_vllm', 'custom']);
 let providersLive = [];
 let defaultModelLive = '';
 let defaultProviderLive = '';
-let providerConfiguredLive = null;
+/* Whether first-run setup reported a configured provider. On an object because
+   the boot in 200 is what learns the answer. */
+const setupState = { providerConfigured: null };
 
 function openModelsForMissingProvider() {
   const connected = providersLive.some((p) => p.on);
-  const knownMissing = providerConfiguredLive === false || providersLive.length > 0;
+  const knownMissing = setupState.providerConfigured === false || providersLive.length > 0;
   if (connected || !knownMissing) return false;
   void RavenIslands.settings.openModels();
   return true;
@@ -240,7 +242,7 @@ DS.settings = {
       /* check:true = fetch now, not the daily cache: the button says check for
          updates, and a person who just clicked it is asking about now. */
       const v = await rpc.call('system.version', { check: true });
-      if (v.raven_version) APP_VERSION = v.raven_version;
+      if (v.raven_version) appVersionSet(v.raven_version);
       if (v.update_available) {
         showUpNote('ver', v.latest_version);
         drawSettings();
@@ -416,14 +418,14 @@ async function persistModel(m, provider, scope) {
     // leaving the draft for a conversation of its own advances the generation
     // (every view switch does) -- so without this the resolved draft write
     // repaints a chip that has since been loaded correctly for someone else.
-    if (!sid && !pendingModel && gen === viewGen) { modelSet(m); setModelLabel(); }
+    if (!sid && !staged.model && gen === viewGen) { modelSet(m); setModelLabel(); }
     return;
   }
   if (sid) {
     await rpc.call('config.set', { key: 'model', value: m, provider, session_id: sid });
     return;
   }
-  pendingModel = { model: m, provider };
+  staged.model = { model: m, provider };
   return 'staged';
 }
 
@@ -436,10 +438,10 @@ async function persistModel(m, provider, scope) {
    leaves the chip hidden on the refusal rather than inventing one. */
 let tierMenu = [];
 
-/* Read by the send path, which applies it next to the staged model.
-   `pendingTier` itself is declared beside `pendingModel` in 080, where both are
-   reset on the two paths that abandon a draft. */
-function stagedTier() { const t = pendingTier; pendingTier = null; return t; }
+/* Read by the send path, which applies it next to the staged model. `staged`
+   itself is declared in 080, where every field is reset on the two paths that
+   abandon a draft. */
+function stagedTier() { const t = staged.tier; staged.tier = null; return t; }
 
 DS.tier = {
   read: async () => {
@@ -456,7 +458,7 @@ DS.tier = {
       /* Staged, and echoed back as though written: there is no server state to
          contradict it yet, and the chip has to show the reader what their next
          turn will run at. */
-      pendingTier = mode;
+      staged.tier = mode;
       return { mode, availableModes: tierMenu };
     }
     const r = await rpc.call('session.set_mode', { session_key: sid, mode });

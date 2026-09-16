@@ -9,22 +9,23 @@ const parkedTurns = new Map();  // session_key -> parked turn snapshot
 const subBySession = {};        // session_key -> subscription_id
 const subSession = {};          // subscription_id -> session_key
 const PARK_EVENT_CAP = 4000;
-/* The session the running turn belongs to. parkTurn must NOT key by the current
-   pointer: every rail click moves it before sessionOpen(s), so by the time the
-   old turn is parked it already names the TARGET session. Parking under that
-   would file the old transcript in the wrong drawer and immediately hand it
-   back as the new session's content. */
-let turnOwner = null;
-/* The message a retry would re-send. Held here rather than read back off the
-   last `.ask` bubble, which is markup and may belong to another session. */
-let lastAsk = '';
+/* turnOwner: the session the running turn belongs to. parkTurn must NOT key by
+   the current pointer: every rail click moves it before sessionOpen(s), so by
+   the time the old turn is parked it already names the TARGET session. Parking
+   under that would file the old transcript in the wrong drawer and immediately
+   hand it back as the new session's content.
+   lastAsk: the message a retry would re-send. Held here rather than read back
+   off the last `.ask` bubble, which is markup and may belong to another
+   session.
+   Both on an object because the turn and override layers write them. */
+const park = { turnOwner: null, lastAsk: '' };
 
 function parkTurn() {
-  if (!turnOwner || !turn.busy()) return;
+  if (!park.turnOwner || !turn.busy()) return;
   stopSayPaint();
-  const s = sess(turnOwner);
+  const s = sess(park.turnOwner);
   if (s) s.status = 'run';
-  parkedTurns.set(turnOwner, {
+  parkedTurns.set(park.turnOwner, {
     nodes: [...$('#stage').childNodes],
     turn: { st: live.st, steps: live.steps, say: live.say, open: new Map(live.open),
       sawEpisode: live.sawEpisode, startedAt: live.startedAt, answerAt: live.answerAt },
@@ -52,7 +53,7 @@ DS.transcript.parked = (node) => {
 };
 
 function restoreTurn(pk) {
-  turnOwner = sessionCurrent();
+  park.turnOwner = sessionCurrent();
   const stage = $('#stage');
   stage.innerHTML = '';
   pk.nodes.forEach((n) => stage.appendChild(n));
@@ -77,7 +78,7 @@ function restoreTurn(pk) {
    Apply the same reducer to the visible phase or to the saved copy, never to
    whichever conversation merely happens to be open when the frame lands. */
 function transitionTurn(owner, event) {
-  if (owner === turnOwner && owner === sessionCurrent()) {
+  if (owner === park.turnOwner && owner === sessionCurrent()) {
     turn.dispatch(event);
     return;
   }

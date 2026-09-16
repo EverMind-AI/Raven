@@ -1,5 +1,8 @@
 /* ══ module 2: capabilities page ══════════════════════════════════ */
-let extTab = 'skill', cKind = 'all', cQuery = '';
+let extTab = 'skill';
+/* The filter bar's state. On an object because demo/150-chrome.js writes both
+   fields from the pill row and the search field. */
+const capFilter = { kind: 'all', query: '' };
 
 /* Only one module page at a time. They used to cover the whole window, so
    two open at once was invisible; now that the rail stays put, the one behind
@@ -14,7 +17,15 @@ const NAV_OF = {
   cronPage: 'moreBtn',
 };
 
-function showPage(id) {
+/* The skill and plugin layers wrap this verb. The registry is a `var` with no
+   initialiser on purpose: demo/152-skills.js is a cycle-mate of this file, so
+   it can register before this statement has run, and an initialiser would
+   discard what it registered. */
+var showPageDecorators;
+function showPage(id) { return applyDecorators(showPageDecorators, showPageBase)(id); }
+function decorateShowPage(wrap) { (showPageDecorators ??= []).push(wrap); }
+
+function showPageBase(id) {
   Object.keys(NAV_OF).forEach((p) => { $('#' + p).dataset.open = String(p === id); });
   /* From the top, every time: the scroller keeps its position across a close
      and reopen, so a page could greet the reader halfway down its own list. */
@@ -37,9 +48,13 @@ function showPage(id) {
 
 /* Switching module resets the filters: a query typed while browsing skills is
    not a question about plugins. */
-function extSet(tab) {
+var extSetDecorators;
+function extSet(tab) { return applyDecorators(extSetDecorators, extSetBase)(tab); }
+function decorateExtSet(wrap) { (extSetDecorators ??= []).push(wrap); }
+
+function extSetBase(tab) {
   if (!tab || tab === extTab) return;
-  extTab = tab; cKind = 'all'; cQuery = '';
+  extTab = tab; capFilter.kind = 'all'; capFilter.query = '';
   $('#cq').value = '';
   [...$('#cKind').children].forEach((c, i) => c.setAttribute('aria-pressed', String(i === 0)));
   closeDetail();
@@ -84,7 +99,11 @@ function closeSet() {
   markNewCurrent();
 }
 
-function closeDetail() { $('#detail').dataset.open = 'false'; }
+var closeDetailDecorators;
+function closeDetail() { return applyDecorators(closeDetailDecorators, closeDetailBase)(); }
+function decorateCloseDetail(wrap) { (closeDetailDecorators ??= []).push(wrap); }
+
+function closeDetailBase() { $('#detail').dataset.open = 'false'; }
 
 /* ══ module 2b: external agents ════════════════════════════════════
    The renderer is the xa island (ui-web/src/features/xa/); what remains here

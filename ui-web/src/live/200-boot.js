@@ -26,12 +26,12 @@ DS.onboard = {
   if (!(await rpc.connect())) { authFail(); return; }
   try {
     const hello = await rpc.call('system.hello', { client_version: '0.1.0', surface: SURFACE });
-    if (hello && hello.platform) HOST_PLATFORM = hello.platform;
+    if (hello && hello.platform) hostPlatformSet(hello.platform);
     // Before the first paint of anything data-driven: config.language decides
     // what every label below says.
     await loadLang();
     const v = await rpc.call('system.version', {});
-    if (v.raven_version) APP_VERSION = v.raven_version;
+    if (v.raven_version) appVersionSet(v.raven_version);
     drawFoot();
     /* Absent until system.version carries them; the row simply stays hidden,
        so an older server degrades to no notice rather than a broken one. */
@@ -67,7 +67,7 @@ DS.onboard = {
        standalone onboarding flow for an explicit design or support pass. */
     try {
       const setup = await rpc.call('setup.status', {});
-      providerConfiguredLive = setup.provider_configured !== false;
+      setupState.providerConfigured = setup.provider_configured !== false;
       /* ?onboard=demo asked for the canned flow, which the demo shell has
          already put on screen. Both write into #onb, so opening this one would
          replace it -- and the reader who asked for the version that writes

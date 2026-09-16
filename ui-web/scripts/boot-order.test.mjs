@@ -81,7 +81,7 @@ describe('the assembled page boot order', () => {
 
 describe('first-run model setup', () => {
   it('records missing-provider state without opening onboarding automatically', () => {
-    expect(live).toContain('providerConfiguredLive = setup.provider_configured !== false;')
+    expect(live).toContain('setupState.providerConfigured = setup.provider_configured !== false;')
     expect(live).not.toMatch(/setup\.provider_configured === false\s*\|\|/)
   })
 

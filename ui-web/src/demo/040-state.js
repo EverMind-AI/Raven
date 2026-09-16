@@ -1,6 +1,9 @@
 /* ══ app state ════════════════════════════════════════════════════ */
 sessionSet('a');
-let timers = [], use = null;
+let timers = [];
+/* The running turn's usage totals. On an object because the conversation,
+   replay and composer layers all write it. */
+const runState = { use: null };
 let rt = 'local', undoBin = null;
 
 const stop_ = () => { timers.forEach(clearTimeout); timers = []; };
