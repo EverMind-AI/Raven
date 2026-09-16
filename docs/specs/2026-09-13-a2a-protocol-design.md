@@ -391,7 +391,15 @@ second message against that task id resumes the same turn.
 - a 0.3 compatibility layer;
 - per-caller credentials or any enrolment flow: one configured bearer token;
 - migrating `raven serve` to starlette/fastapi;
-- advertising peer skills into the turn, so the model can pick a peer unprompted.
+- advertising peer skills into the turn, so the model can pick a peer unprompted;
+- bounding the task store. `InMemoryTaskStore` has no TTL, no count cap and no reclaim
+  path, and the caller is the one who decides how many tasks exist, so an authenticated
+  peer can grow it for the process lifetime. Deferred rather than solved: the token is
+  configured per deployment and there is no enrolment flow, so every caller is one the
+  operator admitted by hand, and a restart clears it. The same applies to concurrency --
+  an inbound turn does not pass through `Scheduler.submit` (recorded in that guard's own
+  roster), so nothing on this path bounds how many turns a peer holds open at once, and a
+  parked `INPUT_REQUIRED` task holds one until its ask times out.
 
 ## Evidence
 
