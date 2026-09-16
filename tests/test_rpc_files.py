@@ -803,9 +803,33 @@ async def test_deleting_a_document_takes_its_retained_source_with_it(kb) -> None
     assert not alias.is_file()
 
 
+async def test_deleting_a_document_takes_its_rendering_with_it(kb) -> None:
+    """The retained source is not the only copy a preview leaves. The PDF the
+    converter produced is a readable copy of the whole document, and it is
+    keyed by a digest of the source's path and stamp -- so the key has to be
+    taken while that file is still there."""
+    from raven.rpc import knowledge_preview, pdf_preview
+    from raven.rpc.methods import knowledge as kb_methods
+
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="notice.xls", content=b"\xd0\xcf\x11\xe0stub")
+    alias = knowledge_preview._alias_for(doc, kb.document_path(doc.id))
+    rendered = pdf_preview.cache_dir() / f"{pdf_preview.cache_key(alias)}.pdf"
+    rendered.write_bytes(b"%PDF-1.4 the document, readable")
+
+    kb_methods._set_manager_for_tests(kb)
+    try:
+        await kb_methods.knowledge_documents_delete({"document_id": doc.id})
+    finally:
+        kb_methods._set_manager_for_tests(None)
+
+    assert not rendered.is_file()
+    assert not alias.is_file()
+
+
 async def test_deleting_a_base_takes_every_retained_source_with_it(kb) -> None:
     """The same for the base around them: its delete visits blobs only."""
-    from raven.rpc import knowledge_preview
+    from raven.rpc import knowledge_preview, pdf_preview
     from raven.rpc.methods import knowledge as kb_methods
 
     base = await _base(kb)
@@ -815,6 +839,10 @@ async def test_deleting_a_base_takes_every_retained_source_with_it(kb) -> None:
         aliases.append(knowledge_preview._alias_for(doc, kb.document_path(doc.id)))
     assert all(a.is_file() for a in aliases)
 
+    renderings = [pdf_preview.cache_dir() / f"{pdf_preview.cache_key(a)}.pdf" for a in aliases]
+    for rendering in renderings:
+        rendering.write_bytes(b"%PDF-1.4 the document, readable")
+
     kb_methods._set_manager_for_tests(kb)
     try:
         await kb_methods.knowledge_bases_delete({"base_id": base.id})
@@ -822,6 +850,7 @@ async def test_deleting_a_base_takes_every_retained_source_with_it(kb) -> None:
         kb_methods._set_manager_for_tests(None)
 
     assert not any(a.is_file() for a in aliases)
+    assert not any(r.is_file() for r in renderings)
 
 
 async def test_a_retained_source_nobody_deleted_is_swept_like_a_rendering(kb, monkeypatch) -> None:

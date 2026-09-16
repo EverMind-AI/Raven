@@ -165,12 +165,24 @@ def forget_source(document_id: str) -> None:
     if not directory.is_dir():
         return
     for entry in directory.glob(f"{document_id}.*"):
+        # The rendering's name is a digest of this file's path and stamp, so
+        # the key has to be taken while the file is still here. The PDF is a
+        # readable copy of the whole document, which is the thing a delete is
+        # being asked to get rid of.
+        rendered = None
         try:
-            entry.unlink()
+            rendered = cache_dir() / f"{cache_key(entry)}.pdf"
         except OSError:
-            # A sweep takes it later. Failing a delete over its cache copy
-            # would leave a reader with a row they cannot be rid of.
-            logger.debug("pdf-preview: could not remove the retained source {}", entry)
+            pass
+        for path in (entry, rendered):
+            if path is None:
+                continue
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                # A sweep takes it later. Failing a delete over its cache copy
+                # would leave a reader with a row they cannot be rid of.
+                logger.debug("pdf-preview: could not remove {}", path)
 
 
 def cache_key(source: Path) -> str:
