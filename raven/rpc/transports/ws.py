@@ -274,7 +274,10 @@ class WsGateway:
             headers={
                 "Content-Type": content_type_for(path),
                 "Content-Disposition": "inline",
-                "Content-Security-Policy": sandbox_for(path),
+                # The reader asked for this one view to run; the route does not
+                # remember it, so the next request for the same file is read-only
+                # again unless it asks too.
+                "Content-Security-Policy": sandbox_for(path, run=request.query.get("run") == "1"),
                 "X-Content-Type-Options": "nosniff",
                 "Cache-Control": "no-store",
             },
