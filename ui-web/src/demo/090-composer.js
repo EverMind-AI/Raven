@@ -30,7 +30,7 @@ const SLASH = [
       const s = sess(sessionCurrent());
       $('#stage').innerHTML = ''; pitch();
       if (s) { s.run = null; s.last = T('gui.sess.not_started'); }
-      use = null; drawMeter(); sessionDraw();
+      runState.use = null; drawMeter(); sessionDraw();
     }) }
 ];
 
@@ -38,7 +38,7 @@ const SLASH = [
    live mode installs its own meter wording and upload transport over this. */
 DS.composer ??= {
   meter: () => (turn.busy() ? T('gui.meter.running')
-    : use ? T('gui.meter.usage', { calls: use.calls, in: (use.in / 1000).toFixed(1), out: (use.out / 1000).toFixed(1) })
+    : runState.use ? T('gui.meter.usage', { calls: runState.use.calls, in: (runState.use.in / 1000).toFixed(1), out: (runState.use.out / 1000).toFixed(1) })
     : ''),
   slash: SLASH,
   slashName: (id) => slashName(id),
@@ -54,7 +54,7 @@ function send(text) {
   if (turn.busy()) { queuePush(text); toast('已排队，本轮结束后发出'); return; }
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
   ask(text);
-  turn.dispatch({ type: 'send' }); use = null;
+  turn.dispatch({ type: 'send' }); runState.use = null;
   drawMeter(); goState(); sessionDraw();
   const run = pickRun(text);
   const s = sess(sessionCurrent());

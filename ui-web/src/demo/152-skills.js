@@ -39,7 +39,11 @@ const skInstBtn = (() => {
    box, and the chrome above it is still the page's, set here on every draw.
    demo/153-plugins.js wraps this name for the plugin tab, so a call that
    arrives here is always a skill draw. */
-function drawCaps() {
+var drawCapsDecorators;
+function drawCaps() { return applyDecorators(drawCapsDecorators, drawCapsBase)(); }
+function decorateDrawCaps(wrap) { (drawCapsDecorators ??= []).push(wrap); }
+
+function drawCapsBase() {
   const box = $('#capsBody'); box.innerHTML = '';
   const title = T('gui.tab.skills');
   const installed = RavenIslands.skills.view() === 'installed';
@@ -71,21 +75,18 @@ function drawCaps() {
     RavenIslands.skills.searchNow($('#cq').value.trim());
   };
 
-  const prevExtSet = extSet;
-  extSet = function (tab) {
+  decorateExtSet((prev) => (tab) => {
     const was = extTab;
-    prevExtSet(tab);
+    prev(tab);
     if (extTab !== was) RavenIslands.skills.reset();
-  };
+  });
 
-  const prevShowPage = showPage;
-  showPage = function (id) {
-    prevShowPage(id);
+  decorateShowPage((prev) => (id) => {
+    prev(id);
     if (id !== 'capsPage') RavenIslands.skills.dropDrawer();
-  };
+  });
 
-  const prevCloseDetail = closeDetail;
-  closeDetail = function () { RavenIslands.skills.dropDrawer(); prevCloseDetail(); };
+  decorateCloseDetail((prev) => () => { RavenIslands.skills.dropDrawer(); prev(); });
   $('#dClose').onclick = () => closeDetail();
 
   /* The island owns the view; the chrome follows it from out here. A view

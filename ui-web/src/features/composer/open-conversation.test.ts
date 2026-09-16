@@ -59,9 +59,9 @@ function harness(startAsDraft: boolean) {
     'applyStagedModel', 'applyStagedTier', 'applyStagedPerm', 'sessionDraw',
     'subscribe', 'wsSetRoot', 'startAsDraft', 'touchSession', 'beginNaming',
     'mediaOf', 'namingDeclined', 'setSessionWorkdir',
-    `let draft = startAsDraft; let viewGen = 7; let turnOwner = null; let pendingWorkdir = null;\n${fnSource}\n`
+    `let draft = startAsDraft; let viewGen = 7; const park = { turnOwner: null, lastAsk: '' }; let pendingWorkdir = null;\n${fnSource}\n`
     + 'return { openConversation, sendOnSession, isDraft: () => draft, '
-    + 'turnOwner: () => turnOwner, setDraft: (on) => { draft = on; }, '
+    + 'turnOwner: () => park.turnOwner, setDraft: (on) => { draft = on; }, '
     + 'stageWorkdir: (dir) => { pendingWorkdir = dir; }, stagedWorkdir: () => pendingWorkdir };',
   ) as (...args: unknown[]) => {
     openConversation: (preview?: string, atPointer?: (id: string) => void) => Promise<string | null>
