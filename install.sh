@@ -18,6 +18,10 @@
 #   4. chromium      (browser-tool runtime; downloaded by playwright)
 #   5. LibreOffice   (deck preview; installed on macOS, offered on Linux)
 #
+# It then ends in the product: `raven web` opens the page in a browser and holds
+# this terminal, so the install finishes on something running rather than on a
+# hint to go and start it.
+#
 # POSIX sh on purpose (runs under dash/ash, not just bash).
 set -eu
 
@@ -107,6 +111,15 @@ ensure_node() {
   fi
 
   info "Node.js >= $MIN_NODE_MAJOR not found; downloading a private runtime (does not touch the system)..."
+  provision_private_node
+}
+
+# Download, verify and extract a private Node runtime into $NODE_RUNTIME_DIR.
+# Split out of ensure_node because build_web_assets needs it on a second path:
+# a system node packaged without npm satisfies ensure_node and leaves the build
+# with no npm to call. Every failure here is fatal, so a caller that must not
+# die on a failed download runs this in a subshell.
+provision_private_node() {
   ver="$(latest_node_v22)"
   pkg="node-${ver}-${NODE_OS}-${NODE_ARCH}"
   url="https://nodejs.org/dist/${ver}/${pkg}.tar.gz"
@@ -156,29 +169,89 @@ ensure_node() {
 # `ui-tui/dist/entry.js` (the TUI bundle) and `ui-web/dist/index.html` (the page
 # `raven web` serves) are both gitignored build artifacts. A release wheel
 # carries them; an editable install of a checkout gets neither, so without this
-# a clone install has no TUI and no page. Both must exist before first run.
+# a clone install has no TUI and no page. Both must exist, and both must be no
+# older than the sources they were built from, before first run.
+#
+# Missing is not the only reason to build. The install is editable, so Python
+# tracks the checkout with no further help -- but these two are compiled, and
+# nothing relinks them. Built once and then only ever checked for existence,
+# they keep serving whatever the tree held at first install while every `.py`
+# beside them moves on, which reads as a frontend that ignores your edits.
+#
+# True when the artifact is missing, or any source under the named directories
+# is newer than it. mtime is the right question: git stamps every file it
+# rewrites with the time it wrote it, so a pull or a branch switch that touched
+# the frontend sorts after the artifact and one that did not leaves it alone.
+is_stale() {
+  artifact="$1"
+  shift
+  [ -f "$artifact" ] || return 0
+  for dir in "$@"; do
+    [ -d "$dir" ] || [ -f "$dir" ] || continue
+    # node_modules is rewritten by this script's own `npm ci`, which would
+    # leave the artifact permanently stale; dist and .modern hold build output,
+    # the artifact among it.
+    newer="$(
+      find "$dir" \
+        \( -name node_modules -o -name dist -o -name .modern \) -prune -o \
+        -type f -newer "$artifact" -print 2>/dev/null | head -n 1
+    )"
+    [ -z "$newer" ] || return 0
+  done
+  return 1
+}
+
+# Resolve a node bin directory that also carries npm. Sets `node_dir` (empty
+# when there is none) and `blocker` (the reason, empty on success).
+#
+# ensure_node may have provisioned a private runtime that never reaches PATH,
+# so look there before giving up. npm ships alongside node, but verify it
+# explicitly rather than assume: Debian and Ubuntu package the two separately,
+# and a system node >= 22 satisfies ensure_node, so on those a build would find
+# node and no npm with no private runtime ever fetched. The official tarball
+# carries npm beside node, so fetch one at that point rather than skip both
+# builds on a machine one download away from running them.
+#
+# That fetch is subshelled because provisioning is fatal and this caller must
+# not be: the system node still runs `raven tui`, so a download that fails here
+# is a skipped build, not a failed install.
+resolve_node_dir() {
+  node_dir=""
+  blocker=""
+  node_bin="$(command -v node || true)"
+  [ -n "$node_bin" ] || node_bin="$(private_node_bin || true)"
+  if [ -z "$node_bin" ] || [ ! -x "$node_bin" ]; then
+    blocker="No usable node found"
+    return
+  fi
+  if PATH="$(dirname "$node_bin"):$PATH" command -v npm >/dev/null 2>&1; then
+    node_dir="$(dirname "$node_bin")"
+    return
+  fi
+  npm_node="$(private_node_bin || true)"
+  if [ -z "$npm_node" ]; then
+    info "Found node but not npm; fetching a private Node runtime that carries both..."
+    if ( provision_private_node ); then npm_node="$(private_node_bin || true)"; fi
+  fi
+  if [ -n "$npm_node" ] && PATH="$(dirname "$npm_node"):$PATH" command -v npm >/dev/null 2>&1; then
+    node_dir="$(dirname "$npm_node")"
+  else
+    blocker="Found node but not npm"
+  fi
+}
+
 build_web_assets() {
   src="$1"
   need_tui=0
   need_page=0
-  [ -f "$src/ui-tui/dist/entry.js" ] || need_tui=1
-  [ -f "$src/ui-web/dist/index.html" ] || need_page=1
+  if is_stale "$src/ui-tui/dist/entry.js" "$src/ui-tui"; then need_tui=1; fi
+  # The page inlines the shared catalogue (ui-web/build.py reads i18n/messages.json),
+  # so a catalogue-only change is a page change.
+  if is_stale "$src/ui-web/dist/index.html" "$src/ui-web" "$src/i18n"; then need_page=1; fi
   [ "$need_tui" = 1 ] || [ "$need_page" = 1 ] || return 0
 
-  # One probe for both builds. ensure_node may have provisioned a private
-  # runtime that never reaches PATH, so look there before giving up.
-  node_bin="$(command -v node || true)"
-  [ -n "$node_bin" ] || node_bin="$(private_node_bin || true)"
-  node_dir=""
-  blocker=""
-  if [ -z "$node_bin" ] || [ ! -x "$node_bin" ]; then
-    blocker="No usable node found"
-  elif ! PATH="$(dirname "$node_bin"):$PATH" command -v npm >/dev/null 2>&1; then
-    # npm ships alongside node, but verify explicitly before relying on it.
-    blocker="Found node but not npm"
-  else
-    node_dir="$(dirname "$node_bin")"
-  fi
+  # One probe for both builds.
+  resolve_node_dir
 
   if [ "$need_tui" = 1 ]; then
     if [ -n "$blocker" ]; then
@@ -497,54 +570,38 @@ install_office() {
   esac
 }
 
-# --- 5. capability summary ---------------------------------------------------
-# One mouth for what actually landed: `raven doctor --install-summary` reads
-# only what is importable/installed, needs no config, and always exits 0. The
-# raven shim lands in `uv tool dir --bin`, which this shell's PATH may not
-# carry yet, so invoke it by absolute path. Purely informational -- the caller
-# guards the whole call so it can never fail a completed install.
-print_capability_summary() {
+# --- 5. launch -------------------------------------------------------------
+# The install ends on a running page. `--stop` first, because a gateway an
+# earlier install left resident would be attached to instead of the build that
+# just landed; `--foreground` then holds this terminal on a fresh one and opens
+# the browser on it, so Ctrl-C here means what it says. The raven shim lands in
+# `uv tool dir --bin`, which this shell's PATH may not carry yet, so invoke it
+# by absolute path.
+launch_web() {
   bin="$(uv tool dir --bin 2>/dev/null || true)/raven"
   [ -x "$bin" ] || bin="$HOME/.local/bin/raven"
-  [ -x "$bin" ] || return 0
+  [ -x "$bin" ] || {
+    warn "raven is not where this script looked for it; open a new terminal and run: raven web"
+    return 0
+  }
   printf '\n'
-  info "Capabilities:"
-  "$bin" doctor --install-summary \
-    || warn "capability summary unavailable (raven doctor failed)"
+  ok "Starting Raven -- your browser will open in a moment. Ctrl-C here stops it."
+  printf '\n'
+  "$bin" web --stop >/dev/null && "$bin" web --foreground
 }
 
 # --- main ------------------------------------------------------------------
 main() {
   have curl || die "curl is required; please install it first"
-  # Read before installing so the closing hint can tell a first run from an
-  # upgrade; the install itself never writes config.json (the wizard does).
-  if [ -f "$RAVEN_HOME/config.json" ]; then
-    had_config=1
-  else
-    had_config=0
-  fi
   detect_platform
   ensure_uv
   ensure_node
   install_raven
 
-  # The summary is not gated: a minimal install still sees what it skipped.
   [ -n "${RAVEN_MINIMAL:-}" ] || install_browser
   [ -n "${RAVEN_MINIMAL:-}" ] || install_office
-  print_capability_summary || true
 
-  printf '\n'
-  if [ "$had_config" = 1 ]; then
-    ok "Raven updated. Your config in $RAVEN_HOME is unchanged."
-    printf '\n    \033[1mraven\033[0m    # continue where you left off\n\n'
-    printf '  tip: next time you can upgrade in place with \033[1mraven upgrade\033[0m\n\n'
-  else
-    ok "All set! Open a new terminal (or source your shell profile), then run:"
-    printf '\n    \033[1mraven\033[0m    # sets you up on first run, then opens the TUI\n\n'
-  fi
-  if ! printf '%s' "$PATH" | grep -q "$HOME/.local/bin"; then
-    warn "Your current PATH does not include ~/.local/bin yet -- open a new terminal, or run: export PATH=\"\$HOME/.local/bin:\$PATH\""
-  fi
+  launch_web
 }
 
 main "$@"

@@ -5878,19 +5878,21 @@ def test_each_provider_sits_in_the_group_its_credentials_put_it_in() -> None:
 # --------------------------------------------------------------------------- first-run hints
 
 
-def test_installers_send_first_run_to_bare_raven() -> None:
-    """Both installers' first-run block names bare ``raven``, not the wizard.
+def test_installers_send_first_run_to_the_page_not_the_wizard() -> None:
+    """Neither installer ends by naming a command to type.
 
-    The startup gate runs the wizard from bare ``raven`` and continues into the
-    TUI in the same process, so naming ``raven onboard`` here would present one
-    continuous flow as two commands to run in sequence.
+    Both now finish by starting ``raven web``, and the page carries its own
+    onboarding, so a first run is walked through in the browser. The pin that
+    matters is the one that used to matter for the closing hint: ``raven
+    onboard`` must not appear, because the startup gate runs the wizard and
+    continues in the same process -- naming it would present one continuous
+    flow as two steps.
     """
     root = Path(__file__).resolve().parents[1]
     for name in ("install.sh", "install.ps1"):
-        first_run = (root / name).read_text()
-        first_run = first_run[first_run.index("All set") :]
-        assert "sets you up on first run" in first_run, name
-        assert "raven onboard" not in first_run, name
+        text = (root / name).read_text()
+        assert "raven onboard" not in text, name
+        assert "web --foreground" in text, name
 
 
 def test_installers_build_both_web_assets_for_an_editable_install() -> None:
@@ -5979,16 +5981,18 @@ def test_the_windows_installer_reads_back_every_npm_exit_code() -> None:
     assert not unchecked, f"npm invocations with no exit-code check: {unchecked}"
 
 
-def test_installers_tell_an_upgrade_apart_from_a_first_run() -> None:
-    """A re-run over an existing config is an upgrade: say so instead of
-    repeating first-time-setup wording, and name the in-place path (which keeps
-    the channel extras rather than re-downloading everything)."""
+def test_installers_no_longer_probe_config_to_word_a_closing_hint() -> None:
+    """Both installers used to read config.json only so the closing hint could
+    say "Raven updated" instead of "All set". There is no closing hint now --
+    both paths end on the same running page -- so the probe has to go with it,
+    or it reads as a decision the script still makes.
+    """
     root = Path(__file__).resolve().parents[1]
     for name in ("install.sh", "install.ps1"):
         text = (root / name).read_text()
-        assert "config.json" in text, name
-        assert "Raven updated" in text, name
-        assert "raven upgrade" in text, name
+        assert "config.json" not in text, name
+        assert "All set" not in text, name
+        assert "Raven updated" not in text, name
 
 
 def test_readme_quickstart_matches_the_installer_hint() -> None:

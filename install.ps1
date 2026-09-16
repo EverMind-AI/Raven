@@ -16,6 +16,10 @@
 #   3. raven         (installed as a global uv tool)
 #   4. chromium      (browser-tool runtime; downloaded by playwright)
 #   5. LibreOffice   (deck preview; offered via winget)
+#
+# It then ends in the product: `raven web` opens the page in a browser and holds
+# this session, so the install finishes on something running rather than on a
+# hint to go and start it.
 
 $ErrorActionPreference = "Stop"
 
@@ -149,6 +153,15 @@ function Ensure-Node {
     }
 
     Write-Info "Node.js >= $MinNodeMajor not found; downloading private runtime..."
+    return Install-PrivateNode
+}
+
+# Download, verify and extract a private Node runtime into $NodeRuntimeDir, and
+# return the node.exe in it. Split out of Ensure-Node because Build-WebAssets
+# needs it on a second path: a node packaged without npm satisfies Ensure-Node
+# and leaves the build with no npm to call. Failures here raise (via Fail), so a
+# caller that must not abort on a failed download wraps this in try/catch.
+function Install-PrivateNode {
     $arch = Get-NodeArch
     $version = Get-LatestNodeV22
     $pkg = "node-$version-win-$arch"
@@ -288,19 +301,82 @@ function Test-RavenSource([string]$Dir) {
     return (Test-Path $pyproject) -and (Select-String -Path $pyproject -Pattern '^name = "raven"' -Quiet)
 }
 
+# True when the artifact is missing, or any source under the named directories
+# is newer than it. Missing is not the only reason to build: the install is
+# editable, so Python tracks the checkout with no further help, but these two
+# artifacts are compiled and nothing relinks them -- checked only for existence
+# they keep serving whatever the tree held at first install while every .py
+# beside them moves on. mtime is the right question: git stamps every file it
+# rewrites with the time it wrote it, so a pull that touched the frontend sorts
+# after the artifact and one that did not leaves it alone.
+#
+# The prune is one level deep, where node_modules, dist and .modern actually
+# sit; install.sh prunes them at any depth. Deeper is reachable here only by
+# walking node_modules to decide to ignore it, which is the one directory worth
+# not walking.
+function Test-AssetStale([string]$Artifact, [string[]]$Sources) {
+    if (-not (Test-Path $Artifact)) { return $true }
+    $builtAt = (Get-Item $Artifact).LastWriteTimeUtc
+    $pruned = @("node_modules", "dist", ".modern")
+    foreach ($dir in $Sources) {
+        if (-not (Test-Path $dir)) { continue }
+        if (-not (Test-Path $dir -PathType Container)) {
+            if ((Get-Item $dir).LastWriteTimeUtc -gt $builtAt) { return $true }
+            continue
+        }
+        $entries = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue |
+            Where-Object { -not ($_.PSIsContainer -and $pruned -contains $_.Name) })
+        foreach ($entry in $entries) {
+            if (-not $entry.PSIsContainer) {
+                if ($entry.LastWriteTimeUtc -gt $builtAt) { return $true }
+                continue
+            }
+            $newer = Get-ChildItem -LiteralPath $entry.FullName -Recurse -Force -ErrorAction SilentlyContinue |
+                Where-Object { -not $_.PSIsContainer -and $_.LastWriteTimeUtc -gt $builtAt } |
+                Select-Object -First 1
+            if ($newer) { return $true }
+        }
+    }
+    return $false
+}
+
 # ui-tui\dist\entry.js (the TUI bundle) and ui\dist\index.html (the page
 # `raven web` serves) are both gitignored build artifacts. A release wheel
 # carries them; an editable install of a checkout gets neither, so without this
-# a clone install has no TUI and no page. Both must exist before first run.
+# a clone install has no TUI and no page. Both must exist, and both must be no
+# older than the sources they were built from, before first run.
 function Build-WebAssets([string]$ScriptDir, [string]$NodePath, [string]$UvPath) {
-    $needTui = -not (Test-Path (Join-Path $ScriptDir "ui-tui\dist\entry.js"))
-    $needPage = -not (Test-Path (Join-Path $ScriptDir "ui-web\dist\index.html"))
+    $needTui = Test-AssetStale (Join-Path $ScriptDir "ui-tui\dist\entry.js") @((Join-Path $ScriptDir "ui-tui"))
+    # The page inlines the shared catalogue (ui-web/build.py reads
+    # i18n/messages.json), so a catalogue-only change is a page change.
+    $needPage = Test-AssetStale (Join-Path $ScriptDir "ui-web\dist\index.html") @(
+        (Join-Path $ScriptDir "ui-web"),
+        (Join-Path $ScriptDir "i18n")
+    )
     if (-not ($needTui -or $needPage)) { return }
 
     # One probe for both builds. npm ships alongside node, but verify it
-    # explicitly before relying on it.
+    # explicitly rather than assume -- a node packaged without npm satisfies
+    # Ensure-Node, so the build can arrive here with no npm and no private
+    # runtime ever fetched. The official archive carries npm beside node, so
+    # fetch one at that point rather than skip both builds on a machine one
+    # download away from running them. try/catch because that fetch raises on
+    # failure and this caller must not: the node already here still runs
+    # `raven tui`, so a failed download is a skipped build, not a failed
+    # install.
     Add-ProcessPath (Split-Path $NodePath -Parent)
     $npm = Get-Command npm -ErrorAction SilentlyContinue
+    if (-not $npm) {
+        $privateNode = Find-PrivateNode
+        if (-not $privateNode) {
+            Write-Info "Found node but not npm; fetching a private Node runtime that carries both..."
+            try { $privateNode = Install-PrivateNode } catch { $privateNode = $null }
+        }
+        if ($privateNode) {
+            Add-ProcessPath (Split-Path $privateNode -Parent)
+            $npm = Get-Command npm -ErrorAction SilentlyContinue
+        }
+    }
     if (-not $npm) {
         if ($needTui) { Write-Warn "Found node but not npm; skipping TUI bundle build" }
         if ($needPage) { Write-Warn "Found node but not npm; skipping served-page build; raven web will not start" }
@@ -548,61 +624,53 @@ function Install-Office {
     }
 }
 
-# One mouth for what actually landed: `raven doctor --install-summary` reads
-# only what is importable/installed, needs no config, and always exits 0. The
-# raven shim lands in `uv tool dir --bin`, which this session's PATH may not
-# carry yet, so invoke it by absolute path. Purely informational -- every
-# branch degrades to a warning so it can never fail a completed install.
-function Show-CapabilitySummary([string]$UvPath) {
+# The install ends on a running page. `--stop` first, because a gateway an
+# earlier install left resident would be attached to instead of the build that
+# just landed; `--foreground` then holds this session on a fresh one and opens
+# the browser on it, so Ctrl-C here means what it says. The raven shim lands in
+# `uv tool dir --bin`, which this session's PATH may not carry yet, so invoke it
+# by absolute path.
+#
+# Unlike install.sh, a non-zero page exit only warns: under `irm | iex` this is
+# the caller's own interactive PowerShell, and Ctrl-C -- the ordinary way to end
+# a foreground page -- comes back non-zero, so exiting on it would close the
+# window the reader is standing in.
+function Start-Web([string]$UvPath) {
     $binDir = ""
     try { $binDir = [string](& $UvPath tool dir --bin 2>$null) } catch { $binDir = "" }
     $bin = if ($binDir) { Join-Path $binDir "raven.exe" } else { $null }
     if (-not $bin -or -not (Test-Path $bin)) { $bin = Join-Path $HOME ".local\bin\raven.exe" }
-    if (-not (Test-Path $bin)) { return }
+    if (-not (Test-Path $bin)) {
+        Write-Warn "raven is not where this script looked for it; open a new PowerShell window and run: raven web"
+        return
+    }
     Write-Host ""
-    Write-Info "Capabilities:"
-    try {
-        & $bin doctor --install-summary
-        if ($LASTEXITCODE -ne 0) { throw "raven doctor exited $LASTEXITCODE" }
-    } catch {
-        Write-Warn "capability summary unavailable (raven doctor failed)"
+    Write-Ok "Starting Raven -- your browser will open in a moment. Ctrl-C here stops it."
+    Write-Host ""
+    & $bin web --stop > $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "could not clear the gateway a previous install left running; start the page with 'raven web'"
+        return
+    }
+    & $bin web --foreground
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "the page ended with exit code $LASTEXITCODE; start it again with 'raven web'"
     }
 }
 
 function Main {
-    # Read before installing so the closing hint can tell a first run from an
-    # upgrade; the install itself never writes config.json (the wizard does).
-    $hadConfig = Test-Path (Join-Path $RavenHome "config.json")
-
     $uv = Ensure-Uv
     $node = Ensure-Node
     Install-Raven $uv $node
 
-    # The summary is not gated: a minimal install still sees what it skipped.
     if (-not $env:RAVEN_MINIMAL) { Install-Browser $uv }
     if (-not $env:RAVEN_MINIMAL) { Install-Office }
-    Show-CapabilitySummary $uv
 
-    $toolBin = Join-Path $HOME ".local\bin"
-    Add-ProcessPath $toolBin
+    # Before the page, not after: the page holds this session until Ctrl-C, and
+    # `raven` has to work in the session the reader comes back to.
+    Add-ProcessPath (Join-Path $HOME ".local\bin")
 
-    Write-Host ""
-    if ($hadConfig) {
-        Write-Ok "Raven updated. Your config in $RavenHome is unchanged."
-        Write-Host ""
-        Write-Host "    raven    # continue where you left off"
-        Write-Host ""
-        Write-Host "  tip: next time you can upgrade in place with 'raven upgrade'"
-        Write-Host ""
-    } else {
-        Write-Ok "All set. Open a new PowerShell window, or continue in this one, then run:"
-        Write-Host ""
-        Write-Host "    raven    # sets you up on first run, then opens the TUI"
-        Write-Host ""
-    }
-    if (($env:PATH -split ';') -notcontains $toolBin) {
-        Write-Warn "Current PATH does not include $toolBin. Restart PowerShell if 'raven' is not found."
-    }
+    Start-Web $uv
 }
 
 Main
