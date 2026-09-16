@@ -19,6 +19,11 @@ Two decisions every subclass inherits:
   ``api_key`` of the plugin's own slice, so a shell that exports one wins over
   a file that recorded another. Without a key nothing is sent -- ``recall`` is
   ``[]``, ``store`` is ``False``, ``health`` names the variable to set.
+- The owner on the wire is the owner of the call. ``recall`` and
+  ``recall_session`` name theirs in ``user_id``; ``store`` may name one in
+  ``metadata["user_id"]`` (a sub-agent's scope) and otherwise writes under the
+  host's ``ServiceLocator.user_id``. A flat service has no agent track, so an
+  ``agent_id`` call is answered empty without a request.
 """
 
 from __future__ import annotations
@@ -125,19 +130,24 @@ class HttpMemoryBackend:
     def _auth_headers(self) -> dict[str, str]:
         raise NotImplementedError
 
-    def _recall_call(self, query: str, top_k: int) -> Call:
+    def _recall_call(self, query: str, top_k: int, owner: str) -> Call:
         raise NotImplementedError
 
     def _parse_hits(self, body: Any) -> list[Memory]:
         raise NotImplementedError
 
-    def _store_call(self, session_id: str, messages: list[dict[str, Any]]) -> Call:
+    def _store_call(self, session_id: str, messages: list[dict[str, Any]], owner: str) -> Call:
         raise NotImplementedError
+
+    def _store_calls(self, session_id: str, messages: list[dict[str, Any]], owner: str) -> list[Call]:
+        """One request per batch the service accepts; a service with a
+        per-request limit (Zep) splits here. Every call must be accepted."""
+        return [self._store_call(session_id, messages, owner)]
 
     def _delete_call(self, memory_id: str, kind: str | None) -> Call | None:
         raise NotImplementedError
 
-    def _session_call(self, session_id: str) -> Call:
+    def _session_call(self, session_id: str, owner: str) -> Call:
         raise NotImplementedError
 
     def _parse_session(self, body: Any) -> list[Memory]:
@@ -146,9 +156,9 @@ class HttpMemoryBackend:
     def _health_call(self) -> Call:
         raise NotImplementedError
 
-    async def _before_store(self, session_id: str) -> bool:
+    async def _before_store(self, session_id: str, owner: str) -> bool:
         """A service that needs a container created before the first write
-        (Zep's thread) does it here. ``False`` fails the store."""
+        (Zep's user and thread) does it here. ``False`` fails the store."""
         return True
 
     def _effective_status(self, reply: Reply) -> int:
@@ -190,9 +200,9 @@ class HttpMemoryBackend:
         # empty without a request, as is the caller bug of both-or-neither.
         if (user_id is None) == (agent_id is None) or agent_id is not None:
             return []
-        if top_k <= 0 or not self._api_key:
+        if top_k <= 0 or not self._api_key or user_id is None:
             return []
-        reply = await self._send(self._recall_call(query, top_k), timeout=RECALL_TIMEOUT_S)
+        reply = await self._send(self._recall_call(query, top_k, user_id), timeout=RECALL_TIMEOUT_S)
         if self._effective_status(reply) != 200:
             self._warn("recall", reply)
             return []
@@ -216,12 +226,14 @@ class HttpMemoryBackend:
             return True
         if not self._api_key:
             return False
-        if not await self._before_store(session_id):
+        owner = self._store_owner(metadata)
+        if not await self._before_store(session_id, owner):
             return False
-        reply = await self._send(self._store_call(session_id, batch), timeout=STORE_TIMEOUT_S)
-        if not self._store_accepted(reply):
-            self._warn("store", reply)
-            return False
+        for call in self._store_calls(session_id, batch, owner):
+            reply = await self._send(call, timeout=STORE_TIMEOUT_S)
+            if not self._store_accepted(reply):
+                self._warn("store", reply)
+                return False
         return True
 
     async def feedback(self, signals: dict[str, Any]) -> None:
@@ -264,7 +276,7 @@ class HttpMemoryBackend:
     ) -> list[Memory]:
         if not self._api_key or agent_id is not None:
             return []
-        reply = await self._send(self._session_call(session_id), timeout=RECALL_TIMEOUT_S)
+        reply = await self._send(self._session_call(session_id, user_id or self._user_id), timeout=RECALL_TIMEOUT_S)
         if self._effective_status(reply) != 200:
             return []
         try:
@@ -273,6 +285,13 @@ class HttpMemoryBackend:
             return []
 
     # ── plumbing ─────────────────────────────────────────────────────
+
+    def _store_owner(self, metadata: dict[str, Any] | None) -> str:
+        """The owner a write files under: the scope named in ``metadata``
+        (a sub-agent's block, in either spelling) or the host's own."""
+        meta = metadata or {}
+        named = meta.get("user_id") or meta.get("userId")
+        return str(named) if named else self._user_id
 
     def _normalize(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []

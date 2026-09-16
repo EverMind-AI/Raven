@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from raven.memory_engine.api_key_onboard import ApiKeyOnboardStep
+from raven.memory_engine import ApiKeyOnboardStep
 from raven.plugins import PluginContext
 from raven_zep.backend import ZepBackend
 

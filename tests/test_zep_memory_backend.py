@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 
-from raven_zep.backend import ZepBackend
+from raven_zep.backend import MAX_MESSAGE_CHARS, MAX_MESSAGES_PER_REQUEST, ZepBackend
 from tests._hosted_memory_cases import USER, HostedBackendCases
 from tests._hosted_memory_fakes import FakeCloud, FakeZep
 
@@ -58,7 +58,7 @@ class TestZep(HostedBackendCases):
         pre_existing.users.add(USER)
         other = self.build(pre_existing)
         await other.start()
-        assert other._user_ready is True
+        assert USER in other._users_ready
         await other.stop()
 
     async def test_first_store_creates_the_thread_once(self, backend, fake):
@@ -93,6 +93,40 @@ class TestZep(HostedBackendCases):
         assert sent[0] == {"role": "user", "content": "one", "created_at": "2026-03-01T10:00:00+00:00"}
         assert sent[1] == {"role": "assistant", "content": "two"}
         assert fake.status_calls == 0
+
+    async def test_a_write_under_another_owner_creates_that_user_and_thread(self, backend, fake):
+        await backend.start()
+        assert await backend.store("t-9", [{"role": "user", "content": "x"}], metadata={"user_id": "bob"}) is True
+        assert fake.users == {USER, "bob"}
+        assert fake.threads["t-9"] == "bob"
+        assert fake.stored_texts("bob") == ["x"]
+
+    async def test_store_splits_at_zep_request_limits(self, backend, fake):
+        many = [{"role": "user", "content": f"m{i}"} for i in range(MAX_MESSAGES_PER_REQUEST + 1)]
+        assert await backend.store("t-1", many) is True
+        writes = fake.calls("POST", "/t-1/messages")
+        assert [len(FakeZep.body(r)["messages"]) for r in writes] == [MAX_MESSAGES_PER_REQUEST, 1]
+        assert fake.stored_texts(USER) == [f"m{i}" for i in range(MAX_MESSAGES_PER_REQUEST + 1)]
+
+        long = "x" * (MAX_MESSAGE_CHARS + 10)
+        assert await backend.store("t-2", [{"role": "assistant", "content": long}]) is True
+        (write,) = fake.calls("POST", "/t-2/messages")
+        sent = FakeZep.body(write)["messages"]
+        assert [len(m["content"]) for m in sent] == [MAX_MESSAGE_CHARS, 10]
+        assert {m["role"] for m in sent} == {"assistant"}
+        assert "".join(m["content"] for m in sent) == long
+
+    async def test_the_fake_refuses_what_zep_refuses(self, backend, fake):
+        """The limit cases above can only fail if the fake enforces the limits."""
+        from raven.memory_engine import STORE_TIMEOUT_S, Call
+
+        await backend.start()
+        await backend._before_store("t-3", USER)
+        reply = await backend._send(
+            Call("POST", "/api/v2/threads/t-3/messages", json={"messages": [{"role": "user", "content": "x"}] * 31}),
+            timeout=STORE_TIMEOUT_S,
+        )
+        assert reply.status == 400
 
     async def test_recall_is_a_graph_search_over_edges(self, backend, fake):
         fake.seed(USER, "alice drinks tea")

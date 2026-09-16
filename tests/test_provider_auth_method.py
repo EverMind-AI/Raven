@@ -545,6 +545,14 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/agent/subagent/vendored_agents.py",
         # The skill hub's endpoint credential, read to store or forward it.
         "raven/config/update_skills.py",
+        # A hosted memory service's own credential (Mem0 / Zep / MemOS), not a
+        # provider section: the base class reads it to put it on that service's
+        # Authorization header and to answer "nothing is sent without one"; the
+        # onboarding screen reads it to probe the service once and to record
+        # what the user typed under the backend's own slice. Neither rules on
+        # whether a Raven provider is set up.
+        "raven/memory_engine/http_backend.py",
+        "raven/memory_engine/api_key_onboard.py",
     }
 
     names = {"api_key", "api_key_list", "apiKey", "apiKeyList"}

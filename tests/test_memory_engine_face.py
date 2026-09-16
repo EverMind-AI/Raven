@@ -25,14 +25,27 @@ def _internal_imports(path: Path) -> list[str]:
     return hits
 
 
-def test_nothing_outside_the_engine_imports_its_submodules() -> None:
-    hits = [
-        h
+def _consumers() -> list[Path]:
+    """Every module that may consume the engine: the host outside the engine
+    itself, and the shipped plugins -- a wheel installed elsewhere is the
+    consumer a rearranged layout would break."""
+    host = [
+        p
         for p in (REPO / "raven").rglob("*.py")
         if not p.relative_to(REPO).as_posix().startswith("raven/memory_engine/")
-        for h in _internal_imports(p)
     ]
+    plugins = [p for p in (REPO / "plugins-dist").rglob("*.py") if "node_modules" not in p.parts]
+    return host + plugins
+
+
+def test_nothing_outside_the_engine_imports_its_submodules() -> None:
+    hits = [h for p in _consumers() for h in _internal_imports(p)]
     assert hits == [], "reach the memory engine through raven.memory_engine: " + "; ".join(hits)
+
+
+def test_the_scan_covers_the_shipped_plugins() -> None:
+    scanned = {p.relative_to(REPO).parts[:2] for p in _consumers()}
+    assert ("plugins-dist", "mem0-memory") in scanned and ("plugins-dist", "everos-memory") in scanned
 
 
 def test_every_face_name_resolves() -> None:

@@ -111,6 +111,34 @@ class HostedBackendCases:
         (req,) = fake.requests
         assert self.recall_owner(req) == USER
 
+    async def test_recall_uses_the_owner_of_the_call(self, backend, fake):
+        fake.seed("bob", "bob likes coffee")
+        fake.seed(USER, "alice likes tea")
+        hits = await backend.recall("likes", user_id="bob", top_k=5)
+        assert [h.text for h in hits] == ["bob likes coffee"]
+        (req,) = fake.requests
+        assert self.recall_owner(req) == "bob"
+
+    async def test_store_files_under_the_owner_named_in_metadata(self, backend, fake):
+        assert await backend.store("s-1", [{"role": "user", "content": "one"}], metadata={"user_id": "bob"}) is True
+        assert await backend.store("s-2", [{"role": "user", "content": "two"}], metadata={"userId": "carol"}) is True
+        assert await backend.store("s-3", [{"role": "user", "content": "three"}], metadata={"flush": True}) is True
+        assert fake.stored_texts("bob") == ["one"]
+        assert fake.stored_texts("carol") == ["two"]
+        assert fake.stored_texts(USER) == ["three"]
+        owners = [
+            self.store_owner(r)
+            for r in fake.calls("POST")
+            if r.url.path.endswith("/messages") or r.url.path.endswith("/add/") or r.url.path.endswith("/add/message")
+        ]
+        assert owners == ["bob", "carol", USER]
+
+    async def test_recall_session_uses_the_owner_of_the_call(self, backend, fake):
+        fake.seed("bob", "bob's session fact", session="s-1")
+        fake.seed(USER, "alice's session fact", session="s-1")
+        hits = await backend.recall_session("s-1", user_id="bob")
+        assert [h.text for h in hits] == ["bob's session fact"]
+
     async def test_hit_mapping(self, backend, fake):
         mid = fake.seed(USER, "alice likes tea")
         hits = await backend.recall("tea", user_id=USER, top_k=5)

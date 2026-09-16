@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from raven.contracts.memory import Memory
-from raven.memory_engine.http_backend import Call, HttpMemoryBackend, Reply, clamp_score
+from raven.memory_engine import Call, HttpMemoryBackend, Reply, clamp_score
 from raven.plugins import PluginContext
 
 RATE_LIMITED_CODE = 40309
@@ -50,8 +50,8 @@ class MemosBackend(HttpMemoryBackend):
     def _store_accepted(self, reply: Reply) -> bool:
         return self._effective_status(reply) == 200 and (reply.body or {}).get("message") == "ok"
 
-    def _recall_call(self, query: str, top_k: int) -> Call:
-        return Call("POST", "/search/memory", json={"query": query, "user_id": self._user_id, "top_k": top_k})
+    def _recall_call(self, query: str, top_k: int, owner: str) -> Call:
+        return Call("POST", "/search/memory", json={"query": query, "user_id": owner, "top_k": top_k})
 
     def _parse_hits(self, body: Any) -> list[Memory]:
         data = (body or {}).get("data") or {}
@@ -74,14 +74,14 @@ class MemosBackend(HttpMemoryBackend):
                 )
         return out
 
-    def _store_call(self, session_id: str, messages: list[dict[str, Any]]) -> Call:
+    def _store_call(self, session_id: str, messages: list[dict[str, Any]], owner: str) -> Call:
         rows = [{"role": m["role"], "content": m["content"]} for m in messages]
         return Call(
             "POST",
             "/add/message",
             json={
                 "messages": rows,
-                "user_id": self._user_id,
+                "user_id": owner,
                 "conversation_id": session_id,
                 "async_mode": True,
             },
@@ -92,8 +92,8 @@ class MemosBackend(HttpMemoryBackend):
         # is refused (code 40071), and ``user_id`` alone deletes the whole user.
         return Call("POST", "/delete/memory", json={"memory_ids": [memory_id]})
 
-    def _session_call(self, session_id: str) -> Call:
-        return Call("POST", "/get/message", json={"user_id": self._user_id, "conversation_id": session_id})
+    def _session_call(self, session_id: str, owner: str) -> Call:
+        return Call("POST", "/get/message", json={"user_id": owner, "conversation_id": session_id})
 
     def _parse_session(self, body: Any) -> list[Memory]:
         data = (body or {}).get("data") or {}

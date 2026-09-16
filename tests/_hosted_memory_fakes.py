@@ -205,7 +205,13 @@ class FakeZep(FakeCloud):
             sid = path.removeprefix("/api/v2/threads/").removesuffix("/messages")
             if sid not in self.threads:
                 return httpx.Response(404, json={"message": "thread not found"})
-            for m in self.body(request)["messages"]:
+            rows = self.body(request)["messages"]
+            # https://help.getzep.com/v3/adding-messages#message-limits
+            if len(rows) > 30 or any(len(m.get("content", "")) > 4096 for m in rows):
+                return httpx.Response(
+                    400, json={"message": "message limits exceeded (30 per request, 4096 chars each)"}
+                )
+            for m in rows:
                 self._keep(self.threads[sid], m["content"], sid, role=m["role"])
             return httpx.Response(202, json={"task_id": "task-fake"})
         if method == "GET" and path.startswith("/api/v2/threads/") and path.endswith("/messages"):

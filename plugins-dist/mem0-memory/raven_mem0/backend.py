@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from raven.contracts.memory import Memory
-from raven.memory_engine.http_backend import Call, HttpMemoryBackend, clamp_score
+from raven.memory_engine import Call, HttpMemoryBackend, clamp_score
 from raven.plugins import PluginContext
 
 SEARCH_THRESHOLD = 0.1
@@ -31,7 +31,7 @@ class Mem0Backend(HttpMemoryBackend):
     def _auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Token {self._api_key}"}
 
-    def _recall_call(self, query: str, top_k: int) -> Call:
+    def _recall_call(self, query: str, top_k: int, owner: str) -> Call:
         return Call(
             "POST",
             "/v3/memories/search/",
@@ -40,7 +40,7 @@ class Mem0Backend(HttpMemoryBackend):
                 "top_k": top_k,
                 "threshold": SEARCH_THRESHOLD,
                 "rerank": False,
-                "filters": {"user_id": self._user_id},
+                "filters": {"user_id": owner},
             },
         )
 
@@ -60,7 +60,7 @@ class Mem0Backend(HttpMemoryBackend):
             )
         return out
 
-    def _store_call(self, session_id: str, messages: list[dict[str, Any]]) -> Call:
+    def _store_call(self, session_id: str, messages: list[dict[str, Any]], owner: str) -> Call:
         rows = []
         for m in messages:
             content = m["content"]
@@ -70,14 +70,14 @@ class Mem0Backend(HttpMemoryBackend):
         return Call(
             "POST",
             "/v3/memories/add/",
-            json={"messages": rows, "user_id": self._user_id, "run_id": session_id},
+            json={"messages": rows, "user_id": owner, "run_id": session_id},
         )
 
     def _delete_call(self, memory_id: str, kind: str | None) -> Call | None:
         return Call("DELETE", f"/v1/memories/{memory_id}/")
 
-    def _session_call(self, session_id: str) -> Call:
-        return Call("GET", "/v1/memories/", params={"user_id": self._user_id, "run_id": session_id})
+    def _session_call(self, session_id: str, owner: str) -> Call:
+        return Call("GET", "/v1/memories/", params={"user_id": owner, "run_id": session_id})
 
     def _health_call(self) -> Call:
         return Call("GET", "/v1/memories/", params={"user_id": self._user_id, "page_size": 1})
