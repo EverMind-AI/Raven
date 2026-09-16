@@ -302,6 +302,9 @@ class SubagentManager:
         # ``set_instance_mode`` for why it is not persisted, and why the host
         # rather than the agent is what holds it.
         self._instance_modes: dict[tuple[str, str, str], str] = {}
+        # And which model, by the same key and on the same terms. Separate from
+        # the modes above because an agent can offer either without the other.
+        self._instance_models: dict[tuple[str, str, str], str] = {}
         # The one agent table this process dispatches against, shared with the DAG
         # tool rather than built twice (see ``AgentRegistry``). The in-process
         # factory is bound after construction because it is a bound method of this
@@ -864,7 +867,12 @@ class SubagentManager:
         # rather than where the task starts running: it queues behind the
         # concurrency gate and a sandbox boot first, and a switch landing in
         # that window would hand it an endpoint chosen after it was asked for.
-        # A subagent has no model of its own, so it follows its conversation.
+        # This binding is raven's own, for a lane that runs on raven's provider:
+        # such a subagent has no model of its own, so it follows its
+        # conversation. Not a claim about every subagent -- an acp agent brings
+        # its own provider and never reads this, and a person can put one
+        # instance of it on a model of their choosing, which travels as
+        # `session_model` and is pushed over `session/set_config_option`.
         binding = resolve(None, self._fallback)
         # Passed only when there is one, the way `_run_subagent_inner` is called
         # below: the argument is new here, and a caller that replaces this method
@@ -1060,6 +1068,9 @@ class SubagentManager:
                             provider=self.provider,
                             model=self.model,
                             mode=self.resolve_mode(session_key, agent, handle),
+                            **optional_keyword(
+                                backend, "session_model", self.instance_model(session_key, agent, handle)
+                            ),
                             **optional_keyword(backend, "authored_task", text),
                             **kwargs,
                         )
@@ -1228,6 +1239,53 @@ class SubagentManager:
             _TIER_MISS_SEEN.add(seen)
             logger.info("sub-agent {}: tier {!r} not offered; running at {!r}", agent, tier, landed)
         return landed
+
+    def agent_model_choices(self, agent: str) -> tuple[Any, ...]:
+        """The models this agent offers, measured from its own handshake.
+
+        ``raven.acp_client.capabilities.AcpModelChoice`` records, read off the
+        registry row rather than re-probed for the reason ``agent_modes`` gives
+        above: the row is where the measurement already landed.
+
+        Empty for a transport that has no such menu, and for an acp agent that
+        advertises no ``model`` config option -- the two are the same answer here
+        because they are the same fact for a caller: there is nothing to pick
+        from.
+        """
+        row = self.registry.get(agent or "")
+        return () if row is None else tuple(row.caps.model_choices)
+
+    def instance_model(self, session_key: str | None, agent: str, handle: str) -> str | None:
+        """Which model this instance's turns run on, or ``None`` for the agent's own."""
+        return self._instance_models.get((session_key or "", agent, handle))
+
+    def set_instance_model(self, session_key: str | None, agent: str, handle: str, model: str | None) -> str | None:
+        """Put one instance on ``model`` from its next turn on.
+
+        Everything ``set_instance_mode`` says below about where this is held and
+        why it is not persisted applies unchanged: the agent binds the choice to
+        a session id it holds in memory, the pool relaunches that process
+        whenever the launch key changes, and re-asserting on every turn is what
+        repairs it. A raven restart returns every instance to its agent's own
+        model.
+
+        ``None`` clears the override. Raises ``ValueError`` naming what the agent
+        does offer, so a caller is never left guessing at the vocabulary -- the
+        values are opaque provider-qualified ids and guessing at one is how a
+        reader asks for a model the agent will refuse.
+        """
+        key = (session_key or "", agent, handle)
+        if model is None:
+            self._instance_models.pop(key, None)
+            return None
+        offered = [c.value for c in self.agent_model_choices(agent)]
+        if model not in offered:
+            raise ValueError(
+                f"{agent!r} has no model {model!r}" + (f"; it offers {len(offered)}" if offered else "; it offers none")
+            )
+        self._instance_models[key] = model
+        logger.info("Instance {}/{} set to model {}", agent, handle, model)
+        return model
 
     def set_instance_mode(self, session_key: str | None, agent: str, handle: str, mode: str | None) -> str | None:
         """Put one direct-chat instance in ``mode`` from its next turn on.
@@ -1560,6 +1618,11 @@ class SubagentManager:
                             provider=provider,
                             model=model,
                             mode=self.resolve_mode(session_key, agent, origin.get("instance")),
+                            **optional_keyword(
+                                backend,
+                                "session_model",
+                                self.instance_model(session_key, agent, origin.get("instance") or ""),
+                            ),
                             **optional_keyword(backend, "authored_task", origin.get("authored_task")),
                             **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),
                             **state_kwargs,

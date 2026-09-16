@@ -2589,6 +2589,96 @@
       ]
     },
     {
+      "name": "subagents.instance.set_model",
+      "summary": "Report, set or clear the model one direct-chat instance answers with. Neither field reports; clear=true drops the override, after which the instance runs on whatever the agent picked for itself; model=<value> switches from the next turn on. Unlike set_mode there is nothing to inherit: a cleared instance follows the agent's own choice, which this host cannot name, so null means exactly that. Always answers with the override and the whole menu, so one reply is enough to draw the control.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "agent",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "handle",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "model",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "The opaque provider-qualified id the agent offered. Never a display name: the two differ and the agent takes only the id back."
+          }
+        },
+        {
+          "name": "clear",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Drop this instance's override, returning it to the agent's own model. model wins when both are given, matching set_mode: naming one is a statement, clearing is the absence of one."
+          }
+        }
+      ],
+      "result": {
+        "name": "SubagentsInstanceSetModelResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "This instance's override, or null when it follows the agent's own model."
+            },
+            "availableModels": {
+              "type": "array",
+              "description": "The menu the agent advertised, measured from its own handshake rather than declared here.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "value"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The id the agent takes back."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "What the agent asked to be shown, usually far shorter than the value."
+                  },
+                  "group": {
+                    "type": "string",
+                    "description": "The agent's own bucketing, a provider typically. Empty when it offered none."
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
       "name": "session.set_mode",
       "summary": "Report, set or clear the sub-agent tier this session dispatches at. Neither field reports; clear=true returns to the configured default; mode=<id> switches from the next turn on. Raven's own effort is the same in every tier.",
       "params": [
