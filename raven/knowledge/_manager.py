@@ -24,7 +24,6 @@ from raven.knowledge._embedding import (
     embedding_client,
     load_embedding_config,
 )
-from raven.knowledge._parser import ParserBase, TextParser
 from raven.knowledge._records import (
     DEFAULT_TOP_K,
     DocumentOrigin,
@@ -35,6 +34,9 @@ from raven.knowledge._records import (
 from raven.knowledge._structure import HeadingAwareChunker, StructuredTextParser
 from raven.knowledge._types import Chunk, VectorRecord, VectorSearchResult
 from raven.knowledge._vector_store import VectorStoreBase
+from raven.knowledge.parser import ParserBase
+from raven.knowledge.parser.docx_parser import DocxParser
+from raven.knowledge.parser.text_parser import TextParser
 
 
 class KnowledgeError(RuntimeError):
@@ -79,9 +81,11 @@ def _default_parsers() -> list[ParserBase]:
 
     Order matters: the structured parser takes the two formats it can find
     headings in, and TextParser has to stay behind it for CSV, JSON, YAML,
-    RST and plain text, which would otherwise have no parser at all.
+    RST and plain text, which would otherwise have no parser at all. DocxParser
+    claims a media type no other parser here answers to, so its position is
+    free.
     """
-    return [StructuredTextParser(), TextParser()]
+    return [StructuredTextParser(), DocxParser(), TextParser()]
 
 
 def supported_extensions() -> list[str]:

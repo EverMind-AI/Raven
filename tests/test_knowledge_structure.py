@@ -275,7 +275,7 @@ def test_the_structured_parser_only_claims_what_it_can_cut():
     """This parser claims only the two formats it can find headings in, so a
     registry holding it alone would leave plain text, CSV, JSON, YAML and RST
     with no parser at all. TextParser has to stay alongside it for the rest."""
-    from raven.knowledge._parser import TextParser
+    from raven.knowledge.parser.text_parser import TextParser
 
     assert StructuredTextParser.supported_media_types == ["text/markdown", "text/html"]
     left_behind = set(TextParser.supported_media_types) - set(StructuredTextParser.supported_media_types)

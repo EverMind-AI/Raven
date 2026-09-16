@@ -49,9 +49,11 @@ retained in `LICENSES/`.
   `ui-webui` itself. What remains in this repository, and what this notice is
   now about, is the code adopted FROM it and rewritten in place:
   `raven/knowledge/_types.py`, `raven/knowledge/_chunker.py`,
-  and `raven/knowledge/_parser.py`. Each names its origin in its own module
-  docstring. A fourth module, `dag_projection`, carried derived code until it
-  was removed for having no importer; nothing of it remains.
+  and `raven/knowledge/parser/` (the `ParserBase` contract and the plain-text
+  parser; the package layout follows RAGFlow's `deepdoc.parser` and the Word
+  parser is our own). Each names its origin in its own module docstring. A
+  fourth module, `dag_projection`, carried derived code until it was removed
+  for having no importer; nothing of it remains.
 - Modifications: the three modules above are rewritten rather than vendored --
   they take agentscope's chunking, parsing and DAG-projection logic and nothing
   else, and they carry no agentscope import. The attribution stays because the

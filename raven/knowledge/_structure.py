@@ -33,9 +33,9 @@ import re
 from html.parser import HTMLParser
 
 from raven.knowledge._chunker import ApproxTokenChunker
-from raven.knowledge._parser import ParserBase
 from raven.knowledge._sections import MAX_SECTION_CHARS, SECTION_ORDINAL, SECTION_TEXT
 from raven.knowledge._types import Chunk, Section, TextBlock
+from raven.knowledge.parser import ParserBase
 
 _ATX_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _CODE_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
