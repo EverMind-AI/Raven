@@ -9,7 +9,7 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell
 import { sources } from '../../state/sources'
 import { turn } from '../demo/040-state.js'
 import { claimBoot } from '../demo/160-boot.js'
-import { openLiveSession } from './080-overrides.js'
+import { switchTo } from '../../state/session/registry'
 
 export function liveMode() {
   /* The stub gate, which used to be this layer's opening `return`: opened from
@@ -51,7 +51,7 @@ export function install() {
   sources.sessions = {
     snapshot: () => ({ rows: liveSessionRows, cur: sessionCurrent(), busy: turn.busy() }),
     replace: (rows) => { liveSessionRows = rows; },
-    open: (s) => openLiveSession(s),
+    open: (s) => switchTo(s),
   };
   islands.rail.hold();
   sessionSet(null);

@@ -51,7 +51,6 @@ const pickRun = (s) => /超时|timeout|登录|bug|修|fix|报错|定位|回调/.
 
 function send(text) {
   if (turn.busy()) { queuePush(text); toast('已排队，本轮结束后发出'); return; }
-  const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
   ask(text);
   turn.dispatch({ type: 'send' }); runState.use = null;
   drawMeter(); goState(); sessionDraw();

@@ -64,7 +64,7 @@ const field = (holder: unknown, name: string): unknown =>
 
 /**
  * The runtime timed the turn and sent `duration_ms` on `message.complete`.
- * Site: `turnDur` in src/legacy/live/050-turn.js, whose local subtraction is
+ * Site: `duration` in src/state/session/runtime.ts, whose local subtraction is
  * the fallback for a gateway too old to send it (and for a stop, which ends a
  * turn without a `message.complete` at all).
  */
@@ -72,21 +72,22 @@ export const hasTurnDuration = (durationMs: unknown): boolean => durationMs != n
 
 /**
  * A `tool.complete` frame carries the emit site's own verdict. Site: the
- * `tool.complete` arm in src/legacy/live/050-turn.js, where the text heuristic
- * `okOf` survives only as the backstop for a gateway that omits the field.
+ * `tool.complete` stage in src/state/session/stages.ts, where the text
+ * heuristic `okOf` survives only as the backstop for a gateway that omits the
+ * field.
  */
 export const hasToolOk = (ok: unknown): boolean => typeof ok === 'boolean'
 
 /**
  * The gateway still sends `subagent.delivered`.
  *
- * Site: the `subagent.delivered` arm in src/legacy/live/050-turn.js, which is
- * a deliberate no-op -- the row it would draw belongs to the `turn.started`
+ * Site: the `subagent.delivered` stage in src/state/session/stages.ts, which
+ * is a deliberate no-op -- the row it would draw belongs to the `turn.started`
  * that follows. There is no condition at that site to move here: the page
- * accepts the frame from every gateway, and it always will while the arm does
- * nothing. Named so the tolerance is on this list and so the stage that
- * replaces the arm has one place to ask. Always true today, because a
- * notification never produces the -32601 that `gone()` records.
+ * accepts the frame from every gateway, and it always will while the stage does
+ * nothing. Named so the tolerance is on this list and so the stage has one
+ * place to ask. Always true today, because a notification never produces the
+ * -32601 that `gone()` records.
  */
 export const hasSubagentDelivered = (): boolean => has('subagent.delivered')
 
@@ -94,7 +95,7 @@ export const hasSubagentDelivered = (): boolean => has('subagent.delivered')
  * The gateway sends `session.naming_ended`, so a quiet ending settles as fast
  * as a title does.
  *
- * Site: the 12s naming backstop in src/legacy/live/050-turn.js. The timer arms
+ * Site: the 12s naming backstop in src/state/session/runtime.ts. The timer arms
  * for every gateway today and must go on doing so -- it covers a connection
  * that drops mid-turn as well as a gateway too old to send the event, and only
  * the first half of that is a version question -- so nothing consults this
@@ -107,7 +108,7 @@ export const hasNamingEnded = (): boolean => has('session.naming_ended')
  * verdict and stays at the site: a gateway too old to carry the field says
  * nothing, and reading that as "declined" tears down a placeholder while a
  * title really is on its way. Sites: `dispatchSend` and the draft path of
- * `liveSend` in src/legacy/live/080-overrides.js.
+ * `send` in src/state/session/runtime.ts.
  */
 export const hasNamingFlag = (answer: unknown): boolean => field(answer, 'naming') !== undefined
 
@@ -115,9 +116,9 @@ export const hasNamingFlag = (answer: unknown): boolean => field(answer, 'naming
  * A `session.delete` answer carries `still_on_disk` at all. Whether it says
  * the file survived stays at the site, for the same reason as `naming`:
  * "nothing at all" is not "nothing was there", and reading it as the second
- * drops a row whose file may still exist. Sites: `sources.sessions.remove` in
- * src/legacy/live/080-overrides.js and `deleteAll` in
- * src/legacy/live/130-writes.js, which must not disagree about one answer.
+ * drops a row whose file may still exist. Sites: `removeSession` and
+ * `deleteAllSessions` in src/features/rail/leave.ts, which must not disagree
+ * about one answer.
  */
 export const hasStillOnDisk = (answer: unknown): boolean => field(answer, 'still_on_disk') !== undefined
 

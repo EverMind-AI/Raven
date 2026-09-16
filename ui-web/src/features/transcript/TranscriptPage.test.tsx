@@ -17,6 +17,7 @@ import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
 import { setShell, shell } from '../../shell/bridge'
+import { hold as holdHost } from '../../state/session/hosts'
 
 import type { Shell } from '../../shell/bridge'
 import type { ProseTarget } from '../../shell/prose'
@@ -2643,9 +2644,9 @@ describe('transcript island, lane lifetime', () => {
   it('keeps a parked host: detached is not the same as thrown away', () => {
     turn('streaming')
     const parked = stage().querySelector('[data-tsl]')! as HTMLElement
-    /* What live/060-parked.js does on a mid-turn session switch: the stage's
-       children are held in a detached array, then wiped off the page. */
-    ;(sources.transcript as TranscriptSource).parked = (node) => node === parked
+    /* What a mid-turn session switch does: the conversation being left takes
+       its lane host off the stage and holds it (state/session/residency.ts). */
+    holdHost(parked)
     stage().innerHTML = ''
     turn('the other session')
     seen.md = 0

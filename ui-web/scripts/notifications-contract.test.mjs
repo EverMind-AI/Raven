@@ -6,7 +6,9 @@
  * surface that silently stops working -- so the two ends are compared here
  * instead: the table against raven/acp/updates.py's SIDE_CHANNEL_METHODS,
  * which is the server-side roster of the pushes that are not subscription
- * events, and the table against what the legacy layer actually registers.
+ * events, and the table against every name the page actually registers --
+ * which is the legacy layer plus the session pipeline, the two places a
+ * handler is installed.
  *
  * The Python file is read, never written: this whole refactor stays inside
  * ui-web/.
@@ -42,13 +44,21 @@ function sideChannelMethods() {
   return [...text.slice(open, close).matchAll(/"([^"]+)"/g)].map((m) => m[1])
 }
 
-/** Every [file:line, name] the legacy layer registers a push handler for. */
+/* Where a push handler can be installed: the two legacy layers, and the
+   session pipeline, which took the subscription envelope and the five requests
+   that block a turn. */
+const SITES = [
+  ...['demo', 'live'].flatMap((layer) => partNames(layer).map((name) => `legacy/${layer}/${name}`)),
+  'state/session/pipeline.ts',
+]
+
+/** Every [file:line, name] the page registers a push handler for. */
 function registered() {
-  const files = ['demo', 'live'].flatMap((layer) => partNames(layer).map((name) => `${layer}/${name}`))
   const found = []
-  for (const rel of files) {
-    const text = readFileSync(resolve(process.cwd(), 'src/legacy', rel), 'utf8')
-    const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS)
+  for (const rel of SITES) {
+    const text = readFileSync(resolve(process.cwd(), 'src', rel), 'utf8')
+    const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.ES2022, true,
+      rel.endsWith('.ts') ? ts.ScriptKind.TS : ts.ScriptKind.JS)
     const walk = (node) => {
       /* `gateway().on(...)`, which is what tells it apart from any other
          object's method of that name. */

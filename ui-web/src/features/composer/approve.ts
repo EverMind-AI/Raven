@@ -50,7 +50,7 @@ export function open(
      lines of an async page.
 
      `owner` is the conversation the request was raised in, which the caller
-     learns from the frame that raised it (live/070-notify.js). It is not always
+     learns from the frame that raised it (state/session/pipeline.ts). It is not always
      the open one: a turn the reader stepped away from can block on an approval
      at any moment, and filing that under whatever is on screen puts the question
      over a conversation it does not belong to -- while the conversation that

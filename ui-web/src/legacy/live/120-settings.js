@@ -26,7 +26,6 @@ import { sources } from '../../state/sources'
 import { $, LANG, T, langSet } from '../demo/010-kernel.js'
 import { modelCurrent, queueDraw, sess, turn } from '../demo/040-state.js'
 import { sessionDraw, sessionOpen } from '../demo/050-rail.js'
-import { pitch } from '../demo/060-conversation.js'
 import { closeDetail, drawCapsBadge, drawXa } from '../demo/120-capabilities.js'
 import { APP_VERSION, appVersionSet, drawSettings } from '../demo/130-settings.js'
 import { drawCron, drawKb, drawMem } from '../demo/140-schedule.js'
@@ -34,7 +33,7 @@ import { drawConn } from '../demo/145-connections.js'
 import { drawMoreFly } from '../demo/150-chrome.js'
 import { drawCaps } from '../demo/152-skills.js'
 import { drawPb } from '../demo/154-playbooks.js'
-import { draft } from './080-overrides.js'
+import { isDraft } from '../../state/session/registry'
 import { askUpgrade, showUpNote } from './210-update-notice.js'
 
 /* -- language ---------------------------------------------------------
@@ -92,8 +91,6 @@ function redrawAll() {
      place -- and only the settings dialog, which the flip is made from, is
      above it. */
   closeDetail();
-  const p = $('#stage').querySelector('.pitch');
-  if (p) { p.remove(); pitch(); }
   /* The transcript island re-renders its catalogue words (verbs, fold
      headers, footers) in place -- which is also what covers a turn still
      streaming, where the reload below must not run. */
@@ -102,7 +99,7 @@ function redrawAll() {
   /* The words baked into stored segments (note labels, phrased previews) come
      back right on a rebuild from disk. Skipped while a turn is streaming:
      re-opening the session mid-turn would cut the stream off. */
-  if (!draft && sessionCurrent() && !turn.busy()) sessionOpen(sess(sessionCurrent()));
+  if (!isDraft() && sessionCurrent() && !turn.busy()) sessionOpen(sess(sessionCurrent()));
 }
 
 /* The language the gateway last agreed to, kept where a page that cannot

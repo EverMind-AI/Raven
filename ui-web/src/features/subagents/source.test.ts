@@ -15,10 +15,13 @@ import { loadPart } from '../../../scripts/legacy-part.mjs'
 import type { Sources } from '../../state/sources'
 
 async function harness() {
-  const part = await loadPart(() => import('../../legacy/live/230-tabs.js'), {
+  const part = await loadPart(async () => {
+    await import('./source')
+    return import('../../legacy/live/230-tabs.js')
+  }, {
     fakes: {
       'src/shell/session': { current: () => 's1' },
-      'live/080-overrides.js': { mediaOf: () => ({}) },
+      'src/state/session/runtime': { mediaOf: () => ({}) },
     },
     islands: { transcript: { agentStage: () => {} }, subagents: { directEvent: () => {} } },
   })

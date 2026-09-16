@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { loadPart, looseQuery, partTexts } from '../../../scripts/legacy-part.mjs'
+import { loadPart, looseQuery, moduleText } from '../../../scripts/legacy-part.mjs'
 
 type Runtime = typeof import('./runtime')
 
@@ -13,10 +13,9 @@ async function turnPart(
   stamps: Record<string, unknown>,
   stubs: { state?: Record<string, unknown>; transcript?: Record<string, unknown> } = {},
 ): Promise<Runtime> {
-  /* The part is loaded first and the seam imported after it, which is the
-     order that keeps one module graph: a mock consulted from inside another
-     mock's factory would hand a cycle-mate the unmocked module. */
-  await loadPart(() => import('../../legacy/live/050-turn.js'), {
+  /* The module under test is what the fakes are installed around: a module
+     the first import did not reach is loaded afterwards without them. */
+  await loadPart(() => import('./runtime'), {
     fakes: {
       'src/shell/session': { current: () => 's1' },
       'src/shell/ctxchip': { set: () => {} },
@@ -32,8 +31,7 @@ async function turnPart(
       'demo/050-rail.js': { sessionDraw: () => {} },
       'demo/070-transcript.js': { killStatus: () => {} },
       'demo/090-composer.js': { drawMeter: () => {}, goState: () => {} },
-      'live/030-sessions.js': { touchSession: () => {} },
-      'live/080-overrides.js': { liveSend: () => {} },
+      'src/state/session/registry': { touch: () => {} },
     },
     islands: {
       transcript: { nudge: () => {}, stopStream: () => {}, ...stubs.transcript },
@@ -99,16 +97,15 @@ describe('the live turn wiring', () => {
   })
 
   it('re-anchors the fallback clock on a turn nobody typed', () => {
-    /* An ordering rule about one branch of the dispatcher, so it is read off
-       the part's own text: the branch runs for an event the harness above
+    /* An ordering rule about one stage of the pipeline, so it is read off the
+       stage table's own text: the stage runs for an event the harness above
        cannot distinguish from the one before it. */
-    const live = partTexts('live') as Array<[string, string]>
-    const src = live.find(([name]) => name === '050-turn.js')![1]
-    const mark = "} else if (ev.type === 'turn.started') {"
+    const src = moduleText('state/session/stages.ts') as string
+    const mark = "arm('turn.started'"
     const start = src.indexOf(mark)
     expect(start).toBeGreaterThan(-1)
-    const next = src.indexOf("} else if (ev.type === 'episode.start') {", start)
+    const next = src.indexOf("arm('episode.start'", start)
     expect(next).toBeGreaterThan(start)
-    expect(src.slice(start, next)).toContain('live.startedAt = Date.now();')
+    expect(src.slice(start, next)).toContain('rt.startedAt = Date.now()')
   })
 })

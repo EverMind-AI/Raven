@@ -1,14 +1,10 @@
 // @vitest-environment happy-dom
-/* One case per arm of the dispatcher, before it is rewritten as an ordered
- * stage array.
+/* One case per stage of the pipeline.
  *
- * Nothing drove this function before: the arms were read off the source, which
- * says what an arm contains and never what it does. So this is
- * characterisation, not specification -- what each arm does TODAY, ordering
- * included, so the rewrite has a baseline to be measured against. Two arms are
- * dead and labelled as such: nothing in the repo sends them and the contract
- * does not name them, and the rewrite deletes them together with their case
- * here.
+ * Nothing drove this before the stages were written: the arms of the if/else
+ * chain they replaced were read off the source, which says what an arm contains
+ * and never what it does. So this is characterisation -- what each stage does,
+ * ordering included -- and it is the baseline the rewrite was measured against.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -49,10 +45,11 @@ async function harness({
     steps.push(st)
     return st
   }
-  /* The part is loaded first and the seam imported after it, which is the
-     order that keeps one module graph: a mock consulted from inside another
-     mock's factory would hand a cycle-mate the unmocked module. */
-  await loadPart(() => import('../../legacy/live/050-turn.js'), {
+  /* The stage table is imported first and the pipeline that reaches it after,
+     which is the order that keeps one module graph: the fakes are installed
+     around the module under test, and a module the first import did not reach
+     is loaded afterwards without them. */
+  await loadPart(async () => { await import('./runtime'); await import('./stages'); return import('./pipeline') }, {
     fakes: {
       'src/shell/session': { current: () => current },
       'src/shell/toast': { show: (text: string) => log.push(['toast', text]) },
@@ -98,13 +95,8 @@ async function harness({
         wsOnTool: (name: string, args: unknown, replay: boolean) => log.push(['wsOnTool', name, args, replay]),
         wsOnToolDone: (...a: unknown[]) => log.push(['wsOnToolDone', ...a]),
       },
-      'demo/140-schedule.js': { refreshCron: () => log.push(['refreshCron']) },
-      'live/030-sessions.js': { touchSession: (id: string, preview?: string) => log.push(['touch', id, preview]) },
-      'live/080-overrides.js': {
-        drainQueue: () => log.push(['drainQueue']),
-        leaveDeletedSession: () => {},
-        liveSend: (text: string) => log.push(['liveSend', text]),
-        softStop: () => log.push(['softStop']),
+      'src/features/rail/source': {
+        touchSession: (id: string, preview?: string) => log.push(['touch', id, preview]),
       },
     },
     islands: {
@@ -117,6 +109,9 @@ async function harness({
         spawnFeed: (p: unknown) => log.push(['spawnFeed', p]),
         finishTurn: (_st: unknown, _steps: unknown, clock: unknown) => log.push(['finishTurn', clock]),
         artifacts: (turnNo: unknown) => log.push(['artifacts', turnNo]),
+        /* The fold a stop makes asks this first and nothing else does, so it is
+           where "softStop ran" is visible from outside. */
+        turnKept: () => { log.push(['softStop']); return false },
       },
       workspace: { advanceTurn: () => log.push(['advanceTurn']), currentTurn: () => 3 },
       subagents: {
@@ -136,15 +131,23 @@ async function harness({
   await fakeGateway(() => Promise.resolve({ sessions: [] }))
   const { setSources } = await import('../sources')
   setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-  const parked = await import('../../legacy/live/060-parked.js')
-  const turnState = await import('../../legacy/live/050-turn.js')
+  const registry = await import('./registry')
+  const runtime = await import('./runtime')
+  /* The two page-level objects the turn used to live on, as the conversation
+     the page is showing: the turn's owner is the runtime a frame lands in, and
+     the retry text is that runtime's own. */
+  const park = {
+    get turnOwner() { return registry.viewRuntime().key },
+    get lastAsk() { return registry.viewRuntime().lastAsk },
+    set lastAsk(text: string) { registry.viewRuntime().lastAsk = text },
+  }
   return {
     dispatch: pipeline.dispatch,
     log,
     steps,
     rows,
-    park: parked.park as { turnOwner: string | null; lastAsk: string },
-    live: turnState.live as unknown as {
+    park,
+    live: runtime.state() as unknown as {
       st: Step | null
       steps: Step[]
       say: string
@@ -249,8 +252,8 @@ describe('session.titled', () => {
 describe('session.naming_ended', () => {
   it('hands the reason to the one place that decides (050-turn.js:139)', async () => {
     const h = await harness({ rows: [{ id: 's1', title: 'gui.new_task' }] })
-    const turnPart = await import('../../legacy/live/050-turn.js')
-    turnPart.beginNaming('please cut a desktop release')
+    const runtime = await import('./runtime')
+    runtime.beginNaming('please cut a desktop release')
 
     h.dispatch({ type: 'session.naming_ended', payload: { session_id: 's1', reason: 'no_title' } })
 
@@ -437,36 +440,6 @@ describe('subagent.delivered', () => {
     h.dispatch({ type: 'subagent.delivered', payload: { label: 'qc' } })
 
     expect(h.log).toEqual([])
-  })
-})
-
-/* The two arms below are DEAD: nothing in the repo emits either name and the
-   contract does not carry them. Characterisation only -- the rewrite deletes
-   the arms and these two cases together. */
-describe('cron.started (dead arm)', () => {
-  it('seeds a row for the job and marks it running (050-turn.js:233)', async () => {
-    const h = await harness({ rows: [] })
-    const sessions = await import('../../legacy/live/030-sessions.js')
-
-    h.dispatch({ type: 'cron.started', payload: { job_id: 'j1', name: 'morning brief' } })
-
-    expect((sessions.cronNames as Record<string, string>).j1).toBe('morning brief')
-    expect(h.rows[0]).toMatchObject({ id: 'cron:j1', title: 'morning brief', status: 'run', from: 'cron' })
-    expect(h.did('touch')).toEqual([['touch', 'cron:j1', undefined]])
-  })
-})
-
-describe('cron.finished (dead arm)', () => {
-  it('holds the finished marker on the row and re-reads the list (050-turn.js:247)', async () => {
-    const h = await harness({ rows: [{ id: 'cron:j1', status: 'run' }] })
-
-    h.dispatch({ type: 'cron.finished', payload: { job_id: 'j1', ok: false } })
-    await h.tick()
-
-    expect(h.rows[0]!.status).toBe('err')
-    expect(h.did('touch')).toEqual([['touch', 'cron:j1', undefined]])
-    /* The cron page is not open here, so it is not redrawn. */
-    expect(h.did('refreshCron')).toEqual([])
   })
 })
 

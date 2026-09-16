@@ -45,11 +45,11 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
      through this holder rather than stubbed, so the reconnect drives the real
      function. */
   const api: { switchTo?: Registry['switchTo'] } = {}
-  /* The part is loaded first and the seam imported after it, which is the
-     order that keeps one module graph: a mock consulted from inside another
-     mock's factory would hand the override layer the unmocked parked-turn
-     module. */
-  const part = await loadPart(() => import('../../legacy/live/080-overrides.js'), {
+  /* The registry is imported first and the part that wires it after, which is
+     the order that keeps one module graph: the fakes are installed around the
+     modules the first import reaches, and one it did not is loaded afterwards
+     without them. */
+  await loadPart(async () => { await import('./registry'); return import('../../legacy/live/080-overrides.js') }, {
     fakes: {
       'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) } },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
@@ -64,6 +64,7 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
         parkDraft: () => {},
         queueClear: () => {},
         queueRestore: () => {},
+        queueShift: () => undefined,
         sess: (id: string) => (rows || []).find((r) => r.id === id),
         stop_: () => {},
         turn: {
@@ -90,12 +91,12 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
       'demo/100-workspace.js': { setWs: () => {}, wsOnHistory: () => {}, wsReset: () => {} },
       'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
       'demo/152-skills.js': { drawCaps: () => {} },
-      'live/040-history.js': {
+      'src/features/transcript/source': {
         renderHistory: (messages: Array<{ text: string }>) => { state.fresh = null; calls.push(['renderHistory', messages[0]]) },
       },
-      'live/060-parked.js': {
-        parkTurn: () => calls.push(['parkTurn']),
-        restoreTurn: () => calls.push(['restoreTurn']),
+      'src/state/session/residency': {
+        park: () => calls.push(['parkTurn']),
+        resume: () => calls.push(['restoreTurn']),
       },
       'src/features/workspace/source': { wsSetRoot: (root: string) => calls.push(['wsSetRoot', root]) },
     },
@@ -134,19 +135,31 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
        here, and an empty envelope is a valid answer to both. */
     return Promise.resolve({})
   })
-  const parked = await import('../../legacy/live/060-parked.js')
-  const turnState = await import('../../legacy/live/050-turn.js')
-  const overrides = part as Overrides
+  const overrides = (await import('../../legacy/live/080-overrides.js')) as Overrides
   const { setSources } = await import('../sources')
   setSources({ composer: {}, sessions: {}, transcript: {} } as never)
+  const { staging } = await import('./staging')
   const rpcUi = await import('../../legacy/live/020-rpc.js')
   overrides.install()
+  /* The four page-level names the switch used to keep, as the conversations
+     that keep them now: the subscription whose frames paint the stage is the
+     one on the conversation being shown, the two books are that same field
+     read either way round, and the staged picks belong to the draft. */
+  const sub = (key: string | null) => registry.get(key)?.subscriptionId ?? null
   const env = {
-    live: turnState.live as { subId: string | null },
-    subBySession: parked.subBySession as Record<string, string>,
-    subSession: parked.subSession as Record<string, string>,
-    parkedTurns: parked.parkedTurns as Map<string, unknown>,
-    staged: overrides.staged as Staged,
+    live: {
+      get subId() { return sub(current) },
+      set subId(id: string | null) { registry.record(current, id) },
+    },
+    subBySession: new Proxy({} as Record<string, string>, {
+      get: (_t, key: string) => sub(key),
+      set: (_t, key: string, id: string) => { registry.record(key, id); return true },
+    }),
+    subSession: new Proxy({} as Record<string, string>, {
+      get: (_t, id: string) => registry.bySubscription(id),
+    }),
+    parkedTurns: { set: (key: string, _pk: unknown) => { registry.ensure(key).events = [] } },
+    get staged() { return staging() as Staged },
     sessionCurrent: () => current,
     sessionSet: (id: string | null) => { current = id; calls.push(['sessionSet', id]) },
     sess: (id: string) => (rows || []).find((r) => r.id === id),
@@ -421,7 +434,8 @@ describe('the live session switch', () => {
     const h = await harness({ rows: [{ id: 'a' }] })
     h.env.sessionSet('a')
     await h.subscribe('a')
-    h.env.live.subId = null
+    /* Nothing to release: the subscription whose frames paint the stage is not
+       a second field any more, it is the conversation's own. */
 
     await h.subscribe('a')
 

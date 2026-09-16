@@ -80,12 +80,7 @@ export function install() {
      already has the honest answer for each: no node states to read, nothing to
      open a node into, and the agents panel for a spawn row. Installing
      null-guarded stand-ins here only moved that decision to the wrong layer --
-     live/240-external-agents.js installs the three that can do the work. */
-    /* Whether a detached lane host is one the shell means to bring back rather
-     than one it threw away. Nothing is parked on this canvas -- one session,
-     no socket -- so the honest answer here is no; live/060-parked.js installs
-     the real check over this one. */
-    parked: () => false,
+     the transcript's own source installs the ones that can do the work. */
   };
 }
 
