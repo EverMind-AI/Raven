@@ -295,7 +295,14 @@ a second, differently-authenticated network face.
 
 ## Outbound
 
-One tool on the host agent, taking an Agent Card URL and a message.
+One tool on the host agent, taking an Agent Card URL and a message. It is registered only
+once a peer is configured, because its schema is not free: measured at 158 tokens, reserved
+on every turn of every conversation, against a tool surface already within about fifty
+tokens of the bound `tests/test_agent_loop_token_budget.py` holds. A host with no peers has
+nowhere to send a message, so it was paying for a tool it could not use. Nothing becomes
+unreachable -- a peer that needs no credential is still listed by origin with `credential`
+empty, which sends no header -- so reaching a public agent costs one config line instead of
+a per-turn tax on every install.
 
 Configuration is a section of its own, `a2a`, holding the inbound switch and its token, and
 a list of trusted peers keyed by origin. A peer entry carries an origin and its credentials
