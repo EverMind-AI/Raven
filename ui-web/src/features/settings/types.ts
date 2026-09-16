@@ -1,4 +1,4 @@
-import type { ApiUsageModel, SettingsUsageResult } from '../../rpc/generated'
+import type { ApiUsageModel, SettingsUsageResult, ToolSetupNeed } from '../../rpc/generated'
 
 /* One provider row of the model panel. Each source owns its provider list;
    the live source shares its fetched rows with the composer's model picker. */
@@ -76,7 +76,10 @@ export interface ToolRow {
   one: string
   on: boolean
   danger?: boolean
-  needs?: string | null
+  /* Set when the tool exists but is withheld for want of a key. The contract's
+     own shape (`ToolSetupNeed`): the page reads it for truth only -- the row is
+     here so a key-gated tool is visible rather than simply absent. */
+  needs?: ToolSetupNeed | null
 }
 
 /* Everything the dialog draws from, in one read. `raw` is the config

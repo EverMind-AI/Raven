@@ -49,8 +49,11 @@ export interface KbDoc {
   created_at: string
   updated_at: string
   /* Which kind of data source this arrived through. A folder is not one of
-     them: the browser walks it and sends the files, so each lands as a file. */
-  origin?: 'file' | 'note' | 'url'
+     them: the browser walks it and sends the files, so each lands as a file.
+     A free string because that is what the contract declares
+     (`KnowledgeDocument.origin`); `file`, `note` and `url` are what the engine
+     writes today, and the page compares against those three. */
+  origin?: string
   /* Where a url document was read from. Empty for every other origin. */
   origin_ref?: string
 }

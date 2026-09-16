@@ -177,6 +177,15 @@ describe('the live extension source', () => {
       },
       islands: { plugins: { event: vi.fn() } },
     })
+    /* The row builders word their own labels, so the source needs the shell's
+       catalogue the way it has it inside the page. Installed on the instance
+       loadPart's reset just produced. */
+    const bridge = await import('../../shell/bridge')
+    bridge.setShell({
+      T: (key: string, _vars?: Record<string, string | number>, fallback?: string) => fallback ?? key,
+      confirmAsk: () => {},
+      showPage: () => {},
+    })
     const call = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === 'settings.get') {
         return { settings: { tools: { disabledTools: [] }, plugins: { disabled: [] } } }
@@ -206,7 +215,10 @@ describe('the live extension source', () => {
     expect(capabilities.loaded()).toBe(true)
     expect(skills.installed().map((row) => row.name)).toEqual(['review'])
     expect(plugins.rows().map((row) => row.name)).toEqual(['Python', 'remote'])
-    expect(extPart.toolsLive.map((row: { id: string }) => row.id)).toEqual(['read_file'])
+    /* Imported after loadPart's reset, so it is the same module instance the
+       part just installed from. */
+    const { extTools } = await import('./source')
+    expect(extTools().map((row) => row.id)).toEqual(['read_file'])
 
     await plugins.manual('CRM', 'npx -y @acme/crm-mcp')
     expect(call).toHaveBeenCalledWith('raven.mcp.set', {

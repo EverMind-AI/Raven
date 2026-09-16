@@ -21,7 +21,7 @@ import type { SettingsSnapshot, SettingsSource } from './types'
 /* The connections page is opened by importing its island, so standing in for
    that module is how the manage button's second half is observed. */
 const connOpens = vi.hoisted(() => ({ n: 0 }))
-vi.mock('../connections/store', () => ({ open: () => { connOpens.n += 1 } }))
+vi.mock('../connections/nav', () => ({ open: () => { connOpens.n += 1 } }))
 
 const toastWriter = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }))
 vi.mock('../../shell/toast', () => ({
@@ -56,7 +56,7 @@ function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       { id: 'read_file', name: 'read', group: 'file', reach: 'local', one: 'reads', on: true },
       { id: 'write_file', name: 'write', group: 'file', reach: 'local', one: 'writes', on: true, danger: true },
       { id: 'web_fetch', name: 'fetch', group: 'net', reach: 'net', one: 'fetches', on: true },
-      { id: 'image_generate', name: 'draw', group: 'net', reach: 'net', one: 'draws', on: false, needs: 'key' },
+      { id: 'image_generate', name: 'draw', group: 'net', reach: 'net', one: 'draws', on: false, needs: { setting: 'image.apiKey' } },
     ],
     ...over,
   }

@@ -1,19 +1,21 @@
-/* Every method name the legacy layer calls is one the contract declares.
+/* Every method name the page calls is one the contract declares.
  *
- * The layer is plain JavaScript, so `gateway().call('sessoin.list', ...)` type
- * checks as readily as the spelling that exists -- the compiler only sees the
- * transport's signature where the caller is TypeScript. A misspelt name is a
- * -32601 at the moment a reader opens the page that makes it, which is the one
- * failure this refactor was supposed to end.
+ * The legacy layer is plain JavaScript, so `gateway().call('sessoin.list', ...)`
+ * type checks as readily as the spelling that exists -- the compiler only sees
+ * the transport's signature where the caller is TypeScript. A misspelt name is
+ * a -32601 at the moment a reader opens the page that makes it, which is the
+ * one failure this refactor was supposed to end.
  *
  * So the names are collected from the source with the TypeScript API and held
- * to RPC_METHODS, which is generated from rpc-schema/openrpc.json. The two the
- * contract does not declare go through `callUnchecked` and are listed here by
- * name: they answer -32601 today and must go on doing so rather than being
- * typed into existence or silently dropped.
+ * to RPC_METHODS, which is generated from rpc-schema/openrpc.json. The feature
+ * sources are read too, even though tsc already checks them: the unchecked
+ * escape hatch below is a plain string on either side of the line, and this is
+ * what keeps it to the two names it was opened for. They answer -32601 today
+ * and must go on doing so rather than being typed into existence or silently
+ * dropped.
  */
 
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import ts from 'typescript'
@@ -27,9 +29,20 @@ import { RPC_METHODS } from '../src/rpc/generated'
    plugin-add path in live/150-plugins.js. */
 const UNCHECKED = ['raven.mcp.list', 'raven.mcp.set']
 
-const FILES = ['demo', 'live'].flatMap((layer) =>
-  partNames(layer).map((name) => `${layer}/${name}`),
-)
+/* Both legacy layers, plus every feature's source module: the calls moved
+   there as each domain left the layer, and the two sets together are the
+   page's whole traffic. Paths are from src/. */
+const sourceModules = () => readdirSync(resolve(process.cwd(), 'src/features'), { withFileTypes: true })
+  .filter((e) => e.isDirectory())
+  .map((e) => `features/${e.name}/source.ts`)
+  .filter((rel) => {
+    try { readFileSync(resolve(process.cwd(), 'src', rel)); return true } catch { return false }
+  })
+
+const FILES = [
+  ...['demo', 'live'].flatMap((layer) => partNames(layer).map((name) => `legacy/${layer}/${name}`)),
+  ...sourceModules(),
+]
 
 /* A `gateway().call(...)` or `gateway().binary(...)`: the callee is a property
    of a call to `gateway`, which is what tells it apart from `source.call(...)`
@@ -50,8 +63,9 @@ function isGatewayMember(node, member) {
 function names(member) {
   const found = []
   for (const rel of FILES) {
-    const text = readFileSync(resolve(process.cwd(), 'src/legacy', rel), 'utf8')
-    const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS)
+    const text = readFileSync(resolve(process.cwd(), 'src', rel), 'utf8')
+    const kind = rel.endsWith('.ts') ? ts.ScriptKind.TS : ts.ScriptKind.JS
+    const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.ES2022, true, kind)
     const walk = (node) => {
       if (isGatewayMember(node, member)) {
         const first = node.arguments[0]
@@ -68,7 +82,7 @@ function names(member) {
   return found
 }
 
-describe('the method names the legacy layer calls', () => {
+describe('the method names the page calls', () => {
   const declared = new Set(RPC_METHODS)
   const called = names('call')
 
