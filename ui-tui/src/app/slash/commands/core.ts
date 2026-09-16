@@ -186,7 +186,9 @@ export const coreCommands: SlashCommand[] = [
             // The gate reads the mode live, so the switch holds from the
             // next tool call -- nothing else to poke.
             ctx.transcript.sys(
-              isDefault ? `default permission mode set to ${want}` : `permission mode set to ${want} for this conversation`
+              isDefault
+                ? `default permission mode set to ${want}`
+                : `permission mode set to ${want} for this conversation`
             )
           })
         )
@@ -278,7 +280,7 @@ export const coreCommands: SlashCommand[] = [
 
   {
     aliases: ['instances'],
-    help: 'switch to a sub-agent instance chat (no arg lists them)',
+    help: 'switch to a subagent instance chat (no arg lists them)',
     name: 'instance',
     usage: '/instance [<n> | <agent>/<handle> | main]',
     run: (arg, ctx) => {
@@ -288,7 +290,7 @@ export const coreCommands: SlashCommand[] = [
 
       if (!target) {
         if (addressable.length === 0) {
-          return ctx.transcript.sys('no sub-agent instances in this session yet')
+          return ctx.transcript.sys('no subagent instances in this session yet')
         }
 
         const lines = addressable.map(
@@ -297,7 +299,7 @@ export const coreCommands: SlashCommand[] = [
         )
 
         return ctx.transcript.sys(
-          [`sub-agent instances (/instance <n> to switch, /instance main to leave):`, ...lines].join('\n')
+          [`subagent instances (/instance <n> to switch, /instance main to leave):`, ...lines].join('\n')
         )
       }
 
@@ -322,7 +324,7 @@ export const coreCommands: SlashCommand[] = [
   },
 
   {
-    help: 'show or change the effort tier -- of this conversation, or of the sub-agent you are chatting with',
+    help: 'show or change the effort tier -- of this conversation, or of the subagent you are chatting with',
     name: 'mode',
     usage: '/mode [<id> | default]   -- default/reset/clear return to the default',
     run: (arg, ctx) => {
@@ -402,7 +404,7 @@ export const coreCommands: SlashCommand[] = [
             // surface draws the control -- this one.
             const scope = active
               ? null
-              : "Raven's own effort is the same in every tier; this is what it asks of its sub-agents."
+              : "Raven's own effort is the same in every tier; this is what it asks of its subagents."
             ctx.transcript.sys(
               [
                 first,
@@ -418,7 +420,7 @@ export const coreCommands: SlashCommand[] = [
   },
 
   {
-    help: 'create a sub-agent instance and chat with it (no arg opens the picker)',
+    help: 'create a subagent instance and chat with it (no arg opens the picker)',
     name: 'new-instance',
     usage: '/new-instance [<agent>]',
     run: (arg, ctx) => {

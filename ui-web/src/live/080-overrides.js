@@ -9,7 +9,7 @@ async function subscribe(sessionKey) {
     subSession[r.subscription_id] = sessionKey;
     claimStream(sessionKey);
   } catch (e) {
-    toast(`订阅失败：${e.message || e}`);
+    toast(T('gui.op.subscribe_failed', { detail: e.message || e }));
   }
 }
 
@@ -124,7 +124,7 @@ async function applyStagedModel(sessionId, gen) {
   } catch (e) {
     // Said out loud, not just reversed: the pick was announced as staged, so a
     // silent chip flip back would be an unexplained contradiction.
-    toast(`切换失败：${(e && ((e.data && e.data.detail) || e.message)) || e}`);
+    toast(T('gui.op.switch_failed', { detail: (e && ((e.data && e.data.detail) || e.message)) || e }));
     void loadProviders(sessionId, gen);
   }
 }
@@ -340,7 +340,7 @@ async function openLiveSession(s) {
        empty their stage, and must not raise a toast about a page nobody is on. */
     if (gen !== viewGen) return;
     pitch();
-    toast(`打开会话失败：${e.message || e}`);
+    toast(T('gui.op.open_failed', { detail: e.message || e }));
   }
 }
 

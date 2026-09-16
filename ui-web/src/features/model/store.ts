@@ -122,7 +122,7 @@ export const protocolFor = (provider: Provider, model: string): ApiProtocol => {
 
 export async function setProtocol(model: string, provider: string, protocol: ApiProtocol): Promise<void> {
   const setter = source().setProtocol
-  if (!setter) throw new Error('当前 WebUI 后端不支持 API 类型设置')
+  if (!setter) throw new Error(t('gui.model.protocol_unsupported'))
   await setter(model, provider, protocol)
   announce()
 }
@@ -151,13 +151,15 @@ export async function choose(m: string, provider: string): Promise<void> {
     /* A staged pick (a draft, applied when its session is created) is not an
        applied switch, and saying so here is what keeps a later refusal from
        contradicting an earlier success claim. */
-    toast(settled === 'staged' ? `已选择 ${short(m)}，发送首条消息后生效` : `已切换到 ${short(m)}`)
+    toast(settled === 'staged'
+      ? t('gui.model.pick_staged', { name: short(m) })
+      : t('gui.model.pick_switched', { name: short(m) }))
   } catch (e) {
     if (scope === 'session') {
       setCurrent(prev)
       after?.()
     }
-    toast(`切换失败：${detail(e)}`)
+    toast(t('gui.op.switch_failed', { detail: detail(e) }))
   }
 }
 
