@@ -2170,9 +2170,9 @@ function DefaultsPage({ s }: { s: SettingsState }): JSX.Element {
         title={t('gui.set.dm.embed')}
         note={t('gui.set.dm.embed_note')}
         kind="embedding"
-        pinKey="knowledge"
-        modelField="embeddingModel"
-        providerField="embeddingProvider"
+        pinKey="embedding"
+        modelField="model"
+        providerField="provider"
         foot={t('gui.set.dm.embed_warn')}
         s={s}
       />

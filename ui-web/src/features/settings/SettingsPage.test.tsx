@@ -1680,8 +1680,8 @@ describe('default model pins', () => {
       [
         'set',
         {
-          key: 'knowledge',
-          value: { embeddingModel: 'text-embedding-3-large', embeddingProvider: 'openai' },
+          key: 'embedding',
+          value: { model: 'text-embedding-3-large', provider: 'openai' },
         },
       ],
     ])
@@ -1694,7 +1694,7 @@ describe('default model pins', () => {
      failing at all. A refused write now leaves the config untouched because
      there was only ever one. */
   it('leaves the stored pin untouched when the write is refused', async () => {
-    const data = pinsnap({ raw: { knowledge: { embeddingModel: 'openai/old', embeddingProvider: 'openai' } } })
+    const data = pinsnap({ raw: { embedding: { model: 'openai/old', provider: 'openai' } } })
     const calls: Array<[string, unknown]> = []
     install(data, {
       set: async (key, value) => {
@@ -1717,8 +1717,8 @@ describe('default model pins', () => {
       [
         'set',
         {
-          key: 'knowledge',
-          value: { embeddingModel: 'text-embedding-3-large', embeddingProvider: 'openai' },
+          key: 'embedding',
+          value: { model: 'text-embedding-3-large', provider: 'openai' },
         },
       ],
     ])

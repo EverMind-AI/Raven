@@ -459,7 +459,15 @@ def set_embedding_endpoint(
     if not clean:
         return {}
 
-    _refuse_a_pin_that_cannot_embed(clean, path=path)
+    # Against the block this would leave behind, not against the fields handed
+    # in: a run that changes only the model is still pinned to the provider
+    # already recorded, and judging the fields alone refused it.
+    stored = {}
+    try:
+        stored = dict(read_raw_or_raise(path).get("embedding") or {})
+    except Exception:  # noqa: BLE001 - an unreadable config raises from atomic_update below
+        pass
+    _refuse_a_pin_that_cannot_embed({**stored, **clean}, path=path)
 
     def _apply(_text: str | None) -> tuple[str, Any]:
         data = read_raw_or_raise(path)
@@ -489,6 +497,12 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
     provider = str(clean.get("provider") or "")
     model = str(clean.get("model") or "")
     if not provider:
+        # A model with nobody to serve it. Stored, it reads as configured on
+        # every screen while every reader resolves it to nothing -- which is
+        # how a wizard came to report semantic memory over a service running
+        # on keywords alone.
+        if model:
+            raise EmbeddingPinError("an embedding model needs the provider that serves it")
         return
 
     from raven.config.update_providers import resolve_provider_credentials
@@ -504,7 +518,7 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
         return
     from raven.providers import catalog
 
-    row = catalog.describe(provider, model.split("/", 1)[1] if "/" in model else model)
+    row = catalog.describe(provider, model)
     caps = tuple(getattr(row, "capabilities", ()) or ())
     if caps and "embedding" not in caps:
         raise EmbeddingPinError(

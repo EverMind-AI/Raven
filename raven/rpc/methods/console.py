@@ -812,13 +812,13 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "sessionTitle.provider": _chk_pin_provider("sessionTitle.provider"),
     "translate.model": _chk_pin_model("translate.model"),
     "translate.provider": _chk_pin_provider("translate.provider"),
-    "knowledge.embeddingModel": _chk_pin_model("knowledge.embeddingModel"),
-    "knowledge.embeddingProvider": _chk_pin_provider("knowledge.embeddingProvider"),
+    "embedding.model": _chk_pin_model("embedding.model"),
+    "embedding.provider": _chk_pin_provider("embedding.provider"),
     # The pair keys. A surface offering a pin writes one of these, not the two
     # leaves in sequence.
     "sessionTitle": _chk_pin_pair("sessionTitle", "model", "provider"),
     "translate": _chk_pin_pair("translate", "model", "provider"),
-    "knowledge": _chk_pin_pair("knowledge", "embeddingModel", "embeddingProvider"),
+    "embedding": _chk_pin_pair("embedding", "model", "provider"),
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
     "agents.defaults.reasoningEffort": _chk_enum("agents.defaults.reasoningEffort", "minimal", "low", "medium", "high"),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),
@@ -1050,6 +1050,7 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
             "sections": {},
             "config_path": "",
         }
+    from raven.config.raven import load_raven_config
     from raven_everos.config import (
         WRITABLE_SECTIONS,
         everos_has_own_embedding,
@@ -1067,7 +1068,17 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
             # blank for an install the wizard had just configured, and filling
             # it in from there wrote a second endpoint that silently outranked
             # the one a knowledge base goes on reading.
-            cur = host_embedding_section()
+            #
+            # The pair as stored, beside the address it resolves to: the model
+            # the card offers to edit has to be the one on file, not the id the
+            # vendor is addressed by, or saving the row back would store a
+            # spelling the user never chose.
+            pin = load_raven_config().embedding
+            cur = {
+                **host_embedding_section(),
+                "model": pin.model or "",
+                "provider": pin.provider or "",
+            }
         model = str(cur.get("model") or "")
         # A guard against a hand-written "<fill me>", not the mechanism that
         # makes an unconfigured role read as unset: the shipped template seeds
@@ -1125,24 +1136,33 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
             raise ConfigValidationError(f"{k} too long (max 500)")
         if v:
             clean[k] = v
+    # Which home this save lands in, decided before the borrow: raven's block
+    # names the provider rather than holding a copy of its credentials, so
+    # there a borrow is the name itself and lending would produce two fields
+    # the block has no place for.
+    to_host_block = section == "embedding" and not everos_has_own_embedding()
+
     borrow = params.get("borrow_from")
     if borrow is not None:
         if not isinstance(borrow, str) or not borrow.strip():
             raise ConfigValidationError("borrow_from must be a provider name")
-        from raven.config.update_providers import lend_provider_credentials
+        if to_host_block:
+            clean["provider"] = borrow.strip()
+        else:
+            from raven.config.update_providers import lend_provider_credentials
 
-        try:
-            lent = lend_provider_credentials(borrow.strip())
-        except KeyError as exc:
-            raise ConfigValidationError(f"no such provider: {borrow}") from exc
-        except ValueError as exc:
-            raise ConfigValidationError(str(exc)) from exc
-        # The borrowed values win over anything the client sent for the same
-        # keys: the page cannot read a stored key -- `model.endpoints` redacts
-        # it -- so a client-sent api_key alongside a borrow is the redaction
-        # itself being echoed back, which would overwrite a real key with the
-        # word for one.
-        clean.update(lent)
+            try:
+                lent = lend_provider_credentials(borrow.strip())
+            except KeyError as exc:
+                raise ConfigValidationError(f"no such provider: {borrow}") from exc
+            except ValueError as exc:
+                raise ConfigValidationError(str(exc)) from exc
+            # The borrowed values win over anything the client sent for the same
+            # keys: the page cannot read a stored key -- `model.endpoints` redacts
+            # it -- so a client-sent api_key alongside a borrow is the redaction
+            # itself being echoed back, which would overwrite a real key with the
+            # word for one.
+            clean.update(lent)
 
     if not clean:
         raise ConfigValidationError("fields must carry at least one non-empty value")
@@ -1155,19 +1175,26 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
             "the embedding endpoint is set by the EVEROS_EMBEDDING__MODEL / __BASE_URL / __API_KEY "
             "environment variables, which outrank anything saved here; change them instead"
         )
-    if section == "embedding" and not everos_has_own_embedding():
+    if to_host_block:
         # Written where it is read from, so the card cannot edit one home while
-        # the service and the knowledge base use the other. `provider` has no
-        # place in the host's block and is refused rather than dropped: a value
+        # the service and the knowledge base use the other. The block names a
+        # model and a provider and holds no credential of its own, so an
+        # address or a key sent here is refused rather than dropped: a value
         # accepted and discarded reads to the caller as one that was stored.
-        if "provider" in clean:
-            raise ConfigValidationError("provider is not part of raven's embedding endpoint")
-        from raven.config.update import set_embedding_endpoint
+        stray = sorted(k for k in ("base_url", "api_key") if k in clean)
+        if stray:
+            raise ConfigValidationError(
+                f"{' and '.join(stray)} belongs to the provider, not to raven's embedding endpoint"
+            )
+        from raven.config.update import EmbeddingPinError, embedding_model_change, set_embedding_endpoint
 
-        set_embedding_endpoint(
-            {"model": clean.get("model"), "baseUrl": clean.get("base_url"), "apiKey": clean.get("api_key")}
-        )
-        return {"applied": True}
+        pin = {"model": clean.get("model"), "provider": clean.get("provider")}
+        try:
+            previous = set_embedding_endpoint(pin)
+        except EmbeddingPinError as exc:
+            raise ConfigValidationError(str(exc)) from exc
+        warning = embedding_model_change(previous, pin)
+        return {"applied": True, "warning": warning} if warning else {"applied": True}
     set_everos_section(section, clean)
     return {"applied": True}
 

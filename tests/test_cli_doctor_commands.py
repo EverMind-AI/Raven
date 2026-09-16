@@ -1262,17 +1262,24 @@ def test_install_summary_browser_row_ticks_a_complete_download(
 # --------------------------------------------------------------------------- embedding relocation
 
 
-def _legacy_embedding(monkeypatch, tmp_path: Path, present: bool) -> None:
+def _legacy_embedding(monkeypatch, tmp_path: Path, present: bool, base_url: str = "https://legacy.test/v1") -> None:
     """Point the legacy reader at a file this test owns."""
     from raven.knowledge import _embedding as emb
 
     toml = tmp_path / "everos.toml"
     if present:
         toml.write_text(
-            '[embedding]\nmodel = "legacy-model"\nbase_url = "https://legacy.test/v1"\napi_key = "sk-legacy"\n',
+            f'[embedding]\nmodel = "legacy-model"\nbase_url = "{base_url}"\napi_key = "sk-legacy"\n',
             encoding="utf-8",
         )
     monkeypatch.setattr(emb, "_legacy_everos_config_path", lambda: toml if present else None)
+
+
+def _provider_at(name: str, base_url: str) -> None:
+    """A configured provider answering at ``base_url``, for the pin to name."""
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields(name, {"api_key": "sk-legacy", "api_base": base_url})
 
 
 def test_doctor_offers_to_move_an_embedding_endpoint_it_finds(
@@ -1292,14 +1299,27 @@ def test_doctor_offers_to_move_an_embedding_endpoint_it_finds(
 def test_doctor_fix_copies_the_endpoint_into_ravens_own_block(
     healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """The retired block held an address and a key; the pin names the provider
+    that has them, so the move only lands when one answers at that address."""
+    _provider_at("siliconflow", "https://legacy.test/v1")
     _legacy_embedding(monkeypatch, tmp_path, present=True)
 
     runner.invoke(app, ["doctor", "--fix"])
 
     block = json.loads(healthy_config.read_text(encoding="utf-8"))["embedding"]
-    assert block["model"] == "legacy-model"
-    assert block["baseUrl"] == "https://legacy.test/v1"
-    assert block["apiKey"] == "sk-legacy"
+    assert block == {"model": "legacy-model", "provider": "siliconflow"}
+
+
+def test_doctor_fix_leaves_an_endpoint_no_provider_answers_for(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Nowhere for the key to live, and inventing a provider row from a bare URL
+    would be a worse guess than saying nothing."""
+    _legacy_embedding(monkeypatch, tmp_path, present=True, base_url="https://nobody.test/v1")
+
+    runner.invoke(app, ["doctor", "--fix"])
+
+    assert "embedding" not in json.loads(healthy_config.read_text(encoding="utf-8"))
 
 
 def test_doctor_says_nothing_when_there_is_nothing_to_move(
