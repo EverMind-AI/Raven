@@ -1,5 +1,12 @@
 import type { ParamsOf, ResultOf, RpcMethod } from './generated'
-import type { ConnectionState, NotificationHandler, RpcTransport } from './transport'
+import type {
+  BinaryHandler,
+  ConnectionState,
+  NotificationHandler,
+  RpcTransport,
+  StateInfo,
+  StateListener,
+} from './transport'
 
 import { RpcError } from './transport'
 
@@ -15,10 +22,11 @@ export type Fixtures = { [M in RpcMethod]?: Responder<M> }
  */
 export class FixtureTransport implements RpcTransport {
   private readonly handlers = new Map<string, Set<NotificationHandler>>()
-  private readonly stateListeners = new Set<(s: ConnectionState) => void>()
+  private readonly binaryHandlers = new Set<BinaryHandler>()
+  private readonly stateListeners = new Set<StateListener>()
   private state: ConnectionState = 'closed'
   /** Every call made, in order -- lets a test assert on traffic. */
-  readonly calls: Array<{ method: RpcMethod; params: unknown }> = []
+  readonly calls: Array<{ method: string; params: unknown }> = []
 
   constructor(private readonly fixtures: Fixtures) {}
 
@@ -36,11 +44,35 @@ export class FixtureTransport implements RpcTransport {
     return responder as ResultOf<M>
   }
 
+  async callUnchecked(method: string, params: Record<string, unknown>): Promise<unknown> {
+    this.calls.push({ method, params })
+    const responder: unknown = (this.fixtures as Record<string, unknown>)[method]
+    if (responder === undefined) {
+      throw new RpcError(-32601, `fixture: no response recorded for ${method}`)
+    }
+    if (typeof responder === 'function') {
+      return await (responder as (p: Record<string, unknown>) => unknown)(params)
+    }
+    return responder
+  }
+
   on(method: string, handler: NotificationHandler): () => void {
     const set = this.handlers.get(method) ?? new Set()
     set.add(handler)
     this.handlers.set(method, set)
     return () => set.delete(handler)
+  }
+
+  binary(handler: BinaryHandler): () => void {
+    this.binaryHandlers.add(handler)
+    return () => this.binaryHandlers.delete(handler)
+  }
+
+  /** Test hook: push a binary frame into the app. */
+  emitBinary(buf: ArrayBuffer): void {
+    for (const h of this.binaryHandlers) {
+      h(buf)
+    }
   }
 
   /** Test hook: push a server-style notification into the app. */
@@ -50,17 +82,17 @@ export class FixtureTransport implements RpcTransport {
     }
   }
 
-  onState(listener: (state: ConnectionState) => void): () => void {
+  onState(listener: StateListener): () => void {
     this.stateListeners.add(listener)
     listener(this.state)
     return () => this.stateListeners.delete(listener)
   }
 
   /** Test hook: simulate a connection-state transition. */
-  setState(next: ConnectionState): void {
+  setState(next: ConnectionState, info?: StateInfo): void {
     this.state = next
     for (const l of this.stateListeners) {
-      l(next)
+      l(next, info)
     }
   }
 
