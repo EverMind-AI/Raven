@@ -27,6 +27,7 @@ from loguru import logger
 from raven.acp_client.acp_agent import AcpAgentBackend, AcpEmptyTurnError
 from raven.acp_client.capabilities import (
     AcpMode,
+    AcpModelChoice,
     CapabilitySnapshot,
     SnapshotStore,
     relearn_session_modes,
@@ -40,6 +41,7 @@ from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.subagent.probe import probe_one
 from raven.agent.subagent.probe_state import fingerprint
+from raven.agent.subagent.registry import _row_for
 from raven.config.schema import SubagentsConfig, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.config.update_subagents import reject_unsupported_acp_fields
 
@@ -339,6 +341,17 @@ def _with_modes(cfg: Any, *modes: AcpMode) -> CapabilitySnapshot:
     )
 
 
+def _with_model_choices(cfg: Any, *choices: AcpModelChoice) -> CapabilitySnapshot:
+    return CapabilitySnapshot(
+        agent="a",
+        fingerprint=snapshot_fingerprint(cfg),
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        model_choices=choices,
+    )
+
+
 def _session_result(*modes: dict[str, str]) -> dict[str, Any]:
     return {"sessionId": "s1", "modes": {"currentModeId": "fast", "availableModes": list(modes)}}
 
@@ -467,6 +480,33 @@ def test_a_failed_rebuild_does_not_reach_the_turn() -> None:
 class _StubProvider:
     def get_default_model(self) -> str:
         return "stub-model"
+
+
+def test_the_model_menu_survives_the_row_and_the_meta_built_back_off_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both halves of the round trip, because the field is invisible either way.
+
+    ``format_agent_listing`` deliberately does not render ``model_choices``, so
+    nothing on screen says whether a conversion dropped it. The only reader is
+    the picker, and the pane hides the whole chip when the menu is empty -- a
+    later edit that loses the field on one of the two paths would take the
+    control off the screen with the suite still green. ``modes`` travels the
+    same two conversions and is already pinned; this is the same assertion for
+    the field beside it.
+    """
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    menu = (
+        AcpModelChoice(value="stub:model-a", name="model-a", group="Stub"),
+        AcpModelChoice(value="stub:model-b", name="model-b", group="Stub"),
+    )
+    SnapshotStore(path=path).record(_with_model_choices(cfg, *menu))
+
+    row = _row_for(cfg)
+    assert row.caps.model_choices == menu, "the config's menu must reach the row"
+    assert row.meta().model_choices == menu, "and the meta built back off that row must carry it"
 
 
 def test_the_relearned_menu_reaches_the_roster_the_clamp_and_picker_read(
