@@ -190,6 +190,7 @@ const DARK_PAIRED = new Set([
 const TONES: Record<string, 'mono' | 'hybrid' | 'mono-white'> = {
   amd: 'mono-white',
   anthropic: 'hybrid',
+  mineru: 'hybrid',
   vllm: 'mono',
 }
 
