@@ -146,6 +146,10 @@ function watchUpgrade(shade, since) {
 let distBase = null;
 
 const distProbe = async () => {
+  /* Only the built page has a dist to watch. Under `vite dev` the dev server
+     owns '/' and answers with a fresh validator after every edit it hot-reloads,
+     so this probe would read the developer's own typing as a new build. */
+  if (!import.meta.env.PROD) return null;
   try {
     const r = await fetch('/', { method: 'HEAD', cache: 'no-store' });
     if (!r.ok) return null;
@@ -179,6 +183,10 @@ function watchForUpdates() {
     if (tag !== distBase) showUpNote('ui');
   };
   note.onclick = () => { if (upKind === 'ver') askUpgrade(); else window.location.reload(); };
+  /* The click stays wired either way -- the version notice this row also
+     carries comes from the gateway, which the dev server proxies. Only the
+     dist watch is built-page-only; see distProbe. */
+  if (!import.meta.env.PROD) return;
   probe();
   setInterval(probe, 30000);
   document.addEventListener('visibilitychange', () => {
