@@ -102,15 +102,10 @@ let draft = false;
    session to scope the switch to, and writing it would change the global
    default instead. It is applied to the session the first message mints, then
    forgotten. Cleared on any leave of the draft so a stale pick cannot land on
-   the next conversation. */
-let pendingModel = null;
-/* The tier picked before the conversation exists. Declared beside `pendingModel`
-   and reset on exactly the same two paths, because it is the same problem: a
-   draft has no session_key, and writing under the empty one lands on a policy
-   the first turn will not read. Assigned from the tier source in 120. */
-let pendingTier = null;
-/* The permission mode picked while still a draft: the same pair, the same two resets. */
-let pendingPerm = null;
+   the next conversation. The tier and the permission mode are the same problem
+   and reset on exactly the same two paths, which is why the three share one
+   object; the settings layer in 120 assigns all three. */
+const staged = { model: null, tier: null, perm: null };
 /* The working directory picked while still a draft. Not a fourth staged write:
    the engine takes it on `session.create` itself, so `promote` hands it over
    with the mint rather than writing it afterwards. Reset on the same two paths
@@ -130,8 +125,8 @@ let pendingWorkdir = null;
    Its own function so the refusal path is reachable from a test without
    driving the whole send. */
 async function applyStagedModel(sessionId, gen) {
-  if (!pendingModel) return;
-  const pm = pendingModel; pendingModel = null;
+  if (!staged.model) return;
+  const pm = staged.model; staged.model = null;
   try {
     await rpc.call('config.set', { key: 'model', value: pm.model, provider: pm.provider, session_id: sessionId });
   } catch (e) {
@@ -215,7 +210,7 @@ function startDraft() {
   live.subId = null;
   parkDraft(); loadDraft('new');
   resetView();
-  draft = true; sessionSet(null); pendingModel = null;
+  draft = true; sessionSet(null); staged.model = null;
   // The other half of the pair with openLiveSession: a draft runs the
   // configured default, so leaving a conversation for one has to read that
   // default back or the chip keeps claiming the model of the conversation just
@@ -225,8 +220,8 @@ function startDraft() {
      so leaving a conversation for one has to read that default back -- and a
      tier staged for a draft that was never sent belongs to nothing, so it goes
      rather than waiting to be spent by whichever conversation is sent next. */
-  pendingTier = null; void loadTier();
-  pendingPerm = null; void loadPermMode(null, gen);
+  staged.tier = null; void loadTier();
+  staged.perm = null; void loadPermMode(null, gen);
   pendingWorkdir = null; setDraftWorkdir();
   $('#title').textContent = T('gui.new_task');
   pitch(); sessionDraw(); ta.focus();
@@ -242,7 +237,7 @@ async function openLiveSession(s) {
   // into the newly opened stage. Route them to the parked buffer instead.
   live.subId = null;
   parkDraft(); loadDraft(s.id);
-  draft = false; pendingModel = null;
+  draft = false; staged.model = null;
   // The model is per conversation now, so the chip must follow the one being
   // opened -- otherwise it keeps the model of the session left behind. Keyed to
   // s.id rather than sessionCurrent(): the current session is not switched over
@@ -256,8 +251,8 @@ async function openLiveSession(s) {
      in memory (`_session_policies`, no persistence), so a gateway restart puts
      every session back on the catalogue default -- and the chip went on naming
      the tier from before the gap. */
-  pendingTier = null; void loadTier();
-  pendingPerm = null; void loadPermMode(s.id, gen);
+  staged.tier = null; void loadTier();
+  staged.perm = null; void loadPermMode(s.id, gen);
   // Opening it IS reading it. ``s`` can be a bare {id, title} from the
   // reconnect path, so clear the flag on the row in sessionRows(), not on the arg.
   const row = sess(s.id);
@@ -488,7 +483,7 @@ function sendOnSession(text, failed) {
 /* What `liveSend` has always run here, unchanged. */
 function dispatchSend(text, failed) {
   const current = sessionCurrent();
-  turnOwner = current;
+  park.turnOwner = current;
   touchSession(current, text);
   beginNaming(text);
   /* `=== false`, not falsy: a server too old to carry the field says nothing
@@ -504,7 +499,7 @@ function liveSend(text) {
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
   /* What a retry re-sends. Recorded after the attachment note is folded in, so
      the second attempt carries the same message as the first. */
-  lastAsk = text;
+  park.lastAsk = text;
   ask(text);
   turn.dispatch({ type: 'send' });
   resetTurnState();
@@ -522,7 +517,7 @@ function liveSend(text) {
   }
   // The draft becomes a real session here, on its first message.
   (async () => {
-    const id = await openConversation(rowPreview(text), () => { turnOwner = sessionCurrent(); });
+    const id = await openConversation(rowPreview(text), () => { park.turnOwner = sessionCurrent(); });
     beginNaming(text);
     /* `sessionCurrent()` rather than `id`, which is what this has always sent:
        the two differ only when the reader opened another conversation inside

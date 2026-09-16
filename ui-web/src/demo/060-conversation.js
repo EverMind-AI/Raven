@@ -5,7 +5,7 @@ function openDemoSession(s) {
   // row goes back to carrying its timestamp.
   if (s.status === 'done') s.status = null;
   markNewCurrent();
-  stop_(); turn.dispatch({ type: 'idle' }); queueClear(); use = null;
+  stop_(); turn.dispatch({ type: 'idle' }); queueClear(); runState.use = null;
   wsReset();
   setWs(false);
   $('#title').textContent = plainTitle(s.title);
@@ -14,7 +14,7 @@ function openDemoSession(s) {
   drawMeter(); goState(); drawBanner();
   if (s.run) {
     const r = RUNS[s.run];
-    use = r.use;
+    runState.use = r.use;
     setCtx(((r.use && r.use.in) || 0) + ((r.use && r.use.out) || 0), 200000);
     ask(r.ask); replay(r, true);
   } else if (s.status === 'err') {

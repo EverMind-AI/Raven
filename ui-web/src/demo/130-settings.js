@@ -28,6 +28,7 @@ window.sTab = 'usage';
 // the running install is the only thing that knows its version. The rail foot
 // and the About card both render this as "--" rather than as a guess.
 let APP_VERSION = null;
+function appVersionSet(v) { APP_VERSION = v; }
 
 /* Wiping the list is a session operation, so it goes on the session source
    rather than staying a name the live layer overwrites. It has to live in this

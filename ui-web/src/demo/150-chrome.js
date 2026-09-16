@@ -138,13 +138,13 @@ document.addEventListener('keydown', (e) => {
 $('#setClose').onclick = () => closeSet();
 $('#setVeil').onclick = (e) => { if (e.target === $('#setVeil')) closeSet(); };
 $('#dClose').onclick = closeDetail;
-/* The scrim closes the sheet; calls through the name so late rebinds win. */
+/* The scrim closes the sheet; calls through the name so later decorators win. */
 $('#detail').addEventListener('click', (e) => { if (e.target === $('#detail')) closeDetail(); });
 
-$('#cq').oninput = () => { cQuery = $('#cq').value.trim().toLowerCase(); drawCaps(); };
+$('#cq').oninput = () => { capFilter.query = $('#cq').value.trim().toLowerCase(); drawCaps(); };
 $('#cKind').onclick = (e) => {
   const b = e.target.closest('button'); if (!b) return;
-  cKind = b.dataset.k;
+  capFilter.kind = b.dataset.k;
   [...$('#cKind').children].forEach((c) => c.setAttribute('aria-pressed', String(c === b)));
   drawCaps();
 };

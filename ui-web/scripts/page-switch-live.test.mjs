@@ -157,8 +157,8 @@ function harness({ rows, deferSubscribe } = {}) {
      return { subscribe, startDraft, openLiveSession, onReconnect: rpc.onReconnect,
        /* Test-only reach into the staged tier: it is written from the tier
           source in 120, which this harness does not compile. */
-       stageTier: (m) => { pendingTier = m }, stagedTier: () => pendingTier,
-       stagePerm: (m) => { pendingPerm = m }, stagedPerm: () => pendingPerm };`,
+       stageTier: (m) => { staged.tier = m }, stagedTier: () => staged.tier,
+       stagePerm: (m) => { staged.perm = m }, stagedPerm: () => staged.perm };`,
   )
   const api = install(env)
   return {

@@ -67,7 +67,7 @@ function onEvent(ev) {
        drawn the question; a window that is only watching has not. */
     if (!turn.busy() && p.content) ask(p.content);
     if (p.content) touchSession(sessionCurrent(), p.content);
-    turnOwner = sessionCurrent();
+    park.turnOwner = sessionCurrent();
     turn.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter();
     RavenIslands.workspace.advanceTurn();
   } else if (ev.type === 'turn.started') {
@@ -102,7 +102,7 @@ function onEvent(ev) {
        to timing it here, a stop being the one that always does. */
     live.startedAt = Date.now();
     live.answerAt = 0;
-    turnOwner = sessionCurrent();
+    park.turnOwner = sessionCurrent();
     turn.dispatch({ type: 'stream', cancellable: false }); goState(); drawMeter();
   } else if (ev.type === 'episode.start') {
     if (live.st) { live.st.seal(); }
@@ -183,7 +183,7 @@ function onEvent(ev) {
     }
     turn.dispatch({ type: 'idle' });
     noteRow(p.message || 'error', p.detail || p.reason || '',
-      lastAsk ? { retry: () => liveSend(lastAsk) } : null);
+      park.lastAsk ? { retry: () => liveSend(park.lastAsk) } : null);
     goState(); drawMeter(); sessionDraw();
   } else if (ev.type === 'cron.delivered') {
     toast(T('gui.cron.new_output', { name: p.name }));

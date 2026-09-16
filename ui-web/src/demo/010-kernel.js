@@ -26,9 +26,20 @@ let LANG = 'en';
 function langSet(v) { LANG = v; applyI18n(); }
 /* The GATEWAY host's OS family -- host-side actions (reveal in Finder) happen
    there, not in this browser. The UA is only the prior for the usual localhost
-   case; system.hello corrects it. */
+   case; system.hello corrects it. The live layer calls the setter rather than
+   assigning, the way it does for LANG: an imported binding is read-only, and a
+   field the other layer writes is a strand count-shared-globals.mjs counts. */
 let HOST_PLATFORM = /Mac/.test(navigator.platform) ? 'mac'
   : /Win/.test(navigator.platform) ? 'windows' : 'linux';
+function hostPlatformSet(v) { HOST_PLATFORM = v; }
+
+/* Later layers decorate a handful of this shell's verbs rather than reassigning
+   them. Registration order is application order from the inside out, so the
+   last registrar wraps every earlier one -- the order the reassignment chain
+   produced when each layer captured the then-current value. */
+function applyDecorators(list, base) {
+  return (list ?? []).reduce((f, wrap) => wrap(f), base);
+}
 const fillVars = (s, vars) =>
   vars ? String(s).replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : String(s);
 

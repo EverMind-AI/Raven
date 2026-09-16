@@ -25,7 +25,7 @@ function providerGuardHarness({ configured = null, providers = [] } = {}) {
   let opened = 0
   const build = Function(
     'deps',
-    `let providerConfiguredLive = deps.configured;
+    `const setupState = { providerConfigured: deps.configured };
      let providersLive = deps.providers;
      const RavenIslands = { settings: { openModels: () => { deps.opened() } } };
      ${providerGuardSrc[0]}
@@ -143,14 +143,15 @@ function persistHarness({ session = 'sess-1', answer = {}, reject = null } = {})
   const calls = []
   const build = Function(
     'deps',
-    `let defaultModelLive = '', defaultProviderLive = '', pendingModel = null, viewGen = 0;
+    `let defaultModelLive = '', defaultProviderLive = '', viewGen = 0;
+     const staged = { model: null, tier: null, perm: null };
      const { rpc, sessionCurrent, loadProviders, modelSet, setModelLabel } = deps;
      ${persistSrc[0]}
      return {
        persistModel,
        defaults: () => ({ model: defaultModelLive, provider: defaultProviderLive }),
-       pending: () => pendingModel,
-       stage: (v) => { pendingModel = v; },
+       pending: () => staged.model,
+       stage: (v) => { staged.model = v; },
      };`,
   )
   const api = build({
@@ -305,7 +306,8 @@ function combinedHarness({ session = 'a' } = {}) {
   const pending = []
   const build = Function(
     'deps',
-    `let viewGen = 0, providersLive = [], defaultModelLive = '', defaultProviderLive = '', pendingModel = null;
+    `let viewGen = 0, providersLive = [], defaultModelLive = '', defaultProviderLive = '';
+     const staged = { model: null, tier: null, perm: null };
      const { rpc, sessionCurrent, modelSet, setModelLabel } = deps;
      ${loadProvidersSrc}
      ${persistSrc[0]}
@@ -381,7 +383,8 @@ function stagedHarness({ reject = null } = {}) {
   const build = Function(
     'deps',
     'T',
-    `let viewGen = 0, providersLive = [], pendingModel = { model: 'm2', provider: 'minimax' };
+    `let viewGen = 0, providersLive = [];
+     const staged = { model: { model: 'm2', provider: 'minimax' }, tier: null, perm: null };
      const { rpc, sessionCurrent, modelSet, setModelLabel, toast } = deps;
      ${loadProvidersSrc}
      ${stagedSrc[0]}

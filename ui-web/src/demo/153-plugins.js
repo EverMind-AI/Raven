@@ -86,8 +86,7 @@ function drawPlugTab() {
     if (title) h.appendChild(mk('h3', null, title));
   };
 
-  const prevDrawCaps = drawCaps;
-  drawCaps = function () {
+  decorateDrawCaps((prev) => () => {
     if (extTab === 'plugin') {
       skInstBtn.sync();  // the skills "installed" button must not linger on this tab
       drawPlugTab();
@@ -98,27 +97,23 @@ function drawPlugTab() {
     // status pills, and the skill view re-hides them for itself.
     $('#cKind').hidden = false;
     $('.cbar').style.display = '';
-    prevDrawCaps();
+    prev();
     pmInstBtn.sync();
     syncHero();
-  };
+  });
 
-  const prevExtSet = extSet;
-  extSet = function (tab) {
+  decorateExtSet((prev) => (tab) => {
     const was = extTab;
-    prevExtSet(tab);
+    prev(tab);
     if (extTab !== was) { RavenIslands.plugins.reset(); $('.cbar').style.display = ''; }
-  };
+  });
 
-  const prevShowPage = showPage;
-  showPage = function (id) {
-    prevShowPage(id);
+  decorateShowPage((prev) => (id) => {
+    prev(id);
     if (id !== 'capsPage') { RavenIslands.plugins.drawerClosed(); $('.cbar').style.display = ''; }
-  };
+  });
 
-  const prevCloseDetail = closeDetail;
-  closeDetail = function () { RavenIslands.plugins.drawerClosed(); prevCloseDetail(); };
-  // The X button captured the previous closeDetail reference at bind time.
+  decorateCloseDetail((prev) => () => { RavenIslands.plugins.drawerClosed(); prev(); });
   $('#dClose').onclick = () => closeDetail();
 
   const prevInput = $('#cq').oninput;
