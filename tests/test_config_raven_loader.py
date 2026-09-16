@@ -334,6 +334,36 @@ class TestTheRetiredEndpointShapeStillLoads:
             "provider": "deepinfra",
         }
 
+    def test_an_install_that_already_consumed_v8_is_still_repaired(self, stub_config_path: Path) -> None:
+        """Generation 8 shipped the move without this repair.
+
+        So a config can carry the stamp and the shape that cannot load at the
+        same time: the base loader pops the extension keys, validates, and
+        stamps 8, while the extension read then fails on the two retired
+        fields. A repair gated on 8 would never reach that install.
+        """
+        import json
+
+        from raven.config.loader import load_config
+
+        _write_config(
+            stub_config_path,
+            {
+                "embedding": {"model": "m", "baseUrl": "https://api.siliconflow.cn/v1", "apiKey": "k"},
+                "providers": {"siliconflow": {"apiKey": "sk"}},
+            },
+        )
+        stub_config_path.with_suffix(".migrations.json").write_text(json.dumps({"version": 8}), encoding="utf-8")
+
+        cfg = ec_module.load_raven_config()
+        load_config()
+
+        assert cfg.embedding.model == "m" and cfg.embedding.provider == "siliconflow"
+        assert json.loads(stub_config_path.read_text(encoding="utf-8"))["embedding"] == {
+            "model": "m",
+            "provider": "siliconflow",
+        }
+
     def test_an_endpoint_nobody_answers_for_goes_whole(self, stub_config_path: Path) -> None:
         """Not half of it. A model left with no provider is a pin every reader
         resolves to nothing while every screen reads it as configured."""
