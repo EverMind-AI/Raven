@@ -10,13 +10,14 @@
    and a fixture in the island's own shape would hide a mapping bug until
    live. */
 
+import { islands } from '../../islands'
 import { sources } from '../../state/sources'
 
-function openPb() { RavenIslands.playbooks.open(); }
-function closePb() { RavenIslands.playbooks.close(); }
+function openPb() { islands.playbooks.open(); }
+function closePb() { islands.playbooks.close(); }
 function drawPb() {
   /* A language flip re-renders #pbBody with the new catalogue. */
-  RavenIslands.playbooks.redraw();
+  islands.playbooks.redraw();
 }
 
 let PB_FIXTURE;

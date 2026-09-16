@@ -9,6 +9,7 @@
    `{handled: true}`, the contract the island's catch reads. Both refresh the
    live source through loadExt so every installed surface answers the change. */
 
+import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { T } from '../demo/010-kernel.js'

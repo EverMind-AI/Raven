@@ -8,9 +8,9 @@
  *
  * Beside the rack rather than in shell/, because it is a tenant of it: one sheet
  * appended to #sheetRack, filed under the conversation that asked. That is also
- * why its opener is published on the composer's bag instead of as a global of
- * its own -- the rack's six names are already there and this is the seventh
- * thing the layers do to that rack.
+ * why its opener sits on the composer's member of the island bag instead of a
+ * member of its own -- the rack's six names are already there and this is the
+ * seventh thing the layers do to that rack.
  *
  * "The conversation that asked" is a fact the caller has to carry in, not one
  * this module can read: see `owner` on :func:`open`.

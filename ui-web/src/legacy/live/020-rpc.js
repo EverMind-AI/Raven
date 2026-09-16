@@ -6,6 +6,7 @@
    the desktop shell's reauth handshake -- driven off the transport's own
    connection state. */
 
+import { islands } from '../../islands'
 import { gateway } from '../../state/gateway'
 import { T } from '../demo/010-kernel.js'
 import { failureBar, upShade } from '../demo/040-state.js'
@@ -111,7 +112,7 @@ function bootFail(e) {
   const msg = [(e && e.message) || String(e), detail].filter(Boolean).join(' - ');
   failureBar(T('gui.boot_fail', { where: 'live boot', err: msg }));
   // A dead boot must not leave the rail shimmering forever under the banner.
-  RavenIslands.rail.release();
+  islands.rail.release();
   if (window.console) console.error('[live boot]', e);
 }
 

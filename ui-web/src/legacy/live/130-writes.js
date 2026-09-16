@@ -3,6 +3,8 @@
 /* One delete per session, and a session that refuses stays in the list -- the
    rail must never claim something is gone while the file is still on disk. */
 
+import { setCurrent as sessionSet } from '../../shell/session'
+import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { T } from '../demo/010-kernel.js'

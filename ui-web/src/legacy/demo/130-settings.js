@@ -7,6 +7,13 @@
 /* The fixture provider rows. Live mode owns the rows fetched from its model
    source, so it never refills this demo list in place. */
 
+import { islands } from '../../islands'
+import { draw as drawCtx } from '../../shell/ctxchip'
+import { draw as drawFoot } from '../../shell/foot'
+import { draw as drawPerm } from '../../shell/perm'
+import { setCurrent as sessionSet } from '../../shell/session'
+import { show as toast } from '../../shell/toast'
+import { settingsTab } from '../../state/settingsTab'
 import { sources } from '../../state/sources'
 import { $, LANG, T, langSet, mk } from './010-kernel.js'
 import { TOOLS, TOOL_GROUPS } from './030-fixtures.js'
@@ -67,7 +74,7 @@ const modKey = () => (isMac() ? '⌘' : 'Ctrl +');
    and the capabilities rows. */
 function drawSettings() {
   /* The island repaints #spanels (and the #snavList rail) from its store. */
-  RavenIslands.settings.redraw();
+  islands.settings.redraw();
 }
 
 // Everything runs on this machine; the chip is a label, not a switch.
@@ -108,10 +115,10 @@ const tierMenuDemo = () => ['medium', 'high', 'max'].map((id) => ({
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  /* The open tab. A window property, not a script binding: the chrome writes
-   `sTab = 'model'` before opening the dialog, and the island (a separate
-   script that cannot see this script's scope) reads and writes the slot. */
-  window.sTab = 'usage';
+  /* The open tab. A shared slot rather than a binding of this part's: the
+   chrome writes it before opening the dialog and the settings island reads and
+   writes the same one (src/state/settingsTab.ts). */
+  settingsTab.id = 'usage';
 
   /* Wiping the list is a session operation, so it goes on the session source
    rather than staying a name the live layer overwrites. It has to live in this

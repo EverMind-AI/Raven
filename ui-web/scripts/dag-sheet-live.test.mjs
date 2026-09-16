@@ -16,18 +16,16 @@ async function startedRun(payload) {
   const started = []
   const part = await loadPart(() => import('../src/legacy/live/050-turn.js'), {
     fakes: {
+      'src/shell/session': { current: () => 'sess-1' },
       'demo/010-kernel.js': { $: looseQuery() },
       'demo/040-state.js': { sheetSession: () => 'sess-1' },
       'demo/070-transcript.js': { dagFlowFeed: () => {} },
     },
-    globals: {
-      RavenIslands: {
-        dag: {
-          fromStarted: () => [],
-          start: (key, run) => started.push({ key, run }),
-        },
+    islands: {
+      dag: {
+        fromStarted: () => [],
+        start: (key, run) => started.push({ key, run }),
       },
-      sessionCurrent: () => 'sess-1',
     },
   })
   part.onEvent({ type: 'dag.run_started', payload })

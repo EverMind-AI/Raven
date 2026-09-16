@@ -10,6 +10,7 @@ import { loadPart, looseQuery } from './legacy-part.mjs'
 async function opener(calls, run) {
   const part = await loadPart(() => import('../src/legacy/live/050-turn.js'), {
     fakes: {
+      'src/shell/session': { current: () => 'a' },
       'demo/010-kernel.js': { $: looseQuery() },
       'demo/040-state.js': { sheetSession: () => 'a' },
       'demo/100-workspace.js': { setWs: (...args) => calls.push(['fallback', ...args]) },
@@ -17,10 +18,7 @@ async function opener(calls, run) {
         dagOpenNode: (runId, node) => calls.push(['node', runId, node.id]),
       },
     },
-    globals: {
-      RavenIslands: { dag: { run: (key) => (key === 'a' ? run : null) } },
-      sessionCurrent: () => 'a',
-    },
+    islands: { dag: { run: (key) => (key === 'a' ? run : null) } },
   })
   const { setSources, sources } = await import('../src/state/sources')
   setSources({ transcript: {}, composer: {}, sessions: {} })

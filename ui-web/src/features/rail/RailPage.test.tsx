@@ -13,6 +13,7 @@ import {
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { setShell, shell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { MenuItem } from '../../shell/menu'
@@ -44,7 +45,7 @@ interface Harness {
 }
 
 /* The island runs against the same two seams production wires: a fake shell
-   on window.RavenShell (T returns its key, so tests assert catalogue keys)
+   handed in through setShell (T returns its key, so tests assert catalogue keys)
    and a snapshot source on sources.sessions. */
 function install(over: Partial<RailSnapshot> = {}): Harness {
   const state: RailSnapshot = { rows: [row()], cur: 'a', busy: false, ...over }
@@ -57,7 +58,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     showPage: id => calls.push(['showPage', id]),
     navState: () => ({ pages: [], btnOf: () => undefined })
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   sessionReset()
   setCurrent(state.cur)
   onChange((id) => {
@@ -96,7 +97,7 @@ const BTN_OF: Record<string, string> = {
 }
 
 function navUp(open: string): void {
-  window.RavenShell!.navState = () => ({
+  shell().navState = () => ({
     pages: PAGES,
     btnOf: p => BTN_OF[p],
     morePages: ['xaPage', 'connPage', 'cronPage']

@@ -4,8 +4,11 @@
    real turn events; opened from disk (file://) or with ?stub=1 the
    demo keeps its mock data untouched. */
 
+import { islands } from '../../islands'
+import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell/session'
 import { sources } from '../../state/sources'
 import { turn } from '../demo/040-state.js'
+import { claimBoot } from '../demo/160-boot.js'
 import { openLiveSession } from './080-overrides.js'
 
 export function liveMode() {
@@ -41,7 +44,7 @@ export function install() {
   /* Claims the splash and the onboarding moment from the demo shell: its load
    handler backs off when this flag is set, and the boot below decides when
    the splash lifts and whether first-run setup is due (setup.status). */
-  window.__liveBoot = 1;
+  claimBoot();
 
   /* Set before the deferred first paint, cleared once the real counts land. */
   (() => { const r = document.querySelector('.rail'); if (r) r.dataset.counts = 'pending'; })();
@@ -50,13 +53,13 @@ export function install() {
     replace: (rows) => { liveSessionRows = rows; },
     open: (s) => openLiveSession(s),
   };
-  RavenIslands.rail.hold();
+  islands.rail.hold();
   sessionSet(null);
   /* From here on the pointer is the live layer's, so what it says can be recorded
    for the next reload. Started after the line above on purpose: the demo shell
    has already opened its canned session on this page, and both that and the
    clear above are fixture noise the note must not carry (see shell/resume.ts). */
-  RavenIslands.view.watch();
+  islands.view.watch();
 }
 
 export { shellReady, liveSessionRows }

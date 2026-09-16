@@ -7,6 +7,7 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { setShell } from '../../shell/bridge'
 
 import type { PlaybookDetail, PlaybookNode, PlaybookRow, PlaybooksSource } from './types'
 import type { Shell } from '../../shell/bridge'
@@ -59,17 +60,17 @@ function detail(over: Partial<PlaybookDetail> & { name: string }): PlaybookDetai
 }
 
 /* The island runs against the two seams production wires: a fake shell on
-   window.RavenShell (T answers its own key, so assertions name catalogue keys
+   setShell (T answers its own key, so assertions name catalogue keys
    rather than translations) and a fixture source on sources.playbooks. */
 const pages: (string | null)[] = []
 
 function install(over: Partial<PlaybooksSource> = {}): void {
-  window.RavenShell = {
+  setShell({
     T: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
     confirmAsk: (_t: unknown, _b: unknown, _l: unknown, fn: () => void) => fn(),
     showPage: (id: string | null) => pages.push(id),
     closeDetail: () => {}
-  } as unknown as Shell
+  } as unknown as Shell)
   setSources({
     playbooks: {
       list: async () => [row({ name: 'issue-triage' })],

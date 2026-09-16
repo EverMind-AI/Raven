@@ -1,17 +1,23 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-
-import type { Shell } from './bridge'
+import { resetShell } from './bridge'
 
 /* The stored tier is read once at module load, so each case that cares about it
    has to seed localStorage and then import a fresh copy. resetModules plus a
-   dynamic import is the whole trick. */
+   dynamic import is the whole trick -- and the shell goes in after the reset,
+   through the bridge instance the fresh copy will read. */
 async function load(stored?: string | null): Promise<typeof import('./perm')> {
   localStorage.clear()
   if (stored != null) localStorage.setItem('raven.perm', stored)
   const { resetModules } = await import('vitest').then((v) => ({ resetModules: v.vi.resetModules }))
   resetModules()
+  await wire()
   return import('./perm')
+}
+
+async function wire(): Promise<void> {
+  const bridge = await import('./bridge')
+  bridge.setShell({ T: (key) => key, confirmAsk: () => {}, showPage: () => {} })
 }
 
 /* The same three elements page.html carries, in the same nesting and with the
@@ -32,18 +38,13 @@ function markup(): void {
     </div>`
 }
 
-beforeEach(() => {
-  const shell: Shell = {
-    T: (key) => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  window.RavenShell = shell
+beforeEach(async () => {
+  await wire()
   markup()
 })
 
 afterEach(() => {
-  delete window.RavenShell
+  resetShell()
   document.body.innerHTML = ''
   localStorage.clear()
 })
@@ -224,26 +225,22 @@ describe('persisting a pick', () => {
 
   it('commits the chip only after the write is acknowledged', async () => {
     const perm = await load()
-    ;(window as unknown as { persistPermMode?: (m: string) => Promise<boolean> }).persistPermMode = () =>
-      Promise.resolve(true)
+    perm.setPermPersister(() => Promise.resolve(true))
     perm.open()
     rows()[1]!.click()
     await Promise.resolve()
     await Promise.resolve()
     expect(perm.current()).toBe('smart')
-    delete (window as unknown as { persistPermMode?: unknown }).persistPermMode
   })
 
   it('keeps the engine mode on a rejected write', async () => {
     const perm = await load()
-    ;(window as unknown as { persistPermMode?: (m: string) => Promise<boolean> }).persistPermMode = () =>
-      Promise.resolve(false)
+    perm.setPermPersister(() => Promise.resolve(false))
     perm.open()
     rows()[2]!.click()
     await Promise.resolve()
     await Promise.resolve()
     expect(perm.current()).toBe('ask')
     expect(localStorage.getItem('raven.perm')).not.toBe('full')
-    delete (window as unknown as { persistPermMode?: unknown }).persistPermMode
   })
 })

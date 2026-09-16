@@ -7,6 +7,7 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types'
@@ -17,7 +18,7 @@ import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types
 const shellCalls: Array<[string, unknown]> = []
 
 /* The island runs against the same two seams production wires up: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
+   shell handed in through setShell (T returns its key, so tests assert catalogue
    keys, not translations) and a source on sources.browser. */
 function wire(source: BrowserSource, lang = 'en'): void {
   shellCalls.length = 0
@@ -33,7 +34,7 @@ function wire(source: BrowserSource, lang = 'en'): void {
     showWorkspace: (tab) => shellCalls.push(['showWorkspace', tab]),
     wsShows: () => true,
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   setSources({ browser: source })
   document.body.innerHTML = '<div class="ws-body" id="wsBody"></div>'
 }

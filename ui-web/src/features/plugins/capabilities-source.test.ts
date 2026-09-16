@@ -50,11 +50,9 @@ async function opener(source: CapabilitiesSource): Promise<{
     fakes: {
       'demo/010-kernel.js': { $: looseQuery() },
       'demo/152-skills.js': { drawCaps: () => calls.push('draw') },
+      'src/shell/toast': { show: toast },
     },
-    globals: {
-      RavenIslands: { skills: { skeleton } },
-      toast,
-    },
+    islands: { skills: { skeleton } },
   })
   ;(await seam()).capabilities = source
   part.decorateExtSet(() => (tab: string) => calls.push(`tab:${tab}`))
@@ -120,8 +118,8 @@ describe('manual plugin add', () => {
         },
         'demo/120-capabilities.js': { drawCapsBadge },
         'demo/152-skills.js': { drawCaps },
+        'src/shell/toast': { show: toast },
       },
-      globals: { toast, RavenIslands: {} },
     })
     ;(await seam()).plugins = { manual } as unknown as PluginsSource
     part.install()
@@ -148,8 +146,11 @@ describe('manual plugin add', () => {
 
   it('keeps fixture additions inside the fixture source', async () => {
     const part = await loadPart(() => import('../../legacy/demo/153-plugins.js'), {
-      fakes: { 'demo/010-kernel.js': { $: looseQuery() } },
-      globals: { RavenIslands: { plugins: { event: vi.fn() } }, toast: vi.fn() },
+      fakes: {
+        'demo/010-kernel.js': { $: looseQuery() },
+        'src/shell/toast': { show: vi.fn() },
+      },
+      islands: { plugins: { event: vi.fn() } },
     })
     part.install()
     const { plugins } = await seam()
@@ -170,11 +171,11 @@ describe('the live extension source', () => {
       mcp: [{ name: 'remote', transport: 'http', enabled: true, state: 'connected', tool_count: 2 }],
     }
     const extPart = await loadPart(() => import('../../legacy/live/090-extensions.js'), {
-      globals: {
-        RavenIslands: { plugins: { event: vi.fn() } },
-        setMemFault: vi.fn(),
-        toast: vi.fn(),
+      fakes: {
+        'src/shell/banner': { setFault: vi.fn() },
+        'src/shell/toast': { show: vi.fn() },
       },
+      islands: { plugins: { event: vi.fn() } },
     })
     const call = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === 'settings.get') {

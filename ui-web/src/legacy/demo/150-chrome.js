@@ -5,6 +5,15 @@
    handler over a text field asks this first. keyCode 229 is the older spelling
    some IMEs still send instead of isComposing. */
 
+import { islands } from '../../islands'
+import { toggle as toggleFind } from '../../shell/find'
+import { close as closeImage } from '../../shell/lightbox'
+import { show as menuAt } from '../../shell/menu'
+import { toggle as togglePerm } from '../../shell/perm'
+import { setCurrent as sessionSet } from '../../shell/session'
+import { toggle as toggleTier } from '../../shell/tier'
+import { show as toast } from '../../shell/toast'
+import { settingsTab } from '../../state/settingsTab'
 import { sources } from '../../state/sources'
 import { $, T } from './010-kernel.js'
 import { modelCurrent, modelSet, turn } from './040-state.js'
@@ -21,8 +30,8 @@ import { closePb, openPb } from './154-playbooks.js'
 const composing = (e) => !!(e.isComposing || e.keyCode === 229);
 
 /* ---- the search row ------------------------------------------------
-   Owned by ui-web/src/shell/find.ts, which holds the term and publishes
-   toggleFind(). The Cmd+F handler above stays here because showing the rail
+   Owned by ui-web/src/shell/find.ts, which holds the term and exports the
+   toggle imported here. The Cmd+F handler above stays here because showing the rail
    first is a chrome decision, and it is the only caller from this side. */
 
 const setRail = (on) => {
@@ -37,12 +46,12 @@ let tooNarrowToSplit;
 /* ---- the foot row --------------------------------------------------
    One door to settings. What the row says -- the running build and this
    platform's shortcut for that door -- is written by the foot module
-   (ui-web/src/shell/foot.ts), which publishes drawFoot(); the door itself is
-   here, because the dialog behind it is. */
+   (ui-web/src/shell/foot.ts), whose draw is imported here as drawFoot; the
+   door itself is here, because the dialog behind it is. */
 
 /* The one door to settings. The island's source owns the refresh that must
    happen before drawing, so both modes use the same opener. */
-const openSettings = async () => { await RavenIslands.settings.open(); };
+const openSettings = async () => { await islands.settings.open(); };
 
 /* ── the 更多 flyout ──────────────────────────────────────────────────
    Sub-agents / entrances / schedules live here. The renderer is the nav flyout module
@@ -50,7 +59,7 @@ const openSettings = async () => { await RavenIslands.settings.open(); };
    what remains here is the one name the live layer still calls. */
 function drawMoreFly() {
   /* A language flip re-runs the MORE_ROWS.forEach that names the rows. */
-  RavenIslands.nav.draw();
+  islands.nav.draw();
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
@@ -130,7 +139,7 @@ export function install() {
       // No toast: the chip right there already shows the new model.
       fn: () => { modelSet(m); $('#modelName').textContent = m; }
     })));
-    items.push('-', { label: T('gui.slash.manage_models'), fn: () => { window.sTab = 'model'; drawSettings(); openSet(); } });
+    items.push('-', { label: T('gui.slash.manage_models'), fn: () => { settingsTab.id = 'model'; drawSettings(); openSet(); } });
     menuAt(r.left, r.bottom + 6, items);
   };
 

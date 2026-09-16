@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { InstanceModel } from './InstanceModel'
 import * as store from './store'
 import { resetSources, setSources } from '../../state/sources'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { AgentsSource, InstanceRow } from './types'
@@ -15,7 +16,7 @@ function wire(over: Partial<AgentsSource> = {}): void {
     confirmAsk: () => {},
     showPage: () => {},
   }
-  window.RavenShell = shell
+  setShell(shell)
   setSources({ agents: { list: async () => [], ...over } as AgentsSource })
   document.body.innerHTML = '<div id="menu" data-open="false"></div><div id="toast"></div>'
 }
@@ -44,7 +45,7 @@ beforeEach(() => { store._resetForTests() })
 afterEach(() => {
   cleanup()
   store._resetForTests()
-  delete window.RavenShell
+  resetShell()
   resetSources()
   document.body.innerHTML = ''
   vi.restoreAllMocks()

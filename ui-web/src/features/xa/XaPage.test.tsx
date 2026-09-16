@@ -7,6 +7,7 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { XaActArgs, XaRow, XaSource } from './types'
@@ -42,7 +43,7 @@ function row(over: Partial<XaRow> = {}): XaRow {
 }
 
 /* The island runs against the same two seams production wires: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
+   shell handed in through setShell (T returns its key, so tests assert catalogue
    keys, not translations) and a fixture source on sources.xa. */
 function install(rows: XaRow[], over: Partial<XaSource> = {}) {
   const acts: Array<[string, string, XaActArgs]> = []
@@ -81,7 +82,7 @@ function install(rows: XaRow[], over: Partial<XaSource> = {}) {
       if (d) d.dataset.open = 'false'
     },
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   setSources({ xa: source })
   document.body.innerHTML =
     '<section id="xaPage"><div id="xaBody"></div></section>' +

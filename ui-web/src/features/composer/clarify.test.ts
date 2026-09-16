@@ -5,6 +5,7 @@ import { open as approveOpen } from './approve'
 import { close, open } from './clarify'
 import { _resetForTests, forget, sync } from './sheets'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
+import { resetShell, setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 
@@ -14,7 +15,7 @@ function wire(): void {
     confirmAsk: () => {},
     showPage: () => {},
   }
-  window.RavenShell = shell
+  setShell(shell)
   document.body.innerHTML =
     '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>'
     + '<div class="dock-in"></div></div></div>'
@@ -43,7 +44,7 @@ beforeEach(() => {
 
 afterEach(() => {
   sessionReset()
-  delete window.RavenShell
+  resetShell()
   document.body.innerHTML = ''
 })
 

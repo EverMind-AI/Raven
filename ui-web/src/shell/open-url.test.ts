@@ -2,11 +2,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { open } from './open-url'
+import { resetShell, setShell } from './bridge'
 
 afterEach(() => {
   vi.restoreAllMocks()
   document.body.innerHTML = ''
-  delete window.RavenShell
+  resetShell()
 })
 
 describe('the host URL action', () => {
@@ -18,7 +19,7 @@ describe('the host URL action', () => {
 
   it('copies a non-URL value and reports success', async () => {
     document.body.innerHTML = '<div id="toasts"></div>'
-    window.RavenShell = { T: () => 'copied', confirmAsk: () => {}, showPage: () => {} }
+    setShell({ T: () => 'copied', confirmAsk: () => {}, showPage: () => {} })
     const writeText = vi.fn(async () => {})
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
     open('/tmp/report.txt')
@@ -29,7 +30,7 @@ describe('the host URL action', () => {
 
   it('shows the original value when copying fails', async () => {
     document.body.innerHTML = '<div id="toasts"></div>'
-    window.RavenShell = { T: () => 'copied', confirmAsk: () => {}, showPage: () => {} }
+    setShell({ T: () => 'copied', confirmAsk: () => {}, showPage: () => {} })
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: async () => Promise.reject(new Error('denied')) }, configurable: true,
     })

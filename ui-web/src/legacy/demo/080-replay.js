@@ -4,6 +4,9 @@
    anything scheduled from *inside* a fired callback must use a plain delay
    — passing the cumulative offset there would defer it by the whole run. */
 
+import { islands } from '../../islands'
+import { set as setCtx } from '../../shell/ctxchip'
+import { current as sessionCurrent } from '../../shell/session'
 import { eventsFor } from './030-fixtures.js'
 import { later, queueShift, runState, sess, turn } from './040-state.js'
 import { sessionDraw } from './050-rail.js'
@@ -53,15 +56,15 @@ function replay(run, instant) {
       const h = open_[e.id];
       if (!h) return;
       h.done(e.ok, e.r, e.ms, e.diff);
-      if (e.meta) RavenIslands.transcript.delivery(WS.turn, e.meta);
+      if (e.meta) islands.transcript.delivery(WS.turn, e.meta);
       if (!e.ok) h.meta.st.failed = true;
       wsOnToolDone(h.meta.n, h.meta.a, e.ok, e.r, e.ms, e.diff);
     }, e.d);
     else if (e.t === 'answer') {
       const parts = e.x.match(/[\s\S]{1,26}/g) || [];
       fire(() => {
-        if (instant) { RavenIslands.transcript.answer(e.x); return; }
-        const typed = RavenIslands.transcript.answerTyped(e.x);
+        if (instant) { islands.transcript.answer(e.x); return; }
+        const typed = islands.transcript.answerTyped(e.x);
         let n = 0;
         parts.forEach((_, k) => later(k * TYPE_MS, () => {
           n += parts[k].length;
@@ -76,7 +79,7 @@ function replay(run, instant) {
       foldSilentRuns(steps);
       collapseTurn(null);
       /* The turn's products close it, exactly as in live mode. */
-      RavenIslands.transcript.artifacts(WS.turn);
+      islands.transcript.artifacts(WS.turn);
       turn.dispatch({ type: 'idle' }); runState.use = run.use;
       setCtx(((run.use && run.use.in) || 0) + ((run.use && run.use.out) || 0), 200000);
       const s = sess(sessionCurrent());

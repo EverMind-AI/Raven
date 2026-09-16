@@ -92,7 +92,7 @@ export function copyToClip(text: string, done: string): void {
 
 /* Straight to the renderer, not out through the shell and back: prose.ts is a
    pure function in this same bundle, so a bridge verb here would round-trip
-   window.RavenShell.md -> window.md -> this module for nothing, and would hide
+   the shell bridge and back into this module for nothing, and would hide
    the file viewer from anyone auditing md()'s callers. */
 export const mdHtml = (src: string): string => md(src)
 export const hostPlatform = (): string => source().hostPlatform()
@@ -297,6 +297,16 @@ export function relToWorkspace(p: string): string | null {
   return s.replace(/^\.\//, '')
 }
 
+/* The desk's file opener, handed in by src/islands.ts for the same reason the
+   subagents panel takes its pane opener that way: features/workspace/deskStore
+   imports this module back. Null leaves the legacy panel path below, which is
+   what a page without a desk has. */
+let deskFile: ((path: string) => void) | null = null
+
+export function setDeskOpener(fn: (path: string) => void): void {
+  deskFile = fn
+}
+
 let fileSeq = 0
 
 export function makeFile(p: string): WsFile {
@@ -307,9 +317,8 @@ export function makeFile(p: string): WsFile {
 }
 
 export function showFile(p: string): void {
-  const desk = window.RavenIslands?.workspace as { openFile?: (path: string) => void } | undefined
-  if (desk?.openFile) {
-    desk.openFile(p)
+  if (deskFile) {
+    deskFile(p)
     return
   }
   const ws = shared()

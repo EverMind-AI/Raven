@@ -12,6 +12,7 @@
 // Stable per-name hue: same plugin, same colour, every render and page.
 // Kept as a shell helper because the memory drawer uses it too.
 
+import { islands } from '../../islands'
 import { sources } from '../../state/sources'
 import { $, T, mk } from './010-kernel.js'
 import { PLUGINS, attnCount } from './030-fixtures.js'
@@ -27,7 +28,7 @@ function pmTile(name) {
 }
 
 /* The live extensions loader flips MCP rows through this name. */
-function pmToggle(name, on) { RavenIslands.plugins.toggleMcp(name, on); }
+function pmToggle(name, on) { islands.plugins.toggleMcp(name, on); }
 
 /* The "installed" entry point rides in the filter bar, like the skills view
    switch — created once, shown only on the plugin tab. */
@@ -39,9 +40,9 @@ let pmInstBtn;
 function drawPlugTab() {
   const box = $('#capsBody');
   box.innerHTML = '';
-  box.appendChild(RavenIslands.plugins.host);
+  box.appendChild(islands.plugins.host);
   const title = T('gui.tab.plugins');
-  const view = RavenIslands.plugins.view();
+  const view = islands.plugins.view();
   $('#capsTitle').textContent = view === 'installed' ? T('gui.plug.installed_title') : title;
   $('#capsPage').setAttribute('aria-label', title);
   $('#cKind').hidden = true;
@@ -49,10 +50,10 @@ function drawPlugTab() {
   $('#cq').placeholder = T('gui.plug.search_ph');
   $('.cbar').style.display = view === 'installed' ? 'none' : '';
   pmInstBtn.sync();
-  RavenIslands.plugins.redraw();
+  islands.plugins.redraw();
   /* The first reveal fetches; a boot-time draw of the closed page must
      not fire a market search nobody asked for. */
-  if ($('#capsPage').dataset.open === 'true') RavenIslands.plugins.searchIfIdle();
+  if ($('#capsPage').dataset.open === 'true') islands.plugins.searchIfIdle();
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
@@ -60,11 +61,11 @@ function drawPlugTab() {
 export function install() {
   pmInstBtn = (() => {
     const b = mk('button', 'pminstbtn');
-    b.onclick = () => { RavenIslands.plugins.toggleView(); };
+    b.onclick = () => { islands.plugins.toggleView(); };
     $('.cbar').appendChild(b);
     return { el: b, sync() {
-      b.hidden = extTab !== 'plugin' || RavenIslands.plugins.view() === 'installed';
-      const n = RavenIslands.plugins.installedCount();
+      b.hidden = extTab !== 'plugin' || islands.plugins.view() === 'installed';
+      const n = islands.plugins.installedCount();
       const attn = attnCount();
       b.innerHTML = '';
       b.append(mk('span', null, T('gui.plug.installed_n', { n })));
@@ -92,7 +93,7 @@ export function install() {
       const h = pageHero();
       h.innerHTML = '';
       let title = '';
-      if (extTab === 'plugin' && RavenIslands.plugins.view() === 'market') title = T('gui.plug.hero');
+      if (extTab === 'plugin' && islands.plugins.view() === 'market') title = T('gui.plug.hero');
       else if (extTab === 'skill' && skView === 'market') title = T('gui.hub.hero');
       h.hidden = !title;
       if (title) h.appendChild(mk('h3', null, title));
@@ -117,20 +118,20 @@ export function install() {
     decorateExtSet((prev) => (tab) => {
       const was = extTab;
       prev(tab);
-      if (extTab !== was) { RavenIslands.plugins.reset(); $('.cbar').style.display = ''; }
+      if (extTab !== was) { islands.plugins.reset(); $('.cbar').style.display = ''; }
     });
 
     decorateShowPage((prev) => (id) => {
       prev(id);
-      if (id !== 'capsPage') { RavenIslands.plugins.drawerClosed(); $('.cbar').style.display = ''; }
+      if (id !== 'capsPage') { islands.plugins.drawerClosed(); $('.cbar').style.display = ''; }
     });
 
-    decorateCloseDetail((prev) => () => { RavenIslands.plugins.drawerClosed(); prev(); });
+    decorateCloseDetail((prev) => () => { islands.plugins.drawerClosed(); prev(); });
     $('#dClose').onclick = () => closeDetail();
 
     const prevInput = $('#cq').oninput;
     $('#cq').oninput = () => {
-      if (extTab === 'plugin') { RavenIslands.plugins.setQuery($('#cq').value.trim()); return; }
+      if (extTab === 'plugin') { islands.plugins.setQuery($('#cq').value.trim()); return; }
       if (prevInput) prevInput();
     };
   }

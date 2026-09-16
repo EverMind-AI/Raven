@@ -1,10 +1,11 @@
 /* The strangler seam between a migrated island and the legacy shell.
  *
- * The shell publishes late-bound closures on window.RavenShell (see
- * ui-web/src/legacy/demo/155-bridge.js): late-bound so the live layer's rebinds --
- * toast, most notably -- win over the demo definitions the bridge was
- * evaluated with. The data half is a module of its own (state/sources.ts),
- * which both legacy layers import and install their sources into.
+ * The legacy shell hands its half in through setShell (see
+ * ui-web/src/legacy/demo/155-bridge.js), as late-bound closures rather than
+ * references: the live layer rebinds some of what they call -- toast, most
+ * notably -- and the island must reach the rebound one. The data half is a
+ * module of its own (state/sources.ts), which both legacy layers import and
+ * install their sources into.
  *
  * Everything here throws loudly when the shell is absent: an island runs
  * inside the assembled page or inside a test that installed fakes, never
@@ -67,17 +68,21 @@ export interface Shell {
   setIsOpen?(): boolean
 }
 
-declare global {
-  interface Window {
-    RavenShell?: Shell
-    RavenIslands?: Record<string, unknown>
-  }
+let published: Shell | null = null
+
+export function setShell(s: Shell): void {
+  published = s
+}
+
+/* Back to the state a fresh page starts in. For tests: a shell one case
+   handed in must not be visible to the next. */
+export function resetShell(): void {
+  published = null
 }
 
 export function shell(): Shell {
-  const s = window.RavenShell
-  if (!s) throw new Error('RavenShell is not published; the island is running outside the page')
-  return s
+  if (!published) throw new Error('RavenShell is not published; the island is running outside the page')
+  return published
 }
 
 export function t(key: string, vars?: Record<string, string | number>, fallback?: string): string {

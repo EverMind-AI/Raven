@@ -13,6 +13,14 @@
    normal-looking replies the whole time, and live mode is the only mode where
    it can happen at all. Refusing one notice is a decision about that notice. */
 
+import { open as openModelPicker } from '../../features/model/store'
+import { islands } from '../../islands'
+import { draw as drawBanner } from '../../shell/banner'
+import { draw as drawCtx } from '../../shell/ctxchip'
+import { draw as drawFoot } from '../../shell/foot'
+import { draw as drawPerm, setFromConfig as setPermMode, setPermPersister } from '../../shell/perm'
+import { current as sessionCurrent } from '../../shell/session'
+import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { $, LANG, T, langSet } from '../demo/010-kernel.js'
@@ -70,7 +78,7 @@ async function loadPermMode(sid, gen) {
     return;
   }
   if (ticket !== viewGen) return;
-  window.setPermMode?.(((r && r.config) || {})['permissions.mode'] || 'ask');
+  setPermMode(((r && r.config) || {})['permissions.mode'] || 'ask');
 }
 const pushPermMode = () => loadPermMode(sessionCurrent());
 
@@ -115,7 +123,7 @@ function openModelsForMissingProvider() {
   const connected = providersLive.some((p) => p.on);
   const knownMissing = setupState.providerConfigured === false || providersLive.length > 0;
   if (connected || !knownMissing) return false;
-  void RavenIslands.settings.openModels();
+  void islands.settings.openModels();
   return true;
 }
 
@@ -235,7 +243,7 @@ function redrawAll() {
   /* The transcript island re-renders its catalogue words (verbs, fold
      headers, footers) in place -- which is also what covers a turn still
      streaming, where the reload below must not run. */
-  RavenIslands.transcript.redraw();
+  islands.transcript.redraw();
   queueDraw();
   /* The words baked into stored segments (note labels, phrased previews) come
      back right on a rebuild from disk. Skipped while a turn is streaming:
@@ -359,9 +367,9 @@ export function install() {
    session_id to write under yet, so the pick is staged and applied to the
    session the first message mints -- the shape the model and tier chips take
    (`applyStagedPerm` in 080). The default is the settings panel's to change.
-   Published here because this file owns the settings transport; the island
-   calls it late-bound. */
-  window.persistPermMode = (m) => {
+   Registered here because this file owns the settings transport; the chip
+   asks for it only when a pick is made. */
+  setPermPersister((m) => {
     const sid = sessionCurrent();
     if (!sid) { staged.perm = m; return true; }
     return gateway().call('config.set', { key: 'permissions.mode', value: m, scope: 'session', session_id: sid })
@@ -371,7 +379,7 @@ export function install() {
         return false;
       })
       .catch(() => { toast(T('gui.perm.save_failed')); return false; });
-  };
+  });
 
   sources.settings = {
     load: async () => {
@@ -508,8 +516,8 @@ export function install() {
       await gateway().call('model.set_protocol', { model, slug: provider, protocol });
       await loadProviders();
     },
-    openSettings: () => RavenIslands.settings.open(),
-    openProviderModels: (provider) => RavenIslands.settings.openProviderModels(provider),
+    openSettings: () => islands.settings.open(),
+    openProviderModels: (provider) => islands.settings.openProviderModels(provider),
   };
 
   sources.composer.beforeSend = openModelsForMissingProvider;

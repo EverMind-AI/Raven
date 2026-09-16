@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { install, onChange, term, toggle } from './find'
+import { resetShell, setShell } from './bridge'
 
 import type { Shell } from './bridge'
 
@@ -26,7 +27,7 @@ function wire(): void {
     confirmAsk: () => {},
     showPage: () => {},
   }
-  window.RavenShell = shell
+  setShell(shell)
   onChange(() => {
     draws += 1
   })
@@ -50,7 +51,7 @@ beforeEach(wire)
 
 afterEach(() => {
   onChange(() => {})
-  delete window.RavenShell
+  resetShell()
   document.body.innerHTML = ''
 })
 

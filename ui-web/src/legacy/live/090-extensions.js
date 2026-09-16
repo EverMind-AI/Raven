@@ -3,6 +3,7 @@
    mutations are intercepted with property setters that persist through
    settings.set. */
 
+import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { T } from '../demo/010-kernel.js'

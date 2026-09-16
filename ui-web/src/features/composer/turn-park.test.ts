@@ -23,6 +23,8 @@ async function harness(): Promise<{
   const workspaceRestore = vi.fn((next: typeof workspace) => Object.assign(workspace, next))
   const part = (await loadPart(() => import('../../legacy/live/060-parked.js'), {
     fakes: {
+      'src/shell/session': { current: () => current },
+      'src/shell/banner': { draw: vi.fn() },
       'demo/010-kernel.js': { $: looseQuery() },
       'demo/040-state.js': {
         down: vi.fn(),
@@ -51,13 +53,9 @@ async function harness(): Promise<{
       },
       'live/080-overrides.js': { drainQueue },
     },
-    globals: {
-      RavenIslands: {
-        composer: { liveAnchor: () => 42, setLiveAnchor: vi.fn() },
-        workspace: { snapshot: () => ({ ...workspace }), restore: workspaceRestore },
-      },
-      sessionCurrent: () => current,
-      drawBanner: vi.fn(),
+    islands: {
+      composer: { liveAnchor: () => 42, setLiveAnchor: vi.fn() },
+      workspace: { snapshot: () => ({ ...workspace }), restore: workspaceRestore },
     },
   })) as ParkedPart
   return {

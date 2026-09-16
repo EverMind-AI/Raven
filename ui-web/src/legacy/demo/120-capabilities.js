@@ -1,5 +1,7 @@
 /* ══ module 2: capabilities page ══════════════════════════════════ */
 
+import { islands } from '../../islands'
+import { show as toast } from '../../shell/toast'
 import { sources } from '../../state/sources'
 import { $, applyDecorators } from './010-kernel.js'
 import { markNewCurrent } from './050-rail.js'
@@ -48,8 +50,8 @@ function showPageBase(id) {
   /* Same rule for the overlays a single page owns: the channel drawer and the
      new-job sheet used to survive the switch and sit over whatever came next,
      still showing the entry the reader had left behind. */
-  if (id !== 'connPage') RavenIslands?.connections?.closeDialog?.();
-  if (id !== 'cronPage') RavenIslands?.cron?.closeSheet?.();
+  if (id !== 'connPage') islands?.connections?.closeDialog?.();
+  if (id !== 'cronPage') islands?.cron?.closeSheet?.();
 }
 
 /* Switching module resets the filters: a query typed while browsing skills is
@@ -73,7 +75,7 @@ async function openCaps(tab) {
   if (src.loaded()) { drawCaps(); drawCapsBadge(); }
   else {
     const box = $('#capsBody'); box.innerHTML = '';
-    box.appendChild(RavenIslands.skills.skeleton);
+    box.appendChild(islands.skills.skeleton);
   }
   try {
     if (await src.load()) { drawCaps(); drawCapsBadge(); }
@@ -116,10 +118,10 @@ function closeDetailBase() { $('#detail').dataset.open = 'false'; }
    page by importing the island (shell/navfly.ts); it does not come through
    here. The island owns everything drawn inside the body and its sheet in
    the shared detail drawer. */
-function closeXa() { RavenIslands.xa.close(); }
+function closeXa() { islands.xa.close(); }
 function drawXa() {
   /* A language flip re-renders #xaBody with the new catalogue. */
-  RavenIslands.xa.redraw();
+  islands.xa.redraw();
 }
 
 /* The fixture rows. A row is (name, kind, configured, enabled, probe_status,

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { markNew as railMarkNew } from '../features/rail/store'
 import { MORE_ROWS, draw, install as installNav, mark, toggle } from './navfly'
 import { resetSources, setSources } from '../state/sources'
+import { resetShell, setShell } from './bridge'
 
 import type { Shell } from './bridge'
 import type { RailSource } from '../features/rail/types'
@@ -45,7 +46,7 @@ function install(over: Partial<Shell> = {}): Harness {
     navState: () => ({ pages: Object.keys(NAV_OF), btnOf: (p) => NAV_OF[p] }),
     ...over,
   }
-  window.RavenShell = fake
+  setShell(fake)
   setSources({ sessions: { snapshot: () => ({ rows: [], cur: 'a', busy: false, query: '' }) } as unknown as RailSource })
   return seen
 }
@@ -81,7 +82,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  delete window.RavenShell
+  resetShell()
   resetSources()
 })
 

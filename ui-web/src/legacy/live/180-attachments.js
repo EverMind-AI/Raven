@@ -8,6 +8,7 @@
    paths: every file tool is already workspace-scoped, so a path is all it
    needs. Bytes never ride inside the message. */
 
+import { current as sessionCurrent } from '../../shell/session'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { uploadRefusal } from './020-rpc.js'

@@ -1,5 +1,7 @@
 /* ---- notifications ------------------------------------------------ */
 
+import { current as sessionCurrent } from '../../shell/session'
+import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { T } from '../demo/010-kernel.js'
 import { approvalClose, approvalSheet, approveSheet, clarifyClose, clarifySheet, sess } from '../demo/040-state.js'

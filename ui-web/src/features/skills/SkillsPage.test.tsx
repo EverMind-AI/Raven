@@ -7,6 +7,7 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
+import { setShell } from '../../shell/bridge'
 
 import type { Shell } from '../../shell/bridge'
 import type { HubItem, InstalledSkill, SkillsSource } from './types'
@@ -29,7 +30,7 @@ function hubItem(over: Partial<HubItem> = {}): HubItem {
 }
 
 /* The island runs against the same two seams production wires: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
+   shell handed in through setShell (T returns its key, so tests assert catalogue
    keys, not translations) and a fixture source on sources.skills. */
 function install(items: HubItem[], over: Partial<SkillsSource> = {}, installed: InstalledSkill[] = []) {
   const calls: string[] = []
@@ -53,7 +54,7 @@ function install(items: HubItem[], over: Partial<SkillsSource> = {}, installed: 
       store.dropDrawer()
     },
   }
-  window.RavenShell = fakeShell
+  setShell(fakeShell)
   setSources({ skills: source })
   document.body.innerHTML =
     '<section id="capsPage" data-open="true"><div id="capsBody"></div></section>' +

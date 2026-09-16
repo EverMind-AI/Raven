@@ -39,7 +39,7 @@ const label = (key: string, vars?: Record<string, unknown>) =>
 /* `sources.sessions.remove` as live/080-overrides.js installs it. The rest of that
    part reaches for dozens of collaborators that have nothing to do with the
    decision under test, so those are fakes; the decision is the part's own.
-   `RavenIslands.rail.removeRow` is what "the row goes" means -- nothing else
+   `islands.rail.removeRow` is what "the row goes" means -- nothing else
    in leaveDeletedSession is visible from outside it. */
 async function harness(answer: Answer | Error) {
   const left = vi.fn()
@@ -49,6 +49,7 @@ async function harness(answer: Answer | Error) {
   let settled: Promise<void> = Promise.resolve()
   const part = await loadPart(() => import('../../legacy/live/080-overrides.js'), {
     fakes: {
+      'src/shell/session': { current: () => null },
       'demo/010-kernel.js': { $: looseQuery(), T: label },
       'demo/040-state.js': {
         confirmAsk: (_t: string, _b: string, _l: string, run: () => Promise<void>) => {
@@ -62,18 +63,15 @@ async function harness(answer: Answer | Error) {
         sessionReplace: () => {},
         sessionRows: () => [],
       },
+      'src/shell/toast': { show: toast },
     },
-    globals: {
-      sessionCurrent: () => null,
-      toast,
-      RavenIslands: {
-        dag: { forget: () => {} },
-        rail: {
-          endRename: () => {},
-          removeRow: (rows: Row[], _current: string | null, id: string) => {
-            left(id)
-            return { kind: 'unchanged', rows }
-          },
+    islands: {
+      dag: { forget: () => {} },
+      rail: {
+        endRename: () => {},
+        removeRow: (rows: Row[], _current: string | null, id: string) => {
+          left(id)
+          return { kind: 'unchanged', rows }
         },
       },
     },
@@ -150,8 +148,9 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
       },
       'demo/130-settings.js': { drawSettings: () => {} },
       'live/080-overrides.js': { startDraft: () => {} },
+      'src/shell/session': { current: () => null, setCurrent: () => {} },
+      'src/shell/toast': { show: () => {} },
     },
-    globals: { sessionCurrent: () => null, sessionSet: () => {}, toast: () => {} },
   })
   await fakeGateway(async (_method: string, p: { session_id: string }) => {
     const a = answers[p.session_id]

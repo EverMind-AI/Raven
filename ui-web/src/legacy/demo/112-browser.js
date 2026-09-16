@@ -9,6 +9,7 @@
    Registered, not declared-for-override -- live mode installs its own
    sources.browser and this object is never consulted. */
 
+import { show as toast } from '../../shell/toast'
 import { sources } from '../../state/sources'
 import { WS } from './100-workspace.js'
 
