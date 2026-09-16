@@ -319,6 +319,14 @@ The Card advertises the scheme under `securitySchemes`; the protobuf admits five
 (`api_key`, `http_auth`, `oauth2`, `open_id_connect`, `mtls`), and this build implements
 one -- a bearer token in the `Authorization` header, declared as `http_auth`.
 
+The Card declares that scheme twice, because the two fields answer different questions:
+`securitySchemes` defines what the name `http_auth` means, and `securityRequirements`
+selects it as one a caller must satisfy. Every RPC method is refused without the token, so
+a card carrying only the definition tells a peer that reads it honestly that no credential
+is needed; it then calls unauthenticated and is refused, having been told nothing that
+would have prevented it. The requirement names the scheme with an empty scope list, which
+is the protocol's way of saying "this scheme, no scopes" rather than no requirement.
+
 The token is configured, never minted per caller: there is no enrolment flow here, and
 inventing one would be a larger design than the protocol face itself. An unauthenticated
 request is refused before it reaches `AgentExecutor`, so a turn is never started by an

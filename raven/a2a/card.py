@@ -25,7 +25,9 @@ from a2a.types import (
     AgentInterface,
     AgentSkill,
     HTTPAuthSecurityScheme,
+    SecurityRequirement,
     SecurityScheme,
+    StringList,
 )
 from google.protobuf.struct_pb2 import Struct
 
@@ -36,6 +38,18 @@ from raven.config.schema import A2aConfig
 CARD_PATH = "/.well-known/agent-card.json"
 JSONRPC_BINDING = "JSONRPC"
 PROTOCOL_VERSION = "1.0"
+
+AUTH_SCHEME = "http_auth"
+"""The name `security_schemes` defines and `security_requirements` selects."""
+
+SCHEME_NO_SCOPES = StringList()
+"""The scope list for a scheme that has none.
+
+`SecurityRequirement.schemes` maps a scheme name to the scopes a caller needs
+under it. Bearer-token access here is all-or-nothing, so the list is empty --
+which is the protocol's way of saying "this scheme, no scopes", and is not the
+same as declaring no requirement at all.
+"""
 
 SUBAGENT_EXTENSION_URI = "https://raven.evermind.ai/a2a/extensions/sub-agents/v1"
 """Identifies the roster carried in `AgentCapabilities.extensions`.
@@ -84,10 +98,17 @@ def build_agent_card(config: A2aConfig, *, base_url: str, extended_available: bo
             extended_agent_card=extended_available,
         ),
         security_schemes={
-            "http_auth": SecurityScheme(
+            AUTH_SCHEME: SecurityScheme(
                 http_auth_security_scheme=HTTPAuthSecurityScheme(scheme="bearer"),
             )
         },
+        # Both fields, because they answer different questions and this face
+        # enforces the answer to the second. `security_schemes` defines what
+        # `http_auth` means; `security_requirements` says a caller must satisfy
+        # it. Declaring only the first tells a peer that reads the card honestly
+        # that no authentication is needed -- it then calls without a credential
+        # and is refused, having been told nothing that would have prevented it.
+        security_requirements=[SecurityRequirement(schemes={AUTH_SCHEME: SCHEME_NO_SCOPES})],
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain"],
         skills=[
