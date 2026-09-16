@@ -30,9 +30,10 @@ python3 build.py       # splice into src/page.html -> dist/index.html, copy asse
 They are separate because `build.py` must run where npm may not be on PATH:
 the installer adds npm inside a subshell, and the python step is what the
 release wheel and `make build-ui` call. `build.py` ends by booting the artifact
-in happy-dom and comparing its DOM shape against a golden under
-`scripts/__golden__/`, so a
-structural regression fails the build rather than the browser.
+in happy-dom twice -- once on its fixtures (`?stub=1`), once in live mode with
+no gateway answering -- and comparing each DOM shape against its golden under
+`scripts/__golden__/`, so a structural regression fails the build rather than
+the browser.
 
 ## Develop
 
@@ -63,5 +64,5 @@ node scripts/check-class-namespace.mjs
 node scripts/count-shared-globals.mjs
 ```
 
-The page checks read `dist/`, so build before running them. The boot snapshot
-runs on its own, from `build.py`.
+The page checks read `dist/`, so build before running them. The two boot
+snapshots run on their own, from `build.py`.
