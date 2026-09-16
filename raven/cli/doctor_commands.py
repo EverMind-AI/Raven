@@ -29,7 +29,11 @@ from rich.console import Console
 from raven import __logo__
 from raven.cli._helpers import print_probe_troubleshooting
 from raven.contracts.memory import BackendHealth, HealthCheck
-from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
+from raven.core.plugin_stack import (
+    SHIPPED_DEFAULT_BACKEND,
+    everos_plugin_installed,
+    everos_plugin_missing_note,
+)
 from raven.core.provider_stack import send_probe
 
 if TYPE_CHECKING:
@@ -642,7 +646,7 @@ def _probe_memory(config: "RavenConfig", workspace_path: "Path") -> MemoryInfo:
     info = MemoryInfo(backend=config.memory.backend)
     if config.memory.backend is None:
         return info
-    if config.memory.backend == "everos" and not everos_plugin_installed():
+    if config.memory.backend == SHIPPED_DEFAULT_BACKEND and not everos_plugin_installed():
         info.plugin_missing = True
         return info
     backend = maybe_build_memory_backend(workspace_path, config)

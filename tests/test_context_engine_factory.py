@@ -191,11 +191,11 @@ class TestSkillForgeRouterAssembly:
         types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend()))
         assert LocalSkillSource in types
 
-    def test_everos_source_present_when_backend(self, tmp_path: Path) -> None:
+    def test_backend_source_present_when_backend(self, tmp_path: Path) -> None:
         types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend()))
         assert BackendSkillSource in types
 
-    def test_everos_source_absent_without_backend(self, tmp_path: Path) -> None:
+    def test_backend_source_absent_without_backend(self, tmp_path: Path) -> None:
         types, _ = _router_sources(_build_engine(tmp_path, backend=None))
         assert BackendSkillSource not in types
 

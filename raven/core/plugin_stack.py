@@ -57,6 +57,18 @@ logger = logging.getLogger(__name__)
 EVEROS_PLUGIN_DISTRIBUTION = "everos-memory"
 """The distribution that contributes the ``everos`` memory backend."""
 
+SHIPPED_DEFAULT_BACKEND = "everos"
+"""The value ``memory.backend`` carries when nobody has chosen one.
+
+Named rather than compared inline, because the three places that test for it
+are not treating this backend as special -- they are answering "the default
+names something that is not here", which is the commonest way an install
+reaches those lines and the only one where the reader did not pick the name
+themselves. A reader who wrote a backend name into their config already knows
+what they asked for; a reader who never touched it needs to be told what the
+default was and where it went.
+"""
+
 _EVEROS_PLUGIN_PACKAGE = "raven_everos"
 
 
@@ -237,7 +249,7 @@ def maybe_build_memory_backend(
         # distribution. Saying only which backends are installed leaves that
         # reader with nothing to do; doctor and the wizard already answer it in
         # one sentence, and this is the surface a turn actually reaches.
-        if name == "everos" and not everos_plugin_installed():
+        if name == SHIPPED_DEFAULT_BACKEND and not everos_plugin_installed():
             message = f"{message} {everos_plugin_missing_note()}"
         if notify is not None:
             notify(message)

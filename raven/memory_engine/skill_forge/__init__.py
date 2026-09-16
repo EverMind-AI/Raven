@@ -18,7 +18,7 @@ hits as :class:`RouterHit` records.
 from __future__ import annotations
 
 from raven.memory_engine.skill_forge.catalog import LocalSkillCatalog
-from raven.memory_engine.skill_forge.everos_source import BackendSkillSource
+from raven.memory_engine.skill_forge.backend_source import BackendSkillSource
 from raven.memory_engine.skill_forge.fusion import RRF_K, rrf_merge_weighted
 from raven.memory_engine.skill_forge.gate import LLMGateFilter
 from raven.memory_engine.skill_forge.hub_source import HubSkillSource

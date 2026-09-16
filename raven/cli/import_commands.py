@@ -21,6 +21,7 @@ from raven.cli._tty_guard import die_if_not_tty
 from raven.config.loader import load_config
 from raven.config.schema import Config
 from raven.core.plugin_stack import (
+    SHIPPED_DEFAULT_BACKEND,
     build_plugin_registry,
     everos_plugin_installed,
     everos_plugin_missing_note,
@@ -143,7 +144,7 @@ async def _build_and_run(
         # Two ways to get no backend, and they need different instructions:
         # nobody configured one, or the configured one ships separately and is
         # not installed here. `raven onboard` only fixes the first.
-        if ec_config.memory.backend == "everos" and not everos_plugin_installed():
+        if ec_config.memory.backend == SHIPPED_DEFAULT_BACKEND and not everos_plugin_installed():
             console.print(f"[red]Nothing was imported: {everos_plugin_missing_note()}[/red]")
         else:
             console.print(
