@@ -608,6 +608,7 @@ def test_catalogue_offers_only_chat_models() -> None:
     assert not [m for m in offered if "embedding" in m or "speech" in m], sorted(offered)
 
 
+@pytest.mark.slow
 def test_the_catalogue_is_not_read_until_the_picker_is_opened() -> None:
     """Reading it imports LiteLLM, which is two seconds Raven must not spend at
     startup. Importing the module that offers it must stay free."""
@@ -701,8 +702,9 @@ async def test_save_key_refuses_a_key_for_an_address_only_deployment(fake_home: 
     assert "api_key" in str(excinfo.value)
 
 
-async def test_save_key_accepts_optional_lm_studio_key(fake_home: Path) -> None:
+async def test_save_key_accepts_optional_lm_studio_key(fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """LM Studio's server can be put behind a token, and a remote one usually is."""
+    monkeypatch.setattr("raven.config.update_providers.test_provider", lambda *a, **k: {"ok": True, "model_ids": []})
     result = await model_save_key(
         {"slug": "lm_studio", "api_key": "lms-token", "api_base": "http://remote-lms:1234/v1"}
     )
@@ -805,6 +807,12 @@ async def test_options_lists_lm_studio_models_from_the_local_server(
 
     monkeypatch.setattr("raven.config.update_providers.test_provider", probe)
     model_module._LIVE_MODEL_CACHE.clear()
+    # The cache's own lifetime is five seconds and one `model_options` call
+    # walks every provider in the catalogue, which takes most of that on an
+    # idle machine and all of it on a loaded one. Left alone, the second call
+    # below probes again on a busy CI runner and this reads as a caching bug.
+    # Expiry is a behaviour of its own and has a test of its own, below.
+    monkeypatch.setattr(model_module, "_LIVE_MODEL_CACHE_TTL_SECONDS", 3600.0)
 
     first = _entry(await model_options({}), "lm_studio")
     second = _entry(await model_options({}), "lm_studio")
@@ -818,6 +826,64 @@ async def test_options_lists_lm_studio_models_from_the_local_server(
     assert first["models"] == ["lm-studio/qwen3-8b", "lm-studio/publisher/vision-model"]
     assert second["models"] == first["models"]
     assert calls == [("lm_studio", 2)]
+
+
+def test_the_live_model_cache_is_asked_again_once_it_has_expired(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the cache, on a clock this test owns.
+
+    The entry is meant to go stale so a server that has since loaded a model is
+    not reported from a reading taken minutes ago. That was only ever exercised
+    by accident -- by the test above outrunning its own five-second window on a
+    slow machine, which read as a caching bug rather than as this.
+
+    Through `_provider_models` rather than `model_options`, which is the whole
+    picker and walks every provider in the catalogue: three of those is six
+    seconds of doing something this test is not about, and the suite's idle-time
+    ceiling is right to refuse it. The cache lives on this call, so this is also
+    the narrower subject.
+    """
+    from raven.rpc.methods.model import _provider_models
+
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}},
+            "providers": {"lm_studio": {"apiBase": "http://localhost:1234/v1"}},
+        },
+    )
+    calls: list[tuple[str, int]] = []
+
+    def probe(name: str, *, timeout_s: int) -> dict:
+        calls.append((name, timeout_s))
+        return {"ok": True, "model_ids": ["qwen3-8b"]}
+
+    class _Clock:
+        """`time.monotonic` is read in one place in the module under test, so a
+        stub carrying only that is enough and cannot reach anything else."""
+
+        def __init__(self) -> None:
+            self.now = 1_000.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    clock = _Clock()
+    monkeypatch.setattr("raven.config.update_providers.test_provider", probe)
+    monkeypatch.setattr(model_module, "time", clock)
+    model_module._LIVE_MODEL_CACHE.clear()
+
+    assert _provider_models("lm_studio", configured=True) == ["lm-studio/qwen3-8b"]
+    clock.now += model_module._LIVE_MODEL_CACHE_TTL_SECONDS - 0.1
+    assert _provider_models("lm_studio", configured=True) == ["lm-studio/qwen3-8b"]
+    assert calls == [("lm_studio", 2)], "an entry inside its lifetime is still the answer"
+
+    clock.now += 0.2
+    assert _provider_models("lm_studio", configured=True) == ["lm-studio/qwen3-8b"]
+
+    assert calls == [("lm_studio", 2), ("lm_studio", 2)]
 
 
 @pytest.mark.parametrize(

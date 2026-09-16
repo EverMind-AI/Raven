@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args
 
 from loguru import logger
+from pydantic.alias_generators import to_camel, to_snake
 
 from raven.config.env_file import MIRRORED_KEYS, refresh_env_file
 from raven.config.schema import WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
@@ -574,7 +575,7 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
 
     checker = _SETTINGS_SIMPLE_KEYS.get(key)
     if checker is not None:
-        written = _write_raw_key(key, checker(value), merge=key == "tools.media.image")
+        written = _write_raw_key(key, checker(value), merge=key in _MERGED_KEYS)
         if key in MIRRORED_KEYS:
             # cli/acp sub-agents read every web credential from the
             # environment, not from the config, so the ~/.raven/env mirror has
@@ -584,6 +585,32 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         return written
 
     raise ConfigValidationError(f"key not writable via settings.set: {key}")
+
+
+#: Keys whose value is an object covering only part of the block it names, so
+#: the write merges instead of replacing. ``sessionTitle`` carries enabled, the
+#: timeout and the width gate beside its pin, and a replacing write would drop
+#: every one of them.
+_MERGED_KEYS = frozenset({"tools.media.image", "sessionTitle", "translate", "knowledge"})
+
+
+def _as_written(node: dict, name: str) -> str:
+    """The spelling this object already uses for ``name``, or ``name`` itself.
+
+    The config models set ``alias_generator=to_camel`` with
+    ``populate_by_name=True``, so every block and field is accepted under two
+    spellings and a hand-written config may hold either. A write that always
+    used the camelCase one did not update the file, it grew a second key beside
+    the first -- and since the models forbid extras, the block that was there
+    before became an extra input and the whole config stopped loading. The
+    write has to follow the file rather than the writer's spelling.
+    """
+    if name in node:
+        return name
+    for alias in (to_camel(name), to_snake(name)):
+        if alias != name and alias in node:
+            return alias
+    return name
 
 
 def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
@@ -605,17 +632,21 @@ def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
         node = raw
         parts = key.split(".")
         for p in parts[:-1]:
-            node = node.setdefault(p, {})
+            node = node.setdefault(_as_written(node, p), {})
             if not isinstance(node, dict):
                 raise ConfigValidationError(f"config path {key} blocked by non-object")
-        prev = node.get(parts[-1])
+        leaf = _as_written(node, parts[-1])
+        prev = node.get(leaf)
         if merge:
             if prev is not None and not isinstance(prev, dict):
                 raise ConfigValidationError(f"config path {key} blocked by non-object")
-            node[parts[-1]] = {**(prev or {}), **value}
-            prev = {k: (prev or {}).get(k) for k in value}
+            existing = prev or {}
+            # Each field of the pair, under the spelling the block already uses.
+            fields = {_as_written(existing, k): v for k, v in value.items()}
+            node[leaf] = {**existing, **fields}
+            prev = {k: existing.get(k) for k in fields}
         else:
-            node[parts[-1]] = value
+            node[leaf] = value
         return json.dumps(raw, indent=2, ensure_ascii=False), prev
 
     prev = atomic_update(path, _apply)
@@ -662,6 +693,77 @@ def _chk_str(key: str, max_len: int = 500):
     return chk
 
 
+def _chk_pin_model(key: str):
+    """A subsystem pin's model half: a Model Ref, or empty to unset it.
+
+    Empty clears the pin rather than being rejected, because "follow the
+    conversation" is the documented unset state and a picker needs a way back
+    to it. Not checked against a catalogue: a provider's live list is the
+    authority on what it serves, and a config written before a model was
+    published must not be refused by a snapshot that predates it.
+    """
+    inner = _chk_str(key, 200)
+
+    def chk(v: Any) -> str | None:
+        if v is None:
+            return None
+        text = inner(v).strip()
+        return text or None
+
+    return chk
+
+
+def _chk_pin_provider(key: str):
+    """A pin's provider half: a configured provider's slug, or empty to unset.
+
+    Checked against the registry rather than against the config: naming a
+    provider that has no credentials yet is an ordinary order of operations
+    (pick the model, then go and add the key), while naming one that does not
+    exist is a typo that would otherwise surface as a silent fallback to the
+    conversation's model.
+    """
+    inner = _chk_str(key, 100)
+
+    def chk(v: Any) -> str | None:
+        if v is None:
+            return None
+        text = inner(v).strip()
+        if not text:
+            return None
+        from raven.providers.registry import canonical_provider_name, find_by_name
+
+        slug = canonical_provider_name(text)
+        if find_by_name(slug) is None:
+            raise ConfigValidationError(f"{key}: no provider named {text!r}")
+        return slug
+
+    return chk
+
+
+def _chk_pin_pair(parent: str, model_field: str, provider_field: str):
+    """A model/provider pin as one value, so it is written as one operation.
+
+    Both halves in a single ``settings.set`` because a pin is only meaningful
+    as a pair. Written a key at a time, a dropped connection between the two
+    leaves a model pointing at the wrong provider, and the rollback cannot
+    recover through the connection that just failed; two pickers saving at once
+    can interleave their writes into a pair neither of them chose. One key is
+    one ``atomic_update`` under the config lock, which has neither failure.
+
+    The leaves stay individually writable for callers that set one on purpose,
+    exactly as ``tools.media.image.model`` does beside ``tools.media.image``;
+    their validators are what this delegates to.
+    """
+    fields = {model_field, provider_field}
+
+    def chk(value: Any) -> dict:
+        if not isinstance(value, dict) or set(value) != fields:
+            raise ConfigValidationError(f"{parent} must contain exactly {model_field} and {provider_field}")
+        return {k: _SETTINGS_SIMPLE_KEYS[f"{parent}.{k}"](v) for k, v in value.items()}
+
+    return chk
+
+
 def _chk_image_selection(value: Any) -> dict:
     if not isinstance(value, dict) or set(value) != {"model", "quality"}:
         raise ConfigValidationError("image selection must contain exactly model and quality")
@@ -701,6 +803,22 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "channels.sendProgress": _chk_bool("channels.sendProgress"),
     "channels.sendToolHints": _chk_bool("channels.sendToolHints"),
     "memory.memoryTopK": _chk_int("memory.memoryTopK", 1, 50),
+    # The default-model pins the settings page offers, each a model and the
+    # provider serving it. Written as a pair by the page; validated
+    # independently here because `settings.set` carries one key at a time, and
+    # a pin with one half missing is a state the readers already handle (they
+    # follow the conversation's model rather than guess a credential).
+    "sessionTitle.model": _chk_pin_model("sessionTitle.model"),
+    "sessionTitle.provider": _chk_pin_provider("sessionTitle.provider"),
+    "translate.model": _chk_pin_model("translate.model"),
+    "translate.provider": _chk_pin_provider("translate.provider"),
+    "knowledge.embeddingModel": _chk_pin_model("knowledge.embeddingModel"),
+    "knowledge.embeddingProvider": _chk_pin_provider("knowledge.embeddingProvider"),
+    # The pair keys. A surface offering a pin writes one of these, not the two
+    # leaves in sequence.
+    "sessionTitle": _chk_pin_pair("sessionTitle", "model", "provider"),
+    "translate": _chk_pin_pair("translate", "model", "provider"),
+    "knowledge": _chk_pin_pair("knowledge", "embeddingModel", "embeddingProvider"),
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
     "agents.defaults.reasoningEffort": _chk_enum("agents.defaults.reasoningEffort", "minimal", "low", "medium", "high"),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),

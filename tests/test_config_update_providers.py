@@ -1669,3 +1669,89 @@ def test_a_sibling_endpoint_that_fails_costs_its_own_models_and_nothing_else(cfg
     assert full["ok"] is True
     assert full["model_ids"] == ["openai/gpt-6"]
     assert full["implied_capabilities"] == {}
+
+
+# ---------------------------------------------------------------------------
+# resolve_provider_credentials
+# ---------------------------------------------------------------------------
+
+
+class TestResolveProviderCredentials:
+    """The address and key a request would actually go out on.
+
+    Unredacted, for a caller about to make the call rather than draw a screen,
+    and the same selection ``test_provider`` makes -- so a caller reaching a
+    provider through here reaches the address the runtime would.
+    """
+
+    def test_a_configured_key_resolves_with_the_specs_address(self, cfg_path: Path) -> None:
+        from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
+
+        set_provider_fields("siliconflow", {"api_key": "sk-live"}, config_path=cfg_path)
+
+        resolved = resolve_provider_credentials("siliconflow", config_path=cfg_path)
+
+        # No address configured, so the spec's default -- the same fallback the
+        # request path takes.
+        assert resolved == ("https://api.siliconflow.cn/v1", "sk-live")
+
+    def test_a_direct_vendor_with_no_servable_default_answers_nothing(self, cfg_path: Path) -> None:
+        """OpenAI and Anthropic state no default address of their own: theirs
+        travels via env vars to a driver that knows it, and ``ProviderSpec``
+        deliberately does not hand it out (see ``usable_default_api_base``).
+
+        So a caller that has to make the call itself gets nothing here, and the
+        key alone is not enough. Configuring an address makes it resolve, which
+        the test below covers. This is the shape of the answer, not an
+        oversight: the alternative is handing out an address the rest of the
+        codebase refuses to serve."""
+        from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
+
+        set_provider_fields("openai", {"api_key": "sk-live"}, config_path=cfg_path)
+
+        assert resolve_provider_credentials("openai", config_path=cfg_path) is None
+
+    def test_a_configured_address_wins_over_the_default(self, cfg_path: Path) -> None:
+        from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
+
+        set_provider_fields(
+            "openai", {"api_key": "sk-live", "api_base": "https://proxy.test/v1/"}, config_path=cfg_path
+        )
+
+        resolved = resolve_provider_credentials("openai", config_path=cfg_path)
+
+        # Trailing slash dropped: the caller appends /embeddings, and some
+        # gateways answer 404 to a doubled slash.
+        assert resolved == ("https://proxy.test/v1", "sk-live")
+
+    def test_no_key_is_not_a_credential(self, cfg_path: Path) -> None:
+        """Reads as "not set up" rather than as an anonymous request to
+        somebody's paid endpoint."""
+        from raven.config.update_providers import resolve_provider_credentials
+
+        cfg_path.write_text(json.dumps({"providers": {"openai": {}}}), encoding="utf-8")
+
+        assert resolve_provider_credentials("openai", config_path=cfg_path) is None
+
+    def test_an_oauth_seat_answers_nothing(self, cfg_path: Path) -> None:
+        """Its token is fetched and refreshed by the flow that owns it, and
+        handing out a stale one would be worse than saying nothing."""
+        from raven.config.update_providers import resolve_provider_credentials
+
+        assert resolve_provider_credentials("openai_codex", config_path=cfg_path) is None
+
+    def test_an_unreadable_config_answers_nothing(self, cfg_path: Path) -> None:
+        from raven.config.update_providers import resolve_provider_credentials
+
+        cfg_path.write_text("{not json", encoding="utf-8")
+
+        assert resolve_provider_credentials("openai", config_path=cfg_path) is None
+
+    def test_a_section_that_does_not_validate_falls_back_to_defaults(self, cfg_path: Path) -> None:
+        """A hand-edited section with a wrong type is not a reason to raise at
+        a caller that only wanted an address."""
+        from raven.config.update_providers import resolve_provider_credentials
+
+        cfg_path.write_text(json.dumps({"providers": {"openai": {"apiKey": 17}}}), encoding="utf-8")
+
+        assert resolve_provider_credentials("openai", config_path=cfg_path) is None

@@ -116,6 +116,13 @@ def test_agent_help_shows_resume_flag() -> None:
     assert "--resume" in r.stdout
 
 
+async def _skip_background_grace(*_args, **_kwargs) -> None:
+    """Stand-in for ``_wait_for_background_work``: the stub subagents/scheduler
+    below never go busy, so the real 2 s sub-agent hand-off grace has nothing
+    to wait for and only adds wall time."""
+    return None
+
+
 def _invoke_agent_capturing_session(
     monkeypatch: pytest.MonkeyPatch, home: Path, extra_args: list[str]
 ) -> tuple[object, dict[str, str]]:
@@ -166,6 +173,7 @@ def _invoke_agent_capturing_session(
     monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
+    monkeypatch.setattr("raven.cli.agent_commands._wait_for_background_work", _skip_background_grace)
     # This test exercises session keying, not memory: don't boot the real
     # (bundled) everos backend / plugin tools inside the CliRunner (the
     # embedded everos runtime is heavy and not under test here).
@@ -467,6 +475,7 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
     # write is rolled back with the test instead of leaking a fake key.
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-stub-invalid")
     monkeypatch.setattr("raven.providers.litellm_provider.acompletion", _raise_401)
+    monkeypatch.setattr("raven.cli.agent_commands._wait_for_background_work", _skip_background_grace)
 
     class _StubSubagents:
         def set_submit(self, _submit) -> None:
@@ -722,6 +731,7 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
     monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
+    monkeypatch.setattr("raven.cli.agent_commands._wait_for_background_work", _skip_background_grace)
     monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda *a, **k: None)
     monkeypatch.setattr("raven.core.plugin_stack.build_plugin_tools", lambda *a, **k: [])
     return runner.invoke(app, ["agent", "-m", "hi", "-w", str(tmp_path / "ws")])

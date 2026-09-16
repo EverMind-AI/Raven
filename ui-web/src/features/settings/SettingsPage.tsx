@@ -9,6 +9,8 @@ import * as notifications from '../../shell/notifications'
 import { open as openUrl } from '../../shell/open-url'
 import { isMac, modKey } from '../../shell/platform'
 import { ModelTagDefs, ModelTags, TagGlyph } from '../../shell/model-tags'
+
+import type { ModelTagFacts } from '../../shell/model-tags'
 import { ModelIcon, ProviderIcon, ProviderLink, ProviderStatus } from '../../shell/provider-mark'
 import { hint as reachHint, text as reachText } from '../../shell/reach'
 import { show as toast } from '../../shell/toast'
@@ -29,19 +31,10 @@ import type { JSX, ReactNode, RefObject } from 'react'
    changing" -- myself, the agent, or the machine it runs on. */
 const SET_GROUPS: Array<{ key: string; pages: Array<[string, string]> }> = [
   {
-    key: 'gui.set.grp.me',
-    pages: [
-      ['usage', 'gui.set.pg.usage'],
-      ['look', 'gui.set.pg.look'],
-      ['notify', 'gui.set.pg.notify'],
-      ['keys', 'gui.set.pg.keys'],
-      ['about', 'gui.set.pg.about'],
-    ],
-  },
-  {
     key: 'gui.set.grp.agent',
     pages: [
       ['model', 'gui.set.pg.model'],
+      ['defaults', 'gui.set.pg.defaults'],
       ['perm', 'gui.set.pg.perm'],
       ['toolset', 'gui.set.pg.toolset'],
       ['memory', 'gui.set.pg.memory'],
@@ -54,6 +47,16 @@ const SET_GROUPS: Array<{ key: string; pages: Array<[string, string]> }> = [
       ['exec', 'gui.set.pg.exec'],
       ['channel', 'gui.set.pg.channel'],
       ['data', 'gui.set.pg.data'],
+    ],
+  },
+  {
+    key: 'gui.set.grp.me',
+    pages: [
+      ['usage', 'gui.set.pg.usage'],
+      ['look', 'gui.set.pg.look'],
+      ['notify', 'gui.set.pg.notify'],
+      ['keys', 'gui.set.pg.keys'],
+      ['about', 'gui.set.pg.about'],
     ],
   },
 ]
@@ -69,6 +72,7 @@ const SET_ICO: Record<string, string> = {
   notify: '<path d="M12 4a5 5 0 0 0-5 5v4l-1.5 3h13L17 13V9a5 5 0 0 0-5-5Z"/><path d="M10 20h4"/>',
   keys: '<rect x="3" y="6.5" width="18" height="11" rx="2.2"/><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8"/>',
   about: '<circle cx="12" cy="12" r="8"/><path d="M12 11v5M12 8h.01"/>',
+  defaults: '<path d="M4 7h10M4 12h10M4 17h10"/><path d="m17 5.5 2 2 3-3.5"/><path d="m17 15.5 2 2 3-3.5"/>',
   model: '<path d="M12 3.5 20 8v8l-8 4.5L4 16V8l8-4.5Z"/><path d="M12 12v8.5M12 12 4 8M12 12l8-4"/>',
   perm: '<path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z"/>',
   memory: '<rect x="4" y="4.5" width="16" height="15" rx="2.4"/><path d="M8 9h8M8 12.5h8M8 16h5"/>',
@@ -328,9 +332,9 @@ function HostInput({
   )
 }
 
-function Scard({ title, desc, children }: { title?: string; desc?: string; children?: ReactNode }): JSX.Element {
+function Scard({ title, desc, children, className }: { title?: string; desc?: string; children?: ReactNode; className?: string }): JSX.Element {
   return (
-    <div className="scard">
+    <div className={className ? "scard " + className : "scard"}>
       {(title || desc) && (
         <div className="ch">
           {title && <div className="t">{title}</div>}
@@ -2001,14 +2005,132 @@ function ModelTuning({ s }: { s: SettingsState }): JSX.Element {
   )
 }
 
+/* The providers page is now the accounts and their model lists alone: what a
+   conversation *defaults* to is a choice about the agent, not about a vendor,
+   and it moved to the page beside this one with the other four defaults. */
 function ModelPage({ s }: { s: SettingsState }): JSX.Element {
+  return <ProvSplit s={s} />
+}
+
+/* ---- default models -------------------------------------------------- */
+
+/* One pin per row: a model and the provider serving it, written as a pair.
+   `kind` is what the row filters the offer by -- a picker that lists every
+   model for every slot is how an embedding id ends up in the painting slot,
+   and the vendors publish enough to tell them apart (see `kind_of`). */
+/* The same bucketing the backend does (`registry_data.kind_of`), against the
+   same facts: a model states its capabilities and what it writes, and reading
+   only the modality put most of one gateway's image models under Text. Vision
+   is deliberately not image -- reading pictures is something a text model
+   does, and filtering on it would put half a catalogue behind the wrong slot.
+
+   A model the registry knows nothing about has no facts at all. Those are
+   offered under Text rather than hidden: a just-published id nobody has
+   described yet is exactly what somebody is here to select, and the slots that
+   must not take one (embedding) say so by naming their capability. */
+function kindOf(facts: ModelTagFacts | undefined): ModelKind {
+  const caps = facts?.capabilities ?? []
+  if (caps.includes('embedding')) return 'embedding'
+  const outs = facts?.output_modalities ?? []
+  if (outs.includes('image') || caps.includes('image-generation')) return 'image'
+  return 'text'
+}
+
+/* One pin per row: a model and the provider serving it, written as a pair.
+   The offer is filtered by what the slot is for -- a picker listing every
+   model for every slot is how an embedding id lands in a painting slot -- and
+   grouped by provider, because the group is the answer to "whose credential
+   pays for this", which a bare id does not carry. */
+function PinRow({
+  title,
+  note,
+  kind,
+  pinKey,
+  modelField,
+  providerField,
+  foot,
+  s,
+}: {
+  title: string
+  note: string
+  kind: ModelKind
+  /* The block the pair lives under, which is also the key it is written by:
+     one write, so the two halves cannot be persisted apart. */
+  pinKey: string
+  modelField: string
+  providerField: string
+  foot?: string
+  s: SettingsState
+}): JSX.Element {
+  const [nl, say] = useNl()
+  const model = String(V(s.snap.raw, `${pinKey}.${modelField}`, '') || '')
+  const provider = String(V(s.snap.raw, `${pinKey}.${providerField}`, '') || '')
+  const groups = s.snap.providers
+    .filter((p) => p.on)
+    .map((p) => ({
+      p,
+      models: (p.configured?.length ? p.configured : p.models).filter((m) => kindOf(p.labels?.[m]) === kind),
+    }))
+    .filter((g) => g.models.length)
+  const current = model && provider ? `${provider}::${model}` : ''
+  return (
+    <Scard className="inline" title={title} desc={note}>
+      {groups.length ? (
+        <select
+          className="mini"
+          aria-label={title}
+          value={current}
+          onChange={(e) => {
+            const [nextProvider = '', nextModel = ''] = e.currentTarget.value.split('::')
+            void store
+              .writePin(pinKey, { [modelField]: nextModel, [providerField]: nextProvider })
+              .then((r) => {
+                if (r !== 'ok') say()
+              })
+          }}
+        >
+          <option value="">{t('gui.set.dm.inherit')}</option>
+          {groups.map((g) => (
+            <optgroup key={g.p.id} label={g.p.name}>
+              {g.models.map((m) => (
+                <option key={`${g.p.id}::${m}`} value={`${g.p.id}::${m}`}>
+                  {g.p.labels?.[m]?.label || shortModel(m) || m}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      ) : (
+        <div className="hint">{t('gui.set.dm.no_provider')}</div>
+      )}
+      {foot && <div className="hint">{foot}</div>}
+      {nl && <div className="nlmsg">{nl}</div>}
+    </Scard>
+  )
+}
+
+/* Its own refusal line, not the page's: the image tool saves through a
+   different call from the pins, and a failure reported under the agent model
+   sends the reader to the control that did not fail. */
+function PaintRow({ s }: { s: SettingsState }): JSX.Element {
+  const [nl, say] = useNl()
+  return (
+    <Scard className="inline" title={t('gui.set.dm.paint')} desc={t('gui.set.dm.paint_note')}>
+      <ImageModelPicker
+        model={String(V(s.snap.raw, 'tools.media.image.model', ''))}
+        quality={Vnull(s.snap.raw, 'tools.media.image.quality', undefined) as string | undefined}
+        say={say}
+      />
+      {nl && <div className="nlmsg">{nl}</div>}
+    </Scard>
+  )
+}
+
+function DefaultsPage({ s }: { s: SettingsState }): JSX.Element {
   const [nl, say] = useNl()
   return (
     <>
-      <div className="scard inline">
-        <div className="ch">
-          <div className="t">{t('gui.model.default')}</div>
-        </div>
+      <Scard className="inline" title={t('gui.set.dm.agent')} desc={t('gui.set.dm.agent_note')}>
         <button
           className="mini ghost pickm"
           onClick={(e) => {
@@ -2019,9 +2141,41 @@ function ModelPage({ s }: { s: SettingsState }): JSX.Element {
           <span className="car">⌄</span>
         </button>
         {nl && <div className="nlmsg">{nl}</div>}
-      </div>
-      <ProvSplit s={s} />
+      </Scard>
       <ModelTuning s={s} />
+      <PinRow
+        title={t('gui.set.dm.quick')}
+        note={t('gui.set.dm.quick_note')}
+        kind="text"
+        pinKey="sessionTitle"
+        modelField="model"
+        providerField="provider"
+        s={s}
+      />
+      <PinRow
+        title={t('gui.set.dm.translate')}
+        note={t('gui.set.dm.translate_note')}
+        kind="text"
+        pinKey="translate"
+        modelField="model"
+        providerField="provider"
+        s={s}
+      />
+      {/* Not a pin: the image tool carries its own key and address rather than
+          borrowing a provider account, so this stays the model/quality pair it
+          has always been -- moved here because a reader looking for "what
+          draws my pictures" looks at the defaults, not inside a tool row. */}
+      <PaintRow s={s} />
+      <PinRow
+        title={t('gui.set.dm.embed')}
+        note={t('gui.set.dm.embed_note')}
+        kind="embedding"
+        pinKey="knowledge"
+        modelField="embeddingModel"
+        providerField="embeddingProvider"
+        foot={t('gui.set.dm.embed_warn')}
+        s={s}
+      />
     </>
   )
 }
@@ -2570,13 +2724,6 @@ function ToolGroupCard({ g, rows, s }: { g: ToolGroup; rows: ToolRow[]; s: Setti
           return (
             <Fragment key={r.id}>
               <ToolLine row={r} raw={s.snap.raw} s={s} />
-              {r.id === 'image_generate' && s.toolKeyEdit === r.id && (
-                <ImageModelPicker
-                  model={String(V(s.snap.raw, 'tools.media.image.model', ''))}
-                  quality={Vnull(s.snap.raw, 'tools.media.image.quality', undefined) as string | undefined}
-                  say={say}
-                />
-              )}
               {cred && s.toolKeyEdit === r.id && <ToolCredRow id={r.id} path={cred} raw={s.snap.raw} say={say} />}
             </Fragment>
           )
@@ -2608,6 +2755,8 @@ function PageBody({ tab, s }: { tab: string; s: SettingsState }): JSX.Element {
       return <KeysPage />
     case 'about':
       return <AboutPage />
+    case 'defaults':
+      return <DefaultsPage s={s} />
     case 'model':
       return <ModelPage s={s} />
     case 'perm':
