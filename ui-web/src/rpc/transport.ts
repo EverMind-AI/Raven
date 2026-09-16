@@ -1,4 +1,5 @@
 import type { ParamsOf, ResultOf, RpcMethod } from './generated'
+import type { PushMethod } from './notifications'
 
 export class RpcError extends Error {
   constructor(
@@ -52,10 +53,11 @@ export interface RpcTransport {
   call<M extends RpcMethod>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>>
   /**
    * Attach a handler for a server-pushed notification method. Returns the
-   * detach function. Names stay plain strings: the contract declares calls,
-   * not pushes.
+   * detach function. The contract declares calls, not pushes, so the names
+   * come from the hand-written table in ./notifications instead: a misspelt
+   * one is a handler that is never called, silently, for the life of the tab.
    */
-  on(method: string, handler: NotificationHandler): () => void
+  on(method: PushMethod, handler: NotificationHandler): () => void
   /**
    * Attach a handler for binary frames (the screencast stream). Returns the
    * detach function.

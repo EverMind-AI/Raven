@@ -12,11 +12,11 @@
    `absent` is what the island's empty state reads to tell the two apart. */
 
 import { islands } from '../../islands'
+import { gone, has } from '../../rpc/capabilities'
 import { current as sessionCurrent } from '../../shell/session'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { mediaOf } from './080-overrides.js'
-import { rpcGone, rpcHas } from './220-browser.js'
 
 let agentsWatch = null;
 
@@ -34,13 +34,13 @@ export function install() {
     roster: () => gateway().call('subagents.list', { probe: false })
       .then(r => (r.rows || []).filter(row => row.enabled)),
     list: (sessionId) => {
-      if (!rpcHas('subagent')) return Promise.resolve([]);
+      if (!has('subagent')) return Promise.resolve([]);
       return gateway().call('subagent.list', { session_id: sessionId })
         .then((r) => (r && r.items) || [])
         /* Absent surface -> no rows (the island words that empty state); a call
            that merely failed rethrows, so the page keeps what it last drew --
            a dropped socket must not repaint a live run as "no delegated work". */
-        .catch((e) => { if (rpcGone('subagent', e)) return []; throw e; });
+        .catch((e) => { if (gone('subagent', e)) return []; throw e; });
     },
     /* A call is addressed by conversation and call, not by call alone: its
      record lives inside that conversation's own directory. A dag node is
@@ -48,16 +48,16 @@ export function install() {
     context: (id) => gateway().call('subagent.context', { id, session_id: sessionCurrent() }),
     node: (runId, node) => gateway().call('dag.node', { run_id: runId, node, session_key: sessionCurrent() })
       .then((r) => (r && r.node) || {}),
-    absent: () => !rpcHas('subagent'),
+    absent: () => !has('subagent'),
     /* The stateful handles. Scoped to the open session like everything else here,
      and answering with no rows on an absent surface for the same reason `list`
      does -- a panel that cannot tell "none" from "not supported" makes the
      reader guess. */
     instances: (sessionId) => {
-      if (!rpcHas('subagents')) return Promise.resolve([]);
+      if (!has('subagents')) return Promise.resolve([]);
       return gateway().call('subagents.instances', { session_key: sessionId })
         .then((r) => (r && r.instances) || [])
-        .catch((e) => { if (rpcGone('subagents', e)) return []; throw e; });
+        .catch((e) => { if (gone('subagents', e)) return []; throw e; });
     },
     /* Addressed by (agent, handle) inside the open session: a handle is unique
      per agent, not globally, so both halves travel. */
