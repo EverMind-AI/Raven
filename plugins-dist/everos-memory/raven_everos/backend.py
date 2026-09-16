@@ -133,12 +133,23 @@ _MEMORIZE_TIMEOUT_S: float = 360.0
 # permanently, and neither is worth a minute of the user's time.
 _RECALL_TIMEOUT_S: float = 4.0
 _STORE_TIMEOUT_S: float = 10.0
+# ...and an append is not flat work: EverOS may carve a boundary out of any
+# add, which runs a model, so the cost follows how much is handed over. A turn
+# passes a handful of messages and lands well inside the floor; a bulk import
+# passes up to a hundred at once and did not, which read as a dead service and
+# failed every source behind it.
+_STORE_TIMEOUT_PER_MESSAGE_S: float = 0.5
 
 # Shutdown's total budget for flushing every session left with buffered-but-
 # unflushed turns. One shared budget for the whole sweep, not per session: the
 # process is already on its way out, and a wedged server must not turn "quit"
 # into a multi-minute hang across N sessions.
 _SHUTDOWN_FLUSH_BUDGET_S: float = 5.0
+
+
+def _store_budget(message_count: int) -> float:
+    """What one non-final append may take, for a slice of this size."""
+    return _STORE_TIMEOUT_S + _STORE_TIMEOUT_PER_MESSAGE_S * max(0, message_count)
 
 
 class ServiceState(Enum):
@@ -554,6 +565,15 @@ class EverosBackend:
 
         from raven_everos.server import ProbeVerdict
 
+        if isinstance(exc, httpx.HTTPStatusError):
+            # A status line is proof the service is up and answering; what
+            # failed is this request. Demoting on it turned one unprocessable
+            # payload into a dead backend for the rest of the process -- every
+            # later call short-circuits on the state guard without reaching the
+            # wire, so a single bad record failed every source behind it in the
+            # same import. The state is left exactly as it was: a service that
+            # then does go away still demotes, through timeout or refusal.
+            return
         if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
             self._apply_probe(ProbeVerdict.TIMEOUT)
         elif isinstance(exc, httpx.ConnectError):
@@ -969,7 +989,7 @@ class EverosBackend:
         # A per-turn append must not hold a turn open; a final flush is the call
         # that makes EverOS extract, which is what the six-minute budget was
         # sized for. One number for both silently overrode the other.
-        budget = _MEMORIZE_TIMEOUT_S if is_final else _STORE_TIMEOUT_S
+        budget = _MEMORIZE_TIMEOUT_S if is_final else _store_budget(len(payload))
         # Marked before the call, not after: if this is cancelled mid-flight
         # the add may already have landed, and the safe direction is one
         # redundant flush rather than content that is never extracted.

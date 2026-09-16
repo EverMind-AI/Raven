@@ -87,11 +87,28 @@ class ProviderSpec:
     #: Read through `display_api_base`, never directly.
     shown_api_base: str = ""
     native_api_bases: tuple[tuple[str, str], ...] = ()
+    #: Addresses one vendor serves the same account model from, where the choice
+    #: is the reader's rather than a default we could pick for them: DMXAPI sells
+    #: a CNY platform, an international one and an enterprise one, and an account
+    #: on each is a separate signup. Given as (label, api_base, signup_url), the
+    #: first being what a fresh install starts on.
+    #:
+    #: Distinct from `native_api_bases`, which is one vendor's addresses keyed by
+    #: the protocol spoken to them and never a question anyone is asked. A
+    #: provider that states these is offered the list instead of a free-text
+    #: host field -- there is nothing to type when the answer is one of three.
+    platforms: tuple[tuple[str, str, str], ...] = ()
     passes_default_api_base: bool = False  # send the shipped default as a per-call api_base
     strip_api_base_trailing_slash: bool = False
 
     # gateway behavior
     strip_model_prefix: bool = False  # strip "provider/" before re-prefixing
+
+    #: This gateway serves other vendors' models under names of its own, so the
+    #: bundled registry's ids for it are not ids it accepts. A catalogue list
+    #: must then come from the gateway alone: the registry rows would be
+    #: selectable, and every one of them a wrong-model error on first use.
+    renames_models: bool = False
 
     # per-model param overrides, e.g. (("kimi-k2.5", {"temperature": 1.0}),)
     model_overrides: tuple[tuple[str, dict[str, Any]], ...] = ()
@@ -340,6 +357,313 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=False,
         model_overrides=(),
     ),
+    # Poe resells whole vendor catalogues under one subscription key, so a model
+    # id here names the model's maker and never Poe. Gateway for that reason:
+    # the rule is what puts Poe's own prefix in front of "anthropic/..." rather
+    # than letting Anthropic's key answer for a Poe subscription.
+    #
+    # No `default_model` and no shortlist, for the reason the resale gateways
+    # below state. Poe names what it serves by bot rather than by the
+    # maker's id, and only the outer "poe/" comes off before the request is
+    # sent -- so a vendor-spelled id arrives as a model Poe does not have, and
+    # shipping one as the default makes the first chat a wrong-model error.
+    ProviderSpec(
+        name="poe",
+        keywords=("poe",),
+        env_key="POE_API_KEY",
+        display_name="Poe",
+        homepage="https://poe.com/api_key",
+        skip_prefixes=(),
+        is_gateway=True,
+        detect_by_base_keyword="api.poe.com",
+        default_api_base="https://api.poe.com/v1",
+        strip_model_prefix=False,
+        renames_models=True,
+    ),
+    # === Resale gateways reached through OpenAI's driver ===================
+    # Thirteen shelves that resell other vendors' models over an
+    # OpenAI-compatible endpoint. LiteLLM routes none of them, so each borrows
+    # OpenAI's driver and states the address that distinguishes it -- the same
+    # shape as SiliconFlow above, and a gateway for the same reason: a model id
+    # here names its maker, so only the gateway rule keeps that vendor's key
+    # from answering for a subscription bought here.
+    #
+    # None states a `default_model` or ships a shortlist. Nothing Raven bundles
+    # carries a row for any of them, and a gateway's ids are its own spelling of
+    # somebody else's model -- guessing at that spelling would put an id the
+    # vendor rejects in front of the user as a recommendation. Their own
+    # /v1/models answers it once a key is entered, and `catalog.describe` names
+    # whatever comes back by matching the model rather than the shelf.
+    ProviderSpec(
+        name="ai302",
+        keywords=(
+            "302ai",
+            "ai302",
+        ),
+        env_key="OPENAI_API_KEY",
+        display_name="302.AI",
+        homepage="https://302.ai",
+        via_driver="openai",
+        name_aliases=("302ai",),  # not a Python identifier, so it cannot be the field name
+        is_gateway=True,
+        detect_by_base_keyword="302.ai",
+        default_api_base="https://api.302.ai/v1",
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="dmxapi",
+        keywords=("dmxapi",),
+        env_key="OPENAI_API_KEY",
+        display_name="DMXAPI",
+        homepage="https://www.dmxapi.cn/",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="dmxapi",
+        default_api_base="https://www.dmxapi.cn/v1",
+        # Three storefronts, three signups, one key format. Which one a key was
+        # issued by is not discoverable from the key, so it is asked rather than
+        # detected -- and the address follows from the answer, which is why this
+        # provider offers no host field.
+        platforms=(
+            ("www.DMXAPI.cn (CNY)", "https://www.dmxapi.cn/v1", "https://www.dmxapi.cn/register"),
+            (
+                "www.DMXAPI.com (International)",
+                "https://www.dmxapi.com/v1",
+                "https://www.dmxapi.com/register",
+            ),
+            (
+                "ssvip.DMXAPI.com (Enterprise)",
+                "https://ssvip.dmxapi.com/v1",
+                "https://ssvip.dmxapi.com/register",
+            ),
+        ),
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="burncloud",
+        keywords=("burncloud",),
+        env_key="OPENAI_API_KEY",
+        display_name="BurnCloud",
+        homepage="https://ai.burncloud.com/",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="burncloud",
+        default_api_base="https://ai.burncloud.com/v1",
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="ocoolai",
+        keywords=("ocoolai",),
+        env_key="OPENAI_API_KEY",
+        display_name="ocoolAI",
+        homepage="https://one.ocoolai.com/",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="ocoolai",
+        default_api_base="https://api.ocoolai.com/v1",
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="ppio",
+        keywords=(
+            "ppio",
+            "ppinfra",
+        ),
+        env_key="OPENAI_API_KEY",
+        display_name="PPIO",
+        homepage="https://ppio.com/",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="ppinfra",
+        default_api_base="https://api.ppinfra.com/v3/openai",
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="lanyun",
+        keywords=("lanyun",),
+        env_key="OPENAI_API_KEY",
+        display_name="LANYUN",
+        homepage="https://maas.lanyun.net",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="lanyun",
+        default_api_base="https://maas-api.lanyun.net/v1",
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="alayanew",
+        keywords=("alayanew",),
+        env_key="OPENAI_API_KEY",
+        display_name="AlayaNew",
+        homepage="https://www.alayanew.com/",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="alayanew",
+        default_api_base="https://deepseek.alayanew.com/v1",
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="sophnet",
+        keywords=("sophnet",),
+        env_key="OPENAI_API_KEY",
+        display_name="SophNet",
+        homepage="https://sophnet.com",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="sophnet",
+        default_api_base="https://www.sophnet.com/api/open-apis/v1",
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="tokenhub",
+        keywords=("tokenhub",),
+        env_key="OPENAI_API_KEY",
+        display_name="TokenHub",
+        homepage="https://cloud.tencent.com/product/tokenhub",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="tencentmaas",
+        default_api_base="https://tokenhub.tencentmaas.com/v1",
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="xirang",
+        keywords=(
+            "xirang",
+            "wishub",
+        ),
+        env_key="OPENAI_API_KEY",
+        display_name="Xirang",
+        homepage="https://www.ctyun.cn",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="wishub",
+        default_api_base="https://wishub-x1.ctyun.cn/v1",
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="ph8",
+        keywords=("ph8",),
+        env_key="OPENAI_API_KEY",
+        display_name="PH8",
+        homepage="https://ph8.co",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="ph8.co",
+        default_api_base="https://ph8.co/v1",
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="aionly",
+        keywords=(
+            "aionly",
+            "aiionly",
+        ),
+        env_key="OPENAI_API_KEY",
+        display_name="AIOnly",
+        homepage="https://www.aiionly.com",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="aiionly",
+        default_api_base="https://api.aiionly.com/v1",
+        strip_model_prefix=False,
+    ),
+    ProviderSpec(
+        name="radeon_cloud",
+        keywords=("radeon",),
+        env_key="OPENAI_API_KEY",
+        display_name="AMD GPU Cloud",
+        homepage="https://developer.amd.com.cn/radeon/",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="amd.com.cn",
+        default_api_base="https://developer.amd.com.cn/radeon/v1",
+        strip_model_prefix=False,
+    ),
+    # === CN vendors reached through OpenAI's driver ========================
+    # LiteLLM carries no driver for any of these six, so each is reached the way
+    # SiliconFlow is: its OpenAI-compatible endpoint, spoken by OpenAI's driver.
+    # That is also why every one of them hands its address to LiteLLM per call
+    # -- as a gateway, or by stating `passes_default_api_base` -- because the
+    # borrowed driver's own default is api.openai.com, and a spec that keeps its
+    # address to itself would post a Baichuan key there.
+    ProviderSpec(
+        name="baichuan",
+        keywords=("baichuan",),
+        env_key="OPENAI_API_KEY",
+        display_name="Baichuan",
+        homepage="https://www.baichuan-ai.com/",
+        via_driver="openai",
+        passes_default_api_base=True,
+        detect_by_base_keyword="baichuan",
+        default_api_base="https://api.baichuan-ai.com/v1",
+    ),
+    # Qianfan, which serves ERNIE and resells others. Its address carries the
+    # version, and it is v2 rather than the v1 every other entry here ends in.
+    ProviderSpec(
+        name="baidu_cloud",
+        keywords=("ernie", "baidu", "qianfan"),
+        env_key="OPENAI_API_KEY",
+        display_name="Baidu Cloud",
+        homepage="https://cloud.baidu.com/",
+        via_driver="openai",
+        passes_default_api_base=True,
+        detect_by_base_keyword="baidubce",
+        default_api_base="https://qianfan.baidubce.com/v2",
+        default_model="baidu-cloud/ernie-5.1",
+    ),
+    ProviderSpec(
+        name="stepfun",
+        keywords=("stepfun",),
+        env_key="OPENAI_API_KEY",
+        display_name="StepFun",
+        homepage="https://platform.stepfun.com/",
+        via_driver="openai",
+        passes_default_api_base=True,
+        detect_by_base_keyword="stepfun",
+        default_api_base="https://api.stepfun.com/v1",
+        default_model="stepfun/step-3.7-flash",
+    ),
+    ProviderSpec(
+        name="longcat",
+        keywords=("longcat",),
+        env_key="OPENAI_API_KEY",
+        display_name="LongCat",
+        homepage="https://longcat.chat",
+        via_driver="openai",
+        passes_default_api_base=True,
+        detect_by_base_keyword="longcat",
+        default_api_base="https://api.longcat.chat/openai/v1",
+        default_model="longcat/longcat-2.0",
+    ),
+    # ModelScope and Qiniu serve other people's weights rather than their own,
+    # so a model id here names its maker and the gateway rule applies.
+    ProviderSpec(
+        name="modelscope",
+        keywords=("modelscope",),
+        env_key="OPENAI_API_KEY",
+        display_name="ModelScope",
+        homepage="https://modelscope.cn",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="modelscope",
+        default_api_base="https://api-inference.modelscope.cn/v1",
+        strip_model_prefix=False,
+        default_model="modelscope/Qwen/Qwen3-235B-A22B-Instruct-2507",
+    ),
+    ProviderSpec(
+        name="qiniu",
+        keywords=("qiniu", "qnaigc"),
+        env_key="OPENAI_API_KEY",
+        display_name="Qiniu",
+        homepage="https://qiniu.com",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="qnaigc",
+        default_api_base="https://api.qnaigc.com/v1",
+        strip_model_prefix=False,
+        default_model="qiniu/deepseek-v3",
+    ),
     # === Standard providers (matched by model-name keywords) ===============
     # Anthropic. Model ids go out as "anthropic/claude-*": LiteLLM resolves that
     # and a bare "claude-*" to the same provider and wire model, and an explicit
@@ -489,6 +813,32 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=False,
         model_overrides=(),
         default_model="zai/glm-4.6",
+    ),
+    # BigModel, the same vendor's Chinese platform. A sibling of Z.ai above and
+    # not a second spelling of it: the brands differ, the hosts differ, and an
+    # account on one does not authenticate against the other -- so a reader on
+    # BigModel had no row to pick, only Z.ai's with the address typed over it.
+    # Shaped like MiniMax (CN) for the same reason, down to borrowing the global
+    # vendor's driver and filing its metadata under that vendor: GLM is GLM
+    # whichever platform serves it, and the price book is written once.
+    #
+    # `zhipu` stays Z.ai's alias rather than moving here. It is what pre-rename
+    # model ids say, and repointing it would send a saved `zhipu/glm-*` to a
+    # different host on a key that was never issued for it.
+    ProviderSpec(
+        name="bigmodel",
+        native_api_bases=(("anthropic", "https://open.bigmodel.cn/api/anthropic"),),
+        keywords=("bigmodel",),
+        env_key="ZAI_API_KEY",
+        display_name="BigModel",
+        homepage="https://open.bigmodel.cn/",
+        via_driver="zai",
+        metadata_prefix="zai",
+        env_extras=(("ZHIPUAI_API_KEY", "{api_key}"),),
+        skip_prefixes=("openrouter/",),
+        default_api_base="https://open.bigmodel.cn/api/paas/v4",
+        passes_default_api_base=True,
+        default_model="bigmodel/glm-4.6",
     ),
     # Alibaba Cloud: Qwen models over DashScope, which is the service and the
     # name every id and config section is written with -- so the section stays
@@ -670,6 +1020,137 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="http://localhost:11434",
         strip_model_prefix=False,
         model_overrides=(),
+    ),
+    # === Direct vendors LiteLLM routes ====================================
+    # LiteLLM already routes all six from a key plus a prefixed id, so these
+    # specs carry only what it cannot answer: the keyword a bare id offers, and
+    # the /v1/models address `provider test` and the wizard preflight probe
+    # before any LiteLLM call has resolved an endpoint. None passes its default
+    # base per call -- LiteLLM's own driver knows where to send these.
+    ProviderSpec(
+        name="xai",
+        keywords=("xai", "grok"),
+        env_key="XAI_API_KEY",
+        display_name="xAI",
+        homepage="https://x.ai/api",
+        skip_prefixes=("xai/", "openrouter/"),
+        default_api_base="https://api.x.ai/v1",
+        default_model="xai/grok-4.6",
+    ),
+    ProviderSpec(
+        name="mistral",
+        keywords=("mistral", "magistral", "devstral", "pixtral", "codestral", "voxtral"),
+        env_key="MISTRAL_API_KEY",
+        display_name="Mistral",
+        homepage="https://mistral.ai/",
+        skip_prefixes=("mistral/", "openrouter/"),
+        default_api_base="https://api.mistral.ai/v1",
+        default_model="mistral/mistral-large-latest",
+    ),
+    ProviderSpec(
+        name="together_ai",
+        keywords=("together", "togetherai"),
+        env_key="TOGETHERAI_API_KEY",
+        display_name="Together AI",
+        homepage="https://www.together.ai/",
+        skip_prefixes=("together_ai/", "together-ai/", "openrouter/"),
+        default_api_base="https://api.together.xyz/v1",
+        default_model="together-ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    ),
+    # Mirrors the key to FIREWORKS_API_KEY: LiteLLM reads either name, and which
+    # one it checks differs between the chat and the rerank path.
+    ProviderSpec(
+        name="fireworks_ai",
+        keywords=("fireworks",),
+        env_key="FIREWORKS_AI_API_KEY",
+        display_name="Fireworks AI",
+        homepage="https://fireworks.ai/",
+        env_extras=(("FIREWORKS_API_KEY", "{api_key}"),),
+        skip_prefixes=("fireworks_ai/", "fireworks-ai/", "openrouter/"),
+        default_api_base="https://api.fireworks.ai/inference/v1",
+        default_model="fireworks-ai/accounts/fireworks/models/kimi-k2-instruct",
+    ),
+    # The only one of the six whose API is not under a /v1 path.
+    ProviderSpec(
+        name="perplexity",
+        keywords=("perplexity", "sonar"),
+        env_key="PERPLEXITYAI_API_KEY",
+        display_name="Perplexity",
+        homepage="https://www.perplexity.ai/",
+        skip_prefixes=("perplexity/", "openrouter/"),
+        default_api_base="https://api.perplexity.ai",
+        default_model="perplexity/sonar-pro",
+    ),
+    ProviderSpec(
+        name="cerebras",
+        keywords=("cerebras",),
+        env_key="CEREBRAS_API_KEY",
+        display_name="Cerebras",
+        homepage="https://www.cerebras.ai/inference",
+        skip_prefixes=("cerebras/", "openrouter/"),
+        default_api_base="https://api.cerebras.ai/v1",
+        default_model="cerebras/gpt-oss-120b",
+    ),
+    # Hugging Face Inference Providers: one key in front of many backends, and
+    # LiteLLM's driver builds a different route per backend out of the model id
+    # ("fireworks-ai/..." becomes /fireworks-ai/inference/v1). An explicit
+    # api_base replaces that whole route, so the address below is a probe target
+    # only -- which is also why this is not marked a gateway, as that would hand
+    # the default to LiteLLM on every call and collapse the per-backend routing.
+    ProviderSpec(
+        name="huggingface",
+        keywords=("huggingface",),
+        env_key="HUGGINGFACE_API_KEY",
+        display_name="Hugging Face",
+        homepage="https://huggingface.co/docs/inference-providers",
+        env_extras=(("HF_TOKEN", "{api_key}"),),
+        skip_prefixes=("huggingface/", "openrouter/"),
+        default_api_base="https://router.huggingface.co/v1",
+        default_model="huggingface/deepseek-ai/DeepSeek-V4-Pro",
+    ),
+    ProviderSpec(
+        name="xiaomi_mimo",
+        keywords=("mimo", "xiaomi"),
+        env_key="XIAOMI_MIMO_API_KEY",
+        display_name="Xiaomi MiMo",
+        homepage="https://mimo.mi.com/",
+        skip_prefixes=("xiaomi_mimo/", "xiaomi-mimo/", "openrouter/"),
+        default_api_base="https://api.xiaomimimo.com/v1",
+        default_model="xiaomi-mimo/mimo-v2.5",
+    ),
+    # === Self-hosted servers reached through OpenAI's driver ===============
+    # Two more local deployments alongside vLLM, LM Studio and Ollama above,
+    # differing in one way that matters: LiteLLM carries a driver for those
+    # three and none for these, so each borrows OpenAI's and is distinguished
+    # by its address. Both take a key optionally -- a server on someone else's
+    # machine usually sits behind one -- and neither counts as configured until
+    # an address is set, which is what keeps a borrowed driver from posting to
+    # api.openai.com on a key meant for a box on the LAN.
+    ProviderSpec(
+        name="gpustack",
+        keywords=("gpustack",),
+        env_key="OPENAI_API_KEY",
+        display_name="GPUStack",
+        homepage="https://gpustack.ai/",
+        via_driver="openai",
+        is_local=True,
+        accepts_optional_api_key=True,
+        # No default: a GPUStack cluster is wherever the operator put it, and
+        # the shipped-default question has one honest answer here -- ask.
+        default_api_base="",
+    ),
+    # OpenVINO Model Server serves its OpenAI-compatible API under /v3, not the
+    # /v1 every other entry here ends in.
+    ProviderSpec(
+        name="ovms",
+        keywords=("ovms", "openvino"),
+        env_key="OPENAI_API_KEY",
+        display_name="OpenVINO Model Server",
+        homepage="https://www.intel.com/content/www/us/en/developer/tools/openvino-toolkit/overview.html",
+        via_driver="openai",
+        is_local=True,
+        accepts_optional_api_key=True,
+        default_api_base="http://localhost:8000/v3",
     ),
     # === Auxiliary (not a primary LLM provider) ============================
     # Groq: mainly used for Whisper voice transcription, also usable for LLM.

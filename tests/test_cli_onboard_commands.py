@@ -3652,7 +3652,7 @@ def test_the_curated_groups_cover_the_flat_list_and_carry_both_fallbacks() -> No
     # the custom-endpoint path, which routes through the generic OpenAI driver
     # and so loses the behaviour litellm applies to "ollama_chat/".
     local = {entry["name"] for group in _CURATED_GROUPS if group["kind"] == "local" for entry in group["providers"]}
-    assert local == {"lm_studio", "ollama_chat", "hosted_vllm"}
+    assert local == {"lm_studio", "ollama_chat", "hosted_vllm", "gpustack", "ovms"}
 
 
 def test_the_vendor_step_offers_litellm_names_the_picker_does_not_already_list() -> None:
@@ -3669,7 +3669,7 @@ def test_the_vendor_step_offers_litellm_names_the_picker_does_not_already_list()
         "import sys, json\n"
         "from raven.cli.onboard_commands import _litellm_vendor_choices\n"
         "rest = _litellm_vendor_choices()\n"
-        "print(json.dumps({'litellm': 'litellm' in sys.modules, 'count': len(rest), 'has': 'mistral' in rest,"
+        "print(json.dumps({'litellm': 'litellm' in sys.modules, 'count': len(rest), 'has': 'deepinfra' in rest,"
         " 'excludes_listed': 'openai' not in rest}))\n"
     )
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
@@ -3784,8 +3784,8 @@ def test_a_vendor_with_no_spec_is_configured_by_the_wizard_not_rejected(monkeypa
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     (tmp_path / ".raven").mkdir()
 
-    assert onboard_commands._validate_provider_name("mistral") == "mistral"
-    assert find_by_name("mistral") is None, "mistral gained a spec; pick another spec-less vendor"
+    assert onboard_commands._validate_provider_name("deepinfra") == "deepinfra"
+    assert find_by_name("deepinfra") is None, "deepinfra gained a spec; pick another spec-less vendor"
 
 
 def test_a_typo_in_the_vendor_step_is_a_message_not_a_traceback(monkeypatch, tmp_path) -> None:
@@ -4173,12 +4173,12 @@ def test_a_spec_less_vendor_is_offered_the_catalogue_rows_it_has() -> None:
     """Returning nothing for these is what forced the id to be typed.
 
     Every offered id carries the prefix, which the catalogue itself does not
-    guarantee: Mistral's rows have it, Bedrock's do not. Offering an unprefixed
-    one would put the bare id straight back into config.
+    guarantee: DeepInfra's rows have it, Bedrock's do not. Offering an
+    unprefixed one would put the bare id straight back into config.
     """
     from raven.providers.common_models import litellm_models_for
 
-    for slug in ("mistral", "fireworks_ai", "bedrock"):
+    for slug in ("deepinfra", "nebius", "bedrock"):
         models = litellm_models_for(slug)
         assert models, f"{slug}: no candidates offered"
         assert all(m.startswith(f"{slug}/") for m in models), [m for m in models if not m.startswith(f"{slug}/")][:3]

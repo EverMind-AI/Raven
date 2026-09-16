@@ -28,7 +28,7 @@ const { getLogsDir, getActiveLogPath, statLogFiles, readJsonlFile } = require('.
 // nothing about the code that produced it, so a logic change without a bump
 // silently reuses indexes built by the old logic -- which is how the first
 // version of the dedupe below appeared to do nothing at all.
-const SCHEMA = 2;
+const SCHEMA = 3;
 
 // Spans the viewer never shows on their own, so a session whose spans are all in
 // this set has nothing to look at.
@@ -71,6 +71,26 @@ function emptyPair(id, key) {
   };
 }
 
+// Work that belongs to no session -- a cron heartbeat, a plugin load, a title
+// generated after a turn ended -- is still work, and it still costs tokens. A
+// payload keyed on a session id has nowhere to put it, so it gets a session of
+// its own, one per calendar day. Derived from the span alone, so this per-file
+// index and the whole-corpus reader in server.js land on the same id without
+// sharing any state; a day is the grain because per-trace would shatter a
+// year of timer ticks into a session each.
+const BACKGROUND_SESSION_PREFIX = 'background:';
+
+function backgroundSessionId(startTime) {
+  const day = typeof startTime === 'string' ? startTime.slice(0, 10) : '';
+  return `${BACKGROUND_SESSION_PREFIX}${day || 'undated'}`;
+}
+
+// Asked of a row rather than matched on the prefix by every caller: the prefix
+// is this module's to mint, so it is this module's to recognize.
+function isBackgroundSessionId(sessionId) {
+  return typeof sessionId === 'string' && sessionId.startsWith(BACKGROUND_SESSION_PREFIX);
+}
+
 function pairKey(id, key) {
   // Serialized rather than joined on a separator character: a separator is
   // only safe if no id or key can contain it, and neither is constrained here.
@@ -106,9 +126,8 @@ function indexRecords(records) {
 
   for (const record of records) {
     const attrs = record?.attributes || {};
-    const id = attrs['session.id'] || null;
     const key = attrs['session.key'] || null;
-    if (!id && !key) continue;
+    const id = attrs['session.id'] || (key ? null : backgroundSessionId(record.startTime));
 
     if (key) {
       if (!keyToId[key]) keyToId[key] = {};
@@ -356,6 +375,8 @@ module.exports = {
   indexFor,
   electIdentity,
   resolvePairSessionId,
+  backgroundSessionId,
+  isBackgroundSessionId,
   preferredValue,
   isUuidLike,
   mergedIndex

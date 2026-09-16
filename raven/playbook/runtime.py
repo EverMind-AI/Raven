@@ -402,6 +402,7 @@ class PlaybookRuntime:
         fills: dict[str, dict[str, Any]] | None = None,
         *,
         allow_disabled: bool = False,
+        confirmed: bool = False,
     ) -> ExecutionPlan | None:
         """Load one playbook and act on it; ``None`` if the name is unknown.
 
@@ -416,6 +417,11 @@ class PlaybookRuntime:
 
         ``allow_disabled`` is for the CLI, where the user named the playbook
         themselves.
+
+        ``confirmed`` is relayed to the executor, whose gate reads it as "this
+        caller already put the run to the user". Passed through rather than
+        decided here: which entries ask is a property of the entry, and the
+        runtime is shared by all of them.
         """
         self._refresh()
         spec = self._specs.get(name)
@@ -423,7 +429,7 @@ class PlaybookRuntime:
             return None
         cid = self._context.get("session_key") or ""
         key = (cid, name)
-        plan = await self._executor.execute(spec, params or {}, fills=fills or {})
+        plan = await self._executor.execute(spec, params or {}, fills=fills or {}, confirmed=confirmed)
         if plan.kind == "gaps":
             rounds = self._gap_rounds.get(key, 0) + 1
             self._gap_rounds[key] = rounds

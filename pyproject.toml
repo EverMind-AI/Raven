@@ -500,8 +500,8 @@ markers = [
     "e2e: spawns real subprocesses / drives the full stack (slow); deselected by default, run with '-m e2e' (e.g. tests/tui/autotest)",
     "real_llm: hits a real everos runtime (LLM + embedding); skipped unless EVEROS_LLM__API_KEY / EVEROS_EMBEDDING__MODEL are configured",
     "llm_judge: uses an LLM as a grader for extraction quality (extra cost / non-determinism); opt-in",
-    "slow: real subprocess, tool or render that cannot be faked and still runs in the default selection (e2e does not); exempt from the wall-clock ceiling",
-    "production_timing: proves a timing property or asserts a production delay constant; exempt from the suite's shortening of retry and grace ladders and from the wall-clock ceiling",
+    "slow: real subprocess, tool or render that cannot be faked and still runs in the default selection (e2e does not); exempt from the idle ceiling",
+    "production_timing: proves a timing property or asserts a production delay constant; exempt from the suite's shortening of retry and grace ladders and from the idle ceiling",
 ]
 
 [tool.coverage.run]

@@ -1424,6 +1424,19 @@ class ModelLabel(_Strict):
     context_window: int | None = None
 
 
+class ModelOptionPlatform(_Strict):
+    """One address a provider serves from, offered as a choice rather than typed.
+
+    ``signup_url`` is per platform because the accounts are: a key from the CNY
+    storefront does not work against the international one, so a single "get a
+    key" link beside the field would send half the readers to the wrong signup.
+    """
+
+    label: str
+    api_base: str
+    signup_url: str
+
+
 class ModelOptionProvider(_Strict):
     """One provider row in the ``/model`` picker."""
 
@@ -1456,6 +1469,9 @@ class ModelOptionProvider(_Strict):
     model_labels: dict[str, ModelLabel] | None = None
     total_models: int
     needs_api_base: bool
+    #: Addresses to pick between, empty for the providers that have only one.
+    #: A row that states these is drawn with the list in place of a host field.
+    platforms: list[ModelOptionPlatform] = Field(default_factory=list)
     warning: str
 
 
@@ -3876,6 +3892,98 @@ class PlaybooksOauthClearParams(_Strict):
     server: str
 
 
+class PlaybooksSetEnabledParams(_Strict):
+    name: str
+    enabled: bool = Field(
+        ...,
+        description="The state wanted. true takes the name off the deny list, false puts it on.",
+    )
+
+
+class PlaybooksSetEnabledResult(_Strict):
+    # Required, every field: the handler answers all of them on every success,
+    # so a default here would advertise a shape the server never sends and
+    # leave both generated clients typing them optional.
+    name: str
+    enabled: bool = Field(..., description="The state now in force.")
+    changed: bool = Field(
+        ...,
+        description=(
+            "False when it was already in that state, so a caller can tell 'you did that' from "
+            "'it was already so' without a second read."
+        ),
+    )
+
+
+class PlaybooksValidateParams(_Strict):
+    name: str
+
+
+class PlaybooksValidateResult(_Strict):
+    name: str
+    ok: bool = Field(..., description="True when errors is empty.")
+    errors: list[str] = Field(
+        ...,
+        description=("Every finding, in the order the validator reports them. Empty when the playbook is sound."),
+    )
+    path: str = Field(..., description="The file the findings refer to.")
+
+
+class PlaybooksDeleteParams(_Strict):
+    name: str
+
+
+class PlaybooksDeleteResult(_Strict):
+    name: str
+    deleted: bool
+    uncovered_builtin: bool = Field(
+        ...,
+        description=(
+            "True when a user playbook was shadowing a builtin of the same name, so the name is still "
+            "in the library and now resolves to the builtin."
+        ),
+    )
+
+
+class PlaybooksRunParams(_Strict):
+    name: str
+    session_key: str = Field(
+        ...,
+        description=(
+            "The conversation this run reports to, as its own `channel:chat_id`. Required because a "
+            "run's progress and completion announce are addressed to a conversation, and an RPC call "
+            "is an origin nothing else sets one for."
+        ),
+    )
+    params: dict[str, JsonValue] | None = None
+    fills: dict[str, JsonValue] | None = None
+    confirmed: bool | None = Field(
+        None,
+        description=(
+            "The caller's statement that it already put this run to the user, so the graph-level gate "
+            "does not ask a second time. Send it only when a person actually saw the run and agreed."
+        ),
+    )
+
+
+class PlaybooksRunResult(_Strict):
+    name: str
+    kind: Literal["dag", "guidance", "gaps", "questions"] = Field(
+        ...,
+        description=(
+            "`dag`: dispatched, `reply` is the receipt. `guidance`: prompt-mode composition "
+            "instructions. `gaps`: nothing was dispatched and `reply` names what is missing. "
+            "`questions`: it cannot proceed and `reply` says why."
+        ),
+    )
+    reply: str = Field(
+        ...,
+        description=(
+            "The executor's own answer, verbatim. For a dispatched graph this is the receipt the run id is read out of."
+        ),
+    )
+
+
 class OkResult(_Strict):
     ok: bool
 
@@ -4034,6 +4142,10 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "playbooks.credentials.clear": (PlaybooksCredentialsClearParams, OkResult),
     "playbooks.oauth.authorize": (PlaybooksOauthAuthorizeParams, PlaybooksOauthAuthorizeResult),
     "playbooks.oauth.clear": (PlaybooksOauthClearParams, OkResult),
+    "playbooks.set_enabled": (PlaybooksSetEnabledParams, PlaybooksSetEnabledResult),
+    "playbooks.validate": (PlaybooksValidateParams, PlaybooksValidateResult),
+    "playbooks.delete": (PlaybooksDeleteParams, PlaybooksDeleteResult),
+    "playbooks.run": (PlaybooksRunParams, PlaybooksRunResult),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
     "plughub.detail": (PlughubDetailParams, PlughubDetailResult),

@@ -28,7 +28,9 @@ import pytest
 from raven.config.schema import Config
 from raven.providers.registry import (
     PROVIDERS,
+    SHAPE_LOCAL,
     ProviderSpec,
+    auth_shape,
     canonical_provider_name,
     find_by_model,
     normalize_provider_name,
@@ -245,6 +247,39 @@ def test_each_gateway_puts_its_own_prefix_on_a_bare_model_id(spec: ProviderSpec)
     provider = LiteLLMProvider(api_key="K", provider_name=spec.name, default_model="probe-model")
     resolved = provider._resolve_model("probe-model")
     assert resolved.startswith(f"{spec.model_prefix}/"), f"{spec.name}: {resolved}"
+
+
+@pytest.mark.parametrize("spec", PROVIDERS, ids=lambda s: s.name)
+def test_a_borrowed_driver_is_never_servable_without_an_address(spec: ProviderSpec) -> None:
+    """Twenty-two providers speak OpenAI's API through OpenAI's driver.
+
+    For every one of them the wire prefix is `openai/`, so the model id alone
+    says nothing about where the request goes -- the address does, and LiteLLM's
+    default for that driver is api.openai.com. A spec that borrows a driver and
+    cannot supply an address would therefore post a Baichuan or GPUStack key to
+    OpenAI's endpoint and read the answer as the configured vendor's.
+
+    Two ways to be safe and a provider needs one of them: hand LiteLLM the
+    shipped default per call, or be reached by address at all -- where the
+    credential gate refuses to call the provider configured until one is set.
+    A shipped default that the reader would not serve counts as neither, which
+    is exactly what `usable_default_api_base` answers.
+    """
+    if spec.client:
+        pytest.skip("a client of our own owns the endpoint, so LiteLLM never resolves one")
+    if not spec.model_prefix:
+        pytest.skip("bypasses LiteLLM entirely and takes no route prefix")
+    if spec.model_prefix == spec.name:
+        pytest.skip("speaks for itself; LiteLLM's own driver knows where to send it")
+
+    # Reached by address, where the credential gate refuses to call the provider
+    # configured until one is set -- so there is no state in which a request
+    # goes out with the borrowed driver's default.
+    by_address = auth_shape(spec.name) == SHAPE_LOCAL
+    assert spec.usable_default_api_base or by_address, (
+        f"{spec.name}: reached through {spec.model_prefix}'s driver with no address of its own, "
+        f"so a request would go to that vendor's endpoint"
+    )
 
 
 @pytest.mark.parametrize("spec", PROVIDERS, ids=lambda s: s.name)
@@ -575,6 +610,39 @@ def test_a_prefix_stripping_gateway_drops_one_segment_not_all_but_the_last(confi
     assert provider._resolve_model(configured) == sent
 
 
+def test_the_two_zhipu_platforms_are_separate_rows_reaching_separate_hosts() -> None:
+    """One vendor, two platforms, and an account on one is no use on the other.
+
+    Z.ai serves the world from api.z.ai; BigModel serves China from
+    open.bigmodel.cn. They were one row here for a while on the reasoning that
+    `zai` already answered to `zhipu` -- true of model ids, and beside the
+    point: the alias routes a name, it does not move an endpoint, so a reader
+    holding a BigModel key had only Z.ai's row and had to type the address over
+    it. Same split MiniMax has, asserted the same way.
+
+    `zhipu` stays Z.ai's alias rather than moving to the platform whose brand it
+    matches. It is what pre-rename ids say, and repointing it would send a saved
+    `zhipu/glm-*` to a host its key was never issued for.
+    """
+    from raven.providers.registry import find_by_name
+
+    zai, bigmodel = find_by_name("zai"), find_by_name("bigmodel")
+    assert zai is not None and bigmodel is not None
+
+    assert "z.ai" in (zai.shown_api_base or "")
+    assert "open.bigmodel.cn" in bigmodel.usable_default_api_base
+    assert bigmodel.usable_default_api_base != (zai.shown_api_base or "")
+
+    # The alias did not move, and it still answers to the global row.
+    assert "zhipu" in zai.route_names
+    assert "zhipu" not in bigmodel.route_names
+    assert find_by_model("zhipu/glm-4.6") is zai
+
+    # Each row is reachable as itself, and neither claims the other's prefix.
+    assert find_by_model("bigmodel/glm-4.6") is bigmodel
+    assert find_by_model("zai/glm-4.6") is zai
+
+
 def test_a_metadata_prefix_is_declared_only_where_it_differs_from_routing() -> None:
     """One answer to "what is this model", asked of the registry.
 
@@ -591,10 +659,12 @@ def test_a_metadata_prefix_is_declared_only_where_it_differs_from_routing() -> N
         "minimax_cn_api": "minimax",
         "minimax_global": "minimax",
         "minimax_cn": "minimax",
+        "bigmodel": "zai",
     }
 
     assert metadata_model_id("openai-codex/gpt-5.3-codex") == "chatgpt/gpt-5.3-codex"
     assert metadata_model_id("minimax-cn/MiniMax-M3") == "minimax/MiniMax-M3"
+    assert metadata_model_id("bigmodel/glm-4.6") == "zai/glm-4.6"
     assert metadata_model_id("deepseek/deepseek-chat") is None, "routing id is already the metadata id"
     assert metadata_model_id("gpt-4o") is None, "a bare id claims no provider"
 

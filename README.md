@@ -212,25 +212,6 @@ source deployment, install Python 3.12, `uv`, Node.js, and npm. A source
 checkout also needs the repository dependencies installed before starting the
 engine.
 
-### 🚀 Start the server from source
-
-From the repository root:
-
-```bash
-make install-deps
-make build-ui
-uv run raven web
-```
-
-`raven web` opens the local page and leaves the engine running after the
-terminal exits. It defaults to `http://127.0.0.1:18792`. Use
-`uv run raven web --foreground` when debugging, or `uv run raven web --stop` to
-stop the resident engine. The first run can start without a configured model;
-add one from **Settings > Models** or run `uv run raven onboard`.
-
-To run only the engine without the browser launcher, use
-`uv run raven gateway`.
-
 ### 🐳 Start with Docker Compose
 
 The repository Compose setup builds the page and Python environment as part of
@@ -290,6 +271,25 @@ Run the locally built image through Compose by exporting
 `RAVEN_IMAGE=raven:local` (or prefixing the command with that assignment) and
 running `docker compose up` from `docker/`. The Makefile shortcut is
 `RAVEN_IMAGE=raven:local make docker-up`. Stop the stack with `make docker-down`.
+
+### 🚀 Start the server from source
+
+From the repository root:
+
+```bash
+make install-deps
+make build-ui
+uv run raven web
+```
+
+`raven web` opens the local page and leaves the engine running after the
+terminal exits. It defaults to `http://127.0.0.1:18792`. Use
+`uv run raven web --foreground` when debugging, or `uv run raven web --stop` to
+stop the resident engine. The first run can start without a configured model;
+add one from **Settings > Model Providers** or run `uv run raven onboard`.
+
+To run only the engine without the browser launcher, use
+`uv run raven gateway`.
 
 ## 📚 Documentation
 

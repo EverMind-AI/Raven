@@ -121,6 +121,10 @@ jobs:
         with:
           node-version: 22
 
+      # No bytecode precompilation, of site-packages here or of the checkout
+      # before the run: measured over three runs of this workflow, neither paid
+      # for itself. The note stays so the next reader does not spend an
+      # afternoon finding that out again.
       - name: Install dependencies
         run: uv sync --locked --all-extras --dev --python ${{ matrix.python }}
 
@@ -140,7 +144,11 @@ jobs:
         # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
         # set, and the highlighter then splits option names with escape codes, so
         # `"--flag" in result.stdout` assertions fail only on CI.
-        run: make coverage-shard COVERAGE_SHARD=${{ matrix.shard }}
+        # The idle ceiling fails the shard here and only here: a test that waits
+        # out a production sleep waits the same seconds on every machine, so the
+        # verdict is portable; the flag stays off addopts because the Windows
+        # job runs pytest with --noconftest, where the option does not exist.
+        run: make coverage-shard COVERAGE_SHARD=${{ matrix.shard }} PYTEST_ARGS=--idle-ceiling-strict
 
       - name: Name the data file after the shard
         run: mv .coverage .coverage.shard-${{ strategy.job-index }}

@@ -1805,7 +1805,13 @@ function syncSelection() {
     return;
   }
 
-  const listed = sessions.find((item) => item.sessionId === state.selectedSessionId) || sessions[0];
+  // Newest-first puts a background day at the top whenever the last thing the
+  // store saw belonged to no session, which is most of the time. Opening on a
+  // real conversation is the default the panel had before those rows existed.
+  const listed =
+    sessions.find((item) => item.sessionId === state.selectedSessionId) ||
+    sessions.find((item) => !item.isBackground) ||
+    sessions[0];
   state.selectedSessionId = listed.sessionId;
   // May still be the list row: traces resolve to [] until the detail lands, and
   // this runs again when it does.

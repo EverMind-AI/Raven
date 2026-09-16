@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 168 methods, 96 component schemas.
+// 172 methods, 96 component schemas.
 
 /* eslint-disable */
 /**
@@ -747,6 +747,11 @@ export interface ModelOptionProvider {
   };
   total_models: number;
   needs_api_base: boolean;
+  platforms?: {
+    label: string;
+    api_base: string;
+    signup_url: string;
+  }[];
   warning: string;
   /**
    * Keyed by the model id as it appears in `models`.
@@ -3008,12 +3013,18 @@ export interface PlaybooksListResult {
   playbooks: PlaybookRow[];
 }
 export interface PlaybooksGetParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
   name: string;
 }
 export interface PlaybooksGetResult {
   playbook: PlaybookDetail;
 }
 export interface PlaybooksCredentialsGetParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
   name: string;
 }
 export interface PlaybooksCredentialsGetResult {
@@ -3021,6 +3032,9 @@ export interface PlaybooksCredentialsGetResult {
   servers: PlaybookCredentialServer[];
 }
 export interface PlaybooksCredentialsSetParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
   name: string;
   param: string;
   value: string;
@@ -3029,6 +3043,9 @@ export interface PlaybooksCredentialsSetResult {
   ok: boolean;
 }
 export interface PlaybooksCredentialsClearParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
   name: string;
   param: string;
 }
@@ -3036,6 +3053,9 @@ export interface PlaybooksCredentialsClearResult {
   ok: boolean;
 }
 export interface PlaybooksOauthAuthorizeParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
   name: string;
   server: string;
 }
@@ -3046,11 +3066,107 @@ export interface PlaybooksOauthAuthorizeResult {
   error?: string | null;
 }
 export interface PlaybooksOauthClearParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
   name: string;
   server: string;
 }
 export interface PlaybooksOauthClearResult {
   ok: boolean;
+}
+export interface PlaybooksSetEnabledParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
+  name: string;
+  /**
+   * The state wanted. true takes the name off the deny list, false puts it on.
+   */
+  enabled: boolean;
+}
+export interface PlaybooksSetEnabledResult {
+  name: string;
+  /**
+   * The state now in force.
+   */
+  enabled: boolean;
+  /**
+   * False when it was already in that state, so a caller can tell 'you did that' from 'it was already so'.
+   */
+  changed: boolean;
+}
+export interface PlaybooksValidateParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
+  name: string;
+}
+export interface PlaybooksValidateResult {
+  name: string;
+  /**
+   * True when errors is empty.
+   */
+  ok: boolean;
+  /**
+   * Every finding, in the order the validator reports them. Empty when the playbook is sound.
+   */
+  errors: string[];
+  /**
+   * The file the findings refer to.
+   */
+  path: string;
+}
+export interface PlaybooksDeleteParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
+  name: string;
+}
+export interface PlaybooksDeleteResult {
+  name: string;
+  deleted: boolean;
+  /**
+   * True when a user playbook was shadowing a builtin of the same name, so the name is still in the library and now resolves to the builtin.
+   */
+  uncovered_builtin: boolean;
+}
+export interface PlaybooksRunParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
+  name: string;
+  /**
+   * The conversation this run reports to, as its own `channel:chat_id`. Required because a run's progress and completion announce are addressed to a conversation, and an RPC call is an origin nothing else sets one for.
+   */
+  session_key: string;
+  /**
+   * Values for the playbook's declared `params`. A parameter this machine holds as a stored secret is filled from there and must not be sent.
+   */
+  params?: {
+    [k: string]: JsonValue;
+  };
+  /**
+   * Node fields the author left blank, keyed by the node id written in the file. Only `subagent`, `nodeSummary` and `promptTemplate` may be filled; aimed at a field the author already wrote, the whole call is refused.
+   */
+  fills?: {
+    [k: string]: JsonValue;
+  };
+  /**
+   * The caller's statement that it already put this run to the user, so the graph-level gate does not ask a second time. Send it only when a person actually saw the run and agreed.
+   */
+  confirmed?: boolean;
+}
+export interface PlaybooksRunResult {
+  name: string;
+  /**
+   * `dag`: dispatched, `reply` is the receipt. `guidance`: prompt-mode composition instructions. `gaps`: nothing was dispatched and `reply` names what is missing. `questions`: it cannot proceed and `reply` says why.
+   */
+  kind: 'dag' | 'guidance' | 'gaps' | 'questions';
+  /**
+   * The executor's own answer, verbatim. For a dispatched graph this is the receipt the run id is read out of.
+   */
+  reply: string;
 }
 export interface ApprovalRespondParams {
   approval_id: string;
@@ -3908,6 +4024,10 @@ export interface RpcMethods {
   'playbooks.credentials.clear': { params: PlaybooksCredentialsClearParams; result: PlaybooksCredentialsClearResult };
   'playbooks.oauth.authorize': { params: PlaybooksOauthAuthorizeParams; result: PlaybooksOauthAuthorizeResult };
   'playbooks.oauth.clear': { params: PlaybooksOauthClearParams; result: PlaybooksOauthClearResult };
+  'playbooks.set_enabled': { params: PlaybooksSetEnabledParams; result: PlaybooksSetEnabledResult };
+  'playbooks.validate': { params: PlaybooksValidateParams; result: PlaybooksValidateResult };
+  'playbooks.delete': { params: PlaybooksDeleteParams; result: PlaybooksDeleteResult };
+  'playbooks.run': { params: PlaybooksRunParams; result: PlaybooksRunResult };
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult };
   'clarify.respond': { params: ClarifyRespondParams; result: ClarifyRespondResult };
   'confirm.respond': { params: ConfirmRespondParams; result: ConfirmRespondResult };
@@ -4040,10 +4160,14 @@ export const RPC_METHODS = [
   "playbooks.credentials.clear",
   "playbooks.credentials.get",
   "playbooks.credentials.set",
+  "playbooks.delete",
   "playbooks.get",
   "playbooks.list",
   "playbooks.oauth.authorize",
   "playbooks.oauth.clear",
+  "playbooks.run",
+  "playbooks.set_enabled",
+  "playbooks.validate",
   "plug.auth",
   "plug.install",
   "plug.remove",

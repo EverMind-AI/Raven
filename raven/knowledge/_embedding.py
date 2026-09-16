@@ -75,13 +75,62 @@ def everos_config_path() -> Path:
     return everos_root() / "everos.toml"
 
 
+def _pinned_embedding_config() -> EmbeddingConfig | None:
+    """The embedding pair configured in raven's own config, resolved.
+
+    ``knowledge.embeddingModel`` names the model and
+    ``knowledge.embeddingProvider`` names who serves it, and the provider's own
+    address and key are what the call goes out on -- the same pair every other
+    subsystem pin states, for the same reason: a model id does not name a
+    credential.
+
+    ``None`` whenever the pair cannot be completed, which hands the caller back
+    to the EverOS endpoint rather than failing. An install that never sets this
+    behaves exactly as it did before the block existed.
+    """
+    try:
+        from raven.config.raven import load_raven_config
+        from raven.config.update_providers import resolve_provider_credentials
+    except Exception:
+        return None
+    try:
+        pin = load_raven_config().knowledge
+    except Exception as exc:
+        logger.debug("knowledge: cannot read the embedding pin ({}); using the everos endpoint", exc)
+        return None
+    model, provider = pin.embedding_model, pin.embedding_provider
+    if not model or not provider:
+        return None
+    resolved = resolve_provider_credentials(provider)
+    if resolved is None:
+        logger.warning(
+            "knowledge: embedding provider {!r} has no usable credentials; using the everos endpoint instead",
+            provider,
+        )
+        return None
+    base_url, api_key = resolved
+    # The provider half already said whose credential this is, so the stored
+    # `provider/model` spelling has served its purpose: what goes on the wire is
+    # the vendor's own id, which is the tail.
+    wire_model = model.split("/", 1)[1] if "/" in model else model
+    return EmbeddingConfig(model=wire_model, base_url=base_url, api_key=api_key, dimensions=None)
+
+
 def load_embedding_config() -> EmbeddingConfig | None:
     """The configured embedding endpoint, or ``None`` when there is not one.
 
     ``None`` rather than a raise: a deployment with no embedding configured is
     a deployment with no knowledge bases, which is an ordinary state. The
     caller turns it into "configure this first", not into a failed start.
+
+    Raven's own pin wins when it is complete. It is the choice somebody made in
+    settings, against a provider they can see; the EverOS file is the endpoint
+    inherited from the memory backend, and staying on it after a deliberate
+    pick would make the picker a control that changes nothing.
     """
+    pinned = _pinned_embedding_config()
+    if pinned is not None:
+        return pinned
     path = everos_config_path()
     if not path.is_file():
         return None
