@@ -1,7 +1,10 @@
 /* ---- overrides ----------------------------------------------------- */
 
+import { loadProviders, openModelsForMissingProvider, stagedTier } from '../../features/model/source'
 import { loadExt } from '../../features/plugins/source'
 import { plainTitle } from '../../features/rail/title'
+import { loadPermMode, stagedPerm } from '../../features/settings/source'
+import { wsSetRoot } from '../../features/workspace/source'
 import { islands } from '../../islands'
 import { hasNamingFlag, hasStillOnDisk } from '../../rpc/capabilities'
 import { draw as drawBanner } from '../../shell/banner'
@@ -10,6 +13,8 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell
 import { load as loadTier } from '../../shell/tier'
 import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
+import { bumpGeneration, generation } from '../../state/session/generation'
+import { setStaging } from '../../state/session/staging'
 import { sources } from '../../state/sources'
 import { $, T } from '../demo/010-kernel.js'
 import { claimDraft, confirmAsk, dropDraft, loadDraft, parkDraft, queueClear, queuePush, queueShift, sess, sheetsForget, stop_, turn } from '../demo/040-state.js'
@@ -25,8 +30,6 @@ import { rowPreview, touchSession } from './030-sessions.js'
 import { renderHistory } from './040-history.js'
 import { beginNaming, live, namingDeclined, resetTurnState, turnDur } from './050-turn.js'
 import { park, parkTurn, parkedTurns, restoreTurn, subBySession, subSession, transitionTurn } from './060-parked.js'
-import { loadPermMode, loadProviders, openModelsForMissingProvider, stagedPerm, stagedTier } from './120-settings.js'
-import { wsSetRoot } from './170-workspace.js'
 
 async function subscribe(sessionKey) {
   // One subscription per session per socket: re-opening a session reuses its
@@ -126,14 +129,11 @@ async function applyStagedPerm(sessionId) {
   void loadPermMode(sessionId);
 }
 
-/* Which switch the visible page belongs to. `session.resume` is a round trip,
-   and a reader who clicks a second session -- or the new-task button -- while
-   it is in flight leaves the answer with nowhere to land: the stage it was
-   cleared for now holds somebody else's conversation. Every switch takes the
-   next ticket, and an answer whose ticket has been spent is dropped rather
-   than painted, which is lossless because a re-open reads the same transcript
-   back off disk. */
-let viewGen = 0;
+/* Which switch the visible page belongs to lives in
+   state/session/generation.ts: the readers that drop a superseded answer -- the
+   provider refresh, the permission-mode refresh, the default-model write-back
+   -- are in the feature sources, and only the two switches below spend a
+   ticket. */
 
 function resetView() {
   stop_(); turn.dispatch({ type: 'idle' }); queueClear();
@@ -158,8 +158,7 @@ function startDraft() {
      typed there belongs: the conversation it was typed over, not the one
      being opened. */
   islands.rail.endRename();
-  viewGen += 1;
-  const gen = viewGen;
+  const gen = bumpGeneration();
   parkTurn();
   // The old session's stream must stop routing to the visible stage the
   // moment we leave it -- its events belong to the parked buffer now.
@@ -184,8 +183,7 @@ function startDraft() {
 
 async function openLiveSession(s) {
   islands.rail.endRename();
-  viewGen += 1;
-  const gen = viewGen;
+  const gen = bumpGeneration();
   parkTurn();
   // Same as startDraft: while session.resume is in flight the old session
   // may still be streaming, and a stale live.subId would paint its events
@@ -248,7 +246,7 @@ async function openLiveSession(s) {
        looking at -- the pointer, the rail selection, the context ring, the
        transcript, the panes -- so a spent ticket has to stop here rather than
        repaint over the switch that overtook it. */
-    if (gen !== viewGen) return;
+    if (gen !== generation()) return;
     if (r.session_id && r.session_id !== s.id) s.id = r.session_id;
     sessionSet(s.id);
     /* resume hands back the canonical id, so the row rendered from the listed
@@ -287,7 +285,7 @@ async function openLiveSession(s) {
     /* Checked again on this side of the subscribe: the round trip is one more
        place a reader can leave from, and a replayed file window opens on
        whichever desk is on screen. */
-    if (gen !== viewGen) return;
+    if (gen !== generation()) return;
     /* Last, and only on this path. The reader may be arriving here after a
        reload -- or after an upgrade replaced the page under them -- in which
        case the graph they were watching and the windows they had open are
@@ -302,7 +300,7 @@ async function openLiveSession(s) {
   } catch (e) {
     /* Same for the failure: a session the reader has already left must not
        empty their stage, and must not raise a toast about a page nobody is on. */
-    if (gen !== viewGen) return;
+    if (gen !== generation()) return;
     pitch();
     toast(T('gui.op.open_failed', { detail: e.message || e }));
   }
@@ -380,7 +378,7 @@ async function promote(preview, atPointer) {
   /* Taken before the first await, so a caller reporting on THIS conversation
      reads the view as it stood when the promotion began rather than whatever
      the reader has opened since. */
-  const gen = viewGen;
+  const gen = generation();
   const r = await gateway().call('session.create', {});
   wsSetRoot(r.info && r.info.cwd);
   const s = { id: r.session_id, title: T('gui.new_task'), last: preview || T('gui.sess.not_started'),
@@ -555,6 +553,11 @@ async function leaveArchivedSession(sessionId) {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
+  /* The three staged picks are read and written by the settings and model
+     sources; the object stays here, where both paths that abandon a draft
+     reset it. */
+  setStaging(staged);
+
   onReconnect(async () => {
     await gateway().call('system.hello', { client_version: '0.1.0', surface: SURFACE }).catch(() => {});
     killStatus();
@@ -726,4 +729,4 @@ export function install() {
   };
 }
 
-export { subscribe, claimStream, draft, staged, applyStagedModel, applyStagedTier, applyStagedPerm, viewGen, resetView, startDraft, openLiveSession, mediaOf, promoting, openConversation, promote, sendOnSession, dispatchSend, liveSend, softStop, drainQueue, forgetSubscription, leaveDeletedSession, leaveArchivedSession }
+export { subscribe, claimStream, draft, staged, applyStagedModel, applyStagedTier, applyStagedPerm, resetView, startDraft, openLiveSession, mediaOf, promoting, openConversation, promote, sendOnSession, dispatchSend, liveSend, softStop, drainQueue, forgetSubscription, leaveDeletedSession, leaveArchivedSession }

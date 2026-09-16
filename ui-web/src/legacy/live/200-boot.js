@@ -1,7 +1,9 @@
 /* ---- boot ---------------------------------------------------------- */
 
+import { setupState } from '../../features/model/source'
 import { onboardSource } from '../../features/onboard/source'
 import { loadExt } from '../../features/plugins/source'
+import { loadSettings, pushPermMode } from '../../features/settings/source'
 import { islands } from '../../islands'
 import { hasUpdateFlag } from '../../rpc/capabilities'
 import { draw as drawFoot } from '../../shell/foot'
@@ -19,7 +21,7 @@ import { shellReady } from './010-boot-guard.js'
 import { SURFACE, authFail, bootFail } from './020-rpc.js'
 import { loadSessions } from './030-sessions.js'
 import { openLiveSession, startDraft } from './080-overrides.js'
-import { langRestore, loadLang, loadSettings, pushPermMode, setupState } from './120-settings.js'
+import { langRestore, loadLang } from './120-settings.js'
 import { resumeUpgrade, showUpNote, watchForUpdates } from './210-update-notice.js'
 
 /* Everything this part used to do while the concatenated page script ran, in

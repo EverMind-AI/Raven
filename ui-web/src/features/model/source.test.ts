@@ -2,38 +2,64 @@
 /* The per-conversation model refresh, driven with deferred responses.
  * model.options does its catalogue work off-thread, so a refresh for a
  * conversation the reader has left can land after the one they moved to; the
- * viewGen guard is what keeps the late answer from repainting the page. A
+ * generation ticket is what keeps the late answer from repainting the page. A
  * synchronous stub cannot exercise that, so this runs the real functions.
+ *
+ * Migrated from scripts/model-refresh-live.test.mjs when the model and
+ * settings sources left the legacy layer: the assertions are unchanged, and
+ * what moved is how the harness reaches them -- imports of the two source
+ * modules and the override part, instead of one part and its collaborators.
  */
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from './legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
 
-/* The settings part and the override part in one fresh graph: `viewGen` and
- * `staged` live in the second one and the first reads both.
+/* One entry of the traffic log: a method name with its params, or a page verb
+   with whatever it was handed. */
+type Call = [string, unknown?]
+/* A call the case has not settled yet. */
+interface Deferred {
+  method: string
+  params: Record<string, unknown>
+  res(answer: unknown): void
+  rej(error: unknown): void
+}
+interface Options {
+  session?: string | null
+  answers?: Record<string, unknown> | null
+}
+
+/* The two sources and the override part in one fresh graph: the staged picks
+ * live in the part and both sources read them, and the generation ticket is a
+ * module of its own that all three share.
  *
  * `answers` resolves a call at once; without it every call is held in
  * `pending` for the test to settle in whatever order the race needs.
  */
-async function live({ session = null, answers = null } = {}) {
-  const calls = []
-  const pending = []
+async function live({ session = null, answers = null }: Options = {}) {
+  const calls: Call[] = []
+  const pending: Deferred[] = []
   /* A view switch re-reads the default model and the permission mode, and
      those two reads are the switch's own -- no case here settles them. Held
      apart so the indices below stay the indices of the calls under test. */
   let switching = false
-  const settings = await loadPart(() => import('../src/legacy/live/120-settings.js'), {
+  await loadPart(() => import('../model/source'), {
     fakes: {
       'src/shell/session': { current: () => session, setCurrent: () => {} },
       'src/shell/banner': { draw: () => {} },
-      'src/shell/toast': { show: (t) => calls.push(['toast', t]) },
+      'src/shell/toast': { show: (text: string) => calls.push(['toast', text]) },
       'src/shell/tier': { load: () => {} },
-      'src/shell/perm': { setFromConfig: (m) => calls.push(['setPermMode', m]) },
+      'src/shell/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
+      'src/shell/bridge': {
+        t: (key: string, _vars?: unknown, fallback?: string) => (fallback ?? key),
+        ds: () => ({}),
+        shell: () => ({}),
+      },
       'demo/010-kernel.js': { $: looseQuery() },
       'demo/040-state.js': {
         modelCurrent: () => '',
-        modelSet: (m) => calls.push(['modelSet', m]),
+        modelSet: (m: string) => calls.push(['modelSet', m]),
         loadDraft: () => {},
         parkDraft: () => {},
         queueClear: () => {},
@@ -49,9 +75,10 @@ async function live({ session = null, answers = null } = {}) {
     islands: {
       settings: { openModels: () => calls.push(['openModels']) },
       rail: { endRename: () => {} },
+      model: { current: () => '', setCurrent: (m: string) => calls.push(['modelSet', m]) },
     },
   })
-  await fakeGateway((method, params) => {
+  await fakeGateway((method: string, params: Record<string, unknown>) => {
     if (switching) return new Promise(() => {})
     calls.push([method, params])
     /* `?? {}` so a call the case did not name -- the refresh a write kicks
@@ -60,24 +87,50 @@ async function live({ session = null, answers = null } = {}) {
     if (answers) return Promise.resolve(answers[method] ?? {})
     return new Promise((res, rej) => pending.push({ method, params, res, rej }))
   })
-  const overrides = await import('../src/legacy/live/080-overrides.js')
+  const model = await import('../model/source')
+  const settingsModule = await import('../settings/source')
+  const { generation } = await import('../../state/session/generation')
+  const overrides = await import('../../legacy/live/080-overrides.js') as unknown as {
+    staged: { model: { model: string; provider: string } | null; tier: string | null; perm: string | null }
+    startDraft(): void
+    applyStagedModel(sessionId: string, gen: number): Promise<void>
+  }
+  /* The part publishes the staged object the sources read, which install()
+     does in the page. Called here rather than running the whole install. */
+  ;(await import('../../state/session/staging')).setStaging(overrides.staged)
+  /* Everything the two sources read off the page. `modelSet` is the island's
+     verb, faked above; the chip painter is the page's. */
+  model.setChipPainter(() => {})
+  const settings = {
+    setupState: model.setupState,
+    openModelsForMissingProvider: model.openModelsForMissingProvider,
+    loadProviders: model.loadProviders,
+    persistModel: model.persistModel,
+    loadPermMode: settingsModule.loadPermMode,
+    loadSettings: settingsModule.loadSettings,
+    settingsSnapshot: settingsModule.settingsSnapshot,
+    HIDDEN_PROVIDERS: model.HIDDEN_PROVIDERS,
+    get providersLive() { return model.providers() },
+    get defaultModelLive() { return model.defaultModel() },
+    get defaultProviderLive() { return model.defaultProvider() },
+  }
   const tick = () => new Promise((r) => setTimeout(r, 0))
   return {
     settings,
     overrides,
     calls,
     /* A switch to the new-task screen, which is one of the two paths that
-       spends a generation ticket -- the part's own counter, not a stand-in. */
+       spends a generation ticket -- the real counter, not a stand-in. */
     bump: () => {
       switching = true
       try { overrides.startDraft() } finally { switching = false }
-      return overrides.viewGen
+      return generation()
     },
-    gen: () => overrides.viewGen,
+    gen: () => generation(),
     inFlight: () => pending.map((p) => p.method),
-    param: (i) => pending[i].params,
-    settle: (i, answer) => { pending[i].res(answer); return tick() },
-    fail: (i, error) => { pending[i].rej(error); return tick() },
+    param: (i: number) => pending[i]!.params,
+    settle: (i: number, answer: unknown) => { pending[i]!.res(answer); return tick() },
+    fail: (i: number, error: unknown) => { pending[i]!.rej(error); return tick() },
     modelsSet: () => calls.filter((c) => c[0] === 'modelSet').map((c) => c[1]),
   }
 }
@@ -197,6 +250,15 @@ describe('the live model persist', () => {
     expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['', ''])
   })
 
+  /* The fourth path, added with the migration: a session pick WITH a session
+     writes under it and nothing else -- no default pair moves, no refresh. */
+  it('a session pick writes under that session and moves no default', async () => {
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true } } })
+    await h.settings.persistModel('m2', 'minimax', 'session')
+    expect(h.calls).toEqual([['config.set', { key: 'model', value: 'm2', provider: 'minimax', session_id: 'sess-1' }]])
+    expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['', ''])
+  })
+
   it('a session pick with no session stages and says so', async () => {
     const h = await live()
     const out = await h.settings.persistModel('m2', 'minimax', 'session')
@@ -223,9 +285,9 @@ describe('the live settings snapshot', () => {
 })
 
 describe('providers the page does not offer', () => {
-  const row = (slug) => ({ slug, name: slug, authenticated: false, models: [] })
+  const row = (slug: string) => ({ slug, name: slug, authenticated: false, models: [] })
 
-  async function listed(providers) {
+  async function listed(providers: unknown[]) {
     const h = await live({ session: 'sess-1', answers: { 'model.options': { model: '', provider: '', providers } } })
     await h.settings.loadProviders()
     return h.settings.providersLive
