@@ -69,6 +69,12 @@ dependencies = [
     "click>=8.1",
     "pyarrow>=17",
     "a2a-sdk>=1.1.2",
+    # The A2A object model IS protobuf, so the inbound face converts at its own
+    # boundary (raven/a2a/runtime.py, routes_aiohttp.py) rather than letting the
+    # SDK's types leak outward. That makes google.protobuf a direct import of
+    # ours, not an incidental one -- declared for the same reason as numpy and
+    # idna above, and range-matched to what a2a-sdk itself allows.
+    "protobuf>=5.29.5,<7",
 ]
 
 [project.optional-dependencies]
