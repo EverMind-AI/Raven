@@ -26,16 +26,14 @@ picture and carry them on type, grid, rule and colour.
 
 ## Settle four things first
 
-Language, audience, length, and whether the deck runs light or dark. They are the user's to
-decide, every page is measured against them, and a deck built on a guess is measured
-against a brief nobody agreed to.
+Language, audience, length, ground. Take each from the first of these that settles it: the
+request; what memory recalled about this user; the defaults. Defaults: the language the
+request is written in; a general audience; about 20 pages; a light ground.
 
-**Light is the default ground.** Recommend light when you ask; take light when nobody
-answers. Dark only when the request names it or the brand's own material is dark.
-
-Ask with `ask_user`, in one call, before any other work. Where there is no user to ask --
-the request arrived from another agent -- read all four out of the request and say in the
-reply which you took and where from. Do not default any of them silently.
+Ask with `ask_user` only for a decision none of the three settles and the deck cannot start
+without: at most one call, before any other work, recommending the default. Where there is
+no user to ask (the request came from another agent), take the defaults. Say in the reply
+which of the four were defaults.
 
 ## Rules
 

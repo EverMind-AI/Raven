@@ -117,6 +117,23 @@ def configure_image_generation(config: dict, host: dict) -> None:
     render.inherit_media_image(config, host)
 
 
+def inherit_everos_address(config: dict, host: dict) -> str | None:
+    """Point this product's memory at the host's EverOS server, when the host names one.
+
+    The product config carries the stock port; a host that runs its own EverOS on
+    another port (every second instance on one machine does) would otherwise send
+    this lane's turns to whatever answers on the stock one.
+    """
+    host_slice = ((host.get("plugins") or {}).get("config") or {}).get("everos-memory") or {}
+    base_url = host_slice.get("base_url") if isinstance(host_slice, dict) else None
+    if not isinstance(base_url, str) or not base_url.strip():
+        return None
+    own = config.setdefault("plugins", {}).setdefault("config", {}).setdefault("everos-memory", {})
+    if isinstance(own, dict):
+        own["base_url"] = base_url.strip()
+    return base_url.strip()
+
+
 def render_config(source: Path) -> Path:
     """Write a copy of ``source`` with the secrets merged in, under the state root.
 
@@ -130,6 +147,7 @@ def render_config(source: Path) -> Path:
 
     config.setdefault("tools", {})["web"] = deepcopy((host.get("tools") or {}).get("web") or {})
     configure_image_generation(config, host)
+    inherit_everos_address(config, host)
 
     defaults = config.setdefault("agents", {}).setdefault("defaults", {})
     for key in ("model", "provider", "reasoningEffort"):
