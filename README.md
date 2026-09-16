@@ -297,6 +297,7 @@ To run only the engine without the browser launcher, use
 - [Developer workflow](docs/dev.md)
 - [Tracing Standard API](docs/TRACING_STANDARD_API.md)
 - [Sandbox usage](docs/sandbox/usage.md)
+- [Browser and desktop control](docs/browser-and-desktop.md)
 - [Memory plugin architecture](docs/memory-plugin-architecture.md)
 - [Self-evolution loop mapping](docs/specs/self-evolution-loop-raven-mapping.md)
 - [Proactivity implementation](docs/Proactivity-Implementation.md)

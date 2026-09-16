@@ -71,6 +71,14 @@ KEY_GATED = {"web_search", "image_search"}
 #: every one by a config row (the w96 ledger discipline). The three that left
 #: this set are in ``UNGATED``.
 TRUNK_HELD_OUT = {
+    "browser_click",
+    "browser_navigate",
+    "browser_press",
+    "browser_screenshot",
+    "browser_scroll",
+    "browser_snapshot",
+    "browser_tabs",
+    "browser_type",
     "create_playbook",
     "deliver_files",
     "hub",

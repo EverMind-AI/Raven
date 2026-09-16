@@ -50,6 +50,12 @@ _STRICTNESS = {Tier.DENY: 2, Tier.ASK: 1, Tier.ALLOW: 0}
 # it -- the request expires while the agent waits, and the reply that follows
 # hands over a path instead, which reaches nobody. Everything absent from this
 # set defaults to asking, unknown (MCP) tools included.
+#
+# The browser's reading and moving verbs are here on the web_fetch reasoning:
+# opening a page is a GET the agent could make anyway, and the navigation
+# policy in raven.browser.policy refuses what a GET must not reach. Its acting
+# verbs (click, type, press) are absent on purpose -- they submit forms -- and
+# ask once per site rather than per call; see ``builtin.session_keys``.
 DEFAULT_ALLOW_TOOLS: frozenset[str] = frozenset(
     {
         "read_file",
@@ -72,6 +78,11 @@ DEFAULT_ALLOW_TOOLS: frozenset[str] = frozenset(
         "read_mcp_resource",
         "list_mcp_prompts",
         "get_mcp_prompt",
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_screenshot",
+        "browser_scroll",
+        "browser_tabs",
     }
 )
 

@@ -53,7 +53,15 @@
       "load_playbook",
       "plugin",
       "run_subagent_dag",
-      "cron"
+      "cron",
+      "browser_click",
+      "browser_navigate",
+      "browser_press",
+      "browser_screenshot",
+      "browser_scroll",
+      "browser_snapshot",
+      "browser_tabs",
+      "browser_type"
     ]
   },
   "memory": {

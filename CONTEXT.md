@@ -1589,8 +1589,15 @@ _Avoid_: calling `zh_lexicon` a catalog -- one is what raven says, the other is
 what raven recognises.
 
 **Browser** (`browser/`):
-Browser automation (`driver.py`) and its outbound policy (`policy.py`).
-Consumed by surfaces only; a surface-side feature library like `importer`.
+Browser automation (`driver.py`) and its outbound policy (`policy.py`). One Chromium
+per process, reached from two sides: the panel's `browser.*` RPC (the reader's hands)
+and the model's `browser_*` tools (`agent/tools/browser.py`). A tool call names an
+**owner** -- the sub-agent run in flight, else the conversation -- and the driver binds
+each owner to a tab, so concurrent agents work in separate tabs and an owner's act
+brings its tab to the front of the panel. Calls with no owner are the reader's and are
+stamped as a **touch**, which the tools report to the model once.
+_Avoid_: calling the owner a session -- a sub-agent run inside one conversation is a
+second owner, and that distinction is what keeps it off its parent's tab.
 
 ### Execution & Evaluation
 
