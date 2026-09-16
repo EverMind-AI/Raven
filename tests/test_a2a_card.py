@@ -8,6 +8,7 @@ from raven import __version__ as raven_version
 from raven.a2a.card import (
     CARD_PATH,
     JSONRPC_BINDING,
+    SCHEME_NO_SCOPES,
     SUBAGENT_EXTENSION_URI,
     build_agent_card,
     build_extended_agent_card,
@@ -184,3 +185,25 @@ def test_the_seed_is_dropped_under_its_legacy_spelling_too():
 
     assert [s.id for s in card.skills] == ["general"]
     assert list(card.capabilities.extensions) == []
+
+
+def test_the_card_declares_the_bearer_scheme_it_actually_enforces():
+    """`security_schemes` says what `http_auth` means; `security_requirements`
+    says it is required.
+
+    Every RPC call is refused without the bearer token, so a card that defines
+    the scheme but selects none tells a generic peer that no authentication is
+    needed. It then calls unauthenticated and is refused, with nothing in the
+    card that would have told it otherwise.
+    """
+    card = build_agent_card(A2aConfig(), base_url="/a2a")
+
+    assert "http_auth" in card.security_schemes
+    assert [dict(req.schemes) for req in card.security_requirements] == [{"http_auth": SCHEME_NO_SCOPES}]
+
+
+def test_the_extended_card_keeps_the_requirement_too():
+    """It rides the same bearer check, so it must carry the same declaration."""
+    card = build_extended_agent_card(A2aConfig(), base_url="/a2a", agents=[_Agent("X", "y")])
+
+    assert [dict(req.schemes) for req in card.security_requirements] == [{"http_auth": SCHEME_NO_SCOPES}]
