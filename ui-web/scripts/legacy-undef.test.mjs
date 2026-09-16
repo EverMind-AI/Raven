@@ -135,6 +135,9 @@ function freeIdentifiers(rel) {
         || (ts.isMethodDeclaration(p) && p.name === n)
         || (ts.isBindingElement(p) && p.propertyName === n)
         || (ts.isQualifiedName(p) && p.right === n)
+        /* `import.meta`: the `meta` half is part of the syntax, not a name
+           anything could have declared. */
+        || (ts.isMetaProperty(p) && p.name === n)
         || (ts.isGetAccessorDeclaration(p) && p.name === n)
         || (ts.isSetAccessorDeclaration(p) && p.name === n)
         || (ts.isLabeledStatement(p) && p.label === n)

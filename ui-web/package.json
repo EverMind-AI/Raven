@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "vite",
     "gen": "node scripts/gen-rpc-client.mjs",
     "gen:check": "node scripts/gen-rpc-client.mjs --check",
     "type-check": "tsc --noEmit -p tsconfig.json",
