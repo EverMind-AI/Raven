@@ -250,6 +250,52 @@ describe('workspace island', () => {
     expect(note?.textContent || '').toContain('gui.ws.html_no_scripts')
   })
 
+  /* One grant, both halves: the frame's attribute and the route's header have
+     to agree, so the test asserts the pair rather than either alone. */
+  it('runs an HTML preview only once the reader asks, and then on both halves', async () => {
+    install(emptyWs({
+      file: { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+
+    const before = document.querySelector('.fview iframe') as HTMLIFrameElement
+    expect(before.getAttribute('sandbox')).toBe('')
+    expect(before.getAttribute('src') || '').not.toContain('run=1')
+
+    await act(async () => {
+      (screen.getByText('gui.ws.html_run') as HTMLElement).click()
+    })
+
+    const after = document.querySelector('.fview iframe') as HTMLIFrameElement
+    expect(after.getAttribute('sandbox')).toBe('allow-scripts')
+    expect(after.getAttribute('src') || '').toContain('run=1')
+    expect(document.querySelector('.fview .vnote')).toBeNull()
+  })
+
+  /* Opening another file starts read-only: the grant is held as the path it was
+     given for, so there is no flag left set over a page nobody looked at. */
+  it('does not carry a run grant onto the next file', async () => {
+    install(emptyWs({
+      file: { path: '/repo/one.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    await act(async () => {
+      (screen.getByText('gui.ws.html_run') as HTMLElement).click()
+    })
+    expect((document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('sandbox')).toBe('allow-scripts')
+
+    await act(async () => {
+      store.restore(emptyWs({
+        file: { path: '/repo/two.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
+      }))
+      store.sync()
+    })
+
+    const next = document.querySelector('.fview iframe') as HTMLIFrameElement
+    expect(next.getAttribute('sandbox')).toBe('')
+    expect(document.querySelector('.fview .vnote')).not.toBeNull()
+  })
+
   /* The PDF frame runs its viewer's own scripts, so there is nothing withheld
      to explain and a note there would be noise. */
   it('says nothing of the sort beside a PDF', async () => {

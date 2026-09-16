@@ -212,7 +212,13 @@ def resolve_readable(raw: str, *, workspace: Path | None = None) -> Path:
     return resolved
 
 
-def sandbox_for(path: Path) -> str:
+#: The kinds a reader may ask to run. A page and a drawing are the two an agent
+#: writes that can need their own code to finish; everything else served here is
+#: read as text or as a picture, where running nothing costs nothing.
+_RUNNABLE_SUFFIXES = frozenset({".html", ".htm", ".svg"})
+
+
+def sandbox_for(path: Path, *, run: bool = False) -> str:
     """The CSP sandbox value for a viewable file.
 
     Every response is sandboxed, which is what gives it an opaque origin and so
@@ -225,8 +231,22 @@ def sandbox_for(path: Path) -> str:
     the page frames a PDF without one. HTML and SVG stay script-free: a report
     the agent wrote is readable without running code, and not running it is
     the safer default.
+
+    ``run`` is the reader asking for the other thing, once, for one file. What
+    it grants is exactly what a PDF already has -- ``allow-scripts`` without
+    ``allow-same-origin`` -- so the origin stays opaque and the page still
+    reaches no cookie of this one. What it does newly permit is the page making
+    requests of its own, which is the part worth a deliberate act rather than a
+    default: material an agent wrote can carry instructions it was given, and
+    running it is how those instructions reach the network.
+
+    Deliberately not remembered anywhere. The grant belongs to one view of one
+    file, so a second file, or the same file opened again, starts read-only --
+    a remembered "always run" would answer for pages the reader has not seen.
     """
     if path.suffix.lower() == ".pdf":
+        return "sandbox allow-scripts"
+    if run and path.suffix.lower() in _RUNNABLE_SUFFIXES:
         return "sandbox allow-scripts"
     return "sandbox"
 

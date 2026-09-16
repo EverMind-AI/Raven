@@ -5547,6 +5547,10 @@
       "en": "Raven is confined to the workspace, so this file cannot be opened here.",
       "zh": "Raven 被限制在工作目录内，这个文件没法在这里打开。"
     },
+    "gui.ws.html_run": {
+      "en": "Run it here",
+      "zh": "\u5728\u8fd9\u91cc\u8fd0\u884c"
+    },
     "gui.ws.html_no_scripts": {
       "en": "Scripts do not run in this preview. A page that needs them may look blank, or may look finished while its layout is wrong and nothing responds. Open the file outside Raven to see it as written.",
       "zh": "\u9884\u89c8\u4e0d\u8fd0\u884c\u811a\u672c\u3002\u9700\u8981\u811a\u672c\u7684\u9875\u9762\u53ef\u80fd\u4e00\u7247\u7a7a\u767d\uff0c\u4e5f\u53ef\u80fd\u770b\u7740\u50cf\u753b\u597d\u4e86\u3001\u5b9e\u9645\u4e0a\u6392\u7248\u662f\u6b6a\u7684\u4e14\u70b9\u4ec0\u4e48\u90fd\u6ca1\u53cd\u5e94\u3002\u8981\u770b\u5b83\u672c\u6765\u7684\u6837\u5b50\uff0c\u8bf7\u5728 Raven \u4e4b\u5916\u6253\u5f00\u8fd9\u4e2a\u6587\u4ef6\u3002"

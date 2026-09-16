@@ -2836,6 +2836,10 @@ textarea:focus, textarea:focus-visible,
 /* Not .verr: nothing failed here. A withheld capability is worth saying plainly
    and worth not dressing as an error, or the reader starts debugging the file. */
 .fview .vnote {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
   padding: 10px 14px;
   font-size: 12px;
   line-height: 1.6;
@@ -2843,6 +2847,7 @@ textarea:focus, textarea:focus-visible,
   background: var(--raised);
   border-bottom: 1px solid var(--line);
 }
+.fview .vnote-run { flex: none; }
 
 /* ── switch ────────────────────────────────────────────────────────── */
 .swi {

@@ -5,7 +5,7 @@ import { show as menuAt } from '../../shell/menu'
 import { show as toast } from '../../shell/toast'
 import {
   RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL,
-  hostPlatform, mdHtml, openInApp, renderURL, setAppFor,
+  hostPlatform, mdHtml, openInApp, renderURL, runURL, setAppFor,
 } from './store'
 import * as deliveries from './deliveries'
 import * as store from './store'
@@ -310,11 +310,17 @@ function BinNote({ f }: { f: WsFile }): JSX.Element {
    the diff list or the deliverables shelf -- nothing navigates from inside it,
    which is why there is nothing left here to navigate with. */
 export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile | null }): JSX.Element {
+  /* Held here because both the bar and the body act on it, and held as the path
+     it was granted for rather than a flag: opening another file revokes it with
+     no effect to remember to write, which is the shape that cannot leak a grant
+     onto a page the reader never saw. */
+  const [ranFor, setRanFor] = useState<string | null>(null)
   if (!store.source().canBrowse) return <div className="wsnote">{t('gui.ws.file_unreadable')}</div>
   const f = file
+  const running = !!f && ranFor === f.path
   return (
     <div className="fwrap">
-      <Fbar f={f} />
+      <Fbar f={f} running={running} />
       <div className="fpane">
         {!f ? (
           <div className="fempty">
@@ -323,7 +329,7 @@ export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile |
           </div>
         ) : (
           <div className="fbody">
-            <FileBody key={f.seq ?? f.path} f={f} />
+            <FileBody key={f.seq ?? f.path} f={f} running={running} onRun={() => setRanFor(f.path)} />
           </div>
         )}
       </div>
@@ -331,7 +337,7 @@ export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile |
   )
 }
 
-function Fbar({ f }: { f: WsFile | null }): JSX.Element {
+function Fbar({ f, running }: { f: WsFile | null; running: boolean }): JSX.Element {
   const platform = hostPlatform()
   /* Subscribed for the same reason BinNote is: the delivery row a save link
      prefers can arrive after the pane mounts. */
@@ -392,7 +398,13 @@ function Fbar({ f }: { f: WsFile | null }): JSX.Element {
           className="ghost-ic tipdn"
           data-tip={t('gui.ws.file_newtab')}
           aria-label={t('gui.ws.file_newtab')}
-          onClick={() => window.open(f.kind === 'pptx' ? renderURL(f.path) : fileURL(f.path), '_blank', 'noopener')}
+          /* A tab granted the same run the pane was: the reader asked once, for
+             this file, and a tab that still refused would send them to save the
+             file and open it by hand -- which is the longer way round to the
+             same execution, with none of the isolation this one keeps. */
+          onClick={() => window.open(
+            f.kind === 'pptx' ? renderURL(f.path) : running ? runURL(f.path) : fileURL(f.path),
+            '_blank', 'noopener')}
         >
           <Ico d={ICO.ext} />
         </button>
@@ -441,7 +453,7 @@ function diffLineCls(line: string): string {
   return ''
 }
 
-function FileBody({ f }: { f: WsFile }): JSX.Element {
+function FileBody({ f, running, onRun }: { f: WsFile; running: boolean; onRun: () => void }): JSX.Element {
   const [broken, setBroken] = useState(false)
   const asSource = f.raw || !RENDERED[f.kind]
   const asImage = f.kind === 'img' || (f.kind === 'svg' && !asSource)
@@ -482,10 +494,20 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
          rectangle of its own background colour, which reads as a broken file
          rather than a withheld capability -- and the reader goes looking for
          the bug in what the agent wrote. */
-      : <>
-        <div className="vnote">{t('gui.ws.html_no_scripts')}</div>
-        <iframe sandbox="" referrerPolicy="no-referrer" src={fileURL(f.path)} />
-      </>
+      /* Both halves have to grant it: the frame's sandbox attribute and the
+         response's own header. The attribute is here and the header comes from
+         asking the route for the running view, so neither alone is enough --
+         which is what keeps a page from running because one of the two was
+         edited without the other. */
+      : running
+        ? <iframe sandbox="allow-scripts" referrerPolicy="no-referrer" src={runURL(f.path)} />
+        : <>
+          <div className="vnote">
+            {t('gui.ws.html_no_scripts')}
+            <button className="mini ghost vnote-run" onClick={onRun}>{t('gui.ws.html_run')}</button>
+          </div>
+          <iframe sandbox="" referrerPolicy="no-referrer" src={fileURL(f.path)} />
+        </>
   } else if (asDeck) {
     body = <DeckBody f={f} />
   } else if (f.kind === 'bin') {
