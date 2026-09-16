@@ -14,6 +14,7 @@
    it can happen at all. Refusing one notice is a decision about that notice. */
 
 import { open as openModelPicker } from '../../features/model/store'
+import { extTools, loadExt } from '../../features/plugins/source'
 import { islands } from '../../islands'
 import { hasUpdateFlag } from '../../rpc/capabilities'
 import { draw as drawBanner } from '../../shell/banner'
@@ -37,7 +38,6 @@ import { drawMoreFly } from '../demo/150-chrome.js'
 import { drawCaps } from '../demo/152-skills.js'
 import { drawPb } from '../demo/154-playbooks.js'
 import { draft, staged, viewGen } from './080-overrides.js'
-import { loadExt, toolsLive } from './090-extensions.js'
 import { askUpgrade, showUpNote } from './210-update-notice.js'
 
 /* The config settings.get returned. Keys arrive camelCased
@@ -179,7 +179,7 @@ const settingsSnapshot = () => ({
   // conversations start on, so pairing the default model with the visible
   // session's provider badged the wrong row whenever the two scopes differ.
   providers: providersLive, curProvider: defaultProviderLive, model: defaultModelLive,
-  toolGroups: TOOL_GROUPS, tools: toolsLive,
+  toolGroups: TOOL_GROUPS, tools: extTools(),
 });
 
 const settingsErr = (e) => (e.data && e.data.detail) || e.message || e;

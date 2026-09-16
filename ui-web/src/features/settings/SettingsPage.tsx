@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { shell, t } from '../../shell/bridge'
+import { ds, shell, t } from '../../shell/bridge'
 import { show as menuAt } from '../../shell/menu'
 import { KeyInput } from '../../shell/key-input'
 import * as lookStore from '../../shell/look'
@@ -14,14 +14,26 @@ import type { ModelTagFacts } from '../../shell/model-tags'
 import { ModelIcon, ProviderIcon, ProviderLink, ProviderStatus } from '../../shell/provider-mark'
 import { hint as reachHint, text as reachText } from '../../shell/reach'
 import { show as toast } from '../../shell/toast'
-import { open as openConn } from '../connections/store'
-import { count as sessionCount, deleteAll as deleteAllSessions } from '../rail/store'
+import { open as openConn } from '../connections/nav'
 import * as store from './store'
 import { ImageModelPicker } from './ImageModelPicker'
 
 import type { SettingsState } from './store'
+import type { RailSource } from '../rail/types'
 import type { EverosSection, ProviderRow, ToolGroup, ToolRow } from './types'
 import type { JSX, ReactNode, RefObject } from 'react'
+
+/* The session list, reached through the seam. `deleteAll` is wrapped because
+   a source that has none is the shape a demo shell can be in, and an
+   optimistic click must not throw out of the confirm. */
+const sessionCount = (): number => ds<RailSource>('sessions').snapshot().rows.length
+const deleteAllSessions = (): void => {
+  try {
+    ds<RailSource>('sessions').deleteAll?.()
+  } catch {
+    /* no source, nothing to delete */
+  }
+}
 
 /* The dialog's contents, transcribed from the legacy drawSettings pages:
    same class names, same DOM shape, ui-web/src/styles/page.css untouched. The
@@ -2487,7 +2499,9 @@ function DataPage({ s }: { s: SettingsState }): JSX.Element {
           className="mini ghost danger"
           onClick={() =>
             /* A session operation offered from the settings page, so it is
-               the session source's, not this page's. */
+               the session source's, not this page's -- read straight off the
+               seam rather than through the rail island's store, which is the
+               rail's own and not this page's to reach into. */
             sh.confirmAsk(t('gui.set.delete_all'), t('gui.set.delete_all_body', { n: sessionCount() }), t('gui.set.delete_all_yes'), () =>
               deleteAllSessions(),
             )

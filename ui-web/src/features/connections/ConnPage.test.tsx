@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ConnApp } from './ConnPage'
+import { open } from './nav'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
@@ -156,7 +157,7 @@ function pressOver(under: Element): void {
 async function mount() {
   const view = render(<ConnApp />, { container: document.getElementById('connBody')! })
   await act(async () => {
-    store.open()
+    open()
   })
   return view
 }

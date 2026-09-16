@@ -1,29 +1,12 @@
-/* -- data & memory: the rpc source ------------------------------------
-   The page renderer is the memory island (ui-web/src/features/memory/); this
-   file only knows how to speak memory.* over /rpc. Installing onto the
-   seam replaces the fixture source before the first paint. */
+/* -- data & memory: the seam ------------------------------------------
+   The source is ui-web/src/features/memory/source.ts; installing it here
+   replaces the fixture source before the first paint. */
 
-import { show as toast } from '../../shell/toast'
-import { gateway } from '../../state/gateway'
+import { memorySource } from '../../features/memory/source'
 import { sources } from '../../state/sources'
-import { T } from '../demo/010-kernel.js'
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  sources.memory = {
-    stats: () => gateway().call('memory.stats', {}),
-    list: (req) => gateway().call('memory.list', {
-      kind: req.kind, page: req.page, page_size: req.page_size, q: req.q || null,
-    }),
-    /* Toasted here, and still rejected as handled: the island's success
-     branch closes the drawer and reloads, which must not run on a failed
-     delete. */
-    remove: (it) => gateway().call('memory.delete', { kind: it.kind, id: it.id })
-      .then(() => toast(T('gui.mem.deleted')))
-      .catch((e) => {
-        toast(T('gui.plug.op_failed', { err: (e.data && e.data.detail) || e.message || e }));
-        throw { handled: true };
-      }),
-  };
+  sources.memory = memorySource;
 }

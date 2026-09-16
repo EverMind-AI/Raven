@@ -23,7 +23,7 @@
  * directly would turn a dependency the shell keeps one-way into an import cycle.
  */
 
-import { open as openConn } from '../features/connections/store'
+import { open as openConn } from '../features/connections/nav'
 import { open as openCron } from '../features/cron/store'
 import { open as openXa } from '../features/xa/store'
 

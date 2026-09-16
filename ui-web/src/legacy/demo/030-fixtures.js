@@ -9,6 +9,7 @@
    your disk -- so the badge is what answers "where does my data go".   */
 /* ── 工具: built in, fixed list, on/off only ───────────────────────── */
 
+import { CHANNELS } from '../../features/connections/catalogue'
 import { sources } from '../../state/sources'
 import { T } from './010-kernel.js'
 
@@ -122,8 +123,6 @@ const DELIVER = { app:'gui.deliver.app', feishu:'gui.deliver.feishu', email:'gui
 const cronFailing = () => CRONS.filter((j) => j.on && j.runs[0] && !j.runs[0].ok).length;
 
 /* ══ module 2b data: channels — where you talk to it ═════════════════ */
-/* Brand names stay as they are; the two generic ones (email, and the vendors
-   whose English name differs) come from the catalogue. */
 /* The field lists are not decoration: what an entrance costs to get into is
    derived from them (no required field at all means the only way in is signing
    in by phone), and the page groups and orders the catalogue by that. A fixture
@@ -132,9 +131,14 @@ const cronFailing = () => CRONS.filter((j) => j.on && j.runs[0] && !j.runs[0].ok
 const creds = (...pairs) => pairs.map(([key, label, secret]) => ({ key, label, required:true, secret:!!secret, set:false }));
 const filled = (fs) => fs.map((f) => ({ ...f, set:true }));
 let CH_FIELDS;
-let CHANNELS;
-// One accessor so a renderer never has to know which of the two it is.
-const chanName = (c) => (c.key ? T(c.key) : c.name);
+/* Which two entrances the demo has in service, and as whom. The rest of a
+   channel row -- its id, its name and whether it signs in by scanning -- is
+   the catalogue's (features/connections/catalogue.ts), which production reads
+   too; only this overlay is fixture. */
+const CH_DEMO = {
+  feishu: { on:true, who:'EverMind', running:true },
+  email:  { on:true, who:'weixiang@evermind.ai', running:true },
+};
 
 // Skills and plugins share a lifecycle, so most code treats them as one list;
 // tools never do (they cannot be installed or removed, only switched off).
@@ -291,24 +295,13 @@ export function install() {
     weixin:   [],
     whatsapp: []
   };
-  CHANNELS = [
-    { id:'feishu',   key:'gui.chan.feishu',   on:true,  who:'EverMind', running:true },
-    { id:'wecom',    key:'gui.chan.wecom',    on:false },
-    { id:'weixin',   key:'gui.chan.weixin',   on:false, qrLogin:true },
-    { id:'slack',    name:'Slack',    on:false },
-    { id:'dingtalk', key:'gui.chan.dingtalk', on:false },
-    { id:'qq',       name:'QQ',       on:false },
-    { id:'telegram', name:'Telegram', on:false },
-    { id:'discord',  name:'Discord',  on:false },
-    { id:'whatsapp', name:'WhatsApp', on:false, qrLogin:true },
-    { id:'email',    key:'gui.chan.email',    on:true,  who:'weixiang@evermind.ai', running:true },
-    { id:'matrix',   name:'Matrix',   on:false },
-    { id:'mochat',   key:'gui.chan.mochat',   on:false }
-  ].map((c) => {
+  CHANNELS.forEach((c) => {
+    Object.assign(c, CH_DEMO[c.id] || {});
     const fs = CH_FIELDS[c.id] || [];
     /* An entrance in service has its credentials in place; one that is not is
      missing all of them, which is what its row counts down. */
-    return { ...c, fields:c.on ? filled(fs) : fs, missing:c.on ? [] : fs.map((f) => f.key) };
+    c.fields = c.on ? filled(fs) : fs;
+    c.missing = c.on ? [] : fs.map((f) => f.key);
   });
   RUNS = {
     gtm: {
@@ -470,4 +463,4 @@ go test ./internal/... -run TestLogin -count=3   →  3 runs, 0 failures
   };
 }
 
-export { TOOL_GROUPS, TOOLS, SKILLS, PLUGINS, FREQ, CRONS, DELIVER, cronFailing, creds, filled, CH_FIELDS, CHANNELS, chanName, INSTALLABLE, cap, capOn, tool, needsAttn, attnCount, STATE_TXT, stateText, NOKEY, GTM_DOC, GTM_DELIVERY_FILES, FIX_DELIVERY_FILES, GTM_FILE_EVENTS, ANSWER_GTM, DAG_RUN, DAG_GTM, RUNS, eventsFor, SESSION_FIXTURES }
+export { TOOL_GROUPS, TOOLS, SKILLS, PLUGINS, FREQ, CRONS, DELIVER, cronFailing, creds, filled, CH_FIELDS, INSTALLABLE, cap, capOn, tool, needsAttn, attnCount, STATE_TXT, stateText, NOKEY, GTM_DOC, GTM_DELIVERY_FILES, FIX_DELIVERY_FILES, GTM_FILE_EVENTS, ANSWER_GTM, DAG_RUN, DAG_GTM, RUNS, eventsFor, SESSION_FIXTURES }
