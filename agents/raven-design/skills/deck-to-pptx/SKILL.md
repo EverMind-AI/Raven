@@ -15,7 +15,9 @@ outline. Name its absolute path in the reply.
 | Facts the material does not carry | `web_search`, then `web_fetch` the page | there is no other search |
 | A real logo, product shot, published chart | `image_search` | direct image URL, pixel size and source page per hit; see `references/assets.md` |
 | A picture that does not exist yet | `image_generate` | reference pictures go in `images`, up to six |
-| An icon | `raven_ppt.services.assets.icons` | 1304 outline icons, see `references/assets.md` |
+| Page furniture: grid, heading, text, points, card, plane, rule, footer, table, picture, formula | the engine's helper modules, written beside the script | `ppt_layout`; see `references/assets.md` |
+| An icon | `add_icon`, `find_icons` from `ppt_icons` | 1304 outline icons, see `references/assets.md` |
+| A connector, a timeline, a chart | `connect`, `timeline` from `ppt_shapes`; `ppt_charts` | see `references/assets.md` |
 | A figure or table from a paper | PyMuPDF on `raven-python` | from the PDF you were given, else one you downloaded; crop the region or pull the embedded image; see `references/assets.md` |
 | A formula | `add_formula` from `raven_ppt.services.assets.formulas`, on `raven-python` | one line of TeX in, a picture in the deck's ink at true size out; see `references/assets.md` |
 | Symbols inside a sentence | `math_runs` from the same module | `_A`, `^2`, `θ*` become real sub- and superscript runs; see `references/assets.md` |
@@ -23,6 +25,20 @@ outline. Name its absolute path in the reply.
 
 With no image key configured, `image_generate` says so. Say which pages would have had a
 picture and carry them on type, grid, rule and colour.
+
+## Helpers are packaged
+
+- Before the build script, write the engine's helper modules beside it, once
+  (`references/assets.md` has the command). Import from `ppt_layout`, `ppt_theme`, `ppt_icons`,
+  `ppt_shapes` and `ppt_charts`.
+- Do not write a text-box, rectangle, rule, icon, header, footer or source-note helper of your
+  own. Draw directly with python-pptx only a gradient, a free-form polygon or a full-bleed
+  photograph.
+- The theme is a copy of a packaged one with the deck's own colours and faces changed.
+- Coordinates are inches in a `Box`; a region divides itself (`grid`, `split_left`, `stack`).
+  Measure with `fits`, `text_size`, `table_size` before drawing.
+- On this route there is no ANTI-SLOP-CHECK.md, no contract and no Task State. Do not
+  initialize or update one.
 
 ## Settle four things first
 
@@ -80,7 +96,8 @@ which of the four were defaults.
 10. Every prompt names the region the type needs -- which side, what share -- and ends with
    `no text, no letters, no numbers`. All words on a page are set by the typography.
 11. After generating, rebuild the page and look at the render. Only the composed page counts.
-12. Read the deck's own render before delivering. Every page.
+12. Read the deck's own render before delivering. Every page, at 90 dpi or more; fix what it
+    showed and render again.
 
 ## Technical decks
 
@@ -117,6 +134,8 @@ Body under **14.0pt** is reported and under **10.8pt** is refused; footers may g
 If it does not fit at these sizes, split the page or cut it -- never shrink the type.
 
 ## Mechanics that bite here
+
+For what is drawn with python-pptx directly; the helper modules handle these themselves.
 
 - **A connector lands on a box at both ends.** A line into empty space is a node you did
   not draw, and nothing checks for it.
