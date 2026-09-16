@@ -196,7 +196,7 @@ def make_hook(ctx: "PluginContext"):
         return MisconfiguredEngineHook(shared.slice_error)
     if shared.cfg is None or not shared.cfg.enabled:
         return None
-    if shared.selector is None and shared.manager is None:
+    if shared.selector is None and shared.manager is None and not shared.cfg.workdir_per_session:
         # Nothing this hook would do on any phase; declining keeps the chain
         # exactly as long as the configuration asked for.
         return None

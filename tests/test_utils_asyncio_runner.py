@@ -50,6 +50,7 @@ def _run_script(body: str, timeout: float) -> subprocess.CompletedProcess[str]:
     )
 
 
+@pytest.mark.production_timing
 def test_stdlib_run_hangs_on_a_task_that_swallows_its_cancellation() -> None:
     """The defect being fixed, pinned so the fix cannot be quietly reverted.
 

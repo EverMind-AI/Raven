@@ -61,6 +61,28 @@ def config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
+async def _probe_openai_without_network(cfg, *, source):
+    """An ``_probe_openai`` stand-in for tests about row shape, not live probing."""
+    from raven.agent.subagent.probe import ProbeResult
+
+    return ProbeResult(cfg.name, source, "openai", "unknown", "not probed in this test", "", 0)
+
+
+@pytest.fixture(autouse=True)
+def _skip_live_probes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ``_rows(probe=True)`` off both the login shell and the network.
+
+    ``subagents_list`` probes by default, and the fixture config here holds an
+    openai-kind agent, so every call reached a real ``/models`` round trip
+    against the address in that config and a real login shell spawned to read
+    its PATH. Neither carries a signal these assertions read, and a unit test
+    that answers differently when a vendor is down is not one. A test about the
+    PATH capture itself sets ``_login_path`` again, which lands after this.
+    """
+    monkeypatch.setattr("raven.agent.subagent.probe._login_path", lambda: "")
+    monkeypatch.setattr("raven.agent.subagent.probe._probe_openai", _probe_openai_without_network)
+
+
 async def test_list_returns_configured_entries_and_unconfigured_presets(config_path: Path) -> None:
     result = await subagents_list({})
     by_name = {row["name"]: row for row in result["rows"]}

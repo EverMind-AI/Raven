@@ -202,20 +202,6 @@ Raven 可以直接从源码仓库运行，也可以作为单个 Docker Compose �
 
 使用 Docker 部署时，请安装 Docker Engine 和 Docker Compose v2。使用源码部署时，请安装 Python 3.12、`uv`、Node.js 和 npm，并在启动引擎前安装仓库依赖。
 
-### 🚀 从源码启动服务
-
-在仓库根目录运行：
-
-```bash
-make install-deps
-make build-ui
-uv run raven web
-```
-
-`raven web` 会打开本地页面，并在终端退出后保持引擎运行。默认地址是 `http://127.0.0.1:18792`。调试时可以使用 `uv run raven web --foreground`，使用 `uv run raven web --stop` 停止常驻引擎。首次启动时可以暂时不配置模型，之后在 **设置 > 模型（Settings > Models）** 中添加，或运行 `uv run raven onboard`。
-
-如果只需要启动引擎而不打开浏览器页面，请使用 `uv run raven gateway`。
-
 ### 🐳 使用 Docker Compose 启动
 
 仓库中的 Compose 配置会在构建镜像时完成页面和 Python 环境的构建，因此无需在宿主机上单独构建：
@@ -225,7 +211,7 @@ cd docker
 docker compose up
 ```
 
-打开 <http://127.0.0.1:18793>。Compose 容器运行完整的 `gateway` 引擎，因此在 **设置 > 模型（Settings > Models）** 中添加模型服务商后，无需重启即可在下一轮使用。
+打开 <http://127.0.0.1:18793>。Compose 容器运行完整的 `gateway` 引擎，因此在 **设置 > 模型（Settings > Model Providers）** 中添加模型服务商后，无需重启即可在下一轮使用。
 
 容器布局、登录流程、模型服务商配置和运维说明详见 [`docker/README.md`](docker/README.md)。
 
@@ -261,6 +247,20 @@ docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
 ```
 
 要通过 Compose 运行本地构建的镜像，请设置 `RAVEN_IMAGE=raven:local`（也可以在命令前直接设置该变量），然后在 `docker/` 目录运行 `docker compose up`。对应的 Makefile 快捷方式是 `RAVEN_IMAGE=raven:local make docker-up`。使用 `make docker-down` 停止服务。
+
+### 🚀 从源码启动服务
+
+在仓库根目录运行：
+
+```bash
+make install-deps
+make build-ui
+uv run raven web
+```
+
+`raven web` 会打开本地页面，并在终端退出后保持引擎运行。默认地址是 `http://127.0.0.1:18792`。调试时可以使用 `uv run raven web --foreground`，使用 `uv run raven web --stop` 停止常驻引擎。首次启动时可以暂时不配置模型，之后在 **设置 > 模型（Settings > Models）** 中添加，或运行 `uv run raven onboard`。
+
+如果只需要启动引擎而不打开浏览器页面，请使用 `uv run raven gateway`。
 
 ## 📚 文档
 

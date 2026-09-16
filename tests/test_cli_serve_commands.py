@@ -1322,3 +1322,12 @@ class TestRefusingAnIncompleteInstall:
         `system.upgrade` asks it to stand down. A refusal must not be mistaken
         for that, or the environment never gets started again once it is whole."""
         assert serve_commands.INCOMPLETE_INSTALL_EXIT != 0
+
+
+def test_serve_starts_the_litellm_warm_up_at_boot() -> None:
+    """The served page's first key save used to wait on the LiteLLM import;
+    the boot coroutine starts it in the background. ``_serve_main`` binds a
+    port and serves forever, so its source is pinned rather than executed."""
+    import inspect
+
+    assert "warm_up_in_background()" in inspect.getsource(serve_commands._serve_main)
