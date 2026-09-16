@@ -3892,6 +3892,59 @@ class PlaybooksOauthClearParams(_Strict):
     server: str
 
 
+class PlaybooksSetEnabledParams(_Strict):
+    name: str
+    enabled: bool = Field(
+        ...,
+        description="The state wanted. true takes the name off the deny list, false puts it on.",
+    )
+
+
+class PlaybooksSetEnabledResult(_Strict):
+    # Required, every field: the handler answers all of them on every success,
+    # so a default here would advertise a shape the server never sends and
+    # leave both generated clients typing them optional.
+    name: str
+    enabled: bool = Field(..., description="The state now in force.")
+    changed: bool = Field(
+        ...,
+        description=(
+            "False when it was already in that state, so a caller can tell 'you did that' from "
+            "'it was already so' without a second read."
+        ),
+    )
+
+
+class PlaybooksValidateParams(_Strict):
+    name: str
+
+
+class PlaybooksValidateResult(_Strict):
+    name: str
+    ok: bool = Field(..., description="True when errors is empty.")
+    errors: list[str] = Field(
+        ...,
+        description=("Every finding, in the order the validator reports them. Empty when the playbook is sound."),
+    )
+    path: str = Field(..., description="The file the findings refer to.")
+
+
+class PlaybooksDeleteParams(_Strict):
+    name: str
+
+
+class PlaybooksDeleteResult(_Strict):
+    name: str
+    deleted: bool
+    uncovered_builtin: bool = Field(
+        ...,
+        description=(
+            "True when a user playbook was shadowing a builtin of the same name, so the name is still "
+            "in the library and now resolves to the builtin."
+        ),
+    )
+
+
 class OkResult(_Strict):
     ok: bool
 
@@ -4050,6 +4103,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "playbooks.credentials.clear": (PlaybooksCredentialsClearParams, OkResult),
     "playbooks.oauth.authorize": (PlaybooksOauthAuthorizeParams, PlaybooksOauthAuthorizeResult),
     "playbooks.oauth.clear": (PlaybooksOauthClearParams, OkResult),
+    "playbooks.set_enabled": (PlaybooksSetEnabledParams, PlaybooksSetEnabledResult),
+    "playbooks.validate": (PlaybooksValidateParams, PlaybooksValidateResult),
+    "playbooks.delete": (PlaybooksDeleteParams, PlaybooksDeleteResult),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
     "plughub.detail": (PlughubDetailParams, PlughubDetailResult),

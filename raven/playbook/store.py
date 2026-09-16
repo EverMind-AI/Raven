@@ -89,6 +89,20 @@ class PlaybookStore:
             return "builtin"
         return None
 
+    def user_directory(self, name: str) -> Path | None:
+        """The user-layer directory for ``name``, or ``None`` if it has none.
+
+        One read, and it answers both questions a caller that intends to remove
+        a playbook has: which directory, and whether it is the user's to remove.
+        ``origin_of`` and ``path_for`` answer those separately, so a caller that
+        asked one and then the other decided on two different views of the disk
+        -- and the second is the one it would act on. A builtin has no user
+        directory, so ``None`` covers "packaged" and "already gone" alike, which
+        are the two cases where there is nothing here to delete.
+        """
+        directory = self._root / name
+        return directory if (directory / "playbook.md").exists() else None
+
     def is_shadowing(self, name: str) -> bool:
         """Whether a user playbook hides a builtin of the same name."""
         return (self._root / name / "playbook.md").exists() and (self._builtin_root / name / "playbook.md").exists()
