@@ -51,6 +51,7 @@ function chromium(over: Partial<ChromiumSource> = {}): { source: ChromiumSource;
   const source: ChromiumSource = {
     embedded: true,
     urls: () => [],
+    state: async () => ({ started: false }),
     frame: async () => ({ started: false }),
     open: async (p) => {
       calls.push(['open', p])
@@ -246,6 +247,31 @@ describe('browser island, embedded shape (the rpc source)', () => {
       store.onFrame({ url: 'https://example.com/c', loading: false }, null)
     })
     expect(bar.value).toBe('https://example.com/c')
+  })
+
+  it('asks a popped-out browser where it is, never for a picture', async () => {
+    /* Capturing a headed window through CDP repaints it, so a poll for a frame
+       the popped-out view does not draw made the reader's own window flicker
+       once a second. */
+    const { calls } = chromium({
+      state: async () => {
+        calls.push(['state', null])
+        return { started: true, headful: true, url: 'https://example.com', title: 'Example' }
+      },
+      frame: async (p) => {
+        calls.push(['frame', p])
+        return { started: true, headful: true, url: 'https://example.com', title: 'Example' }
+      },
+    })
+    mount()
+    await screen.findByText('gui.br.popped')
+
+    calls.length = 0
+    await act(async () => {
+      await store.poll(true)
+    })
+
+    expect(calls.map(([k]) => k)).toEqual(['state'])
   })
 
   it('turns a failed navigation into the error page, and retry re-asks', async () => {

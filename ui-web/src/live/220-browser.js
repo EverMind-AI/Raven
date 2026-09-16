@@ -19,6 +19,7 @@ DS.browser = {
   embedded: true,
   urls: () => RavenIslands.workspace.urls(),
   openUrl: (u) => RavenIslands.chrome.openUrl(u),
+  state: () => rpc.call('browser.state', {}),
   frame: (p) => rpc.call('browser.frame', p),
   open: (p) => rpc.call('browser.open', p),
   watch: (p) => rpc.call('browser.watch', p),

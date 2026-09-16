@@ -54,6 +54,10 @@ export interface LinksSource {
 export interface ChromiumSource {
   embedded: true
   urls(): UrlRow[]
+  /* Where the page is, with no picture taken. What the poll asks while the
+     browser is popped out: capturing a headed window makes it flicker, and
+     the popped-out view has no frame to draw anyway. */
+  state(): Promise<BrowserReply>
   frame(p: { quality: number }): Promise<BrowserReply>
   open(p: { url?: string; action?: string }): Promise<BrowserReply>
   watch(p: { on: boolean; quality?: number; width?: number; height?: number }): Promise<BrowserReply>

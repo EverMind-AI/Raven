@@ -250,7 +250,12 @@ export async function poll(force: boolean): Promise<void> {
   }
   busy = true
   try {
-    const r = await chromium().frame({ quality: 70 })
+    /* A popped-out browser is asked where it is, not for a picture: the view
+       draws a note rather than a frame, and CDP capturing a headed window
+       repaints it -- at this interval the reader watches their own window
+       flicker for a JPEG nothing shows. */
+    const src = chromium()
+    const r = state.started && state.headful && src.state ? await src.state() : await src.frame({ quality: 70 })
     const wasStarted = state.started
     const wasHeadful = state.headful
     const p: Partial<BrowserState> = {
