@@ -137,6 +137,9 @@ dev = [
     "everos-memory",
     "ppt-engine",
     "design-engine",
+    "mem0-memory",
+    "zep-memory",
+    "memos-memory",
 ]
 eval = [
     # benchmarks/proactivity_eval PROBE adapter (deprioritized stretch test) needs
@@ -207,6 +210,9 @@ include = [
 everos-memory = { workspace = true }
 ppt-engine = { workspace = true }
 design-engine = { workspace = true }
+mem0-memory = { workspace = true }
+zep-memory = { workspace = true }
+memos-memory = { workspace = true }
 
 [tool.uv]
 constraint-dependencies = [
@@ -291,7 +297,7 @@ target-version = "py312"
 # The distributables beside the host wheel are first-party to this repo's
 # lint: without their root here, ruff reads `raven_everos` as a third-party
 # package and wants its imports in another block than `raven`'s.
-src = [".", "plugins-dist/everos-memory", "plugins-dist/ppt-engine", "plugins-dist/design-engine"]
+src = [".", "plugins-dist/everos-memory", "plugins-dist/ppt-engine", "plugins-dist/design-engine", "plugins-dist/mem0-memory", "plugins-dist/zep-memory", "plugins-dist/memos-memory"]
 extend-exclude = [
     # Byte snapshots of the retired vendored fork: the records the parity
     # guards compare against. Reformatting a record destroys its fidelity.

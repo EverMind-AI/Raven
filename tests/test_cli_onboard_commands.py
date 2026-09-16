@@ -149,6 +149,19 @@ def _no_everos_io(monkeypatch: pytest.MonkeyPatch):
     return monkeypatch
 
 
+@pytest.fixture(autouse=True)
+def _everos_screen_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Narrow the wizard's memory screens to EverOS's.
+
+    The dev environment installs the hosted-memory plugins too, and with more
+    than one screen step 4 opens with a chooser. The tests in this file script
+    the EverOS screen's own prompts; the chooser is tested on its own, with
+    stand-in steps. A test that stubs ``_memory_steps`` itself overrides this.
+    """
+    original = onboard_commands._memory_steps
+    monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [p for p in original() if p[0] == "everos"])
+
+
 @pytest.fixture
 def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect config_path + workspace_path under tmp_path; stub template sync.
@@ -1406,21 +1419,19 @@ class _FakeMemoryStep:
         return False
 
 
-def test_step4_memory_first_configured_wins(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two memory plugins, first CONFIGURED: its name is recorded and the
-    second screen never runs -- a later DISABLED must not overwrite it."""
+def test_step4_memory_runs_only_the_chosen_screen(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two memory plugins: the chooser picks one, its outcome is recorded and
+    the other screen never runs."""
     from raven.plugins import StepOutcome
 
     step_a = _FakeMemoryStep(StepOutcome.CONFIGURED)
     step_b = _FakeMemoryStep(StepOutcome.DISABLED)
     monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", step_b)])
     monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+    monkeypatch.setattr(onboard_commands, "_choose_memory_screen", lambda steps: "a")
 
     calls: list[str | None] = []
-    monkeypatch.setattr(
-        "raven.config.update.set_memory_backend",
-        lambda name: calls.append(name),
-    )
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
 
     result = onboard_commands._step4_memory(
         skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
@@ -1428,23 +1439,22 @@ def test_step4_memory_first_configured_wins(tmp_env: Path, monkeypatch: pytest.M
 
     assert result is None
     assert calls == ["a"]
-    assert step_b.run_calls == 0
+    assert (step_a.run_calls, step_b.run_calls) == (1, 0)
 
 
-def test_step4_memory_all_disabled_clears_backend(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every screen declines: the backend is recorded as ``None`` exactly once."""
+def test_step4_memory_chosen_screen_declining_clears_backend(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The chosen screen declines: ``None`` is recorded once; the screen not
+    chosen is not consulted as a fallback."""
     from raven.plugins import StepOutcome
 
-    step_a = _FakeMemoryStep(StepOutcome.DISABLED)
+    step_a = _FakeMemoryStep(StepOutcome.CONFIGURED)
     step_b = _FakeMemoryStep(StepOutcome.DISABLED)
     monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", step_b)])
     monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+    monkeypatch.setattr(onboard_commands, "_choose_memory_screen", lambda steps: "b")
 
     calls: list[str | None] = []
-    monkeypatch.setattr(
-        "raven.config.update.set_memory_backend",
-        lambda name: calls.append(name),
-    )
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
 
     result = onboard_commands._step4_memory(
         skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
@@ -1452,6 +1462,74 @@ def test_step4_memory_all_disabled_clears_backend(tmp_env: Path, monkeypatch: py
 
     assert result is None
     assert calls == [None]
+    assert (step_a.run_calls, step_b.run_calls) == (0, 1)
+
+
+def test_step4_memory_off_records_none_and_runs_no_screen(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.plugins import StepOutcome
+
+    step_a = _FakeMemoryStep(StepOutcome.CONFIGURED)
+    step_b = _FakeMemoryStep(StepOutcome.CONFIGURED)
+    monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", step_b)])
+    monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+    monkeypatch.setattr(onboard_commands, "_choose_memory_screen", lambda steps: None)
+
+    calls: list[str | None] = []
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
+
+    assert onboard_commands._step4_memory(skip=False, non_interactive=False, main_model=None, warnings=[]) is None
+    assert calls == [None]
+    assert (step_a.run_calls, step_b.run_calls) == (0, 0)
+
+
+def test_step4_memory_single_screen_has_no_chooser(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One installed backend: straight into its screen, as before the second plugin existed."""
+    from raven.plugins import StepOutcome
+
+    step = _FakeMemoryStep(StepOutcome.CONFIGURED)
+    monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("only", step)])
+    monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+
+    def _explode(steps):
+        raise AssertionError("a single screen must not open the chooser")
+
+    monkeypatch.setattr(onboard_commands, "_choose_memory_screen", _explode)
+    calls: list[str | None] = []
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
+
+    assert onboard_commands._step4_memory(skip=False, non_interactive=False, main_model=None, warnings=[]) is None
+    assert calls == ["only"] and step.run_calls == 1
+
+
+def test_choose_memory_screen_offers_every_backend_and_off(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every installed screen is a choice, Off is the last one, and the
+    recorded backend is the default the cursor starts on."""
+    import json
+
+    tmp_env.write_text(json.dumps({"memory": {"backend": "zep"}}), encoding="utf-8")
+    scripted = _ScriptedSelect([("Which memory backend?", "memos")])
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+
+    steps = [(n, _FakeMemoryStep(None)) for n in ("everos", "mem0", "zep", "memos")]
+    assert onboard_commands._choose_memory_screen(steps) == "memos"
+    assert scripted.values_offered_for("Which memory backend?") == ["everos", "mem0", "zep", "memos", "__off__"]
+    ((_, kwargs),) = scripted.prompt_kwargs
+    assert kwargs["default"] == "zep"
+    assert kwargs["style"] is not None
+
+
+def test_choose_memory_screen_off_is_none_and_unknown_current_has_no_default(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    tmp_env.write_text(json.dumps({"memory": {"backend": "retired-backend"}}), encoding="utf-8")
+    scripted = _ScriptedSelect([("Which memory backend?", "__off__")])
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+
+    assert onboard_commands._choose_memory_screen([("a", _FakeMemoryStep(None)), ("b", _FakeMemoryStep(None))]) is None
+    ((_, kwargs),) = scripted.prompt_kwargs
+    assert kwargs["default"] is None
 
 
 def test_skipping_preserves_a_backend_that_contributes_no_screen(
@@ -1498,7 +1576,7 @@ def test_skipping_still_clears_a_selected_backend_its_own_screen_calls_unconfigu
 
 
 def test_step4_memory_back_returns_sentinel_without_writing(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The first screen backs out: the wizard returns ``_BACK`` and nothing
+    """The chosen screen backs out: the wizard returns ``_BACK`` and nothing
     is recorded, not even for the screen that never ran."""
     from raven.plugins import StepOutcome
 
@@ -1506,6 +1584,7 @@ def test_step4_memory_back_returns_sentinel_without_writing(tmp_env: Path, monke
     step_b = _FakeMemoryStep(StepOutcome.CONFIGURED)
     monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", step_b)])
     monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+    monkeypatch.setattr(onboard_commands, "_choose_memory_screen", lambda steps: "a")
 
     calls: list[str | None] = []
     monkeypatch.setattr(

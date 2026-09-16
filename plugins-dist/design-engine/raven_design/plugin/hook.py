@@ -68,7 +68,7 @@ from typing import TYPE_CHECKING, Any
 
 from raven.agent import workdir
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
-from raven.memory_engine.skill_local.registry import SkillRegistry
+from raven.memory_engine import SkillRegistry
 from raven_design.selector import VisualDomainSkillSelector
 
 if TYPE_CHECKING:

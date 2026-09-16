@@ -1,8 +1,8 @@
-"""Dependency direction between the host and the bundled everos plugin.
+"""Dependency direction between the host and the bundled memory plugins.
 
-The host may know the plugin only through the plugin contract
+The host may know a plugin only through the plugin contract
 (``raven.contracts.memory`` and ``raven.plugins``); it must not import the
-``raven_everos`` package. The plugin may use the host's public helpers --
+``raven_everos`` / ``raven_mem0`` / ``raven_zep`` / ``raven_memos`` packages. The plugin may use the host's public helpers --
 ``raven.config.update`` included, since the ``plugins.config`` slice it writes
 there is its own data -- but must not reach into host modules that exist for
 the plugin's sake. The list below holds the violations still standing; a task
@@ -17,9 +17,14 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HOST_DIR = REPO_ROOT / "raven"
-PLUGIN_DIR = REPO_ROOT / "plugins-dist" / "everos-memory" / "raven_everos"
+PLUGIN_DIRS = (
+    REPO_ROOT / "plugins-dist" / "everos-memory" / "raven_everos",
+    REPO_ROOT / "plugins-dist" / "mem0-memory" / "raven_mem0",
+    REPO_ROOT / "plugins-dist" / "zep-memory" / "raven_zep",
+    REPO_ROOT / "plugins-dist" / "memos-memory" / "raven_memos",
+)
 
-_PLUGIN_IMPORT = re.compile(r"^\s*(from|import)\s+raven_everos\b", re.M)
+_PLUGIN_IMPORT = re.compile(r"^\s*(from|import)\s+raven_(everos|mem0|zep|memos)\b", re.M)
 _HOST_PRIVATE = re.compile(
     r"^\s*(?:from\s+raven\.(cli|config\.loader|config\.raven)\b|import\s+raven\.(cli|config\.loader|config\.raven)\b)",
     re.M,
@@ -47,12 +52,13 @@ def _host_files() -> list[Path]:
 
 
 def _plugin_files() -> list[Path]:
-    return list(PLUGIN_DIR.rglob("*.py"))
+    return [p for d in PLUGIN_DIRS for p in d.rglob("*.py")]
 
 
 def test_scan_roots_exist() -> None:
     assert _host_files(), f"no host sources under {HOST_DIR}: the scan would pass vacuously"
-    assert _plugin_files(), f"no plugin sources under {PLUGIN_DIR}: the scan would pass vacuously"
+    for d in PLUGIN_DIRS:
+        assert list(d.rglob("*.py")), f"no plugin sources under {d}: the scan would pass vacuously"
 
 
 def test_host_does_not_import_plugin_internals() -> None:

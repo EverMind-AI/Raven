@@ -21,7 +21,7 @@ from raven.providers.binding import ModelBinding, active_binding
 from raven.skill_hub.policy import is_blocked, normalize_blocklist
 
 if TYPE_CHECKING:
-    from raven.memory_engine.skill_local.registry import SkillRegistry
+    from raven.memory_engine import SkillRegistry
     from raven.providers.base import LLMProvider
 
 log = logging.getLogger(__name__)

@@ -244,40 +244,46 @@ importing it ahead of selection.
 | user drop-in | `~/.raven/plugins/<id>/` | copy the dir | user must provide deps |
 | project drop-in | `./.raven/plugins/<id>/` | checked into project | user must provide deps |
 
-### Example: a mem0 backend via pip + entry_points
+### Example: the shipped hosted-memory plugins
+
+`plugins-dist/mem0-memory`, `zep-memory` and `memos-memory` are the reference
+second plugins: Mem0 Platform, Zep Cloud and MemOS Cloud, one distribution
+each, every one a thin HTTP client over the `httpx` the host already carries.
 
 ```
-raven-mem0/
-  pyproject.toml          # [project.entry-points."raven.plugins"] mem0 = "raven_mem0"
-  src/raven_mem0/
-    __init__.py           # empty/cheap
-    backend.py            # make_backend + Mem0Backend(MemoryBackend)
-    raven-plugin.toml  # id="mem0-memory", contributes memory_backends name="mem0"
+plugins-dist/mem0-memory/
+  pyproject.toml                  # [project.entry-points."raven.plugins"] mem0-memory = "raven_mem0"
+  raven_mem0/
+    raven-plugin.toml             # id="mem0-memory"; memory_backends name="mem0" + its onboard screen
+    backend.py                    # Mem0Backend(HttpMemoryBackend): the service's requests and response shapes
+    onboard.py                    # make_onboard_step -> ApiKeyOnboardStep(ctx, Mem0Backend)
 ```
 
-```python
-class Mem0Backend:  # structurally a MemoryBackend
-    async def recall(self, query, *, user_id=None, agent_id=None, top_k):
-        if user_id is None:        # flat backend: no agent track
-            return []
-        hits = self._m.search(query, user_id=user_id, limit=top_k)
-        return [Memory(text=h["memory"], score=h.get("score", 0.0),
-                       metadata={"id": h.get("id")}) for h in hits["results"]]
-    # store / feedback / start / stop ...
+What they share lives in the host, next to the contract tests, for any author
+of a hosted backend: `raven.memory_engine.HttpMemoryBackend` owns the
+contract's failure semantics (a fault costs one call, never the turn), the
+turn-path budget (recall gives up before the host's 5s does) and the write
+semantics (`store` returns `True` on acceptance -- hosted services extract
+asynchronously, and nothing polls on the turn path); a subclass fills in its
+service's calls and how to read the answers. `raven.memory_engine.ApiKeyOnboardStep`
+is the matching wizard screen: one key, one `health()` probe, one slice.
 
-def make_backend(ctx) -> MemoryBackend:
-    return Mem0Backend(ctx)
-```
-
-Install + activate:
+Install + activate (each wheel ships with the release; `install.sh` does not
+pull them yet):
 
 ```bash
-uv add raven-mem0          # mem0ai pulled transitively; entry_points auto-discovered
+uv tool install --with mem0-memory@<wheel-url> "raven[channels] @ <raven-wheel-url>"
 ```
 ```json
 "memory":  { "backend": "mem0", "userId": "user-raven", "memoryTopK": 5 },
-"plugins": { "config": { "mem0-memory": { "mem0_config": { "...": "..." } } } }
+"plugins": { "config": { "mem0": { "api_key": "...", "base_url": "https://api.mem0.ai" } } }
 ```
+
+Each backend reads the slice keyed by its **contribution name** (`mem0`,
+`zep`, `memos`), so three keys never share a slot and switching
+`memory.backend` leaves the others' slices in place. `<NAME>_API_KEY` in the
+environment beats the slice. Identity is never in a slice: `user_id` reaches
+the backend through `ServiceLocator`.
 
 Multiple backends coexist; `memory.backend` picks one; `plugins.disabled`
 turns one off. An installed-but-unselected backend's code is never

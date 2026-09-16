@@ -1,0 +1,22 @@
+[plugin]
+id                 = "zep-memory"
+version            = "0.1.0"
+display_name       = "Zep Cloud memory"
+raven              = ">=0.1"
+bundled            = false
+
+[[plugin.contributes.memory_backends]]
+name    = "zep"
+factory = "raven_zep.backend:make_backend"
+
+[[plugin.contributes.onboard]]
+name    = "zep"
+factory = "raven_zep.onboard:make_onboard_step"
+
+# The backend reads ``plugins.config["zep"]`` (the onboarding screen writes it
+# there); ``ZEP_API_KEY`` in the environment beats the slice. Identity is not
+# declared here: ``user_id`` comes from the host through ``ServiceLocator``,
+# never from a plugin's own slice.
+[plugin.config_schema]
+api_key  = { type = "string" }
+base_url = { type = "string" }

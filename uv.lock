@@ -12,8 +12,11 @@ resolution-markers = [
 members = [
     "design-engine",
     "everos-memory",
+    "mem0-memory",
+    "memos-memory",
     "ppt-engine",
     "raven",
+    "zep-memory",
 ]
 constraints = [
     { name = "aiohttp", specifier = ">=3.13.4" },
@@ -2364,6 +2367,36 @@ wheels = [
 ]
 
 [[package]]
+name = "mem0-memory"
+version = "0.1.0"
+source = { editable = "plugins-dist/mem0-memory" }
+dependencies = [
+    { name = "httpx" },
+    { name = "raven" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
+    { name = "raven", editable = "." },
+]
+
+[[package]]
+name = "memos-memory"
+version = "0.1.0"
+source = { editable = "plugins-dist/memos-memory" }
+dependencies = [
+    { name = "httpx" },
+    { name = "raven" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
+    { name = "raven", editable = "." },
+]
+
+[[package]]
 name = "mistune"
 version = "3.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3728,10 +3761,13 @@ channels = [
 dev = [
     { name = "design-engine" },
     { name = "everos-memory" },
+    { name = "mem0-memory" },
+    { name = "memos-memory" },
     { name = "ppt-engine" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+    { name = "zep-memory" },
 ]
 eval = [
     { name = "huggingface-hub" },
@@ -3784,6 +3820,8 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.3,<1.0.0" },
     { name = "matrix-nio", marker = "sys_platform != 'win32' and extra == 'channel-matrix'", specifier = ">=0.25.2" },
     { name = "mcp", specifier = ">=1.27.0" },
+    { name = "mem0-memory", marker = "extra == 'dev'", editable = "plugins-dist/mem0-memory" },
+    { name = "memos-memory", marker = "extra == 'dev'", editable = "plugins-dist/memos-memory" },
     { name = "mistune", marker = "extra == 'channel-matrix'", specifier = ">=3.0.0,<4.0.0" },
     { name = "msgpack", marker = "extra == 'channel-mochat'", specifier = ">=1.2.1,<2.0.0" },
     { name = "nh3", marker = "extra == 'channel-matrix'", specifier = ">=0.2.17,<1.0.0" },
@@ -3833,6 +3871,7 @@ requires-dist = [
     { name = "websocket-client", marker = "extra == 'channel-mochat'", specifier = ">=1.9.0,<2.0.0" },
     { name = "websockets", marker = "extra == 'channel-discord'", specifier = ">=16.0,<17.0" },
     { name = "wecom-aibot-sdk-python", marker = "extra == 'channel-wecom'", specifier = ">=0.1.5" },
+    { name = "zep-memory", marker = "extra == 'dev'", editable = "plugins-dist/zep-memory" },
 ]
 provides-extras = ["channel-telegram", "channel-slack", "channel-discord", "channel-whatsapp", "channel-matrix", "channel-feishu", "channel-wecom", "channel-mochat", "channel-qq", "channel-dingtalk", "channel-email", "channel-weixin", "channels", "tools", "sandbox", "browser", "dev", "eval"]
 
@@ -4991,6 +5030,21 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/19/3774d162f6732d1cfb0b47b4140a942a35ca82bb19b6db1f80e9e7bdc8f8/yarl-1.23.0-cp314-cp314t-win_amd64.whl", hash = "sha256:4503053d296bc6e4cbd1fad61cf3b6e33b939886c4f249ba7c78b602214fabe2", size = 97610, upload-time = "2026-03-01T22:07:45.773Z" },
     { url = "https://files.pythonhosted.org/packages/51/47/3fa2286c3cb162c71cdb34c4224d5745a1ceceb391b2bd9b19b668a8d724/yarl-1.23.0-cp314-cp314t-win_arm64.whl", hash = "sha256:44bb7bef4ea409384e3f8bc36c063d77ea1b8d4a5b2706956c0d6695f07dcc25", size = 86041, upload-time = "2026-03-01T22:07:49.026Z" },
     { url = "https://files.pythonhosted.org/packages/69/68/c8739671f5699c7dc470580a4f821ef37c32c4cb0b047ce223a7f115757f/yarl-1.23.0-py3-none-any.whl", hash = "sha256:a2df6afe50dea8ae15fa34c9f824a3ee958d785fd5d089063d960bae1daa0a3f", size = 48288, upload-time = "2026-03-01T22:07:51.388Z" },
+]
+
+[[package]]
+name = "zep-memory"
+version = "0.1.0"
+source = { editable = "plugins-dist/zep-memory" }
+dependencies = [
+    { name = "httpx" },
+    { name = "raven" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
+    { name = "raven", editable = "." },
 ]
 
 [[package]]
