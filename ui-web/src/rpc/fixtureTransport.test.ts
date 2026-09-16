@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { FixtureTransport } from './fixtureTransport'
 import { RpcError } from './transport'
 
+import type { Fixtures } from './fixtureTransport'
 import type { ConnectionState } from './transport'
 
 describe('FixtureTransport', () => {
@@ -56,6 +57,29 @@ describe('FixtureTransport', () => {
     detach()
     t.emit('turn.delta', { text: 'y' })
     expect(got).toEqual([{ text: 'x' }, { text: 'x' }, { text: 'y' }])
+  })
+
+  it('answers an undeclared method name recorded by string', async () => {
+    const t = new FixtureTransport({ 'raven.mcp.list': { servers: [] } } as Fixtures)
+    await expect(t.callUnchecked('raven.mcp.list', {})).resolves.toEqual({ servers: [] })
+    expect(t.calls.map((c) => c.method)).toEqual(['raven.mcp.list'])
+  })
+
+  it('rejects an unrecorded undeclared method with -32601, the way the gateway does', async () => {
+    const t = new FixtureTransport({})
+    const err = await t.callUnchecked('raven.mcp.set', { on: true }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(RpcError)
+    expect((err as RpcError).code).toBe(-32601)
+  })
+
+  it('fans a binary frame out to handlers, and detach removes one', () => {
+    const t = new FixtureTransport({})
+    const got: number[] = []
+    const detach = t.binary((buf) => got.push(buf.byteLength))
+    t.emitBinary(new ArrayBuffer(4))
+    detach()
+    t.emitBinary(new ArrayBuffer(8))
+    expect(got).toEqual([4])
   })
 
   it('reports the current state immediately, then each transition', async () => {

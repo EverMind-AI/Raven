@@ -4,16 +4,33 @@ export class RpcError extends Error {
   constructor(
     readonly code: number,
     message: string,
-    readonly data?: unknown
+    readonly data?: unknown,
+    /** The error frame as it came off the wire, for a caller that needs more. */
+    readonly rpc?: unknown
   ) {
     super(message)
     this.name = 'RpcError'
   }
 }
 
-export type ConnectionState = 'connecting' | 'open' | 'reconnecting' | 'auth-failed' | 'closed'
+export type ConnectionState =
+  | 'connecting'
+  | 'open'
+  | 'reconnecting'
+  | 'reconnected'
+  | 'auth-failed'
+  | 'closed'
+
+export interface StateInfo {
+  /** Rejoin attempts that have failed so far; 0 at the moment of the drop. */
+  attempt?: number
+}
+
+export type StateListener = (state: ConnectionState, info?: StateInfo) => void
 
 export type NotificationHandler = (params: unknown) => void
+
+export type BinaryHandler = (buf: ArrayBuffer) => void
 
 /**
  * The typed end state of the DataSource seam. Two implementations planned:
@@ -39,8 +56,20 @@ export interface RpcTransport {
    * not pushes.
    */
   on(method: string, handler: NotificationHandler): () => void
+  /**
+   * Attach a handler for binary frames (the screencast stream). Returns the
+   * detach function.
+   */
+  binary(handler: BinaryHandler): () => void
+  /**
+   * The escape hatch for the two method names the page calls that the
+   * contract does not declare: `raven.mcp.list` and `raven.mcp.set`. They
+   * answer -32601 today and must go on doing so, so they keep their calls
+   * here instead of being typed into existence or silently dropped.
+   */
+  callUnchecked(method: string, params: Record<string, unknown>): Promise<unknown>
   /** Observe connection-state changes (fires immediately with the current state). */
-  onState(listener: (state: ConnectionState) => void): () => void
+  onState(listener: StateListener): () => void
   connect(): Promise<boolean>
   close(): void
 }
