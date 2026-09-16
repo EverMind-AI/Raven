@@ -141,6 +141,101 @@ def test_a_session_opened_before_grouping_keeps_its_file(tmp_path: Path) -> None
     assert not (tmp_path / "sessions" / "-srv-alpha" / "old.jsonl").exists()
 
 
+def test_the_gateway_opens_a_session_filed_under_a_project_slug(tmp_path: Path) -> None:
+    """The page lists every group, so it has to be able to open every group.
+
+    A conversation started by a terminal entrypoint is filed under that launch
+    directory's slug; the gateway groups by channel and so looks somewhere
+    else. ``list_sessions`` scans the whole tree either way, which is how the
+    session reached the rail -- opening it then minted a fresh empty one and
+    the reader's history looked lost.
+    """
+    terminal = SessionManager(tmp_path, project_slug="-srv-alpha", project_dir=Path("/srv/alpha"))
+    session = terminal.get_or_create("tui:one")
+    session.add_message("user", "hi")
+    terminal.save(session)
+
+    gateway = SessionManager(tmp_path)
+
+    assert [s["key"] for s in gateway.list_sessions(channel="tui")] == ["tui:one"]
+    assert gateway.exists("tui:one")
+    reopened = gateway.peek("tui:one")
+    assert reopened is not None
+    assert [m["content"] for m in reopened.messages] == ["hi"]
+
+
+def test_the_gateway_appends_to_the_transcript_it_opened(tmp_path: Path) -> None:
+    """One session id, one file. Every write verb resolves through
+    ``session_path`` -- so a gateway that could not find the transcript did not
+    merely read an empty one, it started a second under the channel and split
+    the conversation between them."""
+    terminal = SessionManager(tmp_path, project_slug="-srv-alpha", project_dir=Path("/srv/alpha"))
+    session = terminal.get_or_create("tui:one")
+    session.add_message("user", "hi")
+    terminal.save(session)
+
+    gateway = SessionManager(tmp_path)
+    reopened = gateway.get_or_create("tui:one")
+    reopened.add_message("user", "from the page")
+    gateway.save(reopened)
+
+    assert [p.relative_to(tmp_path).as_posix() for p in sorted((tmp_path / "sessions").glob("*/*.jsonl"))] == [
+        "sessions/-srv-alpha/one.jsonl"
+    ]
+    # Read by a manager that has never held this session: the writers above both
+    # cache it, so asking either of them would answer from memory rather than
+    # from the file this test is about.
+    reader = SessionManager(tmp_path, project_slug="-srv-alpha")
+    stored = reader.peek("tui:one")
+    assert stored is not None
+    assert [m["content"] for m in stored.messages] == ["hi", "from the page"]
+
+
+def test_two_channels_sharing_a_chat_id_keep_their_own_transcripts(tmp_path: Path) -> None:
+    """The stem is not an identity. Searching the other groups matches on the
+    chat_id, and ``cli:<id>`` and ``tui:<id>`` are two conversations -- adopting
+    on the stem alone gave one of them the other's file to append to, and the
+    two then read as one."""
+    manager = SessionManager(tmp_path)
+    for channel, text in (("cli", "from the terminal"), ("tui", "from the tui")):
+        session = manager.get_or_create(f"{channel}:same")
+        session.add_message("user", text)
+        manager.save(session)
+
+    assert manager.session_path("cli:same") == tmp_path / "sessions" / "cli" / "same.jsonl"
+    assert manager.session_path("tui:same") == tmp_path / "sessions" / "tui" / "same.jsonl"
+    reader = SessionManager(tmp_path)
+    assert [m["content"] for m in reader.peek("cli:same").messages] == ["from the terminal"]
+    assert [m["content"] for m in reader.peek("tui:same").messages] == ["from the tui"]
+
+
+def test_a_keyless_transcript_is_still_adopted_across_groups(tmp_path: Path) -> None:
+    """The key is what tells two channels apart, and a transcript written before
+    that field existed has none. Refusing those would strand exactly the oldest
+    conversations the search was added for."""
+    (tmp_path / "sessions" / "cli").mkdir(parents=True)
+    (tmp_path / "sessions" / "cli" / "ancient.jsonl").write_text(
+        '{"_type": "metadata", "created_at": "2026-08-07T00:00:00"}\n{"role": "user", "content": "remember me"}\n',
+        encoding="utf-8",
+    )
+
+    grouped = SessionManager(tmp_path, project_slug="-srv-alpha")
+
+    assert [m["content"] for m in grouped.get_or_create("cli:ancient").messages] == ["remember me"]
+
+
+def test_the_gateway_still_files_its_own_sessions_by_channel(tmp_path: Path) -> None:
+    """Reaching across groups is a fallback for a transcript that already
+    exists, not a change of where this process writes."""
+    terminal = SessionManager(tmp_path, project_slug="-srv-alpha")
+    terminal.save(terminal.get_or_create("tui:elsewhere"))
+
+    gateway = SessionManager(tmp_path)
+    gateway.save(gateway.get_or_create("web:fresh"))
+
+    assert (tmp_path / "sessions" / "web" / "fresh.jsonl").is_file()
+
+
 def test_listing_filters_on_the_key_not_the_directory(tmp_path: Path) -> None:
     """Under project grouping the directory no longer names the channel, so a
     channel filter that trusted it would return nothing."""
