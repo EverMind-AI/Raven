@@ -329,6 +329,7 @@ function stagedHarness({ reject = null } = {}) {
   const pending = []
   const build = Function(
     'deps',
+    'T',
     `let viewGen = 0, providersLive = [], pendingModel = { model: 'm2', provider: 'minimax' };
      const { rpc, sessionCurrent, modelSet, setModelLabel, toast } = deps;
      ${loadProvidersSrc}
@@ -341,7 +342,7 @@ function stagedHarness({ reject = null } = {}) {
     modelSet: (m) => calls.push(['modelSet', m]),
     setModelLabel: () => {},
     toast: (t) => calls.push(['toast', t]),
-  })
+  }, (key) => key)
   return {
     ...api,
     calls,

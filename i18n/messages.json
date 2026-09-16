@@ -303,20 +303,20 @@
     },
     "agents": {
       "zh": {
-        "name": "子代理",
-        "help": "打开子代理面板（实时查看，可暂停/终止）"
+        "name": "子智能体",
+        "help": "打开子智能体面板（实时查看，可暂停/终止）"
       }
     },
     "replay": {
       "zh": {
         "name": "回放",
-        "help": "回放一棵已完成的子代理树"
+        "help": "回放一棵已完成的子智能体树"
       }
     },
     "replay-diff": {
       "zh": {
         "name": "回放对比",
-        "help": "对比两棵已完成的子代理树"
+        "help": "对比两棵已完成的子智能体树"
       }
     },
     "reload-skills": {
@@ -472,7 +472,7 @@
       "zh": "耗时"
     },
     "gui.deleg.d_scale": {
-      "en": "Graph",
+      "en": "Scale",
       "zh": "规模"
     },
     "gui.deleg.st_run": {
@@ -740,7 +740,7 @@
       "zh": "地址或命令，例如 npx -y @acme/crm-mcp"
     },
     "gui.adv_hint": {
-      "en": "Know what you are connecting? Give it an address or a launch command and Raven will handshake for its actions.",
+      "en": "Know what you are connecting? Give it an address or a launch command and Raven will handshake to fetch its actions.",
       "zh": "知道要接什么就直接填地址或启动命令，Raven 会握手取回它提供的动作。"
     },
     "gui.adv_name_ph": {
@@ -808,7 +808,7 @@
       "zh": "保存"
     },
     "gui.ai_note": {
-      "en": "AI-generated content -- double-check what matters.",
+      "en": "AI-generated content - double-check what matters.",
       "zh": "内容由 AI 生成，请注意甄别"
     },
     "gui.answer.branch": {
@@ -868,7 +868,7 @@
       "zh": "展开全部附件"
     },
     "gui.att.too_big": {
-      "en": "{name} is {size}; the most this connection carries is {limit}",
+      "en": "{name} is {size}; this connection carries at most {limit}",
       "zh": "{name} 有 {size}，这条连接最多只能传 {limit}"
     },
     "gui.att.uploading": {
@@ -881,23 +881,23 @@
     },
     "gui.auth.checking": {
       "en": "Sign-in was refused - checking whether the service is still up",
-      "zh": "登录被拒 — 正在确认服务是否还在"
+      "zh": "登录被拒——正在确认服务是否还在"
     },
     "gui.auth.dead": {
       "en": "The service is not running - start it with: raven web",
-      "zh": "服务没有在运行 — 在终端运行：raven web"
+      "zh": "服务没有在运行——在终端运行：raven web"
     },
     "gui.auth.stale": {
       "en": "The service is running but this tab's sign-in expired - get a fresh link with: raven web",
-      "zh": "服务在运行，但这个标签页的登录已失效 — 在终端运行 raven web 拿一个新链接"
+      "zh": "服务在运行，但这个标签页的登录已失效——在终端运行 raven web 拿一个新链接"
     },
     "gui.auth.dead_app": {
       "en": "Sign-in expired - quit Raven and open it again",
-      "zh": "登录已失效 — 关掉 Raven 再打开一次"
+      "zh": "登录已失效——关掉 Raven 再打开一次"
     },
     "gui.auth.retry": {
       "en": "Session expired - reconnecting",
-      "zh": "认证已失效 — 正在重新连接"
+      "zh": "认证已失效——正在重新连接"
     },
     "gui.boot_fail": {
       "en": "Startup step \"{where}\" failed: {err}",
@@ -932,7 +932,7 @@
       "zh": "还没打开页面"
     },
     "gui.br.idle_w": {
-      "en": "Type a URL above, or ask Raven to open one. You and Raven share this browser -- either of you can click, and the other sees it.",
+      "en": "Type a URL above, or ask Raven to open one. You and Raven share this browser - either of you can click, and the other sees it.",
       "zh": "在上面输入网址，或者让 Raven 打开一个。这个浏览器你和 Raven 共用：谁点的另一方都看得到。"
     },
     "gui.br.popin": {
@@ -948,7 +948,7 @@
       "zh": "已在独立窗口中打开"
     },
     "gui.br.popped_w": {
-      "en": "The page is running in a real Chromium window -- native scrolling and typing, and Raven keeps driving the same session. Logins carry over.",
+      "en": "The page is running in a real Chromium window - native scrolling and typing, and Raven keeps driving the same session. Logins carry over.",
       "zh": "页面正运行在一个真实的 Chromium 窗口里——原生滚动和输入，Raven 仍然操作的是同一个会话，登录状态也会带过去。"
     },
     "gui.br.reload": {
@@ -1133,7 +1133,7 @@
     },
     "gui.clarify.other_ph": {
       "en": "Other - write your own answer...",
-      "zh": "其他 — 输入你自己的回答…"
+      "zh": "其他——输入你自己的回答…"
     },
     "gui.clarify.ph": {
       "en": "Write your answer...",
@@ -1184,7 +1184,7 @@
       "zh": "关闭"
     },
     "gui.code.copied": {
-      "en": "copied",
+      "en": "Copied",
       "zh": "已复制"
     },
     "gui.code.copy": {
@@ -1276,7 +1276,7 @@
       "zh": "已开启，但没有在运行"
     },
     "gui.conn.st_unknown": {
-      "en": "Cannot tell -- the gateway is not answering",
+      "en": "Cannot tell - the gateway is not answering",
       "zh": "状态未知 —— gateway 没有应答"
     },
     "gui.conn.st_unpaired": {
@@ -1372,7 +1372,7 @@
       "zh": "每 {every}"
     },
     "gui.cron.failed": {
-      "en": "failed",
+      "en": "Failed",
       "zh": "失败"
     },
     "gui.cron.h.allday": {
@@ -1548,7 +1548,7 @@
       "zh": "打开它的会话"
     },
     "gui.cron.paused": {
-      "en": "paused",
+      "en": "Paused",
       "zh": "已暂停"
     },
     "gui.cron.paused_meta": {
@@ -1600,7 +1600,7 @@
       "zh": "上下文使用 {used}/{max} {pct}%"
     },
     "gui.dag.aria": {
-      "en": "Sub-agent orchestration",
+      "en": "Subagent orchestration",
       "zh": "子智能体编排"
     },
     "gui.dag.close": {
@@ -1628,8 +1628,8 @@
       "zh": "运行 id"
     },
     "gui.dag.deps_none": {
-      "en": "nothing -- starts with the graph",
-      "zh": "无 — 第一层，随图一起起跑"
+      "en": "nothing - starts with the graph",
+      "zh": "无——第一层，随图一起起跑"
     },
     "gui.dag.done": {
       "en": "{n}/{t} done",
@@ -1685,7 +1685,7 @@
     },
     "gui.dag.src_file": {
       "en": "file",
-      "zh": "file"
+      "zh": "文件"
     },
     "gui.dag.src_literal": {
       "en": "text",
@@ -1693,7 +1693,7 @@
     },
     "gui.dag.src_node": {
       "en": "node",
-      "zh": "node"
+      "zh": "节点"
     },
     "gui.dag.st_completed": {
       "en": "done",
@@ -2124,7 +2124,7 @@
       "zh": "下一页"
     },
     "gui.hub.page": {
-      "en": "page {p} / {n}",
+      "en": "Page {p} of {n}",
       "zh": "第 {p} / {n} 页"
     },
     "gui.hub.prev": {
@@ -2345,11 +2345,11 @@
     },
     "gui.mem.down": {
       "zh": "长期记忆当前写不进去，这段时间的对话不会被记住。",
-      "en": "Long-term memory is not being written; nothing from now is being remembered."
+      "en": "Long-term memory is not being written; nothing from here on will be remembered."
     },
     "gui.mem.empty": {
       "zh": "这里还没有记忆，先和 Raven 干点活吧",
-      "en": "Nothing here yet — go do some work with Raven"
+      "en": "Nothing here yet - go do some work with Raven"
     },
     "gui.mem.hero": {
       "zh": "数据与记忆",
@@ -2421,7 +2421,7 @@
     },
     "gui.mem.search_ph": {
       "zh": "语义搜索这类记忆…",
-      "en": "Search this memory semantically…"
+      "en": "Search this memory semantically..."
     },
     "gui.mem.sec_approach": {
       "zh": "做法",
@@ -2789,11 +2789,11 @@
     },
     "gui.model.key_ph": {
       "en": "{name} API key",
-      "zh": "{name} API Key"
+      "zh": "{name} API key"
     },
     "gui.model.key_ph_update": {
       "en": "Only a new key overwrites the stored one",
-      "zh": "填入新的 Key 才会覆盖"
+      "zh": "填入新的密钥才会覆盖"
     },
     "gui.model.kind.endpoint": {
       "en": "Key + address",
@@ -2801,7 +2801,7 @@
     },
     "gui.model.kind.key": {
       "en": "API key",
-      "zh": "API Key"
+      "zh": "API key"
     },
     "gui.model.kind.local": {
       "en": "Local deployment",
@@ -2821,7 +2821,7 @@
     },
     "gui.model.need_key": {
       "en": "Paste the key before connecting.",
-      "zh": "把 Key 填进来再连接。"
+      "zh": "把密钥填进来再连接。"
     },
     "gui.model.needs_login": {
       "en": "sign in from the terminal",
@@ -2829,7 +2829,7 @@
     },
     "gui.model.none_connected": {
       "en": "Nothing connected yet. Pick one below and paste its key.",
-      "zh": "一个都没连。下面挑一家填上 Key 就能开始。"
+      "zh": "一个都没连。下面挑一家填上密钥就能开始。"
     },
     "gui.model.not_connected": {
       "en": "not connected",
@@ -2868,7 +2868,7 @@
       "zh": "{n} 失败"
     },
     "gui.nav.agents": {
-      "en": "Sub-agents",
+      "en": "Subagents",
       "zh": "子智能体"
     },
     "gui.nav.conn": {
@@ -3036,8 +3036,8 @@
       "zh": "完成"
     },
     "gui.onb.key_ph": {
-      "en": "API Key",
-      "zh": "API Key"
+      "en": "API key",
+      "zh": "API key"
     },
     "gui.onb.key_s": {
       "en": "The key is stored locally in ~/.raven/config.json and never leaves this machine.",
@@ -3100,7 +3100,7 @@
       "zh": "欢迎使用 Raven"
     },
     "gui.page.agents": {
-      "en": "Sub-agents",
+      "en": "Subagents",
       "zh": "子智能体"
     },
     "gui.page.conn": {
@@ -3128,7 +3128,7 @@
       "zh": "完全访问"
     },
     "gui.perm.full_h": {
-      "en": "No prompts -- but platform-level dangerous operations are still refused.",
+      "en": "No prompts - but operations that the platform deems dangerous are still refused.",
       "zh": "不弹审批；平台级高危操作仍会被拒绝"
     },
     "gui.perm.smart": {
@@ -3433,7 +3433,7 @@
     },
     "gui.plug.perm_skill": {
       "zh": "包含 {n} 个技能，写入你的工作区",
-      "en": "Includes {n} skill(s), written into your workspace"
+      "en": "Writes skills into your workspace ({n} total)"
     },
     "gui.plug.prog_auth": {
       "zh": "浏览器授权",
@@ -3585,7 +3585,7 @@
     },
     "gui.q.remove": {
       "en": "Remove",
-      "zh": "删除"
+      "zh": "移除"
     },
     "gui.qa.a": {
       "en": "ANSWER",
@@ -4317,7 +4317,7 @@
     },
     "gui.set.mem.borrow_note": {
       "en": "The key and address are copied from that account when you save. Change them there later and this stays on the copy.",
-      "zh": "保存时会把那个账号的密钥和地址复制过来。之后在那边改动,这里不会跟着变。"
+      "zh": "保存时会把那个账号的密钥和地址复制过来。之后在那边改动，这里不会跟着变。"
     },
     "gui.set.mem.models": {
       "en": "EverOS models",
@@ -5092,7 +5092,7 @@
       "zh": "界面有更新"
     },
     "gui.update.reload": {
-      "en": "reload",
+      "en": "Reload",
       "zh": "刷新"
     },
     "gui.upg.body": {
@@ -5104,7 +5104,7 @@
       "zh": "当前还有回合在跑，跑完再升级。"
     },
     "gui.upg.close": {
-      "en": "close",
+      "en": "Close",
       "zh": "关闭"
     },
     "gui.upg.failed": {
@@ -5192,7 +5192,7 @@
       "zh": "还没有后台任务"
     },
     "gui.ws.agents_none_sub": {
-      "en": "Sub-agents this session starts show up here",
+      "en": "Subagents this session starts show up here",
       "zh": "这个会话启动的子智能体会出现在这里"
     },
     "gui.ws.desk_limit": {
@@ -5200,7 +5200,7 @@
       "zh": "最多同时打开 4 个窗口"
     },
     "gui.ws.instance_empty": {
-      "en": "No conversation on record for this sub-agent.",
+      "en": "No conversation on record for this subagent.",
       "zh": "这个子智能体还没有留下对话记录。"
     },
     "gui.ws.spawn_empty": {
@@ -5221,7 +5221,7 @@
     },
     "gui.ws.instance_new_fail": {
       "en": "Could not start: {why}",
-      "zh": "无法新建:{why}"
+      "zh": "无法新建：{why}"
     },
     "gui.ws.instance_say": {
       "en": "Send",
@@ -5257,7 +5257,7 @@
     },
     "gui.ws.instance_forget_note": {
       "en": "Drops the row. For an ACP instance the agent-side session is dropped too, stopping a running turn. Your records stay on disk.",
-      "zh": "移除这一行。ACP 实例的子端侧会话也会一并移除,进行中的任务将被停止。本机记录仍保留在磁盘上。"
+      "zh": "移除这一行。ACP 实例的子端侧会话也会一并移除，进行中的任务将被停止。本机记录仍保留在磁盘上。"
     },
     "gui.ws.browser": {
       "en": "Browser",
@@ -5508,7 +5508,7 @@
       "zh": "{n} 项"
     },
     "gui.ws.json_capped": {
-      "en": "… the rest is only in the source view",
+      "en": "... the rest is only in the source view",
       "zh": "… 其余内容请切换到源码视图"
     },
     "gui.ws.sub.browser": {
@@ -5681,14 +5681,14 @@
     },
     "gui.agent.installing": {
       "en": "Installing...",
-      "zh": "正在安装..."
+      "zh": "正在安装…"
     },
     "gui.agent.install_note": {
       "en": "Downloads this build's dependencies (a few hundred MB) and takes a few minutes. It keeps running if you leave this page.",
-      "zh": "会下载这个构建的依赖(几百 MB),要几分钟。离开这个页面也会继续跑。"
+      "zh": "会下载这个构建的依赖（几百 MB），要几分钟。离开这个页面也会继续跑。"
     },
     "gui.agent.kind_builtin": {
-      "en": "built in",
+      "en": "built-in",
       "zh": "内置"
     },
     "gui.conn.cost_scan_line": {
@@ -5809,7 +5809,7 @@
     },
     "gui.agent.test_running": {
       "en": "Testing...",
-      "zh": "正在测试..."
+      "zh": "正在测试…"
     },
     "gui.agent.test_stop": {
       "en": "Stop",
@@ -5817,15 +5817,15 @@
     },
     "gui.agent.test_note": {
       "en": "Dispatches the agent once for real, which spends its own quota.",
-      "zh": "会真的派它跑一次,消耗它自己的额度。"
+      "zh": "会真的派它跑一次，消耗它自己的额度。"
     },
     "gui.agent.test_ok": {
       "en": "Worked, {ago}",
-      "zh": "可用,{ago}"
+      "zh": "可用，{ago}"
     },
     "gui.agent.test_bad": {
       "en": "Failed, {ago}",
-      "zh": "失败,{ago}"
+      "zh": "失败，{ago}"
     },
     "gui.agent.test_never": {
       "en": "Never tested",
@@ -5917,7 +5917,7 @@
     },
     "gui.pb.canvas": {
       "en": "Playbook graph - drag to pan, ctrl and scroll to zoom",
-      "zh": "剧本流程图 - 拖动平移，按住 ctrl 滚动缩放"
+      "zh": "剧本流程图 · 拖动平移，按住 ctrl 滚动缩放"
     },
     "gui.pb.zoom_in": {
       "en": "Zoom in",
@@ -5973,7 +5973,7 @@
     },
     "gui.pb.col_default": {
       "en": "default",
-      "zh": "缺省"
+      "zh": "默认"
     },
     "gui.pb.col_desc": {
       "en": "description",
@@ -6029,7 +6029,7 @@
     },
     "gui.pb.carried": {
       "en": "carried by this playbook, not this machine's configuration",
-      "zh": "本剧本自带,不是本机配置里的同名服务器"
+      "zh": "本剧本自带，不是本机配置里的同名服务器"
     },
     "gui.pb.required": {
       "en": "required",
@@ -6040,12 +6040,12 @@
       "zh": "—"
     },
     "gui.tier.title": {
-      "en": "Sub-agent effort",
+      "en": "Subagent effort",
       "zh": "子智能体力度"
     },
     "gui.tier.scope": {
-      "en": "The tier in force is offered to the sub-agents this conversation dispatches, clamped to what each one supports.",
-      "zh": "当前这一档会下发给本会话派出的子智能体,并按每个子智能体支持的档位钳定。"
+      "en": "The tier in force is offered to the subagents this conversation dispatches, clamped to what each one supports.",
+      "zh": "当前这一档会下发给本会话派出的子智能体，并按每个子智能体支持的档位钳定。"
     },
     "gui.tier.failed": {
       "en": "Could not switch to {name}",
@@ -6056,8 +6056,8 @@
       "zh": "会话模式"
     },
     "gui.tier.mode_scope": {
-      "en": "The profile in force is not one of the built-in tiers, so it is not offered to sub-agents.",
-      "zh": "当前这一档不是内置的三档之一,不会下发给子智能体。"
+      "en": "The tier in force is not a built-in one, so it is not offered to subagents.",
+      "zh": "当前这一档不是内置的三档之一，不会下发给子智能体。"
     },
     "gui.imode.title": {
       "en": "Effort",
@@ -6077,7 +6077,7 @@
     },
     "gui.imode.set_tip": {
       "en": "This instance's own effort, set apart from the conversation.",
-      "zh": "这个实例自己的力度,与会话分开设定。"
+      "zh": "这个实例自己的力度，与会话分开设定。"
     },
     "gui.imode.failed": {
       "en": "Could not change this instance's effort",
@@ -6177,11 +6177,11 @@
     },
     "gui.pb.cred_intro": {
       "en": "What this machine holds for the servers this playbook carries. Values never enter the playbook file or a conversation.",
-      "zh": "本机为此剧本自带的 MCP 服务器保存的凭据。值不会进入剧本文件,也不会进入对话。"
+      "zh": "本机为此剧本自带的 MCP 服务器保存的凭据。值不会进入剧本文件，也不会进入对话。"
     },
     "gui.pb.cred_none": {
       "en": "This playbook declares no secret params and carries no OAuth server.",
-      "zh": "此剧本没有声明 secret 参数,也没有自带 OAuth 服务器。"
+      "zh": "此剧本没有声明 secret 参数，也没有自带 OAuth 服务器。"
     },
     "gui.pb.cred_sec_params": {
       "en": "Secret params",
@@ -6228,7 +6228,7 @@
       "zh": "未授权"
     },
     "gui.pb.cred_authorizing": {
-      "en": "waiting for the browser…",
+      "en": "waiting for the browser...",
       "zh": "等待浏览器授权…"
     },
     "gui.pb.cred_open_link": {
@@ -6250,6 +6250,414 @@
     "gui.pb.cred_disabled": {
       "en": "disabled",
       "zh": "已停用"
+    },
+    "gui.op.subscribe_failed": {
+      "en": "Could not subscribe - {detail}",
+      "zh": "订阅失败：{detail}"
+    },
+    "gui.op.switch_failed": {
+      "en": "Could not switch - {detail}",
+      "zh": "切换失败：{detail}"
+    },
+    "gui.op.open_failed": {
+      "en": "Could not open the session - {detail}",
+      "zh": "打开会话失败：{detail}"
+    },
+    "gui.op.load_failed": {
+      "en": "Could not load - {detail}",
+      "zh": "加载失败：{detail}"
+    },
+    "gui.op.save_failed": {
+      "en": "Could not save - {detail}",
+      "zh": "保存失败：{detail}"
+    },
+    "gui.op.action_failed": {
+      "en": "That did not work - {detail}",
+      "zh": "操作失败：{detail}"
+    },
+    "gui.op.delete_failed": {
+      "en": "Could not delete it - {detail}",
+      "zh": "删除失败：{detail}"
+    },
+    "gui.op.trigger_failed": {
+      "en": "Could not trigger it - {detail}",
+      "zh": "触发失败：{detail}"
+    },
+    "gui.op.lang_failed": {
+      "en": "Could not switch the language - {detail}",
+      "zh": "切换语言失败：{detail}"
+    },
+    "gui.op.branch_failed": {
+      "en": "Could not branch - {detail}",
+      "zh": "分叉失败：{detail}"
+    },
+    "gui.op.saved_next_turn": {
+      "en": "Saved. It applies from the next turn.",
+      "zh": "已保存 · 下一轮对话生效"
+    },
+    "gui.op.saved_restart": {
+      "en": "Saved. It applies once the engine restarts.",
+      "zh": "已保存 · 重启引擎后生效"
+    },
+    "gui.conn.not_receiving": {
+      "en": "The enabled entry is not receiving yet - open the Raven app and it starts.",
+      "zh": "已启用的入口还没在收消息——打开 Raven App 就会启动"
+    },
+    "gui.sess.branch_empty": {
+      "en": "This session has no content yet, so it cannot be branched",
+      "zh": "这个会话还没有内容，无法分叉"
+    },
+    "gui.sess.branched_n": {
+      "en": "Branched, carrying {n} messages",
+      "zh": "已分叉，带上了 {n} 条消息"
+    },
+    "gui.model.protocol_unsupported": {
+      "en": "This WebUI backend cannot set the API type",
+      "zh": "当前 WebUI 后端不支持 API 类型设置"
+    },
+    "gui.model.pick_staged": {
+      "en": "Picked {name}; it applies after you send the first message",
+      "zh": "已选择 {name}，发送首条消息后生效"
+    },
+    "gui.model.pick_switched": {
+      "en": "Switched to {name}",
+      "zh": "已切换到 {name}"
+    },
+    "gui.ws.notice_title": {
+      "en": "Web search is not set up yet",
+      "zh": "网页搜索还没配置"
+    },
+    "gui.ws.notice_body": {
+      "en": "Right now Raven can only fetch URLs you give it; it cannot look things up on its own.",
+      "zh": "现在 Raven 只能抓你给出的网址，不能自己找资料。"
+    },
+    "gui.ws.notice_go": {
+      "en": "Set it up",
+      "zh": "去配置"
+    },
+    "gui.ws.notice_dismiss": {
+      "en": "Dismiss",
+      "zh": "忽略"
+    },
+    "gui.panel.thinking": {
+      "en": "Thinking",
+      "zh": "思考"
+    },
+    "gui.panel.tool_calls": {
+      "en": "Tool calls",
+      "zh": "工具调用"
+    },
+    "gui.panel.progress": {
+      "en": "Progress",
+      "zh": "进度"
+    },
+    "gui.panel.spawned": {
+      "en": "Spawned",
+      "zh": "派生"
+    },
+    "gui.panel.spawn_tree": {
+      "en": "Spawn tree",
+      "zh": "派生树"
+    },
+    "gui.panel.activity": {
+      "en": "Activity",
+      "zh": "活动"
+    },
+    "gui.panel.transcript": {
+      "en": "Transcript",
+      "zh": "转录"
+    },
+    "gui.panel.budget": {
+      "en": "Budget",
+      "zh": "预算"
+    },
+    "gui.panel.files": {
+      "en": "Files",
+      "zh": "文件"
+    },
+    "gui.panel.output": {
+      "en": "Output",
+      "zh": "输出"
+    },
+    "gui.panel.summary": {
+      "en": "Summary",
+      "zh": "摘要"
+    },
+    "gui.panel.tools": {
+      "en": "Available Tools",
+      "zh": "可用工具"
+    },
+    "gui.panel.skills": {
+      "en": "Available Skills",
+      "zh": "可用技能"
+    },
+    "gui.panel.system_prompt": {
+      "en": "System Prompt",
+      "zh": "系统提示词"
+    },
+    "gui.panel.mcp_servers": {
+      "en": "MCP Servers",
+      "zh": "MCP 服务"
+    },
+    "gui.panel.scanning_skills": {
+      "en": "scanning skills",
+      "zh": "正在扫描技能"
+    },
+    "gui.panel.sudo_password": {
+      "en": "sudo password required",
+      "zh": "需要 sudo 密码"
+    },
+    "gui.panel.name": {
+      "en": "Name",
+      "zh": "名称"
+    },
+    "gui.panel.description": {
+      "en": "Description",
+      "zh": "描述"
+    },
+    "gui.panel.esc_cancel": {
+      "en": "Esc/q cancel",
+      "zh": "Esc/q 取消"
+    },
+    "gui.panel.error_x": {
+      "en": "error: {detail}",
+      "zh": "错误：{detail}"
+    },
+    "gui.panel.more_up": {
+      "en": "↑ {n} more",
+      "zh": "↑ 还有 {n} 条"
+    },
+    "gui.panel.more_down": {
+      "en": "↓ {n} more",
+      "zh": "↓ 还有 {n} 条"
+    },
+    "gui.panel.no_providers": {
+      "en": "no providers available",
+      "zh": "没有可用的服务商"
+    },
+    "gui.panel.no_skills": {
+      "en": "no skills available",
+      "zh": "没有可用技能"
+    },
+    "gui.panel.pick_category": {
+      "en": "select a category",
+      "zh": "选择一个分类"
+    },
+    "gui.panel.no_skills_here": {
+      "en": "no skills in this category",
+      "zh": "这个分类下没有技能"
+    },
+    "gui.panel.no_sessions": {
+      "en": "no previous sessions",
+      "zh": "没有历史会话"
+    },
+    "gui.panel.subagents": {
+      "en": "Subagents",
+      "zh": "子智能体"
+    },
+    "gui.panel.sec_installed": {
+      "en": "INSTALLED",
+      "zh": "已安装"
+    },
+    "gui.panel.sec_presets": {
+      "en": "AVAILABLE PRESETS",
+      "zh": "可用预设"
+    },
+    "gui.panel.sec_uninstalled": {
+      "en": "NOT INSTALLED",
+      "zh": "未安装"
+    },
+    "gui.panel.group_open": {
+      "en": "{title} ({n}) - Enter to open",
+      "zh": "{title}（{n}）· Enter 打开"
+    },
+    "gui.panel.loading_subagents": {
+      "en": "loading subagents...",
+      "zh": "正在加载子智能体…"
+    },
+    "gui.panel.loading_skills": {
+      "en": "loading skills...",
+      "zh": "正在加载技能…"
+    },
+    "gui.panel.loading_sessions": {
+      "en": "loading sessions...",
+      "zh": "正在加载会话…"
+    },
+    "gui.panel.loading_models": {
+      "en": "loading models...",
+      "zh": "正在加载模型…"
+    },
+    "gui.panel.loading": {
+      "en": "loading...",
+      "zh": "正在加载…"
+    },
+    "gui.panel.installing": {
+      "en": "installing...",
+      "zh": "正在安装…"
+    },
+    "gui.panel.deleting": {
+      "en": "deleting...",
+      "zh": "正在删除…"
+    },
+    "gui.panel.creating": {
+      "en": "creating...",
+      "zh": "正在创建…"
+    },
+    "gui.panel.add_subagent": {
+      "en": "Add subagent",
+      "zh": "添加子智能体"
+    },
+    "gui.panel.edit_subagent": {
+      "en": "Edit subagent: {name}",
+      "zh": "编辑子智能体：{name}"
+    },
+    "gui.panel.key_stored": {
+      "en": "API key (stored - blank keeps it)",
+      "zh": "API key（已保存 · 留空则不变）"
+    },
+    "gui.panel.name_blank": {
+      "en": "name cannot be blank",
+      "zh": "名称不能为空"
+    },
+    "gui.panel.press_d_again": {
+      "en": "press d again to delete",
+      "zh": "再按一次 d 删除"
+    },
+    "gui.panel.custom_agents": {
+      "en": "custom agents: web UI /subagents or ~/.raven/config.json",
+      "zh": "自定义子智能体：网页端 /subagents 或 ~/.raven/config.json"
+    },
+    "gui.panel.server_addr": {
+      "en": "Server address",
+      "zh": "服务器地址"
+    },
+    "gui.panel.console": {
+      "en": "console",
+      "zh": "控制台"
+    },
+    "gui.panel.last_turn": {
+      "en": "Last turn",
+      "zh": "上一轮"
+    },
+    "gui.panel.replay_x": {
+      "en": "Replay {i}/{n}",
+      "zh": "回放 {i}/{n}"
+    },
+    "gui.panel.queued_none": {
+      "en": "queued - nothing has run yet",
+      "zh": "排队中 · 还没有开始"
+    },
+    "gui.panel.waiting_first": {
+      "en": "waiting for the first step...",
+      "zh": "正在等待第一步…"
+    },
+    "gui.panel.no_step_record": {
+      "en": "no per-step record for this run",
+      "zh": "这次运行没有分步记录"
+    },
+    "gui.panel.k_form": {
+      "en": "Tab field · Enter/Ctrl+S save · Esc back",
+      "zh": "Tab 切换字段 · Enter/Ctrl+S 保存 · Esc 返回"
+    },
+    "gui.panel.k_yn": {
+      "en": "y confirm · n/Esc cancel",
+      "zh": "y 确认 · n/Esc 取消"
+    },
+    "gui.panel.k_yn_enter": {
+      "en": "y/Enter confirm · n/Esc cancel",
+      "zh": "y/Enter 确认 · n/Esc 取消"
+    },
+    "gui.panel.k_hub_main": {
+      "en": "↑/↓ select · Enter add/edit/open · space toggle · t test · d delete · r refresh · Esc/q close",
+      "zh": "↑/↓ 选择 · Enter 添加/编辑/打开 · space 启停 · t 测试 · d 删除 · r 刷新 · Esc/q 关闭"
+    },
+    "gui.panel.k_hub_builtin": {
+      "en": "↑/↓ select · r refresh · Esc/q close",
+      "zh": "↑/↓ 选择 · r 刷新 · Esc/q 关闭"
+    },
+    "gui.panel.k_hub_sub_cfg": {
+      "en": "↑/↓ select · Enter edit · space toggle · t test · d delete · r refresh · ←/Esc back · q close",
+      "zh": "↑/↓ 选择 · Enter 编辑 · space 启停 · t 测试 · d 删除 · r 刷新 · ←/Esc 返回 · q 关闭"
+    },
+    "gui.panel.k_hub_sub": {
+      "en": "↑/↓ select · r refresh · ←/Esc back · q close",
+      "zh": "↑/↓ 选择 · r 刷新 · ←/Esc 返回 · q 关闭"
+    },
+    "gui.panel.k_cats": {
+      "en": "↑/↓ select · Enter open · 1-9,0 quick · Esc/q cancel",
+      "zh": "↑/↓ 选择 · Enter 打开 · 1-9,0 快选 · Esc/q 取消"
+    },
+    "gui.panel.k_esc_back_close": {
+      "en": "Esc back · q close",
+      "zh": "Esc 返回 · q 关闭"
+    },
+    "gui.panel.k_skill": {
+      "en": "i reinspect · x reinstall · Enter/Esc back · q close",
+      "zh": "i 重新查看 · x 重新安装 · Enter/Esc 返回 · q 关闭"
+    },
+    "gui.panel.k_sessions": {
+      "en": "↑/↓ select · Enter resume · 1-9 quick · d delete · Esc/q cancel",
+      "zh": "↑/↓ 选择 · Enter 恢复 · 1-9 快选 · d 删除 · Esc/q 取消"
+    },
+    "gui.panel.k_instances": {
+      "en": "↑/↓ select · Enter create · 1-9 quick · Esc/q cancel",
+      "zh": "↑/↓ 选择 · Enter 创建 · 1-9 快选 · Esc/q 取消"
+    },
+    "gui.panel.k_diff": {
+      "en": "baseline vs candidate · esc/q close",
+      "zh": "基线 对比 候选 · esc/q 关闭"
+    },
+    "gui.panel.boot_summon": {
+      "en": "summoning raven...",
+      "zh": "正在唤醒 raven…"
+    },
+    "gui.panel.boot_loop": {
+      "en": "building agent loop...",
+      "zh": "正在搭建智能体循环…"
+    },
+    "gui.panel.boot_tools": {
+      "en": "loading tools & skills...",
+      "zh": "正在加载工具与技能…"
+    },
+    "gui.panel.no_active_session": {
+      "en": "no active session",
+      "zh": "当前没有会话"
+    },
+    "gui.panel.no_subagents": {
+      "en": "no subagents or presets available",
+      "zh": "没有可用的子智能体或预设"
+    },
+    "gui.panel.esc_stops_test": {
+      "en": "Esc cancels the running test",
+      "zh": "Esc 取消正在运行的测试"
+    },
+    "gui.panel.no_direct_chat": {
+      "en": "no subagent can hold a direct chat (needs an enabled, stateful agent)",
+      "zh": "没有子智能体能直接对话（需要一个已启用且有状态的智能体）"
+    },
+    "gui.panel.no_system_prompt": {
+      "en": "No system prompt loaded.",
+      "zh": "没有加载系统提示词。"
+    },
+    "gui.panel.failed": {
+      "en": "failed",
+      "zh": "失败"
+    },
+    "gui.panel.tool_one": {
+      "en": "1 tool",
+      "zh": "1 个工具"
+    },
+    "gui.panel.tool_n": {
+      "en": "{n} tools",
+      "zh": "{n} 个工具"
+    },
+    "gui.panel.skill_one": {
+      "en": "1 skill",
+      "zh": "1 个技能"
+    },
+    "gui.panel.skill_n": {
+      "en": "{n} skills",
+      "zh": "{n} 个技能"
     }
   }
 }

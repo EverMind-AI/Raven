@@ -12,6 +12,7 @@ import { enterDirect, rememberInstance } from '../app/directChatStore.js'
 import { useGateway } from '../app/gatewayContext.js'
 import { $overlayState, patchOverlayState } from '../app/overlayStore.js'
 import { $uiSessionId, $uiTheme } from '../app/uiStore.js'
+import { t as uiText } from '../i18n/index.js'
 import { launchRavenCommand } from '../lib/externalCli.js'
 import { suspendForHandoff } from '../lib/handoff.js'
 import { FloatBox } from './appChrome.js'
@@ -105,7 +106,13 @@ export function PromptZone({
   if (overlay.sudo) {
     return (
       <Box flexDirection="column" flexShrink={0} paddingX={1} paddingY={1}>
-        <MaskedPrompt cols={cols} icon="🔐" label="sudo password required" onSubmit={onSudoSubmit} t={theme} />
+        <MaskedPrompt
+          cols={cols}
+          icon="🔐"
+          label={uiText('gui.panel.sudo_password')}
+          onSubmit={onSudoSubmit}
+          t={theme}
+        />
       </Box>
     )
   }

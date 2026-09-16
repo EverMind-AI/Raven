@@ -19,6 +19,7 @@ import type { LaunchResult } from '../lib/externalCli.js'
 import type { Theme } from '../theme.js'
 
 import { providerDisplayNames } from '../domain/providers.js'
+import { t as uiText } from '../i18n/index.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { tagBadge, tagLegend } from './modelTags.js'
 import { OverlayHint, useOverlayKeys, windowItems } from './overlayControls.js'
@@ -892,14 +893,14 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
   })
 
   if (loading) {
-    return <Text color={t.color.muted}>loading models…</Text>
+    return <Text color={t.color.muted}>{uiText('gui.panel.loading_models')}</Text>
   }
 
   if (err) {
     return (
       <Box flexDirection="column">
-        <Text color={t.color.label}>error: {err}</Text>
-        <OverlayHint t={t}>Esc/q cancel</OverlayHint>
+        <Text color={t.color.label}>{uiText('gui.panel.error_x', '', { detail: err })}</Text>
+        <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
   }
@@ -907,8 +908,8 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
   if (!providers.length) {
     return (
       <Box flexDirection="column">
-        <Text color={t.color.muted}>no providers available</Text>
-        <OverlayHint t={t}>Esc/q cancel</OverlayHint>
+        <Text color={t.color.muted}>{uiText('gui.panel.no_providers')}</Text>
+        <OverlayHint t={t}>{uiText('gui.panel.esc_cancel')}</OverlayHint>
       </Box>
     )
   }
@@ -924,7 +925,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
     const keyLabel = provider.key_env ?? 'API key'
     const baseLabel =
       provider.auth_type === 'local'
-        ? 'Server address'
+        ? uiText('gui.panel.server_addr')
         : `API base${provider.needs_api_base ? ' (required)' : ' (optional)'}`
     const caret = keySaving ? '' : '▎'
 
@@ -978,7 +979,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
         {keyError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            error: {keyError}
+            {uiText('gui.panel.error_x', '', { detail: keyError })}
           </Text>
         ) : keySaving ? (
           <Text color={t.color.muted} wrap="truncate-end">
@@ -1025,7 +1026,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
         {keyError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            error: {keyError}
+            {uiText('gui.panel.error_x', '', { detail: keyError })}
           </Text>
         ) : keySaving ? (
           <Text color={t.color.muted} wrap="truncate-end">
@@ -1060,7 +1061,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
         </Text>
 
         <Text color={t.color.label} wrap="truncate-end">
-          {keyError ? `error: ${keyError}` : ' '}
+          {keyError ? uiText('gui.panel.error_x', '', { detail: keyError }) : ' '}
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end">
@@ -1160,7 +1161,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
         {keyError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            error: {keyError}
+            {uiText('gui.panel.error_x', '', { detail: keyError })}
           </Text>
         ) : keySaving ? (
           <Text color={t.color.muted} wrap="truncate-end">
@@ -1209,7 +1210,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
         {loginError ? (
           <Text color={t.color.label} wrap="truncate-end">
-            error: {loginError}
+            {uiText('gui.panel.error_x', '', { detail: loginError })}
           </Text>
         ) : loginPhase === 'running' ? (
           <Text color={t.color.muted} wrap="truncate-end">
@@ -1279,7 +1280,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
             disconnecting…
           </Text>
         ) : (
-          <OverlayHint t={t}>y/Enter confirm · n/Esc cancel</OverlayHint>
+          <OverlayHint t={t}>{uiText('gui.panel.k_yn_enter')}</OverlayHint>
         )}
       </Box>
     )
@@ -1430,7 +1431,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
           a tooltip, and only the tags actually on screen are worth a line. Kept
           in the layout when empty so the rows below hold still. */}
       <Text color={t.color.muted} wrap="truncate-end">
-        {tagLegend(models.map((model) => provider?.model_labels?.[model])) || ' '}
+        {tagLegend(models.map(model => provider?.model_labels?.[model])) || ' '}
       </Text>
 
       <Text color={t.color.muted} wrap="truncate-end">
