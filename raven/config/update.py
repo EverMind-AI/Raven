@@ -552,6 +552,7 @@ def embedding_model_change(previous: dict[str, Any], fields: dict[str, Any]) -> 
         "re-index whatever the memory backend has stored."
     )
 
+
 def initialize_a2a_server(*, config_path: Path | None = None) -> str | None:
     """Mint this install's inbound A2A credential and switch the face on.
 
