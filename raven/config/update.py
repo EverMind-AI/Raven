@@ -581,6 +581,7 @@ def embedding_model_change(previous: dict[str, Any], fields: dict[str, Any]) -> 
     # English paragraph on an otherwise translated screen.
     return t(_EMBEDDING_MODEL_CHANGED, was=was, now=now)
 
+
 def initialize_a2a_server(*, config_path: Path | None = None) -> str | None:
     """Mint this install's inbound A2A credential and switch the face on.
 
