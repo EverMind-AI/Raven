@@ -1111,6 +1111,29 @@ _PROVIDER_BASE_URL_FALLBACK = {
 }
 
 
+def provider_serving_at(base_url: str, *, config_path: Path | None = None) -> str | None:
+    """Which configured provider answers at ``base_url``, if any.
+
+    The migrations' one hard part: a retired block stored an address, the
+    block replacing it names a provider, and only the configured providers can
+    say which of them is that address. Compared on the host and path with a
+    trailing slash removed, because the two spellings are the same endpoint and
+    the config may hold either.
+    """
+    want = base_url.rstrip("/")
+    for row in list_providers(config_path=config_path):
+        name = str(row.get("name") or "")
+        if not name:
+            continue
+        try:
+            resolved = resolve_provider_credentials(name, config_path=config_path)
+        except Exception:  # noqa: BLE001 - one unusable provider must not stop the search
+            continue
+        if resolved and resolved[0].rstrip("/") == want:
+            return name
+    return None
+
+
 def resolve_provider_credentials(name: str, *, config_path: Path | None = None) -> tuple[str, str] | None:
     """The address and key a request to ``name`` would actually go out on.
 
@@ -1966,6 +1989,7 @@ __all__ = [
     "lend_provider_credentials",
     "resolve_main_model",
     "provider_field_specs",
+    "provider_serving_at",
     "resolve_provider_credentials",
     "list_providers",
     "get_provider_config",
