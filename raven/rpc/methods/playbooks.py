@@ -422,6 +422,7 @@ async def playbooks_validate(params: dict) -> dict:
     distribution unit: a step naming an agent this host does not have is a real
     finding here, and the CLI reports it the same way.
     """
+    import yaml
     from pydantic import ValidationError
 
     from raven.agent.subagent.registry import AgentRegistry
@@ -435,7 +436,12 @@ async def playbooks_validate(params: dict) -> dict:
     spec = None
     try:
         spec = store.load(name)
-    except (ValidationError, ValueError) as exc:
+    # ``yaml.YAMLError`` beside the other two: a file with an unclosed bracket
+    # raises ``ParserError``, which descends from neither, and a hand-edited
+    # playbook is the commonest way this breaks. Left out, the one method whose
+    # whole point is to answer with findings turned that case into an internal
+    # error with a traceback -- the shape its own contract exists to avoid.
+    except (ValidationError, ValueError, yaml.YAMLError) as exc:
         errors.append(str(exc))
     if spec is not None:
         registry = AgentRegistry()
@@ -467,11 +473,18 @@ async def playbooks_delete(params: dict) -> dict:
 
     name = _known_name(params.get("name"))
     store = _store()
-    origin = store.origin_of(name)
-    if origin == "builtin":
+    if store.origin_of(name) == "builtin":
         raise ConfigValidationError(f"{name} is a builtin and cannot be deleted; disable it instead")
 
-    directory = store.path_for(name).parent
+    # One resolution, and it is the one that gets removed. Asking which layer
+    # serves the name and then asking which directory to remove are two reads of
+    # a disk a second process also writes -- `raven playbook delete` is that
+    # process -- and the second read is the one `rmtree` acts on. Answering both
+    # from a single lookup means the path removed is one that was in the user
+    # layer when it was resolved, whatever happened in between.
+    directory = store.user_directory(name)
+    if directory is None:
+        raise ConfigValidationError(f"{name} is no longer in the library; nothing was removed")
     shutil.rmtree(directory)
     set_playbook_disabled(name, False)
     # Read back through a fresh store: `_store()` holds paths rather than an

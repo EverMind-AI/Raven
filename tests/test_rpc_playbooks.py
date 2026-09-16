@@ -14,6 +14,7 @@ Three things the page depends on and nothing else asserts:
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -772,3 +773,66 @@ async def test_a_library_shaped_name_still_works(library: PlaybookStore) -> None
     refuses everything."""
     library.save(_spec("competitor-scan"))
     assert (await mod.playbooks_validate({"name": "competitor-scan"}))["name"] == "competitor-scan"
+
+
+@pytest.mark.asyncio
+async def test_the_name_that_reaches_the_store_is_the_cleaned_one(library: PlaybookStore) -> None:
+    """The guard's third clause, which the shape checks alone do not hold.
+
+    ``_known_name`` strips, checks the stripped form, and answers it. Handing
+    back the raw string instead would leave a name that passes the shape check
+    and then fails inside the store -- ``"  competitor-scan  "`` is clean after
+    a strip and dirty before it, so the check sees one string and the lookup
+    gets another. Every other name in this file already equals its own strip,
+    which is why nothing else covers this.
+    """
+    library.save(_spec())
+    out = await mod.playbooks_get({"name": "  competitor-scan  "})
+    assert out["playbook"]["name"] == "competitor-scan"
+
+
+@pytest.mark.asyncio
+async def test_a_file_yaml_cannot_parse_is_a_finding_like_any_other(library: PlaybookStore, tmp_path: Path) -> None:
+    """An unclosed bracket is the commonest way a hand-edited playbook breaks.
+
+    ``ParserError`` descends from neither ``ValidationError`` nor ``ValueError``,
+    so left out of the catch it escaped as an internal error with a traceback --
+    the shape this method's contract exists to avoid, on the file most likely to
+    hit it.
+    """
+    broken = tmp_path / "user" / "half-written"
+    broken.mkdir(parents=True, exist_ok=True)
+    (broken / "playbook.md").write_text(
+        "---\nname: half-written\ndescription: d\n---\n\nbody\n\n```yaml playbook-spec\nnodes: [ unclosed\n```\n",
+        encoding="utf-8",
+    )
+    out = await mod.playbooks_validate({"name": "half-written"})
+    assert out["ok"] is False
+    assert out["errors"], "the parse failure is the finding, not a raised error"
+
+
+@pytest.mark.asyncio
+async def test_delete_acts_on_the_directory_it_resolved(
+    library: PlaybookStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Which layer serves the name and which directory to remove are one read.
+
+    Asked separately they are two reads of a disk a second process also writes
+    -- the CLI's own delete is that process -- and the second is the one
+    ``rmtree`` would act on. Here the user directory goes away after the layer
+    is judged: the call must refuse by name rather than carry a resolved path
+    from a world that no longer holds.
+    """
+    library.save(_spec())
+    real = type(library).origin_of
+
+    def vanishing(self: PlaybookStore, name: str):  # type: ignore[no-untyped-def]
+        answer = real(self, name)
+        directory = self.user_directory(name)
+        if directory is not None:
+            shutil.rmtree(directory)
+        return answer
+
+    monkeypatch.setattr(type(library), "origin_of", vanishing)
+    with pytest.raises(RpcError):
+        await mod.playbooks_delete({"name": "competitor-scan"})
