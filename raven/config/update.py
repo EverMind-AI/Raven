@@ -455,7 +455,14 @@ def set_embedding_endpoint(
     """
     path = config_path or get_config_path()
     allowed = {"model", "provider", "dimensions"}
-    clean = {k: v for k, v in fields.items() if k in allowed and v not in (None, "")}
+    given = {k: v for k, v in fields.items() if k in allowed}
+    clean = {k: v for k, v in given.items() if v not in (None, "")}
+    # A pin cleared rather than changed. The page's "inherit" option sends both
+    # halves empty, and dropping empties before the write made that a no-op the
+    # caller was told had applied -- the picker snapped back to the old pair on
+    # the next load, with no way to unset it but editing the file.
+    if given and not clean:
+        return _clear_embedding_pin(path)
     if not clean:
         return {}
 
@@ -482,6 +489,19 @@ def set_embedding_endpoint(
 
     prev = atomic_update(path, _apply)
     logger.info("config/update: embedding endpoint set ({})", ", ".join(sorted(clean)))
+    return prev or {}
+
+
+def _clear_embedding_pin(path: "Path") -> dict[str, Any]:
+    """Remove the block, and answer with what it held."""
+
+    def _apply(_text: str | None) -> tuple[str, Any]:
+        data = read_raw_or_raise(path)
+        prev = dict(data.pop("embedding", None) or {})
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    prev = atomic_update(path, _apply)
+    logger.info("config/update: embedding endpoint cleared")
     return prev or {}
 
 
