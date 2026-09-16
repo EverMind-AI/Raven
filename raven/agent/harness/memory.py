@@ -5,7 +5,7 @@ working state and each segment builder's provider binding, and the builders
 were sized against this generation's context window, so a generation's window
 *is* its engine and replacing it is a new generation. What this module adds is
 the seat: the loop asks the Memory role rather than reaching past it, and the
-two turn-side decisions that were never the shell's move here with it.
+turn-side decisions that were never the shell's live here with it.
 
 ``candidate_messages`` turns on ``owns_compaction``, which is this role's own
 property: an engine that archives for itself wants the whole append-only log
@@ -21,14 +21,16 @@ all five move under a live ``/model`` switch or a hot config apply, and a value
 captured at assembly would answer for the retired one.
 
 Still with the shell on purpose: the assembly orchestration around ``assemble``
-(TurnContext construction, the degraded-segment stash, the injected-skill
-bookkeeping the loop reads back afterwards). Half of that is the window's and
-half is the shell's, so it is not a move this step can make honestly.
+(building the TurnContext, save for the brief this role fills in; the
+degraded-segment stash; the injected-skill bookkeeping the loop reads back
+afterwards). Half of that is the window's and half is the shell's, so it is
+not a move this role can make honestly.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from raven.contracts.assembled import TokenBudget
@@ -109,7 +111,31 @@ class DefaultMemory:
         *,
         turn: "TurnContext",
     ) -> "AssembledContext":
-        return await self._engine.assemble(session_key, session_messages, budget, turn=turn)
+        return await self._engine.assemble(session_key, session_messages, budget, turn=self._briefed(turn))
+
+    @staticmethod
+    def _briefed(turn: "TurnContext") -> "TurnContext":
+        """The turn with what this dispatch's playbook asked of it, if anything.
+
+        Read here rather than where the text is rendered: what a turn shows its
+        model is this role's question, so a later field ("carry the memory
+        segment this time", "recall five rather than three") has one obvious
+        home.
+
+        The rendering stays with the segment that owns the identity's shape.
+        This hands over the two strings and nothing about how they look.
+
+        Imported in the call for the reason ``DefaultAction.judge`` states:
+        naming the charter at the top makes importing the harness import the
+        whole sub-agent package. Nothing is caught around it -- a catch would
+        trade a loud failure for a turn that silently ran unbriefed.
+        """
+        from raven.agent.subagent.charter import current_charter
+
+        charter = current_charter()
+        if charter is None or not (charter.prompt or charter.stop_when):
+            return turn
+        return replace(turn, task_brief=charter.prompt, task_done_when=charter.stop_when)
 
     async def after_turn(self, session_key: str, outcome: dict[str, Any]) -> None:
         await self._engine.after_turn(session_key, outcome)

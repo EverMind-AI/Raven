@@ -7,19 +7,22 @@ this paper with it. Only the ``contract`` tier is a cross-loop promise.
 The four roles name the strategy *decisions* a turn makes, not four layers
 and not the loop itself. Memory assembles the window the model sees, Planning
 may prepare turn guidance, Capability picks the tool definitions one iteration
-exposes, and Action produces one usable model response. Everything else the
-turn does -- iteration accounting, hook phases, tool execution and approval,
+exposes, and Action produces one usable model response and judges a call
+against the dispatch's playbook. Everything else the turn does -- iteration
+accounting, hook phases, tool execution and approval,
 the three in-loop recoveries, persistence and event order -- stays with the
 L2 shell, which is what makes these four replaceable at all.
 
 _Avoid_: reading ``ActionModule`` as "the loop". The shell owns retries, tool
-execution and events; Action owns one model decision. And reading Memory as
+execution and events; Action owns one model decision and the playbook's
+verdict on a call. And reading Memory as
 the memory engine: Memory here is the turn's *window*, which the context
 engine owns; long-term recall is a different organ behind its own paper.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -164,9 +167,34 @@ class ActionRequest:
 
 @runtime_checkable
 class ActionModule(Protocol):
-    """One model decision, from an assembled request to a usable response."""
+    """What the agent does next: decide it, and judge it before it runs.
+
+    Two methods because there are two moments and two callers. ``decide`` is
+    asked by the loop and answers with a response. ``judge`` is asked by
+    ``ToolRegistry.execute`` once per call the response proposed, the way the
+    permission gate beside it is asked -- so the module supplies the judgement
+    and the shell still decides what to do with it. A role that answers ``[]``
+    withholds nothing, which is what having no playbook already means: the
+    contract narrows and never grants.
+    """
 
     async def decide(self, request: ActionRequest) -> "LLMResponse": ...
+
+    def judge(
+        self,
+        name: str,
+        params: Mapping[str, Any],
+        prior: Sequence[tuple[str, Mapping[str, Any]]],
+    ) -> list[str]:
+        """Why this call must not run, or an empty list.
+
+        Sentences, not exceptions: a refusal reaches the model as the call's
+        own result, so its next attempt can be right. Synchronous and cheap by
+        contract -- this runs before every dispatch and ahead of the permission
+        gate, where anything that blocked on the network would cost the turn
+        rather than the call.
+        """
+        ...
 
 
 @dataclass(frozen=True)

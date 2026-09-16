@@ -74,6 +74,11 @@ class AssemblyContext:
     budget: TokenBudget
     prefix: AssembledPrefix | None = None
     can_see_images: bool = True
+    # Carried through from ``TurnContext``: what this dispatch's playbook asked
+    # of the turn. Empty on every turn that carried none, which is the string
+    # every reader already appends to no effect.
+    task_brief: str = ""
+    task_done_when: str = ""
     describe_tool: str | None = None
     surface: str | None = None
     """Which front end the turn came from, when the connection declared one.
@@ -231,6 +236,12 @@ class TurnContext:
     # or None when none is (it comes from an optional plugin). Naming a tool the
     # model does not have reads as an instruction it cannot follow.
     describe_tool: str | None = None
+    # What a dispatch's playbook asked of this turn, if it carried one. Filled
+    # by Memory from the bound charter rather than read where it is rendered:
+    # the identity segment owns how the text looks, Memory owns whether this
+    # turn carries it at all.
+    task_brief: str = ""
+    task_done_when: str = ""
 
 
 __all__ = [

@@ -305,7 +305,19 @@ class RavenLoopBackend:
             ),
             allow_ask=True,
         )
-        tools = ToolRegistry(permission_gate=gate)
+        # This lane runs its own loop rather than an ``AgentLoop``, so it has
+        # no harness to borrow the Action role from -- it builds the default
+        # one for the single thing the registry asks of it: the judgement this
+        # dispatch's playbook carries -- wired the way ``AgentLoop`` wires its
+        # own, so a charter's ``checks`` hold on this lane as they do on the
+        # forked one.
+        # Imported here, not at module scope: ``raven.agent.harness`` reaches
+        # this module through ``raven.agent.subagent``'s own package import, so
+        # naming it at the top closes a cycle that only shows at first import.
+        from raven.agent.harness import DefaultAction
+
+        _verifier = DefaultAction()
+        tools = ToolRegistry(permission_gate=gate, verifier_provider=lambda: _verifier)
         if self.mcp_source is not None:
             tools.set_withheld_source(self.mcp_source.disabled_tools)
         for wrapper, origin in grant.for_registry():

@@ -403,7 +403,13 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             judge_provider_for=self._permission_judge_provider,
             allow_ask=True,
         )
-        self.tools = ToolRegistry(tool_gates=plugin_tool_gates or (), permission_gate=permission_gate)
+        # ``verifier_provider`` is late-bound because the harness is assembled
+        # after this line: the registry exists before the roles that read it.
+        self.tools = ToolRegistry(
+            tool_gates=plugin_tool_gates or (),
+            permission_gate=permission_gate,
+            verifier_provider=lambda: self.harness.action,
+        )
         # A conversation's own mode outlives a restart on its record, the way
         # its model does; this is how the gate reads it back.
         from raven.permissions import set_session_mode_restorer
