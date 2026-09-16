@@ -249,6 +249,29 @@ describe('browser island, embedded shape (the rpc source)', () => {
     expect(bar.value).toBe('https://example.com/c')
   })
 
+  it('keeps streaming to a desk window when the legacy panel says it is hidden', async () => {
+    /* On a desk-ready page the legacy panel shows nothing, so its repaint --
+       which every tool event triggers -- called hidden() and took down the
+       desk window's watch and its poll timer with it. The window then sat on
+       "no page open" for the rest of the session while the model browsed. */
+    const { calls } = chromium({ frame: async () => ({ started: true, url: 'https://example.com' }) })
+    mount()
+    await screen.findByText('gui.br.waiting')
+    store.setDeskPane(true)
+    calls.length = 0
+
+    store.hidden()
+    await act(async () => {})
+
+    expect(calls).toEqual([])
+
+    store.setDeskPane(false)
+    store.hidden()
+    await act(async () => {})
+
+    expect(calls).toContainEqual(['watch', { on: false }])
+  })
+
   it('asks a popped-out browser where it is, never for a picture', async () => {
     /* Capturing a headed window through CDP repaints it, so a poll for a frame
        the popped-out view does not draw made the reader's own window flicker

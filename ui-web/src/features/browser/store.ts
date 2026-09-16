@@ -470,8 +470,16 @@ export async function closeBrowser(): Promise<void> {
 
 /* Leaving the browser view -- another tab, another session, the panel shut --
    must drop the watch; the demo drawWs wrapper calls this on every repaint
-   that lands somewhere else. */
+   that lands somewhere else.
+
+   Not while a desk window holds the view: that repaint speaks for the legacy
+   panel, which on a desk-ready page shows nothing and therefore says "not the
+   browser" every time. Honouring it killed the pane's stream AND its poll
+   timer, and nothing restarts a timer for a page it believes is not open --
+   so the window sat on "no page open" while the model browsed. The pane's own
+   unmount clears the flag before it calls this. */
 export function hidden(): void {
+  if (deskPane) return
   void watch(false)
   tick(false)
 }
