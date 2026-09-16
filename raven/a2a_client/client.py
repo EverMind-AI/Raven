@@ -6,6 +6,8 @@ how a reply becomes a string the model can read.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import httpx
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
 from a2a.types import AgentCard, Message, Part, Role, SendMessageRequest
@@ -20,19 +22,32 @@ A2A_VERSION_HEADER = {"A2A-Version": "1.0"}
 def _text_of(event: object) -> str:
     """Any text carried by one StreamResponse event.
 
-    The oneof is task-or-message, so both arms are read: a peer may answer with a
-    message directly, or with a task whose artifacts hold the answer.
+    The oneof has four arms -- task, message, status_update, artifact_update --
+    and which one carries the answer is the peer's choice, so all four are read.
+    `status_update` is not an optional extra: raven's own executor reports
+    through it, putting the reply in the terminal COMPLETED frame's
+    `status.message`, so a reader of only task and message watches every frame
+    arrive and extracts nothing from any of them.
+
+    An unset arm reads back as a default-empty message rather than raising, so
+    the arms that did not arrive contribute nothing and need no guard.
     """
     chunks: list[str] = []
-    message = getattr(event, "message", None)
-    for part in getattr(message, "parts", None) or []:
-        if getattr(part, "text", ""):
-            chunks.append(part.text)
-    task = getattr(event, "task", None)
-    for artifact in getattr(task, "artifacts", None) or []:
-        for part in getattr(artifact, "parts", None) or []:
+
+    def take(container: object) -> None:
+        for part in getattr(container, "parts", None) or []:
             if getattr(part, "text", ""):
                 chunks.append(part.text)
+
+    take(getattr(event, "message", None))
+
+    task = getattr(event, "task", None)
+    take(getattr(getattr(task, "status", None), "message", None))
+    for artifact in getattr(task, "artifacts", None) or []:
+        take(artifact)
+
+    take(getattr(getattr(getattr(event, "status_update", None), "status", None), "message", None))
+    take(getattr(getattr(event, "artifact_update", None), "artifact", None))
     return "\n".join(chunks)
 
 
@@ -89,6 +104,13 @@ async def send_message(config: A2aConfig, card_url: str, message: str, *, timeou
                 "peer."
             )
         client = ClientFactory(ClientConfig(httpx_client=http)).create(card)
-        request = SendMessageRequest(message=Message(role=Role.ROLE_USER, parts=[Part(text=message)]))
+        # `message_id` is required, and the SDK client does not fill it in: a
+        # message sent without one is refused by a conformant peer -- including
+        # raven's own inbound face -- as InvalidParamsError, before the peer's
+        # agent ever runs. The value only has to identify this message to the
+        # peer, so a fresh uuid is the whole requirement.
+        request = SendMessageRequest(
+            message=Message(role=Role.ROLE_USER, parts=[Part(text=message)], message_id=uuid4().hex)
+        )
         chunks = [text async for event in client.send_message(request) if (text := _text_of(event))]
     return "\n".join(chunks) or "(the peer returned no text)"
