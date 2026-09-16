@@ -23,6 +23,7 @@ configured.
 
 from __future__ import annotations
 
+import functools
 import json
 import shutil
 import subprocess
@@ -51,7 +52,8 @@ def _updates() -> list[dict]:
     return updates
 
 
-def _commitlint_rule(name: str) -> list[str]:
+@functools.lru_cache(maxsize=None)
+def _commitlint_rule(name: str) -> tuple[str, ...]:
     script = f"process.stdout.write(JSON.stringify(require('./commitlint.config.cjs').rules['{name}'][2]))"
     dumped = subprocess.run(
         ["node", "-e", script],
@@ -66,7 +68,7 @@ def _commitlint_rule(name: str) -> list[str]:
     # assertion below. Anchor it on an entry that cannot move.
     anchor = {"scope-enum": "cli", "type-enum": "feat"}[name]
     assert anchor in values, f"{name} did not come through node: {values[:5]}"
-    return values
+    return tuple(values)
 
 
 def _directory(lockfile: str) -> str:
