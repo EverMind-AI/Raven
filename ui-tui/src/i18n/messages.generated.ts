@@ -1593,7 +1593,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.ws.file_binary': 'Nothing to render for this kind of file.',
     'gui.ws.file_denied': 'Raven is confined to the workspace, so this file cannot be opened here.',
     'gui.ws.html_no_scripts':
-      'Scripts do not run in this preview, so a page that draws itself with JavaScript shows only its background. Open the file outside Raven to run it.',
+      'Scripts do not run in this preview. A page that needs them may look blank, or may look finished while its layout is wrong and nothing responds. Open the file outside Raven to see it as written.',
     'gui.ws.file_gone': 'That file is no longer there.',
     'gui.ws.file_loading': 'reading...',
     'gui.ws.file_rendering': 'rendering as PDF...',
@@ -3303,7 +3303,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.ws.file_binary': '这种文件没有可渲染的形式。',
     'gui.ws.file_denied': 'Raven 被限制在工作目录内，这个文件没法在这里打开。',
     'gui.ws.html_no_scripts':
-      '预览不运行脚本，所以用 JavaScript 绘制的页面只会显示背景。要运行它，请在 Raven 之外打开这个文件。',
+      '预览不运行脚本。需要脚本的页面可能一片空白，也可能看着像画好了、实际上排版是歪的且点什么都没反应。要看它本来的样子，请在 Raven 之外打开这个文件。',
     'gui.ws.file_gone': '这个文件已经不在了。',
     'gui.ws.file_loading': '读取中…',
     'gui.ws.file_rendering': '正在转成 PDF…',
