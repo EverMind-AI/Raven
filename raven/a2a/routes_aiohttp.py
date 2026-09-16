@@ -13,6 +13,7 @@ request handler, so an unknown caller never starts a turn.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -151,14 +152,47 @@ claim that its handler already returns the type the client parses.
 """
 
 
+_FORWARDED_PROTO = re.compile(r'\bproto\s*=\s*"?([A-Za-z][A-Za-z0-9+.-]*)"?')
+
+
+def _forwarded_scheme(request: web.Request) -> str:
+    """The scheme the caller used, when a proxy in front of us reports one.
+
+    `Forwarded` (RFC 7239) is read first and `X-Forwarded-Proto` second, taking
+    the first element of either, which is the hop nearest the client. Anything
+    but http or https is ignored rather than trusted into a URL.
+    """
+    if match := _FORWARDED_PROTO.search(request.headers.get("Forwarded", "").split(",")[0]):
+        scheme = match.group(1)
+    else:
+        scheme = request.headers.get("X-Forwarded-Proto", "").split(",")[0]
+    scheme = scheme.strip().lower()
+    return scheme if scheme in {"http", "https"} else ""
+
+
 def _interface_url(request: web.Request, config: A2aConfig) -> str:
     """Where this agent's JSON-RPC interface is, as *this* caller reached it.
 
     One computation for both routes. `aiohttp.web` does not re-export `yarl.URL`
     (there is no `web.URL`); the server's path is always absolute, so plain
     concatenation is enough.
+
+    The socket's scheme is not the caller's. This face listens on plain loopback
+    and the ordinary way to expose it is a TLS-terminating proxy, so an https
+    caller arrives over http here and a card built from the socket advertises
+    `http://` to someone who used `https://` -- which raven's own same-origin
+    guard then refuses, on the host's own card.
+
+    Reading the forwarding header does not widen what this URL already trusts:
+    the host half comes from the caller's `Host` header and always has. Nor is
+    it a server-side decision -- the advertised URL is read by the caller's
+    same-origin check and by nothing on this side -- and the card is built per
+    request, so no caller can affect the card any other caller is given.
     """
-    return str(request.url.origin()) + config.server.path
+    origin = request.url.origin()
+    if scheme := _forwarded_scheme(request):
+        origin = origin.with_scheme(scheme)
+    return str(origin) + config.server.path
 
 
 async def _serve_stream(

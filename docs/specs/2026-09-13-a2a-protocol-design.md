@@ -283,6 +283,17 @@ rejected by a strict parser and silently dropped by a lenient one. The entry dec
 this host; the URI is versioned in its path, because a peer keying off it has no other way
 to tell which shape of `params` it is being handed.
 
+The scheme is part of that origin and does not come from the socket. This face listens on
+plain loopback and the ordinary way to expose it is a TLS-terminating proxy, so an https
+caller arrives here over http; a card built from the socket advertises `http://` to a
+caller who used `https://`, and that is exactly what the same-origin rule above rejects.
+The binding therefore reads `Forwarded` (RFC 7239) and `X-Forwarded-Proto`, taking the hop
+nearest the client and ignoring any value that is not http or https. This does not widen
+what the URL already trusts: its host half comes from the caller's own `Host` header and
+always has, the advertised URL is read by the caller's same-origin check and by nothing on
+this side, and the card is built per request, so no caller can affect the card another one
+is given.
+
 Both are derived per call rather than baked when the face is mounted: on the
 gateway-mounted hosting the loop that owns the roster does not exist yet at mount time, and
 a hot `apply_agents` would otherwise leave the answer stale. A host given no roster at all
