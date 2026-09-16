@@ -1,0 +1,5 @@
+section#pbPage.page[data-i18n-aria=gui.nav.pb][data-open=false]
+  header
+    h2[data-i18n=gui.nav.pb]
+  div.work
+    div#pbBody.wrap

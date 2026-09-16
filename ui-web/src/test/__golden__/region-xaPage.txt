@@ -1,0 +1,5 @@
+section#xaPage.page[data-i18n-aria=gui.page.agents][data-open=false]
+  header
+    h2[data-i18n=gui.page.agents]
+  div.work
+    div#xaBody.wrap
