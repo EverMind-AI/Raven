@@ -299,6 +299,31 @@ def test_the_old_everos_spelling_is_migrated_not_merely_tolerated(stub_config_pa
     assert cfg.skill_forge.extraction.max_skills_top_k == 7
 
 
+def test_the_rename_reaches_the_file_not_only_the_load(stub_config_path: Path) -> None:
+    """A migration that only runs in memory is a shim every load pays for, and
+    a config file that goes on naming a block after the backend it never
+    belonged to. One stamped pass moves both keys and stops."""
+    import json
+
+    from raven.config.loader import load_config
+
+    _write_config(
+        stub_config_path,
+        {
+            "knowledge": {"embeddingModel": "openai/text-embedding-3-small", "embeddingProvider": "openai"},
+            "skill_forge": {"enabled": True, "everos": {"enabled": True}},
+        },
+    )
+
+    load_config()
+
+    raw = json.loads(stub_config_path.read_text(encoding="utf-8"))
+    assert raw["embedding"] == {"model": "openai/text-embedding-3-small", "provider": "openai"}
+    assert "embeddingModel" not in raw["knowledge"]
+    assert raw["skill_forge"]["extraction"] == {"enabled": True}
+    assert "everos" not in raw["skill_forge"]
+
+
 def test_the_new_name_wins_when_a_config_somehow_carries_both(stub_config_path: Path) -> None:
     """Hand-edited, or edited by two tools. The one the reader can see in the
     current schema is the one that applies; the retired key is dropped."""
