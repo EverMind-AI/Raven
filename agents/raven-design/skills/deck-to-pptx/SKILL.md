@@ -32,8 +32,15 @@ picture and carry them on type, grid, rule and colour.
   (`references/assets.md` has the command). Import from `ppt_layout`, `ppt_theme`, `ppt_icons`,
   `ppt_shapes` and `ppt_charts`.
 - Page furniture comes from them and is not rewritten: text, points, cards, rules, heading,
-  footer, source note, table, icon, chart, formula, and the grid a region divides itself into
-  (`grid`, `split_left`, `stack`; measure with `fits`, `text_size`, `table_size` first).
+  footer, source note, chart, formula, and the grid a region divides itself into (`grid`,
+  `split_left`, `stack`; measure with `fits`, `text_size`, `table_size` first).
+- `table` is the ordinary grid: header row, columns, numbers aligned, rows as tall as their
+  text. A table that needs merged cells, a header spanning columns, an icon or a mark inside
+  a cell, a colour per cell, or more columns than fit at 14pt is drawn by hand.
+- Generic marks -- a camera, a warning, a calendar -- come from the packaged icon set
+  (`add_icon`, `find_icons`). The mark of a real thing -- a company's logo, a product's icon,
+  a framework's badge, a paper's venue -- is searched (`image_search`), downloaded and placed
+  as a picture, and a deck that names companies or products carries their marks.
 - Everything that makes a page its own is drawn by hand with python-pptx: a diagram, a
   polygon, a map, a custom arrow, a gradient, a hero number, a cover or section composition.
   Compose it from `plane`, `rule`, `connect` and `preset` where they fit and draw the rest.
