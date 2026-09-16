@@ -1,0 +1,215 @@
+"""ConductHook: a conduct seated in the hook chain, one instance per turn.
+
+What is under test is the seam, not any conduct: that each phase asks the
+verbs that belong to it and renders the answer as the ``HookDecision`` the
+composite already understands; that a turn gets one instance and the next
+turn another; and that a phase-level caller can hand a bare namespace the
+way the plugin tests do.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from raven.agent.hook.conduct import ConductHook
+from raven.contracts.agent_conduct import Accept, AgentConduct, End, Intake, Resample, StepView
+from raven.contracts.loop_hooks import AgentHookContext
+
+
+class _Recording(AgentConduct):
+    """Answers what it was told to and writes down every step it was shown."""
+
+    made = 0
+
+    def __init__(self, *, intake=None, tools=None, note=None, verdict=None, salvaged=None, outbound=None):
+        type(self).made += 1
+        self.steps: list[StepView] = []
+        self.archived: list[str | None] = []
+        self._intake, self._tools, self._note, self._verdict, self._salvaged, self._outbound = (
+            intake,
+            tools,
+            note,
+            verdict,
+            salvaged,
+            outbound,
+        )
+
+    async def intake(self, text, step):
+        self.steps.append(step)
+        return self._intake
+
+    async def select_tools(self, offered, step):
+        return self._tools
+
+    async def advise(self, step):
+        self.steps.append(step)
+        return self._note
+
+    async def review(self, step):
+        self.steps.append(step)
+        return self._verdict or Accept()
+
+    async def salvage(self, step):
+        return self._salvaged
+
+    async def outbound(self, reply, step):
+        return None if self._outbound is None else reply + self._outbound
+
+    async def archive(self, step, reply):
+        self.archived.append(reply)
+
+
+def _ctx(**kw) -> AgentHookContext:
+    return AgentHookContext(session_key="s1", **kw)
+
+
+@pytest.mark.asyncio
+async def test_one_turn_gets_one_conduct_and_the_next_turn_another():
+    _Recording.made = 0
+    hook = ConductHook("probe", lambda: _Recording(note="n"))
+    turn_a, turn_b = _ctx(iteration=1), _ctx(iteration=1)
+    await hook.before_iteration(turn_a)
+    await hook.after_iteration(turn_a)
+    assert _Recording.made == 1, "the same context is the same turn"
+    await hook.before_iteration(turn_b)
+    assert _Recording.made == 2, "a new context is a new turn"
+    await hook.before_user_inbound(turn_b)
+    assert _Recording.made == 3, "the first phase of a turn always starts fresh"
+
+
+@pytest.mark.asyncio
+async def test_two_turns_in_flight_at_once_keep_their_own_conducts():
+    """One hook instance serves every turn a process runs, and a system turn can
+    overlap a user one, so the turn each phase belongs to is the turn its state
+    comes from -- interleaved, not merely consecutive."""
+    _Recording.made = 0
+    hook = ConductHook("probe", lambda: _Recording(note="n"))
+    user, system = _ctx(iteration=1), _ctx(iteration=1)
+    await hook.before_user_inbound(user)
+    await hook.before_user_inbound(system)
+    await hook.before_iteration(user)
+    await hook.before_iteration(system)
+    assert _Recording.made == 2, "two turns, two conducts, however their phases interleave"
+    seen = [len(hook._seat(ctx).conduct.steps) for ctx in (user, system)]
+    assert seen == [2, 2], "each turn's conduct saw only its own steps"
+
+
+@pytest.mark.asyncio
+async def test_a_conducts_addendum_is_replaced_rather_than_stacked():
+    """The system message carries one copy of what a conduct adds: the next call
+    takes the previous one back out before splicing this one in."""
+
+    class Adding(AgentConduct):
+        def __init__(self):
+            self.n = 0
+
+        async def system_addendum(self, step):
+            self.n += 1
+            return Intake(text=f"repo note {self.n}")
+
+    hook = ConductHook("probe", Adding)
+    ctx = _ctx(iteration=1, messages=[{"role": "system", "content": "base"}])
+    await hook.before_iteration(ctx)
+    assert ctx.messages[0]["content"] == "base\n\nrepo note 1"
+    await hook.before_iteration(ctx)
+    assert ctx.messages[0]["content"] == "base\n\nrepo note 2", "one copy, not two"
+
+
+@pytest.mark.asyncio
+async def test_what_a_conduct_archives_is_merged_into_the_turns_observers():
+    """Two conducts stamping the same observer name keep both sets of counters."""
+
+    class Filing(AgentConduct):
+        def __init__(self, name, counters):
+            self._name, self._counters = name, counters
+
+        async def archive(self, step, reply):
+            return {self._name: self._counters}
+
+    ctx = SimpleNamespace(outbound_content="done", metadata={"observers": {"flow": {"kept": 1}}})
+    await ConductHook("a", lambda: Filing("flow", {"added": 2})).after_send(ctx)
+    await ConductHook("b", lambda: Filing("other", {"own": 3})).after_send(ctx)
+    assert ctx.metadata["observers"] == {"flow": {"kept": 1, "added": 2}, "other": {"own": 3}}
+
+
+@pytest.mark.asyncio
+async def test_intake_reshapes_or_ends_the_turn():
+    hook = ConductHook("probe", lambda: _Recording(intake=Intake(text="hello\n\n---\ncard")))
+    decision = await hook.before_user_inbound(SimpleNamespace(inbound_content="hello"))
+    assert decision.modified_content == "hello\n\n---\ncard" and decision.short_circuit_result is None
+    hook = ConductHook("probe", lambda: _Recording(intake=Intake(text="x", reply=("fix the config", []))))
+    decision = await hook.before_user_inbound(SimpleNamespace(inbound_content="x"))
+    assert decision.short_circuit_result == ("fix the config", [])
+    hook = ConductHook("probe", lambda: _Recording(intake=Intake(text="same")))
+    assert (await hook.before_user_inbound(SimpleNamespace(inbound_content="same"))).modified_content is None
+
+
+@pytest.mark.asyncio
+async def test_before_iteration_narrows_tools_and_carries_the_note():
+    offered = [{"function": {"name": "a"}}, {"function": {"name": "b"}}]
+    hook = ConductHook("probe", lambda: _Recording(tools=offered[:1], note="mind the budget"))
+    decision = await hook.before_iteration(_ctx(iteration=2, tools=list(offered)))
+    assert decision.modified_tools == offered[:1]
+    assert decision.append_note == "mind the budget"
+    hook = ConductHook("probe", lambda: _Recording(tools=None))
+    assert (await hook.before_iteration(_ctx(iteration=2, tools=list(offered)))).modified_tools is None
+
+
+@pytest.mark.asyncio
+async def test_review_verdicts_become_the_decisions_the_loop_acts_on():
+    resample = Resample(
+        "too thin",
+        inject=[{"role": "user", "content": "more"}],
+        overrides={"reasoning_effort": "high"},
+        note="gate: thin",
+    )
+    hook = ConductHook("probe", lambda: _Recording(verdict=resample, note="unused when rolled back"))
+    decision = await hook.after_iteration(_ctx(iteration=3, response=SimpleNamespace(content="draft", tool_calls=None)))
+    assert decision.rollback is True
+    assert decision.rollback_inject == [{"role": "user", "content": "more"}]
+    assert decision.rollback_overrides == {"reasoning_effort": "high"}
+    assert decision.notes == ["gate: thin"] and decision.append_note is None
+    hook = ConductHook("probe", lambda: _Recording(verdict=End("done here")))
+    assert (await hook.before_execute_tools(_ctx(iteration=3))).short_circuit_result == "done here"
+    hook = ConductHook("probe", lambda: _Recording(verdict=Accept(note="fine"), note="carry on"))
+    decision = await hook.after_iteration(_ctx(iteration=3))
+    assert decision.rollback is False and decision.append_note == "carry on" and decision.notes == ["fine"]
+
+
+@pytest.mark.asyncio
+async def test_the_step_is_read_off_the_context_and_off_a_bare_namespace():
+    hook = ConductHook("probe", lambda: _Recording())
+    ctx = _ctx(
+        iteration=4,
+        messages=[{"role": "user", "content": "q"}],
+        turn_question="q",
+        turn_base=1,
+        metadata={"hook_rollbacks": 2, "mode": "max"},
+    )
+    await hook.after_iteration(ctx)
+    step = hook.conduct.steps[-1]
+    assert (step.session_key, step.iteration, step.turn_base, step.question, step.rollbacks, step.mode) == (
+        "s1",
+        4,
+        1,
+        "q",
+        2,
+        "max",
+    )
+    assert isinstance(step.transcript, tuple) and step.transcript[0]["content"] == "q"
+    await hook.after_iteration(SimpleNamespace(response=None))
+    step = hook.conduct.steps[-1]
+    assert (step.session_key, step.iteration, step.transcript, step.rollbacks, step.mode) == ("", 0, (), 0, None)
+
+
+@pytest.mark.asyncio
+async def test_salvage_and_the_outgoing_reply_land_where_the_loop_reads_them():
+    hook = ConductHook("probe", lambda: _Recording(salvaged="rescued", outbound="\n\n--- 2 files changed"))
+    assert (await hook.terminal_answerless(_ctx())).short_circuit_result == "rescued"
+    decision = await hook.after_send(SimpleNamespace(outbound_content="done"))
+    assert decision.modified_content == "done\n\n--- 2 files changed"
+    assert hook.conduct.archived == ["done"], "archive is asked after the reply, with the reply as sent"
+    hook = ConductHook("probe", lambda: _Recording())
+    assert (await hook.after_send(SimpleNamespace(outbound_content="done"))).modified_content is None

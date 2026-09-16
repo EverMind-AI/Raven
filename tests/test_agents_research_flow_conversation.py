@@ -516,7 +516,9 @@ def _run_turn(hook, text, *, prior=(), mode="", overlay=None, iteration_writes=N
         )
         await hook.before_iteration(iter_ctx)
         if iteration_writes:
-            iter_ctx.metadata.update(iteration_writes)
+            # The gates' namespaces are the conduct's turn facts now, not keys on
+            # the loop's dict; a test standing in for the gates writes where they do.
+            hook.conduct._facts.update(iteration_writes)
 
         await hook.after_send(AgentHookContext(session_key="s", outbound_content="the answer", metadata=meta))
         return content

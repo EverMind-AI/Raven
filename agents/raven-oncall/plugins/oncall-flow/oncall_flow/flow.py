@@ -14,28 +14,33 @@ plugin contributes them as ONE hook running them in a fixed order:
   through ``metadata["observers"]`` at the send fire.
 - **the work-to-watch judgement** (fork ``_note_watched_path`` + ops/watched.py):
   one sidecar model call per turn that touches a subject, the verdict cached on
-  the turn's own metadata dict, and the provenance line delivered where a
+  the turn's conduct instance, and the provenance line delivered where a
   failure would be -- on the tool result, via the ``append_note`` grant, the
   only channel measured to change behaviour.
 - **the turn close** (fork ``Tool.ends_turn`` on ops_check_later): a successful
   ops_check_later ends the turn; the fork's primitive does not exist on the
-  trunk, so the close is ``after_iteration``'s ``short_circuit_result``, keyed
-  on the call's name plus its result's own first words ("Scheduled a wake" --
-  every refusal branch deliberately starts otherwise).
+  trunk, so the close is the conduct's ``End`` verdict, keyed on the call's
+  name plus its result's own first words ("Scheduled a wake" -- every refusal
+  branch deliberately starts otherwise).
 
-Per-turn state rides the turn's ONE metadata dict (seeded at the inbound fire,
-same dict through the iterations and the send -- the trunk pins this), under
-the freight keys below; ``after_send`` pops every key, so nothing can leak
-into a later turn even on a host that skips a phase.
+The judgements (work-to-watch, the cap-kill note, the close) are one
+``OncallConduct`` -- one instance per turn, seated in the axis order through
+``ConductHook`` -- so the verdict cache and the counters they file are
+attributes that die with the turn. The two mechanism axes (context,
+accounting) stay hooks: their state rides the turn's ONE metadata dict
+(seeded at the inbound fire, same dict through the iterations and the send --
+the trunk pins this) under the freight keys below, and ``after_send`` pops
+every key, so nothing can leak into a later turn even on a host that skips a
+phase. The conduct's counters reach the same ``observers`` stamp through its
+``archive`` verb, merged after the accounting axis wrote the stamp.
 
-The axes are composed here rather than as four manifest rows because the
+The axes are composed here rather than as manifest rows because the
 registry serves hook names sorted, and the axis order is part of this flow's
 contract (context before anything that reads it; accounting before the close
-so the closing call is counted). The import discipline (stdlib + contracts +
-own package) keeps the kernel's CompositeHook out of reach, so ``_run_phase``
-mirrors its documented semantics: first halting state wins and carries the
-trail, notes chain in order joined by a blank line, a raising axis is logged
-and treated as a no-op.
+so the closing call is counted). ``_run_phase``
+mirrors the kernel CompositeHook's documented semantics: first halting state
+wins and carries the trail, notes chain in order joined by a blank line, a
+raising axis is logged and treated as a no-op.
 """
 
 from __future__ import annotations
@@ -51,6 +56,8 @@ from oncall_flow.escalation import append_note, unanswered_question
 from oncall_flow.instrument import is_concluded, log_event
 from oncall_flow.tools import base as tools_base
 from oncall_flow.window import campaign_for_window, task_fingerprint
+from raven.agent.hook.conduct import ConductHook
+from raven.contracts.agent_conduct import Accept, AgentConduct, End, StepView, Verdict
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 
 if TYPE_CHECKING:
@@ -58,23 +65,20 @@ if TYPE_CHECKING:
     from raven.plugins.context import PluginContext
 
 # ``ctx.metadata`` is ONE dict per turn: the loop seeds it at the inbound fire
-# and hands the same dict to the iterations and the send. Everything the axes
-# pass between phases rides it under these keys, and the accounting axis pops
-# all three at ``after_send`` -- ``before_user_inbound`` is skipped for some
-# turn origins, and a value that survived by accident would stamp one turn's
-# judgement on the next (the research-flow freight-key discipline).
+# and hands the same dict to the iterations and the send. Everything the two
+# mechanism axes pass between phases rides it under these keys, and the
+# accounting axis pops both at ``after_send`` -- ``before_user_inbound`` is
+# skipped for some turn origins, and a value that survived by accident would
+# stamp one turn's judgement on the next (the research-flow freight-key
+# discipline). The judgements' own state (the work-to-watch verdict, their
+# counters) lives on the turn's ``OncallConduct`` instance instead.
 
 # The window's identity as the inbound fire saw it: channel, chat_id, task
 # fingerprint. Its absence at iteration 1 is how the context axis knows the
 # inbound fire never ran and the turn is a cold start.
 _CONTEXT_KEY = "oncall_ctx"
 
-# The one work-to-watch verdict this turn bought (a watched.Verdict). Cached
-# whatever it says: "not watched" is as much an answer as "watched", and the
-# fork paid for exactly one judgement per turn.
-_VERDICT_KEY = "oncall_watched"
-
-# The turn's counters, accumulated by every axis, stamped into
+# The turn's counters, accumulated by the mechanism axes, stamped into
 # ``metadata["observers"]`` at the send fire and filed onto the turn's record
 # at persist time (hook surface v3).
 _ACCOUNT_KEY = "oncall_turn"
@@ -288,7 +292,6 @@ class TurnAccountingHook(AgentHook):
 
     async def after_send(self, ctx: AgentHookContext) -> HookDecision:
         ctx.metadata.pop(_CONTEXT_KEY, None)
-        ctx.metadata.pop(_VERDICT_KEY, None)
         acct = ctx.metadata.pop(_ACCOUNT_KEY, None)
         if acct:
             ctx.metadata.setdefault("observers", {})["oncall_flow"] = dict(acct)
@@ -301,7 +304,7 @@ class TurnAccountingHook(AgentHook):
         return HookDecision()
 
 
-# ── Axis 3: the work-to-watch judgement ─────────────────────────────
+# ── The turn's judgements: one conduct, one instance per turn ───────
 
 # The looking tools and the argument that names what they looked at (the
 # fork's table, loop/main.py). The machine face rides trunk exec's own
@@ -317,29 +320,74 @@ _WATCHED_TOOLS = {
 }
 
 
-class WatchedPathHook(AgentHook):
-    """One judgement per turn; one line where a failure would have arrived.
+# The sandbox executor's kill report, rendered by ExecResult.as_text: the only
+# shape a cap kill produces on the local shell. The machine channel's cap writes
+# its own sentence and needs no note here.
+_EXEC_CAP_KILL = re.compile(r"STDERR:\nTimed out after (\d+)(?:\.\d+)?s\b")
 
-    Skipped for a window that already has a campaign (the question this line
-    asks has been answered for that window, and asking again would tell a
-    loop that is driving a campaign to go and declare one), and without a
-    provider (the judge is a sidecar call on the lent model, never the acting
-    turn's own budget). A judgement that cannot be made leaves the look
-    exactly as it would have been -- the fork's asymmetry: a missing line
-    costs nothing today, a wrong line is one sentence that does not apply.
+# A command whose long half is moving bytes, not computing: its client runs
+# locally, so the background lane is its door, never ops_submit.
+_TRANSFER_SHAPE = re.compile(r"\b(scp|rsync|sftp|curl|wget)\b")
+
+# Every refusal branch of ops_check_later deliberately starts with REFUSED or
+# the budget prose; only a scheduled wake starts with this (part 2b keyed the
+# faces so the close could judge by shape).
+_WAKE_NOTE_PREFIX = "Scheduled a wake"
+
+
+class OncallConduct(AgentConduct):
+    """The flow's three judgements, one instance per turn.
+
+    * **work-to-watch** (fork ``_note_watched_path``): one sidecar judgement per
+      turn that touches a subject, skipped for a window that already has a
+      campaign (asking again would tell a loop that is driving a campaign to go
+      and declare one) and without a provider (the judge rides the lent model,
+      never the acting turn's own budget). A judgement that cannot be made
+      leaves the look exactly as it would have been -- the fork's asymmetry: a
+      missing line costs nothing today, a wrong line is one sentence that does
+      not apply. The verdict is cached on ``self`` whatever it says: "not
+      watched" is as much an answer as "watched", and the fork paid for exactly
+      one judgement per turn.
+    * **the cap kill** (measured 2026-09-02 on the fork): a bare "Timed out
+      after 600s" reads as a fault to retry -- a nine-minute training run was
+      killed at the cap, the result died with it, and the loop re-ran the same
+      command into the same wall. The kill is a routing signal, and the note
+      names the door this plugin itself contributes. Said as a note under the
+      result rather than a rewrite of it: the result belongs to the trunk's
+      exec tool, and ``advise`` is the conduct's grant for exactly this line.
+    * **the turn close** (fork ``Tool.ends_turn``): a successful ops_check_later
+      means the next decision belongs to the wake it scheduled; the fork took
+      the tools away and let the model write one closing reply, the rebuilt
+      shape ends the turn on the wake note itself -- the verdict judged the two
+      behaviourally equivalent, and the note already says everything the turn
+      decided (when it comes back, and why).
+
+    Both notes answer the finished iteration, so ``advise`` speaks only when
+    ``step.response`` is set; the close waits for ``step.tools_ran`` because it
+    reads the ops_check_later result out of the transcript. On a closing
+    iteration the notes are not asked for -- the composite dropped them with the
+    short circuit before this class existed, and the adapter's order keeps that.
+    The counters every judgement files reach ``metadata["observers"]`` through
+    ``archive``, merged into the same ``oncall_flow`` entry the accounting axis
+    stamps.
     """
 
-    def __init__(self, provider: "LLMProvider | None" = None, model: str | None = None) -> None:
+    def __init__(self, provider: "LLMProvider | None" = None, judge_model: str | None = None) -> None:
         self._provider = provider
-        self._model = model
+        self._model = judge_model
+        self._verdict: Any = None
+        self._counters: dict[str, Any] = {}
 
-    @property
-    def name(self) -> str:
-        return "OncallWatchedPath"
+    async def advise(self, step: StepView) -> str | None:
+        if step.response is None:
+            return None
+        notes = [note for note in (await self._watched_note(step), self._cap_kill_note(step)) if note]
+        return "\n\n".join(notes) or None
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def _watched_note(self, step: StepView) -> str | None:
+        """One judgement per turn; one line where a failure would have arrived."""
         subjects: list[tuple[str, str]] = []
-        for call in getattr(ctx.response, "tool_calls", None) or []:
+        for call in getattr(step.response, "tool_calls", None) or []:
             key = _WATCHED_TOOLS.get(getattr(call, "name", ""))
             if not key:
                 continue
@@ -347,28 +395,28 @@ class WatchedPathHook(AgentHook):
             if subject:
                 subjects.append((key, subject))
         if not subjects or self._provider is None:
-            return HookDecision()
+            return None
         try:
-            if campaign_for_window(tools_base.ops_home(), ctx.session_key or ""):
-                return HookDecision()
+            if campaign_for_window(tools_base.ops_home(), step.session_key):
+                return None
         except Exception:  # noqa: BLE001 -- an unreadable binding is not a reason to go quiet
             pass
         try:
-            verdict = ctx.metadata.get(_VERDICT_KEY)
+            verdict = self._verdict
             if verdict is None:
                 reply = await self._provider.chat_with_retry(
-                    messages=watched.build_prompt(ctx.turn_question or ""),
+                    messages=watched.build_prompt(step.question),
                     model=self._model,
                 )
                 verdict = watched.read_verdict(getattr(reply, "content", None))
-                ctx.metadata[_VERDICT_KEY] = verdict
-                _account(ctx)["watched"] = {
+                self._verdict = verdict
+                self._counters["watched"] = {
                     "judged": True,
                     "watched": verdict.watched,
                     "subjects": len(verdict.subjects),
                 }
             if not verdict.watched:
-                return HookDecision()
+                return None
             for key, subject in subjects:
                 if key == "command":
                     # The paths inside a command, plus the command whole: the
@@ -381,50 +429,16 @@ class WatchedPathHook(AgentHook):
                 else:
                     hits = [subject]
                 if any(verdict.claims(h) for h in hits):
-                    counters = _account(ctx).setdefault("watched", {})
+                    counters = self._counters.setdefault("watched", {})
                     counters["nudges"] = int(counters.get("nudges") or 0) + 1
-                    return HookDecision(append_note=watched.provenance_line().strip())
+                    return watched.provenance_line().strip()
         except Exception:  # noqa: BLE001 -- a look must not fail over a judgement
             logger.debug("watched-path judgement skipped", exc_info=True)
-        return HookDecision()
+        return None
 
-
-# ── Axis 4: work killed at the local exec cap ───────────────────────
-
-# The sandbox executor's kill report, rendered by ExecResult.as_text: the only
-# shape a cap kill produces on the local shell. The machine channel's cap writes
-# its own sentence and needs no note here.
-_EXEC_CAP_KILL = re.compile(r"STDERR:\nTimed out after (\d+)(?:\.\d+)?s\b")
-
-# A command whose long half is moving bytes, not computing: its client runs
-# locally, so the background lane is its door, never ops_submit.
-_TRANSFER_SHAPE = re.compile(r"\b(scp|rsync|sftp|curl|wget)\b")
-
-
-class ExecCapKillHook(AgentHook):
-    """A local exec kill is a routing signal, not a transient failure.
-
-    A bare "Timed out after 600s" reads as a fault to retry: measured
-    2026-09-02 on the fork, a nine-minute training run was killed at the cap,
-    the result it had computed died with it, and the loop re-ran the same
-    command into the same wall. The work was never going to fit a synchronous
-    shell, and the door that fits it is contributed by this very plugin -- an
-    active flow always has ops_submit on the roster, so the note points there
-    unconditionally (the fork gated the same sentence on its ops surface
-    being present).
-
-    Said as a note under the result rather than a rewrite of it: the fork
-    appended to the tool result text it rendered itself; here the result
-    belongs to the trunk's exec tool, and ``append_note`` is the loop's grant
-    for exactly this line.
-    """
-
-    @property
-    def name(self) -> str:
-        return "OncallExecCapKill"
-
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
-        calls = getattr(ctx.response, "tool_calls", None) or []
+    def _cap_kill_note(self, step: StepView) -> str | None:
+        """A local exec kill is a routing signal, not a transient failure."""
+        calls = getattr(step.response, "tool_calls", None) or []
         by_id = {
             getattr(call, "id", None): str((getattr(call, "arguments", None) or {}).get("command") or "")
             for call in calls
@@ -432,8 +446,8 @@ class ExecCapKillHook(AgentHook):
         }
         by_id.pop(None, None)
         if not by_id:
-            return HookDecision()
-        for message in reversed(ctx.messages or []):
+            return None
+        for message in reversed(list(step.transcript)):
             if message.get("role") != "tool" or message.get("tool_call_id") not in by_id:
                 continue
             payload = _tool_payload(message.get("content"))
@@ -442,64 +456,44 @@ class ExecCapKillHook(AgentHook):
                 continue
             cap = int(hit.group(1))
             command = by_id[message.get("tool_call_id")]
-            _account(ctx)["exec_cap_kill"] = {"cap_s": cap}
+            self._counters["exec_cap_kill"] = {"cap_s": cap}
             # Two doors for two shapes. A transfer's client runs locally and
             # spends no budget, so ops_submit is the wrong pointer for it --
             # measured 2026-09-03 on this note's first real firing, a killed
             # whole-tree scp was pointed at a campaign it should never become.
             if _TRANSFER_SHAPE.search(command):
-                return HookDecision(
-                    append_note=(
-                        f"Killed at the {cap}s exec cap; the copy so far is incomplete. "
-                        "Re-running it the same way dies at the same cap. A transfer belongs "
-                        "in the background lane: run it again with exec's "
-                        "run_in_background=true (it logs to a managed file this turn does "
-                        "not wait on), and cut what you copy -- a .venv does not travel."
-                    )
+                return (
+                    f"Killed at the {cap}s exec cap; the copy so far is incomplete. "
+                    "Re-running it the same way dies at the same cap. A transfer belongs "
+                    "in the background lane: run it again with exec's "
+                    "run_in_background=true (it logs to a managed file this turn does "
+                    "not wait on), and cut what you copy -- a .venv does not travel."
                 )
-            return HookDecision(
-                append_note=(
-                    f"Killed at the {cap}s exec cap; whatever it computed is gone with it. "
-                    "Re-running it here dies at the same cap. Work that outlives the cap "
-                    "belongs to ops_submit: the job runs detached, logs to disk, and writes "
-                    "result.json to the ledger, so nothing is lost when it finishes after "
-                    "this turn."
-                )
+            return (
+                f"Killed at the {cap}s exec cap; whatever it computed is gone with it. "
+                "Re-running it here dies at the same cap. Work that outlives the cap "
+                "belongs to ops_submit: the job runs detached, logs to disk, and writes "
+                "result.json to the ledger, so nothing is lost when it finishes after "
+                "this turn."
             )
-        return HookDecision()
+        return None
 
-
-# ── Axis 5: the turn close ──────────────────────────────────────────
-
-# Every refusal branch of ops_check_later deliberately starts with REFUSED or
-# the budget prose; only a scheduled wake starts with this (part 2b keyed the
-# faces so this axis could judge by shape).
-_WAKE_NOTE_PREFIX = "Scheduled a wake"
-
-
-class TurnCloseHook(AgentHook):
-    """The fork's ``ends_turn``, said as ``after_iteration``'s short circuit.
-
-    A successful ops_check_later means the next decision belongs to the wake
-    it scheduled; the fork took the tools away and let the model write one
-    closing reply, the rebuilt shape ends the turn on the wake note itself --
-    the verdict judged the two behaviourally equivalent, and the note already
-    says everything the turn decided (when it comes back, and why).
-    """
-
-    @property
-    def name(self) -> str:
-        return "OncallTurnClose"
-
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
-        calls = getattr(ctx.response, "tool_calls", None) or []
+    async def review(self, step: StepView) -> Verdict:
+        if not step.tools_ran:
+            # The close reads the ops_check_later result, so it waits for the
+            # iteration's tools to have run.
+            return Accept()
+        calls = getattr(step.response, "tool_calls", None) or []
         if not any(getattr(call, "name", "") == "ops_check_later" for call in calls):
-            return HookDecision()
-        note = _last_tool_payload(ctx.messages or [], "ops_check_later")
+            return Accept()
+        note = _last_tool_payload(list(step.transcript), "ops_check_later")
         if not note.startswith(_WAKE_NOTE_PREFIX):
-            return HookDecision()
-        _account(ctx)["closed_by"] = "ops_check_later"
-        return HookDecision(short_circuit_result=note)
+            return Accept()
+        self._counters["closed_by"] = "ops_check_later"
+        return End(note)
+
+    async def archive(self, step: StepView, reply: str | None) -> dict[str, dict[str, Any]] | None:
+        return {"oncall_flow": dict(self._counters)} if self._counters else None
 
 
 # ── The contributed hook ────────────────────────────────────────────
@@ -510,26 +504,22 @@ _CHAIN_NOTES = frozenset({"before_iteration", "before_execute_tools", "after_ite
 
 
 class OncallFlowHook(AgentHook):
-    """The one manifest hook: five axes, fixed order, composite semantics.
+    """The one manifest hook: three axes, fixed order, composite semantics.
 
     Order is the contract: context first (everything downstream reads what it
-    set), accounting before the close (the closing call is still counted),
-    the judgement and the cap-kill note before the close (the fork noted
-    results before it read the ends-turn flag). ``_run_phase`` mirrors the
-    kernel CompositeHook's
+    set), accounting before the conduct (the closing call is still counted,
+    and the stamp the conduct's ``archive`` merges into is already written).
+    ``_run_phase`` mirrors the kernel CompositeHook's
     documented behaviour -- first halting state halts and carries the trail,
     notes chain joined by a blank line, content and tool modifications chain
-    through the context, a raising axis is a logged no-op -- because the
-    plugin's import discipline stops at the contracts layer.
+    through the context, a raising axis is a logged no-op.
     """
 
     def __init__(self, provider: "LLMProvider | None" = None, judge_model: str | None = None) -> None:
         self._axes: tuple[AgentHook, ...] = (
             TurnContextHook(),
             TurnAccountingHook(),
-            WatchedPathHook(provider, judge_model),
-            ExecCapKillHook(),
-            TurnCloseHook(),
+            ConductHook("oncall_flow", lambda: OncallConduct(provider, judge_model)),
         )
 
     @property
@@ -609,10 +599,9 @@ def make_flow_hook(ctx: "PluginContext") -> OncallFlowHook | None:
 
 
 __all__ = [
+    "OncallConduct",
     "OncallFlowHook",
     "TurnAccountingHook",
-    "TurnCloseHook",
     "TurnContextHook",
-    "WatchedPathHook",
     "make_flow_hook",
 ]

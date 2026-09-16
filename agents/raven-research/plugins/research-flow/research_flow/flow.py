@@ -21,14 +21,16 @@ from __future__ import annotations
 
 import itertools
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from raven.agent.hook.composite import CompositeHook
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.agent.hook.conduct import ConductHook
+from raven.contracts.agent_conduct import Accept, AgentConduct, End, Intake, Resample, StepView, Verdict
+from raven.contracts.loop_hooks import HookDecision
 from research_flow.config import FlowConfig
 from research_flow.gates.ask_user import (
     AskUserGate,
@@ -45,6 +47,7 @@ from research_flow.gates.ask_user import (
     take_pending_clarify,
     turn_brief,
 )
+from research_flow.gates.base import Gate, GateCtx
 from research_flow.gates.budget_note import BudgetNoteObserver
 from research_flow.gates.conversation import (
     ConversationGate,
@@ -165,7 +168,7 @@ def saturation_for(config: FlowConfig) -> SearchSaturation | None:
     return None
 
 
-class TurnFrame(AgentHook):
+class TurnFrame(Gate):
     """The turn-boundary work the fork's loop did outside its observers.
 
     ``before_user_inbound`` resets the turn-scoped ContextVars, consumes an open
@@ -206,7 +209,7 @@ class TurnFrame(AgentHook):
 
     # -- turn entry -----------------------------------------------------
 
-    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_user_inbound(self, ctx: GateCtx) -> HookDecision:
         # Cleared first and unconditionally, before any early return: a turn
         # that inherited the previous one's chain count would be refused a
         # legitimate first question, and a turn that inherited a brief would
@@ -285,7 +288,7 @@ class TurnFrame(AgentHook):
 
     # -- turn-mode decision ----------------------------------------------
 
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_iteration(self, ctx: GateCtx) -> HookDecision:
         """Set this turn's research flag. Turn one by config, later turns by gate.
 
         Runs at iteration 1 rather than in ``before_user_inbound`` because the
@@ -332,7 +335,7 @@ class TurnFrame(AgentHook):
 
     # -- turn exit --------------------------------------------------------
 
-    async def after_send(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_send(self, ctx: GateCtx) -> HookDecision:
         record = self._store.load(ctx.session_key)
         # The plugin's own handoff keys come off before the counters are read:
         # they are phase-to-phase freight, not a gate's measurement.
@@ -445,7 +448,7 @@ def build_chain(
     store: SessionStore,
     evidence_round: EvidenceRound | None = None,
     mode: str = "",
-) -> list[AgentHook]:
+) -> list[Gate]:
     """The fork's ``build_dr_flow`` observer assembly, as one hook chain.
 
     ``max_iterations`` / ``context_window_tokens`` are the resolved loop values
@@ -520,14 +523,14 @@ def build_chain(
     # see it), then ForcedFinalizeGate ahead of the evidence floor ahead of the
     # reviewer - an answerless terminal is salvaged, never reviewed, and a draft
     # below the floor is bounced, never reviewed.
-    observers: list[AgentHook] = []
+    observers: list[Gate] = []
     if cfg.plain_first.enabled:
         # First in the chain: it decides, on the first model call, whether there is a
         # research turn at all, and on the first response whether the plain answer
         # stands - before any terminal gate reads that response as a draft.
         if cfg.plain_first.judge and provider is None:
             _skip("plainFirst.judge")
-        plain: AgentHook = PlainFirstGate(
+        plain: Gate = PlainFirstGate(
             provider if cfg.plain_first.judge else None,
             judge_model=cfg.plain_first.judge_model,
             judge_timeout_seconds=cfg.plain_first.judge_timeout_seconds,
@@ -598,7 +601,7 @@ def build_chain(
         if provider is None:
             _skip("forceFinalize")
         else:
-            finalizer: AgentHook = ForcedFinalizeGate(
+            finalizer: Gate = ForcedFinalizeGate(
                 provider,
                 model=cfg.force_finalize.model,
                 max_nudges=cfg.force_finalize.max_nudges,
@@ -618,7 +621,7 @@ def build_chain(
                 finalizer = ClarifyExemptHook(finalizer)
             observers.append(finalizer)
     if cfg.evidence_floor.enabled:
-        floor: AgentHook = EvidenceFloorGate(
+        floor: Gate = EvidenceFloorGate(
             min_pages=cfg.evidence_floor.min_pages,
             min_domains=cfg.evidence_floor.min_domains,
             max_rollbacks=cfg.evidence_floor.max_rollbacks,
@@ -633,7 +636,7 @@ def build_chain(
         if provider is None:
             _skip("verify")
         else:
-            reviewer: AgentHook = DraftReviewerGate(
+            reviewer: Gate = DraftReviewerGate(
                 provider,
                 model=cfg.verify.model,
                 timeout_seconds=cfg.verify.timeout_seconds,
@@ -673,7 +676,7 @@ def build_chain(
     # the non-research turn, and wrapping it would gate it out of the only
     # place it was built for.
     if cfg.final_shape.report_structure and cfg.final_shape.report_bounce:
-        bar: AgentHook = ReportShapeGate(closing_tag_required=cfg.think_closing_tag_required)
+        bar: Gate = ReportShapeGate(closing_tag_required=cfg.think_closing_tag_required)
         # Same exemption as the reviewer's: a clarify has no report sections to
         # be missing, and demanding them turns the one turn that must not
         # answer into a rewrite.
@@ -713,53 +716,51 @@ class _ChainSlot:
     opens_ledger: bool
 
 
-@dataclass
-class ResearchFlowHook(AgentHook):
-    """The single contributed hook: per-(session, mode) chains, six phases.
+class ResearchFlow:
+    """The process-level half of the research flow: per-(session, mode) chains.
 
     ``session_gear`` is the shared per-session map the web-tool factories read
-    (see :class:`SessionGear`); the hook writes a session's instances into it
+    (see :class:`SessionGear`); the flow writes a session's instances into it
     when it builds that session's chain, and drops them - together with the
     tools' per-session slots - when the session switches mode, so the next
     turn's tool state is rebuilt against the new chain's instances.
 
-    Only an ITERATION context is guaranteed to name the session's mode: the
-    loop stamps ``mode`` / ``mode_overlay`` at its entry, after the inbound
-    fire. A chain is therefore built from an iteration context alone, and the
-    other two phases reuse the one the session's last iteration resolved -
-    otherwise every turn built a second, base-config chain for the rewrite,
-    threw the real one away, and ran the turn's exit under the wrong knobs.
+    Only an ITERATION step is guaranteed to name the session's mode: the loop
+    stamps ``mode`` / ``mode_overlay`` at its entry, after the inbound fire. A
+    chain is therefore built from an iteration step alone, and the other two
+    phases reuse the one the session's last iteration resolved - otherwise
+    every turn built a second, base-config chain for the rewrite, threw the
+    real one away, and ran the turn's exit under the wrong knobs.
     """
 
-    #: Six gates in the chain this hook delegates to answer ``rollback``. The
-    #: loop reads the flag off this class before any session chain exists, so it
-    #: cannot be derived from the members that carry the behaviour.
-    rolls_back_iterations = True
-
-    cfg: FlowConfig
-    provider: "LLMProvider | None"
-    tools: ToolHandles
-    store: SessionStore
-    max_iterations: int = 40
-    context_window_tokens: int = 0
-    session_gear: dict[str, SessionGear] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        cfg: FlowConfig,
+        provider: "LLMProvider | None",
+        tools: ToolHandles,
+        store: SessionStore,
+        max_iterations: int = 40,
+        context_window_tokens: int = 0,
+        session_gear: dict[str, SessionGear] | None = None,
+    ) -> None:
+        self.cfg = cfg
+        self.provider = provider
+        self.tools = tools
+        self.store = store
+        self.max_iterations = max_iterations
+        self.context_window_tokens = context_window_tokens
+        self.session_gear: dict[str, SessionGear] = session_gear if session_gear is not None else {}
         self._chains: dict[tuple[str, str], _ChainSlot] = {}
         self._session_mode: dict[str, str] = {}
         self._current: dict[str, _ChainSlot] = {}
         self._unmoded: _ChainSlot | None = None
 
-    @property
-    def name(self) -> str:
-        return "ResearchFlowHook"
-
-    def _resolve(self, ctx: AgentHookContext) -> _ChainSlot:
+    def _resolve(self, ctx: GateCtx) -> _ChainSlot:
         """This turn's chain.
 
         ``"mode" in metadata`` is the test, not a truthy mode: a deployment
         that declares no modes reports ``""`` as its mode on the iteration
-        contexts, and that is a real answer, while the absent key means the
+        steps, and that is a real answer, while the absent key means the
         phase simply is not told.
         """
         if "mode" not in (ctx.metadata or {}):
@@ -768,9 +769,6 @@ class ResearchFlowHook(AgentHook):
         mode = str(ctx.metadata.get("mode") or "")
         prev = self._session_mode.get(key)
         if prev is not None and prev != mode:
-            # The mode changed between turns: the old chain's knobs no longer
-            # describe this session, and the tools' per-session slots hold the
-            # old chain's evidence round / saturation instances.
             self._chains.pop((key, prev), None)
             self.session_gear.pop(key, None)
             for tool in (self.tools.web_search, self.tools.web_fetch):
@@ -785,21 +783,12 @@ class ResearchFlowHook(AgentHook):
             try:
                 cfg = self.cfg.with_overlay(dr_diff)
             except Exception as e:  # noqa: BLE001 - a bad overlay must not kill the turn
-                # Unreachable for a shipped overlay: the launcher validates every
-                # mode at render time and refuses to start on this. What can still
-                # arrive here is a hand-edited rendered config, and a turn that
-                # runs is still better than one that dies -- but at error level,
-                # because the session now runs a profile its mode label denies.
                 logger.error(
                     "research-flow: mode {!r} overlay rejected ({}); running the base config",
                     mode,
                     e,
                 )
                 cfg = self.cfg
-            # The loop's own enforced cap and resolved window (hook surface
-            # v3), when a turn is driving; the activation values stand in for
-            # a host that stamps neither. Explicit config wins over both
-            # inside build_chain, so the shipped numbers do not move.
             max_iterations = self.max_iterations
             if isinstance(ctx.max_iterations, int) and ctx.max_iterations > 0:
                 max_iterations = ctx.max_iterations
@@ -836,8 +825,8 @@ class ResearchFlowHook(AgentHook):
         self._current[key] = slot
         return slot
 
-    def _reuse(self, ctx: AgentHookContext) -> _ChainSlot:
-        """The chain for a phase whose context does not name the mode.
+    def _reuse(self, ctx: GateCtx) -> _ChainSlot:
+        """The chain for a phase whose step does not name the mode.
 
         The session's last iteration resolved one, and within a turn that IS
         this turn's chain - so ``after_send`` runs the mode's gates and closes
@@ -878,10 +867,6 @@ class ResearchFlowHook(AgentHook):
         """What the fork's loop did at the top of every turn, tool side."""
         cfg = slot.cfg
         if self.tools.web_search is not None:
-            # Repeat detection is scoped to the turn; ``identityScope="topic"``
-            # narrows that to the budgets for a product conversation. Forced
-            # back to turn scope whenever the conversation surface is off,
-            # exactly as the fork's assembly resolved it.
             keep = cfg.conversation.enabled and cfg.conversation.identity_scope == "topic"
             self.tools.web_search.start_turn(keep_identities=keep)
         if self.tools.web_fetch is not None:
@@ -889,43 +874,194 @@ class ResearchFlowHook(AgentHook):
         if slot.opens_ledger:
             open_product_ledger(f"{os.getpid()}-{next(_TURN_SEQ)}")
 
-    # -- phases -----------------------------------------------------------
 
-    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
-        slot = self._resolve(ctx)
-        return await slot.composite.before_user_inbound(ctx)
+class ResearchFlowConduct(AgentConduct):
+    """One turn of the research flow: the chain, run over a context the conduct builds.
 
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
-        slot = self._resolve(ctx)
-        # The tool coroutines run in this turn's task: selecting the session
-        # here scopes every tool call of the turn to its own per-session state.
-        set_current_session(ctx.session_key)
-        if ctx.iteration == 1:
-            self._start_turn(slot)
-        return await slot.composite.before_iteration(ctx)
+    The gates keep their six phases and the composite keeps its merge rules;
+    what this class adds is the seam. Every phase's ``GateCtx`` is built from
+    the step's read-only fields and this turn's private ``facts`` dict, so the
+    gates read what they always read and can no longer write the loop's
+    context. A phase runs once per step object -- the host hands the same
+    ``StepView`` to every verb it asks in one phase, which is what lets
+    ``select_tools`` and ``advise`` share one ``before_iteration`` run.
+    """
 
-    async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
-        return await self._resolve(ctx).composite.before_execute_tools(ctx)
+    def __init__(self, flow: ResearchFlow) -> None:
+        self._flow = flow
+        self._facts: dict[str, Any] = {}
+        self._ran: dict[tuple[str, int], tuple[StepView, HookDecision]] = {}
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
-        return await self._resolve(ctx).composite.after_iteration(ctx)
+    def _ctx(self, step: StepView, *, inbound: str | None = None, outbound: str | None = None) -> GateCtx:
+        facts = self._facts
+        # The three loop readings the chain consults, refreshed from the step.
+        if step.mode is not None:
+            facts["mode"] = step.mode
+        if step.mode_overlay is not None:
+            facts["mode_overlay"] = step.mode_overlay
+        # Written only once a rollback has happened, as the loop writes it: the
+        # turn stamp exports every scalar it finds, and a zero the loop never
+        # wrote would be a new column.
+        if step.rollbacks:
+            facts["hook_rollbacks"] = step.rollbacks
+        return GateCtx(
+            session_key=step.session_key,
+            inbound_content=inbound,
+            session_history=list(step.history) or None,
+            iteration=step.iteration or None,
+            messages=list(step.transcript),
+            tools=list(step.tools),
+            response=step.response,
+            turn_question=step.question,
+            turn_base=step.turn_base,
+            max_iterations=step.max_iterations,
+            context_window_tokens=step.window,
+            outbound_content=outbound,
+            metadata=facts,
+        )
 
-    async def terminal_answerless(self, ctx: AgentHookContext) -> HookDecision:
-        return await self._resolve(ctx).composite.terminal_answerless(ctx)
+    async def _phase(self, phase: str, step: StepView, ctx: GateCtx) -> HookDecision:
+        key = (phase, id(step))
+        cached = self._ran.get(key)
+        if cached is not None and cached[0] is step:
+            return cached[1]
+        slot = self._flow._resolve(ctx)
+        if phase == "before_iteration":
+            set_current_session(step.session_key)
+            if step.iteration == 1:
+                self._flow._start_turn(slot)
+        if phase == "after_send":
+            try:
+                decision = await slot.composite.after_send(ctx)
+            finally:
+                if slot.opens_ledger:
+                    close_product_ledger()
+        else:
+            decision = await getattr(slot.composite, phase)(ctx)
+        for line in decision.notes:
+            self.note(line)
+        self._ran[key] = (step, decision)
+        return decision
 
-    async def after_send(self, ctx: AgentHookContext) -> HookDecision:
-        slot = self._resolve(ctx)
-        try:
-            return await slot.composite.after_send(ctx)
-        finally:
-            # In ``finally`` so a failed render still releases the per-turn
-            # file - otherwise one raising turn leaves a trail on disk that no
-            # later turn reads.
-            if slot.opens_ledger:
-                close_product_ledger()
+    def _verdict(self, decision: HookDecision) -> Verdict:
+        if decision.short_circuit_result is not None:
+            return End(decision.short_circuit_result)
+        if decision.rollback:
+            return Resample(
+                "the research flow sent the step back",
+                inject=decision.rollback_inject,
+                overrides=decision.rollback_overrides,
+            )
+        return Accept()
+
+    async def intake(self, text: str, step: StepView) -> Intake | None:
+        decision = await self._phase("before_user_inbound", step, self._ctx(step, inbound=text))
+        if decision.short_circuit_result is not None:
+            return Intake(text=text, reply=decision.short_circuit_result)
+        if decision.modified_content is not None:
+            return Intake(text=decision.modified_content)
+        return None
+
+    async def select_tools(self, offered: list[dict[str, Any]], step: StepView) -> list[dict[str, Any]] | None:
+        decision = await self._phase("before_iteration", step, self._ctx(step))
+        return decision.modified_tools
+
+    async def advise(self, step: StepView) -> str | None:
+        if step.response is None:
+            decision = await self._phase("before_iteration", step, self._ctx(step))
+        else:
+            decision = await self._phase("after_iteration", step, self._ctx(step))
+        return decision.append_note or None
+
+    async def system_addendum(self, step: StepView) -> Intake | None:
+        decision = await self._phase("before_iteration", step, self._ctx(step))
+        if decision.short_circuit_result is not None:
+            return Intake(text="", reply=decision.short_circuit_result)
+        return None
+
+    async def review(self, step: StepView) -> Verdict:
+        phase = "after_iteration" if step.tools_ran else "before_execute_tools"
+        return self._verdict(await self._phase(phase, step, self._ctx(step)))
+
+    async def salvage(self, step: StepView) -> Any | None:
+        decision = await self._phase("terminal_answerless", step, self._ctx(step))
+        return decision.short_circuit_result
+
+    async def outbound(self, reply: str, step: StepView) -> str | None:
+        decision = await self._phase("after_send", step, self._ctx(step, outbound=reply))
+        return decision.modified_content
+
+    async def archive(self, step: StepView, reply: str | None) -> dict[str, Any] | None:
+        await self._phase("after_send", step, self._ctx(step, outbound=reply or ""))
+        observers = self._facts.get("observers")
+        return dict(observers) if isinstance(observers, dict) and observers else None
+
+
+class ResearchFlowHook(ConductHook):
+    """The single contributed hook: one research conduct per turn over one flow.
+
+    Kept as a named class because its constructor is the product's assembly
+    surface -- the plugin and a shelf of tests build it with the flow's
+    arguments -- and the flow's session gear is read off it by the tool
+    factories.
+    """
+
+    # A gate's rollback is rendered by the adapter, so the declaration the
+    # loop reads to hold this turn's deltas sits here, once for every gate.
+    rolls_back_iterations = True
+
+    def __init__(
+        self,
+        cfg: FlowConfig,
+        provider: "LLMProvider | None",
+        tools: ToolHandles,
+        store: SessionStore,
+        max_iterations: int = 40,
+        context_window_tokens: int = 0,
+        session_gear: dict[str, SessionGear] | None = None,
+    ) -> None:
+        self.flow = ResearchFlow(
+            cfg,
+            provider,
+            tools,
+            store,
+            max_iterations=max_iterations,
+            context_window_tokens=context_window_tokens,
+            session_gear=session_gear,
+        )
+        super().__init__("research_flow", lambda: ResearchFlowConduct(self.flow))
+
+    @property
+    def name(self) -> str:
+        return "ResearchFlowHook"
+
+    @property
+    def cfg(self) -> FlowConfig:
+        return self.flow.cfg
+
+    @property
+    def provider(self) -> "LLMProvider | None":
+        return self.flow.provider
+
+    @property
+    def tools(self) -> ToolHandles:
+        return self.flow.tools
+
+    @property
+    def store(self) -> SessionStore:
+        return self.flow.store
+
+    @property
+    def session_gear(self) -> dict[str, SessionGear]:
+        return self.flow.session_gear
+
+    def _resolve(self, ctx: Any) -> _ChainSlot:
+        return self.flow._resolve(ctx)
 
 
 __all__ = [
+    "ResearchFlow",
+    "ResearchFlowConduct",
     "ResearchFlowHook",
     "SessionGear",
     "ToolHandles",

@@ -28,8 +28,9 @@ import logging
 import time
 from urllib.parse import urlparse
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import HookDecision
 from raven.security.trust import unwrap_untrusted
+from research_flow.gates.base import Gate, GateCtx
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
 from research_flow.support.ledger import ledger_append
 from research_flow.support.process_appendix import _THIN_PAGE_CHARS
@@ -50,7 +51,7 @@ _FLOOR_PROMPT = (
 )
 
 
-class EvidenceFloorGate(AgentHook):
+class EvidenceFloorGate(Gate):
     """Bounce a draft written on fewer readable pages or sites than the mode demands."""
 
     def __init__(
@@ -79,7 +80,7 @@ class EvidenceFloorGate(AgentHook):
     def name(self) -> str:
         return "EvidenceFloorGate"
 
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_iteration(self, ctx: GateCtx) -> HookDecision:
         # ``tools`` is populated only in this phase. Remembered per iteration so the
         # draft check below knows whether "search for further sources" is an
         # instruction the model can follow at all.
@@ -89,7 +90,7 @@ class EvidenceFloorGate(AgentHook):
             state["web_tools_absent"] = not (names & _WEB_TOOLS)
         return HookDecision()
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if getattr(ctx.response, "has_tool_calls", False):
             return HookDecision()
         content = getattr(ctx.response, "content", None) or ""

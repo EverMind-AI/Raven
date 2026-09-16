@@ -41,8 +41,9 @@ import asyncio
 import logging
 import time
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import HookDecision
 from raven.security.trust import unwrap_untrusted, wrap_untrusted
+from research_flow.gates.base import Gate, GateCtx
 from research_flow.support._verdict import parse_bool_verdict
 from research_flow.support.answer_text import visible_answer
 from research_flow.support.harness_text import harness_body_kind, sufficiency_listing_notice, sufficiency_notice
@@ -95,7 +96,7 @@ Reply with one JSON object and nothing else:
 {"sufficient": true|false, "reason": "<one short clause>"}"""
 
 
-class SufficiencyGate(AgentHook):
+class SufficiencyGate(Gate):
     """After the first grounded round, release the turn to write if the evidence decides it."""
 
     def __init__(
@@ -139,7 +140,7 @@ class SufficiencyGate(AgentHook):
     def name(self) -> str:
         return "SufficiencyGate"
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if not getattr(ctx.response, "has_tool_calls", False):
             # No tool calls means the turn is already writing. There is nothing to
             # release, and a judge here would only tax the answer.
@@ -232,7 +233,7 @@ class SufficiencyGate(AgentHook):
                     fetches += 1
         return searches, fetches
 
-    async def _judge(self, ctx: AgentHookContext, messages: list[dict], stage: str = "pages") -> dict | None:
+    async def _judge(self, ctx: GateCtx, messages: list[dict], stage: str = "pages") -> dict | None:
         evidence = self._evidence_pack(messages, ctx.turn_base or 0, keep="head" if stage == "listing" else "tail")
         if not evidence:
             # Defensive, and unreachable while the trigger holds: a turn that counted
