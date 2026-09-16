@@ -296,6 +296,55 @@ describe('workspace island', () => {
     expect(document.querySelector('.fview .vnote')).not.toBeNull()
   })
 
+  /* Reopening is a fresh view, and a fresh view has not been consented to. The
+     file may have been rewritten between the two opens -- which is the ordinary
+     case here, since the agent is still working -- so a grant that survived
+     would run content nobody agreed to run. */
+  it('asks again when the same path is opened as a new view', async () => {
+    const one = { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false, seq: 1 }
+    install(emptyWs({ file: one }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    await act(async () => {
+      (screen.getByText('gui.ws.html_run') as HTMLElement).click()
+    })
+    expect((document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('sandbox')).toBe('allow-scripts')
+
+    await act(async () => {
+      store.restore(emptyWs({
+        file: { path: '/repo/other.md', kind: 'md', raw: false, text: 'x', err: null, size: 1, loading: false, seq: 2 },
+      }))
+      store.sync()
+    })
+    await act(async () => {
+      store.restore(emptyWs({ file: { ...one, seq: 3 } }))
+      store.sync()
+    })
+
+    const back = document.querySelector('.fview iframe') as HTMLIFrameElement
+    expect(back.getAttribute('sandbox')).toBe('')
+    expect(back.getAttribute('src') || '').not.toContain('run=1')
+    expect(document.querySelector('.fview .vnote')).not.toBeNull()
+  })
+
+  /* The agent rewriting a file it is still working on replaces the view without
+     any other file in between, which is the path that never passes through a
+     revoke if the grant is keyed by name. */
+  it('asks again when the open file is rewritten in place', async () => {
+    const one = { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false, seq: 4 }
+    install(emptyWs({ file: one }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    await act(async () => {
+      (screen.getByText('gui.ws.html_run') as HTMLElement).click()
+    })
+    expect((document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('sandbox')).toBe('allow-scripts')
+
+    await act(async () => {
+      store.restore(emptyWs({ file: { ...one, size: 21, seq: 5 } }))
+      store.sync()
+    })
+    expect((document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('sandbox')).toBe('')
+  })
+
   /* The PDF frame runs its viewer's own scripts, so there is nothing withheld
      to explain and a note there would be noise. */
   it('says nothing of the sort beside a PDF', async () => {
