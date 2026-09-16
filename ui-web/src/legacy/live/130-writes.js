@@ -3,6 +3,7 @@
 /* One delete per session, and a session that refuses stays in the list -- the
    rail must never claim something is gone while the file is still on disk. */
 
+import { hasStillOnDisk } from '../../rpc/capabilities'
 import { setCurrent as sessionSet } from '../../shell/session'
 import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
@@ -32,7 +33,8 @@ export function install() {
          file survived, or when a server too old to carry the field leaves the
          question open. */
         const r = await gateway().call('session.delete', { session_id: s.id });
-        if (r.deleted !== s.id && r.still_on_disk !== false) continue;
+        const removed = hasStillOnDisk(r) && r.still_on_disk === false;
+        if (r.deleted !== s.id && !removed) continue;
         gone.push(s.id); dropDraft(s.id);
       } catch { /* counted by what is left below */ }
     }

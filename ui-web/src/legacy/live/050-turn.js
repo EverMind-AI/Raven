@@ -5,6 +5,7 @@
 
 import { plainTitle } from '../../features/rail/title'
 import { islands } from '../../islands'
+import { hasToolOk, hasTurnDuration } from '../../rpc/capabilities'
 import { set as setCtx } from '../../shell/ctxchip'
 import { show as ntfPush } from '../../shell/notifications'
 import { current as sessionCurrent } from '../../shell/session'
@@ -62,7 +63,7 @@ function flushSay() {
    the turn is fully unwound, so post-turn housekeeping is inside their span
    and outside this one. Hence a fallback, not a second opinion. */
 const turnDur = (serverMs) => {
-  if (serverMs != null) return dur(Math.max(serverMs, 1000));
+  if (hasTurnDuration(serverMs)) return dur(Math.max(serverMs, 1000));
   const ms = (live.answerAt || Date.now()) - live.startedAt;
   return live.startedAt ? dur(Math.max(ms, 1000)) : null;
 };
@@ -182,7 +183,7 @@ function onEvent(ev) {
     const preview = cleanPreview(p.result_preview).split('\n').map((l) => l.slice(0, 160)).join('\n');
     // The emit site's verdict is authoritative; the text heuristic survived
     // only as the backstop for an old server that does not send the field.
-    const ok = typeof p.ok === 'boolean' ? p.ok : okOf(o.name || '', preview);
+    const ok = hasToolOk(p.ok) ? p.ok : okOf(o.name || '', preview);
     const took = Date.now() - o.t0;
     o.h.done(ok, preview, took, null, p.truncated);
     /* p.diff is the real change on disk -- the only place a whole-file write's

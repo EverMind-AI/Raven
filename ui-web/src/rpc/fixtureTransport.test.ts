@@ -51,11 +51,11 @@ describe('FixtureTransport', () => {
   it('fans a pushed notification out to handlers, and detach removes one', () => {
     const t = new FixtureTransport({})
     const got: unknown[] = []
-    const detach = t.on('turn.delta', (p) => got.push(p))
-    t.on('turn.delta', (p) => got.push(p))
-    t.emit('turn.delta', { text: 'x' })
+    const detach = t.on('memory.health', (p) => got.push(p))
+    t.on('memory.health', (p) => got.push(p))
+    t.emit('memory.health', { text: 'x' })
     detach()
-    t.emit('turn.delta', { text: 'y' })
+    t.emit('memory.health', { text: 'y' })
     expect(got).toEqual([{ text: 'x' }, { text: 'x' }, { text: 'y' }])
   })
 

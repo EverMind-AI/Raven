@@ -1,6 +1,7 @@
 /* ---- boot ---------------------------------------------------------- */
 
 import { islands } from '../../islands'
+import { hasUpdateFlag } from '../../rpc/capabilities'
 import { draw as drawFoot } from '../../shell/foot'
 import { load as loadTier } from '../../shell/tier'
 import { gateway } from '../../state/gateway'
@@ -60,7 +61,7 @@ export function install() {
       drawFoot();
       /* Absent until system.version carries them; the row simply stays hidden,
        so an older server degrades to no notice rather than a broken one. */
-      if (v.update_available) showUpNote('ver', v.latest_version);
+      if (hasUpdateFlag(v)) showUpNote('ver', v.latest_version);
       /* That answer came from the update cache, which the gateway refreshes on a
        poll -- so between a publish and the next poll it names a version that is
        already superseded, and the banner promises one build while the button
@@ -68,7 +69,7 @@ export function install() {
        after the paint and deliberately not awaited, so the number the reader is
        shown is the number they will get. */
       gateway().call('system.version', { check: true })
-        .then((fresh) => { if (fresh && fresh.update_available) showUpNote('ver', fresh.latest_version); })
+        .then((fresh) => { if (hasUpdateFlag(fresh)) showUpNote('ver', fresh.latest_version); })
         .catch(() => {});
       await loadSessions();
       islands.rail.release();

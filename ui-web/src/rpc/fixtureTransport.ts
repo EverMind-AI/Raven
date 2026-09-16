@@ -1,4 +1,5 @@
 import type { ParamsOf, ResultOf, RpcMethod } from './generated'
+import type { PushMethod } from './notifications'
 import type {
   BinaryHandler,
   ConnectionState,
@@ -56,7 +57,7 @@ export class FixtureTransport implements RpcTransport {
     return responder
   }
 
-  on(method: string, handler: NotificationHandler): () => void {
+  on(method: PushMethod, handler: NotificationHandler): () => void {
     const set = this.handlers.get(method) ?? new Set()
     set.add(handler)
     this.handlers.set(method, set)

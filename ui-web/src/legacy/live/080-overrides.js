@@ -2,6 +2,7 @@
 
 import { plainTitle } from '../../features/rail/title'
 import { islands } from '../../islands'
+import { hasNamingFlag, hasStillOnDisk } from '../../rpc/capabilities'
 import { draw as drawBanner } from '../../shell/banner'
 import { set as setCtx } from '../../shell/ctxchip'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell/session'
@@ -436,9 +437,10 @@ function dispatchSend(text, failed) {
   beginNaming(text);
   /* `=== false`, not falsy: a server too old to carry the field says nothing
      at all, and reading that as "declined" would tear down a placeholder
-     while a title really is on its way. */
+     while a title really is on its way. Which servers carry it is
+     rpc/capabilities.ts's question; what the verdict means stays here. */
   gateway().call('turn.send', { session_key: current, content: text, ...mediaOf(text) })
-    .then(r => { if (r && r.naming === false) namingDeclined(current); })
+    .then(r => { if (hasNamingFlag(r) && r.naming === false) namingDeclined(current); })
     .catch(failed);
 }
 
@@ -472,7 +474,7 @@ function liveSend(text) {
        the promotion above, and making them agree is a fix about where a raced
        first message lands, not about this one. Left alone deliberately. */
     const sent = await gateway().call('turn.send', { session_key: sessionCurrent(), content: text, ...mediaOf(text) });
-    if (sent && sent.naming === false) namingDeclined(id);
+    if (hasNamingFlag(sent) && sent.naming === false) namingDeclined(id);
   })().catch(failed);
 }
 
@@ -657,10 +659,12 @@ export function install() {
          file that survived its removal is still there to list, and claiming it
          is gone is the one thing this rail must never do.
 
-         `!== false`, not falsy: a server too old to carry the field says nothing
-         at all, and "nothing at all" is not "nothing was there" -- reading it as
-         the second would drop a row whose file may have survived. */
-        if (r.deleted !== s.id && r.still_on_disk !== false) throw new Error(T('gui.sess.delete_kept'));
+         `hasStillOnDisk` is the version half: a server too old to carry the
+         field says nothing at all, and "nothing at all" is not "nothing was
+         there" -- reading it as the second would drop a row whose file may
+         have survived. */
+        const removed = hasStillOnDisk(r) && r.still_on_disk === false;
+        if (r.deleted !== s.id && !removed) throw new Error(T('gui.sess.delete_kept'));
         await leaveDeletedSession(s.id);
         toast(r.deleted === s.id
           ? T('gui.sess.deleted_x', { title: s.title })

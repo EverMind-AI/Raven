@@ -14,13 +14,13 @@
 
 import { plainTitle } from '../../features/rail/title'
 import { islands } from '../../islands'
+import { has, hasBuildFlag } from '../../rpc/capabilities'
 import { current as sessionCurrent } from '../../shell/session'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { drawWs, setWs, wsOpen, wsPick } from '../demo/100-workspace.js'
 import { bootPage } from '../demo/160-boot.js'
 import { onEvent } from './050-turn.js'
-import { rpcHas } from './220-browser.js'
 
 function xaRowOf(r) {
   return {
@@ -43,7 +43,7 @@ function xaRowOf(r) {
        and `subagents.build` answers that there is nothing to build. Carried
        for an older server, where the row was the only place the page learned
        a build was in flight. */
-    building: !!r.building,
+    building: hasBuildFlag(r),
     enabled: !!r.enabled,
     probe_status: r.probe_status || 'unknown',
     upgrade_to: r.upgrade_to || null,
@@ -210,7 +210,7 @@ export function install() {
     /* Guarded like sources.agents.list is: a server without the subagent surface answers
      -32601, and a card that asked would then re-ask on every reopen for an answer
      that cannot arrive. */
-    if (!rpcHas('subagent')) return Promise.resolve([]);
+    if (!has('subagent')) return Promise.resolve([]);
     return gateway().call('subagent.list', { session_id: sessionCurrent() })
       .then((r) => (r && r.items) || []);
   };
