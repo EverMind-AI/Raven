@@ -8,7 +8,7 @@ imports LiteLLM right there on the main thread if it is not loaded yet --
 defeating the whole point of the lazy provider. ``resolve_context_window``'s
 ``allow_fetch=False`` construction-time tier now also means "and don't import
 LiteLLM to answer this" (see ``rates._try_litellm_context_window``'s
-``allow_import``), and ``AgentLoop.__init__`` wires ``LazyProvider.on_built``
+``allow_fetch``), and ``AgentLoop.__init__`` wires ``LazyProvider.on_built``
 to ``refresh_context_window`` so the window self-corrects once prewarm
 finishes the import in the background.
 """

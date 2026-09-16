@@ -706,7 +706,7 @@ def _litellm_ready() -> bool:
     membership alone is true for the seconds the module body is still running.
     A caller that reads it that way and then imports does not get the cheap
     hit it asked for: it blocks on LiteLLM's module import lock until the
-    thread already importing it is finished -- the exact wait ``allow_import``
+    thread already importing it is finished -- the exact wait ``allow_fetch``
     exists to refuse. ``__spec__._initializing`` is the flag CPython's own
     import machinery reads to tell a live import from a finished one; a module
     carrying no spec is one no import is still running.
@@ -717,7 +717,7 @@ def _litellm_ready() -> bool:
     return not getattr(getattr(module, "__spec__", None), "_initializing", False)
 
 
-def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | None:
+def _try_litellm_max_output(model: str, *, allow_fetch: bool = True) -> int | None:
     """The model's own output ceiling, from the same metadata as the window.
 
     ``max_tokens`` is a legitimate fallback here in a way it is not on the
@@ -727,8 +727,12 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
     Both tiers are filtered through ``_trustworthy_ceiling``: the rows that get
     this wrong answer the table and ``get_model_info`` alike, so guarding one
     would hand back exactly what the other just rejected.
+
+    ``allow_fetch=False`` stops after the table, for the reason given on
+    ``_try_litellm_context_window``: the ask behind the table is a request to
+    the provider, not a second read of memory.
     """
-    if not allow_import and not _litellm_ready():
+    if not allow_fetch and not _litellm_ready():
         return None
     try:
         from raven.providers.litellm_setup import import_litellm
@@ -741,6 +745,8 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
         ceiling = _trustworthy_ceiling(_table_entry(candidate))
         if ceiling:
             return ceiling
+        if not allow_fetch:
+            continue
         if may_prompt(candidate):
             continue
         try:
@@ -803,7 +809,7 @@ def declared_max_output_tokens(model: str | None, *, allow_fetch: bool = True) -
     """
     if not model:
         return None
-    return _try_litellm_max_output(model, allow_import=allow_fetch) or _try_openrouter_max_output(
+    return _try_litellm_max_output(model, allow_fetch=allow_fetch) or _try_openrouter_max_output(
         model, allow_fetch=allow_fetch
     )
 
@@ -864,8 +870,8 @@ def resolve_max_output_tokens(model: str | None, *, window: int | None = None, a
     return max(1, min(ceiling, room, MAX_OUTPUT_TOKENS_PER_ITERATION))
 
 
-def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int | None:
-    """LiteLLM's static model metadata -- offline, covers most mapped providers.
+def _try_litellm_context_window(model: str, *, allow_fetch: bool = True) -> int | None:
+    """LiteLLM's model metadata: a static table first, then an ask that can go out.
 
     Falls back to ``max_tokens`` (the output ceiling) for the handful of rows
     that carry no ``max_input_tokens``. Not because the two mean the same
@@ -874,15 +880,22 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
     bound only over-trims, where this module's documented default (65536) would
     over-estimate an 8k model by a factor of eight.
 
-    ``allow_import=False`` answers only from a LiteLLM that has already
-    finished importing (see ``_litellm_ready``): importing it costs ~2-7s, and
-    a caller passing this (``AgentLoop`` construction, racing the lazy
-    provider's prewarm thread over that same import) wants the cheap tiers
-    only, not to wait out the import it is trying to defer. Once LiteLLM is in
-    hand the check is free and the lookup proceeds exactly as with
-    ``allow_import=True``.
+    ``allow_fetch=False`` answers from what is already on hand: a LiteLLM that
+    has already finished importing (see ``_litellm_ready``), and then its table
+    alone. Both halves are the same promise. Importing costs ~2-7s, which is
+    the wait a caller passing this (``AgentLoop`` construction, racing the lazy
+    provider's prewarm thread over that same import) is trying to defer -- and
+    ``get_model_info`` is no cheaper for the ids it cannot answer from memory:
+    it asks the provider. For ``ollama_chat/*`` that is a request to the local
+    server, for ``huggingface/*`` one to huggingface.co, and a caller that said
+    it would not fetch cannot be made to wait out either.
+
+    An id the table does not carry therefore answers None here rather than
+    going out for it, which is what ``resolve_context_window`` already promises
+    such a caller: an unknown model returns None and it keeps its configured
+    default.
     """
-    if not allow_import and not _litellm_ready():
+    if not allow_fetch and not _litellm_ready():
         return None
     try:
         from raven.providers.litellm_setup import import_litellm
@@ -897,6 +910,8 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
         if window:
             return int(window)
+        if not allow_fetch:
+            continue
         if may_prompt(candidate):
             continue
         try:
@@ -924,7 +939,7 @@ def resolve_context_window(model: str, *, allow_fetch: bool = True) -> int | Non
     behalf (see ``_try_litellm_context_window``) -- a caller cheap enough to
     pass this is cheap enough not to pay a fresh import either.
     """
-    window = _try_litellm_context_window(model, allow_import=allow_fetch)
+    window = _try_litellm_context_window(model, allow_fetch=allow_fetch)
     if window:
         return window
 

@@ -58,7 +58,7 @@ class LazyProvider(LLMProvider):
         """Fired once, right after the real provider finishes building.
 
         Lets a caller that skipped the real provider's import at construction
-        (see ``rates._try_litellm_context_window``'s ``allow_import``) correct
+        (see ``rates._try_litellm_context_window``'s ``allow_fetch``) correct
         a value it answered cheaply once the real thing is on hand.
 
         No production setter today. ``AgentLoop`` used this to fix up a window

@@ -644,7 +644,7 @@ def test_the_window_those_families_report_is_the_vendors_own(minimax_row):
     assert rates._try_litellm_context_window("minimax-global/MiniMax-M3") == 1_000_000
 
 
-# --- allow_import=False: a cheap caller must not pay LiteLLM's ~2-7s import ---
+# --- allow_fetch=False: a cheap caller pays neither the import nor an ask ---
 #
 # SF11: ``AgentLoop.__init__`` resolves a construction-time window with
 # ``allow_fetch=False`` before ``LazyProvider``'s background thread has had a
@@ -655,7 +655,7 @@ def test_the_window_those_families_report_is_the_vendors_own(minimax_row):
 # temporarily hide that key to exercise the "not yet imported" branch.
 
 
-def test_try_litellm_context_window_allow_import_false_skips_the_import_when_absent(monkeypatch):
+def test_try_litellm_context_window_allow_fetch_false_skips_the_import_when_absent(monkeypatch):
     monkeypatch.delitem(sys.modules, "litellm", raising=False)
     called = {"n": 0}
     real_import_litellm = import_litellm
@@ -666,11 +666,11 @@ def test_try_litellm_context_window_allow_import_false_skips_the_import_when_abs
 
     monkeypatch.setattr("raven.providers.litellm_setup.import_litellm", _spy)
 
-    assert rates._try_litellm_context_window("openai-codex/gpt-5.3-codex", allow_import=False) is None
+    assert rates._try_litellm_context_window("openai-codex/gpt-5.3-codex", allow_fetch=False) is None
     assert called["n"] == 0
 
 
-def test_try_litellm_context_window_allow_import_false_skips_a_half_imported_litellm(monkeypatch):
+def test_try_litellm_context_window_allow_fetch_false_skips_a_half_imported_litellm(monkeypatch):
     """Presence in ``sys.modules`` is not readiness.
 
     CPython publishes the key when the import starts, so during the seconds
@@ -691,8 +691,8 @@ def test_try_litellm_context_window_allow_import_false_skips_a_half_imported_lit
 
     monkeypatch.setattr("raven.providers.litellm_setup.import_litellm", _spy)
 
-    assert rates._try_litellm_context_window("openai-codex/gpt-5.3-codex", allow_import=False) is None
-    assert rates._try_litellm_max_output("openai-codex/gpt-5.3-codex", allow_import=False) is None
+    assert rates._try_litellm_context_window("openai-codex/gpt-5.3-codex", allow_fetch=False) is None
+    assert rates._try_litellm_max_output("openai-codex/gpt-5.3-codex", allow_fetch=False) is None
     assert called["n"] == 0
 
 
@@ -709,22 +709,55 @@ def test_litellm_ready_is_false_while_the_module_body_is_still_running(monkeypat
     assert rates._litellm_ready() is True
 
 
-def test_try_litellm_context_window_allow_import_false_still_answers_once_imported():
-    """Once LiteLLM is already imported the gate is free, and the answer must
-    not differ from the ``allow_import=True`` (default) path."""
+def test_try_litellm_context_window_allow_fetch_false_still_answers_from_the_table():
+    """What the table carries is on hand, so a no-fetch caller gets it in full.
+
+    The tier it does not get is the ask behind the table, which is where the
+    two paths are allowed to differ -- covered separately below."""
     assert "litellm" in sys.modules
     assert rates._try_litellm_context_window(
-        "openai-codex/gpt-5.3-codex", allow_import=False
+        "openai-codex/gpt-5.3-codex", allow_fetch=False
     ) == rates._try_litellm_context_window("openai-codex/gpt-5.3-codex")
 
 
-def test_resolve_context_window_allow_fetch_false_also_forwards_allow_import_false(monkeypatch):
+def test_allow_fetch_false_does_not_ask_litellm_about_an_id_the_table_misses(monkeypatch):
+    """The ask behind the table is a request to the provider, not a second read.
+
+    ``get_model_info`` resolves an unknown id by asking whoever serves it --
+    the local server for ``ollama_chat/*``, huggingface.co for
+    ``huggingface/*`` -- so a caller that said it would not fetch cannot be
+    made to wait out that round trip. It gets None and keeps its default,
+    which is what ``resolve_context_window`` already documents for an id
+    nothing knows.
+    """
+    from raven.providers.litellm_setup import import_litellm
+
+    litellm = import_litellm()
+    asked: list[str] = []
+
+    def _record(candidate, *args, **kwargs):
+        asked.append(candidate)
+        raise RuntimeError("no fetch expected on this path")
+
+    monkeypatch.setattr(litellm, "get_model_info", _record)
+
+    unknown = "huggingface/no-such-org/no-such-model"
+    assert rates._try_litellm_context_window(unknown, allow_fetch=False) is None
+    assert rates._try_litellm_max_output(unknown, allow_fetch=False) is None
+    assert asked == [], f"a no-fetch caller reached the network for {asked}"
+
+    # And the default path still asks, or the tier would be dead rather than deferred.
+    assert rates._try_litellm_context_window(unknown) is None
+    assert asked, "allow_fetch=True must still consult get_model_info"
+
+
+def test_resolve_context_window_allow_fetch_false_reaches_the_litellm_tier(monkeypatch):
     """One flag, one layer of semantics: allow_fetch=False must reach the
-    LiteLLM tier as allow_import=False, not just the OpenRouter tier."""
+    LiteLLM tier as allow_fetch=False, not just the OpenRouter tier."""
     seen = {}
 
-    def _fake_litellm_tier(model, *, allow_import=True):
-        seen["allow_import"] = allow_import
+    def _fake_litellm_tier(model, *, allow_fetch=True):
+        seen["allow_fetch"] = allow_fetch
         return None
 
     monkeypatch.setattr(rates, "_try_litellm_context_window", _fake_litellm_tier)
@@ -732,7 +765,7 @@ def test_resolve_context_window_allow_fetch_false_also_forwards_allow_import_fal
 
     rates.resolve_context_window("openrouter/deepseek/deepseek-v4-pro", allow_fetch=False)
 
-    assert seen["allow_import"] is False
+    assert seen["allow_fetch"] is False
 
 
 # --- Disk persistence of the OpenRouter catalog ---
