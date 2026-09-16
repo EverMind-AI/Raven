@@ -2506,12 +2506,17 @@ class Config(BaseSettings):
     )
 
 
+def is_minimax_image_base(api_base: str) -> bool:
+    """Whether the image tool uses a direct MiniMax regional endpoint."""
+    return api_base.rstrip("/") in ("https://api.minimax.io/v1", "https://api.minimaxi.com/v1")
+
+
 def borrows_openrouter_key(tool: MediaToolConfig) -> bool:
     """Whether this section is in the one state that borrows: configured (it
     names a model or a key) yet keyless. Unconfigured sections borrow nothing,
     which is what keeps a chat credential from quietly enabling tools that
     bill per call."""
-    return bool((tool.api_key or tool.model) and not tool.api_key)
+    return bool((tool.api_key or tool.model) and not tool.api_key and not is_minimax_image_base(tool.api_base))
 
 
 def borrow_openrouter_key(tool: MediaToolConfig, openrouter_key: str) -> None:
