@@ -19,7 +19,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 8
+CURRENT_CONFIG_VERSION = 9
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -41,6 +41,7 @@ _PHANTOM_KNOBS_MIGRATION = 5
 _VENDORED_TREE_MIGRATION = 6
 _RESEARCH_RENAME_MIGRATION = 7
 _EMBEDDING_HOME_MIGRATION = 8
+_EMBEDDING_SHAPE_MIGRATION = 9
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -375,6 +376,8 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
                 rename_pending = _research_rename_pending(raw)
             if from_version < _EMBEDDING_HOME_MIGRATION:
                 changed = _migrate_embedding_home(raw, config_path=path) or changed
+            if from_version < _EMBEDDING_SHAPE_MIGRATION:
+                changed = _migrate_embedding_shape(raw, config_path=path) or changed
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -895,6 +898,50 @@ def _provider_serving(base_url: str, config_path: Path | None) -> str | None:
         return None
 
 
+def _migrate_embedding_shape(data: dict, *, notify: bool = False, config_path: Path | None = None) -> bool:
+    """Take the address and key the block used to carry itself.
+
+    `EmbeddingConfig` forbids extras, so a config still holding them does not
+    load at all -- every command that reads the extension blocks ends in a
+    traceback rather than in a degraded feature.
+
+    Its own generation rather than the one that moved the block: generation 8
+    shipped without this repair, so an install that already consumed 8 carries
+    both the stamp and the shape that cannot load, and a repair gated on 8
+    would never reach it.
+    """
+    import logging as _logging
+
+    _log = _logging.getLogger(__name__)
+    block = data.get("embedding") if isinstance(data, dict) else None
+    if not isinstance(block, dict) or not any(k in block for k in ("baseUrl", "base_url", "apiKey", "api_key")):
+        return False
+
+    address = str(block.pop("baseUrl", None) or block.pop("base_url", None) or "")
+    block.pop("apiKey", None)
+    block.pop("base_url", None)
+    block.pop("api_key", None)
+    # Adopted onto the provider that answers at that address, when one is
+    # configured. Failing that the whole block goes: a model left with no
+    # provider is a pin every reader resolves to nothing while every screen
+    # reads it as configured, which is the state this repair exists to end.
+    served_by = _provider_serving(address, config_path) if address else None
+    if served_by:
+        block.setdefault("provider", served_by)
+        if notify:
+            _log.info("Migrated: embedding endpoint %s -> provider %r", address, served_by)
+    elif not block.get("provider"):
+        data.pop("embedding", None)
+        if notify:
+            _log.warning(
+                "Migrated: dropped the embedding endpoint at %s -- no configured provider answers "
+                "there, so there is nowhere for its key to live. Pick an embedding model in "
+                "settings to configure one again.",
+                address or "(no address)",
+            )
+    return True
+
+
 def _migrate_embedding_home(data: dict, *, notify: bool = False, config_path: Path | None = None) -> bool:
     """Move the endpoint and the extraction block to the names they earned.
 
@@ -944,37 +991,6 @@ def _migrate_embedding_home(data: dict, *, notify: bool = False, config_path: Pa
             block.setdefault(key, value)
         if notify:
             _log.info("Migrated: %s.embedding* -> embedding.%s", know_key, "/".join(sorted(moved)))
-
-    # And the address and key the block used to carry itself. `EmbeddingConfig`
-    # forbids extras, so a config still holding them does not load at all --
-    # every command that reads the extension blocks ends in a traceback, which
-    # is what a config written by an earlier build of this change does.
-    block = data.get("embedding") if isinstance(data, dict) else None
-    if isinstance(block, dict) and any(k in block for k in ("baseUrl", "base_url", "apiKey", "api_key")):
-        changed = True
-        address = str(block.pop("baseUrl", None) or block.pop("base_url", None) or "")
-        block.pop("apiKey", None)
-        block.pop("base_url", None)
-        block.pop("api_key", None)
-        # Adopted onto the provider that answers at that address, when one is
-        # configured. Failing that the whole block goes: a model left with no
-        # provider is a pin every reader resolves to nothing while every screen
-        # reads it as configured, which is the state this change exists to make
-        # unreachable.
-        served_by = _provider_serving(address, config_path) if address else None
-        if served_by:
-            block.setdefault("provider", served_by)
-            if notify:
-                _log.info("Migrated: embedding endpoint %s -> provider %r", address, served_by)
-        elif not block.get("provider"):
-            data.pop("embedding", None)
-            if notify:
-                _log.warning(
-                    "Migrated: dropped the embedding endpoint at %s -- no configured provider answers "
-                    "there, so there is nowhere for its key to live. Pick an embedding model in "
-                    "settings to configure one again.",
-                    address or "(no address)",
-                )
 
     for sf_key in ("skillForge", "skill_forge"):
         forge = data.get(sf_key) if isinstance(data, dict) else None
@@ -1087,6 +1103,8 @@ def _migrate_config(  # noqa: C901 (cc 42: pre-existing, above the ceiling)
 
     if from_version < _EMBEDDING_HOME_MIGRATION:
         _migrate_embedding_home(data, notify=True, config_path=config_path)
+    if from_version < _EMBEDDING_SHAPE_MIGRATION:
+        _migrate_embedding_shape(data, notify=True, config_path=config_path)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts
