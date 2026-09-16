@@ -3,6 +3,54 @@
    branch action its footer offers. Branching acts on the current session -- the OPEN
    conversation -- and the island only offers it on the main lane, so a
    delegated run's pane never claims to fork a session it does not have. */
+
+import { DS } from '../seam/000-datasource.js'
+import { $, T } from '../demo/010-kernel.js'
+import { confirmAsk, down, sess } from '../demo/040-state.js'
+import { sessionDraw, sessionOpen, sessionRows } from '../demo/050-rail.js'
+import { noteRow, noteSay, pitch } from '../demo/060-conversation.js'
+import { drawMeter } from '../demo/090-composer.js'
+import { rpc } from './020-rpc.js'
+import { fmtTok } from './050-turn.js'
+import { draft } from './080-overrides.js'
+import { showUpNote } from './210-update-notice.js'
+
+/* Manual compaction. The runtime already compacts when a prompt outgrows the
+   window; this forces the same pass early, which is what you want once the
+   earlier half of a session has stopped being useful. */
+async function compressNow() {
+  const key = sessionCurrent();
+  if (!key || draft) return;
+  const line = noteRow(T('gui.compress.running'), '', { quiet: true, host: $('#stage') });
+  try {
+    const r = await rpc.call('session.compress', { session_id: key });
+    noteSay(line, r.removed
+      ? T('gui.compress.done', { n: r.removed, before: fmtTok(r.before_tokens), after: fmtTok(r.after_tokens) })
+      : T('gui.compress.noop'), '');
+  } catch (e) {
+    line.remove();
+    /* Same rule as the clear handler, and here it is the failure path that
+       needed it: `line` is a segment in the lane this started in, so a switch
+       has already dropped it and writing to it lands nowhere -- but a bare
+       noteRow asks for the CURRENT lane, so a compaction that failed for the
+       conversation being left posted its error over the one being read. */
+    const detail = (e.data && e.data.detail) || e.message || String(e);
+    if (key !== sessionCurrent()) {
+      const s = sess(key);
+      toast(T('gui.sess.compress_failed', { title: plainTitle((s && s.title) || key), detail }));
+      return;
+    }
+    noteRow(T('gui.compress.fail', { err: '' }).replace(/[:：]\s*$/, ''), detail);
+  }
+  /* The tail this scrolls is the open conversation's. */
+  if (key !== sessionCurrent()) return;
+  down();
+}
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 DS.transcript.branch = () => {
   rpc.call('session.branch', { session_id: sessionCurrent() })
     .then((r) => {
@@ -60,38 +108,6 @@ DS.composer.slash.forEach((x) => {
   if (x.id === 'gui.compress') x.fn = compressNow;
 });
 
-/* Manual compaction. The runtime already compacts when a prompt outgrows the
-   window; this forces the same pass early, which is what you want once the
-   earlier half of a session has stopped being useful. */
-async function compressNow() {
-  const key = sessionCurrent();
-  if (!key || draft) return;
-  const line = noteRow(T('gui.compress.running'), '', { quiet: true, host: $('#stage') });
-  try {
-    const r = await rpc.call('session.compress', { session_id: key });
-    noteSay(line, r.removed
-      ? T('gui.compress.done', { n: r.removed, before: fmtTok(r.before_tokens), after: fmtTok(r.after_tokens) })
-      : T('gui.compress.noop'), '');
-  } catch (e) {
-    line.remove();
-    /* Same rule as the clear handler, and here it is the failure path that
-       needed it: `line` is a segment in the lane this started in, so a switch
-       has already dropped it and writing to it lands nowhere -- but a bare
-       noteRow asks for the CURRENT lane, so a compaction that failed for the
-       conversation being left posted its error over the one being read. */
-    const detail = (e.data && e.data.detail) || e.message || String(e);
-    if (key !== sessionCurrent()) {
-      const s = sess(key);
-      toast(T('gui.sess.compress_failed', { title: plainTitle((s && s.title) || key), detail }));
-      return;
-    }
-    noteRow(T('gui.compress.fail', { err: '' }).replace(/[:：]\s*$/, ''), detail);
-  }
-  /* The tail this scrolls is the open conversation's. */
-  if (key !== sessionCurrent()) return;
-  down();
-}
-
 // Dev-only hook: lets a design pass preview the clarify sheet without
 // spending a model turn (window.__clarify({question, choices})).
 window.__clarify = (p) => rpc.notify['clarify.request'](p || { request_id: 'dev', question: '预览', choices: ['A', 'B'] });
@@ -100,3 +116,6 @@ window.__clarify = (p) => rpc.notify['clarify.request'](p || { request_id: 'dev'
 // actually newer, which never happens on a dev checkout
 // (window.__upnote('ver', '0.1.11')).
 window.__upnote = (kind, latest) => showUpNote(kind || 'ver', latest);
+}
+
+export { compressNow }

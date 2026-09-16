@@ -1,4 +1,25 @@
 /* ---- boot ---------------------------------------------------------- */
+
+import { DS } from '../seam/000-datasource.js'
+import { hostPlatformSet } from '../demo/010-kernel.js'
+import { sess } from '../demo/040-state.js'
+import { sessionRows } from '../demo/050-rail.js'
+import { drawCapsBadge } from '../demo/120-capabilities.js'
+import { appVersionSet } from '../demo/130-settings.js'
+import { cronWarm } from '../demo/140-schedule.js'
+import { hideSplash, showOnboard } from '../demo/160-boot.js'
+import { shellReady } from './010-boot-guard.js'
+import { SURFACE, authFail, bootFail, rpc } from './020-rpc.js'
+import { loadSessions } from './030-sessions.js'
+import { openLiveSession, startDraft } from './080-overrides.js'
+import { loadExt } from './090-extensions.js'
+import { langRestore, loadLang, loadSettings, pushPermMode, setupState } from './120-settings.js'
+import { resumeUpgrade, showUpNote, watchForUpdates } from './210-update-notice.js'
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 DS.onboard = {
   options: () => rpc.call('model.options', {}),
   saveKey: (slug, api_key, api_base) => rpc.call('model.save_key', {
@@ -106,3 +127,4 @@ DS.onboard = {
     bootFail(e);
   }
 })();
+}

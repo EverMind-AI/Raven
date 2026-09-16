@@ -2,6 +2,14 @@
    The island talks to DS.knowledge and knows nothing about transport; this
    file only knows how to speak knowledge.* over /rpc. Installing onto the
    same name is what swaps the demo fixtures for a real engine. */
+
+import { DS } from '../seam/000-datasource.js'
+import { rpc, uploadRefusalBySize } from './020-rpc.js'
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 DS.knowledge = {
   status: () => rpc.call('knowledge.status', {}),
   /* Unwrapped here rather than in the island: the contract answers an object
@@ -69,3 +77,4 @@ DS.knowledge = {
       .call('knowledge.search', { base_ids: baseIds, query, top_k: topK })
       .then((r) => ({ hits: (r && r.hits) || [], search_ms: (r && r.search_ms) || 0, embed_ms: (r && r.embed_ms) || 0 })),
 };
+}

@@ -10,9 +10,11 @@
 
 import { readFileSync } from 'node:fs'
 
+import { sandboxSource } from './legacy-source.mjs'
+
 import { describe, expect, it } from 'vitest'
 
-const demo = readFileSync(new URL('../src/legacy/demo/154-playbooks.js', import.meta.url), 'utf8')
+const demo = sandboxSource(new URL('../src/legacy/demo/154-playbooks.js', import.meta.url))
 const contract = JSON.parse(readFileSync(new URL('../../rpc-schema/openrpc.json', import.meta.url), 'utf8'))
 
 function required(schema) {
@@ -24,8 +26,8 @@ function required(schema) {
 function fixtures() {
   const DS = {}
   /* `RavenIslands` is the shell face the rail calls; the fixture source is what
-     this gate is after, and it is installed by the same module body. */
-  Function('DS', 'RavenIslands', demo)(DS, { playbooks: { open() {}, close() {} } })
+     this gate is after, and the part's install() is what registers it. */
+  Function('DS', 'RavenIslands', `${demo}\ninstall();`)(DS, { playbooks: { open() {}, close() {} } })
   if (!DS.playbooks) throw new Error('DS.playbooks is absent from the demo layer')
   return DS.playbooks
 }

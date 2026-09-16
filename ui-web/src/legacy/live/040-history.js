@@ -5,11 +5,10 @@
    session openers still call. The spread keeps whatever the fixture layer put
    on the seam; the three delegation verbs are added later, by live/240, once
    the dag reader they close over exists. */
-DS.transcript = {
-  ...DS.transcript,
-  clean: (text) => cleanPreview(text),
-  okOf: (name, preview) => okOf(name, preview),
-};
+
+import { DS } from '../seam/000-datasource.js'
+import { unpitch } from '../demo/060-conversation.js'
+import { cleanPreview, okOf } from './030-sessions.js'
 
 function renderHistory(messages) {
   /* Opening a stored conversation IS content: the new-task flag comes down
@@ -19,3 +18,16 @@ function renderHistory(messages) {
   unpitch();
   RavenIslands.transcript.history(messages);
 }
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+DS.transcript = {
+  ...DS.transcript,
+  clean: (text) => cleanPreview(text),
+  okOf: (name, preview) => okOf(name, preview),
+};
+}
+
+export { renderHistory }

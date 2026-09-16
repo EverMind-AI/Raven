@@ -12,9 +12,14 @@
    (ui-web/src/features/workspace/); what stays here is the tool-event bookkeeping
    the fixture hooks feed, the panel chrome outside #wsBody, and the fixture DS
    source. */
+
+import { DS } from '../seam/000-datasource.js'
+import { $, HOST_PLATFORM, T } from './010-kernel.js'
+import { wsOnTool, wsOnToolDone } from './110-subagents.js'
+
 let wsTab = 'diff', wsOpen = false, wsWide = false, wsPicked = false;
 
-const WS = RavenIslands.workspace.shared();
+let WS;
 
 function wsReset() {
   wsTab = 'diff'; wsPicked = false;
@@ -77,7 +82,7 @@ function wsOnHistory(messages) {
    edit_file carries old_text and new_text, which IS the ground truth of the
    change, so the diff needs no backend support at all. Long runs of
    unchanged context are folded to one clickable row. */
-const { hunkFromEdit, hunkFromWrite, hunkFromUnified } = RavenIslands.workspace;
+let hunkFromEdit, hunkFromWrite, hunkFromUnified;
 
 /* The two front ends hand over different shapes -- the live RPC gives the
    whole argument object, the demo replay gives the one string it displays.
@@ -212,6 +217,13 @@ function drawWs() {
   RavenIslands.workspace.draw();
 }
 
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+WS = RavenIslands.workspace.shared();
+({ hunkFromEdit, hunkFromWrite, hunkFromUnified } = RavenIslands.workspace);
+
 /* The fixture source: what the workspace island may ask of demo mode. No
    list/reveal and no canBrowse -- the file tab keeps its demo empty note, and
    opening a change stays the honest toast. Registered, not
@@ -234,3 +246,6 @@ DS.workspace ??= {
 DS.artifacts ??= {
   changes: (turn) => WS.changes.filter((c) => c.turn === turn),
 };
+}
+
+export { wsTab, wsOpen, wsWide, wsPicked, WS, wsReset, wsOnHistory, hunkFromEdit, hunkFromWrite, hunkFromUnified, wsArgs, wsShortPath, wsRecordChange, setWs, setWsFull, bumpWs, wsPick, wsView, wsRestore, wsEpoch, wsStale, wsShowsTurn, drawWs }

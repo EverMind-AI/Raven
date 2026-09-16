@@ -5,18 +5,18 @@
    message.complete), so going live means replacing replay() with a
    socket — the rendering code below does not change.
    ═══════════════════════════════════════════════════════════════════ */
-// If the script runs at all, this marker goes; if you still see it, it did not.
-(() => { const n = document.getElementById('noJs'); if (n) n.remove(); })();
+
+import catalog from '../../../../i18n/messages.json'
 
 const $ = (s) => document.querySelector(s);
 const mk = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 
 /* ── i18n ────────────────────────────────────────────────────────────
-   The catalogue is spliced in from i18n/messages.json at build time —
+   The catalogue comes from i18n/messages.json at build time —
    the same file the TUI generates its own copy from, so one edit moves
    both front ends. LANG mirrors config.language. */
-const I18N = /*__I18N__*/{ "slash": {}, "ui": {} };
+const I18N = { slash: catalog.slash, ui: catalog.ui };
 let LANG = 'en';
 /* The only writer of LANG, and the reason it has one: the current language and
    the catalogue rendered over the static markup have to move together, and
@@ -29,8 +29,7 @@ function langSet(v) { LANG = v; applyI18n(); }
    case; system.hello corrects it. The live layer calls the setter rather than
    assigning, the way it does for LANG: an imported binding is read-only, and a
    field the other layer writes is a strand count-shared-globals.mjs counts. */
-let HOST_PLATFORM = /Mac/.test(navigator.platform) ? 'mac'
-  : /Win/.test(navigator.platform) ? 'windows' : 'linux';
+let HOST_PLATFORM;
 function hostPlatformSet(v) { HOST_PLATFORM = v; }
 
 /* Later layers decorate a handful of this shell's verbs rather than reassigning
@@ -117,3 +116,14 @@ function tipFlash(b, word) {
   setTimeout(() => { b.dataset.tip = keep; }, 1400);
 }
 
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+// If the script runs at all, this marker goes; if you still see it, it did not.
+(() => { const n = document.getElementById('noJs'); if (n) n.remove(); })();
+HOST_PLATFORM = /Mac/.test(navigator.platform) ? 'mac'
+  : /Win/.test(navigator.platform) ? 'windows' : 'linux';
+}
+
+export { $, mk, esc, I18N, LANG, langSet, HOST_PLATFORM, hostPlatformSet, applyDecorators, fillVars, T, slashText, slashName, slashHelp, applyI18n, MCP_RE, rawVerb, ACP_TITLE_RE, callParts, verb, verbIng, dur, COPY_ICO, tipFlash }

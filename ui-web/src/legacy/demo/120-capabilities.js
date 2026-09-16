@@ -1,4 +1,10 @@
 /* ══ module 2: capabilities page ══════════════════════════════════ */
+
+import { DS } from '../seam/000-datasource.js'
+import { $, applyDecorators } from './010-kernel.js'
+import { markNewCurrent } from './050-rail.js'
+import { drawCaps } from './152-skills.js'
+
 let extTab = 'skill';
 /* The filter bar's state. On an object because demo/150-chrome.js writes both
    fields from the pill row and the search field. */
@@ -59,8 +65,6 @@ function extSetBase(tab) {
   [...$('#cKind').children].forEach((c, i) => c.setAttribute('aria-pressed', String(i === 0)));
   closeDetail();
 }
-
-DS.capabilities ??= { loaded: () => true, load: async () => false };
 
 async function openCaps(tab) {
   extSet(tab);
@@ -124,7 +128,23 @@ function drawXa() {
    `probe_status` is "the machine can actually run it". Collapsing them is
    how a disabled agent reads as broken, or a missing binary reads as
    switched off. */
-const XA_FIXTURE = [
+let XA_FIXTURE;
+
+/* The rail badge for capabilities that need attention. The composer used to
+   carry a chip counting active capabilities too; it is gone -- how many tools
+   are wired is a setup question, answered on the extensions page, not something
+   to read while typing. What belongs under the field is the state of THIS
+   session: how much context is left, and what the agent may do unasked. */
+/* No counters on the rail's module rows -- the set-up-once modules do not
+   nag from there; their state is spoken inside the page, where the fix is. */
+function drawCapsBadge() {}
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+DS.capabilities ??= { loaded: () => true, load: async () => false };
+XA_FIXTURE = [
   /* `vendored` is not decoration: it is what tells the page that connecting this
      row means running the product's installer, not writing a config entry from a
      preset it does not have. A fixture missing it read as a preset nobody could
@@ -191,16 +211,6 @@ DS.xa ??= {
     return XA_FIXTURE;
   },
 };
+}
 
-/* The rail badge for capabilities that need attention. The composer used to
-   carry a chip counting active capabilities too; it is gone -- how many tools
-   are wired is a setup question, answered on the extensions page, not something
-   to read while typing. What belongs under the field is the state of THIS
-   session: how much context is left, and what the agent may do unasked. */
-/* No counters on the rail's module rows -- the set-up-once modules do not
-   nag from there; their state is spoken inside the page, where the fix is. */
-function drawCapsBadge() {}
-
-/* The context ring is the ctxchip writer (ui-web/src/shell/ctxchip.ts), which owns
-   the two numbers as well as the drawing; drawCtx and setCtx are its published
-   names, assigned in main.tsx. */
+export { extTab, capFilter, NAV_OF, showPageDecorators, showPage, decorateShowPage, showPageBase, extSetDecorators, extSet, decorateExtSet, extSetBase, openCaps, openSkills, openPlugins, closeCaps, setIsOpen, openSet, closeSet, closeDetailDecorators, closeDetail, decorateCloseDetail, closeDetailBase, closeXa, drawXa, XA_FIXTURE, drawCapsBadge }

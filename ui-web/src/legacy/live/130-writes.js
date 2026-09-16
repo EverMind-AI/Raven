@@ -2,6 +2,19 @@
 
 /* One delete per session, and a session that refuses stays in the list -- the
    rail must never claim something is gone while the file is still on disk. */
+
+import { DS } from '../seam/000-datasource.js'
+import { T } from '../demo/010-kernel.js'
+import { dropDraft } from '../demo/040-state.js'
+import { sessionReplace, sessionRows } from '../demo/050-rail.js'
+import { drawSettings } from '../demo/130-settings.js'
+import { rpc } from './020-rpc.js'
+import { startDraft } from './080-overrides.js'
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 DS.sessions.deleteAll = async () => {
   const gone = [];
   for (const s of sessionRows().slice()) {
@@ -30,3 +43,4 @@ DS.sessions.deleteAll = async () => {
     ? T('gui.set.dat.del_partial', { n: gone.length, left: sessionRows().length })
     : T('gui.set.dat.del_done', { n: gone.length }));
 };
+}

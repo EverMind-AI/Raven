@@ -3,20 +3,21 @@
  * its source refreshes, and live extension rows never borrow fixture storage.
  */
 
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
+import { sandboxSource } from '../../../scripts/legacy-source.mjs'
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const demoSource = readFileSync('src/legacy/demo/120-capabilities.js', 'utf8')
-const chromeSource = readFileSync('src/legacy/demo/150-chrome.js', 'utf8')
-const fixturePluginsFile = readFileSync('src/legacy/demo/153-plugins.js', 'utf8')
-const liveSource = readFileSync('src/legacy/live/090-extensions.js', 'utf8')
-const liveSkillsSource = readFileSync('src/legacy/live/140-skills.js', 'utf8')
-const livePluginsSource = readFileSync('src/legacy/live/150-plugins.js', 'utf8')
+const demoSource = sandboxSource('src/legacy/demo/120-capabilities.js')
+const chromeSource = sandboxSource('src/legacy/demo/150-chrome.js')
+const fixturePluginsFile = sandboxSource('src/legacy/demo/153-plugins.js')
+const liveSource = sandboxSource('src/legacy/live/090-extensions.js', 'installExt')
+const liveSkillsSource = sandboxSource('src/legacy/live/140-skills.js', 'installSkills')
+const livePluginsSource = sandboxSource('src/legacy/live/150-plugins.js', 'installPlugins')
 
+/* Just openCaps: the fixture registration it used to sit next to is in the
+   part's install() now, and this harness injects its own DS anyway. */
 const demoOpen = demoSource.slice(
-  demoSource.indexOf('DS.capabilities ??='),
+  demoSource.indexOf('async function openCaps'),
   demoSource.indexOf('const openSkills'),
 )
 const manualStart = chromeSource.indexOf("$('#mAdd').onclick")
@@ -179,9 +180,9 @@ describe('the live extension source', () => {
     }
     const build = new Function(
       'T', 'rpc', 'toast', 'pmToggle', 'DS', 'LANG', 'showUpNote', 'setMemFault', 'RavenIslands',
-      `${liveSource}\n${liveSkillsSource}\n${livePluginsSource}\nreturn {
-        tools: () => toolsLive,
-      };`,
+      `${liveSource}\n${liveSkillsSource}\n${livePluginsSource}
+       installExt(); installSkills(); installPlugins();
+       return { tools: () => toolsLive };`,
     ) as (...args: unknown[]) => {
       tools(): Array<{ id: string }>
     }

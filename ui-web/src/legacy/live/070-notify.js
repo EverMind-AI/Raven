@@ -1,4 +1,14 @@
 /* ---- notifications ------------------------------------------------ */
+
+import { T } from '../demo/010-kernel.js'
+import { approvalClose, approvalSheet, approveSheet, clarifyClose, clarifySheet, sess } from '../demo/040-state.js'
+import { sessionDraw } from '../demo/050-rail.js'
+import { drawMeter, goState } from '../demo/090-composer.js'
+import { rpc } from './020-rpc.js'
+import { touchSession } from './030-sessions.js'
+import { live, onEvent, refreshList } from './050-turn.js'
+import { PARK_EVENT_CAP, parkedTurns, subSession, transitionTurn } from './060-parked.js'
+
 const notifyTurn = (owner, event) => {
   transitionTurn(owner, event);
   if (owner === sessionCurrent()) { drawMeter(); goState(); sessionDraw(); return; }
@@ -20,6 +30,10 @@ const notifyTurn = (owner, event) => {
   refreshList();
 };
 
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 rpc.notify.event = (params) => {
   if (live.subId && params.subscription_id === live.subId) { onEvent(params.event || {}); return; }
   const sid = subSession[params.subscription_id];
@@ -128,3 +142,6 @@ rpc.notify['clarify.closed'] = (p) => {
   notifyTurn(p.conversation_id || sessionCurrent(), { type: 'resume' });
   clarifyClose(p.request_id);
 };
+}
+
+export { notifyTurn }

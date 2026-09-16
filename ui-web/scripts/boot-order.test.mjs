@@ -4,13 +4,16 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const demo = readFileSync(new URL('../src/legacy/demo/160-boot.js', import.meta.url), 'utf8')
+import { sandboxSource } from './legacy-source.mjs'
+
+const demo = sandboxSource(new URL('../src/legacy/demo/160-boot.js', import.meta.url))
 const build = readFileSync(new URL('../build.py', import.meta.url), 'utf8')
 const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
 if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
-const live = [...manifest[1].matchAll(/"([^"]+\.js)"/g)]
-  .map((m) => readFileSync(new URL(`../src/legacy/live/${m[1]}`, import.meta.url), 'utf8'))
-  .join('')
+const liveParts = [...manifest[1].matchAll(/"([^"]+\.js)"/g)].map((m) => m[1])
+const liveTexts = liveParts.map((name) => readFileSync(new URL(`../src/legacy/live/${name}`, import.meta.url), 'utf8'))
+const live = liveTexts.join('')
+const index = readFileSync(new URL('../src/legacy/index.js', import.meta.url), 'utf8')
 
 const STEPS = [
   'lookLoad', 'paneLoad', 'setRail', 'sessionDraw', 'sessionOpen', 'drawCapsBadge',
@@ -28,7 +31,7 @@ function harness(rows = []) {
   const install = Function(
     ...STEPS,
     'sessionRows', 'bootError', 'queueMicrotask', 'window', 'RavenIslands', 'DS', 'addEventListener',
-    `${demo}\nreturn { bootPage };`,
+    `${demo}\ninstall();\nreturn { bootPage };`,
   )
   const api = install(
     ...values,
@@ -68,13 +71,29 @@ describe('the assembled page boot order', () => {
     expect(calls.map(([name]) => name)).toEqual(STEPS.filter((name) => name !== 'sessionOpen'))
   })
 
+  /* The parts are modules now, so "before" is no longer a position in one
+     concatenated text: it is the order src/legacy/index.js installs them in.
+     Three things carry the rule -- the queue is the last part's, it is the last
+     thing that part installs, and the index installs the live parts in the
+     manifest's order, after the demo half and only in live mode. */
   it('queues live boot only after every synchronous source installer', () => {
-    const queuedAt = live.lastIndexOf('queueMicrotask(bootPage);')
-    const installs = [...live.matchAll(/^DS\.[A-Za-z0-9_.]+\s*=/gm)].map((m) => m.index)
-    expect(queuedAt).toBeGreaterThan(0)
+    const carriers = liveParts.filter((_, i) => liveTexts[i].includes('queueMicrotask(bootPage);'))
+    expect(carriers).toEqual([liveParts.at(-1)])
+
+    const last = liveTexts.at(-1)
+    const opened = last.indexOf('export function install() {')
+    const body = last.slice(opened, last.indexOf('\n}\n', opened))
+    expect(body.trimEnd().endsWith('queueMicrotask(bootPage);')).toBe(true)
+
+    const installs = [...live.matchAll(/^DS\.[A-Za-z0-9_.]+\s*=/gm)]
     expect(installs.length).toBeGreaterThan(10)
-    expect(installs.every((at) => at < queuedAt)).toBe(true)
-    expect(live.slice(queuedAt).trim()).toBe('queueMicrotask(bootPage);\n\n})();')
+
+    const listed = [...index.matchAll(/^import \* as \w+ from '\.\/live\/([^']+)'$/gm)].map((m) => m[1])
+    expect(listed).toEqual(liveParts)
+    expect(index).toContain('for (const part of DEMO) part.install()')
+    expect(index).toContain('if (!liveMode()) return')
+    expect(index.indexOf('for (const part of DEMO)')).toBeLessThan(index.indexOf('for (const part of LIVE)'))
+
     expect(live).not.toContain('CRONS.length = 0')
   })
 })

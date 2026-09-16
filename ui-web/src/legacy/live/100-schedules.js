@@ -2,6 +2,15 @@
    The page (demo/140-schedule.js) owns the one renderer and all chrome;
    this file only knows how to speak cron.* over /rpc. Installing onto the
    seam replaces the fixture source before the first paint. */
+
+import { DS } from '../seam/000-datasource.js'
+import { T } from '../demo/010-kernel.js'
+import { sess } from '../demo/040-state.js'
+import { sessionDraw, sessionOpen, sessionRows } from '../demo/050-rail.js'
+import { closeCron } from '../demo/140-schedule.js'
+import { rpc } from './020-rpc.js'
+import { fmtEvery, fmtStamp } from './090-extensions.js'
+
 function cronToRow(j) {
   const when = j.kind === 'cron' ? cronExprHuman(j.expr)
     : j.kind === 'every' ? T('gui.cron.every', { every: fmtEvery(j.every_ms) })
@@ -27,6 +36,35 @@ function cronToRow(j) {
     deliver: 'app', runs, kind: j.kind, every_ms: j.every_ms, at_ms: j.at_ms, tzv: j.tz };
 }
 
+function jobToSave(j) {
+  const base = { name: j.name.trim(), message: j.what.trim() };
+  if (j.id && !j.fresh) base.id = j.id;
+  if (j.freq === 'hour') {
+    return { ...base, kind: 'every', every_seconds: j.every_ms ? Math.round(j.every_ms / 1000) : 3600 };
+  }
+  if (j.freq === 'cron') return { ...base, kind: 'cron', expr: j.at.trim() };
+  if (j.freq === 'once') {
+    if (!j.at_local) throw new Error('no instant');
+    return { ...base, kind: 'at', at_iso: j.at_local };
+  }
+  /* A time the reader typed, and nothing else read back out of prose: the
+     weekday is a number the control produced. */
+  const hm = j.at.match(/^\s*(\d{1,2}):(\d{2})\s*$/);
+  if (!hm) throw new Error('bad time');
+  const [h, m] = [Number(hm[1]), Number(hm[2])];
+  if (h > 23 || m > 59) throw new Error('bad time');
+  if (j.freq === 'week') {
+    const wd = Number(j.wd);
+    if (!Number.isInteger(wd) || wd < 0 || wd > 6) throw new Error('bad weekday');
+    return { ...base, kind: 'cron', expr: `${m} ${h} * * ${wd}` };
+  }
+  return { ...base, kind: 'cron', expr: `${m} ${h} * * *` };
+}
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 DS.cron = {
   rows: () => rpc.call('cron.list', {}).then((r) => r.jobs.map(cronToRow)),
   toggle: (j) => rpc.call('cron.set_enabled', { id: j.id, enabled: !j.on })
@@ -69,28 +107,6 @@ DS.cron = {
     sessionSet(s.id); sessionDraw(); sessionOpen(s);
   },
 };
-
-function jobToSave(j) {
-  const base = { name: j.name.trim(), message: j.what.trim() };
-  if (j.id && !j.fresh) base.id = j.id;
-  if (j.freq === 'hour') {
-    return { ...base, kind: 'every', every_seconds: j.every_ms ? Math.round(j.every_ms / 1000) : 3600 };
-  }
-  if (j.freq === 'cron') return { ...base, kind: 'cron', expr: j.at.trim() };
-  if (j.freq === 'once') {
-    if (!j.at_local) throw new Error('no instant');
-    return { ...base, kind: 'at', at_iso: j.at_local };
-  }
-  /* A time the reader typed, and nothing else read back out of prose: the
-     weekday is a number the control produced. */
-  const hm = j.at.match(/^\s*(\d{1,2}):(\d{2})\s*$/);
-  if (!hm) throw new Error('bad time');
-  const [h, m] = [Number(hm[1]), Number(hm[2])];
-  if (h > 23 || m > 59) throw new Error('bad time');
-  if (j.freq === 'week') {
-    const wd = Number(j.wd);
-    if (!Number.isInteger(wd) || wd < 0 || wd > 6) throw new Error('bad weekday');
-    return { ...base, kind: 'cron', expr: `${m} ${h} * * ${wd}` };
-  }
-  return { ...base, kind: 'cron', expr: `${m} ${h} * * *` };
 }
+
+export { cronToRow, jobToSave }

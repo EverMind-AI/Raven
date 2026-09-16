@@ -67,6 +67,7 @@ import * as session from './shell/session'
 import { toggle as toggleTheme } from './shell/theme'
 import * as toastWriter from './shell/toast'
 import * as upgradeWriter from './shell/upgrade'
+import { installLegacy } from './legacy/index.js'
 
 /* The island bundle. Assembled ahead of the legacy script by ui-web/build.py, so
  * everything published here exists by the time the shell's shims and the
@@ -570,3 +571,9 @@ const xaHost = document.getElementById('xaBody')
 if (xaHost) createRoot(xaHost).render(<XaApp />)
 const setHost = document.getElementById('spanels')
 if (setHost) createRoot(setHost).render(<SettingsApp />)
+
+/* The legacy page script, which used to be a third inline <script> after this
+   bundle. Last on purpose and for the same reason it was last then: its
+   install() steps read window.RavenIslands, window.sessionSet and the rest of
+   the names published above. */
+installLegacy()

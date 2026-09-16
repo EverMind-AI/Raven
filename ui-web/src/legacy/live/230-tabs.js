@@ -10,7 +10,18 @@
    would sit empty with no way to tell an empty list from a missing feature --
    so an absent surface answers with no rows rather than an error, and
    `absent` is what the island's empty state reads to tell the two apart. */
+
+import { DS } from '../seam/000-datasource.js'
+import { rpc } from './020-rpc.js'
+import { mediaOf } from './080-overrides.js'
+import { rpcGone, rpcHas } from './220-browser.js'
+
 let agentsWatch = null;
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 DS.agents = {
   /* Filtered on whether the agent can be dispatched, not on where it came
      from. It filtered `vendored` -- which is true of every agent that ships
@@ -227,3 +238,6 @@ if (new URLSearchParams(location.search).get('desk-demo') === '1') {
   };
 }
 setInterval(() => { if (agentsWatch) agentsWatch(); }, 2000);
+}
+
+export { agentsWatch }

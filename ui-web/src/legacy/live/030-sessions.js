@@ -1,4 +1,10 @@
 /* ---- session list ------------------------------------------------ */
+
+import { T } from '../demo/010-kernel.js'
+import { sess } from '../demo/040-state.js'
+import { sessionDraw, sessionReplace, sessionRows } from '../demo/050-rail.js'
+import { rpc } from './020-rpc.js'
+
 const DAY = 86400000;
 /* A row's stamp says when its visible conversation last changed, so it carries a
    clock -- a bare date cannot tell two of yesterday's sessions apart. The year
@@ -107,3 +113,12 @@ function okOf(name, preview) {
   if (name === 'understand_media' && preview.includes('[could not understand:')) return false;
   return true;
 }
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+
+}
+
+export { DAY, whenLabel, cronNames, loadCronNames, rowFrom, rowPreview, touchSession, SESS_CHANNELS, loadSessions, cleanPreview, okOf }

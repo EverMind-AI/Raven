@@ -11,6 +11,13 @@
 
 // Stable per-name hue: same plugin, same colour, every render and page.
 // Kept as a shell helper because the memory drawer uses it too.
+
+import { DS } from '../seam/000-datasource.js'
+import { $, T, mk } from './010-kernel.js'
+import { PLUGINS, attnCount } from './030-fixtures.js'
+import { closeDetail, decorateCloseDetail, decorateExtSet, decorateShowPage, extTab } from './120-capabilities.js'
+import { decorateDrawCaps, skInstBtn, skView } from './152-skills.js'
+
 function pmTile(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
@@ -24,19 +31,7 @@ function pmToggle(name, on) { RavenIslands.plugins.toggleMcp(name, on); }
 
 /* The "installed" entry point rides in the filter bar, like the skills view
    switch — created once, shown only on the plugin tab. */
-const pmInstBtn = (() => {
-  const b = mk('button', 'pminstbtn');
-  b.onclick = () => { RavenIslands.plugins.toggleView(); };
-  $('.cbar').appendChild(b);
-  return { el: b, sync() {
-    b.hidden = extTab !== 'plugin' || RavenIslands.plugins.view() === 'installed';
-    const n = RavenIslands.plugins.installedCount();
-    const attn = attnCount();
-    b.innerHTML = '';
-    b.append(mk('span', null, T('gui.plug.installed_n', { n })));
-    if (attn) b.appendChild(mk('span', 'pmbdg', String(attn)));
-  } };
-})();
+let pmInstBtn;
 
 /* The plugin tab's face on #capsBody: chrome first, then the island host.
    The host node survives other tabs clearing #capsBody (they only detach
@@ -59,6 +54,24 @@ function drawPlugTab() {
      not fire a market search nobody asked for. */
   if ($('#capsPage').dataset.open === 'true') RavenIslands.plugins.searchIfIdle();
 }
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+pmInstBtn = (() => {
+  const b = mk('button', 'pminstbtn');
+  b.onclick = () => { RavenIslands.plugins.toggleView(); };
+  $('.cbar').appendChild(b);
+  return { el: b, sync() {
+    b.hidden = extTab !== 'plugin' || RavenIslands.plugins.view() === 'installed';
+    const n = RavenIslands.plugins.installedCount();
+    const attn = attnCount();
+    b.innerHTML = '';
+    b.append(mk('span', null, T('gui.plug.installed_n', { n })));
+    if (attn) b.appendChild(mk('span', 'pmbdg', String(attn)));
+  } };
+})();
 
 {
   /* The hero sits above the search bar, so it lives outside #capsBody --
@@ -214,3 +227,6 @@ DS.plugins ??= (() => {
     reload: async () => {},
   };
 })();
+}
+
+export { pmTile, pmToggle, pmInstBtn, drawPlugTab }

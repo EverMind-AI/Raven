@@ -10,6 +10,8 @@
    and a fixture in the island's own shape would hide a mapping bug until
    live. */
 
+import { DS } from '../seam/000-datasource.js'
+
 function openPb() { RavenIslands.playbooks.open(); }
 function closePb() { RavenIslands.playbooks.close(); }
 function drawPb() {
@@ -17,7 +19,21 @@ function drawPb() {
   RavenIslands.playbooks.redraw();
 }
 
-const PB_FIXTURE = [
+let PB_FIXTURE;
+
+/* A row is the list's view of a playbook; a detail is the whole thing. The
+   fixture keeps one object per playbook and answers both from it, so the two
+   calls cannot drift apart in demo mode. */
+/* The credentials tab against the fixtures: what is "set" lives in memory for
+   the page's lifetime, and authorizing flips a server to authorized after a
+   beat, so the tab's every state is reachable with no engine behind it. */
+const PB_CREDS = { params: {}, oauth: {} };
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+PB_FIXTURE = [
   {
     name: 'release-notes',
     description: '看一个版本都改了什么，出一份分层的中文简报和一张长图',
@@ -236,14 +252,6 @@ const PB_FIXTURE = [
     error: "nodes.2.subagent: 'sec-raven' is not in the agent registry",
   },
 ];
-
-/* A row is the list's view of a playbook; a detail is the whole thing. The
-   fixture keeps one object per playbook and answers both from it, so the two
-   calls cannot drift apart in demo mode. */
-/* The credentials tab against the fixtures: what is "set" lives in memory for
-   the page's lifetime, and authorizing flips a server to authorized after a
-   beat, so the tab's every state is reachable with no engine behind it. */
-const PB_CREDS = { params: {}, oauth: {} };
 DS.playbooks ??= {
   credentials: async (name) => {
     const p = PB_FIXTURE.find((x) => x.name === name);
@@ -296,3 +304,6 @@ DS.playbooks ??= {
     };
   },
 };
+}
+
+export { openPb, closePb, drawPb, PB_FIXTURE, PB_CREDS }
