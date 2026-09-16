@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BrowserApp } from './BrowserPage'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types'
 
@@ -118,6 +120,16 @@ describe('browser island, links shape (the fixture source)', () => {
     expect(items).toHaveLength(2)
     items[1]!.fn()
     expect(shellCalls).toContainEqual(['copy', 'https://a.example/x'])
+  })
+
+  it('keeps its rendered shape', () => {
+    links([
+      { url: 'https://api.example.com/docs', kind: 'fetch', at: 'just now' },
+      { url: 'rate limits', kind: 'search', at: 'earlier' },
+    ])
+    mount()
+    screen.getByText('api.example.com/docs')
+    expect(domSnapshot(document.getElementById('wsBody')!)).toMatchSnapshot()
   })
 })
 
@@ -267,5 +279,18 @@ describe('browser island, embedded shape (the rpc source)', () => {
       screen.getByText('gui.plug.retry').click()
     })
     expect(calls.filter(([k]) => k === 'open').length).toBe(asked + 1)
+  })
+
+  it('keeps its rendered shape', async () => {
+    chromium({
+      frame: async () => ({ started: true, url: 'https://example.com/a', title: 'Example' }),
+      tabs: async () => ({
+        started: true,
+        tabs: [{ index: 0, url: 'https://example.com/a', title: 'Example', active: true }],
+      }),
+    })
+    mount()
+    await screen.findByText('Example')
+    expect(domSnapshot(document.getElementById('wsBody')!)).toMatchSnapshot()
   })
 })

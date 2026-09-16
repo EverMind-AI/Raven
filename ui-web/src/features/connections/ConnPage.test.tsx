@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ConnApp } from './ConnPage'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { ConnChannel, ConnQr, ConnSource } from './types'
 
@@ -1244,5 +1246,25 @@ describe('connections island', () => {
     const body = document.getElementById('connDlgBody')!
     expect(body.querySelector('.suwiz')).toBeNull()
     expect(body.querySelector('.sustate')!.textContent).toContain('gui.conn.st_live')
+  })
+
+  it('keeps its rendered shape, list', async () => {
+    install([
+      chan({ on: true, running: true }),
+      chan({ id: 'telegram', name: 'Telegram' }),
+      chan({ id: 'email', key: 'gui.chan.email' }),
+    ])
+    await mount()
+    await screen.findByText('Slack')
+    expect(domSnapshot(document.getElementById('connBody')!)).toMatchSnapshot()
+  })
+
+  it('keeps its rendered shape, dialog', async () => {
+    install([chan({ fields: [{ key: 'bot_token', required: true }], missing: ['bot_token'] })])
+    await mount()
+    await act(async () => {
+      rowBtn('Slack').click()
+    })
+    expect(domSnapshot(document.getElementById('connVeil')!)).toMatchSnapshot()
   })
 })

@@ -10,6 +10,7 @@ import * as desk from './deskStore'
 import * as workspace from './store'
 
 import { setCurrent } from '../../shell/session'
+import { domSnapshot } from '../../test/domSnapshot'
 
 import type { Shell } from '../../shell/bridge'
 import type { InstanceRow } from '../subagents/types'
@@ -229,5 +230,13 @@ describe('asking for the instance list', () => {
     await tick(30000)
 
     expect(asked.length).toBe(before)
+  })
+
+  it('keeps its rendered shape', async () => {
+    const view = render(<DeskApp />)
+    await act(async () => { desk.update({ paletteOpen: true, tab: 'agents' }) })
+    agentRows = [inst('h1', 'running')]
+    await tick()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
   })
 })

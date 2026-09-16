@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { XaApp } from './XaPage'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { XaActArgs, XaRow, XaSource } from './types'
 
@@ -1508,4 +1510,22 @@ describe('xa island', () => {
     })
   })
 
+  it('keeps its rendered shape, list', async () => {
+    install([
+      row(),
+      row({ name: 'off_one', configured: true, enabled: false }),
+      row({ name: 'miro', kind: 'openai', configured: false, has_api_key: false }),
+      row({ name: 'codex', configured: false, probe_status: 'missing', probe_detail: 'codex: command not found' }),
+    ])
+    await mount()
+    await screen.findByText('claude_code')
+    expect(domSnapshot(document.getElementById('xaBody')!)).toMatchSnapshot()
+  })
+
+  it('keeps its rendered shape, card', async () => {
+    install([row()])
+    await mount()
+    await openCard('claude_code')
+    expect(domSnapshot(document.getElementById('detail')!)).toMatchSnapshot()
+  })
 })

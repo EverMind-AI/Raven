@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CronApp } from './CronPage'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { CronJob, CronSource } from './types'
 
@@ -328,5 +330,25 @@ describe('cron island', () => {
     })
     expect(calls).toContain('toggle')
     expect(rowsSpy.mock.calls.length).toBeGreaterThan(1)
+  })
+
+  it('keeps its rendered shape, list', async () => {
+    install([
+      job({ runs: [{ at: 'today', ok: false, note: 'boom' }] }),
+      job({ id: 'b', name: 'weekly report', runs: [{ at: 'today', ok: true, note: 'fine' }] }),
+      job({ id: 'c', name: 'paused one', on: false }),
+    ])
+    await mount()
+    await screen.findByText('morning digest')
+    expect(domSnapshot(document.getElementById('cronBody')!)).toMatchSnapshot()
+  })
+
+  it('keeps its rendered shape, job page', async () => {
+    install([job({ runs: [{ at: 'today 08:00', ok: false, note: 'boom' }] })])
+    await mount()
+    await act(async () => {
+      ;(await screen.findByText('morning digest')).click()
+    })
+    expect(domSnapshot(document.getElementById('cronBody')!)).toMatchSnapshot()
   })
 })

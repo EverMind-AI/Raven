@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PlugApp } from './PluginsPage'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { DetailEntry, InstalledRow, MarketItem, PluginsSource } from './types'
 
@@ -298,6 +300,29 @@ describe('plugins island', () => {
     await vi.waitFor(() => {
       expect(calls).toContain('reload')
     })
+  })
+
+  it('keeps its rendered shape, market', async () => {
+    install([item(), item({ id: 'notion', name: 'Notion', verified: false })])
+    await mount()
+    await screen.findByText('websearch')
+    expect(domSnapshot(document.getElementById('capsBody')!)).toMatchSnapshot()
+  })
+
+  it('keeps its rendered shape, installed shelf', async () => {
+    install(
+      [item()],
+      [
+        { id: 'sheets', name: 'sheets', src: 'raven-sheets', ver: '0.9.0', state: 'on' },
+        { id: 'mcp:gh', name: 'gh', m: { name: 'gh', enabled: true, state: 'connected', transport: 'http', tool_count: 3 } },
+      ],
+    )
+    await mount()
+    act(() => {
+      store.toggleView()
+    })
+    await screen.findByText('gui.plug.grp_builtin')
+    expect(domSnapshot(document.getElementById('capsBody')!)).toMatchSnapshot()
   })
 })
 

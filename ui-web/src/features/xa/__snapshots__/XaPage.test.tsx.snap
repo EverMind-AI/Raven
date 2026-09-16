@@ -1,0 +1,80 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`xa island > keeps its rendered shape, card 1`] = `
+"b#dTitle
+div#dBody
+  div
+    div.pmdhead
+      span.agent-mark
+        img[data-agent=claude_code]
+      div.pmdmeta
+        div.l1
+          b
+            button.xaedit
+        div.l2
+      div.dact
+        button.mini.ghost
+    div.pmsec
+      div.cap
+      div.pmdesc
+        button.xaedit
+    div.pmsec
+      div.cap
+      div.sutest
+        span.led.off
+        span.vd
+        button.mini
+      div.pmdesc"
+`;
+
+exports[`xa island > keeps its rendered shape, list 1`] = `
+"div.pmhero
+  h3
+div.sugrp
+  div.hd
+    b
+    span.n
+  div.sulist
+    div.surow
+      span.agent-mark
+        img[data-agent=claude_code]
+      div.nm
+        span.led
+        b
+        span.kd
+      div.suact
+        button.mini.ghost
+div.sugrp
+  div.hd
+    b
+    span.n
+  div.sulist
+    div.surow
+      span.agent-mark
+        img[data-agent=claude_code]
+      div.nm
+        span.led.off
+        b
+        span.kd
+      div.suact
+        button.mini
+div.sugrp
+  div.hd
+    b
+    span.n
+  div.sulist
+    div.surow
+      span.agent-mark
+        img[data-agent=claude_code]
+      div.nm
+        span.led.off
+        b
+        span.kd
+      div.suact
+        button.mini
+div.sugrp
+  div.hd
+    b
+    span.n
+    button.gfold"
+`;
