@@ -101,13 +101,20 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def _warm_the_heaviest_import() -> None:
-    """Pay litellm's import here rather than inside whichever test is first.
+    """Pay the cold reads here rather than inside whichever test is first.
 
-    Opening its few thousand files costs about 1.7 s that no CPU accounts for,
-    so it lands as idle on one test, and which test that is depends on the
+    Opening litellm's few thousand files costs about 1.7 s that no CPU accounts
+    for, so it lands as idle on one test, and which test that is depends on the
     order the shard collected. A gate cannot be held to a moving target. Most
     runs import it during collection anyway, from the twenty test modules that
     name a provider at module level, and this is then a no-op.
+
+    The provider catalogue under raven/providers/data is the same shape and was
+    not covered: half a megabyte of json behind an lru_cache that the tests drop
+    through ``reset_cache()``, so it is read again and again, and the first read
+    of the run is a cold one landing wherever it lands. Measured on
+    ``tests/test_rpc_model.py`` with this hook already active, litellm's three
+    large files no longer open inside a test and ``models.json`` still did.
     """
     # Under a temporary home for the length of the call. This runs before the
     # autouse fixtures that redirect the home, and the import publishes the
@@ -125,6 +132,13 @@ def _warm_the_heaviest_import() -> None:
         from raven.providers.litellm_setup import import_litellm
 
         import_litellm()
+
+        from raven.providers import registry_data
+
+        # One accessor per data file, because each is behind its own cache.
+        registry_data.row_by_name("gpt-4o")
+        registry_data.curated_for("openai")
+        registry_data.provider_metadata("openai")
     except Exception as exc:  # noqa: BLE001 -- a missing extra is not this hook's business
         print(f"idle ceiling: litellm did not warm up ({exc}); a first import may be charged to a test")
     finally:
