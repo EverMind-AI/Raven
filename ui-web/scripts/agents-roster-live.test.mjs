@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /* What the desk's agent list is a list OF, asserted on the shipped live layer.
  *
  * The roster seam is three lines of wiring with no island behind it, so nothing
@@ -5,27 +6,19 @@
  * survived: `vendored` is true of every agent that ships WITH raven, so the
  * four bundled ones were dropped while disabled rows were kept. */
 
-import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
-const build = readFileSync(new URL('../build.py', import.meta.url), 'utf8')
-const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
-if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
-const parts = [...manifest[1].matchAll(/"([^"]+\.js)"/g)].map((m) => m[1])
-const live = parts
-  .map((name) => readFileSync(new URL(`../src/legacy/live/${name}`, import.meta.url), 'utf8'))
-  .join('')
+import { fakeRpc, loadPart } from './legacy-part.mjs'
 
-/* The property's own expression, lifted out of the object literal it sits in:
-   evaluating the whole assignment would need every other seam's dependencies. */
-function rosterSeam() {
-  const mark = "roster: () => rpc.call('subagents.list'"
-  const start = live.indexOf(mark)
-  if (start < 0) throw new Error('the roster seam is absent from the assembled live layer')
-  const end = live.indexOf('\n', live.indexOf('),', start))
-  const expression = live.slice(start + 'roster: '.length, end).replace(/,\s*$/, '')
-  return Function('rpc', `return (${expression});`)
+/* The seam the part installs, driven against a transport of our own: the
+   filter is the whole subject, so the rows it is handed have to be ours. */
+async function roster(call) {
+  const part = await loadPart(() => import('../src/legacy/live/230-tabs.js'))
+  await fakeRpc(call)
+  const { DS } = await import('../src/legacy/seam/000-datasource.js')
+  part.install()
+  if (!DS.agents) throw new Error('DS.agents is absent from the live layer')
+  return DS.agents.roster
 }
 
 const ROWS = [
@@ -37,12 +30,9 @@ const ROWS = [
   { name: 'openclaw', kind: 'acp', enabled: true, vendored: false, group: 'installed' },
 ]
 
-const ask = async () => {
-  const rpc = { call: async () => ({ rows: ROWS }) }
-  return rosterSeam()(rpc)()
-}
+const ask = async () => (await roster(async () => ({ rows: ROWS })))()
 
-describe('the assembled live agent roster', () => {
+describe('the live agent roster', () => {
   it('lists every agent that is registered and available', async () => {
     /* Bundled and third-party alike: where an agent came from is not a reason
        to hide one the user can dispatch to right now. */
@@ -62,8 +52,8 @@ describe('the assembled live agent roster', () => {
     /* A probe per row is a process launch per row, on a list that redraws on a
        poll. The panel wants names, not reachability. */
     const asked = []
-    const rpc = { call: async (method, params) => { asked.push([method, params]); return { rows: [] } } }
-    await rosterSeam()(rpc)()
+    const ask2 = await roster(async (method, params) => { asked.push([method, params]); return { rows: [] } })
+    await ask2()
     expect(asked).toEqual([['subagents.list', { probe: false }]])
   })
 })

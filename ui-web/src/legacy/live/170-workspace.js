@@ -71,40 +71,39 @@ const liveLinkTargetOf = (u) => {
 const hostIsLocal = () => /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname);
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-/* Assigned, not ??=: the fixture source (demo/020-prose.js) is already on the
+  /* Assigned, not ??=: the fixture source (demo/020-prose.js) is already on the
    seam by the time this runs, and replacing it before the first paint is the
    whole point. */
-DS.prose = {
-  pathOf: livePathOf,
-  linkTargetOf: liveLinkTargetOf,
-  /* A folder is not something the page can show any more -- the file tree went
+  DS.prose = {
+    pathOf: livePathOf,
+    linkTargetOf: liveLinkTargetOf,
+    /* A folder is not something the page can show any more -- the file tree went
      with the deliverables shelf -- so it goes to the host's own file manager,
      and only while that host is this desktop. Everywhere else `linkTargetOf`
      stops calling a directory a link at all (see the dir check there). */
-  open: ({ p, dir }) => (dir
-    ? rpc.call('fs.reveal', { path: p, session: sessionCurrent() || '' }).catch(() => {})
-    : RavenIslands.workspace.showFile(p)),
-};
+    open: ({ p, dir }) => (dir
+      ? rpc.call('fs.reveal', { path: p, session: sessionCurrent() || '' }).catch(() => {})
+      : RavenIslands.workspace.showFile(p)),
+  };
 
-DS.workspace = {
-  hostPlatform: () => HOST_PLATFORM,
-  canBrowse: true,
-  reveal: (p) => rpc.call('fs.reveal', { path: p, session: sessionCurrent() || '' }),
-  /* The gateway's own registry of what this conversation handed over. The
+  DS.workspace = {
+    hostPlatform: () => HOST_PLATFORM,
+    canBrowse: true,
+    reveal: (p) => rpc.call('fs.reveal', { path: p, session: sessionCurrent() || '' }),
+    /* The gateway's own registry of what this conversation handed over. The
      shelf is built from the manifests on turn events while a client watches;
      this is what it is built from when nobody was watching. */
-  deliverables: (key) => rpc.call('deliverables.list', { session_key: key }).then((r) => (r && r.files) || []),
-  /* The other half of the viewer: a kind the page cannot render goes to the
+    deliverables: (key) => rpc.call('deliverables.list', { session_key: key }).then((r) => (r && r.files) || []),
+    /* The other half of the viewer: a kind the page cannot render goes to the
      host's own application for it. `app` is a name the reader picked, or
      absent for the host default. Only offered while the gateway IS this
      desktop -- see hostIsLocal above. */
-  openIn: (p, app) => rpc.call('fs.open', { path: p, session: sessionCurrent() || '', ...(app ? { app } : {}) }),
-  hostIsLocal,
-  shortPath: (p) => relToWsRoot(p) || relToWorkspace(p) || String(p).replace(/^\/Users\/[^/]+\//, '~/'),
-};
+    openIn: (p, app) => rpc.call('fs.open', { path: p, session: sessionCurrent() || '', ...(app ? { app } : {}) }),
+    hostIsLocal,
+    shortPath: (p) => relToWsRoot(p) || relToWorkspace(p) || String(p).replace(/^\/Users\/[^/]+\//, '~/'),
+  };
 }
 
 export { relToWorkspace, wsRoot, wsSetRoot, relToWsRoot, livePathOf, liveLinkTargetOf, hostIsLocal }

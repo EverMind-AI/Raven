@@ -134,77 +134,75 @@ const lastTextNodeIn = (root) => {
 };
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-sessionSet('a');
-$('#cfNo').onclick = () => { $('#veil').dataset.open = 'false'; cfFn = null; };
-$('#cfYes').onclick = () => { $('#veil').dataset.open = 'false'; if (cfFn) cfFn(); cfFn = null; };
-$('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); };
-({ sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
-  approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose,
-  drawQueue: queueDraw, queuePush, queueShift,
-  queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft,
-  claimDraft, turn } = RavenIslands.composer);
-({ current: modelCurrent, setCurrent: modelSet } = RavenIslands.model);
-({ failureBar, bootError, upShade } = RavenIslands.chrome);
+  sessionSet('a');
+  $('#cfNo').onclick = () => { $('#veil').dataset.open = 'false'; cfFn = null; };
+  $('#cfYes').onclick = () => { $('#veil').dataset.open = 'false'; if (cfFn) cfFn(); cfFn = null; };
+  $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); };
+  ({ sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
+    approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose,
+    drawQueue: queueDraw, queuePush, queueShift,
+    queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft,
+    claimDraft, turn } = RavenIslands.composer);
+  ({ current: modelCurrent, setCurrent: modelSet } = RavenIslands.model);
+  ({ failureBar, bootError, upShade } = RavenIslands.chrome);
 
-/* Preview without an engine: __approve('rm -rf build/'). */
-window.__approve = (p) => approveSheet(p || 'rm -rf build/',
-  () => toast(T('gui.confirm.allow')), () => toast(T('gui.confirm.deny')));
+  /* Preview without an engine: __approve('rm -rf build/'). */
+  window.__approve = (p) => approveSheet(p || 'rm -rf build/',
+    () => toast(T('gui.confirm.allow')), () => toast(T('gui.confirm.deny')));
 
-document.addEventListener('contextmenu', (e) => {
-  if (nativeCtxOk(e.target)) return;
-  e.preventDefault();
-  for (let n = e.target; n && n !== document; n = n.parentElement) {
-    if (!n._ctx) continue;
-    const items = n._ctx();
-    if (items && items.length) menuAt(e.clientX, e.clientY, items);
-    return;
-  }
-});
+  document.addEventListener('contextmenu', (e) => {
+    if (nativeCtxOk(e.target)) return;
+    e.preventDefault();
+    for (let n = e.target; n && n !== document; n = n.parentElement) {
+      if (!n._ctx) continue;
+      const items = n._ctx();
+      if (items && items.length) menuAt(e.clientX, e.clientY, items);
+      return;
+    }
+  });
 
-/* The 更多 group is rail navigation, not a popover: it folds on its own
+  /* The 更多 group is rail navigation, not a popover: it folds on its own
    toggle only, never on an outside click. */
-document.addEventListener('pointerdown', (e) => {
-  if (!e.target.closest('#permPop') && !e.target.closest('#permChip')) closePermPop();
-  if (!e.target.closest('#tierPop') && !e.target.closest('#tierChip')) closeTierPop();
-  if (!e.target.closest('#wdPop') && !e.target.closest('#wdChip')) closeWorkdirPop();
-}, true);
-tipEl = mk('div', 'tipp');
-document.body.appendChild(tipEl);
+  document.addEventListener('pointerdown', (e) => {
+    if (!e.target.closest('#permPop') && !e.target.closest('#permChip')) closePermPop();
+    if (!e.target.closest('#tierPop') && !e.target.closest('#tierChip')) closeTierPop();
+  }, true);
+  tipEl = mk('div', 'tipp');
+  document.body.appendChild(tipEl);
 
-document.addEventListener('pointerover', (e) => {
-  const t = e.target.closest ? e.target.closest('[data-tip]') : null;
-  if (t === tipFor) return;
-  if (t) { tipFor = t; tipPlace(); } else tipHide();
-});
-/* A control that rewrites its own label while hovered (copy's "已复制" flash)
+  document.addEventListener('pointerover', (e) => {
+    const t = e.target.closest ? e.target.closest('[data-tip]') : null;
+    if (t === tipFor) return;
+    if (t) { tipFor = t; tipPlace(); } else tipHide();
+  });
+  /* A control that rewrites its own label while hovered (copy's "已复制" flash)
    keeps the visible pill in step. */
-new MutationObserver(() => { if (tipFor) tipPlace(); })
-  .observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-tip'] });
-document.addEventListener('scroll', tipHide, true);
-document.addEventListener('mousedown', (e) => {
-  if (!dragBand(e)) return;
-  try { window.webkit.messageHandlers.raven.postMessage({ type: 'drag' }); } catch { /* browser */ }
-});
-document.addEventListener('dblclick', (e) => {
-  if (!dragBand(e)) return;
-  try { window.webkit.messageHandlers.raven.postMessage({ type: 'zoom' }); } catch { /* browser */ }
-});
-document.addEventListener('selectionchange', () => {
-  const scroll = $('#scroll');
-  const sel = document.getSelection();
-  if (!scroll || !sel || !sel.rangeCount || sel.isCollapsed) return;
-  const range = sel.getRangeAt(0);
-  if (!scroll.contains(range.startContainer) || scroll.contains(range.endContainer)) return;
-  const tail = lastTextNodeIn(scroll);
-  if (!tail) return;
-  const clamped = range.cloneRange();
-  try { clamped.setEnd(tail, tail.data.length); } catch { return; }
-  sel.removeAllRanges();
-  sel.addRange(clamped);
-});
+  new MutationObserver(() => { if (tipFor) tipPlace(); })
+    .observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-tip'] });
+  document.addEventListener('scroll', tipHide, true);
+  document.addEventListener('mousedown', (e) => {
+    if (!dragBand(e)) return;
+    try { window.webkit.messageHandlers.raven.postMessage({ type: 'drag' }); } catch { /* browser */ }
+  });
+  document.addEventListener('dblclick', (e) => {
+    if (!dragBand(e)) return;
+    try { window.webkit.messageHandlers.raven.postMessage({ type: 'zoom' }); } catch { /* browser */ }
+  });
+  document.addEventListener('selectionchange', () => {
+    const scroll = $('#scroll');
+    const sel = document.getSelection();
+    if (!scroll || !sel || !sel.rangeCount || sel.isCollapsed) return;
+    const range = sel.getRangeAt(0);
+    if (!scroll.contains(range.startContainer) || scroll.contains(range.endContainer)) return;
+    const tail = lastTextNodeIn(scroll);
+    if (!tail) return;
+    const clamped = range.cloneRange();
+    try { clamped.setEnd(tail, tail.data.length); } catch { return; }
+    sel.removeAllRanges();
+    sel.addRange(clamped);
+  });
 }
 
 export { timers, runState, rt, undoBin, stop_, later, down, sess, cfFn, confirmAsk, sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget, approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose, queueDraw, queuePush, queueShift, queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft, claimDraft, turn, modelCurrent, modelSet, failureBar, bootError, upShade, ctxMenu, copyToClip, nativeCtxOk, tipEl, tipFor, tipPlace, tipHide, dragBand, lastTextNodeIn }

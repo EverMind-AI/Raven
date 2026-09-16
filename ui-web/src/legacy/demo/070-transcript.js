@@ -59,32 +59,31 @@ const ACT_ICO = {
 };
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-/* The fixture half of DS.transcript. The demo replay passes explicit ok
+  /* The fixture half of DS.transcript. The demo replay passes explicit ok
    flags and clean previews, so the reading hooks are identity; branch keeps
    the demo's canned fork. Live mode installs the rpc source over this. */
-DS.transcript ??= {
-  clean: (t) => String(t == null ? '' : t).trim(),
-  okOf: () => true,
-  branch: (text) => {
-    const s = { id: 'n' + Date.now(), title: (sess(sessionCurrent()) ? sess(sessionCurrent()).title : '新任务') + ' 的分支',
-      last: '从上一轮回复分叉', when: '刚刚', run: null };
-    sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s); toast('已分叉出新会话');
-  },
-  /* dagRun, openDagNode and openSpawn are deliberately absent. The cards in
+  DS.transcript ??= {
+    clean: (t) => String(t == null ? '' : t).trim(),
+    okOf: () => true,
+    branch: (text) => {
+      const s = { id: 'n' + Date.now(), title: (sess(sessionCurrent()) ? sess(sessionCurrent()).title : '新任务') + ' 的分支',
+        last: '从上一轮回复分叉', when: '刚刚', run: null };
+      sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s); toast('已分叉出新会话');
+    },
+    /* dagRun, openDagNode and openSpawn are deliberately absent. The cards in
      the trail open real things only with a host behind them, and the island
      already has the honest answer for each: no node states to read, nothing to
      open a node into, and the agents panel for a spawn row. Installing
      null-guarded stand-ins here only moved that decision to the wrong layer --
      live/240-external-agents.js installs the three that can do the work. */
-  /* Whether a detached lane host is one the shell means to bring back rather
+    /* Whether a detached lane host is one the shell means to bring back rather
      than one it threw away. Nothing is parked on this canvas -- one session,
      no socket -- so the honest answer here is no; live/060-parked.js installs
      the real check over this one. */
-  parked: () => false,
-};
+    parked: () => false,
+  };
 }
 
 export { newStep, collapseTurn, foldSilentRuns, dagFlowFeed, askEcho, showStatus, killStatus, ACT_ICO }

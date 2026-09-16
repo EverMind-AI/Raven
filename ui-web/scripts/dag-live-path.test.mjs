@@ -1,51 +1,40 @@
-/* The shipped live manifest keeps the delivered DAG opener on the island path. */
-
-import { readFileSync } from 'node:fs'
+// @vitest-environment happy-dom
+/* The live layer keeps the delivered DAG opener on the island path. */
 
 import { describe, expect, it } from 'vitest'
 
-const build = readFileSync(new URL('../build.py', import.meta.url), 'utf8')
-const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
-if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
-const parts = [...manifest[1].matchAll(/"([^"]+\.js)"/g)].map((m) => m[1])
-const live = parts
-  .map((name) => readFileSync(new URL(`../src/legacy/live/${name}`, import.meta.url), 'utf8'))
-  .join('')
+import { loadPart, looseQuery } from './legacy-part.mjs'
 
-function openerAssignment() {
-  const mark = 'DS.transcript.openDagRun = function (runId) {'
-  const start = live.indexOf(mark)
-  if (start < 0) throw new Error('openDagRun is absent from the assembled live layer')
-  const brace = live.indexOf('{', start)
-  let depth = 0
-  for (let index = brace; index < live.length; index += 1) {
-    if (live[index] === '{') depth += 1
-    else if (live[index] === '}') {
-      depth -= 1
-      if (depth === 0) return live.slice(start, index + 2)
-    }
-  }
-  throw new Error('openDagRun has no closing brace in the assembled live layer')
+/* `DS.transcript.openDagRun` is installed by live/050-turn.js onto the source
+   object live/040-history.js built, so the seam is where it is read back. */
+async function opener(calls, run) {
+  const part = await loadPart(() => import('../src/legacy/live/050-turn.js'), {
+    fakes: {
+      'demo/010-kernel.js': { $: looseQuery() },
+      'demo/040-state.js': { sheetSession: () => 'a' },
+      'demo/100-workspace.js': { setWs: (...args) => calls.push(['fallback', ...args]) },
+      'live/240-external-agents.js': {
+        dagOpenNode: (runId, node) => calls.push(['node', runId, node.id]),
+      },
+    },
+    globals: {
+      RavenIslands: { dag: { run: (key) => (key === 'a' ? run : null) } },
+      sessionCurrent: () => 'a',
+    },
+  })
+  const { DS } = await import('../src/legacy/seam/000-datasource.js')
+  DS.transcript = {}
+  DS.composer = {}
+  DS.sessions = {}
+  part.install()
+  if (!DS.transcript.openDagRun) throw new Error('openDagRun is absent from the live layer')
+  return DS.transcript.openDagRun
 }
 
-describe('the assembled live DAG opener', () => {
-  it('opens the island run last node and keeps the agents fallback', () => {
+describe('the live DAG opener', () => {
+  it('opens the island run last node and keeps the agents fallback', async () => {
     const calls = []
-    const DS = { transcript: {} }
-    const RavenIslands = {
-      dag: { run: (key) => key === 'a' ? { run_id: 'r1', order: ['first', 'last'] } : null },
-    }
-    const install = Function(
-      'DS', 'RavenIslands', 'sheetSession', 'dagOpenNode', 'setWs',
-      `${openerAssignment()}\nreturn DS.transcript.openDagRun;`,
-    )
-    const open = install(
-      DS,
-      RavenIslands,
-      () => 'a',
-      (runId, node) => calls.push(['node', runId, node.id]),
-      (...args) => calls.push(['fallback', ...args]),
-    )
+    const open = await opener(calls, { run_id: 'r1', order: ['first', 'last'] })
 
     open('r1')
     open('missing')

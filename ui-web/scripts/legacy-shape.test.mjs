@@ -27,18 +27,14 @@ import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
+import { partNames } from './legacy-part.mjs'
+
 const url = (p) => new URL(`../${p}`, import.meta.url)
-const build = readFileSync(url('build.py'), 'utf8')
-const manifest = (name) => {
-  const block = build.match(new RegExp(`_${name}_PARTS = \\[([\\s\\S]*?)\\]`))
-  if (!block) throw new Error(`_${name}_PARTS is absent from build.py`)
-  return [...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1])
-}
-const FILES = [
-  ...manifest('SEAM').map((p) => `seam/${p}`),
-  ...manifest('DEMO').map((p) => `demo/${p}`),
-  ...manifest('LIVE').map((p) => `live/${p}`),
-]
+/* The parts, in the order src/legacy/index.js installs them -- which is also
+   where partNames checks that every file on disk is installed. */
+const FILES = ['seam', 'demo', 'live'].flatMap((layer) =>
+  partNames(layer).map((name) => `${layer}/${name}`),
+)
 /* What the codemod allows a top-level initialiser to read. Not trusted here:
    the gate derives the real condition from the import graph and checks that
    every one of these is outside every cycle. */

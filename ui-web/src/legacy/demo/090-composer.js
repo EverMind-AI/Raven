@@ -68,24 +68,23 @@ function halt() {
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-ta = $('#ta');
+  ta = $('#ta');
 
-/* The fixture half of DS.composer. Turn state belongs to the composer island;
+  /* The fixture half of DS.composer. Turn state belongs to the composer island;
    live mode installs its own meter wording and upload transport over this. */
-DS.composer ??= {
-  meter: () => (turn.busy() ? T('gui.meter.running')
-    : runState.use ? T('gui.meter.usage', { calls: runState.use.calls, in: (runState.use.in / 1000).toFixed(1), out: (runState.use.out / 1000).toFixed(1) })
-    : ''),
-  slash: SLASH,
-  slashName: (id) => slashName(id),
-  slashHelp: (id) => slashHelp(id),
-  pickHint: 'demo：正式版在这里选文件或直接拖进来',
-  send: (text) => send(text),
-  stop: () => halt(),
-};
+  DS.composer ??= {
+    meter: () => (turn.busy() ? T('gui.meter.running')
+      : runState.use ? T('gui.meter.usage', { calls: runState.use.calls, in: (runState.use.in / 1000).toFixed(1), out: (runState.use.out / 1000).toFixed(1) })
+      : ''),
+    slash: SLASH,
+    slashName: (id) => slashName(id),
+    slashHelp: (id) => slashHelp(id),
+    pickHint: 'demo：正式版在这里选文件或直接拖进来',
+    send: (text) => send(text),
+    stop: () => halt(),
+  };
 }
 
 export { ta, goState, drawMeter, taFit, dockLift, SLASH, pickRun, send, halt }

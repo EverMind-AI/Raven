@@ -98,16 +98,15 @@ function demoOnbBackend() {
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-/* The live guard runs later in this same script task and claims boot before
+  /* The live guard runs later in this same script task and claims boot before
    microtasks drain. Its final part queues bootPage after every source install. */
-queueMicrotask(() => { if (!window.__liveBoot) bootPage(); });
-_spT0 = Date.now();
-({ open: showOnboard } = RavenIslands.onboard);
+  queueMicrotask(() => { if (!window.__liveBoot) bootPage(); });
+  _spT0 = Date.now();
+  ({ open: showOnboard } = RavenIslands.onboard);
 
-/* Demo boot: two independent moments, and only one of them backs off for live
+  /* Demo boot: two independent moments, and only one of them backs off for live
    mode. Ordered rather than nested, because the preview needs the splash lifted
    and the splash is the half that defers.
 
@@ -128,13 +127,13 @@ _spT0 = Date.now();
    file:// or ?stub=1, which is what build.py's docstring points a design pass at
    -- no live layer runs, so this is the only call that ever lifts it. Returning
    early here left the splash over the overlay for the whole session. */
-DS.onboard ??= demoOnbBackend();
+  DS.onboard ??= demoOnbBackend();
 
-addEventListener('load', () => {
-  if (/[?&]onboard=demo/.test(location.search)) showOnboard();
-  if (window.__liveBoot) return;
-  hideSplash(250);
-});
+  addEventListener('load', () => {
+    if (/[?&]onboard=demo/.test(location.search)) showOnboard();
+    if (window.__liveBoot) return;
+    hideSplash(250);
+  });
 }
 
 export { bootPage, _spT0, hideSplash, showOnboard, demoOnbBackend }

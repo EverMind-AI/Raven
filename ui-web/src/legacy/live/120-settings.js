@@ -348,169 +348,168 @@ let tierMenu = [];
 function stagedTier() { const t = staged.tier; staged.tier = null; return t; }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-DS.banner = {
-  websearchNeeds: () => false,
-};
+  DS.banner = {
+    websearchNeeds: () => false,
+  };
 
-/* The pick's write-back. In a conversation it reaches that conversation only
+  /* The pick's write-back. In a conversation it reaches that conversation only
    (config.set under its session_id; the gate reads it live). A draft has no
    session_id to write under yet, so the pick is staged and applied to the
    session the first message mints -- the shape the model and tier chips take
    (`applyStagedPerm` in 080). The default is the settings panel's to change.
    Published here because this file owns the settings transport; the island
    calls it late-bound. */
-window.persistPermMode = (m) => {
-  const sid = sessionCurrent();
-  if (!sid) { staged.perm = m; return true; }
-  return rpc.call('config.set', { key: 'permissions.mode', value: m, scope: 'session', session_id: sid })
-    .then((r) => {
-      if (r && r.applied) return true;
-      toast(T('gui.perm.save_failed'));
-      return false;
-    })
-    .catch(() => { toast(T('gui.perm.save_failed')); return false; });
-};
+  window.persistPermMode = (m) => {
+    const sid = sessionCurrent();
+    if (!sid) { staged.perm = m; return true; }
+    return rpc.call('config.set', { key: 'permissions.mode', value: m, scope: 'session', session_id: sid })
+      .then((r) => {
+        if (r && r.applied) return true;
+        toast(T('gui.perm.save_failed'));
+        return false;
+      })
+      .catch(() => { toast(T('gui.perm.save_failed')); return false; });
+  };
 
-DS.settings = {
-  load: async () => {
-    /* The tool inventory is part of settings. Loading it here keeps every
+  DS.settings = {
+    load: async () => {
+      /* The tool inventory is part of settings. Loading it here keeps every
        opener on the island's one refresh path rather than replacing the
        demo-layer openSettings binding in live mode. */
-    try { await loadExt(); } catch (e) { toast(T('gui.op.load_failed', { detail: e.message || e })); }
-    await loadSettings();
-    pushPermMode();
-    await loadEveros();
-    return settingsSnapshot();
-  },
-  /* Toasts are spoken here, where the legacy wording lived; the thrown
-     handled tag tells the island to only redraw. */
-  set: async (key, value) => {
-    try {
-      const r = await rpc.call('settings.set', { key, value });
+      try { await loadExt(); } catch (e) { toast(T('gui.op.load_failed', { detail: e.message || e })); }
       await loadSettings();
       pushPermMode();
-      /* The server says when a save costs something -- swapping the embedding
-         model invalidates every vector already stored. Discarding the answer
-         and toasting a fixed "saved" is how that reached nobody. */
-      toast(r && r.warning ? r.warning : T('gui.set.saved'));
-    } catch (e) {
-      toast(T('gui.plug.op_failed', { err: settingsErr(e) }));
-      throw { handled: true };
-    }
-    return settingsSnapshot();
-  },
-  /* A null fields object means "clear the section" (optional roles only). */
-  everosSet: async (section, fields, borrowFrom) => {
-    const p = fields ? { section, fields } : { section, clear: true };
-    /* Only the name travels. The key stays where it is and the server copies
-       it across -- what this page holds is `****set****`. */
-    if (borrowFrom) p.borrow_from = borrowFrom;
-    try {
-      const r = await rpc.call('settings.everosSet', p);
       await loadEveros();
-      toast(r && r.warning ? r.warning : T('gui.set.mem.saved'));
-    } catch (e) {
-      toast(T('gui.plug.op_failed', { err: settingsErr(e) }));
-      throw { handled: true };
-    }
-    return settingsSnapshot();
-  },
-  usage: (sessionKey) => rpc.call('settings.usage', { session_key: sessionKey || null }),
-  provider: async (op, params) => {
-    await rpc.call('model.' + op, params);
-    await loadProviders();
-    return settingsSnapshot();
-  },
-  /* A read, so no reload after it: the fetched list is the drawer's own state
+      return settingsSnapshot();
+    },
+    /* Toasts are spoken here, where the legacy wording lived; the thrown
+     handled tag tells the island to only redraw. */
+    set: async (key, value) => {
+      try {
+        const r = await rpc.call('settings.set', { key, value });
+        await loadSettings();
+        pushPermMode();
+        /* The server says when a save costs something -- swapping the embedding
+           model invalidates every vector already stored. Discarding the answer
+           and toasting a fixed "saved" is how that reached nobody. */
+        toast(r && r.warning ? r.warning : T('gui.set.saved'));
+      } catch (e) {
+        toast(T('gui.plug.op_failed', { err: settingsErr(e) }));
+        throw { handled: true };
+      }
+      return settingsSnapshot();
+    },
+    /* A null fields object means "clear the section" (optional roles only). */
+    everosSet: async (section, fields, borrowFrom) => {
+      const p = fields ? { section, fields } : { section, clear: true };
+      /* Only the name travels. The key stays where it is and the server copies
+       it across -- what this page holds is `****set****`. */
+      if (borrowFrom) p.borrow_from = borrowFrom;
+      try {
+        const r = await rpc.call('settings.everosSet', p);
+        await loadEveros();
+        toast(r && r.warning ? r.warning : T('gui.set.mem.saved'));
+      } catch (e) {
+        toast(T('gui.plug.op_failed', { err: settingsErr(e) }));
+        throw { handled: true };
+      }
+      return settingsSnapshot();
+    },
+    usage: (sessionKey) => rpc.call('settings.usage', { session_key: sessionKey || null }),
+    provider: async (op, params) => {
+      await rpc.call('model.' + op, params);
+      await loadProviders();
+      return settingsSnapshot();
+    },
+    /* A read, so no reload after it: the fetched list is the drawer's own state
      and the page behind it has not changed. Adding a row from that list goes
      through `provider` above, which does refresh. */
-  fetchModels: (slug) => rpc.call('model.fetch_models', { slug }),
-  model: () => defaultModelLive,
-  defaultProvider: () => defaultProviderLive,
-  version: () => APP_VERSION,
-  /* The version check the rail-foot notice already does, on demand. No new
+    fetchModels: (slug) => rpc.call('model.fetch_models', { slug }),
+    model: () => defaultModelLive,
+    defaultProvider: () => defaultProviderLive,
+    version: () => APP_VERSION,
+    /* The version check the rail-foot notice already does, on demand. No new
      backend: system.version carries the answer. */
-  checkUpdate: async (btn) => {
-    const was = btn.textContent;
-    btn.textContent = T('gui.set.checking'); btn.disabled = true;
-    try {
-      /* check:true = fetch now, not the daily cache: the button says check for
+    checkUpdate: async (btn) => {
+      const was = btn.textContent;
+      btn.textContent = T('gui.set.checking'); btn.disabled = true;
+      try {
+        /* check:true = fetch now, not the daily cache: the button says check for
          updates, and a person who just clicked it is asking about now. */
-      const v = await rpc.call('system.version', { check: true });
-      if (v.raven_version) appVersionSet(v.raven_version);
-      if (v.update_available) {
-        showUpNote('ver', v.latest_version);
-        drawSettings();
-        askUpgrade();
-        return;
-      }
-      /* The answer has to land on the button: this layer sends toasts to the
+        const v = await rpc.call('system.version', { check: true });
+        if (v.raven_version) appVersionSet(v.raven_version);
+        if (v.update_available) {
+          showUpNote('ver', v.latest_version);
+          drawSettings();
+          askUpgrade();
+          return;
+        }
+        /* The answer has to land on the button: this layer sends toasts to the
          console, and "nothing happened" is indistinguishable from a broken
          check. */
+        btn.disabled = false;
+        btn.textContent = T('gui.set.abt.latest');
+        setTimeout(() => { btn.textContent = was; }, 2200);
+        return;
+      } catch (e) {
+        btn.textContent = T('gui.set.abt.check_fail');
+        setTimeout(() => { btn.textContent = was; }, 2600);
+        if (window.console) console.error('[update check]', e);
+      }
       btn.disabled = false;
-      btn.textContent = T('gui.set.abt.latest');
-      setTimeout(() => { btn.textContent = was; }, 2200);
-      return;
-    } catch (e) {
-      btn.textContent = T('gui.set.abt.check_fail');
-      setTimeout(() => { btn.textContent = was; }, 2600);
-      if (window.console) console.error('[update check]', e);
-    }
-    btn.disabled = false;
-  },
-  /* The composer's picker popover, offered to the island's default-model
+    },
+    /* The composer's picker popover, offered to the island's default-model
      button so both places pick a model the same way. */
-  pickModel: (anchor, after) => openModelPicker(anchor, after, defaultModelLive),
-  /* Declared here rather than beside langPickLive so the whole contract reads
+    pickModel: (anchor, after) => openModelPicker(anchor, after, defaultModelLive),
+    /* Declared here rather than beside langPickLive so the whole contract reads
      in one place. Not awaited: the pick repaints synchronously and the persist
      speaks for itself if it fails. */
-  setLang: (v) => { langPickLive(v, { persist: true }); },
-};
+    setLang: (v) => { langPickLive(v, { persist: true }); },
+  };
 
-DS.tier = {
-  read: async () => {
-    /* A draft asks too, and the handler answers the catalogue and its default
+  DS.tier = {
+    read: async () => {
+      /* A draft asks too, and the handler answers the catalogue and its default
        for a key it has never seen -- which is exactly what the first turn of a
        new conversation will run at. */
-    const r = await rpc.call('session.set_mode', { session_key: sessionCurrent() || '' });
-    tierMenu = (r && r.availableModes) || tierMenu;
-    return r;
-  },
-  set: async (mode) => {
-    const sid = sessionCurrent();
-    if (!sid) {
-      /* Staged, and echoed back as though written: there is no server state to
+      const r = await rpc.call('session.set_mode', { session_key: sessionCurrent() || '' });
+      tierMenu = (r && r.availableModes) || tierMenu;
+      return r;
+    },
+    set: async (mode) => {
+      const sid = sessionCurrent();
+      if (!sid) {
+        /* Staged, and echoed back as though written: there is no server state to
          contradict it yet, and the chip has to show the reader what their next
          turn will run at. */
-      staged.tier = mode;
-      return { mode, availableModes: tierMenu };
-    }
-    const r = await rpc.call('session.set_mode', { session_key: sid, mode });
-    tierMenu = (r && r.availableModes) || tierMenu;
-    return r;
-  },
-};
+        staged.tier = mode;
+        return { mode, availableModes: tierMenu };
+      }
+      const r = await rpc.call('session.set_mode', { session_key: sid, mode });
+      tierMenu = (r && r.availableModes) || tierMenu;
+      return r;
+    },
+  };
 
-DS.model = {
-  providers: () => providersLive,
-  persist: persistModel,
-  setProtocol: async (model, provider, protocol) => {
-    await rpc.call('model.set_protocol', { model, slug: provider, protocol });
-    await loadProviders();
-  },
-  openSettings: () => RavenIslands.settings.open(),
-  openProviderModels: (provider) => RavenIslands.settings.openProviderModels(provider),
-};
+  DS.model = {
+    providers: () => providersLive,
+    persist: persistModel,
+    setProtocol: async (model, provider, protocol) => {
+      await rpc.call('model.set_protocol', { model, slug: provider, protocol });
+      await loadProviders();
+    },
+    openSettings: () => RavenIslands.settings.open(),
+    openProviderModels: (provider) => RavenIslands.settings.openProviderModels(provider),
+  };
 
-DS.composer.beforeSend = openModelsForMissingProvider;
+  DS.composer.beforeSend = openModelsForMissingProvider;
 
-$('#modelChip').onclick = () => {
-  if (openModelsForMissingProvider()) return;
-  openModelPicker(null, setModelLabel);
-};
+  $('#modelChip').onclick = () => {
+    if (openModelsForMissingProvider()) return;
+    openModelPicker(null, setModelLabel);
+  };
 }
 
 export { RAW, configPathLive, everosLive, stagedPerm, loadEveros, loadPermMode, pushPermMode, loadSettings, HIDDEN_PROVIDERS, providersLive, defaultModelLive, defaultProviderLive, setupState, openModelsForMissingProvider, loadProviders, settingsSnapshot, settingsErr, langPickLive, redrawAll, LANG_KEY, langRemember, langRestore, loadLang, shortModel, setModelLabel, persistModel, tierMenu, stagedTier }

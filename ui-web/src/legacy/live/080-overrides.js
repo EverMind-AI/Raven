@@ -543,30 +543,29 @@ async function leaveArchivedSession(sessionId) {
 }
 
 /* Everything this part used to do while the concatenated page script ran, in
-   the same order. src/legacy/index.js is the only caller. The body keeps the
-   statements' original column: the sandbox harnesses slice them out by text. */
+   the same order. src/legacy/index.js is the only caller. */
 export function install() {
-rpc.onReconnect = async () => {
-  await rpc.call('system.hello', { client_version: '0.1.0', surface: SURFACE }).catch(() => {});
-  killStatus();
-  // A fresh socket voids every server-side subscription, and the events a
-  // parked turn missed while the socket was down are unrecoverable — drop
-  // the parked copies and let re-opens rebuild from disk.
-  parkedTurns.clear();
-  for (const k of Object.keys(subBySession)) delete subBySession[k];
-  for (const k of Object.keys(subSession)) delete subSession[k];
-  live.subId = null;
-  sessionRows().forEach((s) => { if (s.status === 'run') s.status = null; });
-  /* Re-subscribing is not enough: events emitted while the socket was down
+  rpc.onReconnect = async () => {
+    await rpc.call('system.hello', { client_version: '0.1.0', surface: SURFACE }).catch(() => {});
+    killStatus();
+    // A fresh socket voids every server-side subscription, and the events a
+    // parked turn missed while the socket was down are unrecoverable — drop
+    // the parked copies and let re-opens rebuild from disk.
+    parkedTurns.clear();
+    for (const k of Object.keys(subBySession)) delete subBySession[k];
+    for (const k of Object.keys(subSession)) delete subSession[k];
+    live.subId = null;
+    sessionRows().forEach((s) => { if (s.status === 'run') s.status = null; });
+    /* Re-subscribing is not enough: events emitted while the socket was down
      are gone, and if the turn ENDED in that gap the client would keep its
      busy spinner forever. Reload the whole session from disk instead -- the
      transcript is persisted server-side, so a full re-open is lossless, and
      a turn that is genuinely still running keeps streaming into the fresh
      subscription that sessionOpen sets up. */
-  const current = sessionCurrent();
-  if (current && !draft) {
-    turn.dispatch({ type: 'idle' });
-    /* End the editor before reading anything it can change. The teardown
+    const current = sessionCurrent();
+    if (current && !draft) {
+      turn.dispatch({ type: 'idle' });
+      /* End the editor before reading anything it can change. The teardown
        inside openLiveSession is too late for THIS caller: it is the only one
        that builds a detached { id, title } instead of handing over the live
        row, so a title read here and committed there gets painted stale over
@@ -582,75 +581,70 @@ rpc.onReconnect = async () => {
        leading icon stripped, and it holds nothing at all while a name is being
        generated. It stays as the last resort for the one thing the row cannot
        answer -- a current conversation that is not in the list. */
-    RavenIslands.rail.endRename();
-    const open = sess(current);
-    const heading = $('#title');
-    const title = (open && open.title) || (heading && heading.textContent) || '';
-    await sessionOpen({ id: current, title });
-    showStatus(T('gui.reconnected'));
-    setTimeout(killStatus, 2500);
-  } else if (current) {
-    subscribe(current);
-  }
-  /* The installed skills, plugins and tools are read once at boot into
+      RavenIslands.rail.endRename();
+      const open = sess(current);
+      const heading = $('#title');
+      const title = (open && open.title) || (heading && heading.textContent) || '';
+      await sessionOpen({ id: current, title });
+      showStatus(T('gui.reconnected'));
+      setTimeout(killStatus, 2500);
+    } else if (current) {
+      subscribe(current);
+    }
+    /* The installed skills, plugins and tools are read once at boot into
      module state and served from there, so a socket that was down when boot
      ran leaves all three empty for the life of the tab -- an empty page
      rather than a failed one. Re-read them here: the session reload above
      already treats a reconnect as "refetch what the gap invalidated", and
      these are the only surfaces whose data never asks again on its own. */
-  /* Repainted, not just re-read: the island renders on its own `set`, which
+    /* Repainted, not just re-read: the island renders on its own `set`, which
      refilling the module state does not call, so the extensions page would
      keep showing the offline note after the reconnect it tells the reader to
      wait for. `drawCaps` is the entry for both tabs (153-plugins.js wraps
      it), guarded the way `redrawAll` guards it -- the page may not be up. */
-  loadExt()
-    .then(() => {
-      drawCapsBadge();
-      try { drawCaps(); } catch { /* extensions page not built yet */ }
-    })
-    .catch(() => {});
-};
-;
+    loadExt()
+      .then(() => {
+        drawCapsBadge();
+        try { drawCaps(); } catch { /* extensions page not built yet */ }
+      })
+      .catch(() => {});
+  };
+  ;
 
-/* The two actions, installed on the source the composer already asks. `stop`
+  /* The two actions, installed on the source the composer already asks. `stop`
    is the go button's other half and the Escape key's; `send` is what the island
    hands a folded message to. */
-DS.composer.send = liveSend;
-/* The one way anything outside the dock can get a conversation to work in. The
+  DS.composer.send = liveSend;
+  /* The one way anything outside the dock can get a conversation to work in. The
    composer has always made one on its first send; this is the same promotion
    offered by name, for a caller that needs the conversation and has no message
    to start it with. */
-DS.composer.startConversation = () => openConversation();
-/* The folder chip's two doors (shell/workdir.ts), on the composer seam beside
-   the promotion they feed: the draft's pick, held for the create above, and
-   the gateway's directory walk behind "Open folder...". */
-DS.composer.stageWorkdir = (dir) => { pendingWorkdir = dir || null; };
-DS.composer.browseDirs = (path) => rpc.call('fs.dirs', path ? { path } : {});
-DS.composer.stop = function () {
-  /* A runtime turn (a delegated result re-entering) is NOT cancellable:
+  DS.composer.startConversation = () => openConversation();
+  DS.composer.stop = function () {
+    /* A runtime turn (a delegated result re-entering) is NOT cancellable:
      turn.cancel resolves only handles turn.send registered, and the stop
      button claiming the UI here would reset the stage while the delegated
      deltas are still streaming into it. The reader's stop does nothing until
      the turn is one they can stop. */
-  if (!turn.cancellable()) return;
-  const owner = sessionCurrent();
-  turn.dispatch({ type: 'cancel' });
-  rpc.call('turn.cancel', { session_key: owner })
-    .then(() => {
-      transitionTurn(owner, { type: 'idle' });
-      if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); drainQueue(); }
-    }, () => {
-      transitionTurn(owner, { type: 'idle' });
-      if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); }
-    });
-  softStop(true);
-};
+    if (!turn.cancellable()) return;
+    const owner = sessionCurrent();
+    turn.dispatch({ type: 'cancel' });
+    rpc.call('turn.cancel', { session_key: owner })
+      .then(() => {
+        transitionTurn(owner, { type: 'idle' });
+        if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); drainQueue(); }
+      }, () => {
+        transitionTurn(owner, { type: 'idle' });
+        if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); }
+      });
+    softStop(true);
+  };
 
-DS.sessions.remove = function (s) {
-  confirmAsk(T('gui.sess.delete_title'), T('gui.sess.delete_body', { title: s.title }), T('gui.sess.delete'), async () => {
-    try {
-      const r = await rpc.call('session.delete', { session_id: s.id });
-      /* A null `deleted` is two answers and only one of them may drop the row.
+  DS.sessions.remove = function (s) {
+    confirmAsk(T('gui.sess.delete_title'), T('gui.sess.delete_body', { title: s.title }), T('gui.sess.delete'), async () => {
+      try {
+        const r = await rpc.call('session.delete', { session_id: s.id });
+        /* A null `deleted` is two answers and only one of them may drop the row.
          Nothing left to remove -- an unknown key, or a conversation whose first
          turn never saved a file -- is the reader's own goal, so the row goes; a
          file that survived its removal is still there to list, and claiming it
@@ -659,66 +653,66 @@ DS.sessions.remove = function (s) {
          `!== false`, not falsy: a server too old to carry the field says nothing
          at all, and "nothing at all" is not "nothing was there" -- reading it as
          the second would drop a row whose file may have survived. */
-      if (r.deleted !== s.id && r.still_on_disk !== false) throw new Error(T('gui.sess.delete_kept'));
-      await leaveDeletedSession(s.id);
-      toast(r.deleted === s.id
-        ? T('gui.sess.deleted_x', { title: s.title })
-        : T('gui.sess.delete_absent', { title: s.title }));
-    } catch (e) { toast(T('gui.sess.delete_failed', { title: s.title, err: e.message || e })); }
-  });
-};
-
-DS.sessions.archive = async function (s) {
-  try {
-    const at = sessionRows().findIndex(row => row.id === s.id);
-    const result = await rpc.call('session.archive', { session_id: s.id, archived: true });
-    if (!result.archived || result.session_key !== s.id) throw new Error(`session ${s.id} was not archived`);
-    await leaveArchivedSession(s.id);
-    toast(T('gui.sess.archived', { title: s.title }), {
-      label: T('gui.undo'),
-      fn: async () => {
-        try {
-          const restored = await rpc.call('session.archive', { session_id: s.id, archived: false });
-          if (restored.archived || restored.session_key !== s.id) {
-            throw new Error(`session ${s.id} was not restored`);
-          }
-          if (!sessionRows().some(row => row.id === s.id)) sessionRows().splice(Math.max(0, Math.min(at, sessionRows().length)), 0, s);
-          sessionDraw();
-        } catch (e) {
-          toast(T('gui.sess.restore_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
-        }
-      }
+        if (r.deleted !== s.id && r.still_on_disk !== false) throw new Error(T('gui.sess.delete_kept'));
+        await leaveDeletedSession(s.id);
+        toast(r.deleted === s.id
+          ? T('gui.sess.deleted_x', { title: s.title })
+          : T('gui.sess.delete_absent', { title: s.title }));
+      } catch (e) { toast(T('gui.sess.delete_failed', { title: s.title, err: e.message || e })); }
     });
-  } catch (e) {
-    toast(T('gui.sess.archive_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
-  }
-};
+  };
 
-$('#newBtn').onclick = () => {
-  if (openModelsForMissingProvider()) return;
-  showPage(null); startDraft();
-};
+  DS.sessions.archive = async function (s) {
+    try {
+      const at = sessionRows().findIndex(row => row.id === s.id);
+      const result = await rpc.call('session.archive', { session_id: s.id, archived: true });
+      if (!result.archived || result.session_key !== s.id) throw new Error(`session ${s.id} was not archived`);
+      await leaveArchivedSession(s.id);
+      toast(T('gui.sess.archived', { title: s.title }), {
+        label: T('gui.undo'),
+        fn: async () => {
+          try {
+            const restored = await rpc.call('session.archive', { session_id: s.id, archived: false });
+            if (restored.archived || restored.session_key !== s.id) {
+              throw new Error(`session ${s.id} was not restored`);
+            }
+            if (!sessionRows().some(row => row.id === s.id)) sessionRows().splice(Math.max(0, Math.min(at, sessionRows().length)), 0, s);
+            sessionDraw();
+          } catch (e) {
+            toast(T('gui.sess.restore_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
+          }
+        }
+      });
+    } catch (e) {
+      toast(T('gui.sess.archive_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
+    }
+  };
 
-/* Persist a manual rename made through the title editor. The editor is the
+  $('#newBtn').onclick = () => {
+    if (openModelsForMissingProvider()) return;
+    showPage(null); startDraft();
+  };
+
+  /* Persist a manual rename made through the title editor. The editor is the
    rail island's, and this used to wrap its entry point to hang a blur listener
    off the input it had just created -- reaching into another layer's DOM, and
    missing an Enter, which replaces that input while it still has focus. The
    island tells us instead. */
-DS.sessions.renamed = (id, title, previous) => {
-  /* A refused rename must not stay quiet -- same reason `DS.sessions.pin` puts
+  DS.sessions.renamed = (id, title, previous) => {
+    /* A refused rename must not stay quiet -- same reason `DS.sessions.pin` puts
      its flag back. The row moved optimistically, so a name the server rejected
      (too long for the metadata record) looks identical to one it took until the
      page is reloaded and the old name is simply back. */
-  rpc.call('session.title', { session_id: id, title }).catch((e) => {
-    const s = sess(id);
-    if (s) { s.title = previous; sessionDraw(); }
-    if (id === sessionCurrent()) {
-      const h = $('#title');
-      if (h) h.textContent = plainTitle(previous);
-    }
-    toast(T('gui.sess.rename_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
-  });
-};
+    rpc.call('session.title', { session_id: id, title }).catch((e) => {
+      const s = sess(id);
+      if (s) { s.title = previous; sessionDraw(); }
+      if (id === sessionCurrent()) {
+        const h = $('#title');
+        if (h) h.textContent = plainTitle(previous);
+      }
+      toast(T('gui.sess.rename_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
+    });
+  };
 }
 
 export { subscribe, claimStream, draft, staged, applyStagedModel, applyStagedTier, applyStagedPerm, viewGen, resetView, startDraft, openLiveSession, mediaOf, promoting, openConversation, promote, sendOnSession, dispatchSend, liveSend, softStop, drainQueue, forgetSubscription, leaveDeletedSession, leaveArchivedSession }
