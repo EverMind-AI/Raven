@@ -10,15 +10,10 @@
 /* ── 工具: built in, fixed list, on/off only ───────────────────────── */
 
 import { CHANNELS } from '../../features/connections/catalogue'
+import { TOOL_GROUPS } from '../../features/settings/source'
 import { sources } from '../../state/sources'
 import { T } from './010-kernel.js'
 
-const TOOL_GROUPS = [
-  { id:'file', label:'gui.toolgrp.file', hint:'gui.toolgrp.file_hint' },
-  { id:'run',  label:'gui.toolgrp.run' },
-  { id:'net',  label:'gui.toolgrp.net' },
-  { id:'ask',  label:'gui.toolgrp.ask' }
-];
 
 const TOOLS = [
   { id:'read_file',  name:'读文件',   group:'file', reach:'local', on:true,  one:'读取工作目录里的文件' },
