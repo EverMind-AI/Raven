@@ -7,12 +7,11 @@
  * a browser.
  */
 
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
+import { sandboxSource } from '../../../scripts/legacy-source.mjs'
 
 import { describe, expect, it, vi } from 'vitest'
 
-const source = readFileSync('src/legacy/live/080-overrides.js', 'utf8')
+const source = sandboxSource('src/legacy/live/080-overrides.js')
 
 /* Just the one assignment, not the file: the rest of this layer reaches for
    dozens of globals that have nothing to do with the decision under test. */
@@ -98,7 +97,7 @@ describe('deleting a session from the rail', () => {
 })
 
 const bulkSource = (() => {
-  const src = readFileSync('src/legacy/live/130-writes.js', 'utf8')
+  const src = sandboxSource('src/legacy/live/130-writes.js')
   const begin = src.indexOf('DS.sessions.deleteAll = async () => {')
   return src.slice(begin, src.indexOf('\n};', begin) + 3)
 })()

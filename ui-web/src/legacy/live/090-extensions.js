@@ -3,6 +3,11 @@
    mutations are intercepted with property setters that persist through
    settings.set. */
 
+import { DS } from '../seam/000-datasource.js'
+import { T } from '../demo/010-kernel.js'
+import { pmToggle } from '../demo/153-plugins.js'
+import { rpc } from './020-rpc.js'
+
 const fmt2 = (n) => String(n).padStart(2, '0');
 function fmtStamp(ms) {
   if (!ms) return '—';
@@ -122,7 +127,14 @@ async function loadExt() {
   extLoaded = true;
 }
 
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 DS.capabilities = {
   loaded: () => extLoaded,
   load: async () => { await loadExt(); return true; },
 };
+}
+
+export { fmt2, fmtStamp, fmtEvery, toolLabel, TOOL_GROUP_OF, TOOL_DANGER, disabledToolsLive, pluginsDisabledLive, toolsLive, skillsLive, pluginsLive, extLoaded, persistDisabledTools, mkToolRow, mkSkillRow, mkPluginRow, MCP_LEGACY, mkMcpRow, loadExt }

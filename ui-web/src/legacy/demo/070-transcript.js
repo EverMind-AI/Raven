@@ -8,6 +8,11 @@
 
 /* One step of a turn: the handle keeps the legacy widget surface
    (hasThink/hasSay/failed setters, tool().done(), seal()). */
+
+import { DS } from '../seam/000-datasource.js'
+import { sess } from './040-state.js'
+import { sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
+
 function newStep() {
   /* Draws into the transcript lane inside #stage. */
   return RavenIslands.transcript.step();
@@ -53,6 +58,10 @@ const ACT_ICO = {
     + 'M21 18a2.2 2.2 0 1 1-4.4 0 2.2 2.2 0 0 1 4.4 0ZM7.3 11l9.4-4M7.3 13l9.4 4',
 };
 
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 /* The fixture half of DS.transcript. The demo replay passes explicit ok
    flags and clean previews, so the reading hooks are identity; branch keeps
    the demo's canned fork. Live mode installs the rpc source over this. */
@@ -76,3 +85,6 @@ DS.transcript ??= {
      the real check over this one. */
   parked: () => false,
 };
+}
+
+export { newStep, collapseTurn, foldSilentRuns, dagFlowFeed, askEcho, showStatus, killStatus, ACT_ICO }

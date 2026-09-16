@@ -6,6 +6,14 @@
 
 /* The fixture provider rows. Live mode owns the rows fetched from its model
    source, so it never refills this demo list in place. */
+
+import { DS } from '../seam/000-datasource.js'
+import { $, LANG, T, langSet, mk } from './010-kernel.js'
+import { TOOLS, TOOL_GROUPS } from './030-fixtures.js'
+import { modelCurrent } from './040-state.js'
+import { sessionDraw, sessionReplace } from './050-rail.js'
+import { pitch } from './060-conversation.js'
+
 const PROVIDERS = [
   { id: 'minimax', name: 'MiniMax (Global)', homepage: 'https://platform.minimax.io/', models: ['minimax/MiniMax-M3', 'minimax/MiniMax-M2'], on: true, kind: 'api_key' },
   { id: 'minimax_cn_api', name: 'MiniMax (CN)', models: ['minimax-cn-api/MiniMax-M3', 'minimax-cn-api/MiniMax-M2'], on: false,
@@ -19,25 +27,11 @@ const PROVIDERS = [
     homepage: 'https://lmstudio.ai/', defaultApiBase: 'http://localhost:1234/v1' }
 ];
 
-/* The open tab. A window property, not a script binding: the chrome writes
-   `sTab = 'model'` before opening the dialog, and the island (a separate
-   script that cannot see this script's scope) reads and writes the slot. */
-window.sTab = 'usage';
-
 // Filled in from system.version once the socket is up, and unknown until then:
 // the running install is the only thing that knows its version. The rail foot
 // and the About card both render this as "--" rather than as a guess.
 let APP_VERSION = null;
 function appVersionSet(v) { APP_VERSION = v; }
-
-/* Wiping the list is a session operation, so it goes on the session source
-   rather than staying a name the live layer overwrites. It has to live in this
-   layer either way: the list and the current session are page bindings, and an
-   island cannot reassign one. */
-DS.sessions.deleteAll = () => {
-  sessionReplace([]); sessionSet(null); sessionDraw(); $('#stage').innerHTML = '';
-  $('#title').textContent = T('gui.new_task'); pitch();
-};
 
 /* A tagged control never renders the new value; the refusal is spoken in the
    row, not in a toast. Kept for the legacy rows (capabilities tool
@@ -82,27 +76,6 @@ function setRuntime() {
   $('#envChip').querySelector('.led').className = 'led';
 }
 
-/* The fixture source: canned config behind the same interface the rpc source
-   implements. Writes refuse with the tag the island renders as the in-row
-   not-live message; usage answers null, which the island draws as the demo's
-   no-data note. Registered, not declared-for-override -- live mode installs
-   its own DS.settings and this object is never consulted. */
-DS.settings ??= {
-  load: async () => ({
-    raw: {}, configPath: '~/.raven/config.json', everos: null,
-    providers: PROVIDERS, curProvider: '', model: modelCurrent(),
-    toolGroups: TOOL_GROUPS, tools: TOOLS,
-  }),
-  set: async () => { throw { notLive: true }; },
-  everosSet: async () => { throw { notLive: true }; },
-  usage: async () => null,
-  provider: async () => { throw { notLive: true }; },
-  model: () => modelCurrent(),
-  version: () => APP_VERSION,
-  checkUpdate: () => notLive(),
-  setLang: (v) => langPickDemo(v),
-};
-
 /* The tier fixture: three rungs behind the same interface `session.set_mode`
    implements, so the design canvas can show the chip and its panel.
 
@@ -131,7 +104,49 @@ const tierMenuDemo = () => ['medium', 'high', 'max'].map((id) => ({
   name: id.charAt(0).toUpperCase() + id.slice(1),
   description: (TIER_SUB[LANG] || TIER_SUB.en)[id],
 }));
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+/* The open tab. A window property, not a script binding: the chrome writes
+   `sTab = 'model'` before opening the dialog, and the island (a separate
+   script that cannot see this script's scope) reads and writes the slot. */
+window.sTab = 'usage';
+
+/* Wiping the list is a session operation, so it goes on the session source
+   rather than staying a name the live layer overwrites. It has to live in this
+   layer either way: the list and the current session are page bindings, and an
+   island cannot reassign one. */
+DS.sessions.deleteAll = () => {
+  sessionReplace([]); sessionSet(null); sessionDraw(); $('#stage').innerHTML = '';
+  $('#title').textContent = T('gui.new_task'); pitch();
+};
+
+/* The fixture source: canned config behind the same interface the rpc source
+   implements. Writes refuse with the tag the island renders as the in-row
+   not-live message; usage answers null, which the island draws as the demo's
+   no-data note. Registered, not declared-for-override -- live mode installs
+   its own DS.settings and this object is never consulted. */
+DS.settings ??= {
+  load: async () => ({
+    raw: {}, configPath: '~/.raven/config.json', everos: null,
+    providers: PROVIDERS, curProvider: '', model: modelCurrent(),
+    toolGroups: TOOL_GROUPS, tools: TOOLS,
+  }),
+  set: async () => { throw { notLive: true }; },
+  everosSet: async () => { throw { notLive: true }; },
+  usage: async () => null,
+  provider: async () => { throw { notLive: true }; },
+  model: () => modelCurrent(),
+  version: () => APP_VERSION,
+  checkUpdate: () => notLive(),
+  setLang: (v) => langPickDemo(v),
+};
 DS.tier ??= {
   read: async () => ({ mode: tierDemo, availableModes: tierMenuDemo() }),
   set: async (mode) => { tierDemo = mode; return { mode: tierDemo, availableModes: tierMenuDemo() }; },
 };
+}
+
+export { PROVIDERS, APP_VERSION, appVersionSet, nlSay, notLive, langPickDemo, isMac, modKey, drawSettings, setRuntime, tierDemo, TIER_SUB, tierMenuDemo }

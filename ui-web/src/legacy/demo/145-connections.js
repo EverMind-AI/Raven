@@ -8,6 +8,11 @@
    live layer's redrawAll still call -- and the fixture source. The More
    flyout opens the page by importing the island (shell/navfly.ts); it does
    not come through here. */
+
+import { DS } from '../seam/000-datasource.js'
+import { CHANNELS } from './030-fixtures.js'
+import { nlSay } from './130-settings.js'
+
 function closeConn() { RavenIslands.connections.close(); }
 function drawConn() {
   /* A language flip re-renders #connBody with the new catalogue. */
@@ -17,6 +22,10 @@ function drawConn() {
    the island's scan poll, so no close path can leave a timer running. */
 function connCloseDialog() { RavenIslands.connections.closeDialog(); }
 
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 /* The fixture source: the demo's canned channels behind the same interface
    the rpc source implements. Rows are the CHANNELS objects themselves,
    mutated in place, which is what makes demo edits stick across a redraw.
@@ -31,3 +40,6 @@ DS.conn ??= {
   apply: async () => { nlSay(null); },
   qr: async () => null,
 };
+}
+
+export { closeConn, drawConn, connCloseDialog }

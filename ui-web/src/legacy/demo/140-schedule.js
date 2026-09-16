@@ -3,6 +3,13 @@
    remains here is its shell face -- the names the nav button, the Esc
    handler and the live layer's redrawAll still call -- and the fixture
    source. */
+
+import { DS } from '../seam/000-datasource.js'
+import { $, T } from './010-kernel.js'
+import { CRONS, FREQ } from './030-fixtures.js'
+import { sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
+import { ask, noteRow } from './060-conversation.js'
+
 function openMem() { RavenIslands.memory.open(); }
 function closeMem() { RavenIslands.memory.close(); }
 function openKb() { RavenIslands.knowledge.open(); }
@@ -15,16 +22,6 @@ function drawKb() {
   /* A language flip re-renders #kbBody with the new catalogue. */
   RavenIslands.knowledge.redraw();
 }
-
-/* The fixture source: the demo has no memory engine behind it, so it
-   answers list with the down marker and the island shows the page's down
-   note. Registered, not declared-for-override -- live mode installs its
-   own DS.memory and this object is never consulted. */
-DS.memory ??= {
-  stats: async () => null,
-  list: async () => { throw { down: true }; },
-  remove: async () => {},
-};
 
 /* ══ module 4: scheduled work ═════════════════════════════════════
    The renderer is the cron island (ui-web/src/features/cron/); what remains
@@ -43,6 +40,20 @@ function drawCron() {
 }
 /* Boot calls this to prefetch rows without opening the page. */
 function cronWarm() { return RavenIslands.cron.warm(); }
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+/* The fixture source: the demo has no memory engine behind it, so it
+   answers list with the down marker and the island shows the page's down
+   note. Registered, not declared-for-override -- live mode installs its
+   own DS.memory and this object is never consulted. */
+DS.memory ??= {
+  stats: async () => null,
+  list: async () => { throw { down: true }; },
+  remove: async () => {},
+};
 
 /* The fixture source: the demo's canned jobs behind the same interface the
    rpc source implements. Registered, not declared-for-override -- live mode
@@ -92,3 +103,6 @@ DS.cron ??= {
     }
   },
 };
+}
+
+export { openMem, closeMem, openKb, closeKb, drawMem, drawKb, closeCron, refreshCron, drawCron, cronWarm }

@@ -7,7 +7,16 @@
 
 /* The field itself stays a name: the skills panel drops a prompt into it and
    the draft store reads it back. */
-const ta = $('#ta');
+
+import { DS } from '../seam/000-datasource.js'
+import { $, T, slashHelp, slashName } from './010-kernel.js'
+import { RUNS } from './030-fixtures.js'
+import { confirmAsk, queuePush, runState, sess, stop_, turn } from './040-state.js'
+import { sessionDraw } from './050-rail.js'
+import { ask, noteRow, pitch } from './060-conversation.js'
+import { replay } from './080-replay.js'
+
+let ta;
 
 function goState() { RavenIslands.composer.goPaint(); }
 function drawMeter() { RavenIslands.composer.drawMeter(); }
@@ -34,20 +43,6 @@ const SLASH = [
     }) }
 ];
 
-/* The fixture half of DS.composer. Turn state belongs to the composer island;
-   live mode installs its own meter wording and upload transport over this. */
-DS.composer ??= {
-  meter: () => (turn.busy() ? T('gui.meter.running')
-    : runState.use ? T('gui.meter.usage', { calls: runState.use.calls, in: (runState.use.in / 1000).toFixed(1), out: (runState.use.out / 1000).toFixed(1) })
-    : ''),
-  slash: SLASH,
-  slashName: (id) => slashName(id),
-  slashHelp: (id) => slashHelp(id),
-  pickHint: 'demo：正式版在这里选文件或直接拖进来',
-  send: (text) => send(text),
-  stop: () => halt(),
-};
-
 const pickRun = (s) => /超时|timeout|登录|bug|修|fix|报错|定位|回调/.test(s) ? RUNS.fix : RUNS.gtm;
 
 function send(text) {
@@ -71,3 +66,26 @@ function halt() {
   noteRow('已中断 · 上面的步骤保留', '', { quiet: true, host: $('#stage') });
   drawMeter(); goState(); sessionDraw();
 }
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+ta = $('#ta');
+
+/* The fixture half of DS.composer. Turn state belongs to the composer island;
+   live mode installs its own meter wording and upload transport over this. */
+DS.composer ??= {
+  meter: () => (turn.busy() ? T('gui.meter.running')
+    : runState.use ? T('gui.meter.usage', { calls: runState.use.calls, in: (runState.use.in / 1000).toFixed(1), out: (runState.use.out / 1000).toFixed(1) })
+    : ''),
+  slash: SLASH,
+  slashName: (id) => slashName(id),
+  slashHelp: (id) => slashHelp(id),
+  pickHint: 'demo：正式版在这里选文件或直接拖进来',
+  send: (text) => send(text),
+  stop: () => halt(),
+};
+}
+
+export { ta, goState, drawMeter, taFit, dockLift, SLASH, pickRun, send, halt }

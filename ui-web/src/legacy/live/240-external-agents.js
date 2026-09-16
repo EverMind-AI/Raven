@@ -11,6 +11,14 @@
    the config on disk. `probe: false` on that follow-up call skips the
    availability check, which can cost up to ten seconds per entry and would only
    re-measure what the write just changed. */
+
+import { DS } from '../seam/000-datasource.js'
+import { drawWs, setWs, wsOpen, wsPick } from '../demo/100-workspace.js'
+import { bootPage } from '../demo/160-boot.js'
+import { rpc } from './020-rpc.js'
+import { onEvent } from './050-turn.js'
+import { rpcHas } from './220-browser.js'
+
 function xaRowOf(r) {
   return {
     name: r.name,
@@ -71,6 +79,37 @@ async function xaFetch(probe) {
   return rows;
 }
 
+/* ── the dag sheet ───────────────────────────────────────
+   The graph a `run_subagent_dag` call is orchestrating, docked above the
+   composer on the conversation that asked for it. Drawn by the island
+   (ui-web/src/features/dag/), which holds the runs as well: what is left on this
+   side is the events, and the panel chrome a node click opens.
+
+   The three `dag.*` branches in live/050-turn.js feed it; the two calls below
+   are the ones that need this file's own chrome. */
+
+/* A node opens where a sub-agent's work already lives, rather than growing a
+   second transcript view inside the sheet: same panel, same renderer, and the
+   sheet stays the map rather than becoming the territory. */
+function dagOpenNode(runId, n) {
+  RavenIslands.subagents.openDagNode(runId, n);
+  /* The open above already raised the node's own window, and in desk mode that
+     window IS the view -- so there is no panel tab left to pick. Picking one
+     anyway routed through `openDeskTab`, whose whole job is to open the
+     palette, so every node opened from the trail's card or from the sheet
+     popped the little desk open beside the window the reader had asked for.
+     The lines below are the pre-desk panel, where selecting the agents view
+     was how the instance got on screen at all. */
+  if (document.documentElement.classList.contains('desk-ready')) return;
+  if (!wsOpen) setWs(true);
+  wsPick('agents');
+  drawWs();
+}
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 DS.xa = {
   load: (probe) => xaFetch(!!probe),
   act: async (op, row, args) => {
@@ -136,33 +175,6 @@ DS.xa = {
     return xaFetch(false);
   },
 };
-
-/* ── the dag sheet ───────────────────────────────────────
-   The graph a `run_subagent_dag` call is orchestrating, docked above the
-   composer on the conversation that asked for it. Drawn by the island
-   (ui-web/src/features/dag/), which holds the runs as well: what is left on this
-   side is the events, and the panel chrome a node click opens.
-
-   The three `dag.*` branches in live/050-turn.js feed it; the two calls below
-   are the ones that need this file's own chrome. */
-
-/* A node opens where a sub-agent's work already lives, rather than growing a
-   second transcript view inside the sheet: same panel, same renderer, and the
-   sheet stays the map rather than becoming the territory. */
-function dagOpenNode(runId, n) {
-  RavenIslands.subagents.openDagNode(runId, n);
-  /* The open above already raised the node's own window, and in desk mode that
-     window IS the view -- so there is no panel tab left to pick. Picking one
-     anyway routed through `openDeskTab`, whose whole job is to open the
-     palette, so every node opened from the trail's card or from the sheet
-     popped the little desk open beside the window the reader had asked for.
-     The lines below are the pre-desk panel, where selecting the agents view
-     was how the instance got on screen at all. */
-  if (document.documentElement.classList.contains('desk-ready')) return;
-  if (!wsOpen) setWs(true);
-  wsPick('agents');
-  drawWs();
-}
 /* The trail's dag card opens a node through the same reader. Installed on the
    transcript source rather than into a page binding the fixture layer declared:
    the island asks its source for these three, and this is the layer that can
@@ -253,5 +265,6 @@ window.__dag = (ev) => onEvent(ev && ev.type ? ev : {
 /* This is the live manifest's last part. Every synchronous DS installer is now
    in place, so the first data-driven paint cannot observe a fixture source. */
 queueMicrotask(bootPage);
+}
 
-})();
+export { xaRowOf, xaSeen, xaFetch, dagOpenNode }

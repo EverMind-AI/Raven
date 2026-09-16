@@ -1,4 +1,14 @@
 /* ══ module 1b: the conversation ══════════════════════════════════ */
+
+import { DS } from '../seam/000-datasource.js'
+import { $, I18N } from './010-kernel.js'
+import { RUNS, cap } from './030-fixtures.js'
+import { loadDraft, parkDraft, queueClear, runState, stop_, turn } from './040-state.js'
+import { markNewCurrent } from './050-rail.js'
+import { replay } from './080-replay.js'
+import { drawMeter, goState } from './090-composer.js'
+import { setWs, wsReset } from './100-workspace.js'
+
 function openDemoSession(s) {
   parkDraft(); loadDraft(s.id);
   // Opening it IS reading it: the finished marker has done its job and the
@@ -24,17 +34,6 @@ function openDemoSession(s) {
     pitch();
   }
 }
-
-/* The fixture half of DS.banner, and only that half. `cap` reads the capability
-   list, which the live layer does fill in place -- but live mode does not use
-   this reading of it: live/120-settings.js installs a source that refuses the
-   suggestion outright, because a config gap belongs in the settings page, not
-   as a strip over every conversation.
-   Live mode installs its source before the shared deferred boot, so this
-   fixture source is never consulted for a live page's first paint. */
-DS.banner ??= {
-  websearchNeeds: () => { const c = cap('websearch'); return !!c && c.state === 'need'; },
-};
 
 function pitch() {
   /* The empty state is the composer itself, moved to the visual centre --
@@ -101,3 +100,21 @@ function noteRow(label, detail, opts) {
   return RavenIslands.transcript.note(label, detail,
     { quiet: !!o.quiet, retry: typeof o.retry === 'function' ? o.retry : null });
 }
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+/* The fixture half of DS.banner, and only that half. `cap` reads the capability
+   list, which the live layer does fill in place -- but live mode does not use
+   this reading of it: live/120-settings.js installs a source that refuses the
+   suggestion outright, because a config gap belongs in the settings page, not
+   as a strip over every conversation.
+   Live mode installs its source before the shared deferred boot, so this
+   fixture source is never consulted for a live page's first paint. */
+DS.banner ??= {
+  websearchNeeds: () => { const c = cap('websearch'); return !!c && c.state === 'need'; },
+};
+}
+
+export { openDemoSession, pitch, unpitch, splitAtts, ask, noteSay, noteRow }

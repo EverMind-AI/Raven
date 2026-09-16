@@ -2,6 +2,23 @@
 /* The DOM half of a turn is the transcript island's now; this machine keeps
    what is genuinely live-side: which step is open, which calls are in
    flight, the say buffer the session row's preview reads, and the clocks. */
+
+import { DS } from '../seam/000-datasource.js'
+import { $, T, dur } from '../demo/010-kernel.js'
+import { down, queueShift, sess, sheetSession, turn } from '../demo/040-state.js'
+import { sessionDraw, sessionReplace, sessionRows } from '../demo/050-rail.js'
+import { ask, noteRow } from '../demo/060-conversation.js'
+import { dagFlowFeed, killStatus, newStep, showStatus } from '../demo/070-transcript.js'
+import { drawMeter, goState } from '../demo/090-composer.js'
+import { setWs } from '../demo/100-workspace.js'
+import { wsOnTool, wsOnToolDone } from '../demo/110-subagents.js'
+import { refreshCron } from '../demo/140-schedule.js'
+import { rpc } from './020-rpc.js'
+import { SESS_CHANNELS, cleanPreview, cronNames, okOf, rowFrom, touchSession } from './030-sessions.js'
+import { park } from './060-parked.js'
+import { drainQueue, leaveDeletedSession, liveSend, softStop } from './080-overrides.js'
+import { dagOpenNode } from './240-external-agents.js'
+
 const live = { subId: null, st: null, steps: [], say: '', open: new Map(), sawEpisode: false };
 
 function resetTurnState() {
@@ -267,32 +284,6 @@ function onEvent(ev) {
 
 const fmtTok = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
-// Per-turn cost lives under each answer and "a turn is running" is now the
-// ticking row above the composer, so the strip under the field stays empty.
-DS.composer.meter = () => '';
-
-/* Opening a delegated graph: the last node if this page already holds the run's
-   own record, the agents panel otherwise. Installed as a source verb rather
-   than written inline in the delivered handler, because the row a RELOAD draws
-   has to open the same thing the live row does. */
-DS.transcript.openDagRun = function (runId) {
-  const id = String(runId || '');
-  if (id) {
-    const d = RavenIslands.dag.run(sheetSession());
-    const last = d && d.run_id === id ? d.order[d.order.length - 1] : null;
-    if (last) {
-      /* With what the node is FOR, not only its id. The run holds every node's
-         summary and this row handed over the slug alone, so a pane opened from
-         the trail was headed by a name for the machine while the same node opened
-         from the sheet was headed by what it did. */
-      const n = d.nodes && d.nodes.get ? d.nodes.get(last) : null;
-      dagOpenNode(id, { id: last, summary: (n && n.node_summary) || null });
-      return;
-    }
-  }
-  setWs(true, 'agents');
-};
-
 function finishTurn(p) {
   const usage = p.usage || {};
   killStatus();
@@ -451,18 +442,6 @@ function beginNaming(text) {
   namingTimers.set(id, { fallback, timer: setTimeout(() => { namingGaveUp(id); }, NAMING_GRACE_MS) });
 }
 
-/* A refused persist must not stay quiet. The row moves optimistically, but a
-   pin the server never accepted looks identical to one it did until the page
-   is reloaded and the group is simply gone -- which is exactly how an older
-   resident gateway, with no session.pin to call at all, presents itself. Put
-   the row back and say so. */
-DS.sessions.pin = (id, pinned) => rpc.call('session.pin', { session_id: id, pinned: !!pinned })
-  .catch((e) => {
-    const s = sess(id);
-    if (s) { s.pin = !pinned; sessionDraw(); }
-    toast(T('gui.sess.pin_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
-  });
-
 async function refreshList() {
   try {
     const r = await rpc.call('session.list', { channels: SESS_CHANNELS });
@@ -477,3 +456,48 @@ async function refreshList() {
     else sessionDraw();
   } catch { /* keep the stale list */ }
 }
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+// Per-turn cost lives under each answer and "a turn is running" is now the
+// ticking row above the composer, so the strip under the field stays empty.
+DS.composer.meter = () => '';
+
+/* Opening a delegated graph: the last node if this page already holds the run's
+   own record, the agents panel otherwise. Installed as a source verb rather
+   than written inline in the delivered handler, because the row a RELOAD draws
+   has to open the same thing the live row does. */
+DS.transcript.openDagRun = function (runId) {
+  const id = String(runId || '');
+  if (id) {
+    const d = RavenIslands.dag.run(sheetSession());
+    const last = d && d.run_id === id ? d.order[d.order.length - 1] : null;
+    if (last) {
+      /* With what the node is FOR, not only its id. The run holds every node's
+         summary and this row handed over the slug alone, so a pane opened from
+         the trail was headed by a name for the machine while the same node opened
+         from the sheet was headed by what it did. */
+      const n = d.nodes && d.nodes.get ? d.nodes.get(last) : null;
+      dagOpenNode(id, { id: last, summary: (n && n.node_summary) || null });
+      return;
+    }
+  }
+  setWs(true, 'agents');
+};
+
+/* A refused persist must not stay quiet. The row moves optimistically, but a
+   pin the server never accepted looks identical to one it did until the page
+   is reloaded and the group is simply gone -- which is exactly how an older
+   resident gateway, with no session.pin to call at all, presents itself. Put
+   the row back and say so. */
+DS.sessions.pin = (id, pinned) => rpc.call('session.pin', { session_id: id, pinned: !!pinned })
+  .catch((e) => {
+    const s = sess(id);
+    if (s) { s.pin = !pinned; sessionDraw(); }
+    toast(T('gui.sess.pin_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
+  });
+}
+
+export { live, resetTurnState, ensureStep, paintSay, stopSayPaint, flushSay, turnDur, onEvent, fmtTok, finishTurn, NAMING_GRACE_MS, namingTimers, titlePlaceholder, settleNaming, namingGaveUp, namingDeclined, namingSuperseded, namingEnded, beginNaming, refreshList }

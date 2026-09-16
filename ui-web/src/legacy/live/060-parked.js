@@ -5,6 +5,16 @@
    streamed token, which is persisted nowhere else until the turn ends) and
    buffers the events that arrive while it is away; returning reattaches the
    DOM and replays the buffer, so nothing is lost. */
+
+import { DS } from '../seam/000-datasource.js'
+import { $ } from '../demo/010-kernel.js'
+import { down, queueRestore, queueSnapshot, sess, turn } from '../demo/040-state.js'
+import { sessionDraw } from '../demo/050-rail.js'
+import { drawMeter, goState } from '../demo/090-composer.js'
+import { drawWs, wsOpen, wsRestore, wsView } from '../demo/100-workspace.js'
+import { live, onEvent, paintSay, stopSayPaint } from './050-turn.js'
+import { drainQueue } from './080-overrides.js'
+
 const parkedTurns = new Map();  // session_key -> parked turn snapshot
 const subBySession = {};        // session_key -> subscription_id
 const subSession = {};          // subscription_id -> session_key
@@ -43,15 +53,6 @@ function parkTurn() {
   });
 }
 
-/* A parked node is detached but not finished with: the transcript island
-   releases a lane host once it leaves the page, and the only copy of a turn
-   still streaming lives in one of these arrays until restoreTurn puts it
-   back. */
-DS.transcript.parked = (node) => {
-  for (const pk of parkedTurns.values()) if (pk.nodes.includes(node)) return true;
-  return false;
-};
-
 function restoreTurn(pk) {
   park.turnOwner = sessionCurrent();
   const stage = $('#stage');
@@ -85,3 +86,19 @@ function transitionTurn(owner, event) {
   const pk = parkedTurns.get(owner);
   if (pk) pk.phase = turn.reduce(pk.phase, event);
 }
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+/* A parked node is detached but not finished with: the transcript island
+   releases a lane host once it leaves the page, and the only copy of a turn
+   still streaming lives in one of these arrays until restoreTurn puts it
+   back. */
+DS.transcript.parked = (node) => {
+  for (const pk of parkedTurns.values()) if (pk.nodes.includes(node)) return true;
+  return false;
+};
+}
+
+export { parkedTurns, subBySession, subSession, PARK_EVENT_CAP, park, parkTurn, restoreTurn, transitionTurn }

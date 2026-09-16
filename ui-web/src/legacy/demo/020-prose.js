@@ -14,6 +14,10 @@
    live layer installs its own source (live/170-workspace.js), which can prove
    the file exists. A path that merely looks like one stays plain text: a dead
    link is worse than no link. */
+
+import { DS } from '../seam/000-datasource.js'
+import { setWs } from './100-workspace.js'
+
 const demoPathOf = (s) => {
   const t = String(s).trim().replace(/:\d+(?::\d+)?$/, '');
   if (!/^[\w.@+-]+(?:\/[\w.@+-]+)+$/.test(t)) return null;
@@ -30,6 +34,10 @@ const demoLinkTargetOf = (u) => {
   return { p: t, dir: !/\.\w{1,8}$/.test(t) };
 };
 
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 DS.prose ??= {
   pathOf: demoPathOf,
   linkTargetOf: demoLinkTargetOf,
@@ -37,3 +45,6 @@ DS.prose ??= {
      both a file and a folder land on the same canned pane. */
   open: () => setWs(true, 'file'),
 };
+}
+
+export { demoPathOf, demoLinkTargetOf }

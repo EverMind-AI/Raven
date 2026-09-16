@@ -8,6 +8,10 @@
    have it at all -- a -32601 from any call. The set is shared: the browser
    island tracks its own surface, but the `subagent.*` source (230-tabs.js)
    still reads these. */
+
+import { DS } from '../seam/000-datasource.js'
+import { rpc } from './020-rpc.js'
+
 const RPC_ABSENT = new Set();
 const rpcGone = (name, e) => {
   if (e && e.code === -32601) RPC_ABSENT.add(name);
@@ -15,6 +19,17 @@ const rpcGone = (name, e) => {
 };
 const rpcHas = (name) => !RPC_ABSENT.has(name);
 
+const brB64Blob = (b64) => {
+  const s = atob(b64);
+  const u = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i);
+  return new Blob([u], { type: 'image/jpeg' });
+};
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 DS.browser = {
   embedded: true,
   urls: () => RavenIslands.workspace.urls(),
@@ -27,13 +42,6 @@ DS.browser = {
   tabs: (p) => rpc.call('browser.tabs', p),
   input: (p) => rpc.call('browser.input', p),
   onFrame: null,
-};
-
-const brB64Blob = (b64) => {
-  const s = atob(b64);
-  const u = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i);
-  return new Blob([u], { type: 'image/jpeg' });
 };
 
 /* Screencast frames arrive as binary WS messages:
@@ -51,3 +59,6 @@ rpc.binary = (buf) => {
 rpc.notify['browser.frame'] = (p) => {
   if (DS.browser.onFrame) DS.browser.onFrame(p, p.jpeg ? brB64Blob(p.jpeg) : null);
 };
+}
+
+export { RPC_ABSENT, rpcGone, rpcHas, brB64Blob }

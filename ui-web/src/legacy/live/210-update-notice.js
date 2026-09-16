@@ -8,6 +8,12 @@
    page on disk, and the released version of Raven itself. They share the
    rail-foot row because to the reader they are one sentence — something newer
    exists — and they differ only in what the click does. */
+
+import { $, T } from '../demo/010-kernel.js'
+import { confirmAsk, turn, upShade } from '../demo/040-state.js'
+import { APP_VERSION } from '../demo/130-settings.js'
+import { rpc } from './020-rpc.js'
+
 let upKind = null;
 let upLatest = null;
 
@@ -179,3 +185,12 @@ function watchForUpdates() {
     if (document.visibilityState === 'visible') probe();
   });
 }
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+
+}
+
+export { upKind, upLatest, showUpNote, UPG_KEY, UPG_CEILING_MS, upMark, upMarkRead, upMarkClear, askUpgrade, resumeUpgrade, runUpgrade, watchUpgrade, distBase, distProbe, distMoved, watchForUpdates }
