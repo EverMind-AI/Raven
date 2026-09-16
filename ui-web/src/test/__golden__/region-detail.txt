@@ -1,0 +1,8 @@
+aside#detail.detail[data-i18n-aria=gui.cap_detail][data-open=false]
+  div.dpanel
+    header
+      b#dTitle
+      button#dClose.dx[data-i18n-aria=gui.close]
+        svg
+          path
+    div#dBody.body

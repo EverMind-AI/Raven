@@ -1,0 +1,7 @@
+div#veil.veil[data-open=false]
+  div.sheet
+    header#cfTitle
+    div#cfBody.body
+    footer
+      button#cfNo.btn[data-i18n=gui.cancel]
+      button#cfYes.btn.bad

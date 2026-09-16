@@ -1,0 +1,15 @@
+div#setVeil.veil.setveil[data-open=false]
+  div#setModal.smodal[data-i18n-aria=gui.page.set]
+    nav#snav.snav
+      div.brandrow
+        span.wm[data-i18n=gui.page.set]
+      div#snavList.snavlist
+    div.sbody
+      header.shd
+        div.ttl
+          h3#setTitle
+          p#setSub.sub
+        button#setClose.icb[data-i18n-aria=gui.close][data-i18n-tip=gui.close]
+          svg
+            path
+      div#spanels.spanels
