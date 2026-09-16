@@ -379,6 +379,9 @@ describe('the queue rows', () => {
   })
 
   it('keeps its rendered shape', () => {
+    /* English fixture words: the snapshot file is new source, and the repo's
+       source-language gate admits no CJK outside its exemption zones. */
+    lang = 'en'
     wire()
     store.queueRestore(['first', 'second'])
     mountQueue()
@@ -612,6 +615,7 @@ describe('the attachment tray', () => {
   })
 
   it('keeps its rendered shape', async () => {
+    lang = 'en'
     wire({ upload: async () => ({ path: 'uploads/notes.txt', size: 300 }) })
     const box = mountTray()
     await act(async () => {

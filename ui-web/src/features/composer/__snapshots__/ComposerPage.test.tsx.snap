@@ -10,18 +10,18 @@ exports[`the attachment tray > keeps its rendered shape 1`] = `
 exports[`the queue rows > keeps its rendered shape 1`] = `
 "div.qrow
   span.v
-  button.icb[data-tip=编辑]
+  button.icb[data-tip=Edit]
     svg
       path
-  button.icb[data-tip=删掉]
+  button.icb[data-tip=Remove]
     svg
       path
 div.qrow
   span.v
-  button.icb[data-tip=编辑]
+  button.icb[data-tip=Edit]
     svg
       path
-  button.icb[data-tip=删掉]
+  button.icb[data-tip=Remove]
     svg
       path"
 `;
