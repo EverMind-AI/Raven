@@ -1696,21 +1696,33 @@ class TestResolveProviderCredentials:
         # request path takes.
         assert resolved == ("https://api.siliconflow.cn/v1", "sk-live")
 
-    def test_a_direct_vendor_with_no_servable_default_answers_nothing(self, cfg_path: Path) -> None:
-        """OpenAI and Anthropic state no default address of their own: theirs
-        travels via env vars to a driver that knows it, and ``ProviderSpec``
-        deliberately does not hand it out (see ``usable_default_api_base``).
+    def test_a_direct_vendor_resolves_on_the_address_a_bare_client_posts_to(self, cfg_path: Path) -> None:
+        """OpenAI and DeepSeek state no default address in the registry, because
+        setup must not ask for one: their requests route through LiteLLM, which
+        knows where they live. That is what ``usable_default_api_base`` answers.
 
-        So a caller that has to make the call itself gets nothing here, and the
-        key alone is not enough. Configuring an address makes it resolve, which
-        the test below covers. This is the shape of the answer, not an
-        oversight: the alternative is handing out an address the rest of the
-        codebase refuses to serve."""
+        A caller here is asking a different question -- where do I POST -- and
+        for that the address is known and canonical. Answering ``None`` told a
+        caller holding a real key for the most common embedding provider of all
+        that the provider had no usable credential."""
         from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
 
         set_provider_fields("openai", {"api_key": "sk-live"}, config_path=cfg_path)
 
-        assert resolve_provider_credentials("openai", config_path=cfg_path) is None
+        assert resolve_provider_credentials("openai", config_path=cfg_path) == (
+            "https://api.openai.com/v1",
+            "sk-live",
+        )
+
+    def test_a_vendor_raven_carries_no_address_for_still_answers_nothing(self, cfg_path: Path) -> None:
+        """The fallback is a short list of canonical addresses, not a guess.
+        A vendor raven has no spec and no entry for has to state its own
+        address, and a key alone is not enough."""
+        from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
+
+        set_provider_fields("deepinfra", {"api_key": "sk-live"}, config_path=cfg_path)
+
+        assert resolve_provider_credentials("deepinfra", config_path=cfg_path) is None
 
     def test_a_configured_address_wins_over_the_default(self, cfg_path: Path) -> None:
         from raven.config.update_providers import resolve_provider_credentials, set_provider_fields

@@ -1101,6 +1101,16 @@ _HTTP_STATUS_MAP: dict[int, str] = {
 }
 
 
+# Fallback OpenAI-compatible base URLs for providers whose registry
+# ``default_api_base`` is empty (they rely on the SDK's built-in default, which
+# a bare OpenAI client doesn't know). A bare client needs an explicit base_url.
+_PROVIDER_BASE_URL_FALLBACK = {
+    "openai": "https://api.openai.com/v1",
+    "deepseek": "https://api.deepseek.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+}
+
+
 def resolve_provider_credentials(name: str, *, config_path: Path | None = None) -> tuple[str, str] | None:
     """The address and key a request to ``name`` would actually go out on.
 
@@ -1138,7 +1148,16 @@ def resolve_provider_credentials(name: str, *, config_path: Path | None = None) 
     endpoints = provider_endpoints(instance)
     endpoint = next((ep for ep in endpoints if ep.api_key), endpoints[0] if endpoints else None)
     api_key = endpoint.api_key if endpoint else ""
-    api_base = (endpoint.api_base if endpoint else None) or (spec.default_api_base if spec else "") or ""
+    api_base = (
+        (endpoint.api_base if endpoint else None)
+        or (spec.default_api_base if spec else "")
+        # A vendor whose registry entry names no address is not a vendor with
+        # no address: OpenAI and DeepSeek rely on their SDK's built-in default,
+        # which a bare client does not know. Without this, a caller holding a
+        # real key for the most common embedding provider of all was told the
+        # provider had no usable credential.
+        or _PROVIDER_BASE_URL_FALLBACK.get(name, "")
+    )
     if not api_key or not api_base:
         return None
     return str(api_base).rstrip("/"), str(api_key)
@@ -1839,15 +1858,6 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
 # (github_copilot / openai_codex) and non-OpenAI wire protocols
 # (anthropic / gemini) are excluded.
 _OPENAI_COMPATIBLE_PROVIDERS = {"openrouter", "openai", "deepseek", "custom"}
-
-# Fallback OpenAI-compatible base URLs for providers whose registry
-# ``default_api_base`` is empty (they rely on the SDK's built-in default, which
-# a bare OpenAI client doesn't know). A bare client needs an explicit base_url.
-_PROVIDER_BASE_URL_FALLBACK = {
-    "openai": "https://api.openai.com/v1",
-    "deepseek": "https://api.deepseek.com/v1",
-    "openrouter": "https://openrouter.ai/api/v1",
-}
 
 
 def _resolve_model_provider(model: str) -> str | None:
