@@ -1,9 +1,8 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Front-end demo. The transcript renderer consumes the same event
-   shapes Raven's JSON-RPC gateway already emits (episode.start /
-   thinking.delta / token.delta / tool.start / tool.complete /
-   message.complete), so going live means replacing replay() with a
-   socket — the rendering code below does not change.
+   The page's own small runtime: the message catalogue and the helpers
+   every part reaches for. There is one data path now -- a page with no
+   raven behind it reads the same contract off a fixture transport
+   (ui-web/src/rpc/fixtures/) -- so nothing here knows which.
    ═══════════════════════════════════════════════════════════════════ */
 
 import catalog from '../../../../i18n/messages.json'

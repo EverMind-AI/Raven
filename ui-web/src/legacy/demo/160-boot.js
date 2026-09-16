@@ -12,7 +12,6 @@ import { load as lookLoad } from '../../shell/look'
 import { load as paneLoad } from '../../shell/panes'
 import { draw as drawPerm } from '../../shell/perm'
 import { load as loadTier } from '../../shell/tier'
-import { sources } from '../../state/sources'
 import { bootError } from './040-state.js'
 import { sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
 import { goState } from './090-composer.js'
@@ -65,46 +64,6 @@ function hideSplash(minMs) {
 
 let showOnboard;
 
-function demoOnbBackend() {
-  const wait = (v, ms) => new Promise((r) => setTimeout(() => r(v), ms == null ? 420 : ms));
-  const P = [
-    { slug: 'anthropic', name: 'Anthropic', auth_type: 'key', authenticated: false,
-      homepage: 'https://anthropic.com/', models: ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'] },
-    { slug: 'openai', name: 'OpenAI', auth_type: 'key', authenticated: false,
-      homepage: 'https://openai.com/', models: ['gpt-5.2', 'gpt-5.2-mini', 'o5', 'gpt-4.1'] },
-    { slug: 'minimax_global', name: 'MiniMax Global', auth_type: 'oauth', authenticated: false,
-      homepage: 'https://platform.minimax.io/', models: ['MiniMax-M2.5', 'MiniMax-M2'] },
-    { slug: 'deepseek', name: 'DeepSeek', auth_type: 'key', authenticated: false,
-      homepage: 'https://deepseek.com/', models: ['deepseek-chat', 'deepseek-reasoner'] },
-    { slug: 'minimax', name: 'MiniMax (Global)', auth_type: 'key', authenticated: false,
-      homepage: 'https://platform.minimax.io/', models: ['minimax/MiniMax-M3', 'minimax/MiniMax-M2.5'] },
-    { slug: 'minimax_cn_api', name: 'MiniMax (CN)', auth_type: 'endpoint', authenticated: false,
-      homepage: 'https://platform.minimaxi.com/', default_api_base: 'https://api.minimaxi.com/v1/', models: ['minimax-cn-api/MiniMax-M3'] },
-    { slug: 'nvidia_nim', name: 'NVIDIA', auth_type: 'key', authenticated: false,
-      homepage: 'https://build.nvidia.com/explore/discover', default_api_base: 'https://integrate.api.nvidia.com/v1', models: ['nvidia-nim/nvidia/nemotron-3-super-120b-a12b', 'nvidia-nim/openai/gpt-oss-120b'] },
-    { slug: 'lm_studio', name: 'LM Studio', auth_type: 'local', needs_api_base: true, authenticated: false,
-      homepage: 'https://lmstudio.ai/', default_api_base: 'http://localhost:1234/v1', models: [] },
-    { slug: 'ollama', name: 'Ollama', auth_type: 'local', needs_api_base: true, authenticated: false,
-      homepage: 'https://ollama.com/', models: ['qwen3:32b', 'llama4:70b'] }
-  ];
-  let pokes = 0;
-  return {
-    options() {
-      /* Second re-probe flips the OAuth row to signed-in, so the preview can
-         walk the "not yet -> try again -> through" path once. */
-      if (pokes++ >= 2) P.find((p) => p.slug === 'minimax_global').authenticated = true;
-      return wait({ model: '', provider: '', providers: P.map((p) => ({ ...p })) });
-    },
-    saveKey(slug) {
-      const p = P.find((x) => x.slug === slug);
-      p.authenticated = true;
-      return wait({ provider: { ...p } });
-    },
-    setModel() { return wait({ applied: true }, 600); },
-    recheck() { return wait(true, 300); }
-  };
-}
-
 /* Whether the live layer has taken the splash and the onboarding moment off
    this part's hands. A setter rather than a field the live half writes: the
    writer is in the other layer, and a container one layer declares and the
@@ -123,29 +82,6 @@ export function install() {
   _spT0 = Date.now();
   ({ open: showOnboard } = islands.onboard);
 
-  /* Demo boot: two independent moments, and only one of them backs off for live
-   mode. Ordered rather than nested, because the preview needs the splash lifted
-   and the splash is the half that defers.
-
-   `?onboard=demo` previews the first-run flow on canned data -- it answers from
-   demoOnbBackend, so it writes nothing. What was missing was that preview on a
-   LIVE page: live/010-boot-guard.js sets __liveBoot whenever the page is served
-   over http without ?stub=1, and the old branch backed off on it, so the only
-   way to reach a canned first-run screen was file:// or ?stub=1, both of which
-   blank the live data as well. Against a real serve there was no way to look at
-   that flow without letting it write.
-
-   `?onboard=1` still means what it always meant: force the real flow, through
-   live/200-boot.js, against the real RPCs. That one writes.
-
-   The splash defers to live, which holds it until real data lands. It must NOT
-   be skipped when the preview opens, though: #onb is z-index 110 and #splash is
-   120 (page.css says so where it stacks them), and on the offline canvas --
-   file:// or ?stub=1, which is what build.py's docstring points a design pass at
-   -- no live layer runs, so this is the only call that ever lifts it. Returning
-   early here left the splash over the overlay for the whole session. */
-  sources.onboard ??= demoOnbBackend();
-
   addEventListener('load', () => {
     if (/[?&]onboard=demo/.test(location.search)) showOnboard();
     if (liveClaimed) return;
@@ -153,4 +89,4 @@ export function install() {
   });
 }
 
-export { bootPage, _spT0, hideSplash, showOnboard, demoOnbBackend, liveClaimed, claimBoot }
+export { bootPage, _spT0, hideSplash, showOnboard, liveClaimed, claimBoot }

@@ -1,43 +1,7 @@
 /* ══ module 1b: the conversation ══════════════════════════════════ */
 
-import { plainTitle } from '../../features/rail/title'
 import { islands } from '../../islands'
-import { draw as drawBanner } from '../../shell/banner'
-import { set as setCtx } from '../../shell/ctxchip'
-import { sources } from '../../state/sources'
-import { $, I18N } from './010-kernel.js'
-import { RUNS, cap } from './030-fixtures.js'
-import { loadDraft, parkDraft, queueClear, runState, stop_, turn } from './040-state.js'
-import { markNewCurrent } from './050-rail.js'
-import { replay } from './080-replay.js'
-import { drawMeter, goState } from './090-composer.js'
-import { setWs, wsReset } from './100-workspace.js'
-
-function openDemoSession(s) {
-  parkDraft(); loadDraft(s.id);
-  // Opening it IS reading it: the finished marker has done its job and the
-  // row goes back to carrying its timestamp.
-  if (s.status === 'done') s.status = null;
-  markNewCurrent();
-  stop_(); turn.dispatch({ type: 'idle' }); queueClear(); runState.use = null;
-  wsReset();
-  setWs(false);
-  $('#title').textContent = plainTitle(s.title);
-  $('#stage').innerHTML = '';
-  $('#flash').textContent = '';
-  drawMeter(); goState(); drawBanner();
-  if (s.run) {
-    const r = RUNS[s.run];
-    runState.use = r.use;
-    setCtx(((r.use && r.use.in) || 0) + ((r.use && r.use.out) || 0), 200000);
-    ask(r.ask); replay(r, true);
-  } else if (s.status === 'err') {
-    ask('把支付回调那块拆成两个 handler');
-    noteRow('找不到模块 stripe（internal/pay/callback.go:12）', '装上依赖或改用内置 http 客户端后重试。');
-  } else {
-    pitch();
-  }
-}
+import { I18N } from './010-kernel.js'
 
 function pitch() {
   /* The empty state is the composer itself, moved to the visual centre --
@@ -108,16 +72,7 @@ function noteRow(label, detail, opts) {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  /* The fixture half of sources.banner, and only that half. `cap` reads the capability
-   list, which the live layer does fill in place -- but live mode does not use
-   this reading of it: live/120-settings.js installs a source that refuses the
-   suggestion outright, because a config gap belongs in the settings page, not
-   as a strip over every conversation.
-   Live mode installs its source before the shared deferred boot, so this
-   fixture source is never consulted for a live page's first paint. */
-  sources.banner ??= {
-    websearchNeeds: () => { const c = cap('websearch'); return !!c && c.state === 'need'; },
-  };
+
 }
 
-export { openDemoSession, pitch, unpitch, splitAtts, ask, noteSay, noteRow }
+export { pitch, unpitch, splitAtts, ask, noteSay, noteRow }

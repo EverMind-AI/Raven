@@ -225,17 +225,6 @@ export function install() {
   WS = islands.workspace.shared();
   ({ hunkFromEdit, hunkFromWrite, hunkFromUnified } = islands.workspace);
 
-  /* The fixture source: what the workspace island may ask of demo mode. No
-   list/reveal and no canBrowse -- the file tab keeps its demo empty note, and
-   opening a change stays the honest toast. Registered, not
-   declared-for-override: live mode installs its own sources.workspace and this
-   object is never consulted. */
-  sources.workspace ??= {
-    shortPath: (p) => String(p),
-    hostPlatform: () => HOST_PLATFORM,
-    openPath: (p) => toast(`demo：正式版会用系统默认程序打开 ${p}`),
-  };
-
   /* ── the turn's products ───────────────────────────────────────────────
    The record's own rows for one turn, unfiltered. Which of them counts as a
    product, and what a tile can draw of it, are the transcript island's to
@@ -244,7 +233,7 @@ export function install() {
    The turn number is the one WS.changes files rows under: bumped per turn by
    the live layer, and per user message with text by wsOnHistory. The
    transcript counts it the same way over the same payload. */
-  sources.artifacts ??= {
+  sources.artifacts = {
     changes: (turn) => WS.changes.filter((c) => c.turn === turn),
   };
 }

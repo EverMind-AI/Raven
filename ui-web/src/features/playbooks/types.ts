@@ -3,7 +3,7 @@
  * The row and detail shapes come straight from the contract
  * (`rpc-schema/openrpc.json` -> `ui-web/src/rpc/generated.ts`), so the page cannot
  * drift from the handlers by re-declaring them here. Only the source interface
- * is local: it is the seam both the fixture source (demo shell) and the rpc
+ * is local: it is the seam both the offline fixture library and the rpc
  * source (live layer) implement.
  */
 

@@ -203,6 +203,11 @@ async function panel() {
     },
   })
   part.install()
+  /* The path shortener is the workspace source's, which the live part installs
+     -- the offline page reads the same one now, so nothing registers a
+     fixture stand-in for it any more. Only the one verb the record needs. */
+  const { sources } = await import('../../state/sources')
+  sources.workspace = { shortPath: (path: string) => path } as unknown as NonNullable<typeof sources.workspace>
   return { part, shared, calls }
 }
 

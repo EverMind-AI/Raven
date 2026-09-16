@@ -3,18 +3,12 @@
    turn is read as segments -- the ask, the steps (thought, narration,
    activity rows), the answer -- and painted into a lane host inside the
    #stage container. What remains here is the island's shell face -- the names
-   the replay, the composer, the schedules fixture and the live layer still
-   call -- and the fixture half of sources.transcript. */
+   the composer and the turn pipeline still call. */
 
 /* One step of a turn: the handle keeps the legacy widget surface
    (hasThink/hasSay/failed setters, tool().done(), seal()). */
 
 import { islands } from '../../islands'
-import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell/session'
-import { show as toast } from '../../shell/toast'
-import { sources } from '../../state/sources'
-import { sess } from './040-state.js'
-import { sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
 
 function newStep() {
   /* Draws into the transcript lane inside #stage. */
@@ -64,24 +58,7 @@ const ACT_ICO = {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  /* The fixture half of sources.transcript. The demo replay passes explicit ok
-   flags and clean previews, so the reading hooks are identity; branch keeps
-   the demo's canned fork. Live mode installs the rpc source over this. */
-  sources.transcript ??= {
-    clean: (t) => String(t == null ? '' : t).trim(),
-    okOf: () => true,
-    branch: (text) => {
-      const s = { id: 'n' + Date.now(), title: (sess(sessionCurrent()) ? sess(sessionCurrent()).title : '新任务') + ' 的分支',
-        last: '从上一轮回复分叉', when: '刚刚', run: null };
-      sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s); toast('已分叉出新会话');
-    },
-    /* dagRun, openDagNode and openSpawn are deliberately absent. The cards in
-     the trail open real things only with a host behind them, and the island
-     already has the honest answer for each: no node states to read, nothing to
-     open a node into, and the agents panel for a spawn row. Installing
-     null-guarded stand-ins here only moved that decision to the wrong layer --
-     the transcript's own source installs the ones that can do the work. */
-  };
+
 }
 
 export { newStep, collapseTurn, foldSilentRuns, dagFlowFeed, askEcho, showStatus, killStatus, ACT_ICO }

@@ -13,9 +13,6 @@ import { wsShortPath } from '../demo/100-workspace.js'
 export function install() {
   setHostPlatformReader(() => HOST_PLATFORM);
   setShortener(wsShortPath);
-  /* Assigned, not ??=: the fixture source (demo/020-prose.js) is already on the
-   seam by the time this runs, and replacing it before the first paint is the
-   whole point. */
   sources.prose = proseSource;
   sources.workspace = workspaceSource;
 }

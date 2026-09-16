@@ -5,11 +5,10 @@
  * live layer feeds the three `dag.*` events in through mount.tsx; what the sheet
  * draws is decided here and in DagSheet.tsx.
  *
- * The runs are shared objects, not copies: the live layer mutates a node's
- * status and times in place and then calls `touch()`, the same arrangement the
- * settings island has with PROVIDERS. That keeps the event handlers reading as
- * they did, and keeps one answer to "what is this node doing" rather than two
- * that have to be held in step.
+ * The runs are shared objects, not copies: the pipeline mutates a node's
+ * status and times in place and then calls `touch()`. That keeps the event
+ * handlers reading as they did, and keeps one answer to "what is this node
+ * doing" rather than two that have to be held in step.
  */
 
 import { slot } from '../../shell/persist'

@@ -1,6 +1,6 @@
 /* -- connections (channels): the seam ---------------------------------
    The source is ui-web/src/features/connections/source.ts; installing it here
-   replaces the fixture source before the first paint. */
+   is what makes it the page's one channels source in every mode. */
 
 import { connSource } from '../../features/connections/source'
 import { sources } from '../../state/sources'

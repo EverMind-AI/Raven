@@ -119,7 +119,7 @@ export interface ModelCatalogue {
   error?: string | null
 }
 
-/* The DS.settings contract both the fixture source (demo shell) and the rpc
+/* The DS.settings contract both the offline fixture library and the rpc
    source (live layer) implement. Writes in the fixture throw { notLive: true },
    which the island renders as the in-row refusal the demo page always spoke;
    the rpc source speaks its own toasts and throws { handled: true } so the

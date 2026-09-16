@@ -1,8 +1,9 @@
-/* ══ live mode ═════════════════════════════════════════════════════
-   Wires the demo shell to a running `raven serve` over the /rpc
-   WebSocket. Loaded over http(s) it replaces the canned replay with
-   real turn events; opened from disk (file://) or with ?stub=1 the
-   demo keeps its mock data untouched. */
+/* ══ live boot ═════════════════════════════════════════════════════
+   The page's own half of the boot: the desktop shell's markers, the claim on
+   the splash, and the session source the rail is held on until the first list
+   lands. Which transport answers the calls is decided before this runs
+   (src/state/transport.ts) -- a page opened from disk or with ?stub=1 installs
+   these same parts and reads the offline fixture library through them. */
 
 import { islands } from '../../islands'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell/session'
@@ -10,13 +11,6 @@ import { sources } from '../../state/sources'
 import { turn } from '../demo/040-state.js'
 import { claimBoot } from '../demo/160-boot.js'
 import { switchTo } from '../../state/session/registry'
-
-export function liveMode() {
-  /* The stub gate, which used to be this layer's opening `return`: opened from
-     disk (file://) or with ?stub=1 the demo keeps its mock data untouched, so
-     legacy/index.js installs the demo layer and stops. */
-  return /^http/.test(location.protocol) && !/(^|[?&])stub=1/.test(location.search);
-}
 
 /* Tells the shell the page has real pixels worth revealing. A no-op in a
    plain browser tab, where the page-level splash handles the same moment. */

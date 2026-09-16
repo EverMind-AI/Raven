@@ -1,6 +1,6 @@
 /* -- schedules: the seam ----------------------------------------------
-   The source is ui-web/src/features/cron/source.ts; installing it here
-   replaces the fixture source before the first paint. */
+   The source is ui-web/src/features/cron/source.ts, and installing it here is
+   what makes it the page's one schedules source in every mode. */
 
 import { cronSource } from '../../features/cron/source'
 import { sources } from '../../state/sources'

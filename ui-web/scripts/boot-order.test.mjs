@@ -107,7 +107,13 @@ describe('the page boot order', () => {
     const listed = [...index.matchAll(/^import \* as \w+ from '\.\/live\/([^']+)'$/gm)].map((m) => m[1])
     expect(listed).toEqual(liveParts)
     expect(index).toContain('for (const part of DEMO) part.install()')
-    expect(index).toContain('if (!liveMode()) return')
+    /* Both halves, in every mode. The live half used to be skipped for a page
+       opened from disk or with ?stub=1, where the demo half's fixture sources
+       answered instead; the fixtures are responders behind the transport now
+       (src/rpc/fixtures/), so one set of parts installs and the URL only
+       decides which transport they read (src/state/transport.ts). */
+    expect(index).toContain('for (const part of LIVE) part.install()')
+    expect(index).not.toContain('liveMode')
     expect(index.indexOf('for (const part of DEMO)')).toBeLessThan(index.indexOf('for (const part of LIVE)'))
 
     expect(live).not.toContain('CRONS.length = 0')

@@ -8,20 +8,18 @@
 import { islands } from '../../islands'
 import { toggle as toggleFind } from '../../shell/find'
 import { close as closeImage } from '../../shell/lightbox'
-import { show as menuAt } from '../../shell/menu'
 import { toggle as togglePerm } from '../../shell/perm'
 import { setCurrent as sessionSet } from '../../shell/session'
 import { toggle as toggleTier } from '../../shell/tier'
 import { show as toast } from '../../shell/toast'
-import { settingsTab } from '../../state/settingsTab'
 import { sources } from '../../state/sources'
 import { $, T } from './010-kernel.js'
-import { modelCurrent, modelSet, turn } from './040-state.js'
+import { turn } from './040-state.js'
 import { renameTitle, sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
 import { ta } from './090-composer.js'
 import { setWs, wsOpen } from './100-workspace.js'
-import { capFilter, closeCaps, closeDetail, closeSet, closeXa, drawCapsBadge, openPlugins, openSet, openSkills, setIsOpen, showPage } from './120-capabilities.js'
-import { PROVIDERS, drawSettings, isMac } from './130-settings.js'
+import { capFilter, closeCaps, closeDetail, closeSet, closeXa, drawCapsBadge, openPlugins, openSkills, setIsOpen, showPage } from './120-capabilities.js'
+import { isMac } from './130-settings.js'
 import { closeCron, closeKb, closeMem, openKb, openMem } from './140-schedule.js'
 import { closeConn, connCloseDialog } from './145-connections.js'
 import { drawCaps } from './152-skills.js'
@@ -131,17 +129,11 @@ export function install() {
 
   $('#meBtn').onclick = () => openSettings();
 
-  $('#modelChip').onclick = () => {
-    const r = $('#modelChip').getBoundingClientRect();
-    const items = [];
-    PROVIDERS.filter((p) => p.on).forEach((p) => p.models.forEach((m) => items.push({
-      label: m === modelCurrent() ? `${m} ✓` : m,
-      // No toast: the chip right there already shows the new model.
-      fn: () => { modelSet(m); $('#modelName').textContent = m; }
-    })));
-    items.push('-', { label: T('gui.slash.manage_models'), fn: () => { settingsTab.id = 'model'; drawSettings(); openSet(); } });
-    menuAt(r.left, r.bottom + 6, items);
-  };
+  /* The model chip's own menu is installed by live/120-settings.js: it opens
+   the picker island against the provider list the page really has. This part
+   carried a second one built from a fixture table -- a list of providers with
+   an `on` flag that only the offline canvas ever had -- and it was replaced on
+   every page, because that install runs after this one. */
 
   $('#permChip').onclick = () => togglePerm();
   $('#tierChip').onclick = () => toggleTier();

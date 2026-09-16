@@ -2,17 +2,10 @@
    Every agent this conversation handed work to. The renderer is the
    subagents island (ui-web/src/features/subagents/), reached through the
    workspace island's dispatch; the list, the running clocks and the detail
-   headers all live there now. What remains here is the fixture source and the
-   workspace panel wiring that always lived in this part (tool-event hooks,
-   panel chrome). */
-
-/* The fixture source. A conversation replayed with no server behind it has
-   no delegated runs and the demo never invents any -- which is why the members
-   this source leaves out are the ones a run would have needed: the watch that
-   keeps the list fresh, the per-run record, and the painter that draws one. */
+   headers all live there now. What remains here is the workspace panel wiring
+   that always lived in this part (tool-event hooks, panel chrome). */
 
 import { islands } from '../../islands'
-import { sources } from '../../state/sources'
 import { $, T } from './010-kernel.js'
 import { WS, bumpWs, drawWs, hunkFromEdit, hunkFromUnified, hunkFromWrite, setWs, setWsFull, wsArgs, wsOpen, wsPick, wsRecordChange, wsShowsTurn, wsTab, wsWide } from './100-workspace.js'
 import { composing } from './150-chrome.js'
@@ -62,8 +55,6 @@ function wsOnToolDone(name, args, ok, preview, ms, diff) {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  sources.agents ??= { list: async () => [] };
-
   $('#wsBtn').onclick = () => islands.workspace.toggleDesk();
   $('#wsClose').onclick = () => setWs(false);
   /* Widening by hand is the seam's job now, so this button does the thing dragging

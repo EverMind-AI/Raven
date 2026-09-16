@@ -1,38 +1,16 @@
 /* ══ module 3: settings page ══════════════════════════════════════
    The renderer is the settings island (ui-web/src/features/settings/); what
    remains here is its shell face -- the names the chrome, the boot list,
-   the capabilities rows and the live layer's redrawAll still call -- and the
-   fixture source. */
-
-/* The fixture provider rows. Live mode owns the rows fetched from its model
-   source, so it never refills this demo list in place. */
+   the capabilities rows and the live layer's redrawAll still call. */
 
 import { islands } from '../../islands'
 import { draw as drawCtx } from '../../shell/ctxchip'
 import { draw as drawFoot } from '../../shell/foot'
 import { draw as drawPerm } from '../../shell/perm'
-import { setCurrent as sessionSet } from '../../shell/session'
 import { show as toast } from '../../shell/toast'
 import { settingsTab } from '../../state/settingsTab'
-import { sources } from '../../state/sources'
-import { $, LANG, T, langSet, mk } from './010-kernel.js'
-import { TOOLS, TOOL_GROUPS } from './030-fixtures.js'
-import { modelCurrent } from './040-state.js'
-import { sessionDraw, sessionReplace } from './050-rail.js'
-import { pitch } from './060-conversation.js'
-
-const PROVIDERS = [
-  { id: 'minimax', name: 'MiniMax (Global)', homepage: 'https://platform.minimax.io/', models: ['minimax/MiniMax-M3', 'minimax/MiniMax-M2'], on: true, kind: 'api_key' },
-  { id: 'minimax_cn_api', name: 'MiniMax (CN)', models: ['minimax-cn-api/MiniMax-M3', 'minimax-cn-api/MiniMax-M2'], on: false,
-    homepage: 'https://platform.minimaxi.com/', kind: 'endpoint', defaultApiBase: 'https://api.minimaxi.com/v1/' },
-  { id: 'anthropic', name: 'Anthropic', homepage: 'https://anthropic.com/', models: ['claude-opus-4-5', 'claude-sonnet-4-6'], on: true, kind: 'api_key' },
-  { id: 'openai', name: 'OpenAI', homepage: 'https://openai.com/', models: ['gpt-5.1', 'gpt-5-mini'], on: false, kind: 'api_key' },
-  { id: 'deepseek', name: 'DeepSeek', homepage: 'https://deepseek.com/', models: ['deepseek-v3.2'], on: false, kind: 'api_key' },
-  { id: 'nvidia_nim', name: 'NVIDIA', models: ['nvidia-nim/nvidia/nemotron-3-super-120b-a12b', 'nvidia-nim/openai/gpt-oss-120b'], on: false,
-    homepage: 'https://build.nvidia.com/explore/discover', kind: 'api_key', defaultApiBase: 'https://integrate.api.nvidia.com/v1' },
-  { id: 'lm_studio', name: 'LM Studio', models: [], on: false, kind: 'local', needsBase: true,
-    homepage: 'https://lmstudio.ai/', defaultApiBase: 'http://localhost:1234/v1' }
-];
+import { $, T, langSet, mk } from './010-kernel.js'
+import { sessionDraw } from './050-rail.js'
 
 // Filled in from system.version once the socket is up, and unknown until then:
 // the running install is the only thing that knows its version. The rail foot
@@ -41,8 +19,8 @@ let APP_VERSION = null;
 function appVersionSet(v) { APP_VERSION = v; }
 
 /* A tagged control never renders the new value; the refusal is spoken in the
-   row, not in a toast. Kept for the legacy rows (capabilities tool
-   credentials, the connections fixture). */
+   row, not in a toast. Kept for the legacy rows (the capabilities page's tool
+   credentials). */
 function nlSay(el, reset, msg) {
   if (reset) reset();
   /* The row when the control sits in one, else the card: a chooser is a whole
@@ -57,11 +35,11 @@ function nlSay(el, reset, msg) {
 }
 const notLive = () => toast(T('gui.set.not_live'));
 
-/* The fixture half of the island's language pick: flip the catalogue and
-   repaint what this layer draws itself. Nothing is persisted, because a page
-   with no gateway behind it has nowhere to persist to -- which is the honest
-   offline answer rather than a silent no-op. Live mode installs its own, and
-   this one is never consulted there. */
+/* The language pick with no persist behind it: flip the catalogue and repaint
+   what this layer draws itself. Unreached today -- the settings source's own
+   pick is installed over it (live/120-settings.js) and writes
+   `config.language` in every mode -- and kept next to the redraw it performs
+   until the settings chrome is a component. */
 function langPickDemo(v) {
   langSet(v);
   sessionDraw(); drawSettings(); drawPerm(); drawWorkdir(); drawCtx(); drawFoot();
@@ -83,35 +61,6 @@ function setRuntime() {
   $('#envChip').querySelector('.led').className = 'led';
 }
 
-/* The tier fixture: three rungs behind the same interface `session.set_mode`
-   implements, so the design canvas can show the chip and its panel.
-
-   The sentences are `raven/config/schema.py:_TIER_TEXTS` and their entries in
-   `raven/i18n/zh.py`, verbatim in both languages, because ONE PER RUNG is the
-   part of this control worth reviewing: the row draws the description, so a
-   sentence of this file's own invention -- and especially one sentence repeated
-   with the id swapped in -- previews a line height and a wrap the live UI never
-   receives. Keyed to `LANG` for the same reason: raven translates these three
-   itself, so the canvas can only show the Chinese lines by carrying them. */
-let tierDemo = 'high';
-const TIER_SUB = {
-  en: {
-    medium: 'The least effort a sub-agent is asked for.',
-    high: 'The middle amount of effort, between the other two.',
-    max: 'The most effort a sub-agent is asked for.',
-  },
-  zh: {
-    medium: '子代理被要求付出的最少努力。',
-    high: '居中的投入，介于另外两档之间。',
-    max: '子代理被要求付出的最多努力。',
-  },
-};
-const tierMenuDemo = () => ['medium', 'high', 'max'].map((id) => ({
-  id,
-  name: id.charAt(0).toUpperCase() + id.slice(1),
-  description: (TIER_SUB[LANG] || TIER_SUB.en)[id],
-}));
-
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
@@ -120,39 +69,6 @@ export function install() {
    writes the same one (src/state/settingsTab.ts). */
   settingsTab.id = 'usage';
 
-  /* Wiping the list is a session operation, so it goes on the session source
-   rather than staying a name the live layer overwrites. It has to live in this
-   layer either way: the list and the current session are page bindings, and an
-   island cannot reassign one. */
-  sources.sessions.deleteAll = () => {
-    sessionReplace([]); sessionSet(null); sessionDraw(); $('#stage').innerHTML = '';
-    $('#title').textContent = T('gui.new_task'); pitch();
-  };
-
-  /* The fixture source: canned config behind the same interface the rpc source
-   implements. Writes refuse with the tag the island renders as the in-row
-   not-live message; usage answers null, which the island draws as the demo's
-   no-data note. Registered, not declared-for-override -- live mode installs
-   its own sources.settings and this object is never consulted. */
-  sources.settings ??= {
-    load: async () => ({
-      raw: {}, configPath: '~/.raven/config.json', everos: null,
-      providers: PROVIDERS, curProvider: '', model: modelCurrent(),
-      toolGroups: TOOL_GROUPS, tools: TOOLS,
-    }),
-    set: async () => { throw { notLive: true }; },
-    everosSet: async () => { throw { notLive: true }; },
-    usage: async () => null,
-    provider: async () => { throw { notLive: true }; },
-    model: () => modelCurrent(),
-    version: () => APP_VERSION,
-    checkUpdate: () => notLive(),
-    setLang: (v) => langPickDemo(v),
-  };
-  sources.tier ??= {
-    read: async () => ({ mode: tierDemo, availableModes: tierMenuDemo() }),
-    set: async (mode) => { tierDemo = mode; return { mode: tierDemo, availableModes: tierMenuDemo() }; },
-  };
 }
 
-export { PROVIDERS, APP_VERSION, appVersionSet, nlSay, notLive, langPickDemo, isMac, modKey, drawSettings, setRuntime, tierDemo, TIER_SUB, tierMenuDemo }
+export { APP_VERSION, appVersionSet, nlSay, notLive, langPickDemo, isMac, modKey, drawSettings, setRuntime }
