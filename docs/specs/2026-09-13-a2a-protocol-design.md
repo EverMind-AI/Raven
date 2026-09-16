@@ -256,6 +256,15 @@ on the gateway-mounted hosting the loop that owns that roster does not exist yet
 time, and a hot `apply_agents` would otherwise leave the answer stale. A host given no
 roster answers `ExtendedAgentCardNotConfiguredError`, the protocol's own word for it.
 
+`supportedInterfaces[].url` is a property of the request, not of the process, and both
+cards derive it from the origin the caller arrived on. One face answers under every name
+that routes to it -- an SSH tunnel, a published container port, a reverse proxy -- and a
+URL fixed when the face is mounted is correct for at most one of them. The requirement is
+sharper than it looks: a caller that finds an interface off the card's own origin must
+refuse it, since a card fetched from a trusted origin would otherwise redirect the
+credential elsewhere (see Outbound). A relative or mount-time URL reads as off-origin to
+that check, so a card built without the request fails the guard its own peers apply.
+
 `capabilities.extended_agent_card` reports what this process can actually answer rather
 than what the build implements, which is why the card route asks the handler instead of
 deciding for itself: the flag and the method's answer are two statements about one fact,
