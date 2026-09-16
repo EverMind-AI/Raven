@@ -25,6 +25,8 @@ import time
 from typing import Any
 from urllib.parse import urlsplit
 
+from loguru import logger
+
 from raven.contracts.tool import Tool, ToolResult
 from raven.permissions.builtin import BROWSER_SITE_PARAM as SITE_PARAM
 from raven.utils.images import image_block, text_block
@@ -54,6 +56,37 @@ def _browser():
     from raven.browser import get_browser
 
     return get_browser()
+
+
+# The pop-out is a first-use convenience, decided once per process: the driver's
+# set_headful is idempotent, but re-asking on every acting call would re-pop the
+# window out each time the reader folded it back into the panel. After the first
+# use the mode is the reader's to control, and a config change takes a restart.
+_headful_attempted = False
+
+
+async def _pop_out_for_agent_use(b: Any) -> None:
+    """Pop the browser into a real window before the model's first acting call,
+    when ``tools.browser.headfulOnAgentUse`` says so.
+
+    Only the tools that can start the browser call this (a navigate, a new
+    tab); click and type presuppose a page already open. With Chromium not up
+    yet it only sets the driver's flag, so the first goto launches headful
+    directly instead of launching headless and relaunching.
+    """
+    global _headful_attempted
+    if _headful_attempted:
+        return
+    _headful_attempted = True
+    from raven.config import load_config
+
+    try:
+        enabled = load_config().tools.browser.headful_on_agent_use
+    except Exception as exc:  # noqa: BLE001 - a config this build cannot read must not take navigation down
+        logger.debug("browser tools: could not read the headful-on-agent-use switch: {}", exc)
+        return
+    if enabled:
+        await b.set_headful(True)
 
 
 def current_owner() -> str:
@@ -234,6 +267,7 @@ class BrowserNavigateTool(_BrowserTool):
 
         async def run() -> ToolResult:
             b = _browser()
+            await _pop_out_for_agent_use(b)
             if action:
                 state = await b.go(action, owner=owner)
             else:
@@ -548,6 +582,7 @@ class BrowserTabsTool(_BrowserTool):
             b = _browser()
             state: dict[str, Any] = {}
             if action == "new":
+                await _pop_out_for_agent_use(b)
                 state = await b.tab_new(url, owner=owner)
             elif action == "activate":
                 state = await b.tab_activate(int(index), owner=owner)

@@ -35,6 +35,7 @@ from raven.browser.driver import MAX_TABS, Browser, _Owner, get_browser
 def fresh_singleton(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(driver_module, "_BROWSER", None)
     monkeypatch.setattr(tools_mod._BrowserTool, "_acted", {})
+    monkeypatch.setattr(tools_mod, "_headful_attempted", False)
 
 
 class _FakePage:
@@ -457,3 +458,80 @@ async def test_an_unavailable_browser_is_a_non_retryable_error(monkeypatch: pyte
     assert out.ok is False
     assert out.retryable is False
     assert "do X" in out.model_text
+
+
+# ── the pop-out on first agent use ────────────────────────────────────
+
+
+def _patch_switch(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+    from types import SimpleNamespace
+
+    import raven.config as config_mod
+    from raven.config.schema import BrowserToolConfig
+
+    cfg = SimpleNamespace(tools=SimpleNamespace(browser=BrowserToolConfig(headful_on_agent_use=enabled)))
+    monkeypatch.setattr(config_mod, "load_config", lambda: cfg)
+
+
+async def test_the_first_navigate_pops_out_before_it_navigates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The switch on, the browser not up: the first acting call sets the driver
+    flag before the goto, so the launch that follows is headful -- not a launch
+    that relaunches. The second navigate asks again of nobody."""
+    b = get_browser()
+    monkeypatch.setattr(tools_mod, "current_owner", lambda: "session:c1")
+    _patch_switch(monkeypatch, enabled=True)
+    calls: list[tuple[str, dict[str, Any]]] = []
+    _stub_actions(b, calls, {"url": "https://a.test/", "title": "A", "started": True})
+
+    async def set_headful(headful: bool) -> dict[str, Any]:
+        calls.append(("set_headful", {"headful": headful}))
+        return {}
+
+    b.set_headful = set_headful  # type: ignore[method-assign]
+
+    await BrowserNavigateTool().execute(url="a.test")
+    await BrowserNavigateTool().execute(url="b.test")
+
+    assert calls[0] == ("set_headful", {"headful": True})
+    assert [name for name, _ in calls].count("set_headful") == 1
+
+
+async def test_a_new_tab_pops_out_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = get_browser()
+    monkeypatch.setattr(tools_mod, "current_owner", lambda: "session:c1")
+    _patch_switch(monkeypatch, enabled=True)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def set_headful(headful: bool) -> dict[str, Any]:
+        calls.append(("set_headful", {"headful": headful}))
+        return {}
+
+    async def tab_new(url: str | None, **kw: Any) -> dict[str, Any]:
+        calls.append(("tab_new", {"url": url, **kw}))
+        return {"url": "about:blank", "title": "", "started": True}
+
+    b.set_headful = set_headful  # type: ignore[method-assign]
+    b.tab_new = tab_new  # type: ignore[method-assign]
+
+    await BrowserTabsTool().execute(action="new")
+
+    assert calls == [("set_headful", {"headful": True}), ("tab_new", {"url": None, "owner": "session:c1"})]
+
+
+async def test_with_the_switch_off_nothing_pops_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = get_browser()
+    monkeypatch.setattr(tools_mod, "current_owner", lambda: "session:c1")
+    _patch_switch(monkeypatch, enabled=False)
+    calls: list[tuple[str, dict[str, Any]]] = []
+    _stub_actions(b, calls, {"url": "https://a.test/", "title": "A", "started": True})
+
+    async def set_headful(headful: bool) -> dict[str, Any]:
+        calls.append(("set_headful", {"headful": headful}))
+        return {}
+
+    b.set_headful = set_headful  # type: ignore[method-assign]
+
+    out = await BrowserNavigateTool().execute(url="a.test")
+
+    assert out.ok
+    assert [name for name, _ in calls] == ["goto", "snapshot"]
